@@ -64,6 +64,10 @@ For security reasons, do **not** hardcode your API key into the HTML or Javascri
 3. Paste your Gemini API Key and click **Save**. 
 4. The key is now safely stored on your device and will be remembered for future sessions.
 
+First time with API keys?
+- In-app guide (works in production): [public/api-keys-guide.html](public/api-keys-guide.html)
+- Repo markdown guide: [docs/api-keys-guide.md](docs/api-keys-guide.md)
+
 ## ☁️ Study Materials From Storage Or Project Folder
 The add-in now works best with local project materials, with an optional one-way sync from Firebase Storage into the project folder.
 

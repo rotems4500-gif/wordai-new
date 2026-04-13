@@ -152,6 +152,21 @@ html, body {
 
 .key-status { display: block; margin-top: 5px; font-size: 0.75rem; color: var(--muted); }
 
+.panel-help-link {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 0.76rem;
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.panel-help-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
 .cloud-loading {
     margin-top: 6px;
     padding: 6px 8px;
