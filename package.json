@@ -1,7 +1,13 @@
 {
   "name": "word-ai-assistant",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Word AI Assistant built with Vite",
+  "author": "Rotem",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rotems4500-gif/wordai.git"
+  },
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=20"
   },
@@ -9,15 +15,116 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "sync:storage": "node scripts/sync-storage-to-local.mjs"
+    "sync:storage": "node scripts/sync-storage-to-local.mjs",
+    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"", 
+    "desktop:build": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:publish": "npm run build && electron-builder --win nsis --publish always"
   },
   "dependencies": {
-    "@microsoft/office-js": "^1.1.91",
+    "@google/generative-ai": "^0.24.1",
+    "@tiptap/extension-blockquote": "^3.22.3",
+    "@tiptap/extension-bubble-menu": "^3.22.3",
+    "@tiptap/extension-code-block-lowlight": "^3.22.3",
+    "@tiptap/extension-color": "^3.22.3",
+    "@tiptap/extension-font-family": "^3.22.3",
+    "@tiptap/extension-highlight": "^3.22.3",
+    "@tiptap/extension-horizontal-rule": "^3.22.3",
+    "@tiptap/extension-image": "^3.22.3",
+    "@tiptap/extension-link": "^3.22.3",
+    "@tiptap/extension-subscript": "^3.22.3",
+    "@tiptap/extension-superscript": "^3.22.3",
+    "@tiptap/extension-table": "^3.22.3",
+    "@tiptap/extension-table-cell": "^3.22.3",
+    "@tiptap/extension-table-header": "^3.22.3",
+    "@tiptap/extension-table-row": "^3.22.3",
+    "@tiptap/extension-task-item": "^3.22.3",
+    "@tiptap/extension-task-list": "^3.22.3",
+    "@tiptap/extension-text-align": "^3.22.3",
+    "@tiptap/extension-text-style": "^3.22.3",
+    "@tiptap/extension-underline": "^3.22.3",
+    "@tiptap/react": "^3.22.3",
+    "@tiptap/starter-kit": "^3.22.3",
+    "ai": "^6.0.159",
+    "clsx": "^2.1.1",
     "core-js": "^3.36.0",
-    "firebase": "^12.12.0"
+    "electron-updater": "^6.6.2",
+    "firebase": "^12.12.0",
+    "lucide-react": "^1.8.0",
+    "mammoth": "^1.12.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "@tailwindcss/typography": "^0.5.19",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "daisyui": "^5.5.19",
+    "electron": "^35.5.1",
+    "electron-builder": "^26.0.12",
     "office-addin-dev-certs": "^1.11.8",
-    "vite": "^5.2.0"
+    "postcss": "^8.5.9",
+    "tailwindcss": "^4.2.2",
+    "vite": "^8.0.8",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.wordai.assistant",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "rotems4500-gif",
+        "repo": "wordai",
+        "releaseType": "release"
+      }
+    ],
+    "productName": "Word AI Assistant",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Word-AI-Assistant-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Word AI Assistant"
+    },
+    "fileAssociations": [
+      {
+        "ext": "docx",
+        "name": "Word AI Document",
+        "description": "Open DOCX files with Word AI Assistant",
+        "role": "Editor"
+      },
+      {
+        "ext": "txt",
+        "name": "Word AI Text Document",
+        "description": "Open text files with Word AI Assistant",
+        "role": "Editor"
+      },
+      {
+        "ext": "html",
+        "name": "Word AI HTML Document",
+        "description": "Open HTML files with Word AI Assistant",
+        "role": "Editor"
+      }
+    ]
   }
 }

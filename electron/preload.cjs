@@ -1,0 +1,22 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('desktopApp', {
+  isDesktop: true,
+  platform: process.platform,
+  versions: {
+    node: process.versions.node,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+  },
+  saveLocalMaterial: (payload) => ipcRenderer.invoke('save-local-material', payload),
+  listLocalMaterials: () => ipcRenderer.invoke('list-local-materials'),
+  readLocalMaterial: (fileName) => ipcRenderer.invoke('read-local-material', fileName),
+  openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
+  consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
+  saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
+  onOpenExternalDocument: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('open-external-document', listener);
+    return () => ipcRenderer.removeListener('open-external-document', listener);
+  },
+});

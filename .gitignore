@@ -1,5 +1,12 @@
 node_modules/
 dist/
+release/
+release-installer/
+release-livecheck/
+release-temp/
+release-temp2/
+release-updater-check/
+release-verify/
 .DS_Store
 .env
 .env.local
