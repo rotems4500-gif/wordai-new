@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onUndo = () => {}, onRedo = () => {}, onHome = () => {} }) {
+export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onUndo = () => {}, onRedo = () => {}, onHome = () => {}, onOpenUpdates = () => {} }) {
   const quickBtn = (icon, title, action) => (
     <button onClick={action} title={title} className="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center transition">
       <i className={icon}></i>
@@ -29,7 +29,15 @@ export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen 
           className="bg-transparent border-none text-white outline-none w-full placeholder-white/70 font-inherit"
         />
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onOpenUpdates}
+          title="בדוק אם יש עדכון"
+          className="flex items-center gap-2 rounded-full border border-white/30 px-3 py-1.5 hover:bg-white/20 transition text-xs font-semibold"
+        >
+          <i className="ph ph-arrow-circle-up text-base"></i>
+          <span>עדכונים</span>
+        </button>
         <i className="ph-fill ph-megaphone text-lg"></i>
         <div className="w-8 h-8 rounded-full bg-blue-400 flex items-center justify-center text-white font-bold">
           RL

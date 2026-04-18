@@ -31,6 +31,7 @@ function App() {
   const [zoom, setZoom] = React.useState(100);
   const [viewMode, setViewMode] = React.useState('print');
   const [fileMenuOpen, setFileMenuOpen] = React.useState(false);
+  const [fileMenuTargetTab, setFileMenuTargetTab] = React.useState(null);
   const [formatPainterActive, setFormatPainterActive] = React.useState(false);
   const [selectedText, setSelectedText] = React.useState('');
   const [currentBlockText, setCurrentBlockText] = React.useState('');
@@ -138,6 +139,7 @@ function App() {
 
       if (matchShortcut(e, shortcuts.openFileMenu)) {
         e.preventDefault();
+        setFileMenuTargetTab(null);
         setFileMenuOpen(true);
         return;
       }
@@ -153,6 +155,11 @@ function App() {
   }, [shortcuts, editor]);
 
   const initializedDocRef = React.useRef(false);
+
+  const openUpdatesPanel = React.useCallback(() => {
+    setFileMenuTargetTab('updates');
+    setFileMenuOpen(true);
+  }, []);
 
   const handleEditorReady = React.useCallback((ed, helpers) => {
     setEditor(ed);
@@ -1073,6 +1080,7 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       <TopBar
+        onOpenUpdates={openUpdatesPanel}
         onOpen={() => handleCommand('openFile')}
         onSave={() => handleCommand('saveLocal')}
         onSaveAs={() => handleCommand('saveAs')}
@@ -1090,7 +1098,10 @@ function App() {
           setLastEditorActivityAt(Date.now());
         }}
         zoom={zoom}
-        onOpenFileMenu={() => setFileMenuOpen(true)}
+        onOpenFileMenu={() => {
+          setFileMenuTargetTab(null);
+          setFileMenuOpen(true);
+        }}
         formatPainterActive={formatPainterActive}
         activeFormats={activeFormats}
         shortcuts={shortcuts}
@@ -1227,7 +1238,11 @@ function App() {
       {/* File Menu Backstage */}
       {fileMenuOpen && (
         <FileMenu
-          onClose={() => setFileMenuOpen(false)}
+          initialSettingsTab={fileMenuTargetTab}
+          onClose={() => {
+            setFileMenuOpen(false);
+            setFileMenuTargetTab(null);
+          }}
           onCommand={(cmd, value) => handleCommand(cmd, value)}
           shortcuts={shortcuts}
           onShortcutsChange={setShortcuts}

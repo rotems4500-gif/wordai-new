@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('desktopApp', {
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
+  getAppUpdateInfo: () => ipcRenderer.invoke('get-app-update-info'),
+  checkForAppUpdates: () => ipcRenderer.invoke('check-for-app-updates'),
+  installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
+  onAppUpdateStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('app-update-status', listener);
+    return () => ipcRenderer.removeListener('app-update-status', listener);
+  },
   onOpenExternalDocument: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('open-external-document', listener);

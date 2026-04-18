@@ -11,6 +11,29 @@ if (!app.isPackaged) {
 let mainWindow;
 let pendingFilePayload = null;
 let loadRendererInProgress = false;
+let latestUpdateState = {
+  status: 'idle',
+  message: 'מוכן לבדיקת עדכונים',
+  currentVersion: app.getVersion(),
+  availableVersion: '',
+  percent: 0,
+  checkedAt: '',
+};
+
+function sendUpdateStatus(nextPatch = {}) {
+  latestUpdateState = {
+    ...latestUpdateState,
+    ...nextPatch,
+    currentVersion: app.getVersion(),
+    checkedAt: new Date().toISOString(),
+  };
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-update-status', latestUpdateState);
+  }
+
+  return latestUpdateState;
+}
 
 function escapeHtml(value = '') {
   return String(value || '')
@@ -115,18 +138,33 @@ function sendDocumentToRenderer(payload) {
 }
 
 function setupAutoUpdater() {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged) {
+    sendUpdateStatus({ status: 'dev-mode', message: 'בדיקת עדכונים זמינה רק בגרסה מותקנת' });
+    return;
+  }
 
   const updateConfigPath = path.join(process.resourcesPath || '', 'app-update.yml');
   if (!fs.existsSync(updateConfigPath)) {
     console.warn('Skipping auto update: app-update.yml not found');
+    sendUpdateStatus({ status: 'unavailable', message: 'קובץ הגדרות העדכון חסר בגרסה הזו' });
     return;
   }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
-  autoUpdater.on('update-available', () => {
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateStatus({ status: 'checking', message: 'בודק אם קיימים עדכונים…', percent: 0 });
+  });
+
+  autoUpdater.on('update-available', (info = {}) => {
+    sendUpdateStatus({
+      status: 'downloading',
+      message: `נמצא עדכון לגרסה ${info.version || ''}. מתחיל להוריד…`,
+      availableVersion: info.version || '',
+      percent: 0,
+    });
+
     dialog.showMessageBox({
       type: 'info',
       title: 'עדכון זמין',
@@ -135,7 +173,31 @@ function setupAutoUpdater() {
     });
   });
 
-  autoUpdater.on('update-downloaded', async () => {
+  autoUpdater.on('download-progress', (progress = {}) => {
+    sendUpdateStatus({
+      status: 'downloading',
+      message: `מוריד עדכון… ${Math.round(Number(progress.percent || 0))}%`,
+      percent: Number(progress.percent || 0),
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info = {}) => {
+    sendUpdateStatus({
+      status: 'up-to-date',
+      message: 'אין עדכון חדש כרגע. האפליקציה מעודכנת.',
+      availableVersion: info.version || app.getVersion(),
+      percent: 100,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', async (info = {}) => {
+    sendUpdateStatus({
+      status: 'downloaded',
+      message: `העדכון לגרסה ${info.version || ''} ירד ומוכן להתקנה`,
+      availableVersion: info.version || '',
+      percent: 100,
+    });
+
     const result = await dialog.showMessageBox({
       type: 'question',
       buttons: ['התקן עכשיו', 'מאוחר יותר'],
@@ -151,10 +213,12 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('error', (err) => {
+    sendUpdateStatus({ status: 'error', message: err?.message || 'שגיאה בבדיקת העדכונים' });
     console.error('Auto update error:', err?.message || err);
   });
 
   autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    sendUpdateStatus({ status: 'error', message: err?.message || 'שגיאת פתיחה במסלול העדכונים' });
     console.error('Auto update startup error:', err?.message || err);
   });
 }
@@ -391,6 +455,43 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
   }
 });
 
+ipcMain.handle('get-app-update-info', async () => ({
+  ok: true,
+  ...latestUpdateState,
+  isPackaged: app.isPackaged,
+  currentVersion: app.getVersion(),
+}));
+
+async function triggerUpdateCheck() {
+  if (!app.isPackaged) {
+    return {
+      ok: false,
+      ...sendUpdateStatus({ status: 'dev-mode', message: 'בדיקת עדכונים זמינה רק באפליקציה המותקנת' }),
+    };
+  }
+
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true, ...latestUpdateState };
+  } catch (error) {
+    return {
+      ok: false,
+      ...sendUpdateStatus({ status: 'error', message: error?.message || 'בדיקת העדכונים נכשלה' }),
+    };
+  }
+}
+
+ipcMain.handle('check-for-app-updates', async () => triggerUpdateCheck());
+
+ipcMain.handle('install-app-update', async () => {
+  if (latestUpdateState.status !== 'downloaded') {
+    return { ok: false, ...latestUpdateState, message: 'עדיין אין עדכון מוכן להתקנה' };
+  }
+
+  setImmediate(() => autoUpdater.quitAndInstall());
+  return { ok: true, ...latestUpdateState, message: 'ההתקנה מתחילה כעת' };
+});
+
 function createAppMenu() {
   const template = [
     {
@@ -430,16 +531,14 @@ function createAppMenu() {
         {
           label: 'בדוק עדכונים',
           click: async () => {
-            if (!app.isPackaged) {
+            const result = await triggerUpdateCheck();
+            if (result?.ok === false) {
               await dialog.showMessageBox({
-                type: 'info',
+                type: result.status === 'error' ? 'error' : 'info',
                 title: 'עדכונים',
-                message: 'בדיקת עדכונים פעילה רק בגרסת ההתקנה.',
-                detail: 'לאחר התקנה אמיתית, האפליקציה תבדוק ותוריד עדכונים אוטומטית.',
+                message: result.message || 'לא ניתן לבדוק עדכונים כרגע.',
               });
-              return;
             }
-            autoUpdater.checkForUpdatesAndNotify();
           },
         },
       ],

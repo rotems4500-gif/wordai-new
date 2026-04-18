@@ -33,6 +33,16 @@ const POPULAR_CUSTOM = [
   { name: 'LM Studio (מקומי)',      url: 'http://localhost:1234/v1',               note: 'הורד מ-lmstudio.ai — ✅ לא דורש מפתח',  model: 'loaded-model',                         keyNote: 'ריק (לא נדרש)' },
 ];
 
+const PROVIDER_MODEL_OPTIONS = {
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash'],
+  openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
+  claude: ['claude-3-5-sonnet-20241022', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'],
+  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+  perplexity: ['llama-3.1-sonar-large-128k-online', 'sonar-pro', 'sonar'],
+  ollama: ['llama3.2', 'qwen2.5', 'mistral'],
+  custom: ['deepseek-chat', 'mistral-large-latest', 'loaded-model'],
+};
+
 const linkifyText = (text = '') => {
   const value = String(text || '');
   const parts = value.split(/(https?:\/\/[^\s)]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s)]*)?)/gi);
@@ -919,10 +929,20 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
               <div>
                 <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל מועדף לסוכן</div>
+                <select
+                  value={(agent.provider && PROVIDER_MODEL_OPTIONS[agent.provider]?.includes(agent.model || '')) ? (agent.model || '') : ''}
+                  onChange={(e) => updateAgent(index, 'model', e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', marginBottom: 6 }}
+                >
+                  <option value="">בחר מודל מהרשימה</option>
+                  {((agent.provider && PROVIDER_MODEL_OPTIONS[agent.provider]) || []).map((modelName) => (
+                    <option key={modelName} value={modelName}>{modelName}</option>
+                  ))}
+                </select>
                 <input
                   value={agent.model || ''}
                   onChange={(e) => updateAgent(index, 'model', e.target.value)}
-                  placeholder="למשל: gemini-2.5-flash / gpt-4o / claude-3-5-sonnet"
+                  placeholder="אפשר גם להקליד ידנית: gemini-2.5-flash / gpt-4o / claude-3-5-sonnet"
                   style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, direction: 'ltr' }}
                 />
               </div>
@@ -946,6 +966,117 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
       >
         + הוסף סוכן תפקידי
       </button>
+    </div>
+  );
+}
+
+function UpdateSettings() {
+  const [updateInfo, setUpdateInfo] = useState({
+    status: 'idle',
+    message: 'מוכן לבדיקת עדכונים',
+    currentVersion: '',
+    availableVersion: '',
+    percent: 0,
+    isPackaged: false,
+  });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let dispose;
+
+    const loadInfo = async () => {
+      try {
+        if (!window.desktopApp?.getAppUpdateInfo) {
+          setUpdateInfo({ status: 'web', message: 'אפשרות זו זמינה רק באפליקציית שולחן העבודה', isPackaged: false });
+          return;
+        }
+        const info = await window.desktopApp.getAppUpdateInfo();
+        setUpdateInfo((prev) => ({ ...prev, ...(info || {}) }));
+      } catch {}
+    };
+
+    loadInfo();
+    if (window.desktopApp?.onAppUpdateStatus) {
+      dispose = window.desktopApp.onAppUpdateStatus((payload) => {
+        setUpdateInfo((prev) => ({ ...prev, ...(payload || {}) }));
+      });
+    }
+
+    return () => dispose?.();
+  }, []);
+
+  const checkNow = async () => {
+    if (!window.desktopApp?.checkForAppUpdates) return;
+    setBusy(true);
+    try {
+      const result = await window.desktopApp.checkForAppUpdates();
+      setUpdateInfo((prev) => ({ ...prev, ...(result || {}) }));
+    } catch (error) {
+      setUpdateInfo((prev) => ({ ...prev, status: 'error', message: error?.message || 'בדיקת העדכונים נכשלה' }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const installNow = async () => {
+    if (!window.desktopApp?.installAppUpdate) return;
+    setBusy(true);
+    try {
+      const result = await window.desktopApp.installAppUpdate();
+      setUpdateInfo((prev) => ({ ...prev, ...(result || {}) }));
+    } catch (error) {
+      setUpdateInfo((prev) => ({ ...prev, status: 'error', message: error?.message || 'התקנת העדכון נכשלה' }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const getStatusMeta = (state) => {
+    if (state === 'downloaded') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'העדכון מוכן להתקנה' };
+    if (state === 'downloading' || state === 'checking') return { color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE', title: 'העדכון בבדיקה/הורדה' };
+    if (state === 'up-to-date') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'האפליקציה מעודכנת' };
+    if (state === 'dev-mode' || state === 'web' || state === 'unavailable') return { color: '#92400E', bg: '#FFFBEB', border: '#FDE68A', title: 'עדכון לא זמין כרגע' };
+    if (state === 'error') return { color: '#991B1B', bg: '#FEF2F2', border: '#FECACA', title: 'אירעה שגיאה בעדכון' };
+    return { color: '#475569', bg: '#F8FAFC', border: '#CBD5E1', title: 'בדיקת עדכונים' };
+  };
+
+  const meta = getStatusMeta(updateInfo.status);
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 14, lineHeight: 1.7 }}>
+        כאן אפשר לבדוק ידנית אם יש גרסה חדשה, ולהתקין אותה מתוך האפליקציה ברגע שהיא מוכנה.
+      </p>
+
+      <div style={{ border: `1px solid ${meta.border}`, background: meta.bg, borderRadius: 14, padding: '14px', marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: meta.color, marginBottom: 6 }}>{meta.title}</div>
+        <div style={{ fontSize: 12, color: '#334155', marginBottom: 8 }}>{updateInfo.message || 'מוכן לבדיקת עדכונים'}</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: '#475569' }}>
+          <span>גרסה נוכחית: {updateInfo.currentVersion || '—'}</span>
+          {updateInfo.availableVersion && <span>גרסה זמינה: {updateInfo.availableVersion}</span>}
+          {(updateInfo.status === 'downloading' || updateInfo.status === 'checking') && <span>התקדמות: {Math.round(Number(updateInfo.percent || 0))}%</span>}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={checkNow}
+          disabled={busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading' || !window.desktopApp?.checkForAppUpdates}
+          style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #93C5FD', background: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? '#E5E7EB' : '#EFF6FF', color: '#1D4ED8', cursor: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? 'default' : 'pointer', fontWeight: 700 }}
+        >
+          {busy ? 'בודק…' : 'בדוק אם יש עדכון'}
+        </button>
+
+        {updateInfo.status === 'downloaded' && (
+          <button
+            onClick={installNow}
+            disabled={busy}
+            style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: busy ? 'default' : 'pointer', fontWeight: 700 }}
+          >
+            התקן עכשיו
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1118,9 +1249,9 @@ function AppearanceSettings() {
 }
 
 // ─── FileMenu ראשי ───
-export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange }) {
-  const [activePanel, setActivePanel] = useState('main');
-  const [settingsTab, setSettingsTab] = useState('ai');
+export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null }) {
+  const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
+  const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
   const [config, setConfig] = useState(getProviderConfig);
   const [shortcutsState, setShortcutsState] = useState(shortcuts || getShortcutsConfig());
   const [assistantBehaviorState, setAssistantBehaviorState] = useState(assistantBehavior || getAssistantBehavior());
@@ -1130,6 +1261,13 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
   const didHydrate = useRef(false);
+
+  useEffect(() => {
+    if (initialSettingsTab) {
+      setActivePanel('settings');
+      setSettingsTab(initialSettingsTab);
+    }
+  }, [initialSettingsTab]);
 
   useEffect(() => {
     if (!didHydrate.current) {
@@ -1218,11 +1356,20 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
           <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '6px 10px' }} />
 
+          <button
+            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 6, fontSize: 13, background: (activePanel === 'settings' && settingsTab === 'updates') ? 'rgba(255,255,255,0.25)' : 'none', border: 'none', color: 'white', cursor: 'pointer', textAlign: 'right', width: '100%' }}
+            onClick={() => { setActivePanel('settings'); setSettingsTab('updates'); }}
+            onMouseEnter={e => { if (!(activePanel === 'settings' && settingsTab === 'updates')) e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
+            onMouseLeave={e => { if (!(activePanel === 'settings' && settingsTab === 'updates')) e.currentTarget.style.background = 'none'; }}>
+            <i className="ph-fill ph-arrow-circle-up" style={{ fontSize: 16, flexShrink: 0 }} />
+            בדוק עדכונים
+          </button>
+
           {sideBtn('settings', 'ph-fill ph-gear', 'הגדרות', true)}
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          Word AI Perfect Assistant v2.0
+          Word AI Perfect Assistant v1.0.2
         </div>
       </div>
 
@@ -1242,7 +1389,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
             {/* Tabs */}
             <div style={{ display: 'flex', borderBottom: '1px solid #E1DFDD', marginBottom: 28 }}>
-              {[['ai', '🤖 מנועי AI'], ['agents', '🧩 סוכני תפקיד'], ['debug', '🪵 לוגים'], ['assistant', '✨ עוזר חכם'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']].map(([id, label]) => (
+              {[['ai', '🤖 מנועי AI'], ['agents', '🧩 סוכני תפקיד'], ['updates', '⬆️ עדכונים'], ['debug', '🪵 לוגים'], ['assistant', '✨ עוזר חכם'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']].map(([id, label]) => (
                 <button key={id} onClick={() => setSettingsTab(id)}
                   style={{ padding: '9px 22px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: settingsTab === id ? 700 : 400, color: settingsTab === id ? '#2B579A' : '#605E5C', borderBottom: settingsTab === id ? '2px solid #2B579A' : '2px solid transparent', marginBottom: -1, transition: 'all 0.15s' }}>
                   {label}
@@ -1252,6 +1399,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
             {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
             {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}
+            {settingsTab === 'updates'     && <UpdateSettings />}
             {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}
             {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
             {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
