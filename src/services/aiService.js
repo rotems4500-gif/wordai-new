@@ -13,10 +13,10 @@ export const DEFAULT_PROVIDER_CONFIG = {
   multiModelEnabled: false,
   gemini:     { key: '' },
   openai:     { key: '', model: 'gpt-4o' },
-  claude:     { key: '', model: 'claude-3-5-sonnet-20241022' },
+  claude:     { key: '', model: 'claude-sonnet-4-6' },
   groq:       { key: '', model: 'llama-3.3-70b-versatile' },
   ollama:     { baseUrl: 'http://localhost:11434/v1', model: 'llama3.2' },
-  perplexity: { key: '', model: 'llama-3.1-sonar-large-128k-online' },
+  perplexity: { key: '', model: 'sonar-pro' },
   custom:     { name: '', baseUrl: '', key: '', model: '' },
 };
 
@@ -181,14 +181,22 @@ const normalizeProviderModelName = (providerId = '', modelName = '') => {
 
   const aliasMap = {
     claude: {
-      'claude-3-5-sonnet': 'claude-3-5-sonnet-20241022',
-      'claude-3.5-sonnet': 'claude-3-5-sonnet-20241022',
+      'claude-3-5-sonnet': 'claude-sonnet-4-6',
+      'claude-3.5-sonnet': 'claude-sonnet-4-6',
+      'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
+      'claude-3-5-sonnet-20240620': 'claude-sonnet-4-6',
+      'claude-3-opus-20240229': 'claude-sonnet-4-6',
+      'claude-3-sonnet-20240229': 'claude-sonnet-4-6',
+      'claude-3-haiku-20240307': 'claude-haiku-4-5',
+      'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
     },
     perplexity: {
-      'sonar-large': 'llama-3.1-sonar-large-128k-online',
-      'sonar-small': 'llama-3.1-sonar-small-128k-online',
-      'sonar-medium': 'llama-3.1-sonar-large-128k-online',
-      'sonar': 'llama-3.1-sonar-large-128k-online',
+      'sonar-large': 'sonar-pro',
+      'sonar-small': 'sonar',
+      'sonar-medium': 'sonar-pro',
+      'llama-3.1-sonar-large-128k-online': 'sonar-pro',
+      'llama-3.1-sonar-small-128k-online': 'sonar',
+      'llama-3.1-sonar-large-128k-chat': 'sonar-pro',
     },
   };
 
@@ -917,13 +925,13 @@ const getModelNameForProvider = (provider, cfg, override = '') => {
     case 'openai':
       return normalizeProviderModelName('openai', cfg.openai.model || 'gpt-4o');
     case 'claude':
-      return normalizeProviderModelName('claude', cfg.claude.model || 'claude-3-5-sonnet-20241022');
+      return normalizeProviderModelName('claude', cfg.claude.model || 'claude-sonnet-4-6');
     case 'groq':
       return normalizeProviderModelName('groq', cfg.groq.model || 'llama-3.3-70b-versatile');
     case 'ollama':
       return normalizeProviderModelName('ollama', cfg.ollama.model || 'llama3.2');
     case 'perplexity':
-      return normalizeProviderModelName('perplexity', cfg.perplexity.model || 'llama-3.1-sonar-large-128k-online');
+      return normalizeProviderModelName('perplexity', cfg.perplexity.model || 'sonar-pro');
     case 'custom':
       return normalizeProviderModelName('custom', cfg.custom.model || 'custom-model');
     default:
@@ -1491,7 +1499,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, modelOverride || cfg.claude.model || 'claude-3-5-sonnet-20241022', sysPrompt, cleanUserPrompt, signal);
+        return callClaudeApi(cfg.claude.key, normalizeProviderModelName('claude', modelOverride || cfg.claude.model || 'claude-sonnet-4-6'), sysPrompt, cleanUserPrompt, signal);
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
@@ -1510,7 +1518,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, modelOverride || cfg.perplexity.model || 'llama-3.1-sonar-large-128k-online', [
+        return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, normalizeProviderModelName('perplexity', modelOverride || cfg.perplexity.model || 'sonar-pro'), [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
         ], signal);
@@ -1565,6 +1573,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       return result;
     } catch (error) {
       lastError = error;
+      const errMsg = error?.message || '';
+      const isModelError = /(404|not_found|invalid.model|invalid_model)/i.test(errMsg);
+      if (isModelError) {
+        logEvent('attempt-error', `מודל לא תקין (${resolvedModel}), מדלג על ניסיונות חוזרים`, {
+          state: 'error',
+          attempt: attempt + 1,
+          errorMessage: errMsg,
+        });
+        break;
+      }
       if (attempt < effectiveRetries) {
         logEvent('attempt-retry', `הבקשה נכשלה, יתבצע ניסיון נוסף (${attempt + 2}/${effectiveRetries + 1})`, {
           state: 'retrying',
@@ -1591,6 +1609,41 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         errorMessage: error?.message || 'שגיאה לא ידועה',
       });
       emitStatus(onStatus, { state: 'error', progress: 100, runId, provider: activeProvider, model: resolvedModel, agentLabel, attempt: attempt + 1, message: error?.message || 'שגיאה' });
+    }
+  }
+
+  // ─── Fallback: אם המנוע נכשל ו-Gemini זמין, נסה דרך Gemini ─────
+  if (activeProvider !== 'gemini' && isProviderConfiguredForUse('gemini', cfg)) {
+    try {
+      logEvent('provider-fallback', `מנוע ${activeProvider} נכשל, מנסה דרך gemini`, {
+        state: 'retrying',
+        originalProvider: activeProvider,
+        originalModel: resolvedModel,
+        fallbackProvider: 'gemini',
+        errorMessage: lastError?.message || '',
+      });
+      emitStatus(onStatus, { state: 'retrying', progress: 50, runId, provider: 'gemini', model: 'gemini-2.5-flash', agentLabel, message: `מנוע ${activeProvider} נכשל, מנסה דרך Gemini` });
+      const geminiKey = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
+      const genAI = new GoogleGenerativeAI(geminiKey);
+      const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const fallbackResult = await withTimeout(
+        fallbackModel.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`),
+        timeoutMs,
+        () => {}
+      );
+      const fallbackText = fallbackResult.response.text();
+      logEvent('provider-fallback-success', 'Gemini החזיר תשובה חלופית', {
+        state: 'success',
+        fallbackProvider: 'gemini',
+        responseChars: String(fallbackText || '').length,
+      });
+      emitStatus(onStatus, { state: 'success', progress: 100, runId, provider: 'gemini', model: 'gemini-2.5-flash', agentLabel, message: 'הושלם (Gemini fallback)' });
+      return fallbackText;
+    } catch (fallbackError) {
+      logEvent('provider-fallback-error', 'גם Gemini fallback נכשל', {
+        state: 'error',
+        errorMessage: fallbackError?.message || '',
+      });
     }
   }
 

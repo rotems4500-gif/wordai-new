@@ -26,7 +26,7 @@ import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace
 const POPULAR_CUSTOM = [
   { name: 'Groq (מהיר ובחינם)',    url: 'https://api.groq.com/openai/v1',         note: 'מפתח חינמי ב-console.groq.com',           model: 'llama-3.3-70b-versatile',              keyNote: 'מתחיל ב-gsk_' },
   { name: 'Mistral AI',             url: 'https://api.mistral.ai/v1',               note: 'מפתח ב-console.mistral.ai',               model: 'mistral-large-latest',                 keyNote: 'מפתח אלפאנומרי' },
-  { name: 'Perplexity',             url: 'https://api.perplexity.ai',               note: 'מפתח ב-perplexity.ai/settings/api',       model: 'llama-3.1-sonar-large-128k-online',    keyNote: 'מתחיל ב-pplx-' },
+  { name: 'Perplexity',             url: 'https://api.perplexity.ai',               note: 'מפתח ב-perplexity.ai/settings/api',       model: 'sonar-pro',    keyNote: 'מתחיל ב-pplx-' },
   { name: 'Together.ai',            url: 'https://api.together.xyz/v1',             note: 'מפתח ב-api.together.ai',                   model: 'meta-llama/Llama-3-70b-chat-hf',       keyNote: 'מפתח ארוך' },
   { name: 'DeepSeek',               url: 'https://api.deepseek.com/v1',             note: 'מפתח ב-platform.deepseek.com',             model: 'deepseek-chat',                        keyNote: 'מתחיל ב-sk-' },
   { name: 'Ollama (מקומי - חינם)', url: 'http://localhost:11434/v1',              note: 'הורד מ-ollama.com — ✅ לא דורש מפתח',    model: 'llama3.2',                             keyNote: 'ריק (לא נדרש)' },
@@ -36,9 +36,9 @@ const POPULAR_CUSTOM = [
 const PROVIDER_MODEL_OPTIONS = {
   gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash'],
   openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
-  claude: ['claude-3-5-sonnet-20241022', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'],
+  claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
-  perplexity: ['llama-3.1-sonar-large-128k-online', 'sonar-pro', 'sonar'],
+  perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
   ollama: ['llama3.2', 'qwen2.5', 'mistral'],
   custom: ['deepseek-chat', 'mistral-large-latest', 'loaded-model'],
 };
@@ -237,7 +237,7 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API ב: console.anthropic.com/settings/keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-ant-..." value={config.claude?.key}
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
-        <FieldRow label="מודל" placeholder="claude-3-5-sonnet-20241022" value={config.claude?.model}
+        <FieldRow label="מודל" placeholder="claude-sonnet-4-6" value={config.claude?.model}
           onChange={v => update('claude', 'model', v)} />
       </ProviderSection>
 
@@ -255,8 +255,8 @@ function AiSettings({ config, setConfig }) {
         description="AI עם גישה לאינטרנט בזמן אמת. מפתח ב: perplexity.ai/settings/api">
         <FieldRow label="מפתח API" type="password" placeholder="pplx-..." value={config.perplexity?.key}
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
-        <FieldRow label="מודל" placeholder="llama-3.1-sonar-large-128k-online" value={config.perplexity?.model}
-          onChange={v => update('perplexity', 'model', v)} hint="sonar-large = עם גישה לאינטרנט" />
+        <FieldRow label="מודל" placeholder="sonar-pro" value={config.perplexity?.model}
+          onChange={v => update('perplexity', 'model', v)} hint="sonar-pro = עם גישה לאינטרנט" />
       </ProviderSection>
 
       {/* Ollama */}
@@ -942,7 +942,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 <input
                   value={agent.model || ''}
                   onChange={(e) => updateAgent(index, 'model', e.target.value)}
-                  placeholder="אפשר גם להקליד ידנית: gemini-2.5-flash / gpt-4o / claude-3-5-sonnet"
+                  placeholder="אפשר גם להקליד ידנית: gemini-2.5-flash / gpt-4o / claude-sonnet-4-6"
                   style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, direction: 'ltr' }}
                 />
               </div>
@@ -1369,7 +1369,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          Word AI Perfect Assistant v1.0.5
+          Word AI Perfect Assistant v1.0.6
         </div>
       </div>
 
