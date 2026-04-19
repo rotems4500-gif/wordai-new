@@ -1,6 +1,6 @@
 {
   "name": "word-ai-assistant",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Word AI Assistant built with Vite",
   "author": "Rotem",
   "repository": {
@@ -16,7 +16,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "sync:storage": "node scripts/sync-storage-to-local.mjs",
-    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"", 
+    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"",
     "desktop:build": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
     "dist:publish": "npm run build && electron-builder --win nsis --publish always"
