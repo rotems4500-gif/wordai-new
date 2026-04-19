@@ -43,6 +43,23 @@ const PROVIDER_MODEL_OPTIONS = {
   custom: ['deepseek-chat', 'mistral-large-latest', 'loaded-model'],
 };
 
+const ACTION_VISIBILITY_OPTIONS = [
+  { id: 'fix', label: 'תיקון מהיר', hint: 'כתיב, דקדוק וליטוש' },
+  { id: 'summary', label: 'סיכום', hint: 'תקציר קצר של הקטע' },
+  { id: 'academic', label: 'אקדמי', hint: 'ניסוח רשמי ומובנה' },
+  { id: 'humanize', label: 'האנשה', hint: 'ריכוך ושפה טבעית יותר' },
+  { id: 'organize', label: 'ארגון', hint: 'סידור מבנה ורצף' },
+  { id: 'textToTable', label: 'המרה לטבלה', hint: 'כשהקטע מתאים להצגה טבלאית' },
+  { id: 'expand', label: 'הרחבה', hint: 'הוספת עומק ודוגמאות' },
+  { id: 'bullets', label: 'רשימת נקודות', hint: 'הפיכה לרשימה ברורה' },
+  { id: 'shorter', label: 'קיצור', hint: 'צמצום בלי לאבד משמעות' },
+  { id: 'continue', label: 'המשך כתיבה', hint: 'יצירת המשך חדש' },
+  { id: 'intro', label: 'מבוא', hint: 'פתיחה למסמך' },
+  { id: 'conclusion', label: 'מסקנה', hint: 'סיום חד וברור' },
+  { id: 'sources', label: 'מקורות', hint: 'הצעת כיווני חיפוש' },
+  { id: 'translate', label: 'תרגום לאנגלית', hint: 'המרת הקטע לאנגלית' },
+];
+
 const linkifyText = (text = '') => {
   const value = String(text || '');
   const parts = value.split(/(https?:\/\/[^\s)]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s)]*)?)/gi);
@@ -370,6 +387,13 @@ const splitList = (value) => String(value || '').split(/[\n,]/).map((item) => it
 
 function WordDefaultsSettings({ prefs, setPrefs }) {
   const setFlag = (field, value) => setPrefs(prev => ({ ...prev, [field]: value }));
+  const setActionVisibility = (actionId, value) => setPrefs(prev => ({
+    ...prev,
+    aiQuickActions: {
+      ...(prev.aiQuickActions || {}),
+      [actionId]: value,
+    },
+  }));
 
   return (
     <div>
@@ -421,6 +445,29 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
             {label}
           </label>
         ))}
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 6 }}>התאמה אישית של פעולות AI</div>
+        <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, lineHeight: 1.6 }}>
+          בחר אילו פעולות יופיעו בסרגל האקדמי ובחלונית ה-AI. השינויים חלים מיד.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {ACTION_VISIBILITY_OPTIONS.map((action) => (
+            <label key={action.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#323130', border: '1px solid #E5E7EB', borderRadius: 10, padding: '8px 10px', background: '#FAFAFA' }}>
+              <input
+                type="checkbox"
+                checked={prefs.aiQuickActions?.[action.id] !== false}
+                onChange={(e) => setActionVisibility(action.id, e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong style={{ display: 'block', marginBottom: 2 }}>{action.label}</strong>
+                <span style={{ fontSize: 10, color: '#64748B' }}>{action.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
       </div>
 
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
@@ -636,6 +683,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
 
 function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, config }) {
   const presets = getWorkspaceAgentPresets();
+  const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
+  const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
 
   const updateAgent = (index, field, value) => {
     setAgents(prev => prev.map((agent, i) => i === index ? { ...agent, [field]: value } : agent));
@@ -692,7 +741,18 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   };
 
   const removeAgent = (index) => {
-    setAgents(prev => prev.filter((_, i) => i !== index));
+    setAgents((prev) => {
+      const target = prev[index];
+      if (automation?.workflowMode === 'manager-auto' && /manager|מנהל/i.test(`${target?.id || ''} ${target?.name || ''}`)) {
+        return prev;
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
+  const updateManager = (field, value) => {
+    if (managerIndex < 0) return;
+    updateAgent(managerIndex, field, value);
   };
 
   return (
@@ -733,10 +793,27 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>סדר עבודה</div>
             <select
               value={automation?.workflowMode || 'manager-pipeline'}
-              onChange={(e) => setAutomation(prev => ({ ...prev, workflowMode: e.target.value, preset: e.target.value === 'custom-order' ? 'custom-workspace' : prev.preset }))}
+              onChange={(e) => {
+                const nextMode = e.target.value;
+                setAutomation(prev => ({ ...prev, workflowMode: nextMode, preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset }));
+                if (nextMode === 'manager-auto') {
+                  setAgents((prev) => {
+                    const hasManager = prev.some((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
+                    const hasAdditionalRoles = prev.some((agent) => !/manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
+                    if (hasManager && hasAdditionalRoles) return prev;
+                    const fallbackTeam = buildWorkspaceAgentPreset(automation?.preset || 'content-studio');
+                    const currentManager = prev.find((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
+                    return fallbackTeam.map((agent) => (
+                      /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`) && currentManager
+                        ? { ...agent, ...currentManager }
+                        : agent
+                    ));
+                  });
+                }
+              }}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
-              <option value="manager-auto">AUTOPILOT מלא — המנהל קובע תפקידים וסדר</option>
+              <option value="manager-auto">AUTOPILOT מלא — המנהל קובע תפקידים, סדר ואסטרטגיה</option>
               <option value="manager-pipeline">מנהל ← מקורות ← מבנה ← כתיבה ← ליטוש</option>
               <option value="design-first">מבנה קודם</option>
               <option value="research-first">חקר קודם</option>
@@ -807,6 +884,9 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               AUTOPILOT מלא — קבע תפקידים, סדר ומודל באופן אוטומטי
             </label>
             כשהאפשרות פעילה, מנהל העבודה מחליט לבד מי צריך לעבוד, באיזה סדר, ואיזה תפקיד זמני יהיה לכל שלב.
+            <div style={{ marginTop: 6, color: '#334155' }}>
+              במצב הזה מוצגות למטה רק הגדרות המנהל. שאר התפקידים נקבעים אוטומטית בזמן הריצה.
+            </div>
           </div>
         )}
 
@@ -863,8 +943,58 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
       </div>
 
+      {automation?.workflowMode === 'manager-auto' && managerAgent && (
+        <div style={{ border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A' }}>בקרת מנהל העבודה</div>
+              <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>כאן בוחרים מהר את המנוע והמודל של מי שמנהל את כל תהליך ה-AUTOPILOT.</div>
+            </div>
+            <span style={{ fontSize: 10, background: '#DBEAFE', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999, fontWeight: 700 }}>AUTOPILOT</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>ספק למנהל</div>
+              <select
+                value={managerAgent.provider || ''}
+                onChange={(e) => updateManager('provider', e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
+              >
+                <option value="">כמו הספק הפעיל</option>
+                <option value="gemini" disabled={!isProviderConfigured(config, 'gemini')}>Gemini</option>
+                <option value="openai" disabled={!isProviderConfigured(config, 'openai')}>OpenAI</option>
+                <option value="claude" disabled={!isProviderConfigured(config, 'claude')}>Claude</option>
+                <option value="groq" disabled={!isProviderConfigured(config, 'groq')}>Groq</option>
+                <option value="perplexity" disabled={!isProviderConfigured(config, 'perplexity')}>Perplexity</option>
+                <option value="ollama" disabled={!isProviderConfigured(config, 'ollama')}>Ollama</option>
+                <option value="custom" disabled={!isProviderConfigured(config, 'custom')}>Custom</option>
+              </select>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל למנהל</div>
+              <input
+                value={managerAgent.model || ''}
+                onChange={(e) => updateManager('model', e.target.value)}
+                placeholder="למשל: gemini-2.5-pro או claude-sonnet-4-6"
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, direction: 'ltr', background: 'white' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 11, color: '#334155', lineHeight: 1.6 }}>
+            ההנחיות המלאות של המנהל זמינות לעריכה בכרטיס שלו למטה, אבל בחירת המוח המנהל עכשיו הרבה יותר ישירה.
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {agents.map((agent, index) => (
+        {agents.map((agent, index) => {
+          if (automation?.workflowMode === 'manager-auto' && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
+            return null;
+          }
+          return (
           <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
               <span style={{ minWidth: 28, height: 28, borderRadius: 999, background: '#EEF4FF', color: '#2B579A', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>
@@ -878,23 +1008,24 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               />
               <button
                 type="button"
-                disabled={index === 0}
+                disabled={automation?.workflowMode === 'manager-auto' || index === 0}
                 onClick={() => moveAgent(index, -1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === 0 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === 0 ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (automation?.workflowMode === 'manager-auto' || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (automation?.workflowMode === 'manager-auto' || index === 0) ? 'default' : 'pointer' }}
               >
                 ↑
               </button>
               <button
                 type="button"
-                disabled={index === agents.length - 1}
+                disabled={automation?.workflowMode === 'manager-auto' || index === agents.length - 1}
                 onClick={() => moveAgent(index, 1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === agents.length - 1 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === agents.length - 1 ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (automation?.workflowMode === 'manager-auto' || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (automation?.workflowMode === 'manager-auto' || index === agents.length - 1) ? 'default' : 'pointer' }}
               >
                 ↓
               </button>
               <button
                 onClick={() => removeAgent(index)}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer' }}
+                disabled={automation?.workflowMode === 'manager-auto'}
+                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: automation?.workflowMode === 'manager-auto' ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: automation?.workflowMode === 'manager-auto' ? 'default' : 'pointer', opacity: automation?.workflowMode === 'manager-auto' ? 0.6 : 1 }}
               >
                 מחק
               </button>
@@ -957,15 +1088,18 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               פעיל בחלונית ה-AI
             </label>
           </div>
-        ))}
+          );
+        })}
       </div>
 
-      <button
-        onClick={addAgent}
-        style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
-      >
-        + הוסף סוכן תפקידי
-      </button>
+      {automation?.workflowMode !== 'manager-auto' && (
+        <button
+          onClick={addAgent}
+          style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + הוסף סוכן תפקידי
+        </button>
+      )}
     </div>
   );
 }

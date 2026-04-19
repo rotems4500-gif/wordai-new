@@ -505,10 +505,26 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <div className="toolbar-group">
                 <div className="toolbar-group-items flex-col items-start gap-1">
                     <div className="flex gap-1">
-                        <select className="r-select" style={{ width: '130px' }} onChange={(e) => onCommand('fontFamily', e.target.value)}>
+                        <select
+                          className="r-select"
+                          style={{ width: '130px' }}
+                          value={activeFormats.fontFamily || 'Alef'}
+                          onChange={(e) => onCommand('fontFamily', e.target.value)}
+                        >
+                          {!FONTS.includes(activeFormats.fontFamily || 'Alef') && (
+                            <option value={activeFormats.fontFamily || 'Alef'}>{activeFormats.fontFamily || 'Alef'}</option>
+                          )}
                           {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
-                        <select className="r-select" style={{ width: '50px' }} defaultValue="12" onChange={(e) => onCommand('fontSize', e.target.value + 'pt')}>
+                        <select
+                          className="r-select"
+                          style={{ width: '58px' }}
+                          value={String(activeFormats.fontSize || '12')}
+                          onChange={(e) => onCommand('fontSize', e.target.value + 'pt')}
+                        >
+                          {!SIZES.includes(String(activeFormats.fontSize || '12')) && (
+                            <option value={String(activeFormats.fontSize || '12')}>{activeFormats.fontSize || '12'}</option>
+                          )}
                           {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                         <button className="r-btn r-btn-small" onClick={() => onCommand('fontSizeInc')} title="הגדל גופן" style={{fontSize:'11px',padding:'0 3px'}}>A+</button>

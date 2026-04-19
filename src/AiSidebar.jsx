@@ -15,7 +15,7 @@ const QUICK_ACTIONS = [
   { id: 'humanize',  icon: '👤', label: 'הפוך לאנושי',   prompt: 'שכתב בסגנון אנושי וטבעי',             sel: true  },
   { id: 'summary',   icon: '📝', label: 'סכם',            prompt: 'סכם בנקודות עיקריות קצרות',            sel: true  },
   { id: 'expand',    icon: '📖', label: 'הרחב',           prompt: 'הרחב עם פרטים ודוגמאות נוספות',        sel: true  },
-  { id: 'formal',    icon: '🎓', label: 'אקדמי',          prompt: 'שכתב בסגנון אקדמי ופורמלי',           sel: true  },
+  { id: 'academic',  icon: '🎓', label: 'אקדמי',          prompt: 'שכתב בסגנון אקדמי ופורמלי',           sel: true  },
   { id: 'translate', icon: '🌐', label: 'תרגם לאנגלית',  prompt: 'תרגם לאנגלית בצורה טבעית',            sel: true  },
   { id: 'bullets',   icon: '📋', label: 'הפוך לרשימה',   prompt: 'המר לרשימת נקודות ברורה',              sel: true  },
   { id: 'shorter',   icon: '✂️', label: 'קצר',            prompt: 'קצר ב-50% בלי לאבד משמעות',           sel: true  },
@@ -25,15 +25,15 @@ const QUICK_ACTIONS = [
   { id: 'sources',   icon: '📚', label: 'הצע מקורות',    prompt: 'הצע מקורות מחקריים רלוונטיים לנושא',   sel: false },
 ];
 
-const bbl = (isUser) => ({
-  maxWidth: '90%',
-  padding: '11px 14px',
+const bbl = (isUser, compactMode = false) => ({
+  maxWidth: compactMode ? '96%' : '90%',
+  padding: compactMode ? '9px 11px' : '11px 14px',
   borderRadius: isUser ? '18px 6px 18px 18px' : '6px 18px 18px 18px',
   background: isUser ? 'linear-gradient(135deg,#2B579A 0%,#106EBE 100%)' : '#F8FAFC',
   border: isUser ? 'none' : '1px solid #E2E8F0',
   color: isUser ? 'white' : '#0F172A',
-  fontSize: 13,
-  lineHeight: 1.6,
+  fontSize: compactMode ? 12 : 13,
+  lineHeight: compactMode ? 1.5 : 1.6,
   whiteSpace: 'pre-wrap',
   boxShadow: isUser ? '0 8px 18px rgba(43,87,154,0.16)' : '0 4px 12px rgba(15,23,42,0.06)',
   direction: 'rtl',
@@ -42,9 +42,9 @@ const bbl = (isUser) => ({
 
 const actBtn = { padding: '8px 6px', border: '1px solid #E1DFDD', borderRadius: 10, background: 'white', cursor: 'pointer', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: '#323130', transition: 'all 0.12s' };
 
-const getShellStyle = (mode) => ({
-  width: mode === 'sidebar' ? 360 : 430,
-  background: mode === 'sidebar' ? '#F3F2F1' : 'linear-gradient(180deg,#FFFFFF 0%,#FBFDFF 100%)',
+const getShellStyle = (mode, compactMode = false) => ({
+  width: mode === 'sidebar' ? '100%' : (compactMode ? 390 : 430),
+  background: mode === 'sidebar' ? '#F8FAFC' : 'linear-gradient(180deg,#FFFFFF 0%,#FBFDFF 100%)',
   border: mode === 'sidebar' ? 'none' : '1px solid #E5E7EB',
   display: 'flex',
   flexDirection: 'column',
@@ -58,7 +58,7 @@ const getShellStyle = (mode) => ({
   boxShadow: mode === 'popup' ? '0 18px 40px rgba(15,23,42,0.16)' : 'none',
 });
 
-export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual' }) {
+export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {} }) {
   const [tab, setTab] = useState('chat');
   const workspaceAutomation = getWorkspaceAutomation();
   const roleAgents = getOrderedRoleAgents(workspaceAutomation.workflowMode);
@@ -70,13 +70,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [loading, setLoading] = useState(false);
   const [activeAgentStatus, setActiveAgentStatus] = useState({ agentLabel: '', progress: 0, message: 'מוכן', state: 'idle' });
   const [agentProgressMap, setAgentProgressMap] = useState({});
-  const [showLogs, setShowLogs] = useState(true);
+  const [showLogs, setShowLogs] = useState(mode !== 'sidebar');
   const [debugLogs, setDebugLogs] = useState(() => getAgentDebugLogs().slice(-60).reverse());
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
 
   const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
   const localContext = selectedText || currentBlockText;
+  const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
+  const visibleActions = QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
+  const selectionActions = visibleActions.filter((action) => action.sel);
+  const generationActions = visibleActions.filter((action) => !action.sel);
+  const shouldShowProgress = workspaceAutomation.showProgress !== false && (!compactMode || tab === 'agents' || ['running', 'retrying', 'error'].includes(activeAgentStatus.state));
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -246,31 +251,42 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   };
 
   return (
-    <div style={getShellStyle(mode)} dir="rtl">
+    <div style={getShellStyle(mode, compactMode)} dir="rtl">
 
       {/* כותרת */}
-      <div style={{ background: 'linear-gradient(135deg,#2B579A 0%,#106EBE 100%)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 24 }}>✨</span>
+      <div style={{ background: 'linear-gradient(135deg,#2B579A 0%,#106EBE 100%)', padding: compactMode ? '10px 12px' : '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: compactMode ? 8 : 10 }}>
+          <span style={{ fontSize: compactMode ? 20 : 24 }}>✨</span>
           <div>
-            <div style={{ color: 'white', fontWeight: 700, fontSize: 14 }}>AI Perfect Assistant</div>
+            <div style={{ color: 'white', fontWeight: 700, fontSize: compactMode ? 13 : 14 }}>AI Perfect Assistant</div>
             <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 1 }}>מנוע פעיל: {getActiveProviderName()}</div>
           </div>
         </div>
-        <button style={{ color: 'rgba(255,255,255,0.8)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 6px', borderRadius: 4 }} onClick={onClose}>×</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {mode === 'sidebar' && (
+            <button
+              style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '6px 8px', borderRadius: 8 }}
+              onClick={onToggleCompact}
+              title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
+            >
+              {compactMode ? '⤢' : '⤡'}
+            </button>
+          )}
+          <button style={{ color: 'rgba(255,255,255,0.8)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 6px', borderRadius: 4 }} onClick={onClose}>×</button>
+        </div>
       </div>
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #E1DFDD', background: '#F8F7F6', flexShrink: 0 }}>
         {[['chat', "💬 צ'אט"], ['actions', '⚡ פעולות'], ['agents', '🧩 סוכנים']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ flex: 1, padding: '9px', fontSize: 12, border: 'none', cursor: 'pointer', fontWeight: tab === id ? 600 : 400, background: tab === id ? 'white' : 'transparent', color: tab === id ? '#2B579A' : '#605E5C', borderBottom: tab === id ? '2px solid #2B579A' : '2px solid transparent' }}>
+            style={{ flex: 1, padding: compactMode ? '8px 6px' : '9px', fontSize: compactMode ? 11 : 12, border: 'none', cursor: 'pointer', fontWeight: tab === id ? 600 : 400, background: tab === id ? 'white' : 'transparent', color: tab === id ? '#2B579A' : '#605E5C', borderBottom: tab === id ? '2px solid #2B579A' : '2px solid transparent' }}>
             {label}
           </button>
         ))}
       </div>
 
-      {workspaceAutomation.showProgress !== false && (
+      {shouldShowProgress && (
         <div style={{ padding: '10px 12px', background: '#F8FBFF', borderBottom: '1px solid #DBEAFE', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: '#1E3A8A', fontWeight: 700, marginBottom: 6 }}>
             <span>{activeAgentStatus.agentLabel ? `כעת עובד: ${activeAgentStatus.agentLabel}` : 'מוכן לעבודה'}</span>
@@ -290,7 +306,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         </div>
       )}
 
-      <div style={{ padding: '10px 12px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', flexShrink: 0 }}>
+      <div style={{ padding: compactMode ? '7px 10px' : '10px 12px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <button
             onClick={() => setShowLogs((prev) => !prev)}
@@ -339,7 +355,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       {/* ─── Chat ─── */}
       {tab === 'chat' && (
         <>
-          <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 10, background: mode === 'sidebar' ? '#FCFDFE' : 'transparent' }}>
+          <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: compactMode ? 10 : 12, display: 'flex', flexDirection: 'column', gap: compactMode ? 8 : 10, background: mode === 'sidebar' ? '#FCFDFE' : 'transparent' }}>
             {reason === 'idle' && (
               <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 14, padding: '10px 12px', color: '#9A3412', fontSize: 12, fontWeight: 600 }}>
                 נראה שנתקעת רגע — אני יכול לעזור בלי להוציא אותך מקו המחשבה.
@@ -353,7 +369,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 {selectedText && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>הטקסט הנבחר</span>}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {CONTEXT_PROMPTS.map((prompt) => (
+                {quickPromptList.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => send(prompt)}
@@ -366,7 +382,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
             </div>
             {messages.map((msg, i) => (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                <div style={bbl(msg.role === 'user')}>{msg.content}</div>
+                <div style={bbl(msg.role === 'user', compactMode)}>{msg.content}</div>
                 {msg.role === 'assistant' && !msg.error && onInsert && (
                   <button onClick={() => onInsert(msg.content)}
                     style={{ fontSize: 11, color: '#2B579A', background: 'none', border: 'none', cursor: 'pointer', marginTop: 3, padding: '2px 4px', textDecoration: 'underline' }}>
@@ -377,7 +393,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
             ))}
             {loading && (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <div style={{ ...bbl(false), color: '#605E5C', fontStyle: 'italic' }}>⏳ מחשב...</div>
+                <div style={{ ...bbl(false, compactMode), color: '#605E5C', fontStyle: 'italic' }}>⏳ מחשב...</div>
               </div>
             )}
             <div style={{ height: 1 }} />
@@ -393,7 +409,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                 placeholder="כתוב חופשי, למשל: @claude תחדד לי את זה / @gemini יש מקור לזה?"
-                style={{ flex: 1, resize: 'none', border: '1px solid #CBD5E1', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', height: 72, direction: 'rtl', background: '#F8FAFC' }}
+                style={{ flex: 1, resize: 'none', border: '1px solid #CBD5E1', borderRadius: 12, padding: compactMode ? '9px 10px' : '10px 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', height: compactMode ? 56 : 72, direction: 'rtl', background: '#F8FAFC' }}
                 disabled={loading} />
               <button onClick={() => send()} disabled={loading || !input.trim()}
                 style={{ width: 40, flexShrink: 0, background: !loading && input.trim() ? '#2B579A' : '#C8C6C4', color: 'white', border: 'none', borderRadius: 8, cursor: !loading && input.trim() ? 'pointer' : 'default', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -418,28 +434,40 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           )}
 
           <div style={{ fontSize: 11, fontWeight: 700, color: '#323130', marginBottom: 6 }}>✂️ עריכת הקטע הנוכחי</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
-            {QUICK_ACTIONS.filter(a => a.sel).map(a => (
-              <button key={a.id} style={actBtn} onClick={() => runAction(a)}
-                onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; e.currentTarget.style.borderColor = '#93C5FD'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
-                <span style={{ fontSize: 20 }}>{a.icon}</span>
-                <span>{a.label}</span>
-              </button>
-            ))}
-          </div>
+          {selectionActions.length ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
+              {selectionActions.map(a => (
+                <button key={a.id} style={actBtn} onClick={() => runAction(a)}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; e.currentTarget.style.borderColor = '#93C5FD'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
+                  <span style={{ fontSize: 20 }}>{a.icon}</span>
+                  <span>{a.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 14, padding: '8px 10px', background: '#F8FAFC', borderRadius: 8, border: '1px dashed #CBD5E1' }}>
+              אין כרגע פעולות עריכה מהירות מסומנות להצגה.
+            </div>
+          )}
 
           <div style={{ fontSize: 11, fontWeight: 700, color: '#323130', marginBottom: 6 }}>✨ יצירת תוכן חדש</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            {QUICK_ACTIONS.filter(a => !a.sel).map(a => (
-              <button key={a.id} style={actBtn} onClick={() => runAction(a)}
-                onMouseEnter={e => { e.currentTarget.style.background = '#F0FDF4'; e.currentTarget.style.borderColor = '#6EE7B7'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
-                <span style={{ fontSize: 20 }}>{a.icon}</span>
-                <span>{a.label}</span>
-              </button>
-            ))}
-          </div>
+          {generationActions.length ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {generationActions.map(a => (
+                <button key={a.id} style={actBtn} onClick={() => runAction(a)}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#F0FDF4'; e.currentTarget.style.borderColor = '#6EE7B7'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
+                  <span style={{ fontSize: 20 }}>{a.icon}</span>
+                  <span>{a.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: '#64748B', padding: '8px 10px', background: '#F8FAFC', borderRadius: 8, border: '1px dashed #CBD5E1' }}>
+              אין כרגע פעולות יצירה מהירות מסומנות להצגה.
+            </div>
+          )}
         </div>
       )}
 

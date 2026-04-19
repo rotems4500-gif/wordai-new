@@ -47,6 +47,14 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
   const [contextPanel, setContextPanel] = useState({ open: false, y: 80 });
   const wrapperRef = React.useRef(null);
   const wordCountFrameRef = React.useRef(null);
+  const bubbleActions = React.useMemo(() => ([
+    { id: "fix", icon: <CheckCheck size={14} className="text-green-600" />, label: "תיקון" },
+    { id: "humanize", icon: <Sparkles size={14} className="text-purple-600" />, label: "האנשה" },
+    { id: "summary", icon: <Wand2 size={14} className="text-blue-600" />, label: "סיכום" },
+    { id: "academic", icon: <BookOpen size={14} className="text-indigo-600" />, label: "אקדמי" },
+    { id: "organize", icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
+    { id: "textToTable", icon: <Table2 size={14} className="text-teal-600" />, label: "לטבלה" },
+  ].filter(({ id }) => wordPreferences?.aiQuickActions?.[id] !== false)), [wordPreferences]);
 
   const syncEditorSurface = useCallback((instance, styleId = documentStyle) => {
     if (!instance?.view?.dom) return;
@@ -59,17 +67,50 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     dom.setAttribute('data-doc-style', styleId);
     dom.setAttribute('data-active-template', activeTemplateId || 'blank');
     dom.dataset.viewMode = currentViewMode;
-    dom.style.minHeight = dom.dataset.customMinHeight || preset.minHeight;
-    dom.style.padding = dom.dataset.customPadding || preset.padding;
-    dom.style.lineHeight = preset.lineHeight;
-    dom.style.background = dom.dataset.customBackground || preset.background;
-    dom.style.border = dom.dataset.customBorder || preset.border;
 
     if (currentViewMode === 'print') {
-      dom.style.width = dom.dataset.customWidth || preset.width;
-      dom.style.maxWidth = dom.dataset.customWidth || preset.width;
+      const pageWidth = dom.dataset.customWidth || preset.width;
+      dom.style.minHeight = dom.dataset.customMinHeight || preset.minHeight;
+      dom.style.padding = dom.dataset.customPadding || preset.padding;
+      dom.style.lineHeight = preset.lineHeight;
+      dom.style.background = dom.dataset.customBackground || preset.background;
+      dom.style.border = dom.dataset.customBorder || preset.border;
+      dom.style.width = `min(100%, ${pageWidth})`;
+      dom.style.maxWidth = pageWidth;
+      dom.style.marginInline = 'auto';
       dom.style.fontSize = savedSize || preset.fontSize;
       dom.style.fontFamily = savedFont || preset.fontFamily;
+    } else if (currentViewMode === 'read') {
+      dom.style.minHeight = 'auto';
+      dom.style.padding = '24px 32px';
+      dom.style.lineHeight = '1.8';
+      dom.style.background = '#FAFAFA';
+      dom.style.border = 'none';
+      dom.style.width = '100%';
+      dom.style.maxWidth = '700px';
+      dom.style.marginInline = 'auto';
+      dom.style.fontSize = '17px';
+      dom.style.fontFamily = 'Georgia, serif';
+    } else if (currentViewMode === 'outline') {
+      dom.style.minHeight = 'auto';
+      dom.style.padding = '18px 22px';
+      dom.style.lineHeight = '1.4';
+      dom.style.background = '#FFFFFF';
+      dom.style.border = 'none';
+      dom.style.width = '100%';
+      dom.style.maxWidth = '100%';
+      dom.style.marginInline = '0';
+      dom.style.fontSize = '13px';
+      dom.style.fontFamily = 'monospace';
+    } else {
+      dom.style.minHeight = 'auto';
+      dom.style.padding = currentViewMode === 'web' ? '20px 40px' : '20px 28px';
+      dom.style.lineHeight = preset.lineHeight;
+      dom.style.background = '#FFFFFF';
+      dom.style.border = 'none';
+      dom.style.width = '100%';
+      dom.style.maxWidth = '100%';
+      dom.style.marginInline = '0';
     }
   }, [documentStyle, activeTemplateId, viewMode]);
 
@@ -109,7 +150,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     editorProps: {
       attributes: {
         class: "bg-white shadow-[0_12px_36px_rgba(15,23,42,0.12)] outline-none text-black relative transition-all duration-300 shrink-0 prose max-w-none text-right rounded-[22px] page-surface",
-        style: "width: 21cm; min-height: 29.7cm; padding: 2.54cm; font-size: 12pt; line-height: 1.6; font-family: 'Alef', sans-serif;",
+        style: "width: min(100%, 21cm); max-width: 21cm; min-height: 29.7cm; padding: 2.54cm; font-size: 12pt; line-height: 1.6; font-family: 'Alef', sans-serif; box-sizing: border-box; overflow-wrap: anywhere;",
         dir: "rtl",
         spellcheck: 'true',
         autocorrect: 'on',
@@ -255,7 +296,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
   if (!editor) return null;
 
   return (
-    <div ref={wrapperRef} className="flex flex-col items-center w-full h-full relative">
+    <div ref={wrapperRef} className="flex flex-col items-center w-full min-h-full relative">
       {contextPanel.open && (
         <div
           data-context-panel="true"
@@ -267,8 +308,8 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
             <div className="text-[11px] text-slate-500 mt-1">נפתח בקליק ימני על המסמך</div>
           </div>
           <div className="p-2 flex flex-col gap-1 text-sm">
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('fix')}>✨ תיקון AI</button>
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('summary')}>📝 סיכום מהיר</button>
+            {wordPreferences?.aiQuickActions?.fix !== false && <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('fix')}>✨ תיקון AI</button>}
+            {wordPreferences?.aiQuickActions?.summary !== false && <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('summary')}>📝 סיכום מהיר</button>}
             <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onOpenAssistant(); setContextPanel((prev) => ({ ...prev, open: false })); }}>💬 פתח חלון AI</button>
             <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onCommand('insertBlankPage'); setContextPanel((prev) => ({ ...prev, open: false })); }}>📄 עמוד ריק</button>
             <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onCommand('pageBreak'); setContextPanel((prev) => ({ ...prev, open: false })); }}>↩️ מעבר עמוד</button>
@@ -286,33 +327,35 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       {/* תפריט צף חכם שמופיע רק כשיש בחירת טקסט */}
       <BubbleMenu editor={editor} tippyOptions={{ duration: 100 }} className="flex flex-wrap overflow-hidden rtl bg-white border border-gray-200 shadow-xl rounded-xl px-2 py-1.5 items-center gap-1 max-w-[520px]">
         {/* --- AI Actions --- */}
-        {[
-          { id: "fix",         icon: <CheckCheck size={14} className="text-green-600" />, label: "תיקון" },
-          { id: "humanize",    icon: <Sparkles size={14} className="text-purple-600" />,  label: "האנשה" },
-          { id: "summary",     icon: <Wand2 size={14} className="text-blue-600" />,       label: "סיכום" },
-          { id: "academic",    icon: <BookOpen size={14} className="text-indigo-600" />,  label: "אקדמי" },
-          { id: "organize",    icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
-          { id: "textToTable", icon: <Table2 size={14} className="text-teal-600" />,      label: "לטבלה" },
-        ].map(({ id, icon, label }) => (
+        {bubbleActions.length ? (
+          bubbleActions.map(({ id, icon, label }) => (
+            <button
+              key={id}
+              onClick={() => handleAiAction(id)}
+              disabled={loadingAction !== null}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full transition-colors whitespace-nowrap ${
+                loadingAction === id
+                  ? "text-gray-400 bg-gray-50"
+                  : "text-gray-700 hover:bg-gray-100"
+              }`}
+              title={label}
+            >
+              {loadingAction === id ? (
+                <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full" />
+              ) : (
+                icon
+              )}
+              <span>{loadingAction === id ? "..." : label}</span>
+            </button>
+          ))
+        ) : (
           <button
-            key={id}
-            onClick={() => handleAiAction(id)}
-            disabled={loadingAction !== null}
-            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full transition-colors whitespace-nowrap ${
-              loadingAction === id
-                ? "text-gray-400 bg-gray-50"
-                : "text-gray-700 hover:bg-gray-100"
-            }`}
-            title={label}
+            onClick={onOpenAssistant}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full text-slate-700 hover:bg-gray-100"
           >
-            {loadingAction === id ? (
-              <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full" />
-            ) : (
-              icon
-            )}
-            <span>{loadingAction === id ? "..." : label}</span>
+            ✨ פתח חלון AI
           </button>
-        ))}
+        )}
 
         <div className="w-px h-5 bg-gray-200 mx-1" />
 
@@ -363,7 +406,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
         )}
       </BubbleMenu>
 
-      <EditorContent editor={editor} className="shrink-0" />
+      <EditorContent editor={editor} className="w-full shrink-0" />
     </div>
   );
 }

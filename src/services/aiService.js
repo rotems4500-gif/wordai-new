@@ -55,6 +55,22 @@ export const DEFAULT_WORD_PREFERENCES = {
   autoSave: true,
   autoSaveMinutes: 10,
   keepLastAutosavedVersion: true,
+  aiQuickActions: {
+    fix: true,
+    humanize: true,
+    summary: true,
+    academic: true,
+    organize: true,
+    textToTable: true,
+    expand: true,
+    translate: true,
+    bullets: true,
+    shorter: true,
+    continue: true,
+    intro: true,
+    conclusion: true,
+    sources: true,
+  },
 };
 
 export const DEFAULT_PERSONAL_STYLE = {

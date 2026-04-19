@@ -102,7 +102,7 @@
         .tp-item i { color: var(--word-blue); }
 
         /* --- אזור העריכה (A4) --- */
-        #editor-wrapper { flex: 1; overflow-y: auto; overflow-x: auto; padding: 32px 16px; display: flex; justify-content: center; align-items: flex-start; transition: transform 0.2s; transform-origin: top center; background-color: #E1DFDD; position: relative; }
+        #editor-wrapper { flex: 1; overflow-y: auto; overflow-x: auto; padding: clamp(14px, 2.8vw, 32px) clamp(8px, 1.8vw, 16px); display: flex; justify-content: center; align-items: flex-start; transition: transform 0.2s; transform-origin: top center; background-color: #E1DFDD; position: relative; }
         #editor-wrapper.show-grid {
             background-image:
                 linear-gradient(to right, rgba(148,163,184,0.18) 1px, transparent 1px),
@@ -124,13 +124,13 @@
         }
 
         /* Document Styles - ProseMirror (Tiptap editor) */
-        .ProseMirror p { margin: 0 0 8pt 0; }
+        .ProseMirror p { margin: 0 0 8pt 0; overflow-wrap: anywhere; }
         .ProseMirror h1 { font-size: 24pt; color: #2B579A; margin: 24pt 0 6pt 0; font-weight: 700; }
         .ProseMirror h2 { font-size: 18pt; color: #2B579A; margin: 18pt 0 4pt 0; border-bottom: 1px solid #E1DFDD; padding-bottom: 4px; font-weight: 600; }
         .ProseMirror h3 { font-size: 14pt; color: #404040; margin: 14pt 0 4pt 0; font-weight: 600; }
         .ProseMirror h4 { font-size: 12pt; color: #606060; margin: 12pt 0 4pt 0; font-style: italic; }
         .ProseMirror table { width: 100%; border-collapse: collapse; margin: 12pt 0; }
-        .ProseMirror th, .ProseMirror td { border: 1px solid #A6A6A6; padding: 6px; text-align: right; }
+        .ProseMirror th, .ProseMirror td { border: 1px solid #A6A6A6; padding: 6px; text-align: right; overflow-wrap: anywhere; word-break: normal; }
         .ProseMirror img { max-width: 100%; height: auto; display: block; margin: 12pt auto; border: 1px solid #E1DFDD; }
         .ProseMirror blockquote { border-right: 4px solid #2B579A; margin: 8pt 0; padding: 4px 12px; color: #605E5C; font-style: italic; background: #F7F7F7; }
         .ProseMirror pre { background: #F3F2F1; border-radius: 4px; padding: 12px; font-family: monospace; font-size: 10pt; }
@@ -148,9 +148,11 @@
         .page-surface {
             border: 1px solid #E5E7EB;
             box-sizing: border-box;
-            max-width: min(100%, 21cm);
-            overflow-x: hidden;
-            word-break: break-word;
+            width: min(100%, 21cm);
+            max-width: 100%;
+            overflow: visible;
+            overflow-wrap: anywhere;
+            word-break: normal;
         }
         .page-surface[data-active-template]:not([data-active-template="blank"]) > p:first-child {
             text-align: center;
@@ -235,12 +237,13 @@
         .page-break-indicator {
             page-break-after: always;
             break-after: page;
-            margin: 2rem -2.2cm;
+            margin: 2rem 0;
             height: 92px;
             position: relative;
             background: linear-gradient(180deg, #E5E7EB 0%, #F8FAFC 50%, #E5E7EB 100%);
             border-top: 2px dashed #BFDBFE;
             border-bottom: 2px dashed #BFDBFE;
+            border-radius: 16px;
             -webkit-user-select: none;
             user-select: none;
         }
@@ -302,8 +305,10 @@
             justify-content: center;
             text-align: center;
             box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-            overflow: hidden;
+            overflow: visible;
             position: relative;
+            box-sizing: border-box;
+            overflow-wrap: anywhere;
         }
         .cover-page h1 { font-size: 30pt; margin: 0 0 12pt; border: none; }
         .cover-page h2 { font-size: 16pt; margin: 0 0 18pt; color: #475569; border: none; }
@@ -357,4 +362,20 @@
             #workspace { display: block; overflow: visible; }
             #editor-wrapper { padding: 0; display: block; overflow: visible; background-color: white; }
             .ProseMirror { box-shadow: none !important; margin: 0 !important; }
+            .page-break-marker,
+            .page-break-node,
+            .page-break-indicator {
+                height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: transparent !important;
+                border: none !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+            }
+            .page-break-node::after,
+            .page-break-indicator::after {
+                display: none !important;
+                content: none !important;
+            }
         }

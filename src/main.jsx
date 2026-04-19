@@ -95,6 +95,7 @@ function App() {
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
+  const [sidebarCompact, setSidebarCompact] = React.useState(true);
   const pendingImportRef = React.useRef(null);
   const [activeFormats, setActiveFormats] = React.useState({
     bold: false,
@@ -108,6 +109,8 @@ function App() {
     alignLeft: false,
     alignJustify: false,
     dir: 'rtl',
+    fontFamily: 'Alef',
+    fontSize: '12',
   });
   // פונקציות מברשת עיצוב מה-DocumentEditor
   const formatPainterRef = React.useRef({ copyFormat: null, applyFormat: null });
@@ -118,6 +121,13 @@ function App() {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+
+  const normalizeFontSizeValue = React.useCallback((rawValue) => {
+    const raw = String(rawValue || '').trim().toLowerCase();
+    const numeric = parseFloat(raw) || 12;
+    if (raw.endsWith('px')) return String(Math.max(8, Math.round(numeric * 0.75)));
+    return String(Math.max(8, Math.round(numeric)));
+  }, []);
 
   const applyDocumentStyleToEditor = React.useCallback((styleId, currentEditor = editor) => {
     if (!currentEditor?.view?.dom) return;
@@ -229,8 +239,8 @@ function App() {
 
       setFeedbackSurvey({
         ...DEFAULT_FEEDBACK_SURVEY,
-        open: true,
-        phase: 'question',
+        open: false,
+        phase: 'details',
         prompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
         usedFallback,
@@ -254,6 +264,12 @@ function App() {
 
   const updateActiveFormats = React.useCallback((currentEditor) => {
     if (!currentEditor) return;
+    const textStyleAttrs = currentEditor.getAttributes('textStyle') || {};
+    const rawFontFamily = String(textStyleAttrs.fontFamily || window.getComputedStyle(currentEditor.view.dom).fontFamily || 'Alef');
+    const fontFamily = rawFontFamily.split(',')[0].replace(/["']/g, '').trim() || 'Alef';
+    const rawFontSize = String(textStyleAttrs.fontSize || window.getComputedStyle(currentEditor.view.dom).fontSize || '12pt');
+    const fontSize = normalizeFontSizeValue(rawFontSize);
+
     setActiveFormats({
       bold: currentEditor.isActive('bold'),
       italic: currentEditor.isActive('italic'),
@@ -266,6 +282,8 @@ function App() {
       alignLeft: currentEditor.isActive({ textAlign: 'left' }),
       alignJustify: currentEditor.isActive({ textAlign: 'justify' }),
       dir: currentEditor.getAttributes('paragraph')?.dir || 'rtl',
+      fontFamily,
+      fontSize,
     });
   }, []);
 
@@ -588,31 +606,27 @@ function App() {
       case 'codeBlock': editor.chain().focus().toggleCodeBlock().run(); break;
       case 'insertHR': editor.chain().focus().setHorizontalRule().run(); break;
       case 'fontFamily': {
-        const chain = editor.chain().focus();
-        if (editor.state.selection.empty && hasMeaningfulEditorContent()) chain.selectAll();
-        chain.setFontFamily(value).run();
+        editor.chain().focus().setFontFamily(value).run();
+        updateActiveFormats(editor);
         break;
       }
       case 'fontSize': {
-        const chain = editor.chain().focus();
-        if (editor.state.selection.empty && hasMeaningfulEditorContent()) chain.selectAll();
-        chain.setFontSize(value).run();
+        editor.chain().focus().setFontSize(value).run();
+        updateActiveFormats(editor);
         break;
       }
       case 'fontSizeInc': {
         const rawSize = String(editor.getAttributes('textStyle').fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt');
-        const unit = (rawSize.match(/[a-z%]+$/i)?.[0] || 'pt').toLowerCase();
-        const step = unit === 'pt' ? 1 : 2;
-        const next = (parseFloat(rawSize) || 12) + step;
-        editor.chain().focus().setFontSize(`${next}${unit}`).run();
+        const next = Number(normalizeFontSizeValue(rawSize) || 12) + 1;
+        editor.chain().focus().setFontSize(`${next}pt`).run();
+        updateActiveFormats(editor);
         break;
       }
       case 'fontSizeDec': {
         const rawSize = String(editor.getAttributes('textStyle').fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt');
-        const unit = (rawSize.match(/[a-z%]+$/i)?.[0] || 'pt').toLowerCase();
-        const step = unit === 'pt' ? 1 : 2;
-        const next = Math.max(8, (parseFloat(rawSize) || 12) - step);
-        editor.chain().focus().setFontSize(`${next}${unit}`).run();
+        const next = Math.max(8, Number(normalizeFontSizeValue(rawSize) || 12) - 1);
+        editor.chain().focus().setFontSize(`${next}pt`).run();
+        updateActiveFormats(editor);
         break;
       }
       case 'lineHeight': editor.chain().focus().setLineHeight(value).run(); break;
@@ -929,9 +943,9 @@ function App() {
           page2.dataset.customWidth = '21cm';
           page2.dataset.customMinHeight = '29.7cm';
         }
-        page2.style.width = page2.dataset.customWidth;
-        page2.style.maxWidth = page2.dataset.customWidth;
-        page2.style.minHeight = page2.dataset.customMinHeight;
+        if ((page2.dataset.viewMode || viewMode) === 'print') {
+          applyDocumentStyleToEditor(documentStyle);
+        }
         break;
       }
       case 'setPageSize': {
@@ -941,9 +955,9 @@ function App() {
         if (pg) {
           pg.dataset.customWidth = pw;
           pg.dataset.customMinHeight = ph;
-          pg.style.width = pw;
-          pg.style.maxWidth = pw;
-          pg.style.minHeight = ph;
+          if ((pg.dataset.viewMode || viewMode) === 'print') {
+            applyDocumentStyleToEditor(documentStyle);
+          }
         }
         break;
       }
@@ -1270,13 +1284,19 @@ function App() {
       
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         {!showStartScreen && sidebarOpen && (
-          <aside className="h-full w-[360px] min-w-[340px] max-w-[30vw] shrink-0 border-l border-slate-300 bg-[#F3F2F1] z-20">
+          <aside
+            className="h-full shrink-0 border-l border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200"
+            style={{ width: sidebarCompact ? 'min(310px, 36vw)' : 'min(390px, 42vw)', minWidth: sidebarCompact ? 240 : 280, maxWidth: '42vw' }}
+          >
             <AiSidebar
               mode="sidebar"
+              compactMode={sidebarCompact}
+              onToggleCompact={() => setSidebarCompact((prev) => !prev)}
               reason={assistantTrigger}
               documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
               selectedText={selectedText}
               currentBlockText={currentBlockText}
+              wordPreferences={wordPreferences}
               onInsert={(text) => {
                 if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
               }}
@@ -1316,6 +1336,23 @@ function App() {
                   </div>
                 ))}
               </div>
+
+              {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
+                <div className="mt-3 flex flex-col md:flex-row gap-2">
+                  <button
+                    className="btn btn-sm btn-primary flex-1"
+                    onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
+                  >
+                    פתח תיקונים ומשוב
+                  </button>
+                  <button
+                    className="btn btn-sm btn-ghost flex-1"
+                    onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
+                  >
+                    המשך לערוך
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {feedbackSurvey.open && (
@@ -1512,8 +1549,8 @@ function App() {
                   }));
                   setFeedbackSurvey({
                     ...DEFAULT_FEEDBACK_SURVEY,
-                    open: true,
-                    phase: 'question',
+                    open: false,
+                    phase: 'details',
                     prompt,
                     templateId: templateId || 'blank',
                     usedFallback,
@@ -1532,7 +1569,7 @@ function App() {
               }}
             />
           )}
-          <div style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
+          <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
             <DocumentEditor
               documentStyle={documentStyle}
               viewMode={viewMode}
