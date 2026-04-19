@@ -47,5 +47,6 @@ jobs:
 
       - name: Publish Windows installer and update metadata
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: npm run dist:publish

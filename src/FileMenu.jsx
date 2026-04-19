@@ -1369,7 +1369,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          Word AI Perfect Assistant v1.0.4
+          Word AI Perfect Assistant v1.0.5
         </div>
       </div>
 

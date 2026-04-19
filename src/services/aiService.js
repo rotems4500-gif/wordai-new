@@ -174,6 +174,27 @@ const normalizeProviderIds = (value, fallback = DEFAULT_PROVIDER_CONFIG.active) 
   return normalized;
 };
 
+const normalizeProviderModelName = (providerId = '', modelName = '') => {
+  const clean = String(modelName || '').trim();
+  const provider = String(providerId || '').trim();
+  if (!clean) return '';
+
+  const aliasMap = {
+    claude: {
+      'claude-3-5-sonnet': 'claude-3-5-sonnet-20241022',
+      'claude-3.5-sonnet': 'claude-3-5-sonnet-20241022',
+    },
+    perplexity: {
+      'sonar-large': 'llama-3.1-sonar-large-128k-online',
+      'sonar-small': 'llama-3.1-sonar-small-128k-online',
+      'sonar-medium': 'llama-3.1-sonar-large-128k-online',
+      'sonar': 'llama-3.1-sonar-large-128k-online',
+    },
+  };
+
+  return aliasMap[provider]?.[clean] || clean;
+};
+
 const isProviderConfiguredForUse = (providerId, cfg) => {
   const provider = cfg?.[providerId] || {};
   switch (providerId) {
@@ -296,26 +317,32 @@ export const getRoleAgents = () => {
   const stored = readJsonFromStorage('wordai_role_agents', null);
   if (stored === null) return DEFAULT_ROLE_AGENTS;
   if (!Array.isArray(stored)) return DEFAULT_ROLE_AGENTS;
-  return stored.map((agent, index) => ({
-    id: agent.id || `custom-${index + 1}`,
-    name: agent.name || `סוכן ${index + 1}`,
-    prompt: agent.prompt || '',
-    provider: agent.provider || '',
-    model: agent.model || '',
-    enabled: agent.enabled !== false,
-  }));
+  return stored.map((agent, index) => {
+    const provider = agent.provider || '';
+    return {
+      id: agent.id || `custom-${index + 1}`,
+      name: agent.name || `סוכן ${index + 1}`,
+      prompt: agent.prompt || '',
+      provider,
+      model: normalizeProviderModelName(provider, agent.model || ''),
+      enabled: agent.enabled !== false,
+    };
+  });
 };
 
 export const saveRoleAgents = (agents) => {
   const cleanAgents = (Array.isArray(agents) ? agents : [])
-    .map((agent, index) => ({
-      id: agent.id || `custom-${index + 1}`,
-      name: String(agent.name || '').trim(),
-      prompt: String(agent.prompt || '').trim(),
-      provider: String(agent.provider || '').trim(),
-      model: String(agent.model || '').trim(),
-      enabled: agent.enabled !== false,
-    }));
+    .map((agent, index) => {
+      const provider = String(agent.provider || '').trim();
+      return {
+        id: agent.id || `custom-${index + 1}`,
+        name: String(agent.name || '').trim(),
+        prompt: String(agent.prompt || '').trim(),
+        provider,
+        model: normalizeProviderModelName(provider, String(agent.model || '').trim()),
+        enabled: agent.enabled !== false,
+      };
+    });
 
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
 };
@@ -431,6 +458,10 @@ const normalizeProviderConfig = (config = {}) => {
     custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...(config?.custom || {}) },
     active: safeActive,
   };
+  merged.claude.model = normalizeProviderModelName('claude', merged.claude.model || DEFAULT_PROVIDER_CONFIG.claude.model);
+  merged.perplexity.model = normalizeProviderModelName('perplexity', merged.perplexity.model || DEFAULT_PROVIDER_CONFIG.perplexity.model);
+  merged.ollama.model = normalizeProviderModelName('ollama', merged.ollama.model || DEFAULT_PROVIDER_CONFIG.ollama.model);
+  merged.custom.model = normalizeProviderModelName('custom', merged.custom.model || '');
   merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
   return merged;
@@ -878,23 +909,23 @@ const trimLogText = (value = '', limit = 220) => {
 };
 
 const getModelNameForProvider = (provider, cfg, override = '') => {
-  if (override) return override;
+  if (override) return normalizeProviderModelName(provider, override);
 
   switch (provider) {
     case 'gemini':
       return 'gemini-2.5-flash';
     case 'openai':
-      return cfg.openai.model || 'gpt-4o';
+      return normalizeProviderModelName('openai', cfg.openai.model || 'gpt-4o');
     case 'claude':
-      return cfg.claude.model || 'claude-3-5-sonnet-20241022';
+      return normalizeProviderModelName('claude', cfg.claude.model || 'claude-3-5-sonnet-20241022');
     case 'groq':
-      return cfg.groq.model || 'llama-3.3-70b-versatile';
+      return normalizeProviderModelName('groq', cfg.groq.model || 'llama-3.3-70b-versatile');
     case 'ollama':
-      return cfg.ollama.model || 'llama3.2';
+      return normalizeProviderModelName('ollama', cfg.ollama.model || 'llama3.2');
     case 'perplexity':
-      return cfg.perplexity.model || 'llama-3.1-sonar-large-128k-online';
+      return normalizeProviderModelName('perplexity', cfg.perplexity.model || 'llama-3.1-sonar-large-128k-online');
     case 'custom':
-      return cfg.custom.model || 'custom-model';
+      return normalizeProviderModelName('custom', cfg.custom.model || 'custom-model');
     default:
       return '';
   }
