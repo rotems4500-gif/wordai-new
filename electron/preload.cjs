@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
+  loadProviderConfig: () => ipcRenderer.invoke('load-provider-config'),
+  saveProviderConfig: (payload) => ipcRenderer.invoke('save-provider-config', payload),
   getAppUpdateInfo: () => ipcRenderer.invoke('get-app-update-info'),
   checkForAppUpdates: () => ipcRenderer.invoke('check-for-app-updates'),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),

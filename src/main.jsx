@@ -8,8 +8,8 @@ import TopBar from './TopBar';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut } from './services/aiService';
-import { buildTemplateSkeleton, generateDocumentFromPrompt, saveDocumentHistory } from './services/workspaceLearningService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, hydrateProviderConfigFromDisk } from './services/aiService';
+import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory } from './services/workspaceLearningService';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
@@ -18,10 +18,52 @@ const DOCUMENT_STYLE_PRESETS = {
   presentation: { label: 'מצגת', fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '15pt', lineHeight: '1.5', padding: '1.8cm', maxWidth: '25cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', textAlign: 'center' },
 };
 
+const buildLiveGenerationShell = (promptText = '') => `
+  <div style="border:1px solid #BFDBFE;background:#EFF6FF;padding:16px 18px;border-radius:14px;margin-bottom:18px;">
+    <p><strong>מכין את המסמך בלייב...</strong></p>
+    <p>אפשר כבר לראות את שלבי העבודה בזמן אמת. התוכן המלא יופיע כאן אוטומטית בעוד רגע.</p>
+  </div>
+  <h1>${String(promptText || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
+  <p>טוען מבנה, מקורות וניסוח...</p>
+`;
+
+const FEEDBACK_OPTION_GROUPS = [
+  {
+    title: 'לאקדמיה',
+    options: [
+      'לחדד שפה אקדמית ורשמית יותר',
+      'לשפר את מבנה הפרקים והכותרות',
+      'לחזק נימוקים, דיון ומסקנות',
+      'להוסיף מקום למקורות, אסמכתאות וציטוטים',
+    ],
+  },
+  {
+    title: 'לשימוש חופשי',
+    options: [
+      'לקצר ולתמצת את המסמך',
+      'להרחיב ולהעמיק את התוכן',
+      'להפוך את הסגנון לברור ופשוט יותר',
+      'לתקן ניסוח, שגיאות וזרימה',
+    ],
+  },
+];
+
+const DEFAULT_FEEDBACK_SURVEY = {
+  open: false,
+  phase: 'question',
+  prompt: '',
+  templateId: 'blank',
+  selectedOptions: [],
+  freeText: '',
+  usedFallback: false,
+  submitting: false,
+};
+
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
     if (window.__mountTimer) clearTimeout(window.__mountTimer);
+    hydrateProviderConfigFromDisk().catch(() => {});
   }, []);
 
   const [editor, setEditor] = React.useState(null);
@@ -44,6 +86,14 @@ function App() {
   const [showStartScreen, setShowStartScreen] = React.useState(false);
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
+  const [liveGeneration, setLiveGeneration] = React.useState({
+    active: false,
+    state: 'idle',
+    prompt: '',
+    summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+    logs: getAgentDebugLogs().slice(-5).reverse(),
+  });
+  const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
   const pendingImportRef = React.useRef(null);
   const [activeFormats, setActiveFormats] = React.useState({
@@ -110,6 +160,98 @@ function App() {
     });
   }, [editor]);
 
+  const toggleFeedbackOption = React.useCallback((option) => {
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      selectedOptions: prev.selectedOptions.includes(option)
+        ? prev.selectedOptions.filter((item) => item !== option)
+        : [...prev.selectedOptions, option],
+    }));
+  }, []);
+
+  const submitDocumentFeedback = React.useCallback(async () => {
+    const selectedOptions = feedbackSurvey.selectedOptions || [];
+    const freeText = String(feedbackSurvey.freeText || '').trim();
+
+    if (!selectedOptions.length && !freeText) {
+      alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
+      return;
+    }
+
+    const feedbackText = [
+      'המשתמש ביקש לעדכן את המסמך לפי המשוב הבא:',
+      selectedOptions.length ? `נקודות לתיקון:\n- ${selectedOptions.join('\n- ')}` : '',
+      freeText ? `בקשה חופשית:\n${freeText}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    setFeedbackSurvey((prev) => ({ ...prev, submitting: true }));
+    setAssistantTrigger('autopilot');
+    setSidebarOpen(true);
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: 'מנהל הצוות מתקן את המסמך לפי המשוב שלך',
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+      logs: getAgentDebugLogs().slice(-5).reverse(),
+    });
+
+    try {
+      const result = await reviseDocumentWithFeedback({
+        existingHtml: editor?.getHTML?.() || '',
+        originalPrompt: feedbackSurvey.prompt,
+        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+        feedback: feedbackText,
+        returnMeta: true,
+      });
+
+      const revisedHtml = result?.html || editor?.getHTML?.() || '';
+      const usedFallback = Boolean(result?.usedFallback);
+
+      if (editor && revisedHtml) {
+        editor.commands.setContent(revisedHtml);
+      }
+
+      persistLocalCache(revisedHtml);
+      saveDocumentHistory({
+        title: `${feedbackSurvey.prompt || 'מסמך'} · תיקון לפי משוב`,
+        content: revisedHtml,
+        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+        source: 'feedback-revision',
+      });
+
+      setLiveGeneration({
+        active: true,
+        state: usedFallback ? 'warning' : 'success',
+        prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+        logs: getAgentDebugLogs().slice(-5).reverse(),
+      });
+
+      setFeedbackSurvey({
+        ...DEFAULT_FEEDBACK_SURVEY,
+        open: true,
+        phase: 'question',
+        prompt: feedbackSurvey.prompt,
+        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+        usedFallback,
+      });
+
+      if (usedFallback && result?.errorMessage) {
+        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
+      }
+    } catch (error) {
+      setFeedbackSurvey((prev) => ({ ...prev, submitting: false }));
+      setLiveGeneration({
+        active: true,
+        state: 'error',
+        prompt: 'עדכון המסמך נכשל',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+        logs: getAgentDebugLogs().slice(-5).reverse(),
+      });
+      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
+    }
+  }, [feedbackSurvey, editor, activeTemplateId]);
+
   const updateActiveFormats = React.useCallback((currentEditor) => {
     if (!currentEditor) return;
     setActiveFormats({
@@ -125,6 +267,20 @@ function App() {
       alignJustify: currentEditor.isActive({ textAlign: 'justify' }),
       dir: currentEditor.getAttributes('paragraph')?.dir || 'rtl',
     });
+  }, []);
+
+  React.useEffect(() => {
+    const syncLiveGeneration = () => {
+      setLiveGeneration((prev) => ({
+        ...prev,
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+        logs: getAgentDebugLogs().slice(-5).reverse(),
+      }));
+    };
+
+    syncLiveGeneration();
+    window.addEventListener('wordai-agent-logs-updated', syncLiveGeneration);
+    return () => window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
   }, []);
 
   React.useEffect(() => {
@@ -712,7 +868,11 @@ function App() {
         downloadFile(htmlContent, 'document.doc', 'application/msword');
         break;
       }
-      case 'print': window.print(); break;
+      case 'print': {
+        setFileMenuOpen(false);
+        window.setTimeout(() => window.print(), 60);
+        break;
+      }
 
       case 'zoom': setZoom(value); break;
       case 'focusMode': setSidebarOpen(false); break;
@@ -1126,6 +1286,142 @@ function App() {
         )}
 
         <div id="editor-wrapper" className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 flex justify-center items-start bg-[#E1DFDD] relative">
+          {!showStartScreen && liveGeneration.active && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 w-[420px] max-w-[92%] rounded-2xl border border-blue-200 bg-white/95 shadow-xl p-4 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-sm font-bold text-slate-800">{liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה' : 'מכין את המסמך בלייב'}</div>
+                  <div className="text-xs text-slate-500">{liveGeneration.prompt || 'מעבד את הבקשה שלך'}</div>
+                </div>
+                <div className={`text-xs font-bold px-2 py-1 rounded-full ${liveGeneration.state === 'success' ? 'bg-green-100 text-green-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'לבדיקה' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
+                </div>
+              </div>
+
+              <div className="space-y-2 mb-3">
+                {(liveGeneration.summary?.stages || []).slice(0, 5).map((stage) => (
+                  <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
+                    <span className="font-medium text-slate-700">{stage.label}</span>
+                    <span className={`${stage.state === 'success' ? 'text-green-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
+                      {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '…' : '•'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-xl bg-slate-900 text-slate-100 p-3 text-xs space-y-1 max-h-28 overflow-auto">
+                {(liveGeneration.logs || []).slice(0, 4).map((log) => (
+                  <div key={log.id || `${log.ts}-${log.message}`}>
+                    {log.message || 'מעדכן סטטוס...'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {feedbackSurvey.open && (
+            <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
+              <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800">{feedbackSurvey.phase === 'question' ? 'איך יצא המסמך?' : 'מה לתקן במסמך?'}</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      {feedbackSurvey.phase === 'question'
+                        ? 'אפשר לאשר שהכול מצוין, או לבקש תיקון ממנהל הצוות.'
+                        : 'בחר את הנקודות החשובות לך, או כתוב חופשי מה לשפר.'}
+                    </p>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => {
+                      setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+                      setLiveGeneration((prev) => ({ ...prev, active: false }));
+                    }}
+                  >
+                    סגור
+                  </button>
+                </div>
+
+                {feedbackSurvey.usedFallback && (
+                  <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    נוצרה כרגע טיוטה בטוחה. אפשר לאשר אותה או לשלוח עכשיו הערות כדי שמנהל הצוות ישפר אותה.
+                  </div>
+                )}
+
+                {feedbackSurvey.phase === 'question' ? (
+                  <div className="flex flex-col md:flex-row gap-3">
+                    <button
+                      className="btn btn-primary flex-1"
+                      onClick={() => {
+                        setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+                        setLiveGeneration((prev) => ({ ...prev, active: false }));
+                      }}
+                    >
+                      כן, המסמך טוב
+                    </button>
+                    <button
+                      className="btn btn-outline flex-1"
+                      onClick={() => {
+                        setFeedbackSurvey((prev) => ({ ...prev, phase: 'details' }));
+                        setLiveGeneration((prev) => ({ ...prev, active: false }));
+                      }}
+                    >
+                      לא, צריך תיקונים
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {FEEDBACK_OPTION_GROUPS.map((group) => (
+                        <div key={group.title} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="font-bold text-slate-800 mb-3">{group.title}</div>
+                          <div className="space-y-2">
+                            {group.options.map((option) => (
+                              <label key={option} className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  className="checkbox checkbox-sm mt-0.5"
+                                  checked={feedbackSurvey.selectedOptions.includes(option)}
+                                  onChange={() => toggleFeedbackOption(option)}
+                                />
+                                <span>{option}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div>
+                      <div className="font-bold text-slate-800 mb-2">כתיבה חופשית</div>
+                      <textarea
+                        className="textarea textarea-bordered w-full min-h-[120px]"
+                        placeholder="לדוגמה: תוסיף יותר מקורות, תחדד את המסקנה, תקצר את הפתיחה, או תשנה את הסגנון..."
+                        value={feedbackSurvey.freeText}
+                        onChange={(e) => setFeedbackSurvey((prev) => ({ ...prev, freeText: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="flex flex-col md:flex-row gap-3 justify-end">
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'question' }))}
+                        disabled={feedbackSurvey.submitting}
+                      >
+                        חזרה
+                      </button>
+                      <button
+                        className={`btn btn-primary ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        onClick={submitDocumentFeedback}
+                        disabled={feedbackSurvey.submitting}
+                      >
+                        {feedbackSurvey.submitting ? 'מעדכן...' : 'שלח למנהל הצוות'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {showStartScreen && (
             <StartScreen
               documentStyle={documentStyle}
@@ -1175,20 +1471,64 @@ function App() {
                 if (!confirmReplaceCurrentDocument()) return;
                 localStorage.setItem('wordai_active_template', templateId || 'blank');
                 setActiveTemplateId(templateId || 'blank');
+                setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
                 changeDocumentStyle(requestedStyle || documentStyle);
-                const generated = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials });
-                if (editor) {
-                  editor.commands.setContent(generated || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`);
-                }
-                saveDocumentHistory({
-                  title: prompt,
-                  content: generated,
-                  templateId,
-                  source: 'start-screen',
-                });
-                persistLocalCache(generated);
+                setAssistantTrigger('autopilot');
+                setSidebarOpen(true);
                 setShowStartScreen(false);
+                setLiveGeneration({
+                  active: true,
+                  state: 'running',
+                  prompt,
+                  summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+                  logs: getAgentDebugLogs().slice(-5).reverse(),
+                });
+                if (editor) {
+                  editor.commands.setContent(buildLiveGenerationShell(prompt));
+                }
                 focusEditorSoon('start');
+
+                try {
+                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
+                  const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
+                  const usedFallback = Boolean(result?.usedFallback);
+                  if (editor) {
+                    editor.commands.setContent(generated);
+                  }
+                  saveDocumentHistory({
+                    title: prompt,
+                    content: generated,
+                    templateId,
+                    source: 'start-screen',
+                  });
+                  persistLocalCache(generated);
+                  setLiveGeneration((prev) => ({
+                    ...prev,
+                    active: true,
+                    state: usedFallback ? 'warning' : 'success',
+                    prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt,
+                    summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+                    logs: getAgentDebugLogs().slice(-5).reverse(),
+                  }));
+                  setFeedbackSurvey({
+                    ...DEFAULT_FEEDBACK_SURVEY,
+                    open: true,
+                    phase: 'question',
+                    prompt,
+                    templateId: templateId || 'blank',
+                    usedFallback,
+                  });
+                } catch (error) {
+                  setLiveGeneration((prev) => ({
+                    ...prev,
+                    active: true,
+                    state: 'error',
+                    logs: getAgentDebugLogs().slice(-5).reverse(),
+                  }));
+                  if (editor) {
+                    editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+                  }
+                }
               }}
             />
           )}

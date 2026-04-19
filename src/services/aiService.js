@@ -417,41 +417,83 @@ export const matchShortcut = (event, shortcut = '') => {
   return normalizeShortcut(parts.join('+')) === normalizeShortcut(shortcut);
 };
 
+const normalizeProviderConfig = (config = {}) => {
+  const safeActive = KNOWN_PROVIDER_IDS.includes(config?.active) ? config.active : DEFAULT_PROVIDER_CONFIG.active;
+  const merged = {
+    ...DEFAULT_PROVIDER_CONFIG,
+    ...config,
+    gemini:     { ...DEFAULT_PROVIDER_CONFIG.gemini,     ...(config?.gemini || {}) },
+    openai:     { ...DEFAULT_PROVIDER_CONFIG.openai,     ...(config?.openai || {}) },
+    claude:     { ...DEFAULT_PROVIDER_CONFIG.claude,     ...(config?.claude || {}) },
+    groq:       { ...DEFAULT_PROVIDER_CONFIG.groq,       ...(config?.groq || {}) },
+    ollama:     { ...DEFAULT_PROVIDER_CONFIG.ollama,     ...(config?.ollama || {}) },
+    perplexity: { ...DEFAULT_PROVIDER_CONFIG.perplexity, ...(config?.perplexity || {}) },
+    custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...(config?.custom || {}) },
+    active: safeActive,
+  };
+  merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
+  merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
+  return merged;
+};
+
 export const getProviderConfig = () => {
   try {
     const stored = JSON.parse(localStorage.getItem('ai_provider_config') || '{}');
-    const merged = {
-      ...DEFAULT_PROVIDER_CONFIG,
-      ...stored,
-      gemini:     { ...DEFAULT_PROVIDER_CONFIG.gemini,     ...stored.gemini },
-      openai:     { ...DEFAULT_PROVIDER_CONFIG.openai,     ...stored.openai },
-      claude:     { ...DEFAULT_PROVIDER_CONFIG.claude,     ...stored.claude },
-      groq:       { ...DEFAULT_PROVIDER_CONFIG.groq,       ...stored.groq },
-      ollama:     { ...DEFAULT_PROVIDER_CONFIG.ollama,     ...stored.ollama },
-      perplexity: { ...DEFAULT_PROVIDER_CONFIG.perplexity, ...stored.perplexity },
-      custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...stored.custom },
-    };
-    merged.active = KNOWN_PROVIDER_IDS.includes(merged.active) ? merged.active : DEFAULT_PROVIDER_CONFIG.active;
-    merged.activeProviders = normalizeProviderIds(merged.activeProviders || [merged.active], merged.active);
-    merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
-    return merged;
+    return normalizeProviderConfig(stored);
   } catch {
-    return { ...DEFAULT_PROVIDER_CONFIG, activeProviders: [DEFAULT_PROVIDER_CONFIG.active] };
+    return normalizeProviderConfig({});
   }
 };
 
-export const saveProviderConfig = (config) => {
-  const safeActive = KNOWN_PROVIDER_IDS.includes(config?.active) ? config.active : DEFAULT_PROVIDER_CONFIG.active;
-  const safeConfig = {
-    ...DEFAULT_PROVIDER_CONFIG,
-    ...config,
-    active: safeActive,
-    activeProviders: normalizeProviderIds(config?.activeProviders || [safeActive], safeActive),
-    multiModelEnabled: Boolean(config?.multiModelEnabled),
-  };
+export const saveProviderConfig = (config, options = {}) => {
+  const safeConfig = normalizeProviderConfig(config);
   localStorage.setItem('ai_provider_config', JSON.stringify(safeConfig));
   if (safeConfig.gemini?.key) localStorage.setItem('GEMINI_API_KEY', safeConfig.gemini.key);
   else localStorage.removeItem('GEMINI_API_KEY');
+
+  if (!options?.skipDisk && window.desktopApp?.saveProviderConfig) {
+    window.desktopApp.saveProviderConfig(safeConfig).catch(() => {});
+  }
+
+  return safeConfig;
+};
+
+let providerConfigHydrationPromise = null;
+
+export const hydrateProviderConfigFromDisk = async () => {
+  if (!window.desktopApp?.loadProviderConfig) return getProviderConfig();
+  if (providerConfigHydrationPromise) return providerConfigHydrationPromise;
+
+  providerConfigHydrationPromise = (async () => {
+    try {
+      const diskConfig = await window.desktopApp.loadProviderConfig();
+      if (!diskConfig || typeof diskConfig !== 'object' || diskConfig.ok === false) {
+        const current = getProviderConfig();
+        saveProviderConfig(current);
+        return current;
+      }
+
+      const localRaw = JSON.parse(localStorage.getItem('ai_provider_config') || '{}');
+      const merged = normalizeProviderConfig({
+        ...diskConfig,
+        ...localRaw,
+        gemini: { ...(diskConfig.gemini || {}), ...(localRaw.gemini || {}) },
+        openai: { ...(diskConfig.openai || {}), ...(localRaw.openai || {}) },
+        claude: { ...(diskConfig.claude || {}), ...(localRaw.claude || {}) },
+        groq: { ...(diskConfig.groq || {}), ...(localRaw.groq || {}) },
+        ollama: { ...(diskConfig.ollama || {}), ...(localRaw.ollama || {}) },
+        perplexity: { ...(diskConfig.perplexity || {}), ...(localRaw.perplexity || {}) },
+        custom: { ...(diskConfig.custom || {}), ...(localRaw.custom || {}) },
+      });
+
+      saveProviderConfig(merged);
+      return merged;
+    } catch {
+      return getProviderConfig();
+    }
+  })();
+
+  return providerConfigHydrationPromise;
 };
 
 const getProviderLabelMap = (cfg) => ({

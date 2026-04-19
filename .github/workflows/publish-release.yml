@@ -24,7 +24,16 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        shell: pwsh
+        run: |
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "npm ci failed, retrying with npm install"
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
       - name: Validate tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')

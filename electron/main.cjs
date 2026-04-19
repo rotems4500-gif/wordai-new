@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const mammoth = require('mammoth');
 const path = require('path');
@@ -121,6 +121,53 @@ function getWritableMaterialsDir() {
   const dir = path.join(app.getPath('userData'), 'project-materials');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function getPersistedProviderConfigPath() {
+  const dir = app.getPath('userData');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'ai-provider-config.json');
+}
+
+function readPersistedProviderConfig() {
+  try {
+    const filePath = getPersistedProviderConfigPath();
+    if (!fs.existsSync(filePath)) return {};
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8') || '{}');
+
+    if (raw && typeof raw === 'object' && !raw.data) {
+      return raw;
+    }
+
+    if (!raw?.data) return {};
+    const payload = Buffer.from(String(raw.data || ''), 'base64');
+    const text = raw.encrypted && safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(payload)
+      : payload.toString('utf8');
+
+    return JSON.parse(text || '{}');
+  } catch (error) {
+    console.error('Failed to read provider config from disk:', error?.message || error);
+    return {};
+  }
+}
+
+function writePersistedProviderConfig(config = {}) {
+  const filePath = getPersistedProviderConfigPath();
+  const jsonText = JSON.stringify(config || {}, null, 2);
+  const encrypted = safeStorage.isEncryptionAvailable();
+  const payload = encrypted
+    ? safeStorage.encryptString(jsonText)
+    : Buffer.from(jsonText, 'utf8');
+
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    encrypted,
+    data: payload.toString('base64'),
+    updatedAt: new Date().toISOString(),
+  }, null, 2) + '\n', 'utf8');
+
+  return { ok: true, filePath };
 }
 
 function sendDocumentToRenderer(payload) {
@@ -452,6 +499,22 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     };
   } catch (error) {
     return { ok: false, error: error?.message || 'Read failed' };
+  }
+});
+
+ipcMain.handle('load-provider-config', async () => {
+  try {
+    return readPersistedProviderConfig();
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Load failed' };
+  }
+});
+
+ipcMain.handle('save-provider-config', async (_event, config = {}) => {
+  try {
+    return writePersistedProviderConfig(config);
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Save failed' };
   }
 });
 

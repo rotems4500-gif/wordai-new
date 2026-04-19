@@ -557,7 +557,15 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
   return `${statusBlock}${buildTemplateSkeleton(templateId, cleanPrompt)}${refs}`;
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [] }) {
+function normalizeGeneratedHtmlResponse(response = '') {
+  return String(response || '')
+    .replace(/^```html\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+}
+
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], returnMeta = false }) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('צריך לכתוב נושא או בקשה למסמך');
 
@@ -594,11 +602,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       { runId, agentLabel: 'AUTOPILOT' },
     );
 
-    const cleanedResponse = String(response || '')
-      .replace(/^```html\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/```\s*$/i, '')
-      .trim();
+    const cleanedResponse = normalizeGeneratedHtmlResponse(response);
 
     if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 20) {
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
@@ -613,7 +617,9 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       outputChars: cleanedResponse.length,
     });
 
-    return cleanedResponse;
+    return returnMeta
+      ? { html: cleanedResponse, usedFallback: false, runId, errorMessage: '' }
+      : cleanedResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-generation-fallback',
@@ -623,7 +629,71 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       message: 'יצירת המסמך עברה לשלד מקומי במקום תשובת AI',
       errorMessage: error?.message || 'שגיאה לא ידועה',
     });
-    return buildLocalDraft(cleanPrompt, templateId, instructions, selectedMaterials);
+    const fallbackHtml = buildLocalDraft(cleanPrompt, templateId, instructions, selectedMaterials);
+    return returnMeta
+      ? { html: fallbackHtml, usedFallback: true, runId, errorMessage: error?.message || 'שגיאה לא ידועה' }
+      : fallbackHtml;
+  }
+}
+
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', returnMeta = false }) {
+  const cleanHtml = String(existingHtml || '').trim();
+  const cleanFeedback = String(feedback || '').trim();
+  if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
+  if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
+
+  const learning = await syncLearnedStyleFromWorkspace();
+  const notes = learning.notes?.join('\n') || '';
+  const templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
+  const runId = `doc-feedback-${Date.now()}`;
+
+  try {
+    logAgentDebugEvent({
+      type: 'doc-feedback-start',
+      state: 'running',
+      runId,
+      agentLabel: 'מנהל הצוות',
+      message: 'מנהל הצוות קיבל משוב ומעדכן את המסמך',
+      templateId,
+    });
+
+    const response = await chatWithActiveProvider(
+      'שפר את המסמך הקיים בהתאם למשוב המשתמש',
+      `נושא המסמך: ${originalPrompt || 'לא צוין'}\n\nמשוב המשתמש:\n${cleanFeedback}\n\nהמסמך הקיים ב-HTML:\n${cleanHtml}`,
+      `פעל כמנהל צוות התוכן של Word AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}`,
+      { runId, agentLabel: 'מנהל הצוות' },
+    );
+
+    const cleanedResponse = normalizeGeneratedHtmlResponse(response);
+    if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 20) {
+      throw new Error('התקבלה תשובת תיקון ריקה או לא שמישה');
+    }
+
+    logAgentDebugEvent({
+      type: 'doc-feedback-success',
+      state: 'success',
+      runId,
+      agentLabel: 'מנהל הצוות',
+      message: 'המסמך עודכן בהתאם למשוב המשתמש',
+      outputChars: cleanedResponse.length,
+    });
+
+    return returnMeta
+      ? { html: cleanedResponse, usedFallback: false, runId, errorMessage: '' }
+      : cleanedResponse;
+  } catch (error) {
+    logAgentDebugEvent({
+      type: 'doc-feedback-fallback',
+      state: 'error',
+      runId,
+      agentLabel: 'מנהל הצוות',
+      message: 'מנהל הצוות לא הצליח להשלים את עדכון המסמך',
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+    });
+
+    return returnMeta
+      ? { html: cleanHtml, usedFallback: true, runId, errorMessage: error?.message || 'שגיאה לא ידועה' }
+      : cleanHtml;
   }
 }
 
