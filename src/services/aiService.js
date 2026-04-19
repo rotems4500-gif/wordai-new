@@ -1,7 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DOMSerializer } from "@tiptap/pm/model";
 import { AGENTS_CONFIG } from "../agentConfig";
-import personalStyleSeed from "../../my_personal_style.json";
+
+// Personal style seed – loaded at runtime from disk, not bundled
+const personalStyleSeed = {};
 
 // ═══════════════════════════════════════
 // Provider Config
