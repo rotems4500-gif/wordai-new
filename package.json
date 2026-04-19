@@ -1,11 +1,11 @@
 {
   "name": "word-ai-assistant",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Word AI Assistant built with Vite",
   "author": "Rotem",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rotems4500-gif/wordai.git"
+    "url": "https://github.com/rotems4500-gif/wordai-new.git"
   },
   "main": "electron/main.cjs",
   "engines": {
@@ -78,7 +78,7 @@
       {
         "provider": "github",
         "owner": "rotems4500-gif",
-        "repo": "wordai",
+        "repo": "wordai-new",
         "releaseType": "release"
       }
     ],
