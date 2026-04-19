@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs } from "./services/aiService";
+import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig } from "./services/aiService";
 
 const CONTEXT_PROMPTS = [
   'נראה ארוך אה?',
@@ -58,6 +58,36 @@ const getShellStyle = (mode, compactMode = false) => ({
   boxShadow: mode === 'popup' ? '0 18px 40px rgba(15,23,42,0.16)' : 'none',
 });
 
+const normalizeLookup = (value = '') => String(value || '').trim().toLowerCase();
+
+const resolveMentionMatch = (text = '', cursor = String(text || '').length) => {
+  const uptoCursor = String(text || '').slice(0, cursor);
+  const match = uptoCursor.match(/(^|\s)([@/])([^\s@/]*)$/);
+  if (!match) return null;
+  const token = `${match[2]}${match[3] || ''}`;
+  const start = uptoCursor.lastIndexOf(token);
+  return start >= 0 ? { trigger: match[2], query: match[3] || '', start, end: cursor } : null;
+};
+
+const findMentionedAgent = (agents = [], token = '') => {
+  const cleanToken = normalizeLookup(token).replace(/\s+/g, '-');
+  return agents.find((agent) => {
+    const byId = normalizeLookup(agent.id);
+    const byName = normalizeLookup(agent.name);
+    const bySlug = byName.replace(/\s+/g, '-');
+    return cleanToken === byId || cleanToken === bySlug || byName.includes(cleanToken);
+  });
+};
+
+const findMentionedSkill = (skills = [], token = '') => {
+  const cleanToken = normalizeLookup(token).replace(/\s+/g, '-');
+  return skills.find((skill) => {
+    const byId = normalizeLookup(skill.id);
+    const byLabel = normalizeLookup(skill.label);
+    return cleanToken === byId || byLabel.includes(cleanToken);
+  });
+};
+
 export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {} }) {
   const [tab, setTab] = useState('chat');
   const workspaceAutomation = getWorkspaceAutomation();
@@ -72,6 +102,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [agentProgressMap, setAgentProgressMap] = useState({});
   const [showLogs, setShowLogs] = useState(mode !== 'sidebar');
   const [debugLogs, setDebugLogs] = useState(() => getAgentDebugLogs().slice(-60).reverse());
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedSkillId, setSelectedSkillId] = useState('none');
+  const [resolvedSkillLabel, setResolvedSkillLabel] = useState('');
+  const [mentionMenu, setMentionMenu] = useState({ open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 });
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -81,7 +115,68 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const visibleActions = QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
   const selectionActions = visibleActions.filter((action) => action.sel);
   const generationActions = visibleActions.filter((action) => !action.sel);
+  const skillCatalog = getSkillCatalog();
+  const skillsConfig = getSkillsConfig();
+  const activeAgent = roleAgents.find((agent) => agent.id === selectedAgentId) || null;
   const shouldShowProgress = workspaceAutomation.showProgress !== false && (!compactMode || tab === 'agents' || ['running', 'retrying', 'error'].includes(activeAgentStatus.state));
+
+  const closeMentionMenu = () => setMentionMenu((prev) => (prev.open ? { ...prev, open: false, items: [], activeIndex: 0 } : prev));
+
+  const updateMentionMenu = (value, cursor = String(value || '').length) => {
+    const match = resolveMentionMatch(value, cursor);
+    if (!match) {
+      closeMentionMenu();
+      return;
+    }
+
+    const query = normalizeLookup(match.query);
+    const items = (match.trigger === '@'
+      ? roleAgents.map((agent) => ({
+          id: agent.id,
+          label: agent.name,
+          description: 'הפעלת סוכן ייעודי למשימה הזו',
+          insertText: `@${agent.id} `,
+          type: 'agent',
+        }))
+      : skillCatalog
+          .filter((skill) => (skillsConfig.skills?.[skill.id]?.mode || 'manual') !== 'off')
+          .map((skill) => ({
+            id: skill.id,
+            label: skill.label,
+            description: skill.usageHint || skill.description,
+            insertText: `/${skill.id} `,
+            type: 'skill',
+          })))
+      .filter((item) => !query || normalizeLookup(item.label).includes(query) || normalizeLookup(item.id).includes(query))
+      .slice(0, 6);
+
+    setMentionMenu({
+      open: items.length > 0,
+      type: match.trigger === '@' ? 'agent' : 'skill',
+      query: match.query,
+      start: match.start,
+      end: match.end,
+      items,
+      activeIndex: 0,
+    });
+  };
+
+  const applyMentionChoice = (item) => {
+    const textarea = inputRef.current;
+    const currentValue = textarea?.value ?? input;
+    const before = currentValue.slice(0, mentionMenu.start);
+    const after = currentValue.slice(mentionMenu.end);
+    const nextValue = `${before}${item.insertText}${after}`;
+    setInput(nextValue);
+    if (item.type === 'skill') setSelectedSkillId(item.id);
+    if (item.type === 'agent') setSelectedAgentId(item.id);
+    closeMentionMenu();
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      const nextCursor = before.length + item.insertText.length;
+      textarea?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -116,6 +211,15 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     window.addEventListener('wordai-agent-logs-updated', syncLogs);
     return () => window.removeEventListener('wordai-agent-logs-updated', syncLogs);
   }, []);
+
+  useEffect(() => {
+    if (selectedSkillId !== 'none' && (skillsConfig.skills?.[selectedSkillId]?.mode || 'manual') === 'off') {
+      setSelectedSkillId('none');
+    }
+    if (selectedAgentId && !roleAgents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId('');
+    }
+  }, [selectedSkillId, selectedAgentId, skillsConfig, roleAgents]);
 
   const updateAgentStatus = (agentId, agentLabel, payload = {}) => {
     setActiveAgentStatus({
@@ -172,27 +276,125 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     setDebugLogs([]);
   };
 
-  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'עוזר ראשי' }) => {
-    const txt = (customPrompt || input).trim();
-    if (!txt || loading) return;
-    if (!customPrompt) setInput('');
-    const ctx = selectedText
+  const buildContext = () => (
+    selectedText
       ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
       : currentBlockText
         ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
-        : docCtx;
-    setMessages(prev => [...prev, { role: 'user', content: txt }]);
+        : docCtx
+  );
+
+  const executeRoleAgentTask = async (agent, task, runtimeOptions = {}) => {
+    if (!agent?.prompt || loading) return;
+    const ctx = buildContext();
+    setTab('chat');
+    setSelectedAgentId(agent.id);
+    setMessages((prev) => [...prev, { role: 'user', content: `🧩 ${agent.name}: ${task}` }]);
+    setLoading(true);
+    updateAgentStatus(agent.id, agent.name, { state: 'running', progress: 10, message: 'הסוכן התחיל לעבוד' });
+    try {
+      const reply = await chatWithRoleAgent(agent, task, ctx, {
+        onStatus: (payload) => updateAgentStatus(agent.id, agent.name, payload),
+        skillId: runtimeOptions.skillId || '',
+        autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
+      });
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
+      setInput('');
+      setAgentTaskInput('');
+      updateAgentStatus(agent.id, agent.name, { state: 'success', progress: 100, message: 'סיים בהצלחה' });
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
+      updateAgentStatus(agent.id, agent.name, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'עוזר ראשי' }) => {
+    const originalText = (customPrompt || input).trim();
+    if (!originalText || loading) return;
+    if (!customPrompt) setInput('');
+    closeMentionMenu();
+
+    let txt = originalText;
+    let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
+    let forcedAgent = activeAgent;
+    let disabledSkillRequested = false;
+
+    while (txt.startsWith('@') || txt.startsWith('/')) {
+      const agentStartMatch = txt.match(/^@([^\s@/]+)\s*/);
+      if (agentStartMatch) {
+        const matchedAgent = findMentionedAgent(roleAgents, agentStartMatch[1]);
+        if (!matchedAgent) break;
+        forcedAgent = matchedAgent;
+        setSelectedAgentId(matchedAgent.id);
+        txt = txt.slice(agentStartMatch[0].length).trimStart();
+        continue;
+      }
+
+      const skillStartMatch = txt.match(/^\/([^\s@/]+)\s*/);
+      if (skillStartMatch) {
+        const matchedSkill = findMentionedSkill(skillCatalog, skillStartMatch[1]);
+        if (!matchedSkill) break;
+        txt = txt.slice(skillStartMatch[0].length).trimStart();
+        const mode = skillsConfig.skills?.[matchedSkill.id]?.mode || 'manual';
+        if (mode === 'off') {
+          disabledSkillRequested = true;
+          manualSkillId = '';
+        } else {
+          manualSkillId = matchedSkill.id;
+          setSelectedSkillId(matchedSkill.id);
+        }
+        continue;
+      }
+
+      break;
+    }
+
+    if (disabledSkillRequested) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: 'הסקיל שביקשת כבוי כרגע בהגדרות, לכן דילגתי עליו.' }]);
+    }
+
+    if (!txt) {
+      const helperText = forcedAgent
+        ? `הסוכן ${forcedAgent.name} נבחר. עכשיו כתוב מה לבצע.`
+        : manualSkillId
+          ? 'הסקיל נבחר. עכשיו כתוב גם מה לבצע.'
+          : 'בחרתי את הסוכן או הסקיל. עכשיו כתוב גם מה לבצע.';
+      setMessages((prev) => [...prev, { role: 'assistant', content: helperText }]);
+      inputRef.current?.focus();
+      return;
+    }
+
+    if (forcedAgent) {
+      await executeRoleAgentTask(forcedAgent, txt, {
+        skillId: manualSkillId,
+        autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+      });
+      return;
+    }
+
+    const ctx = buildContext();
+    setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
     setLoading(true);
     updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     try {
       const reply = await chatWithActiveProvider(txt, ctx, extraSystemPrompt, {
         agentLabel: agentMeta.name,
+        skillId: manualSkillId,
+        autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        onSkillResolved: (payload) => {
+          const skill = payload?.skill;
+          const reasonLabel = payload?.reason === 'auto' ? 'אוטומטי' : payload?.reason === 'default' ? 'ברירת מחדל' : 'ידני';
+          setResolvedSkillLabel(skill?.label ? `${skill.label} · ${reasonLabel}` : 'ללא סקיל פעיל');
+        },
         onStatus: (payload) => updateAgentStatus(agentMeta.id, agentMeta.name, payload),
       });
-      setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
       updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
+      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
       updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
       setLoading(false);
@@ -201,13 +403,6 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   };
 
   const runRoleAgent = async (agent) => {
-    if (!agent?.prompt || loading) return;
-    const ctx = selectedText
-      ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
-      : currentBlockText
-        ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
-        : docCtx;
-
     const customTask = String(agentTaskInput || '').trim();
     const task = customTask
       ? `${customTask}${selectedText ? `\n\nטקסט רלוונטי:\n"${selectedText}"` : ''}${currentBlockText && !selectedText ? `\n\nפסקה רלוונטית:\n"${currentBlockText}"` : ''}`
@@ -216,25 +411,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         : currentBlockText
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
-    setTab('chat');
-    setMessages(prev => [...prev, { role: 'user', content: `🧩 ${agent.name}: ${task}` }]);
-    setLoading(true);
-    updateAgentStatus(agent.id, agent.name, { state: 'running', progress: 10, message: 'הסוכן התחיל לעבוד' });
-    try {
-      const reply = await chatWithRoleAgent(agent, task, ctx, {
-        onStatus: (payload) => updateAgentStatus(agent.id, agent.name, payload),
-      });
-      setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
-      setInput('');
-      setAgentTaskInput('');
-      updateAgentStatus(agent.id, agent.name, { state: 'success', progress: 100, message: 'סיים בהצלחה' });
-    } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
-      updateAgentStatus(agent.id, agent.name, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
-    } finally {
-      setLoading(false);
-      inputRef.current?.focus();
-    }
+    await executeRoleAgentTask(agent, task);
   };
 
   const runAction = (action) => {
@@ -258,7 +435,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         <div style={{ display: 'flex', alignItems: 'center', gap: compactMode ? 8 : 10 }}>
           <span style={{ fontSize: compactMode ? 20 : 24 }}>✨</span>
           <div>
-            <div style={{ color: 'white', fontWeight: 700, fontSize: compactMode ? 13 : 14 }}>AI Perfect Assistant</div>
+            <div style={{ color: 'white', fontWeight: 700, fontSize: compactMode ? 13 : 14 }}>WordFlow AI</div>
             <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 1 }}>מנוע פעיל: {getActiveProviderName()}</div>
           </div>
         </div>
@@ -400,17 +577,95 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           </div>
 
           <div style={{ padding: '10px 12px', borderTop: '1px solid #E1DFDD', background: 'white', flexShrink: 0, boxShadow: '0 -8px 20px rgba(15,23,42,0.04)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              {activeAgent && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#EEF2FF', color: '#3730A3', padding: '5px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                  @{activeAgent.id}
+                  <button onClick={() => setSelectedAgentId('')} style={{ border: 'none', background: 'transparent', color: '#3730A3', cursor: 'pointer', fontSize: 12, padding: 0 }}>×</button>
+                </span>
+              )}
+              <span style={{ fontSize: 11, color: '#475569', fontWeight: 700 }}>סקיל פעיל</span>
+              <select
+                value={selectedSkillId}
+                onChange={(e) => setSelectedSkillId(e.target.value)}
+                style={{ minWidth: compactMode ? 170 : 220, padding: '7px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, background: '#F8FAFC' }}
+              >
+                <option value="none">בחירה אוטומטית לפי ההגדרות</option>
+                {skillCatalog.map((skill) => {
+                  const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
+                  return (
+                    <option key={skill.id} value={skill.id} disabled={mode === 'off'}>
+                      {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+              {resolvedSkillLabel && <span style={{ fontSize: 10, color: '#64748B' }}>בשיחה האחרונה: {resolvedSkillLabel}</span>}
+            </div>
             {localContext && (
               <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6, padding: '6px 8px', background: '#F0F7FF', borderRadius: 8, borderRight: '3px solid #2B579A' }}>
                 📌 הקשר פעיל: &ldquo;{(selectedText || currentBlockText).slice(0, 80)}{(selectedText || currentBlockText).length > 80 ? '…' : ''}&rdquo;
               </div>
             )}
-            <div style={{ display: 'flex', gap: 6 }}>
-              <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="כתוב חופשי, למשל: @claude תחדד לי את זה / @gemini יש מקור לזה?"
+            <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  updateMentionMenu(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                }}
+                onClick={(e) => updateMentionMenu(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
+                onBlur={() => setTimeout(() => closeMentionMenu(), 120)}
+                onKeyDown={(e) => {
+                  if (mentionMenu.open && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+                    e.preventDefault();
+                    if (e.key === 'Escape') {
+                      closeMentionMenu();
+                      return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                      setMentionMenu((prev) => ({ ...prev, activeIndex: Math.min(prev.activeIndex + 1, prev.items.length - 1) }));
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      setMentionMenu((prev) => ({ ...prev, activeIndex: Math.max(prev.activeIndex - 1, 0) }));
+                      return;
+                    }
+                    const choice = mentionMenu.items[mentionMenu.activeIndex] || mentionMenu.items[0];
+                    if (choice) applyMentionChoice(choice);
+                    return;
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder="כתוב חופשי. אפשר להקליד @ כדי לבחור סוכן, או / כדי לבחור סקיל"
                 style={{ flex: 1, resize: 'none', border: '1px solid #CBD5E1', borderRadius: 12, padding: compactMode ? '9px 10px' : '10px 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', height: compactMode ? 56 : 72, direction: 'rtl', background: '#F8FAFC' }}
-                disabled={loading} />
+                disabled={loading}
+              />
+              {mentionMenu.open && (
+                <div style={{ position: 'absolute', right: 0, left: 46, bottom: compactMode ? 64 : 80, background: 'white', border: '1px solid #CBD5E1', borderRadius: 12, boxShadow: '0 12px 30px rgba(15,23,42,0.12)', overflow: 'hidden', zIndex: 20 }}>
+                  <div style={{ padding: '7px 10px', fontSize: 10, fontWeight: 700, color: '#64748B', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                    {mentionMenu.type === 'agent' ? 'סוכנים זמינים' : 'סקילים זמינים'}
+                  </div>
+                  {mentionMenu.items.map((item, index) => (
+                    <button
+                      key={`${item.type}-${item.id}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyMentionChoice(item);
+                      }}
+                      style={{ width: '100%', textAlign: 'right', border: 'none', borderTop: index === 0 ? 'none' : '1px solid #F1F5F9', background: index === mentionMenu.activeIndex ? '#EFF6FF' : 'white', padding: '9px 10px', cursor: 'pointer' }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>{mentionMenu.type === 'agent' ? '@' : '/'}{item.id}</div>
+                      <div style={{ fontSize: 11, color: '#475569' }}>{item.label}</div>
+                      <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>{item.description}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
               <button onClick={() => send()} disabled={loading || !input.trim()}
                 style={{ width: 40, flexShrink: 0, background: !loading && input.trim() ? '#2B579A' : '#C8C6C4', color: 'white', border: 'none', borderRadius: 8, cursor: !loading && input.trim() ? 'pointer' : 'default', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 ↑

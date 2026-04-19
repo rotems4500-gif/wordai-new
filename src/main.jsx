@@ -59,6 +59,16 @@ const DEFAULT_FEEDBACK_SURVEY = {
   submitting: false,
 };
 
+const DEFAULT_INPUT_DIALOG = {
+  open: false,
+  title: '',
+  description: '',
+  fields: [],
+  values: {},
+  confirmLabel: 'אישור',
+  resolve: null,
+};
+
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
@@ -94,6 +104,7 @@ function App() {
     logs: getAgentDebugLogs().slice(-5).reverse(),
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
+  const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
   const pendingImportRef = React.useRef(null);
@@ -133,19 +144,26 @@ function App() {
     if (!currentEditor?.view?.dom) return;
     const preset = DOCUMENT_STYLE_PRESETS[styleId] || DOCUMENT_STYLE_PRESETS.academic;
     const dom = currentEditor.view.dom;
-    const savedFont = String(localStorage.getItem('default-font') || '').trim();
-    const savedSizeRaw = String(localStorage.getItem('default-size') || '').trim();
-    const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}px` : '');
+    let styleOverrides = {};
+    try {
+      styleOverrides = JSON.parse(localStorage.getItem('wordflow_style_overrides') || '{}');
+    } catch {
+      styleOverrides = {};
+    }
+    const currentOverride = styleOverrides?.[styleId] || {};
+    const savedFont = String(wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
+    const savedSizeRaw = String(wordPreferences.defaultFontSize || localStorage.getItem('default-size') || '').trim();
+    const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
     dom.setAttribute('data-doc-style', styleId);
-    dom.style.fontFamily = savedFont || preset.fontFamily;
-    dom.style.fontSize = savedSize || preset.fontSize;
-    dom.style.lineHeight = preset.lineHeight;
+    dom.style.fontFamily = currentOverride.fontFamily || savedFont || preset.fontFamily;
+    dom.style.fontSize = currentOverride.fontSize || savedSize || preset.fontSize;
+    dom.style.lineHeight = currentOverride.lineHeight || preset.lineHeight;
     dom.style.padding = dom.dataset.customPadding || preset.padding;
     dom.style.maxWidth = dom.dataset.viewMode === 'print' ? (dom.dataset.customWidth || preset.maxWidth) : dom.style.maxWidth;
     dom.style.background = dom.dataset.customBackground || preset.background;
     dom.style.textAlign = preset.textAlign;
     dom.style.border = dom.dataset.customBorder || dom.style.border;
-  }, [editor]);
+  }, [editor, wordPreferences]);
 
   const hasMeaningfulEditorContent = React.useCallback((currentEditor = editor) => {
     if (!currentEditor) return false;
@@ -162,6 +180,10 @@ function App() {
     applyDocumentStyleToEditor(nextStyle);
   }, [applyDocumentStyleToEditor]);
 
+  React.useEffect(() => {
+    applyDocumentStyleToEditor(documentStyle);
+  }, [documentStyle, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, applyDocumentStyleToEditor]);
+
   const focusEditorSoon = React.useCallback((position = 'end') => {
     window.requestAnimationFrame(() => {
       try {
@@ -169,6 +191,42 @@ function App() {
       } catch {}
     });
   }, [editor]);
+
+  const openExternalLink = React.useCallback((url) => {
+    if (!url) return;
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch {
+      window.location.href = url;
+    }
+  }, []);
+
+  const requestInputDialog = React.useCallback((config = {}) => new Promise((resolve) => {
+    const fields = Array.isArray(config.fields) ? config.fields : [];
+    const nextValues = fields.reduce((acc, field) => {
+      acc[field.id] = String(field.value ?? '');
+      return acc;
+    }, {});
+
+    setInputDialog({
+      open: true,
+      title: config.title || 'השלם פרטים',
+      description: config.description || '',
+      fields,
+      values: nextValues,
+      confirmLabel: config.confirmLabel || 'אישור',
+      resolve,
+    });
+  }), []);
+
+  const closeInputDialog = React.useCallback((result = null) => {
+    setInputDialog((prev) => {
+      try {
+        prev.resolve?.(result);
+      } catch {}
+      return { ...DEFAULT_INPUT_DIALOG };
+    });
+  }, []);
 
   const toggleFeedbackOption = React.useCallback((option) => {
     setFeedbackSurvey((prev) => ({
@@ -631,11 +689,26 @@ function App() {
         break;
       }
       case 'lineHeight': editor.chain().focus().setLineHeight(value).run(); break;
+      case 'applyParagraphSpacing': {
+        const spacing = value || {};
+        const block = getCurrentBlockElement();
+        if (spacing.lineHeight) editor.chain().focus().setLineHeight(spacing.lineHeight).run();
+        if (block) {
+          if (spacing.before != null) block.style.marginTop = `${Math.max(0, Number(spacing.before) || 0)}pt`;
+          if (spacing.after != null) block.style.marginBottom = `${Math.max(0, Number(spacing.after) || 0)}pt`;
+        }
+        break;
+      }
       case 'saveDefaultTypography': {
         const currentFont = editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef';
         const currentSize = editor.getAttributes('textStyle')?.fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt';
         localStorage.setItem('default-font', currentFont);
         localStorage.setItem('default-size', currentSize);
+        setWordPreferences((prev) => ({
+          ...prev,
+          defaultFontFamily: currentFont,
+          defaultFontSize: currentSize,
+        }));
         applyDocumentStyleToEditor(documentStyle);
         alert(`ברירת המחדל נשמרה: ${currentFont} · ${currentSize}`);
         break;
@@ -674,11 +747,72 @@ function App() {
         break;
       case 'insertImage': editor.chain().focus().setImage({ src: value }).run(); break;
       case 'insertImageUrl': {
-        const url = window.prompt('הכנס כתובת URL של תמונה:');
-        if (url) editor.chain().focus().setImage({ src: url }).run();
+        const result = await requestInputDialog({
+          title: 'הוספת תמונה מקישור',
+          description: 'הדבק כתובת תמונה מלאה.',
+          fields: [
+            { id: 'url', label: 'כתובת תמונה', placeholder: 'https://example.com/image.png' },
+          ],
+          confirmLabel: 'הוסף תמונה',
+        });
+        if (result?.url) editor.chain().focus().setImage({ src: String(result.url).trim() }).run();
         break;
       }
       case 'insertLink': editor.chain().focus().setLink({ href: value }).run(); break;
+      case 'insertLinkDialog': {
+        const result = await requestInputDialog({
+          title: 'הוספת קישור',
+          description: 'אפשר להוסיף גם קישור למקור אקדמי או מערכת חיצונית.',
+          fields: [
+            { id: 'url', label: 'כתובת URL', placeholder: 'https://...' },
+          ],
+          confirmLabel: 'הוסף קישור',
+        });
+        if (result?.url) editor.chain().focus().setLink({ href: String(result.url).trim() }).run();
+        break;
+      }
+      case 'insertBookmarkDialog': {
+        const result = await requestInputDialog({
+          title: 'יצירת סימניה',
+          fields: [
+            { id: 'name', label: 'שם הסימניה', placeholder: 'למשל: מבוא או מקורות' },
+          ],
+          confirmLabel: 'צור סימניה',
+        });
+        if (result?.name) editor.chain().focus().insertContent(`<a id="${escHtml(String(result.name).trim())}" name="${escHtml(String(result.name).trim())}" style="color:inherit;text-decoration:none;">⚓ ${escHtml(String(result.name).trim())}</a>`).run();
+        break;
+      }
+      case 'openGoogleSearch': {
+        const initial = String(selectedText || currentBlockText || '').trim();
+        const result = await requestInputDialog({
+          title: 'חיפוש בגוגל',
+          fields: [
+            { id: 'query', label: 'מה לחפש?', placeholder: 'נושא, מושג או שאלה', value: initial },
+          ],
+          confirmLabel: 'פתח חיפוש',
+        });
+        if (result?.query) openExternalLink(`https://www.google.com/search?q=${encodeURIComponent(String(result.query).trim())}`);
+        break;
+      }
+      case 'searchScholar': {
+        const initial = String(selectedText || currentBlockText || '').trim();
+        const result = await requestInputDialog({
+          title: 'חיפוש ב-Google Scholar',
+          description: 'אפשר לחפש נושא, מאמר, חוקר או מילות מפתח.',
+          fields: [
+            { id: 'query', label: 'מונח חיפוש', placeholder: 'למשל: legal writing pedagogy', value: initial },
+          ],
+          confirmLabel: 'פתח Scholar',
+        });
+        if (result?.query) openExternalLink(`https://scholar.google.com/scholar?q=${encodeURIComponent(String(result.query).trim())}`);
+        break;
+      }
+      case 'openOrbit':
+        openExternalLink('https://orbit.livemind-app.com/');
+        break;
+      case 'openModelHub':
+        openExternalLink('https://aistudio.google.com/');
+        break;
       case 'setColor': editor.chain().focus().setColor(value).run(); break;
       case 'setHighlight': editor.chain().focus().toggleHighlight({ color: value }).run(); break;
       case 'insertTaskList': editor.chain().focus().toggleTaskList().run(); break;
@@ -762,7 +896,14 @@ function App() {
 
       // --- הערת שוליים ---
       case 'insertFootnote': {
-        const footnoteText = window.prompt('טקסט הערת שוליים:');
+        const result = await requestInputDialog({
+          title: 'הוספת הערת שוליים',
+          fields: [
+            { id: 'footnote', label: 'טקסט הערת שוליים', placeholder: 'הקלד כאן את ההערה' },
+          ],
+          confirmLabel: 'הוסף הערה',
+        });
+        const footnoteText = String(result?.footnote || '').trim();
         if (!footnoteText) break;
         const existingFootnotes = document.querySelectorAll('.footnote-ref').length;
         const num = existingFootnotes + 1;
@@ -807,7 +948,7 @@ function App() {
 
         if (currentFilePath && window.desktopApp?.saveDocumentDialog) {
           const ext = String(currentFilePath).toLowerCase().split('.').pop();
-          const canSaveDirectly = ['txt', 'html', 'htm'].includes(ext);
+          const canSaveDirectly = ['txt', 'html', 'htm', 'docx'].includes(ext);
           const result = await window.desktopApp.saveDocumentDialog({
             filePath: canSaveDirectly ? currentFilePath : '',
             title: editor.getText().trim().slice(0, 60) || 'מסמך',
@@ -858,6 +999,7 @@ function App() {
             title: editor.getText().trim().slice(0, 60) || 'מסמך',
             html,
             text,
+            preferredExtension: 'docx',
           });
 
           if (!result?.canceled) {
@@ -878,8 +1020,19 @@ function App() {
         break;
       }
       case 'exportDocx': {
-        // ייצוא בסיסי כ-HTML עם headers של Word
-        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordAI Document</title>${exportDocStyles}</head><body dir="rtl">${editor.getHTML()}</body></html>`;
+        const html = editor.getHTML();
+        const text = editor.getText();
+        if (window.desktopApp?.saveDocumentDialog) {
+          const result = await window.desktopApp.saveDocumentDialog({
+            title: editor.getText().trim().slice(0, 60) || 'מסמך',
+            html,
+            text,
+            preferredExtension: 'docx',
+          });
+          if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
+          break;
+        }
+        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordFlow AI Document</title>${exportDocStyles}</head><body dir="rtl">${html}</body></html>`;
         downloadFile(htmlContent, 'document.doc', 'application/msword');
         break;
       }
@@ -915,7 +1068,7 @@ function App() {
         break;
       }
       case 'exportHTML': {
-        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>Word AI Document</title>${exportDocStyles}</head><body>${editor.getHTML()}</body></html>`;
+        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${exportDocStyles}</head><body>${editor.getHTML()}</body></html>`;
         downloadFile(htmlCtx, 'my-document.html', 'text/html');
         break;
       }
@@ -1040,7 +1193,15 @@ function App() {
         break;
       }
       case 'insertSmartArt': {
-        const items = (window.prompt('הכנס פריטים לרשימה (מופרדים ב-,):') || '').split(',').map(s => s.trim()).filter(Boolean);
+        const result = await requestInputDialog({
+          title: 'יצירת SmartArt',
+          description: 'הפרד בין הפריטים בפסיקים.',
+          fields: [
+            { id: 'items', label: 'פריטים', placeholder: 'למשל: מבוא, שיטה, ממצאים, מסקנה' },
+          ],
+          confirmLabel: 'צור מבנה',
+        });
+        const items = String(result?.items || '').split(',').map(s => s.trim()).filter(Boolean);
         if (!items.length) break;
         const smartMap = {
           list: `<ul style="padding-right:20px">${items.map(i => `<li>${i}</li>`).join('')}</ul>`,
@@ -1053,7 +1214,15 @@ function App() {
         break;
       }
       case 'insertChart': {
-        const chartData = window.prompt('הכנס נתונים (שם:ערך, מופרדים ב-,):\nלדוגמה: ינואר:45, פברואר:72, מרץ:60') || '';
+        const result = await requestInputDialog({
+          title: 'בניית תרשים',
+          description: 'הקלד זוגות של שם וערך בפורמט שם:ערך, מופרדים בפסיקים.',
+          fields: [
+            { id: 'chartData', label: 'נתונים', placeholder: 'ינואר:45, פברואר:72, מרץ:60' },
+          ],
+          confirmLabel: 'צור תרשים',
+        });
+        const chartData = String(result?.chartData || '');
         const rows = chartData.split(',').map(r => r.trim().split(':').map(s => s.trim())).filter(r => r.length === 2);
         if (!rows.length) break;
         const max = Math.max(...rows.map(r => parseFloat(r[1]) || 0)) || 1;
@@ -1065,9 +1234,21 @@ function App() {
       /* ---- פקודות עמודים ---- */
       case 'insertCoverPage': {
         const styleType = value || 'classic';
-        const title = window.prompt('כותרת המסמך:') || 'כותרת המסמך';
-        const sub = window.prompt('כותרת משנה:') || 'כותרת משנה';
-        const author = window.prompt('שם המחבר:') || '________________';
+        const initialTitle = editor.getText().trim().split('\n').find(Boolean) || 'כותרת המסמך';
+        const result = await requestInputDialog({
+          title: 'פרטי עמוד שער',
+          description: 'אם כבר קיים עמוד שער קודם, הוא יוחלף בצורה בטוחה.',
+          fields: [
+            { id: 'title', label: 'כותרת המסמך', value: initialTitle },
+            { id: 'subtitle', label: 'כותרת משנה', value: 'כותרת משנה' },
+            { id: 'author', label: 'שם המחבר', value: '________________' },
+          ],
+          confirmLabel: 'החל עמוד שער',
+        });
+        if (!result) break;
+        const title = String(result.title || 'כותרת המסמך').trim() || 'כותרת המסמך';
+        const sub = String(result.subtitle || 'כותרת משנה').trim() || 'כותרת משנה';
+        const author = String(result.author || '________________').trim() || '________________';
         const date = new Date().toLocaleDateString('he-IL', { year: 'numeric', month: 'long' });
         const safeTitle = escHtml(title);
         const safeSub = escHtml(sub);
@@ -1075,16 +1256,17 @@ function App() {
         const safeDate = escHtml(date);
 
         const coverTemplates = {
-          classic: `<p>מסמך רשמי</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>נכתב על ידי ${safeAuthor}</p><p>${safeDate}</p>`,
-          modern: `<p>WORD AI</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p>`,
-          academic: `<p>עבודה אקדמית</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>מגיש/ה: ${safeAuthor}</p><p>${safeDate}</p>`,
-          bold: `<p>דוח / מצגת / מסמך</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p>`,
+          classic: `<div data-cover-page="true"><p>מסמך רשמי</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>נכתב על ידי ${safeAuthor}</p><p>${safeDate}</p></div>`,
+          modern: `<div data-cover-page="true"><p>WordFlow AI</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p></div>`,
+          academic: `<div data-cover-page="true"><p>עבודה אקדמית</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>מגיש/ה: ${safeAuthor}</p><p>${safeDate}</p></div>`,
+          bold: `<div data-cover-page="true"><p>דוח / מצגת / מסמך</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p></div>`,
         };
 
         localStorage.setItem('wordai_active_template', 'cover');
         setActiveTemplateId('cover');
-        const cover = `${coverTemplates[styleType] || coverTemplates.classic}<div data-type="page-break"></div><h1>כותרת פרק</h1><p></p>`;
-        editor.chain().focus().insertContentAt(1, cover).run();
+        const existingHtml = String(editor.getHTML() || '').replace(/<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i, '').trim();
+        const cover = `${coverTemplates[styleType] || coverTemplates.classic}<div data-type="page-break"></div>${existingHtml || '<h1>כותרת פרק</h1><p></p>'}`;
+        editor.commands.setContent(cover);
         break;
       }
       case 'insertBlankPage': {
@@ -1138,9 +1320,18 @@ function App() {
 
       /* ---- פקודות ציטוטים ---- */
       case 'insertCitation': {
-        const author = window.prompt('שם המחבר:') || '';
-        const year = window.prompt('שנה:') || new Date().getFullYear();
-        const title = window.prompt('כותרת:') || '';
+        const result = await requestInputDialog({
+          title: 'הוספת ציטוט',
+          fields: [
+            { id: 'author', label: 'שם המחבר', placeholder: 'למשל: Cohen' },
+            { id: 'year', label: 'שנה', value: String(new Date().getFullYear()) },
+            { id: 'title', label: 'כותרת המקור', placeholder: 'שם מאמר או ספר' },
+          ],
+          confirmLabel: 'הוסף ציטוט',
+        });
+        const author = String(result?.author || '').trim();
+        const year = String(result?.year || new Date().getFullYear()).trim();
+        const title = String(result?.title || '').trim();
         if (!author) break;
         const citStyle = localStorage.getItem('citation-style') || 'APA';
         const citText = citStyle === 'APA'
@@ -1290,7 +1481,7 @@ function App() {
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         {!showStartScreen && sidebarOpen && (
           <aside
-            className="h-full shrink-0 border-l border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[-8px_0_24px_rgba(15,23,42,0.06)]"
+            className="order-last h-full shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)]"
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
@@ -1364,6 +1555,60 @@ function App() {
         )}
 
         <div id="editor-wrapper" className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 flex justify-center items-start bg-[#E1DFDD] relative">
+          {inputDialog.open && (
+            <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
+              <div className="w-[560px] max-w-[96%] rounded-[24px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800">{inputDialog.title || 'השלם פרטים'}</h3>
+                    {inputDialog.description ? <p className="text-sm text-slate-500 mt-1">{inputDialog.description}</p> : null}
+                  </div>
+                  <button className="btn btn-sm btn-ghost" onClick={() => closeInputDialog(null)}>סגור</button>
+                </div>
+
+                <div className="space-y-3">
+                  {(inputDialog.fields || []).map((field) => (
+                    <label key={field.id} className="block text-right">
+                      <div className="text-sm font-semibold text-slate-700 mb-1">{field.label}</div>
+                      {field.type === 'textarea' ? (
+                        <textarea
+                          className="textarea textarea-bordered w-full min-h-[110px]"
+                          placeholder={field.placeholder || ''}
+                          value={inputDialog.values?.[field.id] || ''}
+                          onChange={(e) => setInputDialog((prev) => ({
+                            ...prev,
+                            values: {
+                              ...(prev.values || {}),
+                              [field.id]: e.target.value,
+                            },
+                          }))}
+                        />
+                      ) : (
+                        <input
+                          className="input input-bordered w-full"
+                          placeholder={field.placeholder || ''}
+                          value={inputDialog.values?.[field.id] || ''}
+                          onChange={(e) => setInputDialog((prev) => ({
+                            ...prev,
+                            values: {
+                              ...(prev.values || {}),
+                              [field.id]: e.target.value,
+                            },
+                          }))}
+                        />
+                      )}
+                    </label>
+                  ))}
+                </div>
+
+                <div className="flex gap-3 justify-end mt-5">
+                  <button className="btn btn-ghost" onClick={() => closeInputDialog(null)}>ביטול</button>
+                  <button className="btn btn-primary" onClick={() => closeInputDialog(inputDialog.values || {})}>{inputDialog.confirmLabel || 'אישור'}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {feedbackSurvey.open && (
             <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
               <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">

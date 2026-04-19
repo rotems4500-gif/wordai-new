@@ -1,7 +1,7 @@
 {
-  "name": "word-ai-assistant",
-  "version": "1.0.12",
-  "description": "Word AI Assistant built with Vite",
+  "name": "wordflow-ai",
+  "version": "1.0.13",
+  "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
     "type": "git",
@@ -48,6 +48,7 @@
     "ai": "^6.0.159",
     "clsx": "^2.1.1",
     "core-js": "^3.36.0",
+    "docx": "^9.6.1",
     "electron-updater": "^6.6.2",
     "firebase": "^12.12.0",
     "lucide-react": "^1.8.0",
@@ -82,7 +83,7 @@
         "releaseType": "release"
       }
     ],
-    "productName": "Word AI Assistant",
+    "productName": "WordFlow AI",
     "asar": true,
     "directories": {
       "output": "release"
@@ -96,7 +97,7 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "Word-AI-Assistant-Setup-${version}.${ext}",
+      "artifactName": "WordFlow-AI-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -104,25 +105,25 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Word AI Assistant"
+      "shortcutName": "WordFlow AI"
     },
     "fileAssociations": [
       {
         "ext": "docx",
-        "name": "Word AI Document",
-        "description": "Open DOCX files with Word AI Assistant",
+        "name": "WordFlow AI Document",
+        "description": "Open DOCX files with WordFlow AI",
         "role": "Editor"
       },
       {
         "ext": "txt",
-        "name": "Word AI Text Document",
-        "description": "Open text files with Word AI Assistant",
+        "name": "WordFlow AI Text Document",
+        "description": "Open text files with WordFlow AI",
         "role": "Editor"
       },
       {
         "ext": "html",
-        "name": "Word AI HTML Document",
-        "description": "Open HTML files with Word AI Assistant",
+        "name": "WordFlow AI HTML Document",
+        "description": "Open HTML files with WordFlow AI",
         "role": "Editor"
       }
     ]

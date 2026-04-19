@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const mammoth = require('mammoth');
+const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table, TableRow, TableCell, WidthType, ImageRun } = require('docx');
 const path = require('path');
 const fs = require('fs');
 
@@ -58,7 +59,179 @@ function plainTextToHtml(text = '') {
     .join('');
 }
 
-function wrapHtmlDocument(html = '', title = 'Word AI Document') {
+function decodeHtmlEntities(value = '') {
+  return String(value || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+async function createDocxImageParagraph(block = '') {
+  const srcMatch = String(block || '').match(/src=["']([^"']+)["']/i);
+  const altMatch = String(block || '').match(/alt=["']([^"']*)["']/i);
+  const src = decodeHtmlEntities(srcMatch?.[1] || '');
+  const alt = decodeHtmlEntities(altMatch?.[1] || 'תמונה');
+
+  if (!src) {
+    return new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      spacing: { after: 160 },
+      children: [new TextRun({ text: `[${alt}]`, italics: true, color: '475569' })],
+    });
+  }
+
+  try {
+    let data = null;
+
+    if (/^data:image\//i.test(src)) {
+      const base64 = src.split(',')[1] || '';
+      if (base64) data = Buffer.from(base64, 'base64');
+    } else if (/^file:\/\//i.test(src)) {
+      data = fs.readFileSync(new URL(src));
+    } else if (fs.existsSync(src)) {
+      data = fs.readFileSync(src);
+    } else if (/^https?:\/\//i.test(src) && typeof fetch === 'function') {
+      const response = await fetch(src);
+      if (response.ok) {
+        data = Buffer.from(await response.arrayBuffer());
+      }
+    }
+
+    if (!data) throw new Error('Image data unavailable');
+
+    return new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 160 },
+      children: [
+        new ImageRun({
+          data,
+          transformation: { width: 420, height: 240 },
+          altText: { name: alt },
+        }),
+      ],
+    });
+  } catch {
+    return new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      spacing: { after: 160 },
+      children: [new TextRun({ text: `[תמונה] ${alt || src}`, italics: true, color: '475569' })],
+    });
+  }
+}
+
+function buildDocxTable(block = '') {
+  const rows = (String(block || '').match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || []).map((rowHtml) => {
+    const cells = rowHtml.match(/<(th|td)[^>]*>[\s\S]*?<\/\1>/gi) || [];
+    return new TableRow({
+      children: (cells.length ? cells : ['<td></td>']).map((cellHtml) => {
+        const isHeader = /^<th/i.test(cellHtml);
+        const text = decodeHtmlEntities(String(cellHtml).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) || ' ';
+        return new TableCell({
+          width: { size: 100, type: WidthType.AUTO },
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [new TextRun({ text, bold: isHeader })],
+            }),
+          ],
+        });
+      }),
+    });
+  });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: rows.length ? rows : [new TableRow({ children: [new TableCell({ children: [new Paragraph(' ')] })] })],
+  });
+}
+
+async function htmlToDocxParagraphs(html = '', fallbackText = '') {
+  const source = String(html || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/<div data-type="page-break"><\/div>/gi, '\n[[PAGE_BREAK]]\n');
+
+  const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>/gi;
+  const children = [];
+  const blocks = source.match(blockRegex) || [];
+
+  const pushTextParagraph = (text, options = {}) => {
+    const cleanText = decodeHtmlEntities(String(text || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (!cleanText) return;
+    const runOptions = {
+      text: cleanText,
+      ...(options.bold ? { bold: true } : {}),
+      ...(options.italics ? { italics: true } : {}),
+      ...(options.color ? { color: options.color } : {}),
+      ...(options.size ? { size: options.size } : {}),
+    };
+    children.push(new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      spacing: { after: 160, line: 360 },
+      children: [new TextRun(runOptions)],
+      ...('bullet' in options ? { bullet: options.bullet } : {}),
+      ...(options.heading ? { heading: options.heading } : {}),
+    }));
+  };
+
+  if (!blocks.length) {
+    String(fallbackText || decodeHtmlEntities(source).replace(/<[^>]+>/g, ' '))
+      .split(/\n{2,}/)
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .forEach((chunk) => pushTextParagraph(chunk));
+    return children.length ? children : [new Paragraph({ text: '' })];
+  }
+
+  for (const block of blocks) {
+    if (block === '[[PAGE_BREAK]]') {
+      children.push(new Paragraph({ text: '', pageBreakBefore: true }));
+      continue;
+    }
+    if (/^<table/i.test(block)) {
+      children.push(buildDocxTable(block));
+      continue;
+    }
+    if (/^<img/i.test(block)) {
+      children.push(await createDocxImageParagraph(block));
+      continue;
+    }
+    if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }); continue; }
+    if (/^<h2/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }); continue; }
+    if (/^<h3/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_3, bold: true, size: 24 }); continue; }
+    if (/^<li/i.test(block)) { pushTextParagraph(block, { bullet: { level: 0 } }); continue; }
+    if (/^<blockquote/i.test(block)) { pushTextParagraph(block, { italics: true, color: '475569' }); continue; }
+    pushTextParagraph(block);
+  }
+
+  return children.length ? children : [new Paragraph({ text: '' })];
+}
+
+async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Document' } = {}) {
+  const children = await htmlToDocxParagraphs(html, text);
+  const doc = new Document({
+    sections: [
+      {
+        properties: {},
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            heading: HeadingLevel.HEADING_1,
+            spacing: { after: 220 },
+            children: [new TextRun({ text: title, bold: true, size: 36 })],
+          }),
+          ...children,
+        ],
+      },
+    ],
+  });
+
+  return Packer.toBuffer(doc);
+}
+
+function wrapHtmlDocument(html = '', title = 'WordFlow AI Document') {
   return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{direction:rtl;font-family:Arial,sans-serif;padding:40px;line-height:1.7}[data-type="page-break"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
 }
 
@@ -250,7 +423,7 @@ function setupAutoUpdater() {
     dialog.showMessageBox({
       type: 'info',
       title: 'עדכון זמין',
-      message: 'נמצאה גרסה חדשה של Word AI Assistant.',
+      message: 'נמצאה גרסה חדשה של WordFlow AI.',
       detail: 'העדכון יורד כעת ברקע.',
     });
   });
@@ -446,8 +619,9 @@ ipcMain.handle('open-document-dialog', async () => {
 ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
   if (!mainWindow) return { canceled: true };
   const baseName = sanitizeFileName(payload?.title || 'document');
+  const preferredExtension = String(payload?.preferredExtension || 'docx').toLowerCase();
   let targetPath = payload?.filePath || '';
-  const directWriteSupported = ['.txt', '.html', '.htm'];
+  const directWriteSupported = ['.txt', '.html', '.htm', '.docx'];
 
   if (targetPath && !directWriteSupported.includes(path.extname(targetPath).toLowerCase())) {
     targetPath = '';
@@ -456,8 +630,9 @@ ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
   if (!targetPath) {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'שמור בשם',
-      defaultPath: `${baseName}.html`,
+      defaultPath: `${baseName}.${preferredExtension === 'txt' ? 'txt' : preferredExtension === 'html' ? 'html' : 'docx'}`,
       filters: [
+        { name: 'Word', extensions: ['docx'] },
         { name: 'HTML', extensions: ['html'] },
         { name: 'Text', extensions: ['txt'] },
       ],
@@ -468,13 +643,20 @@ ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
   }
 
   let ext = path.extname(targetPath).toLowerCase();
-  if (!['.txt', '.html', '.htm'].includes(ext)) {
-    targetPath = `${targetPath.replace(/\.[^.]+$/, '') || targetPath}.html`;
-    ext = '.html';
+  if (!['.txt', '.html', '.htm', '.docx'].includes(ext)) {
+    targetPath = `${targetPath.replace(/\.[^.]+$/, '') || targetPath}.${preferredExtension === 'txt' ? 'txt' : preferredExtension === 'html' ? 'html' : 'docx'}`;
+    ext = path.extname(targetPath).toLowerCase();
   }
 
   if (ext === '.txt') {
     fs.writeFileSync(targetPath, String(payload?.text || ''), 'utf8');
+  } else if (ext === '.docx') {
+    const buffer = await buildDocxBuffer({
+      html: String(payload?.html || ''),
+      text: String(payload?.text || ''),
+      title: baseName,
+    });
+    fs.writeFileSync(targetPath, buffer);
   } else {
     fs.writeFileSync(targetPath, wrapHtmlDocument(String(payload?.html || ''), baseName), 'utf8');
   }

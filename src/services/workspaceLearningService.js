@@ -516,6 +516,7 @@ async function loadMaterialPreview(material) {
       if (payload?.extractedText && material.type !== 'pdf') {
         return String(payload.extractedText || '').slice(0, 5000);
       }
+      if (material.type === 'docx') return '';
       const binary = atob(payload.dataBase64);
       const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
       const buffer = bytes.buffer;
@@ -534,6 +535,10 @@ async function loadMaterialPreview(material) {
     if (material.type === 'pdf') {
       const buffer = await response.arrayBuffer();
       return (await extractPdfTextFromBuffer(buffer)).slice(0, 5000);
+    }
+
+    if (material.type === 'docx') {
+      return '';
     }
 
     const buffer = await response.arrayBuffer();
@@ -641,7 +646,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     const response = await chatWithActiveProvider(
       `צור עבורי מסמך מלא בנושא: ${cleanPrompt}`,
       materialsText,
-      `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך Word AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\n${notes}` : ''}`,
+      `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\n${notes}` : ''}`,
       { runId, agentLabel: 'AUTOPILOT' },
     );
 
@@ -703,7 +708,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     const response = await chatWithActiveProvider(
       'שפר את המסמך הקיים בהתאם למשוב המשתמש',
       `נושא המסמך: ${originalPrompt || 'לא צוין'}\n\nמשוב המשתמש:\n${cleanFeedback}\n\nהמסמך הקיים ב-HTML:\n${cleanHtml}`,
-      `פעל כמנהל צוות התוכן של Word AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}`,
+      `פעל כמנהל צוות התוכן של WordFlow AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}`,
       { runId, agentLabel: 'מנהל הצוות' },
     );
 

@@ -52,6 +52,8 @@ export const DEFAULT_WORD_PREFERENCES = {
   allowBackgroundSave: true,
   openAttachmentsInApp: true,
   showStartExperience: true,
+  defaultFontFamily: 'Alef',
+  defaultFontSize: '12pt',
   autoSave: true,
   autoSaveMinutes: 10,
   keepLastAutosavedVersion: true,
@@ -144,6 +146,81 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   showProgress: true,
 };
 
+export const SKILL_LIBRARY = [
+  {
+    id: 'style-guardian',
+    label: 'שומר סגנון אישי',
+    description: 'שומר על טון, ניסוח ואופי כתיבה עקבי לפי ההעדפות שנלמדו.',
+    usageHint: 'שכתוב, ליטוש, התאמת טון וניסוח',
+    prompt: 'פעל כשומר הסגנון האישי של המשתמש. שמור על הטון, אורך המשפטים, הבהירות והניסוחים המועדפים עליו. אל תשנה את הכוונה המקורית ואל תוסיף מלל מנופח.',
+    keywords: ['שכתב', 'ניסוח', 'סגנון', 'טון', 'תחדד', 'ליטוש', 'אנושי', 'מקצועי'],
+  },
+  {
+    id: 'template-autopilot',
+    label: 'טייס תבניות ודפי שער',
+    description: 'בוחר מבנה, דף שער ותבנית מתאימים למסמך החדש.',
+    usageHint: 'דפי שער, מסמכים רשמיים ותבניות',
+    prompt: 'פעל כטייס תבניות. כשנבנה מסמך חדש, ארגן אותו בתבנית ברורה, בחר מבנה מתאים, והצע דף שער ושדות מסודרים בלי להכביד על המשתמש.',
+    keywords: ['תבנית', 'דף שער', 'שער', 'כותרת', 'מסמך רשמי', 'תבנית מסמך'],
+  },
+  {
+    id: 'academic-structure',
+    label: 'בונה שלד אקדמי',
+    description: 'מייצר מבנה ברור לעבודות, מאמרים, סיכומים והצעות מחקר.',
+    usageHint: 'עבודות אקדמיות, מאמרים וסיכומים',
+    prompt: 'פעל כבונה שלד אקדמי. סדר את התוכן למבוא, גוף, כותרות משנה, מעבר לוגי ומסקנה. אם חסר מידע, הצע שלד ברור במקום להמציא תוכן.',
+    keywords: ['עבודה', 'אקדמי', 'מאמר', 'סמינר', 'סיכום', 'הצעת מחקר', 'שלד'],
+  },
+  {
+    id: 'source-hunter',
+    label: 'צייד מקורות אקדמיים',
+    description: 'מכוון לאיתור מקורות, מילות חיפוש וחוקרים רלוונטיים.',
+    usageHint: 'Google Scholar, חיפוש מקורות ומחקר',
+    prompt: 'פעל כחוקר מקורות אקדמיים. התמקד בהצעת כיווני מחקר, מילות חיפוש, חוקרים, ומסלולי חיפוש אמינים. אל תמציא ציטוטים או מאמרים שלא קיימים.',
+    keywords: ['מקור', 'מקורות', 'גוגל סקולר', 'google scholar', 'מחקר', 'מאמרים', 'חוקרים'],
+  },
+  {
+    id: 'citation-weaver',
+    label: 'אורג ציטוטים חכם',
+    description: 'מסייע לשלב ציטוטים וביבליוגרפיה בפורמט עקבי.',
+    usageHint: 'APA, MLA, ביבליוגרפיה והערות שוליים',
+    prompt: 'פעל כאורג ציטוטים. כשמבקשים לשלב מקורות, סדר ציטוטים בתוך הטקסט ובנה רשימת מקורות עקבית וזהירה. אם חסר מקור אמיתי, כתוב זאת במפורש.',
+    keywords: ['ציטוט', 'ביבליוגרפיה', 'apa', 'mla', 'הערת שוליים', 'מקורות בטקסט'],
+  },
+  {
+    id: 'consistency-checker',
+    label: 'בודק עקביות מסמך',
+    description: 'מאתר חוסר אחידות במבנה, ניסוח, כותרות ומונחים.',
+    usageHint: 'בדיקת אחידות ושיפור מסמך קיים',
+    prompt: 'פעל כבודק עקביות מסמך. חפש חוסר אחידות בכותרות, מונחים, זמנים, סגנון, טון ועימוד, והצע תיקונים ממוקדים.',
+    keywords: ['בדוק', 'אחידות', 'עקביות', 'שגיאות', 'בקרת איכות', 'יישור קו'],
+  },
+  {
+    id: 'draft-from-materials',
+    label: 'בונה טיוטה מחומרי עזר',
+    description: 'הופך נושא, חומרים וקבצים לטיוטה ראשונה מסודרת.',
+    usageHint: 'יצירת טיוטה ראשונה מחומרים שהועלו',
+    prompt: 'פעל כבונה טיוטה מחומרי עזר. קח נושא, מסמכי רקע והנחיות קיימות, וחבר מהם טיוטה מסודרת עם סדר לוגי, בלי להעתיק חומר גלם כמו שהוא.',
+    keywords: ['טיוטה', 'מחומרי עזר', 'מחומרים', 'קבצים', 'תבנה מסמך', 'תכתוב מסמך'],
+  },
+  {
+    id: 'final-submission',
+    label: 'מצב הגשה סופית',
+    description: 'מבצע מעבר אחרון לפני הגשה: שפה, מבנה, מקורות ודגלים אדומים.',
+    usageHint: 'בדיקה אחרונה לפני מסירה או הגשה',
+    prompt: 'פעל במצב הגשה סופית. בצע בדיקה אחרונה של בהירות, שגיאות, מבנה, עקביות, ורשימת נקודות שעדיין דורשות תשומת לב לפני שליחה.',
+    keywords: ['הגשה', 'סופי', 'בדיקה אחרונה', 'לפני שליחה', 'לפני הגשה'],
+  },
+];
+
+export const DEFAULT_SKILLS_CONFIG = {
+  defaultSkillId: 'style-guardian',
+  autoApplyDefault: false,
+  skills: Object.fromEntries(SKILL_LIBRARY.map((skill) => [skill.id, {
+    mode: skill.id === 'style-guardian' ? 'auto' : 'manual',
+  }])),
+};
+
 export const DEFAULT_ROLE_AGENTS = [
   {
     id: 'manager',
@@ -188,6 +265,7 @@ export const DEFAULT_ROLE_AGENTS = [
 ];
 
 const KNOWN_PROVIDER_IDS = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
+const KNOWN_SKILL_IDS = SKILL_LIBRARY.map((skill) => skill.id);
 const PROVIDER_TAG_PATTERNS = [
   { provider: 'gemini', regex: /(^|\s)@(?:gemini|גימיני)(?::([^\s@]+))?/gi },
   { provider: 'claude', regex: /(^|\s)@(?:claude|קלוד)(?::([^\s@]+))?/gi },
@@ -319,6 +397,56 @@ export const getAssistantBehavior = () => ({
 
 export const saveAssistantBehavior = (config) => {
   localStorage.setItem('wordai_assistant_behavior', JSON.stringify({ ...DEFAULT_ASSISTANT_BEHAVIOR, ...config }));
+};
+
+const normalizeSkillMode = (value = '') => {
+  const clean = String(value || '').trim().toLowerCase();
+  return ['manual', 'auto', 'off'].includes(clean) ? clean : 'manual';
+};
+
+export const getSkillCatalog = () => SKILL_LIBRARY.map((skill) => ({ ...skill }));
+
+export const getSkillsConfig = () => {
+  const stored = readJsonFromStorage('wordai_skills_config', {});
+  const skills = {};
+
+  SKILL_LIBRARY.forEach((skill) => {
+    skills[skill.id] = {
+      mode: normalizeSkillMode(stored.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode || 'manual'),
+    };
+  });
+
+  const defaultSkillId = KNOWN_SKILL_IDS.includes(String(stored.defaultSkillId || ''))
+    ? String(stored.defaultSkillId)
+    : DEFAULT_SKILLS_CONFIG.defaultSkillId;
+
+  return {
+    ...DEFAULT_SKILLS_CONFIG,
+    ...stored,
+    defaultSkillId,
+    autoApplyDefault: stored.autoApplyDefault === true,
+    skills,
+  };
+};
+
+export const saveSkillsConfig = (config = {}) => {
+  const current = getSkillsConfig();
+  const next = {
+    defaultSkillId: KNOWN_SKILL_IDS.includes(String(config.defaultSkillId || current.defaultSkillId || ''))
+      ? String(config.defaultSkillId || current.defaultSkillId)
+      : DEFAULT_SKILLS_CONFIG.defaultSkillId,
+    autoApplyDefault: config.autoApplyDefault === true,
+    skills: {},
+  };
+
+  SKILL_LIBRARY.forEach((skill) => {
+    next.skills[skill.id] = {
+      mode: normalizeSkillMode(config.skills?.[skill.id]?.mode || current.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode),
+    };
+  });
+
+  localStorage.setItem('wordai_skills_config', JSON.stringify(next));
+  return next;
 };
 
 export const getWordPreferences = () => ({
@@ -600,6 +728,59 @@ export const getActiveProviderName = () => {
     return selectedProviders.map((id) => names[id] || id).join(' + ');
   }
   return names[cfg.active] || 'AI';
+};
+
+const getSkillMatchScore = (skill = {}, text = '') => {
+  const haystack = String(text || '').toLowerCase();
+  return (Array.isArray(skill.keywords) ? skill.keywords : []).reduce((score, keyword) => {
+    const token = String(keyword || '').trim().toLowerCase();
+    return token && haystack.includes(token) ? score + 1 : score;
+  }, 0);
+};
+
+const resolveSkillForRequest = ({ userPrompt = '', documentContext = '', skillId = '', autoUseDefault = true } = {}) => {
+  const config = getSkillsConfig();
+  const explicitSkillId = String(skillId || '').trim();
+
+  if (explicitSkillId && explicitSkillId !== 'none' && KNOWN_SKILL_IDS.includes(explicitSkillId)) {
+    const skill = SKILL_LIBRARY.find((item) => item.id === explicitSkillId);
+    const mode = config.skills?.[explicitSkillId]?.mode || 'manual';
+    if (skill && mode !== 'off') return { skill, reason: 'manual' };
+  }
+
+  const promptText = String(userPrompt || '');
+  const contextText = String(documentContext || '');
+  const autoCandidate = SKILL_LIBRARY
+    .map((skill) => {
+      if ((config.skills?.[skill.id]?.mode || 'manual') !== 'auto') return { skill, score: 0 };
+      const promptScore = getSkillMatchScore(skill, promptText);
+      const contextScore = Math.min(1, getSkillMatchScore(skill, contextText));
+      return { skill, score: (promptScore * 3) + contextScore };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)[0];
+
+  if (autoCandidate?.skill) {
+    return { skill: autoCandidate.skill, reason: 'auto' };
+  }
+
+  if (autoUseDefault && config.autoApplyDefault && KNOWN_SKILL_IDS.includes(String(config.defaultSkillId || ''))) {
+    const skill = SKILL_LIBRARY.find((item) => item.id === config.defaultSkillId);
+    const mode = config.skills?.[config.defaultSkillId]?.mode || 'manual';
+    if (skill && mode !== 'off') return { skill, reason: 'default' };
+  }
+
+  return { skill: null, reason: 'none' };
+};
+
+const buildSkillSystemPrompt = (skill = null, reason = 'manual') => {
+  if (!skill?.prompt) return '';
+  const reasonText = reason === 'auto'
+    ? 'הסקיל הופעל אוטומטית לפי סוג הבקשה.'
+    : reason === 'default'
+      ? 'זהו סקיל ברירת המחדל שהוגדר למשתמש.'
+      : 'הסקיל הופעל ידנית על ידי המשתמש.';
+  return `סקיל פעיל: ${skill.label}.\n${reasonText}\n${skill.prompt}`;
 };
 
 const buildWorkspaceAutomationInstructions = () => {
@@ -1189,6 +1370,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile());
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions();
+  const skillResolution = resolveSkillForRequest({
+    userPrompt: cleanUserPrompt,
+    documentContext,
+    skillId: options.skillId || '',
+    autoUseDefault: options.autoUseDefaultSkill !== false,
+  });
+  const activeSkill = skillResolution.skill;
+  const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason);
   const automation = getWorkspaceAutomation();
   const onStatus = options.onStatus;
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
@@ -1207,13 +1396,15 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     workflowMode: automation.workflowMode,
     ...extra,
   });
-  const sysPrompt = `אתה העוזר החכם של מעבד התמלילים "Word AI".
+  const sysPrompt = `אתה העוזר החכם של מעבד התמלילים "WordFlow AI".
 ענה תמיד בעברית, קצר, ברור ומעשי.
 הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
 אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
 אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
 אם המשתמש מבקש תוכן חדש, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
+
+  try { options.onSkillResolved?.(skillResolution); } catch {}
 
   logEvent('request-start', 'התחלת בקשת AI', {
     state: 'running',
@@ -1226,6 +1417,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     taggedProviders,
     taggedModel: taggedRouting.taggedModel || '',
     multiModelEnabled: cfg.multiModelEnabled === true,
+    skillId: activeSkill?.id || '',
+    skillLabel: activeSkill?.label || '',
+    skillReason: skillResolution.reason,
   });
 
   if (automation.enabled && automation.autoDispatch !== false && !options.providerOverride && !options.skipAutomation) {
@@ -1756,6 +1950,8 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
     modelOverride: agent.model,
     agentLabel: agent.name || 'סוכן תפקידי',
     onStatus: runtimeOptions.onStatus,
+    skillId: runtimeOptions.skillId || '',
+    autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
     skipAutomation: true,
     skipMultiModel: true,
   });

@@ -19,6 +19,9 @@ import {
   getAgentDebugLogs,
   clearAgentDebugLogs,
   getLatestAgentRunSummary,
+  getSkillCatalog,
+  getSkillsConfig,
+  saveSkillsConfig,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
 
@@ -42,6 +45,8 @@ const PROVIDER_MODEL_OPTIONS = {
   ollama: ['llama3.2', 'qwen2.5', 'mistral'],
   custom: ['deepseek-chat', 'mistral-large-latest', 'loaded-model'],
 };
+
+const DEFAULT_FONT_OPTIONS = ['Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'Arial', 'Calibri', 'David', 'Georgia', 'Segoe UI', 'Tahoma', 'Times New Roman'];
 
 const ACTION_VISIBILITY_OPTIONS = [
   { id: 'fix', label: 'תיקון מהיר', hint: 'כתיב, דקדוק וליטוש' },
@@ -454,6 +459,33 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
       </p>
 
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>טיפוגרפיה ברירת מחדל</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 10, marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>גופן כללי למסמכים חדשים</div>
+            <select
+              value={prefs.defaultFontFamily || 'Alef'}
+              onChange={(e) => setFlag('defaultFontFamily', e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
+            >
+              {DEFAULT_FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>גודל ברירת מחדל</div>
+            <input
+              type="text"
+              value={prefs.defaultFontSize || '12pt'}
+              onChange={(e) => setFlag('defaultFontSize', e.target.value)}
+              placeholder="12pt"
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
+            />
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>אפשר להגדיר כאן ברירת מחדל כללית, ובמסך הבית לערוך סגנון ספציפי עם אייקון העיפרון.</div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>בדיקות בזמן כתיבה</div>
         {[
           ['checkSpellingAsYouType', 'בדיקת איות תוך כדי כתיבה'],
@@ -557,6 +589,78 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
           <input type="checkbox" checked={prefs.showStartExperience !== false} onChange={(e) => setFlag('showStartExperience', e.target.checked)} />
           הצג את מסך הבית בעת הפתיחה
         </label>
+      </div>
+    </div>
+  );
+}
+
+function SkillsSettings({ skillsState, setSkillsState }) {
+  const skills = getSkillCatalog();
+  const updateMode = (skillId, mode) => setSkillsState((prev) => ({
+    ...prev,
+    skills: {
+      ...(prev.skills || {}),
+      [skillId]: {
+        ...(prev.skills?.[skillId] || {}),
+        mode,
+      },
+    },
+  }));
+
+  return (
+    <div>
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>ברירת מחדל לסקילים</div>
+        <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6, marginBottom: 10 }}>
+          כאן בוחרים איזה סקיל יופיע כברירת מחדל בחלונית ה-AI, ומתי כל סקיל ייכנס לפעולה.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10, marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>סקיל ברירת מחדל</div>
+            <select
+              value={skillsState.defaultSkillId || 'style-guardian'}
+              onChange={(e) => setSkillsState((prev) => ({ ...prev, defaultSkillId: e.target.value }))}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
+            >
+              {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', alignSelf: 'end', marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={skillsState.autoApplyDefault === true}
+              onChange={(e) => setSkillsState((prev) => ({ ...prev, autoApplyDefault: e.target.checked }))}
+            />
+            החל אוטומטית את ברירת המחדל
+          </label>
+        </div>
+        <div style={{ fontSize: 10, color: '#64748B' }}>גם אם כבוי אוטומטית, המשתמש עדיין יכול לבחור סקיל ידנית בכל שיחה.</div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {skills.map((skill) => {
+          const mode = skillsState.skills?.[skill.id]?.mode || 'manual';
+          return (
+            <div key={skill.id} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 4 }}>{skill.label}</div>
+                  <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>{skill.description}</div>
+                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>מתאים במיוחד ל: {skill.usageHint}</div>
+                </div>
+                <select
+                  value={mode}
+                  onChange={(e) => updateMode(skill.id, e.target.value)}
+                  style={{ width: 138, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', flexShrink: 0 }}
+                >
+                  <option value="manual">ידני בלבד</option>
+                  <option value="auto">אוטומטי כשמתאים</option>
+                  <option value="off">כבוי</option>
+                </select>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1635,6 +1739,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [assistantBehaviorState, setAssistantBehaviorState] = useState(assistantBehavior || getAssistantBehavior());
   const [wordPrefsState, setWordPrefsState] = useState(wordPreferences || getWordPreferences());
   const [personalStyleState, setPersonalStyleState] = useState(getPersonalStyleProfile());
+  const [skillsState, setSkillsState] = useState(getSkillsConfig());
   const [roleAgents, setRoleAgents] = useState(getRoleAgents());
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
@@ -1660,7 +1765,10 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     saveShortcutsConfig(shortcutsState);
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
+    localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
+    localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
+    saveSkillsConfig(skillsState);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
     const nextDocumentStyle = normalizedPersonalStyle.defaultDocumentStyle || 'academic';
@@ -1674,14 +1782,14 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     setSaved(true);
     const timer = setTimeout(() => setSaved(false), 1200);
     return () => clearTimeout(timer);
-  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
+  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
 
   const menuItems = [
     { id: 'openFile',   icon: 'ph-fill ph-folder-open',   label: 'פתח מהמחשב',         desc: 'פותח מסמך מקומי' },
     { id: 'newDoc',     icon: 'ph-fill ph-file',          label: 'מסמך ריק חדש',       desc: 'מנקה את תוכן העורך' },
     { id: 'saveLocal',  icon: 'ph-fill ph-floppy-disk',   label: 'שמירה מקומית',        desc: 'שומר במטמון לצורך למידה' },
     { id: 'saveAs',     icon: 'ph-fill ph-floppy-disk-back', label: 'שמור בשם',        desc: 'שמירה לכל תיקייה במחשב' },
-    { id: 'exportDocx', icon: 'ph-fill ph-microsoft-word',label: 'הורד ל-Word (.doc)', desc: 'מייצא קובץ .doc תואם לפתיחה ב-Word' },
+    { id: 'exportDocx', icon: 'ph-fill ph-microsoft-word',label: 'הורד ל-Word (.docx)', desc: 'מייצא קובץ Word אמיתי בפורמט DOCX' },
     { id: 'print',      icon: 'ph-fill ph-printer',       label: 'הדפסה / ייצוא PDF',  desc: 'פותח תפריט הדפסה' },
   ];
 
@@ -1695,7 +1803,10 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     saveShortcutsConfig(shortcutsState);
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
+    localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
+    localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
+    saveSkillsConfig(skillsState);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
     const nextDocumentStyle = normalizedPersonalStyle.defaultDocumentStyle || 'academic';
@@ -1712,6 +1823,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   const sideBtn = (id, icon, label, isSettings = false) => (
     <button
+      key={id}
       style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 6, fontSize: 13, background: (activePanel === id || (isSettings && activePanel === 'settings')) ? 'rgba(255,255,255,0.25)' : 'none', border: 'none', color: 'white', cursor: 'pointer', textAlign: 'right', width: '100%', transition: 'background 0.15s' }}
       onClick={() => isSettings ? setActivePanel('settings') : handleItem(id)}
       onMouseEnter={e => { if (!((activePanel === id) || (isSettings && activePanel === 'settings'))) e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
@@ -1730,7 +1842,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '24px 20px 28px' }}>
           <i className="ph-fill ph-file-word" style={{ fontSize: 28 }} />
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Word AI</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>WordFlow AI</div>
             <div style={{ fontSize: 11, opacity: 0.65 }}>מעבד תמלילים</div>
           </div>
         </div>
@@ -1763,7 +1875,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          Word AI Perfect Assistant v1.0.11
+          WordFlow AI v1.0.12
         </div>
       </div>
 
@@ -1779,11 +1891,11 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         {activePanel === 'settings' && (
           <div style={{ padding: '36px 48px', maxWidth: 740 }}>
             <h2 style={{ fontSize: 24, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הגדרות</h2>
-            <p style={{ fontSize: 13, color: '#919191', marginBottom: 28 }}>Word AI Perfect Assistant</p>
+            <p style={{ fontSize: 13, color: '#919191', marginBottom: 28 }}>WordFlow AI</p>
 
             {/* Tabs */}
             <div style={{ display: 'flex', borderBottom: '1px solid #E1DFDD', marginBottom: 28 }}>
-              {[['ai', '🤖 מנועי AI'], ['agents', '🧩 סוכני תפקיד'], ['updates', '⬆️ עדכונים'], ['debug', '🪵 לוגים'], ['assistant', '✨ עוזר חכם'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']].map(([id, label]) => (
+              {[['ai', '🤖 מנועי AI'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכני תפקיד'], ['updates', '⬆️ עדכונים'], ['debug', '🪵 לוגים'], ['assistant', '✨ עוזר חכם'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']].map(([id, label]) => (
                 <button key={id} onClick={() => setSettingsTab(id)}
                   style={{ padding: '9px 22px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: settingsTab === id ? 700 : 400, color: settingsTab === id ? '#2B579A' : '#605E5C', borderBottom: settingsTab === id ? '2px solid #2B579A' : '2px solid transparent', marginBottom: -1, transition: 'all 0.15s' }}>
                   {label}
@@ -1792,6 +1904,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
             </div>
 
             {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+            {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
             {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}
             {settingsTab === 'updates'     && <UpdateSettings />}
             {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}

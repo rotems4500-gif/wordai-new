@@ -29,11 +29,11 @@ const DOC_STYLE_PRESETS = {
   presentation: { fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '14pt', lineHeight: '1.5', padding: '2cm', width: '21cm', minHeight: '29.7cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', border: '1px solid #c4b5fd' },
 };
 
-const getSavedTypographyDefaults = () => {
+const getSavedTypographyDefaults = (prefs = {}) => {
   try {
-    const savedFont = String(localStorage.getItem('default-font') || '').trim();
-    const savedSizeRaw = String(localStorage.getItem('default-size') || '').trim();
-    const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}px` : '');
+    const savedFont = String(prefs.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
+    const savedSizeRaw = String(prefs.defaultFontSize || localStorage.getItem('default-size') || '').trim();
+    const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
     return { savedFont, savedSize };
   } catch {
     return { savedFont: '', savedSize: '' };
@@ -59,7 +59,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
   const syncEditorSurface = useCallback((instance, styleId = documentStyle) => {
     if (!instance?.view?.dom) return;
     const preset = DOC_STYLE_PRESETS[styleId] || DOC_STYLE_PRESETS.academic;
-    const { savedFont, savedSize } = getSavedTypographyDefaults();
+    const { savedFont, savedSize } = getSavedTypographyDefaults(wordPreferences || {});
     const dom = instance.view.dom;
     const currentViewMode = dom.dataset.viewMode || viewMode || 'print';
     dom.setAttribute('data-placeholder', 'התחל לכתוב כאן...');

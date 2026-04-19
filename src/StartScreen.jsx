@@ -88,6 +88,26 @@ const splitInlineList = (value = '') => String(value || '')
   .map((item) => item.trim())
   .filter(Boolean);
 
+const getStartScreenCustomizations = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('wordflow_home_customizations') || '{}');
+    return {
+      templates: parsed?.templates || {},
+      styles: parsed?.styles || {},
+    };
+  } catch {
+    return { templates: {}, styles: {} };
+  }
+};
+
+const applyStartScreenCustomizations = (items = [], kind = 'templates') => {
+  const overrides = getStartScreenCustomizations()?.[kind] || {};
+  return items.map((item) => ({
+    ...item,
+    ...(overrides[item.id] || {}),
+  }));
+};
+
 export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, documentStyle = 'academic', hasDraft = false, lastSavedAt = '' }) {
   const recentItems = hasDraft
     ? [{ id: 'last', title: 'טיוטה אחרונה', meta: lastSavedAt ? `עודכן: ${lastSavedAt}` : 'שוחזר מכתיבה קודמת' }]
@@ -98,7 +118,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [instructions, setInstructions] = useState(getHomeInstructions());
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [templateCards, setTemplateCards] = useState(TEMPLATE_CARDS.map((item) => ({ ...item, count: 0, example: '' })));
+  const [templateCards, setTemplateCards] = useState(applyStartScreenCustomizations(TEMPLATE_CARDS.map((item) => ({ ...item, count: 0, example: '' })), 'templates'));
+  const [editingCard, setEditingCard] = useState(null);
   const [learningText, setLearningText] = useState('לומד מהמסמכים הקודמים שלך...');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -156,7 +177,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       getWorkspaceTemplateCards(),
     ]);
     setMaterials(projectMaterials);
-    setTemplateCards(workspaceTemplates);
+    setTemplateCards(applyStartScreenCustomizations(workspaceTemplates, 'templates'));
     setProfile(learned?.profile || getPersonalStyleProfile());
     const categoryLabel = learned.dominantCategory === 'academic'
       ? 'אקדמי'
@@ -177,7 +198,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
   const onboardingCompleted = Boolean(profile.onboardingCompletedAt);
-  const personalizedStyleCards = [...STYLE_CARDS].sort((a, b) => {
+  const customizations = getStartScreenCustomizations();
+  const personalizedStyleCards = [...STYLE_CARDS].map((style) => ({
+    ...style,
+    ...(customizations.styles?.[style.id] || {}),
+  })).sort((a, b) => {
     const aFav = personalizationDraft.favoriteStyles.includes(a.id) ? 1 : 0;
     const bFav = personalizationDraft.favoriteStyles.includes(b.id) ? 1 : 0;
     return bFav - aFav;
@@ -390,6 +415,46 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveCardCustomization = () => {
+    if (!editingCard?.id) return;
+    const nextCustomizations = getStartScreenCustomizations();
+    const bucket = editingCard.kind === 'style' ? 'styles' : 'templates';
+    nextCustomizations[bucket] = {
+      ...(nextCustomizations[bucket] || {}),
+      [editingCard.id]: {
+        title: String(editingCard.title || '').trim() || editingCard.title,
+        subtitle: String(editingCard.subtitle || '').trim() || editingCard.subtitle,
+        ...(editingCard.kind === 'style' ? { fontFamily: String(editingCard.fontFamily || '').trim() } : {}),
+      },
+    };
+    localStorage.setItem('wordflow_home_customizations', JSON.stringify(nextCustomizations));
+
+    if (editingCard.kind === 'style') {
+      let styleOverrides = {};
+      try {
+        styleOverrides = JSON.parse(localStorage.getItem('wordflow_style_overrides') || '{}');
+      } catch {
+        styleOverrides = {};
+      }
+      styleOverrides[editingCard.id] = {
+        ...(styleOverrides[editingCard.id] || {}),
+        fontFamily: String(editingCard.fontFamily || '').trim(),
+      };
+      localStorage.setItem('wordflow_style_overrides', JSON.stringify(styleOverrides));
+      if (editingCard.id === documentStyle) onDocumentStyleChange(editingCard.id);
+    }
+
+    if (editingCard.kind === 'template') {
+      setTemplateCards((prev) => prev.map((item) => item.id === editingCard.id ? {
+        ...item,
+        title: String(editingCard.title || '').trim() || item.title,
+        subtitle: String(editingCard.subtitle || '').trim() || item.subtitle,
+      } : item));
+    }
+
+    setEditingCard(null);
   };
 
   const handleUpload = async (event) => {
@@ -883,11 +948,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <button
                 key={style.id}
                 onClick={() => onDocumentStyleChange(style.id)}
-                className={`card rounded-2xl text-right border transition-all duration-200 ${documentStyle === style.id ? 'border-[#2B579A] bg-[#EEF4FF] shadow-md' : 'border-slate-200 bg-white hover:shadow-sm'}`}
+                className={`card relative rounded-2xl text-right border transition-all duration-200 ${documentStyle === style.id ? 'border-[#2B579A] bg-[#EEF4FF] shadow-md' : 'border-slate-200 bg-white hover:shadow-sm'}`}
               >
+                <span
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditingCard({
+                      kind: 'style',
+                      id: style.id,
+                      title: style.title,
+                      subtitle: style.subtitle,
+                      fontFamily: style.fontFamily || '',
+                    });
+                  }}
+                  className="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]"
+                  title="ערוך סגנון"
+                >
+                  ✎
+                </span>
                 <div className="card-body p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-bold text-slate-800">{style.title}</div>
+                    <div className="font-bold text-slate-800" style={{ fontFamily: style.fontFamily || 'inherit' }}>{style.title}</div>
                     <div className="flex gap-1 flex-wrap">
                       {personalizationDraft.defaultStyle === style.id && <span className="text-xs rounded-full bg-slate-800 text-white px-2 py-1">ברירת מחדל</span>}
                       {documentStyle === style.id && <span className="text-xs rounded-full bg-[#2B579A] text-white px-2 py-1">פעיל</span>}
@@ -958,8 +1040,24 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             <button
               key={tpl.id}
               onClick={() => (tpl.id === 'blank' ? onCreateBlank() : onCreateTemplate(tpl))}
-              className="card bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200"
+              className="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200"
             >
+              <span
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setEditingCard({
+                    kind: 'template',
+                    id: tpl.id,
+                    title: tpl.title,
+                    subtitle: tpl.subtitle || '',
+                  });
+                }}
+                className="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]"
+                title="ערוך תבנית"
+              >
+                ✎
+              </span>
               <div className="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">
                 {tpl.title}
               </div>
@@ -981,6 +1079,48 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </button>
           )}
         </div>
+
+        {editingCard && (
+          <div className="fixed inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
+            <div className="w-[520px] max-w-[96%] rounded-[24px] bg-white shadow-2xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <div className="text-xl font-bold text-slate-800">{editingCard.kind === 'style' ? 'עריכת סגנון' : 'עריכת תבנית'}</div>
+                  <div className="text-sm text-slate-500">אפשר לעדכן שם, תיאור וגופן ברירת מחדל.</div>
+                </div>
+                <button type="button" onClick={() => setEditingCard(null)} className="btn btn-sm btn-ghost">סגור</button>
+              </div>
+
+              <div className="space-y-3">
+                <input
+                  value={editingCard.title || ''}
+                  onChange={(e) => setEditingCard((prev) => ({ ...prev, title: e.target.value }))}
+                  placeholder="שם"
+                  className="input input-bordered w-full rounded-xl bg-white"
+                />
+                <textarea
+                  value={editingCard.subtitle || ''}
+                  onChange={(e) => setEditingCard((prev) => ({ ...prev, subtitle: e.target.value }))}
+                  placeholder="תיאור קצר"
+                  className="textarea textarea-bordered w-full min-h-[90px] rounded-xl"
+                />
+                {editingCard.kind === 'style' && (
+                  <input
+                    value={editingCard.fontFamily || ''}
+                    onChange={(e) => setEditingCard((prev) => ({ ...prev, fontFamily: e.target.value }))}
+                    placeholder="גופן לסגנון הזה, למשל: Frank Ruhl Libre"
+                    className="input input-bordered w-full rounded-xl bg-white"
+                  />
+                )}
+              </div>
+
+              <div className="flex gap-3 justify-end mt-5">
+                <button type="button" onClick={() => setEditingCard(null)} className="btn btn-ghost">ביטול</button>
+                <button type="button" onClick={saveCardCustomization} className="btn btn-primary">שמור</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="card bg-base-100 border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           {recentItems.length ? recentItems.map((item) => (

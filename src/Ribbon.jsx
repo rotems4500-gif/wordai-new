@@ -66,8 +66,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
   };
 
   const handleInsertLink = () => {
-    const url = window.prompt('הכנס כתובת URL:');
-    if (url) onCommand('insertLink', url);
+    onCommand('insertLinkDialog');
   };
 
   const handleInsertTable = (rows, cols) => {
@@ -76,24 +75,8 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
     setTableHover({ row: 0, col: 0 });
   };
 
-  const handleWikipedia = async () => {
-    const term = window.prompt('חפש בוויקיפדיה (בעברית):');
-    if (!term) return;
-    try {
-      const res = await fetch(`https://he.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(term)}`);
-      if (!res.ok) throw new Error('not found');
-      const data = await res.json();
-      onCommand('insertHTML', `<p><strong>${data.title}</strong> — ${data.extract}</p><p><small>מקור: <a href="${data.content_urls?.desktop?.page}" target="_blank">ויקיפדיה</a></small></p>`);
-    } catch {
-      try {
-        const res2 = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(term)}`);
-        if (!res2.ok) throw new Error('not found');
-        const data2 = await res2.json();
-        onCommand('insertHTML', `<p><strong>${data2.title}</strong> — ${data2.extract}</p><p><small>Source: <a href="${data2.content_urls?.desktop?.page}" target="_blank">Wikipedia</a></small></p>`);
-      } catch {
-        alert('לא נמצא מאמר על: ' + term);
-      }
-    }
+  const handleScholar = () => {
+    onCommand('searchScholar');
   };
 
   const handleZoom = (val) => {
@@ -347,22 +330,31 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
       );
 
       case 'screenshot': return (
-        <div ref={dropRef} style={{ ...ms, padding: '8px 12px', minWidth: '200px' }}>
+        <div ref={dropRef} style={{ ...ms, padding: '8px 12px', minWidth: '220px' }}>
           <div style={{ fontSize: '12px', fontWeight: '600', color: '#323130', marginBottom: '8px' }}>הוסף תמונה</div>
           <button className="r-btn r-btn-medium" style={{ width: '100%', marginBottom: '4px' }}
             onClick={async () => {
               closeDrop();
               try {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-                const track = stream.getVideoTracks()[0];
-                const ic = new ImageCapture(track);
-                const bm = await ic.grabFrame();
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.muted = true;
+                await video.play();
+                await new Promise((resolve) => {
+                  if (video.readyState >= 2) resolve();
+                  else video.onloadedmetadata = () => resolve();
+                });
                 const cv = document.createElement('canvas');
-                cv.width = bm.width; cv.height = bm.height;
-                cv.getContext('2d').drawImage(bm, 0, 0);
-                track.stop();
+                cv.width = video.videoWidth || 1920;
+                cv.height = video.videoHeight || 1080;
+                const ctx = cv.getContext('2d');
+                ctx?.drawImage(video, 0, 0, cv.width, cv.height);
+                stream.getTracks().forEach((track) => track.stop());
                 onCommand('insertImage', cv.toDataURL('image/png'));
-              } catch (err) { alert('לא ניתן לצלם מסך: ' + err.message); }
+              } catch (err) {
+                alert('צילום המסך לא נתמך כרגע במצב הזה. אפשר לבחור תמונה מקובץ במקום זאת.');
+              }
             }}>
             <i className="ph-fill ph-monitor text-blue-600"></i> שתף מסך וצלם
           </button>
@@ -370,6 +362,27 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             onClick={() => { closeDrop(); imgRef.current?.click(); }}>
             <i className="ph-fill ph-image text-gray-600"></i> בחר תמונה מקובץ
           </button>
+        </div>
+      );
+
+      case 'paragraphSpacing': return (
+        <div ref={dropRef} style={{ ...ms, padding: '10px 12px', minWidth: '240px' }}>
+          <div style={{ fontSize: '12px', fontWeight: '600', color: '#323130', marginBottom: '8px' }}>בחר מרווח בין פסקאות</div>
+          {[
+            { label: 'צפוף', lineHeight: '1.15', before: 0, after: 4 },
+            { label: 'רגיל', lineHeight: '1.5', before: 0, after: 8 },
+            { label: 'מרווח', lineHeight: '2', before: 0, after: 14 },
+          ].map((item) => (
+            <button
+              key={item.label}
+              className="r-btn r-btn-medium"
+              style={{ width: '100%', marginBottom: '4px' }}
+              onClick={() => { onCommand('applyParagraphSpacing', item); closeDrop(); }}
+            >
+              <i className="ph-fill ph-list-dashes text-gray-600"></i> {item.label}
+            </button>
+          ))}
+          <div style={{ fontSize: '10px', color: '#64748B', marginTop: '6px' }}>ההחלה מתבצעת על הפסקה הפעילה.</div>
         </div>
       );
 
@@ -390,8 +403,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
           ].map((s, i) => (
             <button key={i} className="r-btn" style={{ width: '100%', justifyContent: 'flex-start', padding: '5px 8px', marginBottom: '3px' }}
               onClick={() => {
-                const text = window.prompt('הכנס טקסט WordArt:');
-                if (text) onCommand('insertWordArt', { text, style: s.style });
+                onCommand('insertWordArt', { text: 'טקסט מעוצב', style: s.style });
                 closeDrop();
               }}>
               <span style={s.preview}>{s.label}</span>
@@ -479,7 +491,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <li className={`tab-btn ${activeTab === "references" ? "active" : ""}`} onClick={() => setActiveTab("references")}>הפניות</li>
             <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab("review")}>סקירה</li>
             <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab("view")}>תצוגה</li>
-            <li className="tab-btn" style={{ color: "var(--word-blue)", fontWeight: "bold" }} onClick={() => onToggleTaskpane()} title={`קיצור: ${shortcuts.toggleAssistant || 'Ctrl+Shift+A'}`}>AI Perfect Assistant</li>
+            <li className="tab-btn" style={{ color: "var(--word-blue)", fontWeight: "bold" }} onClick={() => onToggleTaskpane()} title={`קיצור: ${shortcuts.toggleAssistant || 'Ctrl+Shift+A'}`}>WordFlow AI</li>
         </ul>
 
         {/*  */}
@@ -641,12 +653,16 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
 
             <div className="toolbar-group">
                 <div className="toolbar-group-items">
-                    <button className="r-btn r-btn-large" onClick={handleWikipedia}>
-                        <i className="ph-fill ph-magnifying-glass-plus text-blue-600"></i><span>ויקיפדיה</span>
+                    <button className="r-btn r-btn-large" onClick={handleScholar}>
+                        <i className="ph-fill ph-graduation-cap text-blue-600"></i><span>Google Scholar</span>
                     </button>
                     <div className="btn-column">
-                        <button className="r-btn r-btn-medium" onClick={() => { const q = window.prompt('חיפוש גוגל:'); if(q) window.open('https://www.google.com/search?q=' + encodeURIComponent(q), '_blank'); }}><i className="ph-fill ph-google-logo text-red-500"></i> חיפוש גוגל</button>
-                        <button className="r-btn r-btn-medium" onClick={handleWikipedia}><i className="ph-fill ph-globe text-gray-600"></i> ויקיפדיה</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openGoogleSearch')}><i className="ph-fill ph-google-logo text-red-500"></i> חיפוש גוגל</button>
+                        <button className="r-btn r-btn-medium" onClick={handleScholar}><i className="ph-fill ph-globe text-gray-600"></i> Google Scholar</button>
+                    </div>
+                    <div className="btn-column">
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openModelHub')}><i className="ph-fill ph-cpu text-indigo-600"></i> מודל</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openOrbit')}><i className="ph-fill ph-planet text-sky-600"></i> Orbit</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">תוספות</div>
@@ -658,7 +674,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                         <i className="ph-fill ph-link text-gray-500"></i><span>קישור <i className="ph-fill ph-caret-down text-[8px]"></i></span>
                     </button>
                     <div className="btn-column">
-                        <button className="r-btn r-btn-medium" onClick={() => { const n = window.prompt('שם הסימניה:'); if(n) onCommand('insertBookmark', n); }}><i className="ph-fill ph-bookmark-simple"></i> סימניה</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('insertBookmarkDialog')}><i className="ph-fill ph-bookmark-simple"></i> סימניה</button>
                         <button className="r-btn r-btn-medium" onClick={handleInsertLink}><i className="ph-fill ph-arrows-merge"></i> הפניה מקושרת</button>
                     </div>
                 </div>
@@ -732,7 +748,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                     </div>
 
                     <div className="btn-column justify-center gap-1 ml-2 pl-2 border-l border-gray-200">
-                        <button className="r-btn r-btn-medium" onClick={() => onCommand('lineHeight', '1.5')}><i className="ph-fill ph-list-dashes text-gray-600"></i> מרווח בין פסקאות <i className="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button className="r-btn r-btn-medium" onClick={(e) => openDrop('paragraphSpacing', e)}><i className="ph-fill ph-list-dashes text-gray-600"></i> מרווח בין פסקאות <i className="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
                         <button className="r-btn r-btn-medium" onClick={(e) => openDrop('textEffects', e)}><i className="ph-fill ph-intersect text-gray-500"></i> אפקטים <i className="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('saveDefaultTypography')}><i className="ph-fill ph-check-circle text-green-600"></i> קבע כברירת מחדל</button>
                     </div>
@@ -788,7 +804,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                 <div className="toolbar-group-items">
                     <button className="r-btn r-btn-large" onClick={() => onCommand('generateTOC')}><i className="ph-fill ph-list-dashes"></i><span>תוכן עניינים <i className="ph-fill ph-caret-down text-[8px]"></i></span></button>
                     <div className="btn-column">
-                        <button className="r-btn r-btn-medium" onClick={() => { const level = parseInt(window.prompt('רמת כותרת (1-3):', '2')); if (level >= 1 && level <= 3) onCommand('heading', level); }}><i className="ph-fill ph-plus"></i> הוסף טקסט</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('heading', 2)}><i className="ph-fill ph-plus"></i> הוסף כותרת</button>
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('generateTOC')}><i className="ph-fill ph-arrows-clockwise"></i> עדכן תוכן עניינים</button>
                     </div>
                 </div>
