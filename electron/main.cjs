@@ -8,6 +8,8 @@ if (!app.isPackaged) {
   app.commandLine.appendSwitch('ignore-certificate-errors');
 }
 
+const MANUAL_RELEASES_URL = 'https://github.com/rotems4500-gif/wordai-new/releases';
+
 let mainWindow;
 let pendingFilePayload = null;
 let loadRendererInProgress = false;
@@ -259,14 +261,39 @@ function setupAutoUpdater() {
     }
   });
 
-  autoUpdater.on('error', (err) => {
-    sendUpdateStatus({ status: 'error', message: err?.message || 'שגיאה בבדיקת העדכונים' });
-    console.error('Auto update error:', err?.message || err);
+  autoUpdater.on('error', async (err) => {
+    const rawMessage = String(err?.message || 'שגיאה בבדיקת העדכונים');
+    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*406/i.test(rawMessage);
+
+    if (isReleaseFeedIssue) {
+      sendUpdateStatus({
+        status: 'manual-download',
+        message: 'העדכון האוטומטי לא זמין כרגע. אפשר לעדכן ידנית מעמוד ההורדות.',
+      });
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const result = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['פתח הורדות', 'סגור'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'עדכון אוטומטי לא זמין',
+          message: 'GitHub לא החזיר מסלול עדכון תקין.',
+          detail: 'אפשר להוריד את הגרסה העדכנית ידנית מעמוד ה-Releases.',
+        });
+        if (result.response === 0) shell.openExternal(MANUAL_RELEASES_URL);
+      }
+    } else {
+      sendUpdateStatus({ status: 'error', message: rawMessage });
+    }
+
+    console.error('Auto update error:', rawMessage);
   });
 
   autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-    sendUpdateStatus({ status: 'error', message: err?.message || 'שגיאת פתיחה במסלול העדכונים' });
-    console.error('Auto update startup error:', err?.message || err);
+    const rawMessage = String(err?.message || 'שגיאת פתיחה במסלול העדכונים');
+    sendUpdateStatus({ status: 'error', message: rawMessage });
+    console.error('Auto update startup error:', rawMessage);
   });
 }
 

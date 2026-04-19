@@ -45,8 +45,24 @@ jobs:
             throw "Tag version $tagVersion does not match package.json version $($pkg.version)"
           }
 
-      - name: Publish Windows installer and update metadata
+      - name: Build Windows installer and update metadata
+        shell: pwsh
+        run: |
+          npm run build
+          npx electron-builder --win --publish never
+
+      - name: Create GitHub release and upload assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
         env:
-          GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: npm run dist:publish
