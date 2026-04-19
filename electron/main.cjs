@@ -192,6 +192,39 @@ function setupAutoUpdater() {
     return;
   }
 
+  let manualDownloadShown = false;
+  const handleUpdaterFailure = async (err, fallbackMessage = 'שגיאה בבדיקת העדכונים') => {
+    const rawMessage = String(err?.message || fallbackMessage);
+    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*406/i.test(rawMessage);
+
+    if (isReleaseFeedIssue) {
+      sendUpdateStatus({
+        status: 'manual-download',
+        message: 'העדכון האוטומטי לא זמין כרגע. אפשר להוריד ידנית מעמוד ההורדות.',
+      });
+
+      if (!manualDownloadShown && mainWindow && !mainWindow.isDestroyed()) {
+        manualDownloadShown = true;
+        const result = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['פתח הורדות', 'סגור'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'עדכון אוטומטי לא זמין',
+          message: 'GitHub לא החזיר מסלול עדכון תקין.',
+          detail: 'אפשר להוריד את הגרסה העדכנית ידנית מעמוד ה-Releases.',
+        });
+        if (result.response === 0) shell.openExternal(MANUAL_RELEASES_URL);
+      }
+
+      console.error('Auto update error:', rawMessage);
+      return;
+    }
+
+    sendUpdateStatus({ status: 'error', message: rawMessage });
+    console.error('Auto update error:', rawMessage);
+  };
+
   const updateConfigPath = path.join(process.resourcesPath || '', 'app-update.yml');
   if (!fs.existsSync(updateConfigPath)) {
     console.warn('Skipping auto update: app-update.yml not found');
@@ -261,39 +294,16 @@ function setupAutoUpdater() {
     }
   });
 
-  autoUpdater.on('error', async (err) => {
-    const rawMessage = String(err?.message || 'שגיאה בבדיקת העדכונים');
-    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*406/i.test(rawMessage);
-
-    if (isReleaseFeedIssue) {
-      sendUpdateStatus({
-        status: 'manual-download',
-        message: 'העדכון האוטומטי לא זמין כרגע. אפשר לעדכן ידנית מעמוד ההורדות.',
-      });
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        const result = await dialog.showMessageBox(mainWindow, {
-          type: 'warning',
-          buttons: ['פתח הורדות', 'סגור'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'עדכון אוטומטי לא זמין',
-          message: 'GitHub לא החזיר מסלול עדכון תקין.',
-          detail: 'אפשר להוריד את הגרסה העדכנית ידנית מעמוד ה-Releases.',
-        });
-        if (result.response === 0) shell.openExternal(MANUAL_RELEASES_URL);
-      }
-    } else {
-      sendUpdateStatus({ status: 'error', message: rawMessage });
-    }
-
-    console.error('Auto update error:', rawMessage);
+  autoUpdater.on('error', (err) => {
+    handleUpdaterFailure(err, 'שגיאה בבדיקת העדכונים').catch((nestedError) => {
+      console.error('Auto update error:', nestedError?.message || nestedError);
+    });
   });
 
   autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-    const rawMessage = String(err?.message || 'שגיאת פתיחה במסלול העדכונים');
-    sendUpdateStatus({ status: 'error', message: rawMessage });
-    console.error('Auto update startup error:', rawMessage);
+    handleUpdaterFailure(err, 'שגיאת פתיחה במסלול העדכונים').catch((nestedError) => {
+      console.error('Auto update startup error:', nestedError?.message || nestedError);
+    });
   });
 }
 

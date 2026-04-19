@@ -1035,6 +1035,7 @@ function UpdateSettings() {
     if (state === 'downloaded') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'העדכון מוכן להתקנה' };
     if (state === 'downloading' || state === 'checking') return { color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE', title: 'העדכון בבדיקה/הורדה' };
     if (state === 'up-to-date') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'האפליקציה מעודכנת' };
+    if (state === 'manual-download') return { color: '#92400E', bg: '#FFFBEB', border: '#FDE68A', title: 'נדרש עדכון ידני' };
     if (state === 'dev-mode' || state === 'web' || state === 'unavailable') return { color: '#92400E', bg: '#FFFBEB', border: '#FDE68A', title: 'עדכון לא זמין כרגע' };
     if (state === 'error') return { color: '#991B1B', bg: '#FEF2F2', border: '#FECACA', title: 'אירעה שגיאה בעדכון' };
     return { color: '#475569', bg: '#F8FAFC', border: '#CBD5E1', title: 'בדיקת עדכונים' };
@@ -1074,6 +1075,15 @@ function UpdateSettings() {
             style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: busy ? 'default' : 'pointer', fontWeight: 700 }}
           >
             התקן עכשיו
+          </button>
+        )}
+
+        {updateInfo.status === 'manual-download' && (
+          <button
+            onClick={() => window.open('https://github.com/rotems4500-gif/wordai-new/releases', '_blank', 'noopener,noreferrer')}
+            style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #D97706', background: '#FEF3C7', color: '#92400E', cursor: 'pointer', fontWeight: 700 }}
+          >
+            פתח עמוד הורדות
           </button>
         )}
       </div>
@@ -1369,7 +1379,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          Word AI Perfect Assistant v1.0.7
+          Word AI Perfect Assistant v1.0.8
         </div>
       </div>
 

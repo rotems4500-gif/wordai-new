@@ -45,11 +45,25 @@ jobs:
             throw "Tag version $tagVersion does not match package.json version $($pkg.version)"
           }
 
+      - name: Clean previous release files
+        shell: pwsh
+        run: |
+          if (Test-Path release) {
+            Get-ChildItem release -Force | Remove-Item -Recurse -Force
+          }
+
       - name: Build Windows installer and update metadata
         shell: pwsh
         run: |
           npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx electron-builder --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $latest = Get-Content release/latest.yml -Raw
+          $pkg = Get-Content package.json | ConvertFrom-Json
+          if ($latest -notmatch "version:\s+$($pkg.version)") {
+            throw "latest.yml version does not match package.json version $($pkg.version)"
+          }
 
       - name: Create GitHub release and upload assets
         if: startsWith(github.ref, 'refs/tags/v')
