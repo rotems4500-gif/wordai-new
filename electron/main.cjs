@@ -487,6 +487,8 @@ ipcMain.handle('save-local-material', async (_event, payload) => {
   if (safeName.toLowerCase() === 'index.json') {
     safeName = `uploaded-${Date.now()}.json`;
   }
+  const parsedName = path.parse(safeName);
+  safeName = `${parsedName.name}-${Date.now()}${parsedName.ext || ''}`;
   const dataBase64 = String(payload?.dataBase64 || '');
   if (!safeName || !dataBase64) {
     throw new Error('Missing upload payload');
@@ -501,10 +503,16 @@ ipcMain.handle('save-local-material', async (_event, payload) => {
   try { existing = JSON.parse(fs.readFileSync(indexPath, 'utf8')); } catch {}
   const nextEntry = {
     id: safeName,
-    title: safeName,
+    title: String(payload?.title || safeName),
     file: safeName,
     type: path.extname(safeName).replace(/^\./, ''),
     source: 'materials-local',
+    uploadKind: String(payload?.uploadKind || 'general'),
+    label: String(payload?.label || 'קובץ עזר כללי'),
+    category: String(payload?.category || 'general'),
+    templateId: String(payload?.templateId || 'blank'),
+    learningHint: String(payload?.learningHint || ''),
+    uploadedAt: new Date().toISOString(),
   };
   const merged = [...(Array.isArray(existing) ? existing.filter((item) => item.file !== safeName) : []), nextEntry];
   fs.writeFileSync(indexPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
@@ -529,10 +537,21 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
   try {
     const filePath = path.join(getWritableMaterialsDir(), safeName);
     const buffer = fs.readFileSync(filePath);
+    const ext = path.extname(safeName).toLowerCase();
+    let extractedText = '';
+
+    if (ext === '.docx') {
+      const result = await mammoth.extractRawText({ path: filePath });
+      extractedText = String(result?.value || '').trim();
+    } else if (['.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
+      extractedText = fs.readFileSync(filePath, 'utf8');
+    }
+
     return {
       ok: true,
       file: safeName,
       dataBase64: buffer.toString('base64'),
+      extractedText,
     };
   } catch (error) {
     return { ok: false, error: error?.message || 'Read failed' };

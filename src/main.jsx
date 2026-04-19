@@ -95,7 +95,7 @@ function App() {
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
-  const [sidebarCompact, setSidebarCompact] = React.useState(true);
+  const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
   const pendingImportRef = React.useRef(null);
   const [activeFormats, setActiveFormats] = React.useState({
     bold: false,
@@ -453,6 +453,7 @@ function App() {
       const activeInEditor = document.activeElement?.closest?.('.ProseMirror');
       if (activeInEditor && !sidebarOpen) {
         setAssistantTrigger('idle');
+        setSidebarCompact(false);
         setSidebarOpen(true);
       }
     }, Math.max(3, Number(assistantBehavior.idleSeconds || 5)) * 1000);
@@ -1268,7 +1269,11 @@ function App() {
         documentStyle={documentStyle}
         onToggleTaskpane={() => {
           setAssistantTrigger('manual');
-          setSidebarOpen(v => !v);
+          setSidebarOpen((v) => {
+            const next = !v;
+            if (next) setSidebarCompact(false);
+            return next;
+          });
           setLastEditorActivityAt(Date.now());
         }}
         zoom={zoom}
@@ -1285,9 +1290,62 @@ function App() {
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         {!showStartScreen && sidebarOpen && (
           <aside
-            className="h-full shrink-0 border-l border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200"
-            style={{ width: sidebarCompact ? 'min(310px, 36vw)' : 'min(390px, 42vw)', minWidth: sidebarCompact ? 240 : 280, maxWidth: '42vw' }}
+            className="h-full shrink-0 border-l border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[-8px_0_24px_rgba(15,23,42,0.06)]"
+            style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
+            {liveGeneration.active && (
+              <div className="border-b border-slate-200 bg-white px-3 py-3">
+                <div className="rounded-2xl border border-blue-200 bg-gradient-to-br from-white to-blue-50 p-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">{liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה' : 'מכין את המסמך בלייב'}</div>
+                      <div className="text-[11px] text-slate-500">{liveGeneration.prompt || 'מעבד את הבקשה שלך'}</div>
+                    </div>
+                    <div className={`text-[10px] font-bold px-2 py-1 rounded-full ${liveGeneration.state === 'success' ? 'bg-green-100 text-green-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'לבדיקה' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {(liveGeneration.summary?.stages || []).slice(0, 4).map((stage) => (
+                      <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-[11px] bg-white">
+                        <span className="font-medium text-slate-700">{stage.label}</span>
+                        <span className={`${stage.state === 'success' ? 'text-green-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
+                          {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '…' : '•'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {!!(liveGeneration.logs || []).length && (
+                    <div className="mt-2 rounded-xl bg-slate-900 text-slate-100 p-2 text-[11px] space-y-1 max-h-24 overflow-auto">
+                      {(liveGeneration.logs || []).slice(0, 3).map((log) => (
+                        <div key={log.id || `${log.ts}-${log.message}`}>
+                          {log.message || 'מעדכן סטטוס...'}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        className="btn btn-sm btn-primary flex-1"
+                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
+                      >
+                        פתח תיקונים
+                      </button>
+                      <button
+                        className="btn btn-sm btn-ghost flex-1"
+                        onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
+                      >
+                        המשך לערוך
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <AiSidebar
               mode="sidebar"
               compactMode={sidebarCompact}
@@ -1306,55 +1364,6 @@ function App() {
         )}
 
         <div id="editor-wrapper" className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 flex justify-center items-start bg-[#E1DFDD] relative">
-          {!showStartScreen && liveGeneration.active && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 w-[420px] max-w-[92%] rounded-2xl border border-blue-200 bg-white/95 shadow-xl p-4 backdrop-blur-sm">
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <div>
-                  <div className="text-sm font-bold text-slate-800">{liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה' : 'מכין את המסמך בלייב'}</div>
-                  <div className="text-xs text-slate-500">{liveGeneration.prompt || 'מעבד את הבקשה שלך'}</div>
-                </div>
-                <div className={`text-xs font-bold px-2 py-1 rounded-full ${liveGeneration.state === 'success' ? 'bg-green-100 text-green-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                  {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'לבדיקה' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
-                </div>
-              </div>
-
-              <div className="space-y-2 mb-3">
-                {(liveGeneration.summary?.stages || []).slice(0, 5).map((stage) => (
-                  <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
-                    <span className="font-medium text-slate-700">{stage.label}</span>
-                    <span className={`${stage.state === 'success' ? 'text-green-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
-                      {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '…' : '•'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="rounded-xl bg-slate-900 text-slate-100 p-3 text-xs space-y-1 max-h-28 overflow-auto">
-                {(liveGeneration.logs || []).slice(0, 4).map((log) => (
-                  <div key={log.id || `${log.ts}-${log.message}`}>
-                    {log.message || 'מעדכן סטטוס...'}
-                  </div>
-                ))}
-              </div>
-
-              {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
-                <div className="mt-3 flex flex-col md:flex-row gap-2">
-                  <button
-                    className="btn btn-sm btn-primary flex-1"
-                    onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
-                  >
-                    פתח תיקונים ומשוב
-                  </button>
-                  <button
-                    className="btn btn-sm btn-ghost flex-1"
-                    onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
-                  >
-                    המשך לערוך
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
           {feedbackSurvey.open && (
             <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
               <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
@@ -1511,6 +1520,7 @@ function App() {
                 setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
                 changeDocumentStyle(requestedStyle || documentStyle);
                 setAssistantTrigger('autopilot');
+                setSidebarCompact(false);
                 setSidebarOpen(true);
                 setShowStartScreen(false);
                 setLiveGeneration({

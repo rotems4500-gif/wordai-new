@@ -11,8 +11,19 @@ const PAST_DOCS_INDEX_URL = 'PAST-DOC/index.json';
 const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 
-const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'json']);
+const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'docx']);
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
+export const MATERIAL_UPLOAD_PRESETS = {
+  general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
+  'cover-page': { id: 'cover-page', label: 'דף שער לדוגמה', category: 'office', templateId: 'blank', learningHint: 'למד איך המשתמש אוהב לעצב דפי שער, כותרות ראשיות, שדות וזיהוי מוסד.' },
+  'template-example': { id: 'template-example', label: 'תבנית מסמך לדוגמה', category: 'office', templateId: 'report', learningHint: 'למד את המבנה, סדר הפרקים והעיצוב שהמשתמש מעדיף למסמכים.' },
+  'writing-sample': { id: 'writing-sample', label: 'דוגמת כתיבה אישית', category: 'academic', templateId: 'academic', learningHint: 'למד את הטון, אוצר המילים והניסוח האישי של המשתמש.' },
+  'course-material': { id: 'course-material', label: 'חומר קורס או רקע', category: 'academic', templateId: 'summary', learningHint: 'השתמש בקובץ כדי להבין את עולם התוכן, המושגים והדרישות האקדמיות.' },
+};
+
+export function getMaterialUploadMeta(kind = 'general') {
+  return MATERIAL_UPLOAD_PRESETS[String(kind || 'general')] || MATERIAL_UPLOAD_PRESETS.general;
+}
 const COMMON_CONNECTORS = ['לכן', 'בנוסף', 'עם זאת', 'עם-זאת', 'כמו כן', 'לעומת זאת', 'עם-כן', 'כלומר', 'למעשה', 'בהתאם לכך', 'בסופו של דבר'];
 
 function mergeCountMaps(base = {}, incoming = {}) {
@@ -238,14 +249,19 @@ export async function loadProjectMaterials() {
     .map((item, index) => {
       const name = item.title || item.file || `material-${index + 1}`;
       const type = String(item.type || '').toLowerCase();
+      const inferred = classifyDocName(name);
       return {
         id: item.id || item.file || `material-${index + 1}`,
         title: name,
         file: item.file || '',
         type,
         source: item.source || 'materials',
+        uploadKind: item.uploadKind || 'general',
+        label: item.label || inferred.label,
+        category: item.category || inferred.category,
+        templateId: item.templateId || inferred.templateId,
+        learningHint: item.learningHint || '',
         canPreviewText: textLikeExtensions.has(type) || type === 'pdf',
-        ...classifyDocName(name),
       };
     });
 }
@@ -330,11 +346,35 @@ export async function syncLearnedStyleFromWorkspace() {
       preparedSources.push({
         id: source.id,
         title: source.title,
-        text: preview || `${source.title}\n${source.material.label || ''}`,
+        text: preview || [
+          source.title,
+          source.material.label || '',
+          source.material.learningHint || '',
+        ].filter(Boolean).join('\n'),
       });
       continue;
     }
     preparedSources.push(source);
+  }
+
+  if (profile.learningConsent === false) {
+    const nextProfile = {
+      ...profile,
+      learnedNotes: Array.from(new Set([
+        ...(profile.learnedNotes || []),
+        'הלמידה האוטומטית כבויה כרגע, ולכן המערכת נשענת רק על ההעדפות שבחרת ידנית.',
+      ])).slice(0, 8),
+      scanStats: {
+        ...(profile.scanStats || {}),
+        totalKnown: preparedSources.length,
+        totalScanned: profile.scanStats?.totalScanned || 0,
+        newlyScanned: 0,
+        pendingCount: preparedSources.length,
+        lastScanAt: new Date().toISOString(),
+      },
+    };
+    savePersonalStyleProfile(nextProfile);
+    return { pastDocs, history, projectMaterials, dominantCategory, notes: nextProfile.learnedNotes, scanStats: nextProfile.scanStats, profile: nextProfile };
   }
 
   const newlyDiscoveredSources = preparedSources.filter((source) => !alreadyScanned.has(source.id));
@@ -473,6 +513,9 @@ async function loadMaterialPreview(material) {
     if (material.source === 'materials-local' && window.desktopApp?.readLocalMaterial) {
       const payload = await window.desktopApp.readLocalMaterial(material.file);
       if (!payload?.ok || !payload?.dataBase64) return '';
+      if (payload?.extractedText && material.type !== 'pdf') {
+        return String(payload.extractedText || '').slice(0, 5000);
+      }
       const binary = atob(payload.dataBase64);
       const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
       const buffer = bytes.buffer;
@@ -707,12 +750,19 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-export async function saveHelperMaterial(file) {
+export async function saveHelperMaterial(file, options = {}) {
   if (!file) throw new Error('לא נבחר קובץ');
+  const meta = getMaterialUploadMeta(options.uploadKind || options.id || 'general');
   const arrayBuffer = await file.arrayBuffer();
   const payload = {
     name: file.name,
+    title: file.name,
     dataBase64: arrayBufferToBase64(arrayBuffer),
+    uploadKind: meta.id,
+    label: meta.label,
+    category: meta.category,
+    templateId: meta.templateId,
+    learningHint: meta.learningHint,
   };
 
   if (window.desktopApp?.saveLocalMaterial) {

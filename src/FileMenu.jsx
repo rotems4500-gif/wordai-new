@@ -20,7 +20,7 @@ import {
   clearAgentDebugLogs,
   getLatestAgentRunSummary,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
 const POPULAR_CUSTOM = [
@@ -353,7 +353,7 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
   return (
     <div>
       <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
-        כשהכתיבה נתקעת, העוזר יכול לקפוץ אוטומטית בתוך המסמך ולעזור בלי לשבור את הזרימה.
+        כשהכתיבה נתקעת, העוזר נפתח אוטומטית כסיידבר קבוע בצד ימין כדי לעזור בלי לחסום את המסמך.
       </p>
 
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
@@ -363,7 +363,7 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
             checked={behavior.autoPopup !== false}
             onChange={(e) => setBehavior(prev => ({ ...prev, autoPopup: e.target.checked }))}
           />
-          פתח עוזר אוטומטית כשאני נתקע בכתיבה
+          פתח פאנל עוזר אוטומטית כשאני נתקע בכתיבה
         </label>
       </div>
 
@@ -384,6 +384,58 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
 }
 
 const splitList = (value) => String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+const STYLE_PRESET_OPTIONS = [
+  { id: 'academic', label: 'אקדמי' },
+  { id: 'legal', label: 'משפטי' },
+  { id: 'business', label: 'עסקי' },
+  { id: 'presentation', label: 'מצגת' },
+];
+
+const finalizePersonalProfile = (profile = {}) => {
+  const normalizedFavoriteStyles = Array.from(new Set([
+    ...((Array.isArray(profile.preferredHomeStyleIds) ? profile.preferredHomeStyleIds : []).filter(Boolean)),
+    profile.defaultDocumentStyle || 'academic',
+  ])).slice(0, 4);
+
+  const hasMeaningfulStyleCustomization = Boolean(
+    String(profile.customStyleGuidance || '').trim() ||
+    (profile.defaultDocumentStyle && profile.defaultDocumentStyle !== 'academic') ||
+    normalizedFavoriteStyles.some((item) => item && item !== 'academic')
+  );
+
+  const hasProfileDetails = Boolean(
+    String(profile.displayName || '').trim() ||
+    String(profile.institutionName || '').trim() ||
+    String(profile.studyTrack || '').trim() ||
+    String(profile.userRole || '').trim() ||
+    String(profile.userBackground || '').trim() ||
+    String(profile.writingGoals || '').trim() ||
+    String(profile.defaultAudience || '').trim() ||
+    String(profile.additionalContext || '').trim() ||
+    (Array.isArray(profile.currentCourses) && profile.currentCourses.length) ||
+    hasMeaningfulStyleCustomization
+  );
+
+  const currentFavoriteStyles = Array.isArray(profile.preferredHomeStyleIds) && profile.preferredHomeStyleIds.length
+    ? profile.preferredHomeStyleIds
+    : ['academic'];
+
+  if (!hasProfileDetails) {
+    const favoritesChanged = JSON.stringify(currentFavoriteStyles) !== JSON.stringify(normalizedFavoriteStyles);
+    return favoritesChanged ? { ...profile, preferredHomeStyleIds: normalizedFavoriteStyles } : profile;
+  }
+  const favoritesChanged = JSON.stringify(currentFavoriteStyles) !== JSON.stringify(normalizedFavoriteStyles);
+  const needsNormalization = !profile.onboardingCompletedAt || profile.onboardingDismissedAt || profile.onboardingSnoozedUntil || favoritesChanged;
+  if (!needsNormalization) return profile;
+
+  return {
+    ...profile,
+    preferredHomeStyleIds: normalizedFavoriteStyles,
+    onboardingCompletedAt: profile.onboardingCompletedAt || new Date().toISOString(),
+    onboardingDismissedAt: '',
+    onboardingSnoozedUntil: '',
+  };
+};
 
 function WordDefaultsSettings({ prefs, setPrefs }) {
   const setFlag = (field, value) => setPrefs(prev => ({ ...prev, [field]: value }));
@@ -513,9 +565,18 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
 function PersonalStyleSettings({ profile, setProfile }) {
   const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
   const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
+  const toggleStyle = (styleId) => setProfile((prev) => {
+    const current = Array.isArray(prev.preferredHomeStyleIds) ? prev.preferredHomeStyleIds : [];
+    const next = current.includes(styleId)
+      ? current.filter((item) => item !== styleId)
+      : [...current, styleId].slice(0, 4);
+    return { ...prev, preferredHomeStyleIds: next.length ? next : [styleId] };
+  });
+  const onboardingDone = Boolean(profile.onboardingCompletedAt);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [recentMaterials, setRecentMaterials] = useState([]);
+  const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -527,8 +588,9 @@ function PersonalStyleSettings({ profile, setProfile }) {
     if (!files.length) return;
     setUploading(true);
     try {
+      const selectedUploadMeta = getMaterialUploadMeta(uploadKind);
       for (const file of files) {
-        await saveHelperMaterial(file);
+        await saveHelperMaterial(file, selectedUploadMeta);
       }
       await syncLearnedStyleFromWorkspace();
       setProfile(getPersonalStyleProfile());
@@ -558,10 +620,180 @@ function PersonalStyleSettings({ profile, setProfile }) {
         הקובץ האישי שלך מחובר עכשיו לעוזר, כך שהוא יכתוב בהתאם לרמה, למונחים ולהעדפות שלך.
       </p>
 
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: onboardingDone ? '#F8FBFF' : '#FFF7ED', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700, marginBottom: 6 }}>היכרות אישית עם הסוכן</div>
+        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+          {onboardingDone
+            ? 'ההיכרות הושלמה. הסוכן מתאים את עצמו אליך ויכול להמשיך ללמוד מהחומרים המקומיים שלך לאורך הזמן.'
+            : 'עדיין לא בוצעה היכרות מלאה. אפשר למלא כאן את המידע הידני, או לפתוח את מסך הבית ולבצע היכרות מהירה.'}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+          {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
+          {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
+          {profile.userBackground ? <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>{profile.userBackground}</span> : null}
+          {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
+          {(profile.tonePreferences || []).slice(0, 4).map((tone) => (
+            <span key={tone} style={{ fontSize: 10, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999 }}>{tone}</span>
+          ))}
+          <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
+            {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>פרופיל היכרות</div>
+
+        <input
+          value={profile.displayName || ''}
+          onChange={(e) => updateField('displayName', e.target.value)}
+          placeholder="שם או איך תרצה שהסוכן יקרא לך"
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
+        />
+
+        <input
+          value={profile.institutionName || ''}
+          onChange={(e) => updateField('institutionName', e.target.value)}
+          placeholder="מוסד לימודים, ארגון או מקום עבודה"
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
+        />
+
+        <input
+          value={profile.studyTrack || ''}
+          onChange={(e) => updateField('studyTrack', e.target.value)}
+          placeholder="חוג, מסלול, התמחות או תחום מרכזי"
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
+        />
+
+        <input
+          value={profile.userRole || ''}
+          onChange={(e) => updateField('userRole', e.target.value)}
+          placeholder="סטטוס או תפקיד, למשל: סטודנט, מרצה, מנהל"
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
+        />
+
+        <textarea
+          value={(profile.currentCourses || []).join(', ')}
+          onChange={(e) => updateList('currentCourses', e.target.value)}
+          placeholder="קורסים, שיעורים או נושאים פעילים כרגע"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          value={profile.userBackground || ''}
+          onChange={(e) => updateField('userBackground', e.target.value)}
+          placeholder="מי אתה ככותב או באיזה הקשר אתה בדרך כלל כותב"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          value={profile.writingGoals || ''}
+          onChange={(e) => updateField('writingGoals', e.target.value)}
+          placeholder="מטרות הכתיבה שלך, למשל: עבודה אקדמית מדויקת, ניסוח עסקי חד, סיכומים קצרים"
+          rows={3}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          value={profile.defaultAudience || ''}
+          onChange={(e) => updateField('defaultAudience', e.target.value)}
+          placeholder="מי קהל היעד הטיפוסי שלך"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          value={profile.formatPreferences || ''}
+          onChange={(e) => updateField('formatPreferences', e.target.value)}
+          placeholder="איך אתה מעדיף שהטקסט ייראה: קצר, מובנה, עם סעיפים, מפורט, וכדומה"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          value={profile.additionalContext || ''}
+          onChange={(e) => updateField('additionalContext', e.target.value)}
+          placeholder="כל פרט נוסף שיעזור לסוכן להכיר אותך ולהתאים את התשובות"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <div style={{ borderTop: '1px solid #E5E7EB', marginTop: 10, paddingTop: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>התאמת סגנונות אישית</div>
+
+          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6 }}>סגנונות מועדפים במסך הבית</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+            {STYLE_PRESET_OPTIONS.map((style) => {
+              const active = (profile.preferredHomeStyleIds || []).includes(style.id);
+              return (
+                <button
+                  key={style.id}
+                  type="button"
+                  onClick={() => toggleStyle(style.id)}
+                  style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${active ? '#1D4ED8' : '#CBD5E1'}`, background: active ? '#DBEAFE' : 'white', color: active ? '#1D4ED8' : '#334155', cursor: 'pointer', fontSize: 12 }}
+                >
+                  {style.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <select
+            value={profile.defaultDocumentStyle || 'academic'}
+            onChange={(e) => updateField('defaultDocumentStyle', e.target.value)}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
+          >
+            {STYLE_PRESET_OPTIONS.map((style) => <option key={style.id} value={style.id}>ברירת מחדל: {style.label}</option>)}
+          </select>
+
+          <select
+            value={profile.sentenceLengthPreference || 'מאוזן'}
+            onChange={(e) => updateField('sentenceLengthPreference', e.target.value)}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
+          >
+            <option value="קצר">משפטים קצרים</option>
+            <option value="מאוזן">משפטים מאוזנים</option>
+            <option value="מעמיק">משפטים מעמיקים</option>
+          </select>
+
+          <select
+            value={profile.paragraphLengthPreference || 'בינוני'}
+            onChange={(e) => updateField('paragraphLengthPreference', e.target.value)}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
+          >
+            <option value="תמציתי">פסקאות קצרות</option>
+            <option value="בינוני">פסקאות בינוניות</option>
+            <option value="מפורט">פסקאות מפורטות</option>
+          </select>
+
+          <textarea
+            value={profile.customStyleGuidance || ''}
+            onChange={(e) => updateField('customStyleGuidance', e.target.value)}
+            placeholder="חוקים אישיים לסגנון הכתיבה שלך"
+            rows={2}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+          />
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+          <input type="checkbox" checked={profile.learningConsent === true} onChange={(e) => updateField('learningConsent', e.target.checked)} />
+          אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
+        </label>
+      </div>
+
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>העלה קבצים ללמידת סגנון</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <select
+              value={uploadKind}
+              onChange={(e) => setUploadKind(e.target.value)}
+              style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #C8C6C4', background: 'white', fontSize: 12 }}
+            >
+              {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
             <button
               type="button"
               onClick={handleRefresh}
@@ -577,10 +809,10 @@ function PersonalStyleSettings({ profile, setProfile }) {
               {uploading ? 'מעלה...' : 'העלה קבצים'}
             </button>
           </div>
-          <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm" style={{ display: 'none' }} onChange={handleUpload} />
+          <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" style={{ display: 'none' }} onChange={handleUpload} />
         </div>
         <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
-          אפשר לצרף עבודות קודמות, סיכומים, PDF, מצגות או טיוטות. לחצן הריענון יזהה קבצים חדשים שעדיין לא נסרקו, יסרוק אותם ויעדכן את הסגנון האישי שלך.
+          אפשר לצרף עבודות קודמות, סיכומים, PDF, מצגות, דפי שער לדוגמה, תבניות מסמך או טיוטות. בחר את סוג הקובץ לפני ההעלאה כדי שהסוכן ילמד בדיוק ממה להשתמש.
         </div>
         <div style={{ marginTop: 10, fontSize: 11, color: '#334155', background: 'white', border: '1px solid #DBEAFE', borderRadius: 10, padding: '8px 10px' }}>
           נסרקו: {profile.scanStats?.totalScanned || 0} מתוך {profile.scanStats?.totalKnown || 0} • חדשים בריענון האחרון: {profile.scanStats?.newlyScanned || 0}
@@ -675,6 +907,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
           פתיחות משפט: {(profile.preferredSentenceOpeners || []).slice(0, 4).join(', ') || 'עדיין אין'}
           <br />
           טון שנלמד: {(profile.toneDescriptors || []).slice(0, 4).join(', ') || 'עדיין אין'}
+          <br />
+          למידה ממשחקים: {(profile.learningGameInsights || []).slice(0, 4).join(' • ') || 'עדיין אין'}
         </div>
       </div>
     </div>
@@ -1419,13 +1653,21 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
       return;
     }
 
+    const normalizedPersonalStyle = finalizePersonalProfile(personalStyleState);
+    if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
+
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
-    savePersonalStyleProfile(personalStyleState);
+    savePersonalStyleProfile(normalizedPersonalStyle);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
+    const nextDocumentStyle = normalizedPersonalStyle.defaultDocumentStyle || 'academic';
+    if (localStorage.getItem('wordai_document_style') !== nextDocumentStyle) {
+      localStorage.setItem('wordai_document_style', nextDocumentStyle);
+      onCommand?.('applyDocumentStyle', nextDocumentStyle);
+    }
     onShortcutsChange?.(shortcutsState);
     onAssistantBehaviorChange?.(assistantBehaviorState);
     onWordPreferencesChange?.(wordPrefsState);
@@ -1446,13 +1688,21 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const handleItem = (id) => { onCommand(id); if (id !== 'print') onClose(); };
 
   const handleSave = () => {
+    const normalizedPersonalStyle = finalizePersonalProfile(personalStyleState);
+    if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
+
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
-    savePersonalStyleProfile(personalStyleState);
+    savePersonalStyleProfile(normalizedPersonalStyle);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
+    const nextDocumentStyle = normalizedPersonalStyle.defaultDocumentStyle || 'academic';
+    if (localStorage.getItem('wordai_document_style') !== nextDocumentStyle) {
+      localStorage.setItem('wordai_document_style', nextDocumentStyle);
+      onCommand?.('applyDocumentStyle', nextDocumentStyle);
+    }
     onShortcutsChange?.(shortcutsState);
     onAssistantBehaviorChange?.(assistantBehaviorState);
     onWordPreferencesChange?.(wordPrefsState);
