@@ -5,218 +5,57 @@
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Word AI Assistant</title>
-    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js"></script>
-    <link rel="stylesheet" href="./src/taskpane.css" />
+    <!-- הסרת office.js בעקבות פיצול הפרויקט לאפליקציה עצמאית -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alef:wght@400;700&family=Assistant:wght@400;600;700&family=Frank+Ruhl+Libre:wght@400;700&family=Heebo:wght@400;500;700&family=Miriam+Libre:wght@400;700&family=Secular+One&display=swap" media="print" onload="this.media='all'" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+    <script src="https://unpkg.com/@phosphor-icons/web" defer></script>
 </head>
-<body>
-    <div id="app">
-
-        <!-- Header -->
-        <header class="header">
-            <h1>✍️ Word AI</h1>
-            <div class="header-actions">
-                <button id="btnStyle" class="icon-btn" title="סגנון אישי">🎨</button>
-                <button id="btnSettings" class="icon-btn" title="הגדרות">⚙️</button>
-            </div>
-        </header>
-
-        <!-- Settings Panel -->
-        <div id="settingsPanel" class="panel hidden">
-            <div class="panel-title">⚙️ הגדרות</div>
-
-            <label class="panel-label">מפתח Gemini API</label>
-            <div class="input-row">
-                <input type="password" id="apiKey" placeholder="Google Gemini API Key..." />
-            </div>
-
-            <label class="panel-label" style="margin-top:8px;">מפתח Perplexity API</label>
-            <div class="input-row">
-                <input type="password" id="perplexityApiKey" placeholder="Perplexity API Key..." />
-            </div>
-            <a
-                href="/api-keys-guide.html"
-                class="panel-help-link"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="פתיחת מדריך למתחילים על API Keys"
-            >
-                מדריך למתחילים: איך משיגים Gemini + Perplexity API Keys
-            </a>
-
-            <button id="saveKeyBtn" class="btn-primary" style="margin-top:8px;width:100%;">💾 שמור מפתחות</button>
-            <small id="keyStatus" class="key-status"></small>
-
-            <div class="panel-section-divider"></div>
-            <div class="panel-subtitle">☁️ ספריית לימודים בענן</div>
-            <small class="panel-hint">ללא התחברות. אפשר לטעון חומר מתיקיית הפרויקט או מקישור ציבורי.</small>
-
-            <label class="panel-label" style="margin-top:8px;">קישור ציבורי לקובץ</label>
-            <div class="cloud-link-row">
-                <input type="url" id="cloudPublicUrl" class="cloud-link-input" placeholder="https://... או gs://bucket/path/file.pdf" autocomplete="off" />
-                <button id="cloudImportUrlBtn" class="btn-outline" type="button">ייבא</button>
-            </div>
-            <label class="cloud-download-toggle">
-                <input type="checkbox" id="cloudDownloadToLocalToggle" />
-                <span>הורד לתיקייה המקומית לפני טעינה</span>
-            </label>
-
-            <div id="cloudLoading" class="cloud-loading hidden">⏳ טוען נתוני ענן...</div>
-
-            <small id="cloudAuthStatus" class="key-status">ללא התחברות</small>
-            <label class="panel-label" style="margin-top:8px;">בחירת תתי-תיקיות (נושאים/קורסים)</label>
-            <div id="cloudFolderFilters" class="cloud-folder-filters"></div>
-            <div id="cloudMaterialsList" class="cloud-materials-list">טוען חומרים מתיקיית הפרויקט...</div>
-            <label class="panel-label" style="margin-top:8px;">אינדקס תוכן עניינים</label>
-            <div id="cloudIndexList" class="cloud-index-list">אין עדיין תוכן להצגה</div>
-            <small id="cloudMaterialsStatus" class="key-status"></small>
-
-            <div class="panel-section-divider"></div>
-            <div class="panel-subtitle">🧭 כללי כתיבה לסוכן</div>
-            <small class="panel-hint">נשמר קבוע ומוזרק לכל תשובה: טון, מבנה, אורך, סגנון פתיחה/סיום ועוד.</small>
-            <textarea id="agentRules" class="panel-textarea" placeholder="דוגמה: כתוב במשפטים קצרים, פסקאות של 4-5 שורות, בלי רשימות, טון ענייני ולא מתנצל." rows="4"></textarea>
-
-            <div class="panel-section-divider"></div>
-            <div class="panel-subtitle">🧑‍🏫 בדיקת מרצה</div>
-            <small class="panel-hint">אפשר להזין הנחיות מטלה ידנית או להעלות קובץ הנחיות.</small>
-            <textarea id="assignmentGuidelines" class="panel-textarea" placeholder="הדבק כאן דרישות מטלה, רובריקה או הנחיות מרצה..." rows="4"></textarea>
-            <div class="file-upload-row" style="margin-top:6px;">
-                <label class="file-upload-btn" for="assignmentGuidelinesFile">📎 העלה הנחיות</label>
-                <input type="file" id="assignmentGuidelinesFile" class="file-input-hidden" accept=".pdf,.docx" />
-                <span id="assignmentGuidelinesStatus" class="file-upload-status"></span>
-            </div>
-            <label class="panel-label" style="margin-top:8px;">רמת בדיקה</label>
-            <select id="reviewDepth" class="panel-select" title="בחירת רמת בדיקה" aria-label="בחירת רמת בדיקה">
-                <option value="basic">בסיסית (נקודות עיקריות)</option>
-                <option value="standard" selected>רגילה (מאוזנת)</option>
-                <option value="strict">מחמירה (כמו בודק קפדן)</option>
-            </select>
-
-            <div class="panel-section-divider"></div>
-            <div class="panel-subtitle">🧪 מצב דיבאג</div>
-            <div class="debug-toggle-row">
-                <input type="checkbox" id="debugModeToggle" />
-                <label for="debugModeToggle">הפעל לוג תהליך חי</label>
-            </div>
-            <small class="panel-hint">כאן תראה שלבים אמיתיים של ניתוב, בניית הקשר, ושליחת בקשות.</small>
-            <pre id="debugLog" class="debug-log">דיבאג כבוי</pre>
-
-            <button id="saveMaterialsBtn" class="btn-outline" style="margin-top:6px;width:100%;">שמור הגדרות</button>
-            <small id="materialsStatus" class="key-status"></small>
-        </div>
-
-        <!-- Style Panel -->
-        <div id="stylePanel" class="panel hidden">
-            <div class="panel-title">🎨 סגנון אישי</div>
-
-            <div class="panel-subtitle">מילים וביטויים אהובים</div>
-            <div id="vocabChips" class="vocab-chips"></div>
-            <div class="vocab-input-row">
-                <input id="vocabInput" class="vocab-input" placeholder="הוסף מילה או ביטוי..." />
-                <button id="addVocabBtn" class="btn-add">+</button>
-            </div>
-
-            <div class="panel-subtitle" style="margin-top:10px;">הערות סגנון חופשיות</div>
-            <textarea id="styleNotes" class="panel-textarea" placeholder="הערות כלליות על הסגנון שלי, רמת האקדמיזם, קהל היעד..." rows="3"></textarea>
-
-            <div class="panel-section-divider"></div>
-            <div class="panel-subtitle">📂 למידה מעבודה קודמת</div>
-            <small class="panel-hint">העלה DOCX/PDF — ה-AI יחלץ את הסגנון שלך אוטומטית</small>
-            <div class="file-upload-row" style="margin-top:6px;">
-                <label class="file-upload-btn" for="styleLearningFile">📂 העלה קובץ</label>
-                <input type="file" id="styleLearningFile" class="file-input-hidden" accept=".txt,.docx,.pdf" />
-                <span id="styleLearningStatus" class="file-upload-status"></span>
-            </div>
-
-            <div class="style-actions">
-                <button id="saveStyleBtn" class="btn-primary">💾 שמור</button>
-                <button id="relearnPastWorksBtn" class="btn-outline">🔄 למד מחדש</button>
-                <button id="resetAllStyleBtn" class="btn-outline">🧹 איפוס מלא</button>
-                <button id="exportStyleBtn" class="btn-outline">📤 ייצא JSON</button>
-                <label class="file-upload-btn" for="importStyleFile">📥 ייבא</label>
-                <input type="file" id="importStyleFile" class="file-input-hidden" accept=".json" />
-            </div>
-
-            <div class="panel-section-divider"></div>
-            <div class="exceptions-header-row">
-                <div class="panel-subtitle">🏛️ ועדת חריגים</div>
-                <div class="exceptions-header-actions">
-                    <button id="openExceptionsModalBtn" class="btn-outline btn-mini">פתח</button>
-                    <button id="refreshExceptionsBtn" class="btn-outline btn-mini">רענן</button>
-                </div>
-            </div>
-            <small class="panel-hint">כללים בלבד: נשמר רק אם עבר סף שכיחות ולא קיים כבר כידני.</small>
-            <div id="exceptionsBoard" class="exceptions-board">אין נתונים עדיין</div>
-            <small id="styleStatus" class="key-status"></small>
-        </div>
-
-        <div id="exceptionsModal" class="modal-overlay hidden">
-            <div class="modal-card">
-                <div class="modal-header">
-                    <div>
-                        <div class="panel-title">🏛️ ועדת חריגים</div>
-                        <small class="panel-hint">אפשר לאשר ידנית פריטים שלא עברו עדיין את הסף.</small>
-                    </div>
-                    <button id="closeExceptionsModalBtn" class="icon-btn modal-close-btn" title="סגור">✕</button>
-                </div>
-                <div id="exceptionsModalBoard" class="exceptions-board exceptions-board-modal">אין נתונים עדיין</div>
-            </div>
-        </div>
-
-        <!-- Toast -->
-        <div id="insertToast" class="insert-toast hidden">✅ הוכנס למסמך</div>
-
-        <!-- Selection Context Bar -->
-        <div id="selectionContext" class="selection-context">
-            <span class="selection-label">📄</span>
-            <div id="selectedPreview" class="selection-preview empty-state">לא נבחר טקסט — ה-AI קורא את כל המסמך</div>
-            <span id="selectionBadge" class="selection-badge"></span>
-        </div>
-
-        <div class="chat-history-bar">
-            <select id="chatSessionSelect" class="chat-session-select" title="בחירת שיחה" aria-label="בחירת שיחה"></select>
-            <button id="newChatBtn" class="btn-outline btn-mini">＋ שיחה חדשה</button>
-        </div>
-
-        <!-- Chat Messages -->
-        <div id="chatMessages" class="chat-messages">
-            <div class="chat-bubble ai">
-                שלום! אני קורא את המסמך שלך ומשלב את הסגנון האישי שלך בכל תשובה 🎯<br><br>
-                <strong>מה אני יודע לעשות:</strong><br>
-                ✍️ לכתוב, לנסח ולשכתב — בסגנון שלך<br>
-                ✨ לתקן ולשפר טקסט מסומן<br>
-                📚 למצוא מקורות וציטוטים אקדמיים (Perplexity)<br>
-                🧬 לבצע האנשה אגרסיבית לטקסט<br><br>
-                פשוט שאל, או לחץ על אחד הקיצורים למטה.
-            </div>
-        </div>
-
-        <!-- Quick Action Chips -->
-        <div id="activeAgentBadge" class="active-agent-badge hidden"></div>
-        <div class="quick-chips-bar">
-            <button class="quick-chip" data-agent="fix">✨ תיקון</button>
-            <button class="quick-chip" data-agent="humanize">🧬 האנשה</button>
-            <button class="quick-chip" data-agent="sources">📚 מקורות</button>
-            <button class="quick-chip" data-agent="lecturer">🧑‍🏫 בדיקת מרצה</button>
-            <button class="quick-chip" data-agent="continue">✍️ המשך</button>
-            <button class="quick-chip" data-agent="summary">📋 סיכום</button>
-            <button class="quick-chip" data-agent="academic">👔 אקדמי</button>
-        </div>
-
-        <!-- Chat Input -->
-        <div class="chat-input-area">
-            <label class="chat-attach-btn" for="assignmentGuidelinesFileQuick" title="צרף קובץ הנחיות (PDF/DOCX)">📎 הנחיות</label>
-            <input type="file" id="assignmentGuidelinesFileQuick" class="file-input-hidden" accept=".pdf,.docx" />
-            <textarea id="chatInput" placeholder="שאל כל דבר — עריכה, ניסוח, מחקר, מקורות..." rows="2"></textarea>
-            <button id="sendChat" class="chat-send-btn" title="שלח (Enter)">➤</button>
-        </div>
-        <div id="quickGuidelinesStatus" class="quick-guidelines-status"></div>
-
-        <!-- Status -->
-        <div id="status" class="status-bar">מוכן</div>
-    </div>
-
-    <script type="module" src="./src/taskpane.js"></script>
+<body class="bg-gray-50 h-screen w-screen m-0 overflow-hidden">
+    <div id="app" class="h-full w-full"></div>
+    <script>
+      // מסך שגיאה חירום — מוצג כאשר ה-JS הראשי לא נטען
+      window.__showCrashOverlay = function(msg) {
+        const existing = document.getElementById('__crash-overlay');
+        if (existing) return;
+        var el = document.createElement('div');
+        el.id = '__crash-overlay';
+        el.style.cssText = 'position:fixed;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;font-family:Arial,sans-serif;direction:rtl;padding:32px;';
+        var h2 = document.createElement('h2');
+        h2.style.cssText = 'color:#c0392b;margin-bottom:12px';
+        h2.textContent = '⚠️ שגיאת טעינה';
+        var p = document.createElement('p');
+        p.style.cssText = 'max-width:600px;text-align:center;line-height:1.7;color:#333;white-space:pre-wrap;word-break:break-word;';
+        p.textContent = msg || 'הממשק לא נטען. נסה לסגור ולפתוח מחדש את האפליקציה.';
+        var btn = document.createElement('button');
+        btn.style.cssText = 'margin-top:20px;padding:8px 22px;background:#2B579A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px';
+        btn.textContent = 'רענן';
+        btn.onclick = function() { location.reload(); };
+        el.appendChild(h2);
+        el.appendChild(p);
+        el.appendChild(btn);
+        document.body.appendChild(el);
+      };
+      window.onerror = function(msg, src, line, col, err) {
+        // התעלם משגיאות CDN חיצוני
+        if (src && (src.indexOf('cdnjs.cloudflare.com') !== -1 || src.indexOf('unpkg.com') !== -1)) return;
+        var detail = (err && err.stack) ? err.stack : (msg + ' (' + src + ':' + line + ')');
+        window.__showCrashOverlay(detail);
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        var msg = e.reason && e.reason.message ? e.reason.message : String(e.reason || 'שגיאה לא ידועה');
+        window.__showCrashOverlay(msg);
+      });
+      // פולבק: אם הממשק לא נטען אחרי 8 שניות — מסך שגיאה
+      // בודק גובה ממשי ולא רק firstChild, למקרה שReact עשה mount חלקי ללא תוכן נראה
+      window.__mountTimer = setTimeout(function() {
+        var appEl = document.getElementById('app');
+        if (!appEl) { window.__showCrashOverlay('אלמנט #app לא נמצא בדף.'); return; }
+        var rect = appEl.getBoundingClientRect();
+        if (rect.height < 50) {
+          window.__showCrashOverlay('הממשק לא נטען תוך זמן סביר. גובה=0 (CSS לא נטען או שגיאת React). נסה לפתוח DevTools עם F12 לפרטים.');
+        }
+      }, 8000);
+    </script>
+    <script type="module" src="./src/main.jsx"></script>
 </body>
 </html>
