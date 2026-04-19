@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -46,9 +47,9 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-// Vite plugin: auto-scan past-works/ and generate index.json on every change
+// Vite plugin: auto-scan PAST-DOC/ and generate index.json on every change
 function pastWorksPlugin() {
-  const worksDir = path.resolve(process.cwd(), 'past-works');
+  const worksDir = path.resolve(process.cwd(), 'PAST-DOC');
 
   function generateIndex() {
     if (!fs.existsSync(worksDir)) {
@@ -60,13 +61,19 @@ function pastWorksPlugin() {
         const stat = fs.statSync(path.join(worksDir, f));
         return { name: f, size: stat.size, modified: stat.mtime.toISOString() };
       });
+    const payload = JSON.stringify({ files }, null, 2);
     const indexPath = path.join(worksDir, 'index.json');
-    fs.writeFileSync(indexPath, JSON.stringify({ files }, null, 2), 'utf8');
-    if (files.length) console.log(`[past-works] ${files.length} file(s) indexed.`);
+    fs.writeFileSync(indexPath, payload, 'utf8');
+
+    const publicDir = path.resolve(process.cwd(), 'public', 'PAST-DOC');
+    if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+    fs.writeFileSync(path.join(publicDir, 'index.json'), payload, 'utf8');
+
+    if (files.length) console.log(`[PAST-DOC] ${files.length} file(s) indexed.`);
   }
 
   return {
-    name: 'past-works',
+    name: 'past-docs',
     buildStart() { generateIndex(); },
     configureServer(server) {
       generateIndex();
@@ -87,6 +94,53 @@ function styleBankPlugin() {
   return {
     name: 'style-bank',
     configureServer(server) {
+
+      server.middlewares.use('/api/materials/upload', (req, res) => {
+        if (req.method === 'OPTIONS') { res.writeHead(204, CORS_HEADERS); res.end(); return; }
+        if (req.method !== 'POST') {
+          res.writeHead(405, CORS_HEADERS);
+          res.end();
+          return;
+        }
+
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          try {
+            const { name, dataBase64 } = JSON.parse(body || '{}');
+            const safeName = path.basename(String(name || 'material.bin')).replace(/[^\w\u0590-\u05FF .()\-]/g, '_');
+            if (!safeName || !dataBase64) {
+              res.writeHead(400, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'name and dataBase64 are required' }));
+              return;
+            }
+
+            const materialsDir = path.resolve(process.cwd(), 'public', 'project-materials');
+            if (!fs.existsSync(materialsDir)) fs.mkdirSync(materialsDir, { recursive: true });
+
+            const filePath = path.join(materialsDir, safeName);
+            fs.writeFileSync(filePath, Buffer.from(dataBase64, 'base64'));
+
+            const indexPath = path.join(materialsDir, 'index.json');
+            let existing = [];
+            try { existing = JSON.parse(fs.readFileSync(indexPath, 'utf8')); } catch {}
+            const nextEntry = {
+              id: safeName,
+              title: safeName,
+              file: safeName,
+              type: path.extname(safeName).replace(/^\./, ''),
+            };
+            const merged = [...(Array.isArray(existing) ? existing.filter((item) => item.file !== safeName) : []), nextEntry];
+            fs.writeFileSync(indexPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
+
+            res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, file: safeName }));
+          } catch (error) {
+            res.writeHead(500, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error.message || 'upload failed' }));
+          }
+        });
+      });
 
       server.middlewares.use('/api/storage-sync', (req, res) => {
         if (req.method === 'OPTIONS') { res.writeHead(204, CORS_HEADERS); res.end(); return; }
@@ -216,9 +270,10 @@ function styleBankPlugin() {
 }
 
 export default async () => defineConfig({
-  plugins: [pastWorksPlugin(), styleBankPlugin()],
+  base: './',
+  plugins: [react(), pastWorksPlugin(), styleBankPlugin()],
   server: {
-    port: 3000,
+    port: 3001,
     strictPort: true,
     https: await getHttpsOptions()
   }

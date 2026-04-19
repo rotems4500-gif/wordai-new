@@ -99,6 +99,16 @@ Expected `index.json` format:
 
 Supported extraction: `pdf`, `docx`, and text-based files such as `txt`, `md`, `csv`, `json`, `html`.
 
+## 🔄 Auto Update Release Flow
+To publish a real desktop update that installed users can receive automatically:
+
+1. Bump the app version in [package.json](package.json).
+2. Push the code to GitHub.
+3. Trigger the release workflow or push a tag like v1.0.1.
+4. GitHub Actions will build the Windows installer, upload the release assets, and publish update metadata.
+
+Local builds alone do not trigger auto-update for installed users.
+
 ## 🏗️ Built With
 - **Vanilla JS & HTML5**
 - **Vite** - Lightning fast dev server & bundler.
