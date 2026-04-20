@@ -32,7 +32,7 @@ const SHAPES_LIST = [
 ];
 
 export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => {}, zoom = 100, onOpenFileMenu = () => {}, formatPainterActive = false, activeFormats = {}, shortcuts = {}, assistantOpen = false, documentStyle = 'academic' }) {
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState('');
   const [tableHover, setTableHover] = useState({ row: 0, col: 0 });
   const [fixedDrop, setFixedDrop] = useState(null); // { type, x, y }
   const [symbolCat, setSymbolCat] = useState('כללי');
@@ -486,13 +486,13 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
       {renderFixedDrop()}
         <ul id="tabs-row">
             <li className="tab-btn file-tab" onClick={() => onOpenFileMenu()} title={`קיצור: ${shortcuts.openFileMenu || 'Alt+F'}`}>קובץ</li>
-            <li className={`tab-btn ${activeTab === "home" ? "active" : ""}`} onClick={() => setActiveTab("home")}>בית</li>
-            <li className={`tab-btn ${activeTab === "insert" ? "active" : ""}`} onClick={() => setActiveTab("insert")}>הוספה</li>
-            <li className={`tab-btn ${activeTab === "design" ? "active" : ""}`} onClick={() => setActiveTab("design")}>עיצוב</li>
-            <li className={`tab-btn ${activeTab === "layout" ? "active" : ""}`} onClick={() => setActiveTab("layout")}>פריסה</li>
-            <li className={`tab-btn ${activeTab === "references" ? "active" : ""}`} onClick={() => setActiveTab("references")}>הפניות</li>
-            <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab("review")}>סקירה</li>
-            <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab("view")}>תצוגה</li>
+            <li className={`tab-btn ${activeTab === "home" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "home" ? "" : "home")}>בית</li>
+            <li className={`tab-btn ${activeTab === "insert" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "insert" ? "" : "insert")}>הוספה</li>
+            <li className={`tab-btn ${activeTab === "design" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "design" ? "" : "design")}>עיצוב</li>
+            <li className={`tab-btn ${activeTab === "layout" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "layout" ? "" : "layout")}>פריסה</li>
+            <li className={`tab-btn ${activeTab === "references" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "references" ? "" : "references")}>הפניות</li>
+            <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "review" ? "" : "review")}>סקירה</li>
+            <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "view" ? "" : "view")}>תצוגה</li>
             <li className="tab-btn" style={{ color: "var(--word-blue)", fontWeight: "bold" }} onClick={() => onToggleTaskpane()} title={`קיצור: ${shortcuts.toggleAssistant || 'Ctrl+Shift+A'}`}>WordFlow AI</li>
         </ul>
 

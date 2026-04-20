@@ -1799,143 +1799,148 @@ function App() {
             </div>
           )}
           {showStartScreen && (
-            <StartScreen
-              documentStyle={documentStyle}
-              onDocumentStyleChange={changeDocumentStyle}
-              hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
-              lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
-              onCreateBlank={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                editor?.chain().focus().clearContent().run();
-                setCurrentFilePath('');
-                localStorage.setItem('wordai_active_template', 'blank');
-                syncPersistedAppSettings();
-                setActiveTemplateId('blank');
-                setShowStartScreen(false);
-                focusEditorSoon('start');
-              }}
-              onCreateTemplate={(template) => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const templateId = typeof template === 'string' ? template : template?.id;
-                const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
-                setCurrentFilePath('');
-                localStorage.setItem('wordai_active_template', templateId || 'blank');
-                syncPersistedAppSettings();
-                setActiveTemplateId(templateId || 'blank');
-                const recommendedStyle = {
-                  academic: 'academic',
-                  legal: 'legal',
-                  report: 'business',
-                  summary: 'presentation',
-                  office: 'business',
-                  proposal: 'business',
-                  letter: 'legal',
-                };
-                changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
-                editor?.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
-                setShowStartScreen(false);
-                focusEditorSoon('start');
-              }}
-              onOpenDocument={() => handleCommand('openFile')}
-              onOpenLastDraft={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const savedDraft = wordPreferences.keepLastAutosavedVersion === false
-                  ? null
-                  : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
-                if (savedDraft && editor) editor.commands.setContent(savedDraft);
-                setCurrentFilePath('');
-                setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
-                setShowStartScreen(false);
-                focusEditorSoon('end');
-              }}
-              onOpenSettings={() => {
-                setFileMenuTargetTab('guide');
-                setFileMenuOpen(true);
-              }}
-              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
-                if (!confirmReplaceCurrentDocument()) return;
-                setCurrentFilePath('');
-                localStorage.setItem('wordai_active_template', templateId || 'blank');
-                syncPersistedAppSettings();
-                setActiveTemplateId(templateId || 'blank');
-                setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                changeDocumentStyle(requestedStyle || documentStyle);
-                setAssistantTrigger('autopilot');
-                setSidebarCompact(false);
-                setSidebarOpen(true);
-                setShowStartScreen(false);
-                setLiveGeneration({
-                  active: true,
-                  state: 'running',
-                  prompt,
-                  summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                  logs: getAgentDebugLogs().slice(-5).reverse(),
-                });
-                if (editor) {
-                  editor.commands.setContent(buildLiveGenerationShell(prompt));
-                }
-                focusEditorSoon('start');
-
-                try {
-                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
-                  const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
-                  const usedFallback = Boolean(result?.usedFallback);
-                  if (editor) {
-                    editor.commands.setContent(generated);
-                  }
-                  saveDocumentHistory({
-                    title: prompt,
-                    content: generated,
-                    templateId,
-                    source: 'start-screen',
-                  });
-                  persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({
-                    ...prev,
+            <div className="w-full flex-1 flex flex-col relative z-[50]">
+              <StartScreen
+                documentStyle={documentStyle}
+                onDocumentStyleChange={changeDocumentStyle}
+                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
+                lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
+                onCreateBlank={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  editor?.chain().focus().clearContent().run();
+                  setCurrentFilePath('');
+                  localStorage.setItem('wordai_active_template', 'blank');
+                  syncPersistedAppSettings();
+                  setActiveTemplateId('blank');
+                  setShowStartScreen(false);
+                  focusEditorSoon('start');
+                }}
+                onCreateTemplate={(template) => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const templateId = typeof template === 'string' ? template : template?.id;
+                  const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                  setCurrentFilePath('');
+                  localStorage.setItem('wordai_active_template', templateId || 'blank');
+                  syncPersistedAppSettings();
+                  setActiveTemplateId(templateId || 'blank');
+                  const recommendedStyle = {
+                    academic: 'academic',
+                    legal: 'legal',
+                    report: 'business',
+                    summary: 'presentation',
+                    office: 'business',
+                    proposal: 'business',
+                    letter: 'legal',
+                  };
+                  changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
+                  editor?.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
+                  setShowStartScreen(false);
+                  focusEditorSoon('start');
+                }}
+                onOpenDocument={() => handleCommand('openFile')}
+                onOpenLastDraft={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const savedDraft = wordPreferences.keepLastAutosavedVersion === false
+                    ? null
+                    : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+                  if (savedDraft && editor) editor.commands.setContent(savedDraft);
+                  setCurrentFilePath('');
+                  setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+                  setShowStartScreen(false);
+                  focusEditorSoon('end');
+                }}
+                onOpenSettings={() => {
+                  setFileMenuTargetTab('guide');
+                  setFileMenuOpen(true);
+                }}
+                onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  setCurrentFilePath('');
+                  localStorage.setItem('wordai_active_template', templateId || 'blank');
+                  syncPersistedAppSettings();
+                  setActiveTemplateId(templateId || 'blank');
+                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+                  changeDocumentStyle(requestedStyle || documentStyle);
+                  setAssistantTrigger('autopilot');
+                  setSidebarCompact(false);
+                  setSidebarOpen(true);
+                  setShowStartScreen(false);
+                  setLiveGeneration({
                     active: true,
-                    state: usedFallback ? 'warning' : 'success',
-                    prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt,
+                    state: 'running',
+                    prompt,
                     summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
                     logs: getAgentDebugLogs().slice(-5).reverse(),
-                  }));
-                  setFeedbackSurvey({
-                    ...DEFAULT_FEEDBACK_SURVEY,
-                    open: false,
-                    phase: 'details',
-                    prompt,
-                    templateId: templateId || 'blank',
-                    usedFallback,
                   });
-                } catch (error) {
-                  setLiveGeneration((prev) => ({
-                    ...prev,
-                    active: true,
-                    state: 'error',
-                    logs: getAgentDebugLogs().slice(-5).reverse(),
-                  }));
                   if (editor) {
-                    editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+                    editor.commands.setContent(buildLiveGenerationShell(prompt));
                   }
-                }
-              }}
-            />
+                  focusEditorSoon('start');
+
+                  try {
+                    const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
+                    const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
+                    const usedFallback = Boolean(result?.usedFallback);
+                    if (editor) {
+                      editor.commands.setContent(generated);
+                    }
+                    saveDocumentHistory({
+                      title: prompt,
+                      content: generated,
+                      templateId,
+                      source: 'start-screen',
+                    });
+                    persistLocalCache(generated);
+                    setLiveGeneration((prev) => ({
+                      ...prev,
+                      active: true,
+                      state: usedFallback ? 'warning' : 'success',
+                      prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt,
+                      summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+                      logs: getAgentDebugLogs().slice(-5).reverse(),
+                    }));
+                    setFeedbackSurvey({
+                      ...DEFAULT_FEEDBACK_SURVEY,
+                      open: false,
+                      phase: 'details',
+                      prompt,
+                      templateId: templateId || 'blank',
+                      usedFallback,
+                    });
+                  } catch (error) {
+                    setLiveGeneration((prev) => ({
+                      ...prev,
+                      active: true,
+                      state: 'error',
+                      logs: getAgentDebugLogs().slice(-5).reverse(),
+                    }));
+                    if (editor) {
+                      editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+                    }
+                  }
+                }}
+              />
+            </div>
           )}
-          <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
-            <DocumentEditor
-              documentStyle={documentStyle}
-              viewMode={viewMode}
-              activeTemplateId={activeTemplateId}
-              onReady={handleEditorReady}
-              onWordCountChange={setWordCount}
-              onCommand={handleCommand}
-              wordPreferences={wordPreferences}
-              onOpenAssistant={() => {
-                setAssistantTrigger('manual');
-                setLastEditorActivityAt(Date.now());
-                setSidebarOpen(true);
-              }}
-            />
-          </div>
+
+          {!showStartScreen && (
+            <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
+              <DocumentEditor
+                documentStyle={documentStyle}
+                viewMode={viewMode}
+                activeTemplateId={activeTemplateId}
+                onReady={handleEditorReady}
+                onWordCountChange={setWordCount}
+                onCommand={handleCommand}
+                wordPreferences={wordPreferences}
+                onOpenAssistant={() => {
+                  setAssistantTrigger('manual');
+                  setLastEditorActivityAt(Date.now());
+                  setSidebarOpen(true);
+                }}
+              />
+            </div>
+          )}
 
         </div>
 

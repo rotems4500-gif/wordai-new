@@ -2,33 +2,88 @@ import React, { useState, useRef, useEffect } from "react";
 import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory } from "./services/aiService";
 
 const CONTEXT_PROMPTS = [
-  'נראה ארוך אה?',
-  'יש מקור למה שאמרתי?',
-  'תחדד לי את זה',
-  'תן ניסוח אקדמי',
-  'תקצר בלי לפגוע בטיעון',
-  'איך ממשיכים מכאן?',
+  '🤔 נראה ארוך אה?',
+  '📚 יש מקור למה שאמרתי?', 
+  '💡 תחדד לי את זה',
+  '🎓 תן ניסוח אקדמי',
+  '✂️ תקצר בלי לפגוע בטיעון',
+  '🚀 איך ממשיכים מכאן?',
 ];
 
-const QUICK_ACTIONS = [
-  { id: 'fix',       icon: '✏️', label: 'תקן שגיאות',    prompt: 'תקן שגיאות כתיב ודקדוק',             sel: true  },
-  { id: 'humanize',  icon: '👤', label: 'הפוך לאנושי',   prompt: 'שכתב בסגנון אנושי וטבעי',             sel: true  },
-  { id: 'summary',   icon: '📝', label: 'סכם',            prompt: 'סכם בנקודות עיקריות קצרות',            sel: true  },
-  { id: 'expand',    icon: '📖', label: 'הרחב',           prompt: 'הרחב עם פרטים ודוגמאות נוספות',        sel: true  },
-  { id: 'academic',  icon: '🎓', label: 'אקדמי',          prompt: 'שכתב בסגנון אקדמי ופורמלי',           sel: true  },
-  { id: 'translate', icon: '🌐', label: 'תרגם לאנגלית',  prompt: 'תרגם לאנגלית בצורה טבעית',            sel: true  },
-  { id: 'bullets',   icon: '📋', label: 'הפוך לרשימה',   prompt: 'המר לרשימת נקודות ברורה',              sel: true  },
-  { id: 'shorter',   icon: '✂️', label: 'קצר',            prompt: 'קצר ב-50% בלי לאבד משמעות',           sel: true  },
-  { id: 'continue',  icon: '➡️', label: 'המשך כתיבה',    prompt: 'המשך לכתוב את הטקסט הבא',             sel: false },
-  { id: 'intro',     icon: '🚀', label: 'הוסף מבוא',      prompt: 'כתוב מבוא מתאים למסמך',                sel: false },
-  { id: 'conclusion',icon: '🏁', label: 'הוסף מסקנה',    prompt: 'כתוב מסקנה מתאימה למסמך',              sel: false },
-  { id: 'sources',   icon: '📚', label: 'הצע מקורות',    prompt: 'הצע מקורות מחקריים רלוונטיים לנושא',   sel: false },
+const MODERN_QUICK_ACTIONS = [
+  { 
+    id: 'fix', 
+    icon: '✨', 
+    label: 'תקן שגיאות', 
+    prompt: 'תקן שגיאות כתיב ודקדוק', 
+    sel: true,
+    color: 'from-red-400 to-pink-500',
+    category: 'edit'
+  },
+  { 
+    id: 'humanize', 
+    icon: '👤', 
+    label: 'הפוך לאנושי', 
+    prompt: 'שכתב בסגנון אנושי וטבעי', 
+    sel: true,
+    color: 'from-blue-400 to-indigo-500',
+    category: 'style'
+  },
+  { 
+    id: 'summary', 
+    icon: '📝', 
+    label: 'סכם', 
+    prompt: 'סכם בנקודות עיקריות קצרות', 
+    sel: true,
+    color: 'from-green-400 to-emerald-500',
+    category: 'transform'
+  },
+  { 
+    id: 'expand', 
+    icon: '📖', 
+    label: 'הרחב', 
+    prompt: 'הרחב עם פרטים ודוגמאות נוספות', 
+    sel: true,
+    color: 'from-purple-400 to-violet-500',
+    category: 'transform'
+  },
+  { 
+    id: 'academic', 
+    icon: '🎓', 
+    label: 'אקדמי', 
+    prompt: 'שכתב בסגנון אקדמי ופורמלי', 
+    sel: true,
+    color: 'from-amber-400 to-orange-500',
+    category: 'style'
+  },
+  { 
+    id: 'translate', 
+    icon: '🌐', 
+    label: 'תרגם לאנגלית', 
+    prompt: 'תרגם לאנגלית בצורה טבעית', 
+    sel: true,
+    color: 'from-teal-400 to-cyan-500',
+    category: 'language'
+  },
+];
+
+const QUICK_PROMPTS = [
+  { text: '🚀 המשך לכתוב את הטקסט הבא', icon: '➡️', category: 'write' },
+  { text: '🎯 כתוב מבוא מתאים למסמך', icon: '🚀', category: 'write' },
+  { text: '🏁 כתוב מסקנה מתאימה למסמך', icon: '🏁', category: 'write' },
+  { text: '📚 הצע מקורות מחקריים רלוונטיים', icon: '📚', category: 'research' },
+  { text: '💡 תן רעיונות להמשך', icon: '💡', category: 'ideas' },
+  { text: '🔍 בדוק עובדות ונתונים', icon: '🔍', category: 'check' },
 ];
 
 const CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
 
 const getDefaultMessages = () => ([
-  { role: 'assistant', content: `שלום! אני ${getActiveProviderName()} — העוזר ה-AI שלך.\nאני קורא את ההקשר של המסמך, כך שאפשר לשאול גם בקצרה כמו "נראה ארוך אה?" או "יש מקור לזה?".` }
+  { 
+    role: 'assistant', 
+    content: `שלום! אני ${getActiveProviderName()} 🤖\n\nאני כאן לעזור לך עם הכתיבה. אני רואה את ההקשר של המסמך, אז אפשר לשאול גם בקצרה:\n• "נראה ארוך אה?" 🤔\n• "יש מקור לזה?" 📚\n• "תחדד לי את זה" 💡\n\nמה נכתוב היום?`,
+    timestamp: Date.now()
+  }
 ]);
 
 const getSavedMessages = () => {
@@ -119,13 +174,14 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [mentionMenu, setMentionMenu] = useState({ open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 });
+  const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
 
   const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
   const localContext = selectedText || currentBlockText;
   const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
-  const visibleActions = QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
+  const visibleActions = MODERN_QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
   const selectionActions = visibleActions.filter((action) => action.sel);
   const generationActions = visibleActions.filter((action) => !action.sel);
   const skillCatalog = getSkillCatalog();
@@ -484,182 +540,724 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     send(`${action.prompt}${selectedText ? `:\n\n"${selectedText}"` : ''}`);
   };
 
-  return (
-    <div style={getShellStyle(mode, compactMode)} dir="rtl">
+  // Modern styling functions
+  const modernMessageBubble = (isUser, message) => ({
+    maxWidth: isUser ? '85%' : '95%',
+    padding: isUser ? '12px 16px' : '14px 18px',
+    borderRadius: isUser ? '20px 8px 20px 20px' : '8px 20px 20px 20px',
+    background: isUser 
+      ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+      : 'rgba(15, 23, 42, 0.05)',
+    backdropFilter: isUser ? 'none' : 'blur(10px)',
+    border: isUser ? 'none' : '1px solid rgba(148, 163, 184, 0.2)',
+    color: isUser ? 'white' : '#0F172A',
+    fontSize: 14,
+    lineHeight: 1.6,
+    textShadow: isUser ? '0 1px 2px rgba(0,0,0,0.1)' : 'none',
+    boxShadow: isUser 
+      ? '0 8px 25px rgba(102, 126, 234, 0.25)' 
+      : '0 4px 15px rgba(15, 23, 42, 0.05)',
+    transition: 'all 0.3s ease',
+    position: 'relative',
+    overflow: 'hidden',
+  });
 
-      {/* כותרת */}
-      <div style={{ background: 'linear-gradient(135deg,#2B579A 0%,#106EBE 100%)', padding: compactMode ? '10px 12px' : '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: compactMode ? 8 : 10 }}>
-          <span style={{ fontSize: compactMode ? 20 : 24 }}>✨</span>
+  const modernTabButton = (tabId, label, isActive) => ({
+    flex: 1,
+    padding: '8px 4px',
+    fontSize: 12,
+    fontWeight: isActive ? 700 : 500,
+    border: 'none',
+    cursor: 'pointer',
+    background: isActive 
+      ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 69, 19, 0.08) 100%)'
+      : 'transparent',
+    color: isActive ? '#4F46E5' : '#64748B',
+    borderBottom: isActive ? '2px solid #4F46E5' : '2px solid transparent',
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    position: 'relative',
+    overflow: 'hidden',
+  });
+
+  const modernActionButton = (action, category = 'default') => ({
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
+    padding: '16px 12px',
+    border: 'none',
+    borderRadius: 16,
+    cursor: 'pointer',
+    background: `linear-gradient(135deg, ${action.color || 'rgba(99, 102, 241, 0.1)'} 0%, rgba(139, 69, 19, 0.05) 100%)`,
+    backdropFilter: 'blur(10px)',
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#1E293B',
+    position: 'relative',
+    overflow: 'hidden',
+    boxShadow: '0 4px 15px rgba(0, 0, 0, 0.05)',
+    transform: 'scale(1)',
+  });
+
+  return (
+    <div 
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        position: 'relative',
+        overflow: 'hidden',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+      }}
+      dir="rtl"
+    >
+      {/* Animated Background */}
+      <div 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: `
+            radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
+            radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.2) 0%, transparent 50%)
+          `,
+          animation: 'float 20s ease-in-out infinite',
+          opacity: 0.4,
+        }}
+      />
+
+      {/* Minimal Header */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.1)',
+        backdropFilter: 'blur(20px)',
+        padding: '8px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+        position: 'relative',
+        zIndex: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #FF6B6B, #4ECDC4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            animation: 'pulse 2s ease-in-out infinite',
+          }}>
+            🤖
+          </div>
           <div>
-            <div style={{ color: 'white', fontWeight: 700, fontSize: compactMode ? 13 : 14 }}>WordFlow AI</div>
-            <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 1 }}>מנוע פעיל: {getActiveProviderName()}</div>
+            <div style={{ 
+              color: 'white', 
+              fontWeight: 700, 
+              fontSize: 14,
+              textShadow: '0 2px 4px rgba(0,0,0,0.3)'
+            }}>
+              WordFlow AI ✨
+            </div>
+            <div style={{ 
+              color: 'rgba(255,255,255,0.8)', 
+              fontSize: 10, 
+            }}>
+              {getActiveProviderName()}
+            </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {mode === 'sidebar' && (
             <button
-              style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '6px 8px', borderRadius: 8 }}
+              style={{
+                color: 'rgba(255,255,255,0.9)',
+                background: 'rgba(255,255,255,0.15)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 12,
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: 14,
+                transition: 'all 0.3s ease',
+              }}
               onClick={onToggleCompact}
               title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.25)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.15)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
             >
               {compactMode ? '⤢' : '⤡'}
             </button>
           )}
-          <button style={{ color: 'rgba(255,255,255,0.8)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 6px', borderRadius: 4 }} onClick={onClose}>×</button>
+          <button 
+            style={{
+              color: 'rgba(255,255,255,0.8)',
+              background: 'rgba(255,255,255,0.1)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 12,
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: 18,
+              transition: 'all 0.3s ease',
+            }}
+            onClick={onClose}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 68, 68, 0.2)';
+              e.currentTarget.style.borderColor = 'rgba(255, 68, 68, 0.3)';
+              e.currentTarget.style.transform = 'rotate(90deg)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
+              e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)';
+              e.currentTarget.style.transform = 'rotate(0deg)';
+            }}
+          >
+            ×
+          </button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #E1DFDD', background: '#F8F7F6', flexShrink: 0 }}>
-        {[['chat', "💬 צ'אט"], ['actions', '⚡ פעולות'], ['agents', '🧩 סוכנים']].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)}
-            style={{ flex: 1, padding: compactMode ? '8px 6px' : '9px', fontSize: compactMode ? 11 : 12, border: 'none', cursor: 'pointer', fontWeight: tab === id ? 600 : 400, background: tab === id ? 'white' : 'transparent', color: tab === id ? '#2B579A' : '#605E5C', borderBottom: tab === id ? '2px solid #2B579A' : '2px solid transparent' }}>
+      {/* Modern Navigation Tabs */}
+      <div style={{
+        display: 'flex',
+        background: 'rgba(255, 255, 255, 0.05)',
+        backdropFilter: 'blur(15px)',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+        position: 'relative',
+        zIndex: 5,
+      }}>
+        {[
+          ['chat', "💬 צ'אט"],
+          ['actions', '⚡ פעולות'],
+          ['agents', '🧩 סוכנים']
+        ].map(([id, label]) => (
+          <button 
+            key={id} 
+            onClick={() => setTab(id)}
+            style={modernTabButton(id, label, tab === id)}
+            onMouseEnter={(e) => {
+              if (tab !== id) {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                e.currentTarget.style.transform = 'translateY(-2px)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (tab !== id) {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.transform = 'translateY(0)';
+              }
+            }}
+          >
             {label}
           </button>
         ))}
       </div>
 
       {shouldShowProgress && (
-        <div style={{ padding: '10px 12px', background: '#F8FBFF', borderBottom: '1px solid #DBEAFE', flexShrink: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: '#1E3A8A', fontWeight: 700, marginBottom: 6 }}>
-            <span>{activeAgentStatus.agentLabel ? `כעת עובד: ${activeAgentStatus.agentLabel}` : 'מוכן לעבודה'}</span>
-            <span>{Math.round(activeAgentStatus.progress || 0)}%</span>
+        <div style={{
+          padding: '6px 12px',
+          background: 'rgba(255, 255, 255, 0.08)',
+          backdropFilter: 'blur(15px)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+          position: 'relative',
+          zIndex: 5,
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 4,
+            color: 'white',
+            fontSize: 12,
+            fontWeight: 600,
+          }}>
+            <span>
+              {activeAgentStatus.agentLabel ? `🚀 ${activeAgentStatus.agentLabel}` : '⭐ מוכן לעבודה'}
+            </span>
+            <span style={{
+              background: 'rgba(255, 255, 255, 0.2)',
+              padding: '2px 8px',
+              borderRadius: 12,
+              fontSize: 11,
+            }}>
+              {Math.round(activeAgentStatus.progress || 0)}%
+            </span>
           </div>
-          <div style={{ height: 8, background: '#DBEAFE', borderRadius: 999, overflow: 'hidden' }}>
-            <div style={{ width: `${activeAgentStatus.progress || 0}%`, height: '100%', background: activeAgentStatus.state === 'error' ? '#DC2626' : activeAgentStatus.state === 'success' ? '#16A34A' : '#2563EB', transition: 'width 0.25s ease' }} />
+          
+          <div style={{
+            height: 6,
+            background: 'rgba(255, 255, 255, 0.2)',
+            borderRadius: 20,
+            overflow: 'hidden',
+            position: 'relative',
+          }}>
+            <div style={{
+              width: `${activeAgentStatus.progress || 0}%`,
+              height: '100%',
+              background: activeAgentStatus.state === 'error' 
+                ? 'linear-gradient(90deg, #FF6B6B, #FF8E8E)' 
+                : activeAgentStatus.state === 'success' 
+                ? 'linear-gradient(90deg, #4ECDC4, #44A08D)' 
+                : 'linear-gradient(90deg, #667eea, #764ba2)',
+              borderRadius: 20,
+              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+              boxShadow: '0 0 10px rgba(255, 255, 255, 0.3)',
+            }} />
           </div>
-          <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>{activeAgentStatus.message || 'מוכן'}</div>
-          {(activeAgentStatus.provider || activeAgentStatus.model) && (
-            <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>
-              {activeAgentStatus.provider ? `מנוע: ${activeAgentStatus.provider}` : ''}
-              {activeAgentStatus.model ? ` · מודל: ${activeAgentStatus.model}` : ''}
-              {activeAgentStatus.attempt ? ` · ניסיון ${activeAgentStatus.attempt}` : ''}
-            </div>
-          )}
+          
+          <div style={{
+            fontSize: 11,
+            color: 'rgba(255, 255, 255, 0.9)',
+            marginTop: 6,
+            textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+          }}>
+            {activeAgentStatus.message || 'מוכן'}
+          </div>
         </div>
       )}
 
-      {tab === 'agents' && (
-        <div style={{ padding: compactMode ? '7px 10px' : '10px 12px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <button
-              onClick={() => setShowLogs((prev) => !prev)}
-              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#0F172A', fontSize: 12, fontWeight: 700 }}
-            >
-              🪵 יומן סוכנים מפורט {showLogs ? '▴' : '▾'}
-            </button>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={copyLogsToClipboard} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
-                העתק
-              </button>
-              <button onClick={clearLogs} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
-                נקה
-              </button>
-            </div>
-          </div>
-
-          {showLogs && (
-            <div style={{ marginTop: 8, maxHeight: 170, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {debugLogs.length ? debugLogs.map((log) => (
-                <div key={log.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '7px 9px', background: log.state === 'error' ? '#FEF2F2' : log.state === 'success' ? '#F0FDF4' : '#F8FAFC' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, marginBottom: 4 }}>
-                    <span style={{ fontWeight: 700, color: '#1E293B' }}>{log.agentLabel || 'מערכת'}</span>
-                    <span style={{ color: '#64748B' }}>{formatLogTime(log.ts)}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.45 }}>{log.message || 'ללא הודעה'}</div>
-                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, lineHeight: 1.4 }}>
-                    {[
-                      log.provider ? `מנוע: ${log.provider}` : '',
-                      log.model ? `מודל: ${log.model}` : '',
-                      log.attempt ? `ניסיון ${log.attempt}` : '',
-                      log.errorMessage ? `שגיאה: ${log.errorMessage}` : '',
-                      log.runId ? `הרצה ${String(log.runId).slice(0, 8)}` : '',
-                    ].filter(Boolean).join(' • ')}
-                  </div>
-                </div>
-              )) : (
-                <div style={{ fontSize: 11, color: '#64748B', padding: '8px 4px' }}>
-                  עדיין אין אירועים ביומן.
-                </div>
+      {/* Modern Chat Interface */}
+      {tab === 'chat' && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'rgba(255, 255, 255, 0.02)',
+          backdropFilter: 'blur(20px)',
+          position: 'relative',
+          overflow: 'hidden',
+        }}>
+          
+          {/* Context Header */}
+          <div style={{
+            padding: '6px 12px',
+            background: 'rgba(255, 255, 255, 0.08)',
+            backdropFilter: 'blur(15px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 600 }}>
+                📄 פועל על:
+              </span>
+              <span style={{
+                fontSize: 11,
+                background: 'rgba(59, 130, 246, 0.2)',
+                color: '#93C5FD',
+                padding: '4px 12px',
+                borderRadius: 20,
+                fontWeight: 500,
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+              }}>
+                המסמך כולו
+              </span>
+              
+              {currentBlockText && (
+                <span style={{
+                  fontSize: 11,
+                  background: 'rgba(14, 165, 233, 0.2)',
+                  color: '#7DD3FC',
+                  padding: '4px 12px',
+                  borderRadius: 20,
+                  fontWeight: 500,
+                  border: '1px solid rgba(14, 165, 233, 0.3)',
+                }}>
+                  הפסקה הנוכחית
+                </span>
+              )}
+              
+              {selectedText && (
+                <span style={{
+                  fontSize: 11,
+                  background: 'rgba(34, 197, 94, 0.2)',
+                  color: '#86EFAC',
+                  padding: '4px 12px',
+                  borderRadius: 20,
+                  fontWeight: 500,
+                  border: '1px solid rgba(34, 197, 94, 0.3)',
+                }}>
+                  הטקסט הנבחר
+                </span>
               )}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* ─── Chat ─── */}
-      {tab === 'chat' && (
-        <>
-          <div style={{ padding: '7px 12px', borderBottom: '1px solid #E2E8F0', background: '#F8FAFC', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 10, color: '#64748B' }}>פועל על:</span>
-              <span style={{ fontSize: 10, background: '#DBEAFE', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>המסמך כולו</span>
-              {currentBlockText && <span style={{ fontSize: 10, background: '#E0F2FE', color: '#0369A1', padding: '4px 8px', borderRadius: 999 }}>הפסקה הנוכחית</span>}
-              {selectedText && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>הטקסט הנבחר</span>}
-            </div>
-            <button onClick={clearConversation} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10, color: '#334155' }}>
-              נקה שיחה
+            
+            <button 
+              onClick={clearConversation}
+              style={{
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: 20,
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: 11,
+                color: '#FCA5A5',
+                fontWeight: 500,
+                transition: 'all 0.3s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.25)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              🗑️ נקה שיחה
             </button>
           </div>
-          <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: compactMode ? 10 : 12, display: 'flex', flexDirection: 'column', gap: compactMode ? 8 : 10, background: mode === 'sidebar' ? '#FCFDFE' : 'transparent' }}>
+
+          {/* Quick Prompts Bar */}
+          <div style={{
+            padding: '6px 8px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+            display: 'flex',
+            gap: 6,
+            overflowX: 'auto',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+          }}>
+            <button
+              onClick={() => setShowQuickPrompts(!showQuickPrompts)}
+              style={{
+                background: showQuickPrompts 
+                  ? 'rgba(139, 92, 246, 0.2)' 
+                  : 'rgba(255, 255, 255, 0.1)',
+                border: showQuickPrompts 
+                  ? '1px solid rgba(139, 92, 246, 0.4)'
+                  : '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: 20,
+                padding: '8px 16px',
+                cursor: 'pointer',
+                fontSize: 12,
+                color: showQuickPrompts ? '#C4B5FD' : 'rgba(255,255,255,0.8)',
+                fontWeight: 600,
+                transition: 'all 0.3s ease',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ✨ הצעות חכמות
+            </button>
+            
+            {showQuickPrompts && quickPromptList.map((prompt, index) => (
+              <button
+                key={index}
+                onClick={() => setInput(prompt)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: 20,
+                  padding: '8px 14px',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  color: 'rgba(255,255,255,0.9)',
+                  fontWeight: 500,
+                  transition: 'all 0.3s ease',
+                  whiteSpace: 'nowrap',
+                  animation: `slideIn 0.3s ease ${index * 0.1}s both`,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          {/* Messages Area */}
+          <div 
+            ref={messagesRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              background: `
+                radial-gradient(circle at 10% 90%, rgba(255, 255, 255, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 90% 10%, rgba(139, 92, 246, 0.05) 0%, transparent 50%)
+              `,
+              scrollbarWidth: 'thin',
+              scrollbarColor: 'rgba(255,255,255,0.2) transparent',
+            }}
+          >
             {reason === 'idle' && (
-              <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 14, padding: '10px 12px', color: '#9A3412', fontSize: 12, fontWeight: 600 }}>
-                נראה שנתקעת רגע — אני יכול לעזור בלי להוציא אותך מקו המחשבה.
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(251, 146, 60, 0.05) 100%)',
+                border: '1px solid rgba(251, 146, 60, 0.3)',
+                borderRadius: 16,
+                padding: '12px 16px',
+                color: '#FED7AA',
+                fontSize: 13,
+                fontWeight: 600,
+                textAlign: 'center',
+                backdropFilter: 'blur(10px)',
+                animation: 'pulse 2s ease-in-out infinite',
+              }}>
+                💭 נראה שנתקעת רגע — אני כאן לעזור בלי להוציא אותך מקו המחשבה
               </div>
             )}
 
             {messages.map((msg, i) => (
-              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                <div style={bbl(msg.role === 'user', compactMode)}>{msg.content}</div>
+              <div 
+                key={i} 
+                style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  animation: `messageSlide 0.4s ease ${i * 0.1}s both`
+                }}
+              >
+                <div 
+                  style={modernMessageBubble(msg.role === 'user', msg)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'scale(1.02)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }}
+                >
+                  {msg.content}
+                  
+                  {/* Floating particles effect for user messages */}
+                  {msg.role === 'user' && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      pointerEvents: 'none',
+                      overflow: 'hidden',
+                      borderRadius: 'inherit',
+                    }}>
+                      {[...Array(3)].map((_, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            position: 'absolute',
+                            width: '4px',
+                            height: '4px',
+                            background: 'rgba(255, 255, 255, 0.4)',
+                            borderRadius: '50%',
+                            top: `${20 + idx * 20}%`,
+                            right: `${10 + idx * 15}%`,
+                            animation: `float 3s ease-in-out ${idx * 0.5}s infinite`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
                 {msg.role === 'assistant' && !msg.error && onInsert && (
-                  <button onClick={() => onInsert(msg.content)}
-                    style={{ fontSize: 11, color: '#2B579A', background: 'none', border: 'none', cursor: 'pointer', marginTop: 3, padding: '2px 4px', textDecoration: 'underline' }}>
-                    + הוסף למסמך
+                  <button 
+                    onClick={() => onInsert(msg.content)}
+                    style={{
+                      fontSize: 11,
+                      color: '#A78BFA',
+                      background: 'rgba(139, 92, 246, 0.1)',
+                      border: '1px solid rgba(139, 92, 246, 0.2)',
+                      borderRadius: 12,
+                      padding: '4px 12px',
+                      cursor: 'pointer',
+                      marginTop: 6,
+                      transition: 'all 0.3s ease',
+                      fontWeight: 500,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(139, 92, 246, 0.2)';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(139, 92, 246, 0.1)';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
+                  >
+                    ➕ הוסף למסמך
                   </button>
                 )}
               </div>
             ))}
+            
             {loading && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <div style={{ ...bbl(false, compactMode), color: '#605E5C', fontStyle: 'italic' }}>⏳ מחשב...</div>
+              <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'fadeIn 0.5s ease' }}>
+                <div style={{
+                  ...modernMessageBubble(false),
+                  color: 'rgba(255,255,255,0.7)',
+                  fontStyle: 'italic',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}>
+                  <div style={{
+                    width: '20px',
+                    height: '20px',
+                    border: '2px solid rgba(139, 92, 246, 0.3)',
+                    borderTop: '2px solid #A78BFA',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite',
+                  }} />
+                  מחשב תשובה מושלמת...
+                </div>
               </div>
             )}
-            <div style={{ height: 1 }} />
           </div>
 
-          <div style={{ padding: '10px 12px', borderTop: '1px solid #E1DFDD', background: 'white', flexShrink: 0, boxShadow: '0 -8px 20px rgba(15,23,42,0.04)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+          {/* Modern Input Area */}
+          <div style={{
+            padding: '10px 14px',
+            background: 'rgba(255, 255, 255, 0.05)',
+            backdropFilter: 'blur(20px)',
+            borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+            position: 'relative',
+            zIndex: 10,
+          }}>
+            
+            {/* Agent & Skill Selection */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 8,
+              flexWrap: 'wrap'
+            }}>
               {activeAgent && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#EEF2FF', color: '#3730A3', padding: '5px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                  @{activeAgent.id}
-                  <button onClick={() => setSelectedAgentId('')} style={{ border: 'none', background: 'transparent', color: '#3730A3', cursor: 'pointer', fontSize: 12, padding: 0 }}>×</button>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  background: 'rgba(99, 102, 241, 0.15)',
+                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  borderRadius: 20,
+                  padding: '6px 12px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#C4B5FD',
+                }}>
+                  🤖 @{activeAgent.id}
+                  <button 
+                    onClick={() => setSelectedAgentId('')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#C4B5FD',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                      padding: 0,
+                      marginLeft: 4,
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <span style={{ 
+                  fontSize: 11, 
+                  color: 'rgba(255,255,255,0.8)', 
+                  fontWeight: 600 
+                }}>
+                  ⚙️ סקיל פעיל:
+                </span>
+                <select
+                  value={selectedSkillId}
+                  onChange={(e) => setSelectedSkillId(e.target.value)}
+                  style={{
+                    minWidth: 180,
+                    padding: '8px 12px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    borderRadius: 12,
+                    fontSize: 12,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                    color: 'white',
+                    outline: 'none',
+                  }}
+                >
+                  <option value="none" style={{ color: '#1F2937' }}>
+                    בחירה אוטומטית לפי ההגדרות
+                  </option>
+                  {skillCatalog.map((skill) => {
+                    const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
+                    return (
+                      <option key={skill.id} value={skill.id} disabled={mode === 'off'} style={{ color: '#1F2937' }}>
+                        {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              
+              {resolvedSkillLabel && (
+                <span style={{ 
+                  fontSize: 10, 
+                  color: 'rgba(255,255,255,0.6)',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  padding: '4px 8px',
+                  borderRadius: 12,
+                }}>
+                  אחרון: {resolvedSkillLabel}
                 </span>
               )}
-              <span style={{ fontSize: 11, color: '#475569', fontWeight: 700 }}>סקיל פעיל</span>
-              <select
-                value={selectedSkillId}
-                onChange={(e) => setSelectedSkillId(e.target.value)}
-                style={{ minWidth: compactMode ? 170 : 220, padding: '7px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, background: '#F8FAFC' }}
-              >
-                <option value="none">בחירה אוטומטית לפי ההגדרות</option>
-                {skillCatalog.map((skill) => {
-                  const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
-                  return (
-                    <option key={skill.id} value={skill.id} disabled={mode === 'off'}>
-                      {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
-                    </option>
-                  );
-                })}
-              </select>
-              {resolvedSkillLabel && <span style={{ fontSize: 10, color: '#64748B' }}>בשיחה האחרונה: {resolvedSkillLabel}</span>}
             </div>
+
+            {/* Context Indicator */}
             {localContext && (
-              <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6, padding: '6px 8px', background: '#F0F7FF', borderRadius: 8, borderRight: '3px solid #2B579A' }}>
-                📌 הקשר פעיל: &ldquo;{(selectedText || currentBlockText).slice(0, 80)}{(selectedText || currentBlockText).length > 80 ? '…' : ''}&rdquo;
+              <div style={{
+                fontSize: 11,
+                color: 'rgba(255,255,255,0.9)',
+                marginBottom: 12,
+                padding: '10px 14px',
+                background: 'rgba(59, 130, 246, 0.15)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: 12,
+                backdropFilter: 'blur(10px)',
+                borderRight: '4px solid #3B82F6',
+              }}>
+                📌 הקשר פעיל: "{(selectedText || currentBlockText).slice(0, 80)}{(selectedText || currentBlockText).length > 80 ? '…' : ''}"
               </div>
             )}
-            <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+
+            {/* Input Container */}
+            <div style={{ 
+              display: 'flex', 
+              gap: 12, 
+              position: 'relative',
+              alignItems: 'flex-end',
+            }}>
               <textarea
                 ref={inputRef}
                 value={input}
@@ -693,14 +1291,63 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                     send();
                   }
                 }}
-                placeholder="כתוב חופשי. אפשר להקליד @ כדי לבחור סוכן, או / כדי לבחור סקיל"
-                style={{ flex: 1, resize: 'none', border: '1px solid #CBD5E1', borderRadius: 12, padding: compactMode ? '9px 10px' : '10px 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', height: compactMode ? 56 : 72, direction: 'rtl', background: '#F8FAFC' }}
+                placeholder="💬 כתוב בחופשיות... @ לסוכנים, / לסקילים"
+                style={{
+                  flex: 1,
+                  resize: 'none',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: 16,
+                  padding: '14px 18px',
+                  fontSize: 14,
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  minHeight: 56,
+                  maxHeight: 120,
+                  direction: 'rtl',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  backdropFilter: 'blur(15px)',
+                  color: 'white',
+                  transition: 'all 0.3s ease',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.1)';
+                }}
+                onBlur={(e) => {
+                  setTimeout(() => {
+                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                    e.currentTarget.style.boxShadow = 'none';
+                    closeMentionMenu();
+                  }, 120);
+                }}
                 disabled={loading}
               />
+
+              {/* Mention Menu */}
               {mentionMenu.open && (
-                <div style={{ position: 'absolute', right: 0, left: 46, bottom: compactMode ? 64 : 80, background: 'white', border: '1px solid #CBD5E1', borderRadius: 12, boxShadow: '0 12px 30px rgba(15,23,42,0.12)', overflow: 'hidden', zIndex: 20 }}>
-                  <div style={{ padding: '7px 10px', fontSize: 10, fontWeight: 700, color: '#64748B', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                    {mentionMenu.type === 'agent' ? 'סוכנים זמינים' : 'סקילים זמינים'}
+                <div style={{
+                  position: 'absolute',
+                  right: 0,
+                  left: 72,
+                  bottom: 72,
+                  background: 'rgba(15, 23, 42, 0.95)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: 16,
+                  boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+                  overflow: 'hidden',
+                  zIndex: 50,
+                  animation: 'slideUp 0.2s ease',
+                }}>
+                  <div style={{
+                    padding: '12px 16px',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: 'rgba(255,255,255,0.8)',
+                    background: 'rgba(139, 92, 246, 0.2)',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                  }}>
+                    {mentionMenu.type === 'agent' ? '🤖 סוכנים זמינים' : '⚡ סקילים זמינים'}
                   </div>
                   {mentionMenu.items.map((item, index) => (
                     <button
@@ -709,147 +1356,673 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                         e.preventDefault();
                         applyMentionChoice(item);
                       }}
-                      style={{ width: '100%', textAlign: 'right', border: 'none', borderTop: index === 0 ? 'none' : '1px solid #F1F5F9', background: index === mentionMenu.activeIndex ? '#EFF6FF' : 'white', padding: '9px 10px', cursor: 'pointer' }}
+                      style={{
+                        width: '100%',
+                        textAlign: 'right',
+                        border: 'none',
+                        borderTop: index === 0 ? 'none' : '1px solid rgba(255, 255, 255, 0.1)',
+                        background: index === mentionMenu.activeIndex 
+                          ? 'rgba(139, 92, 246, 0.2)' 
+                          : 'transparent',
+                        padding: '12px 16px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (index !== mentionMenu.activeIndex) {
+                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (index !== mentionMenu.activeIndex) {
+                          e.currentTarget.style.background = 'transparent';
+                        }
+                      }}
                     >
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>{mentionMenu.type === 'agent' ? '@' : '/'}{item.id}</div>
-                      <div style={{ fontSize: 11, color: '#475569' }}>{item.label}</div>
-                      <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>{item.description}</div>
+                      <div style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: 'white',
+                        marginBottom: 4,
+                      }}>
+                        {mentionMenu.type === 'agent' ? '@' : '/'}{item.id}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)' }}>
+                        {item.label}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>
+                        {item.description}
+                      </div>
                     </button>
                   ))}
                 </div>
               )}
-              <button onClick={() => send()} disabled={loading || !input.trim()}
-                style={{ width: 40, flexShrink: 0, background: !loading && input.trim() ? '#2B579A' : '#C8C6C4', color: 'white', border: 'none', borderRadius: 8, cursor: !loading && input.trim() ? 'pointer' : 'default', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                ↑
+
+              {/* Send Button */}
+              <button 
+                onClick={() => send()} 
+                disabled={loading || !input.trim()}
+                style={{
+                  width: 56,
+                  height: 56,
+                  flexShrink: 0,
+                  background: !loading && input.trim() 
+                    ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+                    : 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: 16,
+                  cursor: !loading && input.trim() ? 'pointer' : 'default',
+                  fontSize: 20,
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  boxShadow: !loading && input.trim() 
+                    ? '0 8px 25px rgba(102, 126, 234, 0.3)'
+                    : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (!loading && input.trim()) {
+                    e.currentTarget.style.transform = 'scale(1.05) translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 12px 35px rgba(102, 126, 234, 0.4)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                  e.currentTarget.style.boxShadow = !loading && input.trim() 
+                    ? '0 8px 25px rgba(102, 126, 234, 0.3)'
+                    : 'none';
+                }}
+              >
+                {loading ? (
+                  <div style={{
+                    width: '20px',
+                    height: '20px',
+                    border: '2px solid rgba(255, 255, 255, 0.3)',
+                    borderTop: '2px solid white',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite',
+                  }} />
+                ) : (
+                  '🚀'
+                )}
               </button>
             </div>
           </div>
-        </>
-      )}
-
-      {/* ─── Quick Actions ─── */}
-      {tab === 'actions' && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-          {localContext ? (
-            <div style={{ fontSize: 11, color: '#166534', marginBottom: 10, padding: '6px 10px', background: '#F0FDF4', borderRadius: 6, border: '1px solid #BBF7D0' }}>
-              ✅ הסוכן מחובר להקשר הכתיבה הנוכחי שלך
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: '#92400E', marginBottom: 10, padding: '6px 10px', background: '#FFFBEB', borderRadius: 6, border: '1px solid #FDE68A' }}>
-              💡 מקם את הסמן בפסקה הרלוונטית או בחר טקסט כדי לקבל עזרה מדויקת יותר
-            </div>
-          )}
-
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#323130', marginBottom: 6 }}>✂️ עריכת הקטע הנוכחי</div>
-          {selectionActions.length ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
-              {selectionActions.map(a => (
-                <button key={a.id} style={actBtn} onClick={() => runAction(a)}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; e.currentTarget.style.borderColor = '#93C5FD'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
-                  <span style={{ fontSize: 20 }}>{a.icon}</span>
-                  <span>{a.label}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 14, padding: '8px 10px', background: '#F8FAFC', borderRadius: 8, border: '1px dashed #CBD5E1' }}>
-              אין כרגע פעולות עריכה מהירות מסומנות להצגה.
-            </div>
-          )}
-
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#323130', marginBottom: 6 }}>✨ יצירת תוכן חדש</div>
-          {generationActions.length ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-              {generationActions.map(a => (
-                <button key={a.id} style={actBtn} onClick={() => runAction(a)}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#F0FDF4'; e.currentTarget.style.borderColor = '#6EE7B7'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
-                  <span style={{ fontSize: 20 }}>{a.icon}</span>
-                  <span>{a.label}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: '#64748B', padding: '8px 10px', background: '#F8FAFC', borderRadius: 8, border: '1px dashed #CBD5E1' }}>
-              אין כרגע פעולות יצירה מהירות מסומנות להצגה.
-            </div>
-          )}
         </div>
       )}
 
-      {tab === 'agents' && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: 12, background: 'linear-gradient(180deg,#FAFCFF 0%,#FFFFFF 100%)' }}>
-          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 10 }}>
-            סוכנים לפי תפקידים שהוגדרו במסך ההגדרות.
+      {/* Modern Actions Tab */}
+      {tab === 'actions' && (
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          background: `
+            radial-gradient(circle at 20% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+            rgba(255, 255, 255, 0.02)
+          `,
+          backdropFilter: 'blur(20px)',
+        }}>
+          
+          {/* Context Status */}
+          {localContext ? (
+            <div style={{
+              fontSize: 12,
+              color: '#86EFAC',
+              marginBottom: 16,
+              padding: '12px 16px',
+              background: 'rgba(34, 197, 94, 0.15)',
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+              borderRadius: 16,
+              backdropFilter: 'blur(10px)',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}>
+              ✨ הסוכן מחובר להקשר הכתיבה הנוכחי שלך
+            </div>
+          ) : (
+            <div style={{
+              fontSize: 12,
+              color: '#FDE047',
+              marginBottom: 16,
+              padding: '12px 16px',
+              background: 'rgba(234, 179, 8, 0.15)',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+              borderRadius: 16,
+              backdropFilter: 'blur(10px)',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}>
+              💡 מקם את הסמן בפסקה או בחר טקסט לעזרה מדויקת יותר
+            </div>
+          )}
+
+          {/* Text Editing Actions */}
+          <div style={{
+            marginBottom: 24,
+          }}>
+            <h3 style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: 'white',
+              marginBottom: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              ✂️ עריכת הטקסט הנבחר
+            </h3>
+            
+            {selectionActions.length ? (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                gap: 12,
+              }}>
+                {selectionActions.map((action, index) => (
+                  <button 
+                    key={action.id}
+                    onClick={() => runAction(action)}
+                    style={{
+                      ...modernActionButton(action),
+                      animation: `slideIn 0.3s ease ${index * 0.1}s both`,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'scale(1.05) translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 12px 25px rgba(0, 0, 0, 0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.05)';
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 24,
+                      marginBottom: 4,
+                    }}>
+                      {action.icon}
+                    </div>
+                    <span style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      textAlign: 'center',
+                      lineHeight: 1.2,
+                    }}>
+                      {action.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                fontSize: 12,
+                color: 'rgba(255,255,255,0.6)',
+                padding: '16px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                borderRadius: 12,
+                border: '1px dashed rgba(255, 255, 255, 0.2)',
+                textAlign: 'center',
+              }}>
+                🔄 אין פעולות עריכה זמינות כרגע
+              </div>
+            )}
           </div>
 
-          <div style={{ marginBottom: 12, padding: '12px', border: '1px solid #DBEAFE', borderRadius: 14, background: '#EFF6FF' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>
-              מה תרצה שהסוכן יבצע?
+          {/* Content Generation Actions */}
+          <div>
+            <h3 style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: 'white',
+              marginBottom: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              ✨ יצירת תוכן חדש
+            </h3>
+            
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: 12,
+              marginBottom: 16,
+            }}>
+              {QUICK_PROMPTS.map((prompt, index) => (
+                <button 
+                  key={index}
+                  onClick={() => setInput(prompt.text)}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '16px 12px',
+                    border: 'none',
+                    borderRadius: 16,
+                    cursor: 'pointer',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    backdropFilter: 'blur(15px)',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'white',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    animation: `slideIn 0.4s ease ${index * 0.1}s both`,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
+                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
+                    e.currentTarget.style.transform = 'scale(1.05) translateY(-4px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                    e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                  }}
+                >
+                  <div style={{ fontSize: 20 }}>
+                    {prompt.icon}
+                  </div>
+                  <span style={{
+                    textAlign: 'center',
+                    lineHeight: 1.3,
+                  }}>
+                    {prompt.text.replace(/🚀|🎯|🏁|📚|💡|🔍/g, '')}
+                  </span>
+                </button>
+              ))}
             </div>
-            <div style={{ fontSize: 11, color: '#475569', marginBottom: 8, lineHeight: 1.5 }}>
+          </div>
+        </div>
+      )}
+
+      {/* Modern Agents Tab */}
+      {tab === 'agents' && (
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          background: `
+            radial-gradient(circle at 30% 70%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+            radial-gradient(circle at 70% 30%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+            rgba(255, 255, 255, 0.02)
+          `,
+          backdropFilter: 'blur(20px)',
+        }}>
+          
+          {/* Header */}
+          <div style={{
+            fontSize: 13,
+            color: 'rgba(255,255,255,0.8)',
+            marginBottom: 16,
+            textAlign: 'center',
+            padding: '12px',
+            background: 'rgba(255, 255, 255, 0.05)',
+            borderRadius: 12,
+            backdropFilter: 'blur(10px)',
+          }}>
+            🤖 סוכנים מותאמים אישית לפי תפקידים שהוגדרו במסך ההגדרות
+          </div>
+
+          {/* Task Input */}
+          <div style={{
+            marginBottom: 20,
+            padding: '16px',
+            background: 'rgba(59, 130, 246, 0.1)',
+            border: '1px solid rgba(59, 130, 246, 0.3)',
+            borderRadius: 16,
+            backdropFilter: 'blur(15px)',
+          }}>
+            <div style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: '#93C5FD',
+              marginBottom: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              🎯 מה תרצה שהסוכן יבצע?
+            </div>
+            <div style={{
+              fontSize: 12,
+              color: 'rgba(255,255,255,0.8)',
+              marginBottom: 12,
+              lineHeight: 1.5,
+            }}>
               כתוב משימה חופשית, ואז לחץ על אחד הסוכנים למטה כדי שיבצע אותה בהקשר של המסמך.
             </div>
             <textarea
               value={agentTaskInput}
               onChange={(e) => setAgentTaskInput(e.target.value)}
-              placeholder="למשל: תעבור על הטקסט ותבנה לי גרסה מקצועית וקצרה יותר"
+              placeholder="💬 למשל: תעבור על הטקסט ותבנה לי גרסה מקצועית וקצרה יותר..."
               style={{
                 width: '100%',
-                minHeight: 84,
+                minHeight: 80,
                 resize: 'vertical',
-                border: '1px solid #93C5FD',
-                borderRadius: 10,
-                padding: '10px 12px',
+                border: '1px solid rgba(147, 197, 253, 0.3)',
+                borderRadius: 12,
+                padding: '12px 16px',
                 fontSize: 13,
                 fontFamily: 'inherit',
                 direction: 'rtl',
                 outline: 'none',
-                background: 'white',
-                boxSizing: 'border-box'
+                background: 'rgba(255, 255, 255, 0.08)',
+                backdropFilter: 'blur(10px)',
+                color: 'white',
+                boxSizing: 'border-box',
+                transition: 'all 0.3s ease',
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(147, 197, 253, 0.3)';
+                e.currentTarget.style.boxShadow = 'none';
               }}
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {roleAgents.map((agent) => (
+          {/* Agents Grid */}
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            {roleAgents.map((agent, index) => (
               <button
                 key={agent.id}
                 onClick={() => runRoleAgent(agent)}
                 style={{
                   textAlign: 'right',
-                  border: '1px solid #DBEAFE',
-                  background: 'white',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  backdropFilter: 'blur(15px)',
                   borderRadius: 16,
-                  padding: '12px 14px',
+                  padding: '16px',
                   cursor: 'pointer',
-                  boxShadow: '0 6px 18px rgba(37,99,235,0.06)',
+                  boxShadow: '0 8px 25px rgba(0, 0, 0, 0.1)',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  animation: `slideIn 0.4s ease ${index * 0.1}s both`,
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.02) translateY(-4px)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+                  e.currentTarget.style.boxShadow = '0 15px 35px rgba(0, 0, 0, 0.2)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                  e.currentTarget.style.boxShadow = '0 8px 25px rgba(0, 0, 0, 0.1)';
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A' }}>{agent.name}</div>
-                  <span style={{ fontSize: 10, borderRadius: 999, padding: '3px 8px', background: (agentProgressMap[agent.id]?.state === 'error') ? '#FEE2E2' : (agentProgressMap[agent.id]?.state === 'success') ? '#DCFCE7' : (agentProgressMap[agent.id]?.state === 'running' || agentProgressMap[agent.id]?.state === 'retrying') ? '#DBEAFE' : '#F1F5F9', color: (agentProgressMap[agent.id]?.state === 'error') ? '#B91C1C' : (agentProgressMap[agent.id]?.state === 'success') ? '#166534' : (agentProgressMap[agent.id]?.state === 'running' || agentProgressMap[agent.id]?.state === 'retrying') ? '#1D4ED8' : '#475569' }}>
-                    {agentProgressMap[agent.id]?.state === 'running' ? 'עובד' : agentProgressMap[agent.id]?.state === 'retrying' ? 'מנסה שוב' : agentProgressMap[agent.id]?.state === 'success' ? 'הושלם' : agentProgressMap[agent.id]?.state === 'error' ? 'שגיאה' : 'מוכן'}
+                {/* Agent Header */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  marginBottom: 8,
+                }}>
+                  <div style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}>
+                    🤖 {agent.name}
+                  </div>
+                  
+                  <span style={{
+                    fontSize: 11,
+                    borderRadius: 20,
+                    padding: '4px 12px',
+                    fontWeight: 600,
+                    background: 
+                      agentProgressMap[agent.id]?.state === 'error' ? 'rgba(239, 68, 68, 0.2)' :
+                      agentProgressMap[agent.id]?.state === 'success' ? 'rgba(34, 197, 94, 0.2)' :
+                      agentProgressMap[agent.id]?.state === 'running' || agentProgressMap[agent.id]?.state === 'retrying' ? 'rgba(59, 130, 246, 0.2)' :
+                      'rgba(255, 255, 255, 0.1)',
+                    color:
+                      agentProgressMap[agent.id]?.state === 'error' ? '#FCA5A5' :
+                      agentProgressMap[agent.id]?.state === 'success' ? '#86EFAC' :
+                      agentProgressMap[agent.id]?.state === 'running' || agentProgressMap[agent.id]?.state === 'retrying' ? '#93C5FD' :
+                      'rgba(255,255,255,0.8)',
+                    border: '1px solid ' + (
+                      agentProgressMap[agent.id]?.state === 'error' ? 'rgba(239, 68, 68, 0.3)' :
+                      agentProgressMap[agent.id]?.state === 'success' ? 'rgba(34, 197, 94, 0.3)' :
+                      agentProgressMap[agent.id]?.state === 'running' || agentProgressMap[agent.id]?.state === 'retrying' ? 'rgba(59, 130, 246, 0.3)' :
+                      'rgba(255, 255, 255, 0.2)'
+                    )
+                  }}>
+                    {agentProgressMap[agent.id]?.state === 'running' ? '⚡ עובד' :
+                     agentProgressMap[agent.id]?.state === 'retrying' ? '🔄 מנסה שוב' :
+                     agentProgressMap[agent.id]?.state === 'success' ? '✅ הושלם' :
+                     agentProgressMap[agent.id]?.state === 'error' ? '❌ שגיאה' :
+                     '💤 מוכן'}
                   </span>
                 </div>
-                <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.5 }}>{agent.prompt.slice(0, 110)}{agent.prompt.length > 110 ? '…' : ''}</div>
+
+                {/* Agent Description */}
+                <div style={{
+                  fontSize: 12,
+                  color: 'rgba(255,255,255,0.8)',
+                  lineHeight: 1.6,
+                  marginBottom: agentTaskInput.trim() ? 12 : 0,
+                }}>
+                  {agent.prompt.slice(0, 120)}{agent.prompt.length > 120 ? '...' : ''}
+                </div>
+
+                {/* Task Preview */}
                 {agentTaskInput.trim() && (
-                  <div style={{ marginTop: 8, fontSize: 10, color: '#1D4ED8', background: '#EFF6FF', borderRadius: 8, padding: '6px 8px' }}>
-                    משימה לשליחה: {agentTaskInput.trim().slice(0, 120)}{agentTaskInput.trim().length > 120 ? '…' : ''}
+                  <div style={{
+                    marginTop: 12,
+                    fontSize: 11,
+                    color: '#93C5FD',
+                    background: 'rgba(59, 130, 246, 0.15)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: 12,
+                    padding: '8px 12px',
+                    backdropFilter: 'blur(10px)',
+                    lineHeight: 1.4,
+                  }}>
+                    🎯 {agentTaskInput.slice(0, 60)}{agentTaskInput.length > 60 ? '...' : ''}
                   </div>
                 )}
-                {workspaceAutomation.showProgress !== false && (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ height: 6, background: '#E5E7EB', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${agentProgressMap[agent.id]?.progress || 0}%`, height: '100%', background: '#2563EB', transition: 'width 0.25s ease' }} />
-                    </div>
-                    <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>{agentProgressMap[agent.id]?.message || 'מוכן'}</div>
+
+                {/* Progress Bar for Running Agent */}
+                {agentProgressMap[agent.id]?.state === 'running' && (
+                  <div style={{
+                    marginTop: 8,
+                    height: 4,
+                    background: 'rgba(59, 130, 246, 0.2)',
+                    borderRadius: 20,
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      width: `${agentProgressMap[agent.id]?.progress || 0}%`,
+                      height: '100%',
+                      background: 'linear-gradient(90deg, #3B82F6, #93C5FD)',
+                      transition: 'width 0.3s ease',
+                    }} />
                   </div>
                 )}
               </button>
             ))}
           </div>
+
+          {/* No Agents Message */}
+          {!roleAgents.length && (
+            <div style={{
+              textAlign: 'center',
+              color: 'rgba(255,255,255,0.6)',
+              fontSize: 13,
+              padding: '24px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              borderRadius: 16,
+              border: '1px dashed rgba(255, 255, 255, 0.2)',
+            }}>
+              🤖 אין סוכנים מוגדרים כרגע<br/>
+              <span style={{ fontSize: 12 }}>
+                עבור למסך ההגדרות כדי להוסיף סוכנים חדשים
+              </span>
+            </div>
+          )}
+
+          {/* Debug Log Panel */}
+          {tab === 'agents' && (
+            <div style={{
+              marginTop: 24,
+              background: 'rgba(15, 23, 42, 0.6)',
+              backdropFilter: 'blur(15px)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              borderRadius: 16,
+              overflow: 'hidden',
+            }}>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'space-between', 
+                padding: '12px 16px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+              }}>
+                <button
+                  onClick={() => setShowLogs(!showLogs)}
+                  style={{ 
+                    border: 'none', 
+                    background: 'none', 
+                    padding: 0, 
+                    cursor: 'pointer', 
+                    color: 'white', 
+                    fontSize: 13, 
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  🪵 יומן פעילות סוכנים 
+                  <span style={{
+                    transform: showLogs ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.3s ease',
+                    fontSize: 16,
+                  }}>
+                    ▾
+                  </span>
+                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button 
+                    onClick={copyLogsToClipboard} 
+                    style={{ 
+                      border: '1px solid rgba(59, 130, 246, 0.5)', 
+                      background: 'rgba(59, 130, 246, 0.1)', 
+                      borderRadius: 20, 
+                      padding: '6px 12px', 
+                      cursor: 'pointer', 
+                      fontSize: 11,
+                      color: '#93C5FD',
+                      fontWeight: 600,
+                      transition: 'all 0.3s ease',
+                    }}
+                  >
+                    📋 העתק
+                  </button>
+                  <button 
+                    onClick={clearLogs} 
+                    style={{ 
+                      border: '1px solid rgba(239, 68, 68, 0.5)', 
+                      background: 'rgba(239, 68, 68, 0.1)', 
+                      borderRadius: 20, 
+                      padding: '6px 12px', 
+                      cursor: 'pointer', 
+                      fontSize: 11,
+                      color: '#FCA5A5',
+                      fontWeight: 600,
+                      transition: 'all 0.3s ease',
+                    }}
+                  >
+                    🗑️ נקה
+                  </button>
+                </div>
+              </div>
+
+              {showLogs && (
+                <div style={{ 
+                  padding: '16px', 
+                  maxHeight: 200, 
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}>
+                  {debugLogs.length ? debugLogs.map((log) => (
+                    <div 
+                      key={log.id} 
+                      style={{ 
+                        border: '1px solid rgba(255, 255, 255, 0.1)', 
+                        borderRadius: 12, 
+                        padding: '12px', 
+                        background: log.state === 'error' 
+                          ? 'rgba(239, 68, 68, 0.1)' 
+                          : log.state === 'success' 
+                          ? 'rgba(34, 197, 94, 0.1)' 
+                          : 'rgba(255, 255, 255, 0.02)',
+                        fontSize: 12,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        marginBottom: 6,
+                        fontSize: 11,
+                      }}>
+                        <span style={{ fontWeight: 700, color: 'white' }}>
+                          {log.agentLabel || 'מערכת'}
+                        </span>
+                        <span style={{ color: 'rgba(255,255,255,0.6)' }}>
+                          {formatLogTime(log.ts)}
+                        </span>
+                      </div>
+                      <div style={{ color: 'rgba(255,255,255,0.9)', marginBottom: 6 }}>
+                        {log.message || 'ללא הודעה'}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)' }}>
+                        {[
+                          log.provider ? `מנוע: ${log.provider}` : '',
+                          log.model ? `מודל: ${log.model}` : '',
+                          log.attempt ? `ניסיון ${log.attempt}` : '',
+                          log.errorMessage ? `שגיאה: ${log.errorMessage}` : '',
+                          log.runId ? `הרצה ${String(log.runId).slice(0, 8)}` : '',
+                        ].filter(Boolean).join(' • ')}
+                      </div>
+                    </div>
+                  )) : (
+                    <div style={{ 
+                      fontSize: 12, 
+                      color: 'rgba(255,255,255,0.6)', 
+                      textAlign: 'center',
+                      padding: '16px',
+                    }}>
+                      📝 עדיין אין אירועים ביומן הפעילות
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
