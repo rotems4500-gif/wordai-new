@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import ProfileOnboarding from './ProfileOnboarding';
 import {
   getProviderConfig,
   saveProviderConfig,
@@ -78,7 +79,7 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'כתיבה והתאמה אישית',
-    tabs: [['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']],
+    tabs: [['onboarding', '🎯 פרופיל אישי'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']],
   },
   {
     title: 'תחזוקה ולוגים',
@@ -434,7 +435,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false}
-        description="אם קיבלת מפתח דרך SerpAPI, אפשר לשמור אותו כאן לשימוש במחקר וחיפוש מקורות.">
+        description="אם קיבלת מפתח דרך SerpAPI, אפשר לשמור אותו כאן לשימוש במחקר וחיפוש מקורות. הוצא מפתח מכאן: https://serpapi.com/google-scholar-api">
         <FieldRow label="מפתח SerpAPI" type="password" placeholder="your_serpapi_key" value={config.scholar?.key}
           onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לחיבור חיפושי Google Scholar" />
       </ProviderSection>
@@ -995,6 +996,55 @@ function GuideSettings() {
   );
 }
 
+function OnboardingTabContainer({ profile, setProfile }) {
+  const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
+  const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
+  const toggleStyle = (styleId) => setProfile((prev) => {
+    const current = Array.isArray(prev.preferredHomeStyleIds) ? prev.preferredHomeStyleIds : [];
+    const next = current.includes(styleId)
+      ? current.filter((item) => item !== styleId)
+      : [...current, styleId].slice(0, 4);
+    return { ...prev, preferredHomeStyleIds: next.length ? next : [styleId] };
+  });
+
+  const trainingAnswers = profile.learningGameAnswers || {};
+
+  const selectLearningOption = (questionId, optionId) => {
+    setProfile((prev) => ({
+      ...prev,
+      ...buildLearningGameProfilePatch({ ...(prev.learningGameAnswers || {}), [questionId]: optionId })
+    }));
+  };
+
+  const resetLearningGame = () => {
+    if (confirm('האם אתה בטוח שברצונך לאפס את הלמידה?')) {
+      setProfile((prev) => ({
+        ...prev,
+        learningGameAnswers: {},
+        learningGameInsights: [],
+        learningGamesCompletedAt: '',
+        styleTrainingSummary: '',
+        preferredTrainingExamples: [],
+        dislikedStylePatterns: [],
+      }));
+    }
+  };
+
+  return (
+    <ProfileOnboarding
+      profile={profile}
+      updateField={updateField}
+      updateList={updateList}
+      STYLE_TRAINING_QUESTIONS={STYLE_TRAINING_QUESTIONS}
+      STYLE_PRESET_OPTIONS={STYLE_PRESET_OPTIONS}
+      trainingAnswers={trainingAnswers}
+      selectLearningOption={selectLearningOption}
+      toggleStyle={toggleStyle}
+      resetLearningGame={resetLearningGame}
+    />
+  );
+}
+
 function PersonalStyleSettings({ profile, setProfile }) {
   const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
   const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
@@ -1011,28 +1061,6 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
-  const trainingAnswers = profile.learningGameAnswers || {};
-  const answeredCount = Object.keys(trainingAnswers).length;
-  const trainingComplete = answeredCount >= STYLE_TRAINING_QUESTIONS.length;
-
-  const selectLearningOption = (questionId, optionId) => {
-    setProfile((prev) => ({
-      ...prev,
-      ...buildLearningGameProfilePatch({ ...(prev.learningGameAnswers || {}), [questionId]: optionId }),
-    }));
-  };
-
-  const resetLearningGame = () => {
-    setProfile((prev) => ({
-      ...prev,
-      learningGameAnswers: {},
-      learningGameInsights: [],
-      learningGamesCompletedAt: '',
-      styleTrainingSummary: '',
-      preferredTrainingExamples: [],
-      dislikedStylePatterns: [],
-    }));
-  };
 
   useEffect(() => {
     loadProjectMaterials().then((items) => setRecentMaterials(items.slice(0, 4))).catch(() => {});
@@ -1093,57 +1121,6 @@ function PersonalStyleSettings({ profile, setProfile }) {
           <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
             {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
           </span>
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #DDD6FE', borderRadius: 12, padding: '14px', background: '#F8F7FF', marginBottom: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#5B21B6' }}>משחק "למד אותי"</div>
-            <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.6, marginTop: 4 }}>
-              בחר את הניסוחים שהכי קרובים אליך, והסוכן ילמד את הסגנון הרצוי באופן מקומי ושקט.
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 10, background: trainingComplete ? '#DCFCE7' : '#EDE9FE', color: trainingComplete ? '#166534' : '#6D28D9', padding: '4px 8px', borderRadius: 999, fontWeight: 700 }}>
-              {answeredCount} / {STYLE_TRAINING_QUESTIONS.length} הושלמו
-            </span>
-            <button
-              type="button"
-              onClick={resetLearningGame}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #D8B4FE', background: 'white', color: '#6D28D9', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
-            >
-              אפס אימון
-            </button>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gap: 10 }}>
-          {STYLE_TRAINING_QUESTIONS.map((question) => (
-            <div key={question.id} style={{ border: '1px solid #E9D5FF', borderRadius: 10, padding: '10px', background: 'white' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8 }}>{question.title}</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {question.options.map((option) => {
-                  const selected = trainingAnswers[question.id] === option.id;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => selectLearningOption(question.id, option.id)}
-                      style={{ textAlign: 'right', padding: '10px 11px', borderRadius: 10, border: `1px solid ${selected ? '#8B5CF6' : '#E5E7EB'}`, background: selected ? '#F3E8FF' : '#FAFAFA', cursor: 'pointer' }}
-                    >
-                      <div style={{ fontSize: 10, color: selected ? '#6D28D9' : '#64748B', fontWeight: 700, marginBottom: 5 }}>{option.label}</div>
-                      <div style={{ fontSize: 11, color: '#1F2937', lineHeight: 1.7 }}>{option.text}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 10, fontSize: 11, color: '#475569', lineHeight: 1.7, background: 'white', border: '1px solid #E9D5FF', borderRadius: 10, padding: '9px 10px' }}>
-          <strong>מה למדתי עד עכשיו:</strong> {profile.styleTrainingSummary || 'עדיין אין מספיק בחירות כדי לבנות תקציר סגנון אישי.'}
         </div>
       </div>
 
@@ -1838,6 +1815,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   <option value="groq" disabled={!isProviderConfigured(config, 'groq')}>Groq</option>
                   <option value="perplexity" disabled={!isProviderConfigured(config, 'perplexity')}>Perplexity</option>
                   <option value="ollama" disabled={!isProviderConfigured(config, 'ollama')}>Ollama</option>
+                  <option value="scholar" disabled={!isProviderConfigured(config, 'scholar')}>Google Scholar</option>
                   <option value="custom" disabled={!isProviderConfigured(config, 'custom')}>Custom</option>
                 </select>
               </div>
@@ -2290,106 +2268,133 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   );
 
   return (
-    <div className="fixed inset-0 z-[999] flex" dir="rtl"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[999] bg-slate-900/30 backdrop-blur-sm transition-opacity duration-300" dir="rtl"
+      onClick={e => { if (e.target === e.currentTarget && activePanel !== 'settings') onClose(); }}>
 
-      {/* ─── Sidebar ─── */}
-      <div style={{ width: 240, background: '#2B579A', color: 'white', display: 'flex', flexDirection: 'column', height: '100%', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '24px 20px 28px' }}>
-          <i className="ph-fill ph-file-word" style={{ fontSize: 28 }} />
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>WordFlow AI</div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>מעבד תמלילים</div>
+      {/* ─── Sliding Sidebar Drawer ─── */}
+      <div className={`absolute top-0 right-0 bottom-0 w-[240px] sm:w-[280px] bg-gradient-to-b from-slate-950 via-slate-900 to-indigo-950 border-x-0 transition-transform duration-300 shadow-2xl flex flex-col ${activePanel === 'settings' ? 'pointer-events-none translate-x-full' : 'translate-x-0'}`}>
+        <div className="flex flex-col items-center justify-center gap-3 px-6 pt-10 pb-8 border-b border-white/5">
+          <div className="w-14 h-14 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-[18px] shadow-lg shadow-indigo-500/20 flex items-center justify-center">
+              <i className="ph-fill ph-circles-four text-white text-[28px]" />
+          </div>
+          <div className="text-center mt-2">
+            <div className="text-white font-extrabold text-xl tracking-wide">WordFlow OS</div>
+            <div className="text-indigo-300/80 text-[10px] font-bold tracking-widest uppercase mt-1">Workspace Settings</div>
           </div>
         </div>
 
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 8px', flex: 1 }}>
-          <button style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 6, fontSize: 13, background: 'none', border: 'none', color: 'white', cursor: 'pointer', textAlign: 'right', width: '100%' }}
-            onClick={onClose}
-            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'none'}>
-            <i className="ph ph-arrow-right" style={{ fontSize: 16 }} />
-            חזור לעריכה
+        <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col gap-1.5 scrollbar-hide">
+          <div className="px-2 py-1 text-[10px] font-bold text-slate-500 tracking-widest mb-1 mt-1">קובץ ומסמך</div>
+          {menuItems.map(item => (
+            <button key={item.id} className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 hover:translate-x-[-2px] transition-transform w-full text-right group outline-none focus:ring-1 focus:ring-indigo-400/50" onClick={() => handleItem(item.id)}>
+              <i className={`${item.icon} text-lg text-indigo-400/70 group-hover:text-indigo-300 group-hover:scale-110 transition-transform`} />
+              <span className="font-semibold text-[13px]">{item.label}</span>
+            </button>
+          ))}
+
+          <div className="h-px bg-white/5 my-3 mx-2" />
+
+          <div className="px-2 py-1 text-[10px] font-bold text-slate-500 tracking-widest mb-1">הגדרות מערכת</div>
+          <button
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 hover:translate-x-[-2px] transition-transform w-full text-right group outline-none focus:ring-1 focus:ring-indigo-400/50"
+            onClick={() => { setActivePanel('settings'); setSettingsTab('updates'); }}>
+            <i className="ph-fill ph-arrow-circle-up text-lg text-emerald-400/70 group-hover:text-emerald-300 group-hover:scale-110 transition-transform" />
+            <span className="font-semibold text-[13px]">בדוק עדכונים</span>
           </button>
-
-          <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '6px 10px' }} />
-
-          {menuItems.map(item => sideBtn(item.id, item.icon, item.label))}
-
-          <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '6px 10px' }} />
 
           <button
-            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 6, fontSize: 13, background: (activePanel === 'settings' && settingsTab === 'updates') ? 'rgba(255,255,255,0.25)' : 'none', border: 'none', color: 'white', cursor: 'pointer', textAlign: 'right', width: '100%' }}
-            onClick={() => { setActivePanel('settings'); setSettingsTab('updates'); }}
-            onMouseEnter={e => { if (!(activePanel === 'settings' && settingsTab === 'updates')) e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
-            onMouseLeave={e => { if (!(activePanel === 'settings' && settingsTab === 'updates')) e.currentTarget.style.background = 'none'; }}>
-            <i className="ph-fill ph-arrow-circle-up" style={{ fontSize: 16, flexShrink: 0 }} />
-            בדוק עדכונים
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-white bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/10 transition-all w-full text-right group mt-2 outline-none focus:ring-2 focus:ring-indigo-400/50"
+            onClick={() => { setActivePanel('settings'); setSettingsTab('ai'); }}>
+            <i className="ph-fill ph-sliders-horizontal text-lg text-indigo-300 group-hover:text-white transition-colors" />
+            <span className="font-bold text-[13px]">הגדרות מתקדמות</span>
           </button>
+        </div>
+        
+        <div className="px-4 pb-4 pt-2">
+            <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-slate-400 bg-black/20 hover:text-white hover:bg-black/40 transition-colors w-full outline-none focus:ring-1 focus:ring-indigo-400/50" onClick={onClose}>
+              <i className="ph ph-x text-sm" />
+              <span className="font-semibold text-xs">חזור לעריכה</span>
+            </button>
+        </div>
 
-          {sideBtn('settings', 'ph-fill ph-gear', 'הגדרות', true)}
-        </nav>
-
-        <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          WordFlow AI v1.0.13
+        <div className="pb-4 text-center text-[10px] text-slate-600 font-mono tracking-wider opacity-60">
+          WF-OS v1.0.13
         </div>
       </div>
 
-      {/* ─── Content ─── */}
-      <div style={{ flex: 1, background: 'white', overflowY: 'auto' }}>
-        {activePanel === 'main' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16, color: '#C8C6C4' }}>
-            <i className="ph-fill ph-file-word" style={{ fontSize: 90, color: '#2B579A', opacity: 0.15 }} />
-            <p style={{ fontSize: 14, color: '#A0A0A0' }}>בחר פעולה מהתפריט</p>
-          </div>
-        )}
-
-        {activePanel === 'settings' && (
-          <div style={{ padding: '36px 48px', maxWidth: 740 }}>
-            <h2 style={{ fontSize: 24, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הגדרות</h2>
-            <p style={{ fontSize: 13, color: '#919191', marginBottom: 28 }}>WordFlow AI</p>
-
-            <div style={{ display: 'grid', gap: 10, marginBottom: 28 }}>
-              {SETTINGS_TAB_GROUPS.map((group) => (
-                <div key={group.title} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '10px 12px', background: '#FAFAFA' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginBottom: 8 }}>{group.title}</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {group.tabs.map(([id, label]) => (
-                      <button key={id} onClick={() => setSettingsTab(id)}
-                        style={{ padding: '8px 12px', borderRadius: 999, border: settingsTab === id ? '1px solid #93C5FD' : '1px solid #E5E7EB', background: settingsTab === id ? '#EFF6FF' : 'white', cursor: 'pointer', fontSize: 12, fontWeight: settingsTab === id ? 700 : 500, color: settingsTab === id ? '#1D4ED8' : '#475569', transition: 'all 0.15s' }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+      {/* ─── Settings Popup Modal ─── */}
+      {activePanel === 'settings' && (
+        <div className="absolute inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md transition-opacity duration-200" onClick={() => setActivePanel('main')}>
+          <div className={`${settingsTab === 'onboarding' ? 'bg-transparent w-full max-w-[1400px] h-[95vh] border-none shadow-none' : 'bg-slate-50 w-full max-w-[1280px] h-[90vh] sm:h-[85vh] rounded-[24px] shadow-2xl border border-slate-200/60'} flex flex-col overflow-hidden`} onClick={e => e.stopPropagation()}>
+             {/* POPUP HEADER */}
+             <div className="bg-white px-6 sm:px-8 py-5 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center shadow-inner border border-indigo-100/50">
+                        <i className="ph-fill ph-gear-fine text-[26px] text-indigo-600" />
+                    </div>
+                    <div>
+                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות סביבת עבודה</h2>
+                        <div className="text-[12px] sm:text-[13px] text-slate-500 font-semibold mt-0.5" dir="rtl">WordFlow OS &mdash; Advanced Configuration</div>
+                    </div>
                 </div>
-              ))}
-            </div>
+                <button onClick={() => setActivePanel('main')} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
+                    <i className="ph ph-x text-lg font-bold" />
+                </button>
+             </div>
+             
+             {/* POPUP CONTENT (TABS + SCREENS) */}
+             <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-slate-50/50 custom-scrollbar-slim">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 md:mb-8">
+                  {SETTINGS_TAB_GROUPS.map((group) => (
+                    <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition-colors">
+                      <div className="text-[11px] font-bold text-slate-400 mb-3 tracking-widest">{group.title}</div>
+                      <div className="flex flex-col gap-1.5">
+                        {group.tabs.map(([id, label]) => (
+                          <button key={id} onClick={() => setSettingsTab(id)}
+                            className={`w-full text-right px-3 py-2 rounded-xl text-[12px] sm:text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm focus:ring-indigo-100' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900 focus:ring-slate-100 focus:bg-slate-50'}`}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
 
-            {settingsTab === 'guide'       && <GuideSettings />}
-            {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
-            {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
-            {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}
-            {settingsTab === 'updates'     && <UpdateSettings />}
-            {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}
-            {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
-            {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
-            {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
-            {settingsTab === 'appearance'  && <AppearanceSettings />}
+                <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
+                  {settingsTab === 'guide'       && <GuideSettings />}
+                  {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+                  {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
+                  {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}
+                  {settingsTab === 'updates'     && <UpdateSettings />}
+                  {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
+                  {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
+                  {settingsTab === 'onboarding'  && <OnboardingTabContainer profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                  {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
+                  {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                  {settingsTab === 'appearance'  && <AppearanceSettings />}       
+                </div>
 
-            <div style={{ marginTop: 28, display: 'flex', gap: 10, alignItems: 'center' }}>
-              <button onClick={handleSave}
-                style={{ padding: '10px 30px', background: saved ? '#217346' : '#2B579A', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, transition: 'background 0.3s' }}>
-                {saved ? '✓ נשמר בהצלחה!' : 'שמור עכשיו'}
-              </button>
-              <button onClick={onClose}
-                style={{ padding: '10px 22px', background: 'white', color: '#323130', border: '1px solid #C8C6C4', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-                סגור
-              </button>
-              <span style={{ fontSize: 11, color: saved ? '#217346' : '#919191', marginRight: 4 }}>{saved ? 'נשמר אוטומטית' : 'השינויים נשמרים אוטומטית ב-localStorage'}</span>
-            </div>
+                {/* Footer Actions */}
+                <div className="mt-6 md:mt-8 flex flex-wrap gap-4 items-center justify-end bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2">
+                     * שינויים מוחלים מיד בלחיצה על שמירה.
+                  </div>
+                  <button onClick={() => setActivePanel('main')}
+                    className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none">
+                    בטל וחזור לתפריט
+                  </button>
+                  <button onClick={handleSave}
+                    className={`px-8 py-2.5 text-white rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold transition-all shadow-md outline-none focus:ring-2 ${saved ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 shadow-emerald-600/30 focus:ring-emerald-200' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 border border-indigo-500 shadow-indigo-600/30 focus:ring-indigo-200'}`}>
+                    {saved ? '✓ עודכן בהצלחה!' : 'שמור והחל שינויים'}
+                  </button>
+                </div>
+             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
+
+
+
