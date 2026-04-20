@@ -8,7 +8,7 @@ import TopBar from './TopBar';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, hydrateProviderConfigFromDisk } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
 
 const DOCUMENT_STYLE_PRESETS = {
@@ -73,7 +73,16 @@ function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
     if (window.__mountTimer) clearTimeout(window.__mountTimer);
-    hydrateProviderConfigFromDisk().catch(() => {});
+
+    (async () => {
+      await hydrateAppSettingsFromDisk().catch(() => {});
+      await hydrateProviderConfigFromDisk().catch(() => {});
+      setShortcuts(getShortcutsConfig());
+      setAssistantBehavior(getAssistantBehavior());
+      setWordPreferences(getWordPreferences());
+      setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
+      setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+    })();
   }, []);
 
   const [editor, setEditor] = React.useState(null);
@@ -93,7 +102,7 @@ function App() {
   const [wordPreferences, setWordPreferences] = React.useState(getWordPreferences());
   const [documentStyle, setDocumentStyle] = React.useState(() => localStorage.getItem('wordai_document_style') || 'academic');
   const [activeTemplateId, setActiveTemplateId] = React.useState(() => localStorage.getItem('wordai_active_template') || 'blank');
-  const [showStartScreen, setShowStartScreen] = React.useState(false);
+  const [showStartScreen, setShowStartScreen] = React.useState(() => getWordPreferences().showStartExperience !== false);
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
@@ -178,6 +187,7 @@ function App() {
     const nextStyle = DOCUMENT_STYLE_PRESETS[styleId] ? styleId : 'academic';
     setDocumentStyle(nextStyle);
     localStorage.setItem('wordai_document_style', nextStyle);
+    syncPersistedAppSettings();
     applyDocumentStyleToEditor(nextStyle);
   }, [applyDocumentStyleToEditor]);
 
@@ -385,7 +395,7 @@ function App() {
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [shortcuts, editor]);
+  }, [shortcuts, editor, handleCommand]);
 
   const initializedDocRef = React.useRef(false);
 
@@ -454,17 +464,22 @@ function App() {
 
   React.useEffect(() => {
     if (!editor || initializedDocRef.current) return;
+
+    const shouldShowHome = wordPreferences.showStartExperience !== false;
     const savedDraft = wordPreferences.keepLastAutosavedVersion === false
-      ? localStorage.getItem('wordai_document')
+      ? null
       : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
 
-    if (savedDraft && editor.isEmpty) {
+    if (shouldShowHome) {
+      setShowStartScreen(true);
+    } else if (savedDraft && editor.isEmpty) {
       editor.commands.setContent(savedDraft);
       focusEditorSoon('end');
     } else {
       setShowStartScreen(false);
       focusEditorSoon('start');
     }
+
     initializedDocRef.current = true;
   }, [editor, wordPreferences, focusEditorSoon]);
 
@@ -607,6 +622,7 @@ function App() {
     applyDocumentStyleToEditor(localStorage.getItem('wordai_document_style') || documentStyle, editor);
     setCurrentFilePath(String(payload.filePath || ''));
     localStorage.setItem('wordai_active_template', 'blank');
+    syncPersistedAppSettings();
     setActiveTemplateId('blank');
     saveDocumentHistory({
       title: String(payload.title || 'מסמך שנפתח מהמחשב').trim(),
@@ -729,6 +745,7 @@ function App() {
         const currentSize = editor.getAttributes('textStyle')?.fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt';
         localStorage.setItem('default-font', currentFont);
         localStorage.setItem('default-size', currentSize);
+        syncPersistedAppSettings();
         setWordPreferences((prev) => ({
           ...prev,
           defaultFontFamily: currentFont,
@@ -808,6 +825,14 @@ function App() {
         break;
       }
       case 'openGoogleSearch': {
+        const config = getProviderConfig();
+        const googleUrlTemplate = String(getToolLinksConfig(config)?.googleSearch?.url || '');
+        if (googleUrlTemplate && !googleUrlTemplate.includes('{query}')) {
+          const url = buildExternalToolUrl('googleSearch', '', config);
+          if (url) openExternalLink(url);
+          break;
+        }
+
         const initial = String(selectedText || currentBlockText || '').trim();
         const result = await requestInputDialog({
           title: 'חיפוש בגוגל',
@@ -816,10 +841,21 @@ function App() {
           ],
           confirmLabel: 'פתח חיפוש',
         });
-        if (result?.query) openExternalLink(`https://www.google.com/search?q=${encodeURIComponent(String(result.query).trim())}`);
+        if (result?.query) {
+          const url = buildExternalToolUrl('googleSearch', String(result.query).trim(), config);
+          if (url) openExternalLink(url);
+        }
         break;
       }
       case 'searchScholar': {
+        const config = getProviderConfig();
+        const scholarUrlTemplate = String(getToolLinksConfig(config)?.scholar?.url || '');
+        if (scholarUrlTemplate && !scholarUrlTemplate.includes('{query}')) {
+          const url = buildExternalToolUrl('scholar', '', config);
+          if (url) openExternalLink(url);
+          break;
+        }
+
         const initial = String(selectedText || currentBlockText || '').trim();
         const result = await requestInputDialog({
           title: 'חיפוש ב-Google Scholar',
@@ -829,15 +865,22 @@ function App() {
           ],
           confirmLabel: 'פתח Scholar',
         });
-        if (result?.query) openExternalLink(`https://scholar.google.com/scholar?q=${encodeURIComponent(String(result.query).trim())}`);
+        if (result?.query) {
+          const url = buildExternalToolUrl('scholar', String(result.query).trim(), config);
+          if (url) openExternalLink(url);
+        }
         break;
       }
-      case 'openOrbit':
-        openExternalLink('https://orbit.livemind-app.com/');
+      case 'openOrbit': {
+        const url = buildExternalToolUrl('orbit', '', getProviderConfig());
+        if (url) openExternalLink(url);
         break;
-      case 'openModelHub':
-        openExternalLink('https://aistudio.google.com/');
+      }
+      case 'openModelHub': {
+        const url = buildExternalToolUrl('modelHub', '', getProviderConfig());
+        if (url) openExternalLink(url);
         break;
+      }
       case 'setColor': editor.chain().focus().setColor(value).run(); break;
       case 'setHighlight': editor.chain().focus().toggleHighlight({ color: value }).run(); break;
       case 'insertTaskList': editor.chain().focus().toggleTaskList().run(); break;
@@ -955,6 +998,7 @@ function App() {
           localStorage.removeItem('wordai_document');
           setCurrentFilePath('');
           localStorage.setItem('wordai_active_template', 'blank');
+          syncPersistedAppSettings();
           setActiveTemplateId('blank');
           setShowStartScreen(wordPreferences.showStartExperience !== false);
         }
@@ -964,33 +1008,38 @@ function App() {
         const html = editor.getHTML();
         const text = editor.getText();
         persistLocalCache(html);
+
+        if (window.desktopApp?.saveDocumentDialog) {
+          const ext = String(currentFilePath || '').toLowerCase().split('.').pop();
+          const canSaveDirectly = Boolean(currentFilePath) && ['txt', 'html', 'htm', 'docx'].includes(ext);
+          const result = await window.desktopApp.saveDocumentDialog({
+            filePath: canSaveDirectly ? currentFilePath : '',
+            title: editor.getText().trim().slice(0, 60) || 'מסמך',
+            html,
+            text,
+            preferredExtension: ext === 'txt' ? 'txt' : 'docx',
+          });
+
+          if (!result?.canceled && result?.filePath) {
+            setCurrentFilePath(String(result.filePath));
+            saveDocumentHistory({
+              title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+              content: html,
+              templateId: activeTemplateId || 'blank',
+              source: 'save-local',
+            });
+            alert(canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : `המסמך נשמר בהצלחה ב:\n${result.filePath}`);
+          }
+          break;
+        }
+
         saveDocumentHistory({
           title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
           content: html,
           templateId: activeTemplateId || 'blank',
           source: 'save-local',
         });
-
-        if (currentFilePath && window.desktopApp?.saveDocumentDialog) {
-          const ext = String(currentFilePath).toLowerCase().split('.').pop();
-          const canSaveDirectly = ['txt', 'html', 'htm', 'docx'].includes(ext);
-          const result = await window.desktopApp.saveDocumentDialog({
-            filePath: canSaveDirectly ? currentFilePath : '',
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-          });
-          if (!canSaveDirectly) {
-            alert('קובץ Word שנפתח נשמר מעכשיו בעותק חדש בפורמט נתמך, בלי לדרוס את המקור.');
-          } else if (!result?.canceled && result?.filePath) {
-            alert('המסמך נשמר גם במיקום שבחרת במחשב וגם במטמון המקומי.');
-          }
-          if (!result?.canceled && result?.filePath) {
-            setCurrentFilePath(String(result.filePath));
-          }
-        } else {
-          alert('המסמך נשמר בהצלחה במטמון המקומי לצורך שחזור ולמידה.');
-        }
+        downloadFile(html, 'document.doc', 'application/msword');
         break;
       }
       case 'openFile': {
@@ -1288,6 +1337,7 @@ function App() {
         };
 
         localStorage.setItem('wordai_active_template', 'cover');
+        syncPersistedAppSettings();
         setActiveTemplateId('cover');
         const existingHtml = String(editor.getHTML() || '').replace(/<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i, '').trim();
         const cover = `${coverTemplates[styleType] || coverTemplates.classic}<div data-type="page-break"></div>${existingHtml || '<h1>כותרת פרק</h1><p></p>'}`;
@@ -1370,11 +1420,13 @@ function App() {
         try { sources = JSON.parse(localStorage.getItem('bib-sources') || '[]'); } catch { sources = []; }
         sources.push(src);
         localStorage.setItem('bib-sources', JSON.stringify(sources));
+        syncPersistedAppSettings();
         editor.chain().focus().insertContent(`<sup style="color:#2B579A;cursor:pointer" title="${titleTip}">${citText}</sup>`).run();
         break;
       }
       case 'setCitationStyle':
         localStorage.setItem('citation-style', value);
+        syncPersistedAppSettings();
         break;
       case 'manageSources': {
         let srcs = [];
@@ -1747,7 +1799,9 @@ function App() {
               onCreateBlank={() => {
                 if (!confirmReplaceCurrentDocument()) return;
                 editor?.chain().focus().clearContent().run();
+                setCurrentFilePath('');
                 localStorage.setItem('wordai_active_template', 'blank');
+                syncPersistedAppSettings();
                 setActiveTemplateId('blank');
                 setShowStartScreen(false);
                 focusEditorSoon('start');
@@ -1756,7 +1810,9 @@ function App() {
                 if (!confirmReplaceCurrentDocument()) return;
                 const templateId = typeof template === 'string' ? template : template?.id;
                 const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                setCurrentFilePath('');
                 localStorage.setItem('wordai_active_template', templateId || 'blank');
+                syncPersistedAppSettings();
                 setActiveTemplateId(templateId || 'blank');
                 const recommendedStyle = {
                   academic: 'academic',
@@ -1779,6 +1835,7 @@ function App() {
                   ? null
                   : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
                 if (savedDraft && editor) editor.commands.setContent(savedDraft);
+                setCurrentFilePath('');
                 setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
                 setShowStartScreen(false);
                 focusEditorSoon('end');
@@ -1789,7 +1846,9 @@ function App() {
               }}
               onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
                 if (!confirmReplaceCurrentDocument()) return;
+                setCurrentFilePath('');
                 localStorage.setItem('wordai_active_template', templateId || 'blank');
+                syncPersistedAppSettings();
                 setActiveTemplateId(templateId || 'blank');
                 setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
                 changeDocumentStyle(requestedStyle || documentStyle);

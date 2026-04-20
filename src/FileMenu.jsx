@@ -221,6 +221,7 @@ const isProviderConfigured = (config, providerId) => {
     case 'claude':
     case 'groq':
     case 'perplexity':
+    case 'scholar':
       return Boolean(String(provider.key || '').trim());
     case 'ollama':
       return Boolean(String(provider.baseUrl || '').trim() && String(provider.model || '').trim());
@@ -231,7 +232,7 @@ const isProviderConfigured = (config, providerId) => {
   }
 };
 
-function ProviderSection({ title, icon, description, active, configured, onActivate, children }) {
+function ProviderSection({ title, icon, description, active, configured, onActivate, children, allowActivate = true }) {
   const [expanded, setExpanded] = useState(active || configured);
 
   useEffect(() => {
@@ -257,11 +258,13 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
           >
             {expanded ? 'הסתר פרטים' : 'הצג פרטים'}
           </button>
-          <button onClick={onActivate}
-            disabled={!configured}
-            style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : '#2B579A', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
-            {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
-          </button>
+          {allowActivate && (
+            <button onClick={onActivate}
+              disabled={!configured}
+              style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : '#2B579A', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
+              {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -284,6 +287,17 @@ function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
+  const updateToolLink = (toolId, field, value) =>
+    setConfig((prev) => ({
+      ...prev,
+      toolLinks: {
+        ...(prev.toolLinks || {}),
+        [toolId]: {
+          ...(prev.toolLinks?.[toolId] || {}),
+          [field]: value,
+        },
+      },
+    }));
   const activate = (id) => setConfig(prev => ({
     ...prev,
     active: id,
@@ -418,6 +432,43 @@ function AiSettings({ config, setConfig }) {
         <FieldRow label="שם מודל" placeholder="llama3.2" value={config.ollama?.model}
           onChange={v => update('ollama', 'model', v)} hint='בדוק מה הורדת: "ollama list" בטרמינל' />
       </ProviderSection>
+
+      <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false}
+        description="אם קיבלת מפתח דרך SerpAPI, אפשר לשמור אותו כאן לשימוש במחקר וחיפוש מקורות.">
+        <FieldRow label="מפתח SerpAPI" type="password" placeholder="your_serpapi_key" value={config.scholar?.key}
+          onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לחיבור חיפושי Google Scholar" />
+      </ProviderSection>
+
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: '#F8FBFF', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>קישורי תוספות בסרגל</div>
+        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
+          כאן אפשר לשנות גם את שם הכפתור וגם את הכתובת של כל קישור. בשדות חיפוש אפשר להשתמש ב־{'{query}'} כדי לשלב את מה שסימנת או כתבת, וב־{'{serpapiKey}'} כדי לשלב אוטומטית את מפתח SerpAPI ששמרת.
+        </div>
+        {[
+          ['googleSearch', 'חיפוש גוגל'],
+          ['scholar', 'Google Scholar'],
+          ['modelHub', 'מודל'],
+          ['orbit', 'Orbit'],
+        ].map(([toolId, fallbackLabel]) => (
+          <div key={toolId} style={{ borderTop: '1px solid #DBEAFE', paddingTop: 10, marginTop: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 6 }}>{fallbackLabel}</div>
+            <FieldRow
+              label="כותרת כפתור"
+              placeholder={fallbackLabel}
+              value={config.toolLinks?.[toolId]?.label || ''}
+              onChange={(v) => updateToolLink(toolId, 'label', v)}
+            />
+            <FieldRow
+              label="כתובת אתר"
+              placeholder="https://example.com/search?q={query}"
+              value={config.toolLinks?.[toolId]?.url || ''}
+              onChange={(v) => updateToolLink(toolId, 'url', v)}
+              hint="אפשר להשתמש ב־{'{query}'} וב־{'{serpapiKey}'} בתוך הכתובת"
+            />
+          </div>
+        ))}
+      </div>
+
       <ProviderSection title={config.custom?.name || 'מנוע אחר (מותאם אישית)'} icon="🔌"
         active={config.active === 'custom'} configured={isProviderConfigured(config, 'custom')} onActivate={() => activate('custom')}
         description="">
@@ -2149,7 +2200,10 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   useEffect(() => {
     const syncProfile = () => {
-      setPersonalStyleState((prev) => mergePersonalStyleForSave(prev));
+      setPersonalStyleState((prev) => {
+        const next = mergePersonalStyleForSave(prev);
+        return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+      });
     };
 
     window.addEventListener('wordai-personal-style-updated', syncProfile);
@@ -2163,7 +2217,6 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     }
 
     const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
-    if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
 
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);
@@ -2191,8 +2244,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const menuItems = [
     { id: 'openFile',   icon: 'ph-fill ph-folder-open',   label: 'פתח מהמחשב',         desc: 'פותח מסמך מקומי' },
     { id: 'newDoc',     icon: 'ph-fill ph-file',          label: 'מסמך ריק חדש',       desc: 'מנקה את תוכן העורך' },
-    { id: 'saveLocal',  icon: 'ph-fill ph-floppy-disk',   label: 'שמירה מקומית',        desc: 'שומר במטמון לצורך למידה' },
-    { id: 'saveAs',     icon: 'ph-fill ph-floppy-disk-back', label: 'שמור בשם',        desc: 'שמירה לכל תיקייה במחשב' },
+    { id: 'saveLocal',  icon: 'ph-fill ph-floppy-disk',   label: 'שמור',               desc: 'שומר למחשב. המטמון מתעדכן אוטומטית ברקע' },
+    { id: 'saveAs',     icon: 'ph-fill ph-floppy-disk-back', label: 'שמור עותק בשם', desc: 'שמירת עותק חדש לכל תיקייה במחשב' },
     { id: 'exportDocx', icon: 'ph-fill ph-microsoft-word',label: 'הורד ל-Word (.docx)', desc: 'מייצא קובץ Word אמיתי בפורמט DOCX' },
     { id: 'print',      icon: 'ph-fill ph-printer',       label: 'הדפסה / ייצוא PDF',  desc: 'פותח תפריט הדפסה' },
   ];
@@ -2201,7 +2254,6 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   const handleSave = () => {
     const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
-    if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
 
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);

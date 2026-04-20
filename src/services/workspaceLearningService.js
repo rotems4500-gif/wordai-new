@@ -3,6 +3,7 @@ import {
   getPersonalStyleProfile,
   savePersonalStyleProfile,
   logAgentDebugEvent,
+  syncPersistedAppSettings,
 } from './aiService';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
@@ -377,6 +378,7 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
   const next = [entry, ...current].slice(0, MAX_HISTORY_ITEMS);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+    syncPersistedAppSettings();
   } catch {
     return current;
   }
@@ -390,6 +392,7 @@ export function getHomeInstructions() {
 export function saveHomeInstructions(value = '') {
   const clean = String(value || '').trim();
   localStorage.setItem(HOME_INSTRUCTIONS_KEY, clean);
+  syncPersistedAppSettings();
 }
 
 function dominantCategoryFromItems(items = []) {

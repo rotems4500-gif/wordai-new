@@ -113,7 +113,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [loading, setLoading] = useState(false);
   const [activeAgentStatus, setActiveAgentStatus] = useState({ agentLabel: '', progress: 0, message: 'מוכן', state: 'idle' });
   const [agentProgressMap, setAgentProgressMap] = useState({});
-  const [showLogs, setShowLogs] = useState(mode !== 'sidebar');
+  const [showLogs, setShowLogs] = useState(false);
   const [debugLogs, setDebugLogs] = useState(() => getAgentDebugLogs().slice(-60).reverse());
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
@@ -252,6 +252,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     window.addEventListener('wordai-chat-history-cleared', handleReset);
     return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
   }, []);
+
+  useEffect(() => {
+    if (tab !== 'agents' && showLogs) setShowLogs(false);
+  }, [tab, showLogs]);
 
   const updateAgentStatus = (agentId, agentLabel, payload = {}) => {
     setActiveAgentStatus({
@@ -536,57 +540,64 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         </div>
       )}
 
-      <div style={{ padding: compactMode ? '7px 10px' : '10px 12px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <button
-            onClick={() => setShowLogs((prev) => !prev)}
-            style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#0F172A', fontSize: 12, fontWeight: 700 }}
-          >
-            🪵 יומן סוכנים מפורט {showLogs ? '▴' : '▾'}
-          </button>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={copyLogsToClipboard} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
-              העתק
+      {tab === 'agents' && (
+        <div style={{ padding: compactMode ? '7px 10px' : '10px 12px', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <button
+              onClick={() => setShowLogs((prev) => !prev)}
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#0F172A', fontSize: 12, fontWeight: 700 }}
+            >
+              🪵 יומן סוכנים מפורט {showLogs ? '▴' : '▾'}
             </button>
-            <button onClick={clearLogs} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
-              נקה
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={copyLogsToClipboard} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
+                העתק
+              </button>
+              <button onClick={clearLogs} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10 }}>
+                נקה
+              </button>
+            </div>
           </div>
-        </div>
 
-        {showLogs && (
-          <div style={{ marginTop: 8, maxHeight: 170, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {debugLogs.length ? debugLogs.map((log) => (
-              <div key={log.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '7px 9px', background: log.state === 'error' ? '#FEF2F2' : log.state === 'success' ? '#F0FDF4' : '#F8FAFC' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, color: '#1E293B' }}>{log.agentLabel || 'מערכת'}</span>
-                  <span style={{ color: '#64748B' }}>{formatLogTime(log.ts)}</span>
+          {showLogs && (
+            <div style={{ marginTop: 8, maxHeight: 170, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {debugLogs.length ? debugLogs.map((log) => (
+                <div key={log.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '7px 9px', background: log.state === 'error' ? '#FEF2F2' : log.state === 'success' ? '#F0FDF4' : '#F8FAFC' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, color: '#1E293B' }}>{log.agentLabel || 'מערכת'}</span>
+                    <span style={{ color: '#64748B' }}>{formatLogTime(log.ts)}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.45 }}>{log.message || 'ללא הודעה'}</div>
+                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, lineHeight: 1.4 }}>
+                    {[
+                      log.provider ? `מנוע: ${log.provider}` : '',
+                      log.model ? `מודל: ${log.model}` : '',
+                      log.attempt ? `ניסיון ${log.attempt}` : '',
+                      log.errorMessage ? `שגיאה: ${log.errorMessage}` : '',
+                      log.runId ? `הרצה ${String(log.runId).slice(0, 8)}` : '',
+                    ].filter(Boolean).join(' • ')}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.45 }}>{log.message || 'ללא הודעה'}</div>
-                <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, lineHeight: 1.4 }}>
-                  {[
-                    log.provider ? `מנוע: ${log.provider}` : '',
-                    log.model ? `מודל: ${log.model}` : '',
-                    log.attempt ? `ניסיון ${log.attempt}` : '',
-                    log.errorMessage ? `שגיאה: ${log.errorMessage}` : '',
-                    log.runId ? `הרצה ${String(log.runId).slice(0, 8)}` : '',
-                  ].filter(Boolean).join(' • ')}
+              )) : (
+                <div style={{ fontSize: 11, color: '#64748B', padding: '8px 4px' }}>
+                  עדיין אין אירועים ביומן.
                 </div>
-              </div>
-            )) : (
-              <div style={{ fontSize: 11, color: '#64748B', padding: '8px 4px' }}>
-                עדיין אין אירועים ביומן.
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ─── Chat ─── */}
       {tab === 'chat' && (
         <>
           <div style={{ padding: '7px 12px', borderBottom: '1px solid #E2E8F0', background: '#F8FAFC', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 10, color: '#64748B' }}>הצ'אט, הסוכן והסקיל האחרון נשמרים מקומית.</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, color: '#64748B' }}>פועל על:</span>
+              <span style={{ fontSize: 10, background: '#DBEAFE', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>המסמך כולו</span>
+              {currentBlockText && <span style={{ fontSize: 10, background: '#E0F2FE', color: '#0369A1', padding: '4px 8px', borderRadius: 999 }}>הפסקה הנוכחית</span>}
+              {selectedText && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>הטקסט הנבחר</span>}
+            </div>
             <button onClick={clearConversation} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10, color: '#334155' }}>
               נקה שיחה
             </button>
@@ -597,25 +608,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 נראה שנתקעת רגע — אני יכול לעזור בלי להוציא אותך מקו המחשבה.
               </div>
             )}
-            <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 14, padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#334155', marginBottom: 6 }}>העוזר מבין כרגע את ההקשר שלך</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                <span style={{ fontSize: 10, background: '#DBEAFE', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>המסמך כולו</span>
-                {currentBlockText && <span style={{ fontSize: 10, background: '#E0F2FE', color: '#0369A1', padding: '4px 8px', borderRadius: 999 }}>הפסקה הנוכחית</span>}
-                {selectedText && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>הטקסט הנבחר</span>}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {quickPromptList.map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => send(prompt)}
-                    style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', fontSize: 11, borderRadius: 999, padding: '5px 9px', cursor: 'pointer' }}
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-            </div>
+
             {messages.map((msg, i) => (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                 <div style={bbl(msg.role === 'user', compactMode)}>{msg.content}</div>

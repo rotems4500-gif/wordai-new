@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { getToolLinksConfig } from './services/aiService';
 
 const FONTS = [
   'Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'Secular One',
@@ -35,6 +36,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
   const [tableHover, setTableHover] = useState({ row: 0, col: 0 });
   const [fixedDrop, setFixedDrop] = useState(null); // { type, x, y }
   const [symbolCat, setSymbolCat] = useState('כללי');
+  const toolLinks = getToolLinksConfig();
   const dropRef = useRef(null);
   const imgRef = useRef(null);
 
@@ -654,15 +656,15 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <div className="toolbar-group">
                 <div className="toolbar-group-items">
                     <button className="r-btn r-btn-large" onClick={handleScholar}>
-                        <i className="ph-fill ph-graduation-cap text-blue-600"></i><span>Google Scholar</span>
+                        <i className="ph-fill ph-graduation-cap text-blue-600"></i><span>{toolLinks.scholar?.label || 'Google Scholar'}</span>
                     </button>
                     <div className="btn-column">
-                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openGoogleSearch')}><i className="ph-fill ph-google-logo text-red-500"></i> חיפוש גוגל</button>
-                        <button className="r-btn r-btn-medium" onClick={handleScholar}><i className="ph-fill ph-globe text-gray-600"></i> Google Scholar</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openGoogleSearch')}><i className="ph-fill ph-google-logo text-red-500"></i> {toolLinks.googleSearch?.label || 'חיפוש גוגל'}</button>
+                        <button className="r-btn r-btn-medium" onClick={handleScholar}><i className="ph-fill ph-globe text-gray-600"></i> {toolLinks.scholar?.label || 'Google Scholar'}</button>
                     </div>
                     <div className="btn-column">
-                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openModelHub')}><i className="ph-fill ph-cpu text-indigo-600"></i> מודל</button>
-                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openOrbit')}><i className="ph-fill ph-planet text-sky-600"></i> Orbit</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openModelHub')}><i className="ph-fill ph-cpu text-indigo-600"></i> {toolLinks.modelHub?.label || 'מודל'}</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('openOrbit')}><i className="ph-fill ph-planet text-sky-600"></i> {toolLinks.orbit?.label || 'Orbit'}</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">תוספות</div>

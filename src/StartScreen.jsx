@@ -123,7 +123,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [learningText, setLearningText] = useState('לומד מהמסמכים הקודמים שלך...');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showPromptOptions, setShowPromptOptions] = useState(false);
   const [instructionFileName, setInstructionFileName] = useState('');
   const [loadedWorkspace, setLoadedWorkspace] = useState(null);
   const [profile, setProfile] = useState(() => getPersonalStyleProfile());
@@ -522,13 +521,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               </button>
               <button
                 type="button"
-                onClick={() => setShowPromptOptions((prev) => !prev)}
-                className="btn btn-outline btn-primary px-4 min-h-0 h-10 rounded-xl text-sm"
-              >
-                {showPromptOptions ? 'הסתר הנחיות וקבצים' : 'הוסף הנחיות וקבצים'}
-              </button>
-              <button
-                type="button"
                 onClick={handleLoadWorkspace}
                 className="btn btn-outline btn-accent px-4 min-h-0 h-10 rounded-xl text-sm"
               >
@@ -536,10 +528,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowPromptOptions(true);
-                  instructionFileInputRef.current?.click();
-                }}
+                onClick={() => instructionFileInputRef.current?.click()}
                 className="btn btn-outline btn-secondary px-4 min-h-0 h-10 rounded-xl text-sm"
               >
                 קובץ הנחיות
@@ -550,20 +539,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 className="btn btn-outline btn-info px-4 min-h-0 h-10 rounded-xl text-sm"
               >
                 פתח מסמך לעריכה
-              </button>
-              <select
-                value={uploadKind}
-                onChange={(e) => setUploadKind(e.target.value)}
-                className="select select-bordered min-h-0 h-10 rounded-xl text-sm bg-white"
-              >
-                {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="btn btn-outline px-4 min-h-0 h-10 rounded-xl text-sm"
-              >
-                {uploading ? 'מעלה...' : 'צרף קבצי עזר'}
               </button>
               <input ref={instructionFileInputRef} type="file" accept=".txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
               <input
@@ -584,9 +559,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <span className={`rounded-full px-3 py-1 text-xs ${selectedMaterials.length ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
                 {selectedMaterials.length ? `נבחרו ${selectedMaterials.length} קבצי עזר` : 'ללא קבצי עזר'}
               </span>
-              <span className="rounded-full bg-fuchsia-100 text-fuchsia-700 px-3 py-1 text-xs">סוג העלאה: {getMaterialUploadMeta(uploadKind).label}</span>
               <span className={`rounded-full px-3 py-1 text-xs ${instructions.trim() ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                {instructions.trim() ? 'יש הנחיות ספציפיות למסמך' : 'ללא הנחיות נוספות'}
+                {instructions.trim() ? 'יש הנחיות למסמך' : 'ללא הנחיות נוספות'}
               </span>
               {instructionFileName ? (
                 <span className="rounded-full bg-violet-100 text-violet-700 px-3 py-1 text-xs">קובץ הנחיות: {instructionFileName}</span>
@@ -596,55 +570,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               ) : null}
             </div>
 
-            {showPromptOptions && (
-              <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-3 text-right border-t border-slate-200 pt-3 mt-3 mb-3">
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <div className="text-xs text-slate-500">הנחיות ספציפיות למסמך הזה</div>
-                    <button onClick={() => instructionFileInputRef.current?.click()} className="btn btn-outline btn-secondary btn-xs rounded-lg">
-                      טען קובץ הנחיות
-                    </button>
-                  </div>
-                  <textarea
-                    value={instructions}
-                    onChange={(e) => setInstructions(e.target.value)}
-                    placeholder="למשל: כתוב בסגנון אקדמי, השתמש בטון ענייני, שמור על פסקאות קצרות, אל תמציא מקורות"
-                    className="textarea textarea-bordered w-full min-h-[120px] rounded-xl resize-y"
-                  />
-                  <div className="text-xs text-slate-500 mt-2">אפשר לכתוב כאן ידנית, או לטעון קובץ הנחיות שלם שיתווסף אוטומטית למסמך הנוכחי.</div>
-                </div>
-
-                <div>                  {loadedWorkspace ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 mb-2 text-right">
-                      <div className="text-xs font-semibold text-amber-800">סביבת העבודה שנטענה</div>
-                      <div className="text-xs text-amber-700 mt-1">{loadedWorkspace.workflow}</div>
-                      <div className="text-[11px] text-amber-700 mt-1">{loadedWorkspace.agents?.join(' • ')}</div>
-                    </div>
-                  ) : null}                  <div className="flex items-center justify-between mb-2 gap-2">
-                    <div className="text-xs text-slate-500">קבצי עזר למסמך הזה</div>
-                    <button onClick={() => fileInputRef.current?.click()} className="btn btn-outline btn-primary btn-xs rounded-lg">
-                      {uploading ? 'מעלה...' : 'הוסף קבצים'}
-                    </button>
-                  </div>
-                  <div className="max-h-[190px] overflow-y-auto space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
-                    {materials.length ? materials.map((item) => (
-                      <label key={item.id} className="flex items-start gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 hover:bg-slate-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-primary checkbox-sm mt-0.5"
-                          checked={selectedIds.includes(item.id)}
-                          onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id))}
-                        />
-                        <div>
-                          <div className="text-sm font-semibold text-slate-800">{item.title}</div>
-                          <div className="text-xs text-slate-500">{item.label || 'כללי'}</div>
-                        </div>
-                      </label>
-                    )) : <div className="text-sm text-slate-500 px-2 py-3">אפשר לצרף PDF, מצגות, סיכומים, Word או קבצי טקסט.</div>}
-                  </div>
-                </div>
+            <div className="text-right border-t border-slate-200 pt-3 mt-3 mb-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs text-slate-500">הנחיות למסמך הזה</div>
+                <button onClick={() => instructionFileInputRef.current?.click()} className="btn btn-outline btn-secondary btn-xs rounded-lg">
+                  טען קובץ הנחיות
+                </button>
               </div>
-            )}
+              <textarea
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+                placeholder="למשל: כתוב בסגנון אקדמי, שמור על טון ענייני ואל תמציא מקורות"
+                className="textarea textarea-bordered w-full min-h-[96px] rounded-xl resize-y"
+              />
+              <div className="text-xs text-slate-500 mt-2">אפשר לחדד כאן מה חשוב לך למסמך, בלי כפילות ובלי אזור נוסף בהמשך המסך.</div>
+              {loadedWorkspace ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 mt-3 text-right">
+                  <div className="text-xs font-semibold text-amber-800">סביבת העבודה שנטענה</div>
+                  <div className="text-xs text-amber-700 mt-1">{loadedWorkspace.workflow}</div>
+                  <div className="text-[11px] text-amber-700 mt-1">{loadedWorkspace.agents?.join(' • ')}</div>
+                </div>
+              ) : null}
+            </div>
 
             <div className="grid md:grid-cols-2 gap-3 text-right">
               <div>
@@ -694,50 +641,44 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-[1.3fr_0.7fr] gap-5 mb-8">
+        <div className="mb-8">
           <div className="card bg-base-100 border border-slate-200 rounded-2xl shadow-sm">
             <div className="card-body p-4">
-              <div className="flex items-center justify-between mb-2 gap-3">
-                <div className="text-lg font-bold text-slate-800">הנחיות ספציפיות למסמך</div>
-                <button onClick={() => fileInputRef.current?.click()} className="btn btn-outline btn-primary btn-sm rounded-xl">
-                  {uploading ? 'מעלה...' : 'צרף קבצים'}
-                </button>
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-2 gap-3">
+                <div>
+                  <div className="text-lg font-bold text-slate-800">חומרי עזר</div>
+                  <div className="text-xs text-slate-500 mt-1">כאן מצרפים קבצים למסמך. השארנו את זה במקום אחד ברור כדי שהמסך יהיה נקי יותר.</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={uploadKind}
+                    onChange={(e) => setUploadKind(e.target.value)}
+                    className="select select-bordered min-h-0 h-10 rounded-xl text-sm bg-white"
+                  >
+                    {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  </select>
+                  <button onClick={() => fileInputRef.current?.click()} className="btn btn-outline btn-primary btn-sm rounded-xl">
+                    {uploading ? 'מעלה...' : 'הוסף קבצים'}
+                  </button>
+                  <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
+                </div>
               </div>
-              <textarea
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="למשל: כתוב תמיד בעברית תקינה, השתמש בפסקאות קצרות, אל תמציא מקורות, שמור על טון ענייני"
-                className="textarea textarea-bordered w-full min-h-[120px] rounded-xl resize-y"
-              />
-              <div className="text-xs text-slate-500 mt-2">כאן אפשר לכתוב הנחיות ייעודיות למסמך המסוים שאתה יוצר עכשיו.</div>
-            </div>
-          </div>
-
-          <div className="card bg-base-100 border border-slate-200 rounded-2xl shadow-sm">
-            <div className="card-body p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-lg font-bold text-slate-800">חומרי עזר</div>
-              <button onClick={() => fileInputRef.current?.click()} className="btn btn-outline btn-primary btn-sm rounded-xl">
-                {uploading ? 'מעלה...' : 'הוסף קובץ'}
-              </button>
-              <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
-            </div>
-            <div className="max-h-[220px] overflow-y-auto space-y-2">
-              {materials.length ? materials.map((item) => (
-                <label key={item.id} className="flex items-start gap-2 rounded-xl border border-slate-100 px-3 py-2 hover:bg-slate-50 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-primary checkbox-sm mt-0.5"
-                    checked={selectedIds.includes(item.id)}
-                    onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id))}
-                  />
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">{item.title}</div>
-                    <div className="text-xs text-slate-500">{item.label || 'כללי'}</div>
-                  </div>
-                </label>
-              )) : <div className="text-sm text-slate-500">עדיין לא הוספת חומרי עזר</div>}
-            </div>
+              <div className="max-h-[220px] overflow-y-auto space-y-2">
+                {materials.length ? materials.map((item) => (
+                  <label key={item.id} className="flex items-start gap-2 rounded-xl border border-slate-100 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-primary checkbox-sm mt-0.5"
+                      checked={selectedIds.includes(item.id)}
+                      onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id))}
+                    />
+                    <div>
+                      <div className="text-sm font-semibold text-slate-800">{item.title}</div>
+                      <div className="text-xs text-slate-500">{item.label || 'כללי'}</div>
+                    </div>
+                  </label>
+                )) : <div className="text-sm text-slate-500">עדיין לא הוספת חומרי עזר</div>}
+              </div>
             </div>
           </div>
         </div>

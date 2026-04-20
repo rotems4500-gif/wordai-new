@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
   loadProviderConfig: () => ipcRenderer.invoke('load-provider-config'),
   saveProviderConfig: (payload) => ipcRenderer.invoke('save-provider-config', payload),
+  loadAppSettings: () => ipcRenderer.invoke('load-app-settings'),
+  saveAppSettings: (payload) => ipcRenderer.invoke('save-app-settings', payload),
   getAppUpdateInfo: () => ipcRenderer.invoke('get-app-update-info'),
   checkForAppUpdates: () => ipcRenderer.invoke('check-for-app-updates'),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),

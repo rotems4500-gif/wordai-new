@@ -20,6 +20,13 @@ export const DEFAULT_PROVIDER_CONFIG = {
   ollama:     { baseUrl: 'http://localhost:11434/v1', model: 'llama3.2' },
   perplexity: { key: '', model: 'sonar-pro' },
   custom:     { name: '', baseUrl: '', key: '', model: '' },
+  scholar:    { key: '', provider: 'serpapi' },
+  toolLinks: {
+    googleSearch: { label: 'חיפוש גוגל', url: 'https://www.google.com/search?q={query}' },
+    scholar: { label: 'Google Scholar', url: 'https://scholar.google.com/scholar?q={query}' },
+    modelHub: { label: 'מודל', url: 'https://aistudio.google.com/' },
+    orbit: { label: 'Orbit', url: 'https://orbit.livemind-app.com/' },
+  },
 };
 
 export const DEFAULT_SHORTCUTS = {
@@ -296,6 +303,82 @@ const readJsonFromStorage = (key, fallback) => {
   }
 };
 
+const PERSISTED_APP_SETTINGS_KEYS = [
+  'wordai_shortcuts',
+  'wordai_assistant_behavior',
+  'wordai_skills_config',
+  'wordai_word_preferences',
+  'wordai_personal_style',
+  'wordai_workspace_automation',
+  'wordai_shared_agent_instructions',
+  'wordai_role_agents',
+  'wordai_home_instructions',
+  'wordai_saved_docs_history',
+  'wordflow_home_customizations',
+  'wordflow_style_overrides',
+  'default-font',
+  'default-size',
+  'wordai_document_style',
+  'wordai_active_template',
+  'citation-style',
+  'bib-sources',
+];
+
+const hasMeaningfulStoredValue = (value = '') => {
+  const clean = String(value ?? '').trim();
+  return Boolean(clean) && !['{}', '[]', 'null', 'undefined'].includes(clean);
+};
+
+export const syncPersistedAppSettings = () => {
+  if (typeof window === 'undefined' || !window.desktopApp?.saveAppSettings) return;
+
+  try {
+    const snapshot = {};
+    PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) snapshot[key] = value;
+    });
+    window.desktopApp.saveAppSettings(snapshot).catch(() => {});
+  } catch {}
+};
+
+let appSettingsHydrationPromise = null;
+
+export const hydrateAppSettingsFromDisk = async () => {
+  if (typeof window === 'undefined' || !window.desktopApp?.loadAppSettings) return {};
+  if (appSettingsHydrationPromise) return appSettingsHydrationPromise;
+
+  appSettingsHydrationPromise = (async () => {
+    try {
+      const diskState = await window.desktopApp.loadAppSettings();
+      if (!diskState || typeof diskState !== 'object' || diskState.ok === false) {
+        syncPersistedAppSettings();
+        return {};
+      }
+
+      PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
+        const incoming = diskState[key];
+        if (typeof incoming !== 'string' || !hasMeaningfulStoredValue(incoming)) return;
+        const current = localStorage.getItem(key);
+        if (!hasMeaningfulStoredValue(current)) {
+          localStorage.setItem(key, incoming);
+        }
+      });
+
+      try {
+        window.dispatchEvent(new CustomEvent('wordai-settings-hydrated'));
+      } catch {}
+
+      syncPersistedAppSettings();
+      return diskState;
+    } catch {
+      return {};
+    }
+  })();
+
+  return appSettingsHydrationPromise;
+};
+
 const normalizeProviderIds = (value, fallback = DEFAULT_PROVIDER_CONFIG.active) => {
   const values = Array.isArray(value) ? value : [value];
   const normalized = [...new Set(values.map((item) => String(item || '').trim()).filter((item) => KNOWN_PROVIDER_IDS.includes(item)))];
@@ -330,6 +413,45 @@ const normalizeProviderModelName = (providerId = '', modelName = '') => {
   };
 
   return aliasMap[provider]?.[clean] || clean;
+};
+
+const normalizeToolLinkEntry = (entry = {}, fallback = {}) => {
+  const label = String(entry?.label || fallback?.label || '').trim() || String(fallback?.label || '').trim();
+  let url = String(entry?.url || fallback?.url || '').trim() || String(fallback?.url || '').trim();
+  if (url && !/^https?:\/\//i.test(url)) url = `https://${url.replace(/^\/+/, '')}`;
+  return { label, url };
+};
+
+export const getToolLinksConfig = (cfg = getProviderConfig()) => ({
+  googleSearch: normalizeToolLinkEntry(cfg?.toolLinks?.googleSearch, DEFAULT_PROVIDER_CONFIG.toolLinks.googleSearch),
+  scholar: normalizeToolLinkEntry(cfg?.toolLinks?.scholar, DEFAULT_PROVIDER_CONFIG.toolLinks.scholar),
+  modelHub: normalizeToolLinkEntry(cfg?.toolLinks?.modelHub, DEFAULT_PROVIDER_CONFIG.toolLinks.modelHub),
+  orbit: normalizeToolLinkEntry(cfg?.toolLinks?.orbit, DEFAULT_PROVIDER_CONFIG.toolLinks.orbit),
+});
+
+export const buildExternalToolUrl = (toolId = '', query = '', cfg = getProviderConfig()) => {
+  const tool = getToolLinksConfig(cfg)?.[toolId];
+  if (!tool?.url) return '';
+
+  const cleanQuery = String(query || '').trim();
+  const scholarKey = String(cfg?.scholar?.key || '').trim();
+
+  let resolvedUrl = String(tool.url)
+    .replace(/\{query\}/g, cleanQuery ? encodeURIComponent(cleanQuery) : '')
+    .replace(/\{serpapiKey\}/g, encodeURIComponent(scholarKey))
+    .replace(/\{scholarKey\}/g, encodeURIComponent(scholarKey));
+
+  if (cleanQuery && !resolvedUrl.includes(encodeURIComponent(cleanQuery)) && !/\{query\}/.test(String(tool.url))) {
+    try {
+      const parsed = new URL(resolvedUrl);
+      if (!parsed.searchParams.has('q')) parsed.searchParams.set('q', cleanQuery);
+      resolvedUrl = parsed.toString();
+    } catch {
+      resolvedUrl = `${resolvedUrl}${resolvedUrl.includes('?') ? '&' : '?'}q=${encodeURIComponent(cleanQuery)}`;
+    }
+  }
+
+  return resolvedUrl;
 };
 
 const isProviderConfiguredForUse = (providerId, cfg) => {
@@ -399,6 +521,7 @@ export const getShortcutsConfig = () => ({
 
 export const saveShortcutsConfig = (config) => {
   localStorage.setItem('wordai_shortcuts', JSON.stringify({ ...DEFAULT_SHORTCUTS, ...config }));
+  syncPersistedAppSettings();
 };
 
 export const getAssistantBehavior = () => ({
@@ -408,6 +531,7 @@ export const getAssistantBehavior = () => ({
 
 export const saveAssistantBehavior = (config) => {
   localStorage.setItem('wordai_assistant_behavior', JSON.stringify({ ...DEFAULT_ASSISTANT_BEHAVIOR, ...config }));
+  syncPersistedAppSettings();
 };
 
 const normalizeSkillMode = (value = '') => {
@@ -468,6 +592,7 @@ export const saveSkillsConfig = (config = {}) => {
   });
 
   localStorage.setItem('wordai_skills_config', JSON.stringify(next));
+  syncPersistedAppSettings();
   return next;
 };
 
@@ -478,6 +603,7 @@ export const getWordPreferences = () => ({
 
 export const saveWordPreferences = (config) => {
   localStorage.setItem('wordai_word_preferences', JSON.stringify({ ...DEFAULT_WORD_PREFERENCES, ...config }));
+  syncPersistedAppSettings();
 };
 
 export const getPersonalStyleProfile = () => ({
@@ -491,6 +617,7 @@ export const savePersonalStyleProfile = (profile) => {
     ...profile,
     last_updated: new Date().toISOString(),
   }));
+  syncPersistedAppSettings();
 };
 
 export const getWorkspaceAutomation = () => ({
@@ -503,12 +630,14 @@ export const saveWorkspaceAutomation = (config) => {
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...config,
   }));
+  syncPersistedAppSettings();
 };
 
 export const getSharedAgentInstructions = () => String(localStorage.getItem('wordai_shared_agent_instructions') || '').trim();
 
 export const saveSharedAgentInstructions = (value = '') => {
   localStorage.setItem('wordai_shared_agent_instructions', String(value || '').trim());
+  syncPersistedAppSettings();
 };
 
 export const getRoleAgents = () => {
@@ -543,6 +672,7 @@ export const saveRoleAgents = (agents) => {
     });
 
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
+  syncPersistedAppSettings();
 };
 
 export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().workflowMode) => {
@@ -655,6 +785,8 @@ const normalizeProviderConfig = (config = {}) => {
     ollama:     { ...DEFAULT_PROVIDER_CONFIG.ollama,     ...(config?.ollama || {}) },
     perplexity: { ...DEFAULT_PROVIDER_CONFIG.perplexity, ...(config?.perplexity || {}) },
     custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...(config?.custom || {}) },
+    scholar:    { ...DEFAULT_PROVIDER_CONFIG.scholar,    ...(config?.scholar || {}) },
+    toolLinks: getToolLinksConfig({ ...DEFAULT_PROVIDER_CONFIG, ...(config || {}) }),
     active: safeActive,
   };
   merged.claude.model = normalizeProviderModelName('claude', merged.claude.model || DEFAULT_PROVIDER_CONFIG.claude.model);
@@ -690,6 +822,42 @@ export const saveProviderConfig = (config, options = {}) => {
 
 let providerConfigHydrationPromise = null;
 
+const pickNonEmptyString = (preferredValue = '', fallbackValue = '') => {
+  const preferred = String(preferredValue || '').trim();
+  return preferred || String(fallbackValue || '').trim();
+};
+
+const mergeProviderSettings = (providerId = '', diskValue = {}, localValue = {}) => {
+  const merged = {
+    ...(diskValue || {}),
+    ...(localValue || {}),
+  };
+
+  if ('key' in merged) merged.key = pickNonEmptyString(localValue?.key, diskValue?.key);
+  if ('baseUrl' in merged) merged.baseUrl = pickNonEmptyString(localValue?.baseUrl, diskValue?.baseUrl);
+  if ('name' in merged) merged.name = pickNonEmptyString(localValue?.name, diskValue?.name);
+  if ('model' in merged) merged.model = normalizeProviderModelName(providerId, pickNonEmptyString(localValue?.model, diskValue?.model));
+
+  return merged;
+};
+
+const mergeScholarSettings = (diskValue = {}, localValue = {}) => ({
+  provider: pickNonEmptyString(localValue?.provider, diskValue?.provider || DEFAULT_PROVIDER_CONFIG.scholar.provider),
+  key: pickNonEmptyString(localValue?.key, diskValue?.key),
+});
+
+const mergeToolLinksSettings = (diskValue = {}, localValue = {}) => {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_PROVIDER_CONFIG.toolLinks).map(([toolId, defaults]) => [
+      toolId,
+      {
+        label: pickNonEmptyString(localValue?.[toolId]?.label, diskValue?.[toolId]?.label || defaults.label),
+        url: pickNonEmptyString(localValue?.[toolId]?.url, diskValue?.[toolId]?.url || defaults.url),
+      },
+    ]),
+  );
+};
+
 export const hydrateProviderConfigFromDisk = async () => {
   if (!window.desktopApp?.loadProviderConfig) return getProviderConfig();
   if (providerConfigHydrationPromise) return providerConfigHydrationPromise;
@@ -707,13 +875,21 @@ export const hydrateProviderConfigFromDisk = async () => {
       const merged = normalizeProviderConfig({
         ...diskConfig,
         ...localRaw,
-        gemini: { ...(diskConfig.gemini || {}), ...(localRaw.gemini || {}) },
-        openai: { ...(diskConfig.openai || {}), ...(localRaw.openai || {}) },
-        claude: { ...(diskConfig.claude || {}), ...(localRaw.claude || {}) },
-        groq: { ...(diskConfig.groq || {}), ...(localRaw.groq || {}) },
-        ollama: { ...(diskConfig.ollama || {}), ...(localRaw.ollama || {}) },
-        perplexity: { ...(diskConfig.perplexity || {}), ...(localRaw.perplexity || {}) },
-        custom: { ...(diskConfig.custom || {}), ...(localRaw.custom || {}) },
+        active: KNOWN_PROVIDER_IDS.includes(localRaw.active) ? localRaw.active : diskConfig.active,
+        activeProviders: normalizeProviderIds([
+          ...(Array.isArray(diskConfig.activeProviders) ? diskConfig.activeProviders : []),
+          ...(Array.isArray(localRaw.activeProviders) ? localRaw.activeProviders : []),
+        ], localRaw.active || diskConfig.active),
+        multiModelEnabled: localRaw.multiModelEnabled === true || diskConfig.multiModelEnabled === true,
+        gemini: mergeProviderSettings('gemini', diskConfig.gemini, localRaw.gemini),
+        openai: mergeProviderSettings('openai', diskConfig.openai, localRaw.openai),
+        claude: mergeProviderSettings('claude', diskConfig.claude, localRaw.claude),
+        groq: mergeProviderSettings('groq', diskConfig.groq, localRaw.groq),
+        ollama: mergeProviderSettings('ollama', diskConfig.ollama, localRaw.ollama),
+        perplexity: mergeProviderSettings('perplexity', diskConfig.perplexity, localRaw.perplexity),
+        custom: mergeProviderSettings('custom', diskConfig.custom, localRaw.custom),
+        scholar: mergeScholarSettings(diskConfig.scholar, localRaw.scholar),
+        toolLinks: mergeToolLinksSettings(diskConfig.toolLinks, localRaw.toolLinks),
       });
 
       saveProviderConfig(merged);

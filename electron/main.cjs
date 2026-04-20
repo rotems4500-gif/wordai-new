@@ -5,6 +5,67 @@ const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table
 const path = require('path');
 const fs = require('fs');
 
+const STABLE_USER_DATA_DIRNAME = 'word-ai-assistant';
+const LEGACY_USER_DATA_DIRNAMES = ['Word AI Assistant', 'WordFlow AI', 'wordflow-ai'];
+
+function countDirectoryEntries(dirPath) {
+  try {
+    return fs.readdirSync(dirPath, { withFileTypes: true }).reduce((count, entry) => {
+      const nextPath = path.join(dirPath, entry.name);
+      return count + 1 + (entry.isDirectory() ? countDirectoryEntries(nextPath) : 0);
+    }, 0);
+  } catch {
+    return 0;
+  }
+}
+
+function copyMissingRecursive(sourcePath, targetPath) {
+  if (!fs.existsSync(sourcePath)) return;
+  const sourceStat = fs.statSync(sourcePath);
+
+  if (sourceStat.isDirectory()) {
+    if (!fs.existsSync(targetPath)) fs.mkdirSync(targetPath, { recursive: true });
+    fs.readdirSync(sourcePath, { withFileTypes: true }).forEach((entry) => {
+      copyMissingRecursive(path.join(sourcePath, entry.name), path.join(targetPath, entry.name));
+    });
+    return;
+  }
+
+  if (!fs.existsSync(targetPath)) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+  }
+}
+
+function ensureStableUserDataPath() {
+  const appDataPath = app.getPath('appData');
+  const stablePath = path.join(appDataPath, STABLE_USER_DATA_DIRNAME);
+
+  try {
+    app.setPath('userData', stablePath);
+  } catch {}
+
+  if (!fs.existsSync(stablePath)) fs.mkdirSync(stablePath, { recursive: true });
+
+  LEGACY_USER_DATA_DIRNAMES
+    .map((name) => path.join(appDataPath, name))
+    .filter((legacyPath) => legacyPath !== stablePath && fs.existsSync(legacyPath))
+    .forEach((legacyPath) => {
+      ['ai-provider-config.json', 'app-settings.json', 'Preferences', 'Local State'].forEach((name) => {
+        copyMissingRecursive(path.join(legacyPath, name), path.join(stablePath, name));
+      });
+
+      ['Local Storage', 'Session Storage', 'project-materials'].forEach((name) => {
+        const sourceDir = path.join(legacyPath, name);
+        const targetDir = path.join(stablePath, name);
+        if (!fs.existsSync(sourceDir)) return;
+        copyMissingRecursive(sourceDir, targetDir);
+      });
+    });
+}
+
+ensureStableUserDataPath();
+
 if (!app.isPackaged) {
   app.commandLine.appendSwitch('ignore-certificate-errors');
 }
@@ -330,6 +391,53 @@ function readPersistedProviderConfig() {
 function writePersistedProviderConfig(config = {}) {
   const filePath = getPersistedProviderConfigPath();
   const jsonText = JSON.stringify(config || {}, null, 2);
+  const encrypted = safeStorage.isEncryptionAvailable();
+  const payload = encrypted
+    ? safeStorage.encryptString(jsonText)
+    : Buffer.from(jsonText, 'utf8');
+
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    encrypted,
+    data: payload.toString('base64'),
+    updatedAt: new Date().toISOString(),
+  }, null, 2) + '\n', 'utf8');
+
+  return { ok: true, filePath };
+}
+
+function getPersistedAppSettingsPath() {
+  const dir = app.getPath('userData');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'app-settings.json');
+}
+
+function readPersistedAppSettings() {
+  try {
+    const filePath = getPersistedAppSettingsPath();
+    if (!fs.existsSync(filePath)) return {};
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8') || '{}');
+
+    if (raw && typeof raw === 'object' && !raw.data) {
+      return raw;
+    }
+
+    if (!raw?.data) return {};
+    const payload = Buffer.from(String(raw.data || ''), 'base64');
+    const text = raw.encrypted && safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(payload)
+      : payload.toString('utf8');
+
+    return JSON.parse(text || '{}');
+  } catch (error) {
+    console.error('Failed to read app settings from disk:', error?.message || error);
+    return {};
+  }
+}
+
+function writePersistedAppSettings(settings = {}) {
+  const filePath = getPersistedAppSettingsPath();
+  const jsonText = JSON.stringify(settings || {}, null, 2);
   const encrypted = safeStorage.isEncryptionAvailable();
   const payload = encrypted
     ? safeStorage.encryptString(jsonText)
@@ -751,6 +859,22 @@ ipcMain.handle('load-provider-config', async () => {
 ipcMain.handle('save-provider-config', async (_event, config = {}) => {
   try {
     return writePersistedProviderConfig(config);
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Save failed' };
+  }
+});
+
+ipcMain.handle('load-app-settings', async () => {
+  try {
+    return readPersistedAppSettings();
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Load failed' };
+  }
+});
+
+ipcMain.handle('save-app-settings', async (_event, settings = {}) => {
+  try {
+    return writePersistedAppSettings(settings);
   } catch (error) {
     return { ok: false, error: error?.message || 'Save failed' };
   }
