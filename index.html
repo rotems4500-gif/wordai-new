@@ -5,6 +5,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>WordFlow AI</title>
+    <link rel="icon" type="image/png" href="/app-icon.png" />
     <!-- הסרת office.js בעקבות פיצול הפרויקט לאפליקציה עצמאית -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alef:wght@400;700&family=Assistant:wght@400;600;700&family=Frank+Ruhl+Libre:wght@400;700&family=Heebo:wght@400;500;700&family=Miriam+Libre:wght@400;700&family=Secular+One&display=swap" media="print" onload="this.media='all'" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
@@ -42,7 +43,8 @@
         window.__showCrashOverlay(detail);
       };
       window.addEventListener('unhandledrejection', function(e) {
-        var msg = e.reason && e.reason.message ? e.reason.message : String(e.reason || 'שגיאה לא ידועה');
+        var msg = e.reason && e.reason.stack ? e.reason.stack : (e.reason && e.reason.message ? e.reason.message : String(e.reason || 'שגיאה לא ידועה'));
+        console.error('[Crash] unhandledrejection:', e.reason);
         window.__showCrashOverlay(msg);
       });
       // פולבק: אם הממשק לא נטען אחרי 8 שניות — מסך שגיאה

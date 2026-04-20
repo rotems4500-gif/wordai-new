@@ -1,6 +1,6 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
@@ -91,17 +91,22 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "win": {
       "target": [
         "nsis"
       ],
+      "icon": "assets/app-icon.ico",
       "artifactName": "WordFlow-AI-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
+      "installerIcon": "assets/app-icon.ico",
+      "uninstallerIcon": "assets/app-icon.ico",
+      "installerHeaderIcon": "assets/app-icon.ico",
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

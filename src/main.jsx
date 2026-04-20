@@ -69,6 +69,16 @@ const DEFAULT_INPUT_DIALOG = {
   resolve: null,
 };
 
+const EXPORT_DOC_STYLES = `<style>
+    body { direction: rtl; font-family: Arial, sans-serif; padding: 40px; line-height: 1.7; }
+    [data-type="page-break"] { display: block; height: 0; page-break-after: always; break-after: page; }
+    body > p:first-child { text-align: center; font-size: 11pt; font-weight: 700; color: #64748B; letter-spacing: 1px; margin-top: 20px; }
+    body > h1:nth-child(2) { text-align: center; font-size: 28pt; color: #2B579A; margin: 0 0 10pt; }
+    body > h2:nth-child(3) { text-align: center; font-size: 15pt; color: #475569; margin: 0 0 14pt; }
+    body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
+    body > p:nth-child(5), body > p:nth-child(6) { text-align: center; color: #475569; }
+  </style>`;
+
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
@@ -370,6 +380,11 @@ function App() {
     return () => window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
   }, []);
 
+  // Ref allows the keyboard shortcut effect to call handleCommand without
+  // adding it to the dependency array (which would cause a TDZ error since
+  // handleCommand is defined later in the component body).
+  const handleCommandRef = React.useRef(null);
+
   React.useEffect(() => {
     const handler = (e) => {
       if (matchShortcut(e, shortcuts.toggleAssistant)) {
@@ -389,13 +404,13 @@ function App() {
 
       if (matchShortcut(e, shortcuts.saveLocal)) {
         e.preventDefault();
-        handleCommand('saveLocal');
+        handleCommandRef.current?.('saveLocal');
       }
     };
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [shortcuts, editor, handleCommand]);
+  }, [shortcuts, editor]);
 
   const initializedDocRef = React.useRef(false);
 
@@ -669,15 +684,7 @@ function App() {
     applyPending();
   }, [editor, applyImportedDocument]);
 
-  const exportDocStyles = `<style>
-    body { direction: rtl; font-family: Arial, sans-serif; padding: 40px; line-height: 1.7; }
-    [data-type="page-break"] { display: block; height: 0; page-break-after: always; break-after: page; }
-    body > p:first-child { text-align: center; font-size: 11pt; font-weight: 700; color: #64748B; letter-spacing: 1px; margin-top: 20px; }
-    body > h1:nth-child(2) { text-align: center; font-size: 28pt; color: #2B579A; margin: 0 0 10pt; }
-    body > h2:nth-child(3) { text-align: center; font-size: 15pt; color: #475569; margin: 0 0 14pt; }
-    body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
-    body > p:nth-child(5), body > p:nth-child(6) { text-align: center; color: #475569; }
-  </style>`;
+
 
   const handleCommand = async (cmd, value) => {
     const safeCommands = ['zoom','exportHTML','exportText','focusMode','toggleWatermark',
@@ -1106,7 +1113,7 @@ function App() {
           if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
           break;
         }
-        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordFlow AI Document</title>${exportDocStyles}</head><body dir="rtl">${html}</body></html>`;
+        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body dir="rtl">${html}</body></html>`;
         downloadFile(htmlContent, 'document.doc', 'application/msword');
         break;
       }
@@ -1142,7 +1149,7 @@ function App() {
         break;
       }
       case 'exportHTML': {
-        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${exportDocStyles}</head><body>${editor.getHTML()}</body></html>`;
+        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body>${editor.getHTML()}</body></html>`;
         downloadFile(htmlCtx, 'my-document.html', 'text/html');
         break;
       }
@@ -1519,6 +1526,7 @@ function App() {
       default: break;
     }
   };
+  handleCommandRef.current = handleCommand;
 
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">

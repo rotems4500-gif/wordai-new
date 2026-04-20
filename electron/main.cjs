@@ -627,12 +627,14 @@ async function loadRenderer(win) {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
+    title: 'WordFlow AI',
     width: 1600,
     height: 1000,
     minWidth: 1100,
     minHeight: 720,
     show: false,
     backgroundColor: '#f3f2f1',
+    icon: path.join(__dirname, '..', 'dist', 'app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -993,6 +995,8 @@ if (!singleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    app.setName('WordFlow AI');
+    app.setAppUserModelId('com.wordai.assistant');
     createAppMenu();
     createMainWindow();
     setupAutoUpdater();
