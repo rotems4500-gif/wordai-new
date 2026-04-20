@@ -9,7 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, hydrateProviderConfigFromDisk } from './services/aiService';
-import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory } from './services/workspaceLearningService';
+import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
@@ -96,6 +96,7 @@ function App() {
   const [showStartScreen, setShowStartScreen] = React.useState(false);
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
+  const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
   const [liveGeneration, setLiveGeneration] = React.useState({
     active: false,
     state: 'idle',
@@ -427,15 +428,23 @@ function App() {
 
     const handleSelection = () => syncState(false);
     const handleUpdate = () => syncState(true);
+    const markManualEdit = () => setLastManualStyleLearningAt(Date.now());
+    const dom = editor.view?.dom;
 
     syncState(true);
     editor.on('selectionUpdate', handleSelection);
     editor.on('update', handleUpdate);
+    dom?.addEventListener('input', markManualEdit);
+    dom?.addEventListener('paste', markManualEdit);
+    dom?.addEventListener('drop', markManualEdit);
 
     return () => {
       if (frameId) window.cancelAnimationFrame(frameId);
       editor.off('selectionUpdate', handleSelection);
       editor.off('update', handleUpdate);
+      dom?.removeEventListener('input', markManualEdit);
+      dom?.removeEventListener('paste', markManualEdit);
+      dom?.removeEventListener('drop', markManualEdit);
     };
   }, [editor, updateActiveFormats]);
 
@@ -474,6 +483,22 @@ function App() {
       localStorage.removeItem('wordai_document_autosave_at');
     }
   }, [wordPreferences.keepLastAutosavedVersion]);
+
+  React.useEffect(() => {
+    if (!editor || !lastManualStyleLearningAt) return;
+
+    const timer = window.setTimeout(() => {
+      try {
+        const html = String(editor.getHTML?.() || '');
+        learnFromDocumentDraft({
+          html,
+          title: currentFilePath || 'המסמך הפעיל',
+        });
+      } catch {}
+    }, 8000);
+
+    return () => window.clearTimeout(timer);
+  }, [editor, lastManualStyleLearningAt, currentFilePath]);
 
   React.useEffect(() => {
     if (!editor || wordPreferences.autoSave === false) return;
@@ -1757,6 +1782,10 @@ function App() {
                 setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
                 setShowStartScreen(false);
                 focusEditorSoon('end');
+              }}
+              onOpenSettings={() => {
+                setFileMenuTargetTab('guide');
+                setFileMenuOpen(true);
               }}
               onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
                 if (!confirmReplaceCurrentDocument()) return;

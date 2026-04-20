@@ -25,12 +25,24 @@ export function getMaterialUploadMeta(kind = 'general') {
   return MATERIAL_UPLOAD_PRESETS[String(kind || 'general')] || MATERIAL_UPLOAD_PRESETS.general;
 }
 const COMMON_CONNECTORS = ['לכן', 'בנוסף', 'עם זאת', 'עם-זאת', 'כמו כן', 'לעומת זאת', 'עם-כן', 'כלומר', 'למעשה', 'בהתאם לכך', 'בסופו של דבר'];
+const MANUAL_HISTORY_SOURCES = new Set(['manual', 'opened-file', 'save-local', 'save-as']);
 
 function mergeCountMaps(base = {}, incoming = {}) {
   const next = { ...base };
   Object.entries(incoming || {}).forEach(([key, count]) => {
     if (!key) return;
     next[key] = (next[key] || 0) + Number(count || 0);
+  });
+  return next;
+}
+
+function subtractCountMaps(base = {}, incoming = {}) {
+  const next = { ...base };
+  Object.entries(incoming || {}).forEach(([key, count]) => {
+    if (!key || !next[key]) return;
+    const updated = Number(next[key] || 0) - Number(count || 0);
+    if (updated > 0) next[key] = updated;
+    else delete next[key];
   });
   return next;
 }
@@ -115,6 +127,82 @@ function analyzeTextSample(text = '') {
     paragraphCount: paragraphs.length,
     wordCount: words.length,
   };
+}
+
+export function learnFromDocumentDraft({ html = '', title = 'מסמך פעיל', minChars = 280 } = {}) {
+  const profile = getPersonalStyleProfile();
+  if (profile.learningConsent === false) return { updated: false, reason: 'disabled' };
+
+  const cleanText = String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (cleanText.length < minChars) return { updated: false, reason: 'too-short' };
+
+  const stats = analyzeTextSample(cleanText);
+  if (stats.wordCount < 80 || stats.sentencesCount < 3) return { updated: false, reason: 'insufficient-sample' };
+
+  const signature = [
+    String(title || '').trim(),
+    stats.wordCount,
+    stats.avgSentenceWords,
+    stats.avgParagraphWords,
+    topMapKeys(stats.openerCounts, 3).join('|'),
+    topMapKeys(stats.connectorCounts, 3).join('|'),
+  ].join('::');
+
+  if (signature === profile.lastAutoLearnedSignature) return { updated: false, reason: 'duplicate' };
+
+  const baseVocabularyCounts = subtractCountMaps(profile.learnedVocabularyCounts || {}, profile.autoLearnedVocabularyCounts || {});
+  const basePhraseCounts = subtractCountMaps(profile.learnedPhraseCounts || {}, profile.autoLearnedPhraseCounts || {});
+  const nextVocabularyCounts = mergeCountMaps(baseVocabularyCounts, stats.vocabularyCounts);
+  const nextPhraseCounts = mergeCountMaps(basePhraseCounts, stats.phraseCounts);
+  const nextSentenceLength = classifySentenceLength(stats.avgSentenceWords);
+  const nextParagraphLength = classifyParagraphLength(stats.avgParagraphWords);
+  const toneDescriptors = Array.from(new Set([
+    ...(profile.toneDescriptors || []),
+    nextSentenceLength,
+    nextParagraphLength,
+    Object.keys(stats.connectorCounts || {}).length >= 3 ? 'שימוש עשיר במילות קישור' : 'ניסוח ישיר יחסית',
+  ].filter(Boolean))).slice(0, 8);
+
+  const learnedNotes = Array.from(new Set([
+    ...(profile.learnedNotes || []),
+    `עודכן אוטומטית מהמסמך הפעיל: ${nextSentenceLength}, ${nextParagraphLength}.`,
+  ])).slice(-8);
+
+  const nextProfile = {
+    ...profile,
+    learnedVocabularyCounts: nextVocabularyCounts,
+    learnedPhraseCounts: nextPhraseCounts,
+    learnedVocabulary: topMapKeys(nextVocabularyCounts, 20),
+    learnedPhrases: topMapKeys(nextPhraseCounts, 12),
+    preferredConnectors: Array.from(new Set([...(profile.preferredConnectors || []), ...topMapKeys(stats.connectorCounts, 8)])).slice(0, 8),
+    preferredSentenceOpeners: Array.from(new Set([...(profile.preferredSentenceOpeners || []), ...topMapKeys(stats.openerCounts, 8)])).slice(0, 8),
+    toneDescriptors,
+    learnedSentencePatterns: toneDescriptors,
+    sentenceLengthPreference: profile.sentenceLengthPreference || nextSentenceLength,
+    paragraphLengthPreference: profile.paragraphLengthPreference || nextParagraphLength,
+    styleFingerprint: {
+      ...(profile.styleFingerprint || {}),
+      avgSentenceWords: stats.avgSentenceWords,
+      avgParagraphWords: stats.avgParagraphWords,
+      sentenceCount: stats.sentencesCount,
+      paragraphCount: stats.paragraphCount,
+    },
+    autoLearnedFromEditorAt: new Date().toISOString(),
+    lastAutoLearnedSignature: signature,
+    autoLearnedVocabularyCounts: stats.vocabularyCounts,
+    autoLearnedPhraseCounts: stats.phraseCounts,
+    learnedNotes,
+  };
+
+  savePersonalStyleProfile(nextProfile);
+  try {
+    window.dispatchEvent(new CustomEvent('wordai-personal-style-updated', { detail: { source: 'auto-learning' } }));
+  } catch {}
+  return { updated: true, reason: 'learned', profile: nextProfile };
 }
 
 const TEMPLATE_GUIDES = {
@@ -321,13 +409,14 @@ export async function syncLearnedStyleFromWorkspace() {
     loadProjectMaterials(),
   ]);
 
-  const combined = [...pastDocs, ...history, ...projectMaterials];
+  const learnableHistory = history.filter((item) => MANUAL_HISTORY_SOURCES.has(String(item?.source || 'manual')));
+  const combined = [...pastDocs, ...learnableHistory, ...projectMaterials];
   const dominantCategory = dominantCategoryFromItems(combined);
   const profile = getPersonalStyleProfile();
   const alreadyScanned = new Set(profile.scannedSourceIds || []);
 
   const sourceItems = [
-    ...history.map((item) => ({
+    ...learnableHistory.map((item) => ({
       id: `history:${item.id}`,
       title: item.title || 'טיוטה שמורה',
       text: `${item.title || ''}\n${item.summary || ''}`.trim(),
@@ -388,11 +477,12 @@ export async function syncLearnedStyleFromWorkspace() {
   });
 
   const overallStats = analyzeTextSample(preparedSources.map((source) => source.text).join('\n\n'));
-  const toneDescriptors = [
+  const toneDescriptors = Array.from(new Set([
+    ...(profile.toneDescriptors || []),
     classifySentenceLength(overallStats.avgSentenceWords),
     classifyParagraphLength(overallStats.avgParagraphWords),
     Object.keys(overallStats.connectorCounts || {}).length >= 3 ? 'שימוש עשיר במילות קישור' : 'ניסוח ישיר יחסית',
-  ].filter(Boolean);
+  ].filter(Boolean)));
 
   const notes = [];
   if (dominantCategory === 'academic') notes.push('רוב המסמכים הקודמים הם אקדמיים ולכן יש להעדיף מבנה פורמלי, טיעון מסודר ושפה מדויקת.');
@@ -407,19 +497,20 @@ export async function syncLearnedStyleFromWorkspace() {
   const nextProfile = {
     ...profile,
     academic_level: dominantCategory === 'academic' ? (profile.academic_level || 'undergraduate') : profile.academic_level,
-    learnedNotes: notes,
-    examples: combined.slice(0, 8).map((item) => item.title || item.name).filter(Boolean),
+    learnedNotes: Array.from(new Set([...(profile.learnedNotes || []), ...notes])).slice(-8),
+    examples: Array.from(new Set([...(profile.examples || []), ...combined.slice(0, 8).map((item) => item.title || item.name).filter(Boolean)])).slice(0, 8),
     learnedVocabularyCounts: vocabularyCounts,
     learnedPhraseCounts: phraseCounts,
     learnedVocabulary: topMapKeys(vocabularyCounts, 20),
     learnedPhrases: topMapKeys(phraseCounts, 12),
-    learnedSentencePatterns: toneDescriptors,
-    preferredConnectors: topMapKeys(overallStats.connectorCounts, 8),
-    preferredSentenceOpeners: topMapKeys(overallStats.openerCounts, 8),
+    learnedSentencePatterns: Array.from(new Set([...(profile.learnedSentencePatterns || []), ...toneDescriptors])).slice(0, 8),
+    preferredConnectors: Array.from(new Set([...(profile.preferredConnectors || []), ...topMapKeys(overallStats.connectorCounts, 8)])).slice(0, 8),
+    preferredSentenceOpeners: Array.from(new Set([...(profile.preferredSentenceOpeners || []), ...topMapKeys(overallStats.openerCounts, 8)])).slice(0, 8),
     toneDescriptors,
-    sentenceLengthPreference: classifySentenceLength(overallStats.avgSentenceWords),
-    paragraphLengthPreference: classifyParagraphLength(overallStats.avgParagraphWords),
+    sentenceLengthPreference: profile.sentenceLengthPreference || classifySentenceLength(overallStats.avgSentenceWords),
+    paragraphLengthPreference: profile.paragraphLengthPreference || classifyParagraphLength(overallStats.avgParagraphWords),
     styleFingerprint: {
+      ...(profile.styleFingerprint || {}),
       avgSentenceWords: overallStats.avgSentenceWords,
       avgParagraphWords: overallStats.avgParagraphWords,
       sentenceCount: overallStats.sentencesCount,
@@ -436,6 +527,9 @@ export async function syncLearnedStyleFromWorkspace() {
   };
 
   savePersonalStyleProfile(nextProfile);
+  try {
+    window.dispatchEvent(new CustomEvent('wordai-personal-style-updated', { detail: { source: 'workspace-sync' } }));
+  } catch {}
   return { pastDocs, history, projectMaterials, dominantCategory, notes, scanStats: nextProfile.scanStats, profile: nextProfile };
 }
 

@@ -22,6 +22,8 @@ import {
   getSkillCatalog,
   getSkillsConfig,
   saveSkillsConfig,
+  getAppMemory,
+  clearAppMemory,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
 
@@ -64,6 +66,108 @@ const ACTION_VISIBILITY_OPTIONS = [
   { id: 'sources', label: 'מקורות', hint: 'הצעת כיווני חיפוש' },
   { id: 'translate', label: 'תרגום לאנגלית', hint: 'המרת הקטע לאנגלית' },
 ];
+
+const SETTINGS_TAB_GROUPS = [
+  {
+    title: 'התחלה ועזרה',
+    tabs: [['guide', '📘 מדריך'], ['assistant', '✨ עוזר'], ['updates', '⬆️ עדכונים']],
+  },
+  {
+    title: 'AI וצוות עבודה',
+    tabs: [['ai', '🤖 מנועי AI'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
+  },
+  {
+    title: 'כתיבה והתאמה אישית',
+    tabs: [['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']],
+  },
+  {
+    title: 'תחזוקה ולוגים',
+    tabs: [['debug', '🪵 לוגים']],
+  },
+];
+
+const mergeUniqueStrings = (values = []) => [...new Set((Array.isArray(values) ? values : [values])
+  .flatMap((item) => (Array.isArray(item) ? item : [item]))
+  .map((item) => String(item || '').trim())
+  .filter(Boolean))];
+
+const mergePersonalStyleForSave = (draft = {}) => {
+  const live = getPersonalStyleProfile();
+  return finalizePersonalProfile({
+    ...live,
+    ...draft,
+    learnedVocabularyCounts: live.learnedVocabularyCounts || {},
+    learnedPhraseCounts: live.learnedPhraseCounts || {},
+    learnedVocabulary: live.learnedVocabulary || [],
+    learnedPhrases: live.learnedPhrases || [],
+    learnedNotes: live.learnedNotes || [],
+    learnedSentencePatterns: live.learnedSentencePatterns || [],
+    preferredConnectors: live.preferredConnectors || [],
+    preferredSentenceOpeners: live.preferredSentenceOpeners || [],
+    toneDescriptors: live.toneDescriptors || [],
+    styleFingerprint: live.styleFingerprint || {},
+    scannedSourceIds: live.scannedSourceIds || [],
+    scanStats: live.scanStats || {},
+    autoLearnedFromEditorAt: live.autoLearnedFromEditorAt || '',
+    lastAutoLearnedSignature: live.lastAutoLearnedSignature || '',
+    autoLearnedVocabularyCounts: live.autoLearnedVocabularyCounts || {},
+    autoLearnedPhraseCounts: live.autoLearnedPhraseCounts || {},
+  });
+};
+
+const STYLE_TRAINING_QUESTIONS = [
+  {
+    id: 'tone',
+    title: 'איזה ניסוח מרגיש יותר אתה?',
+    options: [
+      { id: 'formal', label: 'אפשרות א', text: 'בהתאם לממצאים, ניתן להסיק כי יש חשיבות להמשך בחינה מדויקת של הנושא.', insight: 'מעדיף ניסוח רשמי, נקי ומדויק.', avoid: 'סלנג או קלילות מוגזמת' },
+      { id: 'natural', label: 'אפשרות ב', text: 'מהממצאים די ברור שכדאי להמשיך לבדוק את הנושא בצורה מסודרת.', insight: 'מעדיף שפה טבעית, ישירה ונגישה.', avoid: 'ניסוח כבד ומרוחק מדי' },
+    ],
+  },
+  {
+    id: 'depth',
+    title: 'איזו רמת פירוט מתאימה יותר?',
+    options: [
+      { id: 'concise', label: 'אפשרות א', text: 'לסיכום, ההצעה תחסוך זמן ותשפר את רצף העבודה.', insight: 'מעדיף ניסוח תמציתי ומהיר לקריאה.', avoid: 'הרחבות ארוכות שלא מוסיפות ערך' },
+      { id: 'rich', label: 'אפשרות ב', text: 'לסיכום, ההצעה צפויה לחסוך זמן, לשפר את רצף העבודה וליצור חוויית שימוש מדויקת וברורה יותר לאורך התהליך.', insight: 'מעדיף עומק והשלמת רעיונות לפני סיום.', avoid: 'משפטים קצרים מדי בלי הקשר' },
+    ],
+  },
+  {
+    id: 'structure',
+    title: 'איזה מבנה קריאה נוח יותר עבורך?',
+    options: [
+      { id: 'structured', label: 'אפשרות א', text: 'המסמך יכלול: מטרה, שלבים, סיכונים והמלצה סופית.', insight: 'מעדיף מבנה מאורגן עם נקודות וכותרות ברורות.', avoid: 'פסקאות זורמות בלי היררכיה' },
+      { id: 'flowing', label: 'אפשרות ב', text: 'המסמך ייפתח בהסבר קצר, ימשיך לניתוח מרכזי ויסתיים בהמלצה טבעית ורציפה.', insight: 'מעדיף זרימה טבעית ופחות רשימות נוקשות.', avoid: 'עודף כותרות ונקודות טכניות' },
+    ],
+  },
+  {
+    id: 'assertiveness',
+    title: 'איזה סיום נשמע לך נכון יותר?',
+    options: [
+      { id: 'soft', label: 'אפשרות א', text: 'נראה שכדאי לשקול את ההצעה הזו בזהירות ובהתאם לצורך.', insight: 'מעדיף טון זהיר, מאוזן ולא תוקפני.', avoid: 'קביעות חדות מדי' },
+      { id: 'direct', label: 'אפשרות ב', text: 'ההצעה הזו היא הכיוון הנכון וצריך לקדם אותה כבר עכשיו.', insight: 'מעדיף טון החלטי, חד ובטוח.', avoid: 'זהירות יתר וניסוח מהוסס' },
+    ],
+  },
+];
+
+const buildLearningGameProfilePatch = (answers = {}) => {
+  const selectedOptions = STYLE_TRAINING_QUESTIONS
+    .map((question) => question.options.find((option) => option.id === answers[question.id]))
+    .filter(Boolean);
+
+  const insights = mergeUniqueStrings(selectedOptions.map((option) => option.insight)).slice(0, 8);
+  const preferredTrainingExamples = selectedOptions.map((option) => option.text).slice(0, 4);
+  const dislikedStylePatterns = mergeUniqueStrings(selectedOptions.map((option) => option.avoid)).slice(0, 8);
+
+  return {
+    learningGameAnswers: answers,
+    learningGamesCompletedAt: Object.keys(answers).length >= STYLE_TRAINING_QUESTIONS.length ? new Date().toISOString() : '',
+    learningGameInsights: insights,
+    styleTrainingSummary: insights.join(' '),
+    preferredTrainingExamples,
+    dislikedStylePatterns,
+  };
+};
 
 const linkifyText = (text = '') => {
   const value = String(text || '');
@@ -128,24 +232,49 @@ const isProviderConfigured = (config, providerId) => {
 };
 
 function ProviderSection({ title, icon, description, active, configured, onActivate, children }) {
+  const [expanded, setExpanded] = useState(active || configured);
+
+  useEffect(() => {
+    if (active) setExpanded(true);
+  }, [active]);
+
   return (
-    <div style={{ border: `2px solid ${active ? '#2B579A' : '#E1DFDD'}`, borderRadius: 10, padding: '14px 18px', marginBottom: 16, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+    <div style={{ border: `2px solid ${active ? '#2B579A' : '#E1DFDD'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 20 }}>{icon}</span>
-          <span style={{ fontWeight: 700, fontSize: 14, color: '#323130' }}>{title}</span>
+          <span style={{ fontSize: 18 }}>{icon}</span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: '#323130' }}>{title}</span>
           {active && <span style={{ fontSize: 10, background: '#2B579A', color: 'white', padding: '2px 8px', borderRadius: 10 }}>ברירת מחדל</span>}
           {configured && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '2px 8px', borderRadius: 10 }}>מוגדר</span>}
           {!configured && <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 10 }}>חסר מפתח/הגדרה</span>}
         </div>
-        <button onClick={onActivate}
-          disabled={!configured}
-          style={{ fontSize: 11, padding: '4px 14px', background: active ? '#E1DFDD' : '#2B579A', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
-          {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
-        </button>
+
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            style={{ fontSize: 11, padding: '4px 10px', background: 'white', color: '#334155', border: '1px solid #CBD5E1', borderRadius: 6, cursor: 'pointer' }}
+          >
+            {expanded ? 'הסתר פרטים' : 'הצג פרטים'}
+          </button>
+          <button onClick={onActivate}
+            disabled={!configured}
+            style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : '#2B579A', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
+            {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
+          </button>
+        </div>
       </div>
-      {description && <p style={{ fontSize: 11, color: '#605E5C', marginBottom: 10 }}>{linkifyText(description)}</p>}
-      <div>{children}</div>
+
+      {expanded ? (
+        <>
+          {description && <p style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, marginTop: 8 }}>{linkifyText(description)}</p>}
+          <div>{children}</div>
+        </>
+      ) : (
+        <div style={{ fontSize: 10, color: '#64748B', marginTop: 8, lineHeight: 1.6, opacity: 0.9 }}>
+          {configured ? 'הספק מוכן לעבודה. אפשר לפתוח כדי לראות או לערוך את ההגדרות.' : 'פתח את הכרטיס כדי להגדיר מפתח API, כתובת או מודל.'}
+        </div>
+      )}
     </div>
   );
 }
@@ -430,13 +559,13 @@ const finalizePersonalProfile = (profile = {}) => {
     return favoritesChanged ? { ...profile, preferredHomeStyleIds: normalizedFavoriteStyles } : profile;
   }
   const favoritesChanged = JSON.stringify(currentFavoriteStyles) !== JSON.stringify(normalizedFavoriteStyles);
-  const needsNormalization = !profile.onboardingCompletedAt || profile.onboardingDismissedAt || profile.onboardingSnoozedUntil || favoritesChanged;
+  const needsNormalization = profile.onboardingDismissedAt || profile.onboardingSnoozedUntil || favoritesChanged;
   if (!needsNormalization) return profile;
 
   return {
     ...profile,
     preferredHomeStyleIds: normalizedFavoriteStyles,
-    onboardingCompletedAt: profile.onboardingCompletedAt || new Date().toISOString(),
+    onboardingCompletedAt: profile.onboardingCompletedAt || '',
     onboardingDismissedAt: '',
     onboardingSnoozedUntil: '',
   };
@@ -606,13 +735,34 @@ function SkillsSettings({ skillsState, setSkillsState }) {
       },
     },
   }));
+  const updateSkillField = (skillId, field, value) => setSkillsState((prev) => ({
+    ...prev,
+    skills: {
+      ...(prev.skills || {}),
+      [skillId]: {
+        ...(prev.skills?.[skillId] || {}),
+        [field]: value,
+      },
+    },
+  }));
+  const resetSkill = (skillId) => setSkillsState((prev) => ({
+    ...prev,
+    skills: {
+      ...(prev.skills || {}),
+      [skillId]: {
+        mode: skillId === 'style-guardian' ? 'auto' : 'manual',
+        customInstruction: '',
+        customKeywords: [],
+      },
+    },
+  }));
 
   return (
     <div>
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>ברירת מחדל לסקילים</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>שליטה מלאה בסקילים</div>
         <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6, marginBottom: 10 }}>
-          כאן בוחרים איזה סקיל יופיע כברירת מחדל בחלונית ה-AI, ומתי כל סקיל ייכנס לפעולה.
+          כאן בוחרים איזה סקיל יפעל אוטומטית, איזה יישאר ידני בלבד, ואיך כל סקיל ידבר ויעבוד בדיוק בדרך שמתאימה לך.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10, marginBottom: 10 }}>
           <div>
@@ -634,33 +784,161 @@ function SkillsSettings({ skillsState, setSkillsState }) {
             החל אוטומטית את ברירת המחדל
           </label>
         </div>
-        <div style={{ fontSize: 10, color: '#64748B' }}>גם אם כבוי אוטומטית, המשתמש עדיין יכול לבחור סקיל ידנית בכל שיחה.</div>
+        <div style={{ fontSize: 10, color: '#64748B' }}>טיפ: אם אתה רוצה שליטה גבוהה, השאר את הסקילים על מצב ידני והפעל אותם דרך / בחלונית ה-AI.</div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {skills.map((skill) => {
           const mode = skillsState.skills?.[skill.id]?.mode || 'manual';
+          const customInstruction = String(skillsState.skills?.[skill.id]?.customInstruction || '');
+          const customKeywords = Array.isArray(skillsState.skills?.[skill.id]?.customKeywords)
+            ? skillsState.skills?.[skill.id]?.customKeywords.join(', ')
+            : String(skillsState.skills?.[skill.id]?.customKeywords || '');
           return (
             <div key={skill.id} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', marginBottom: 8 }}>
-                <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', marginBottom: 8, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 4 }}>{skill.label}</div>
                   <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>{skill.description}</div>
                   <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>מתאים במיוחד ל: {skill.usageHint}</div>
+                  <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>טריגרים קיימים: {(skill.keywords || []).slice(0, 5).join(' • ')}</div>
                 </div>
-                <select
-                  value={mode}
-                  onChange={(e) => updateMode(skill.id, e.target.value)}
-                  style={{ width: 138, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', flexShrink: 0 }}
-                >
-                  <option value="manual">ידני בלבד</option>
-                  <option value="auto">אוטומטי כשמתאים</option>
-                  <option value="off">כבוי</option>
-                </select>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={mode}
+                    onChange={(e) => updateMode(skill.id, e.target.value)}
+                    style={{ width: 138, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', flexShrink: 0 }}
+                  >
+                    <option value="manual">ידני בלבד</option>
+                    <option value="auto">אוטומטי כשמתאים</option>
+                    <option value="off">כבוי</option>
+                  </select>
+                  <button type="button" onClick={() => resetSkill(skill.id)} style={{ border: '1px solid #CBD5E1', background: '#F8FAFC', color: '#334155', borderRadius: 8, padding: '8px 10px', fontSize: 11, cursor: 'pointer' }}>
+                    אפס התאמה
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>איך אתה רוצה שהסקיל יעבוד?</div>
+                  <textarea
+                    value={customInstruction}
+                    onChange={(e) => updateSkillField(skill.id, 'customInstruction', e.target.value)}
+                    rows={4}
+                    placeholder="למשל: תמיד תהיה תמציתי, אל תמציא מקורות, תכתוב עם כותרות קצרות, שמור על טון אקדמי רגוע"
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מילות זיהוי שאתה רוצה להוסיף</div>
+                  <textarea
+                    value={customKeywords}
+                    onChange={(e) => updateSkillField(skill.id, 'customKeywords', e.target.value)}
+                    rows={4}
+                    placeholder="מופרדות בפסיקים, למשל: עבודה, מאמר, מבוא, סיכום"
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
+                  />
+                </div>
               </div>
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function GuideSettings() {
+  const [memorySnapshot, setMemorySnapshot] = useState(() => getAppMemory());
+  const demoPrompts = [
+    { title: 'שכתוב מהיר', text: 'שכתב את הפסקה הזאת בצורה טבעית וברורה יותר' },
+    { title: 'הפעלת סוכן', text: '@writer נסח לי פתיח קצר ומקצועי למייל הזה' },
+    { title: 'הפעלת סקיל', text: '/academic-structure בנה לי שלד לעבודה על מנהיגות דיגיטלית' },
+    { title: 'מקורות מחקר', text: '/source-hunter תן לי מילות חיפוש ל-Google Scholar על חרדת מבחנים' },
+  ];
+
+  const resetSavedMemory = () => {
+    clearAppMemory();
+    try {
+      localStorage.removeItem('wordai_sidebar_messages');
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wordai-chat-history-cleared'));
+      }
+    } catch {}
+    setMemorySnapshot(getAppMemory());
+  };
+
+  return (
+    <div>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>מדריך שימוש מלא ל-WordFlow AI</div>
+        <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.7 }}>
+          ריכזתי את כל הפעולות במקום אחד ברור: יצירת מסמך, עבודה עם הסוכן, שימוש בסקילים, והבנה איפה כל הגדרה נמצאת.
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>זיכרון מתמשך</div>
+          <button onClick={resetSavedMemory} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 8, padding: '7px 10px', fontSize: 11, cursor: 'pointer' }}>
+            אפס זיכרון שמור
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>
+          האפליקציה שומרת מקומית את היסטוריית הצ'אט האחרונה, הסוכן האחרון, הסקיל האחרון והעדפות שנלמדו, כדי שלא תצטרך להסביר הכול מחדש בכל פתיחה.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+          <span style={{ fontSize: 10, background: '#EEF2FF', color: '#3730A3', padding: '4px 8px', borderRadius: 999 }}>שיחות שמורות: {(memorySnapshot.recentChats || []).length}</span>
+          <span style={{ fontSize: 10, background: '#ECFDF5', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>תזכורות פעילות: {(memorySnapshot.memoryNotes || []).length}</span>
+          <span style={{ fontSize: 10, background: '#F8FAFC', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>סקיל אחרון: {memorySnapshot.lastSelectedSkillId || 'ללא'}</span>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>איפה עושים כל דבר?</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+          {[
+            { title: 'דף הבית', text: 'רק להתחלת מסמך, פתיחת טיוטה וטעינת חומרי עזר.' },
+            { title: 'הגדרות', text: 'כל מה שקשור לסקילים, זיכרון, סגנון אישי, גופנים ומנועי AI.' },
+            { title: 'חלונית AI', text: 'לשאול, לשכתב, לבחור סוכן עם @ או סקיל עם /.' },
+          ].map((item) => (
+            <div key={item.title} style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 11px', background: '#FAFAFA' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>{item.title}</div>
+              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>{item.text}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>זרימת עבודה מומלצת</div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {[
+            '1. פתח מסמך ריק או בחר תבנית מדף הבית.',
+            '2. אם צריך, צרף חומרי עזר והנחיות למסמך הנוכחי בלבד.',
+            '3. פתח את חלונית ה-AI ובקש ניסוח, שכתוב או בניית שלד.',
+            '4. הקלד @ כדי לבחור סוכן ייעודי, או / כדי לבחור סקיל ממוקד.',
+            '5. אם התוצאה טובה — לחץ על הוספה למסמך. אם לא, חדד את הבקשה במשפט קצר נוסף.',
+            '6. להתאמה קבועה פתח את טאב הסקילים או הסגנון האישי בהגדרות.',
+          ].map((step) => (
+            <div key={step} style={{ fontSize: 12, color: '#334155', lineHeight: 1.7, borderRight: '3px solid #2B579A', paddingRight: 10, background: '#F8FAFC', borderRadius: 8, paddingTop: 8, paddingBottom: 8, paddingLeft: 8 }}>{step}</div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>הדגמות מוכנות להעתקה</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {demoPrompts.map((item) => (
+            <div key={item.title} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 11px', background: '#F8FAFC' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>{item.title}</div>
+              <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed #CBD5E1', borderRadius: 8, padding: '8px 9px' }}>
+                {item.text}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -682,6 +960,28 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
+  const trainingAnswers = profile.learningGameAnswers || {};
+  const answeredCount = Object.keys(trainingAnswers).length;
+  const trainingComplete = answeredCount >= STYLE_TRAINING_QUESTIONS.length;
+
+  const selectLearningOption = (questionId, optionId) => {
+    setProfile((prev) => ({
+      ...prev,
+      ...buildLearningGameProfilePatch({ ...(prev.learningGameAnswers || {}), [questionId]: optionId }),
+    }));
+  };
+
+  const resetLearningGame = () => {
+    setProfile((prev) => ({
+      ...prev,
+      learningGameAnswers: {},
+      learningGameInsights: [],
+      learningGamesCompletedAt: '',
+      styleTrainingSummary: '',
+      preferredTrainingExamples: [],
+      dislikedStylePatterns: [],
+    }));
+  };
 
   useEffect(() => {
     loadProjectMaterials().then((items) => setRecentMaterials(items.slice(0, 4))).catch(() => {});
@@ -742,6 +1042,57 @@ function PersonalStyleSettings({ profile, setProfile }) {
           <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
             {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
           </span>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #DDD6FE', borderRadius: 12, padding: '14px', background: '#F8F7FF', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#5B21B6' }}>משחק "למד אותי"</div>
+            <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.6, marginTop: 4 }}>
+              בחר את הניסוחים שהכי קרובים אליך, והסוכן ילמד את הסגנון הרצוי באופן מקומי ושקט.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 10, background: trainingComplete ? '#DCFCE7' : '#EDE9FE', color: trainingComplete ? '#166534' : '#6D28D9', padding: '4px 8px', borderRadius: 999, fontWeight: 700 }}>
+              {answeredCount} / {STYLE_TRAINING_QUESTIONS.length} הושלמו
+            </span>
+            <button
+              type="button"
+              onClick={resetLearningGame}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #D8B4FE', background: 'white', color: '#6D28D9', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+            >
+              אפס אימון
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gap: 10 }}>
+          {STYLE_TRAINING_QUESTIONS.map((question) => (
+            <div key={question.id} style={{ border: '1px solid #E9D5FF', borderRadius: 10, padding: '10px', background: 'white' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8 }}>{question.title}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {question.options.map((option) => {
+                  const selected = trainingAnswers[question.id] === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => selectLearningOption(question.id, option.id)}
+                      style={{ textAlign: 'right', padding: '10px 11px', borderRadius: 10, border: `1px solid ${selected ? '#8B5CF6' : '#E5E7EB'}`, background: selected ? '#F3E8FF' : '#FAFAFA', cursor: 'pointer' }}
+                    >
+                      <div style={{ fontSize: 10, color: selected ? '#6D28D9' : '#64748B', fontWeight: 700, marginBottom: 5 }}>{option.label}</div>
+                      <div style={{ fontSize: 11, color: '#1F2937', lineHeight: 1.7 }}>{option.text}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 11, color: '#475569', lineHeight: 1.7, background: 'white', border: '1px solid #E9D5FF', borderRadius: 10, padding: '9px 10px' }}>
+          <strong>מה למדתי עד עכשיו:</strong> {profile.styleTrainingSummary || 'עדיין אין מספיק בחירות כדי לבנות תקציר סגנון אישי.'}
         </div>
       </div>
 
@@ -879,6 +1230,11 @@ function PersonalStyleSettings({ profile, setProfile }) {
             rows={2}
             style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
           />
+        </div>
+
+        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '8px 10px', marginBottom: 10 }}>
+          סקיל הסגנון הקיים משתמש עכשיו גם בלמידה אוטומטית מהרקע. כשהאפשרות פעילה, האפליקציה לומדת מקומית מהמסמך הפעיל ומהתיקונים שלך לאורך הזמן.
+          {profile.autoLearnedFromEditorAt ? <div style={{ marginTop: 4, color: '#64748B' }}>עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}</div> : null}
         </div>
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
@@ -1023,6 +1379,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const presets = getWorkspaceAgentPresets();
   const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
   const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
+  const isAutopilotManagerMode = ['manager-auto', 'circular-team'].includes(automation?.workflowMode) && automation?.autopilotEnabled !== false;
 
   const updateAgent = (index, field, value) => {
     setAgents(prev => prev.map((agent, i) => i === index ? { ...agent, [field]: value } : agent));
@@ -1081,7 +1438,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const removeAgent = (index) => {
     setAgents((prev) => {
       const target = prev[index];
-      if (automation?.workflowMode === 'manager-auto' && /manager|מנהל/i.test(`${target?.id || ''} ${target?.name || ''}`)) {
+      if (['manager-auto', 'circular-team'].includes(automation?.workflowMode) && /manager|מנהל/i.test(`${target?.id || ''} ${target?.name || ''}`)) {
         return prev;
       }
       return prev.filter((_, i) => i !== index);
@@ -1099,8 +1456,19 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         הוסף סוכני AI לפי תפקידים, וקבע לכל אחד מהם הוראות עבודה משלו.
       </p>
 
-      <div style={{ border: '1px solid #D1FAE5', borderRadius: 12, padding: '10px 12px', background: '#F0FDF4', marginBottom: 14, fontSize: 11, color: '#166534', lineHeight: 1.7 }}>
+      <div style={{ border: '1px solid #D1FAE5', borderRadius: 12, padding: '10px 12px', background: '#F0FDF4', marginBottom: 10, fontSize: 11, color: '#166534', lineHeight: 1.7 }}>
         כאן בדיוק אפשר לשלב כמה מודלים יחד: בחר לכל סוכן ספק ומודל שונים, והמערכת תריץ אותם לפי סדר העבודה שהגדרת.
+      </div>
+
+      <div style={{ border: `1px solid ${isAutopilotManagerMode ? '#BFDBFE' : '#DDD6FE'}`, borderRadius: 12, padding: '12px 14px', background: isAutopilotManagerMode ? '#F8FBFF' : '#F8F7FF', marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: isAutopilotManagerMode ? '#1E3A8A' : '#6D28D9', marginBottom: 6 }}>
+          חוקי ההכרעה הפעילים
+        </div>
+        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+          {isAutopilotManagerMode
+            ? 'במצב הזה כל סוכן מדווח מה הושלם ומה עדיין חסר, ומנהל הצוות הוא זה שמחליט על הצעד הבא.'
+            : 'במצב הזה כל סוכן עדיין מדווח מה חסר, אבל ההמשך נקבע לפי כללים וסקילים פעילים ולא על ידי מנהל מרכזי.'}
+        </div>
       </div>
 
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
@@ -1133,8 +1501,13 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               value={automation?.workflowMode || 'manager-pipeline'}
               onChange={(e) => {
                 const nextMode = e.target.value;
-                setAutomation(prev => ({ ...prev, workflowMode: nextMode, preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset }));
-                if (nextMode === 'manager-auto') {
+                setAutomation(prev => ({
+                  ...prev,
+                  workflowMode: nextMode,
+                  preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset,
+                  circularWorkflowEnabled: nextMode === 'circular-team' ? true : false,
+                }));
+                if (nextMode === 'manager-auto' || nextMode === 'circular-team') {
                   setAgents((prev) => {
                     const hasManager = prev.some((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
                     const hasAdditionalRoles = prev.some((agent) => !/manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
@@ -1151,8 +1524,9 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               }}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
-              <option value="manager-auto">AUTOPILOT מלא — המנהל קובע תפקידים, סדר ואסטרטגיה</option>
-              <option value="manager-pipeline">מנהל ← מקורות ← מבנה ← כתיבה ← ליטוש</option>
+              <option value="manager-auto">טייס אוטומטי — מנהל הצוות מחליט</option>
+              <option value="circular-team">סביבה מעגלית — שיפור בסבבים</option>
+              <option value="manager-pipeline">מצב רגיל — כללים וסקילים מובילים</option>
               <option value="design-first">מבנה קודם</option>
               <option value="research-first">חקר קודם</option>
               <option value="custom-order">סדר מותאם אישית</option>
@@ -1211,7 +1585,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           </div>
         </div>
 
-        {automation?.workflowMode === 'manager-auto' && (
+        {['manager-auto', 'circular-team'].includes(automation?.workflowMode) && (
           <div style={{ marginTop: 10, fontSize: 11, color: '#1E3A8A', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '8px 10px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, marginBottom: 4 }}>
               <input
@@ -1223,8 +1597,29 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             </label>
             כשהאפשרות פעילה, מנהל העבודה מחליט לבד מי צריך לעבוד, באיזה סדר, ואיזה תפקיד זמני יהיה לכל שלב.
             <div style={{ marginTop: 6, color: '#334155' }}>
-              במצב הזה מוצגות למטה רק הגדרות המנהל. שאר התפקידים נקבעים אוטומטית בזמן הריצה.
+              במצב מעגלי, אם מתגלים פערים, הסוכן הכותב או סוכנים אחרים יכולים לחזור לעוד סבב שיפור.
             </div>
+            {automation?.workflowMode === 'circular-team' && (
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={automation?.circularWorkflowEnabled === true}
+                    onChange={(e) => setAutomation(prev => ({ ...prev, circularWorkflowEnabled: e.target.checked }))}
+                  />
+                  אפשר חזרה לסוכן קודם
+                </label>
+                <span style={{ color: '#605E5C' }}>מקסימום סבבים לכל סוכן</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="4"
+                  value={automation?.circularMaxRounds ?? 2}
+                  onChange={(e) => setAutomation(prev => ({ ...prev, circularMaxRounds: Math.max(1, Math.min(4, Number(e.target.value) || 2)) }))}
+                  style={{ width: 64, padding: '6px 8px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -1281,7 +1676,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
       </div>
 
-      {automation?.workflowMode === 'manager-auto' && managerAgent && (
+      {isAutopilotManagerMode && managerAgent && (
         <div style={{ border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
             <div>
@@ -1329,7 +1724,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {agents.map((agent, index) => {
-          if (automation?.workflowMode === 'manager-auto' && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
+          if (['manager-auto', 'circular-team'].includes(automation?.workflowMode) && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
             return null;
           }
           return (
@@ -1346,24 +1741,24 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               />
               <button
                 type="button"
-                disabled={automation?.workflowMode === 'manager-auto' || index === 0}
+                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0}
                 onClick={() => moveAgent(index, -1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (automation?.workflowMode === 'manager-auto' || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (automation?.workflowMode === 'manager-auto' || index === 0) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0) ? 'default' : 'pointer' }}
               >
                 ↑
               </button>
               <button
                 type="button"
-                disabled={automation?.workflowMode === 'manager-auto' || index === agents.length - 1}
+                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1}
                 onClick={() => moveAgent(index, 1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (automation?.workflowMode === 'manager-auto' || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (automation?.workflowMode === 'manager-auto' || index === agents.length - 1) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1) ? 'default' : 'pointer' }}
               >
                 ↓
               </button>
               <button
                 onClick={() => removeAgent(index)}
-                disabled={automation?.workflowMode === 'manager-auto'}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: automation?.workflowMode === 'manager-auto' ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: automation?.workflowMode === 'manager-auto' ? 'default' : 'pointer', opacity: automation?.workflowMode === 'manager-auto' ? 0.6 : 1 }}
+                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode)}
+                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? 'default' : 'pointer', opacity: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? 0.6 : 1 }}
               >
                 מחק
               </button>
@@ -1430,7 +1825,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         })}
       </div>
 
-      {automation?.workflowMode !== 'manager-auto' && (
+      {!['manager-auto', 'circular-team'].includes(automation?.workflowMode) && (
         <button
           onClick={addAgent}
           style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
@@ -1753,12 +2148,21 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   }, [initialSettingsTab]);
 
   useEffect(() => {
+    const syncProfile = () => {
+      setPersonalStyleState((prev) => mergePersonalStyleForSave(prev));
+    };
+
+    window.addEventListener('wordai-personal-style-updated', syncProfile);
+    return () => window.removeEventListener('wordai-personal-style-updated', syncProfile);
+  }, []);
+
+  useEffect(() => {
     if (!didHydrate.current) {
       didHydrate.current = true;
       return;
     }
 
-    const normalizedPersonalStyle = finalizePersonalProfile(personalStyleState);
+    const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
     if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
 
     saveProviderConfig(config);
@@ -1796,7 +2200,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const handleItem = (id) => { onCommand(id); if (id !== 'print') onClose(); };
 
   const handleSave = () => {
-    const normalizedPersonalStyle = finalizePersonalProfile(personalStyleState);
+    const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
     if (normalizedPersonalStyle !== personalStyleState) setPersonalStyleState(normalizedPersonalStyle);
 
     saveProviderConfig(config);
@@ -1875,7 +2279,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </nav>
 
         <div style={{ padding: '12px 20px', fontSize: 10, opacity: 0.4, borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          WordFlow AI v1.0.12
+          WordFlow AI v1.0.13
         </div>
       </div>
 
@@ -1893,16 +2297,23 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
             <h2 style={{ fontSize: 24, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הגדרות</h2>
             <p style={{ fontSize: 13, color: '#919191', marginBottom: 28 }}>WordFlow AI</p>
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', borderBottom: '1px solid #E1DFDD', marginBottom: 28 }}>
-              {[['ai', '🤖 מנועי AI'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכני תפקיד'], ['updates', '⬆️ עדכונים'], ['debug', '🪵 לוגים'], ['assistant', '✨ עוזר חכם'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']].map(([id, label]) => (
-                <button key={id} onClick={() => setSettingsTab(id)}
-                  style={{ padding: '9px 22px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: settingsTab === id ? 700 : 400, color: settingsTab === id ? '#2B579A' : '#605E5C', borderBottom: settingsTab === id ? '2px solid #2B579A' : '2px solid transparent', marginBottom: -1, transition: 'all 0.15s' }}>
-                  {label}
-                </button>
+            <div style={{ display: 'grid', gap: 10, marginBottom: 28 }}>
+              {SETTINGS_TAB_GROUPS.map((group) => (
+                <div key={group.title} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '10px 12px', background: '#FAFAFA' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginBottom: 8 }}>{group.title}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {group.tabs.map(([id, label]) => (
+                      <button key={id} onClick={() => setSettingsTab(id)}
+                        style={{ padding: '8px 12px', borderRadius: 999, border: settingsTab === id ? '1px solid #93C5FD' : '1px solid #E5E7EB', background: settingsTab === id ? '#EFF6FF' : 'white', cursor: 'pointer', fontSize: 12, fontWeight: settingsTab === id ? 700 : 500, color: settingsTab === id ? '#1D4ED8' : '#475569', transition: 'all 0.15s' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
 
+            {settingsTab === 'guide'       && <GuideSettings />}
             {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
             {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
             {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}

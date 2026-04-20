@@ -101,6 +101,13 @@ export const DEFAULT_PERSONAL_STYLE = {
   learningGameAnswers: {},
   learningGameInsights: [],
   learningGamesCompletedAt: '',
+  styleTrainingSummary: '',
+  preferredTrainingExamples: [],
+  dislikedStylePatterns: [],
+  autoLearnedFromEditorAt: '',
+  lastAutoLearnedSignature: '',
+  autoLearnedVocabularyCounts: {},
+  autoLearnedPhraseCounts: {},
   userBackground: '',
   writingGoals: '',
   defaultAudience: '',
@@ -138,6 +145,8 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   workflowMode: 'manager-auto',
   autoDispatch: true,
   autopilotEnabled: true,
+  circularWorkflowEnabled: false,
+  circularMaxRounds: 2,
   workspaceName: 'סביבת עבודה מותאמת',
   sharedGoal: '',
   retryEnabled: true,
@@ -218,6 +227,8 @@ export const DEFAULT_SKILLS_CONFIG = {
   autoApplyDefault: false,
   skills: Object.fromEntries(SKILL_LIBRARY.map((skill) => [skill.id, {
     mode: skill.id === 'style-guardian' ? 'auto' : 'manual',
+    customInstruction: '',
+    customKeywords: [],
   }])),
 };
 
@@ -404,6 +415,13 @@ const normalizeSkillMode = (value = '') => {
   return ['manual', 'auto', 'off'].includes(clean) ? clean : 'manual';
 };
 
+const normalizeSkillText = (value = '', limit = 1600) => String(value || '').trim().slice(0, limit);
+
+const normalizeSkillKeywords = (value = []) => {
+  const raw = Array.isArray(value) ? value.join(',') : String(value || '');
+  return [...new Set(raw.split(/[\n,•]+/).map((item) => item.trim()).filter(Boolean))].slice(0, 20);
+};
+
 export const getSkillCatalog = () => SKILL_LIBRARY.map((skill) => ({ ...skill }));
 
 export const getSkillsConfig = () => {
@@ -413,6 +431,8 @@ export const getSkillsConfig = () => {
   SKILL_LIBRARY.forEach((skill) => {
     skills[skill.id] = {
       mode: normalizeSkillMode(stored.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode || 'manual'),
+      customInstruction: normalizeSkillText(stored.skills?.[skill.id]?.customInstruction || ''),
+      customKeywords: normalizeSkillKeywords(stored.skills?.[skill.id]?.customKeywords || []),
     };
   });
 
@@ -442,6 +462,8 @@ export const saveSkillsConfig = (config = {}) => {
   SKILL_LIBRARY.forEach((skill) => {
     next.skills[skill.id] = {
       mode: normalizeSkillMode(config.skills?.[skill.id]?.mode || current.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode),
+      customInstruction: normalizeSkillText(config.skills?.[skill.id]?.customInstruction || current.skills?.[skill.id]?.customInstruction || ''),
+      customKeywords: normalizeSkillKeywords(config.skills?.[skill.id]?.customKeywords || current.skills?.[skill.id]?.customKeywords || []),
     };
   });
 
@@ -529,6 +551,7 @@ export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().wor
 
   const desiredOrders = {
     'manager-auto': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
+    'circular-team': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
     'manager-pipeline': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
     'design-first': ['designer', 'manager', 'writer', 'researcher', 'proofreader'],
     'research-first': ['researcher', 'manager', 'designer', 'writer', 'proofreader'],
@@ -730,9 +753,13 @@ export const getActiveProviderName = () => {
   return names[cfg.active] || 'AI';
 };
 
-const getSkillMatchScore = (skill = {}, text = '') => {
+const getSkillMatchScore = (skill = {}, text = '', skillConfig = {}) => {
   const haystack = String(text || '').toLowerCase();
-  return (Array.isArray(skill.keywords) ? skill.keywords : []).reduce((score, keyword) => {
+  const keywords = [...new Set([
+    ...(Array.isArray(skill.keywords) ? skill.keywords : []),
+    ...normalizeSkillKeywords(skillConfig?.customKeywords || []),
+  ])];
+  return keywords.reduce((score, keyword) => {
     const token = String(keyword || '').trim().toLowerCase();
     return token && haystack.includes(token) ? score + 1 : score;
   }, 0);
@@ -752,9 +779,10 @@ const resolveSkillForRequest = ({ userPrompt = '', documentContext = '', skillId
   const contextText = String(documentContext || '');
   const autoCandidate = SKILL_LIBRARY
     .map((skill) => {
-      if ((config.skills?.[skill.id]?.mode || 'manual') !== 'auto') return { skill, score: 0 };
-      const promptScore = getSkillMatchScore(skill, promptText);
-      const contextScore = Math.min(1, getSkillMatchScore(skill, contextText));
+      const skillConfig = config.skills?.[skill.id] || {};
+      if ((skillConfig.mode || 'manual') !== 'auto') return { skill, score: 0 };
+      const promptScore = getSkillMatchScore(skill, promptText, skillConfig);
+      const contextScore = Math.min(1, getSkillMatchScore(skill, contextText, skillConfig));
       return { skill, score: (promptScore * 3) + contextScore };
     })
     .filter((item) => item.score > 0)
@@ -773,20 +801,29 @@ const resolveSkillForRequest = ({ userPrompt = '', documentContext = '', skillId
   return { skill: null, reason: 'none' };
 };
 
-const buildSkillSystemPrompt = (skill = null, reason = 'manual') => {
+const buildSkillSystemPrompt = (skill = null, reason = 'manual', skillConfig = null) => {
   if (!skill?.prompt) return '';
   const reasonText = reason === 'auto'
     ? 'הסקיל הופעל אוטומטית לפי סוג הבקשה.'
     : reason === 'default'
       ? 'זהו סקיל ברירת המחדל שהוגדר למשתמש.'
       : 'הסקיל הופעל ידנית על ידי המשתמש.';
-  return `סקיל פעיל: ${skill.label}.\n${reasonText}\n${skill.prompt}`;
+  const customInstruction = normalizeSkillText(skillConfig?.customInstruction || '');
+  const customKeywords = normalizeSkillKeywords(skillConfig?.customKeywords || []);
+  return [
+    `סקיל פעיל: ${skill.label}.`,
+    reasonText,
+    skill.prompt,
+    customInstruction ? `התאמה אישית שהמשתמש הגדיר לסקיל:\n${customInstruction}` : '',
+    customKeywords.length ? `מילות זיהוי שהוגדרו לסקיל: ${customKeywords.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
 };
 
 const buildWorkspaceAutomationInstructions = () => {
   const automation = getWorkspaceAutomation();
   if (!automation.enabled) return '';
 
+  const decisionMode = getDecisionMode(automation);
   const enabledAgents = getOrderedRoleAgents(automation.workflowMode);
   const agentNames = enabledAgents.map((agent) => agent.name).filter(Boolean);
   const agentInstructions = enabledAgents
@@ -797,8 +834,11 @@ const buildWorkspaceAutomationInstructions = () => {
     ? `עבוד לפי סדר הסוכנים המותאם שהוגדר על ידי המשתמש: ${agentNames.join(' ← ')}.`
     : 'עבוד לפי סדר הסוכנים שהוגדר על ידי המשתמש.';
 
+  const circularEnabled = automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false;
+
   const workflowMap = {
     'manager-auto': 'עבוד במצב AUTOPILOT מלא: קודם תכנן, אחר כך קבע לבד אילו תפקידים נדרשים, איזה מודל מתאים לכל שלב, ובאיזה סדר להפעיל אותם. החזר תהליך מתואם וסופי.',
+    'circular-team': 'עבוד כצוות מעגלי: הסוכנים לא חייבים לרוץ רק בקו ישר. אם מתגלים פערים, אפשר להחזיר את הכתיבה, המבנה או הליטוש לסבב נוסף עד שהתוצר מתייצב.',
     'manager-pipeline': 'עבוד כצוות אוטומטי: קודם מנהל העבודה מפרק את הבקשה, אחר כך החוקר מאתר מקורות, לאחר מכן מעצב המבנה מארגן את השלד, הכותב מנסח, ולבסוף המגיה מלטש. החזר למשתמש תוצאה סופית מגובשת.',
     'design-first': 'עבוד בסדר הבא: מבנה וארגון, אחר כך ניסוח תוכן, אחר כך ליטוש. כשהנושא מעורפל, התחל תמיד משלד ברור.',
     'research-first': 'עבוד בסדר הבא: חקר שאלות ומקורות, בניית שלד, כתיבה, ולבסוף ליטוש. אל תמציא עובדות שלא נתמכות בהקשר.',
@@ -812,8 +852,14 @@ const buildWorkspaceAutomationInstructions = () => {
     agentNames.length ? `תפקידי הצוות הפעילים: ${agentNames.join(' → ')}.` : '',
     agentInstructions ? `הנחיות התפקידים הפעילים:\n${agentInstructions}` : '',
     workflowMap[automation.workflowMode] || workflowMap['manager-auto'],
-    automation.workflowMode === 'manager-auto'
+    decisionMode === 'manager'
+      ? 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, ומנהל העבודה הוא זה שמכריע על הצעד הבא.'
+      : 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, והמשך הזרימה ייקבע לפי כללים וסקילים פעילים.',
+    ['manager-auto', 'circular-team'].includes(automation.workflowMode) && decisionMode === 'manager'
       ? 'פעל כמו מנהל עבודה אמיתי: נתח את ההנחיה, את טיוטת המסמך ואת חומרי העזר, בחר אילו סוכנים באמת נדרשים, קבע סדר, והעבר ביניהם שרביט עם משימות ברורות.'
+      : '',
+    circularEnabled
+      ? `מותר לבצע חזרה לסוכן קודם אם התוצר עדיין לא בשל. לכל היותר ${Math.max(1, Math.min(4, Number(automation.circularMaxRounds || 2)))} סבבים לכל סוכן.`
       : '',
     automation.autoDispatch === false
       ? 'הצע חלוקת תפקידים, אך אל תדלג אוטומטית בין שלבים בלי צורך ברור.'
@@ -901,18 +947,22 @@ const resolveStageAgent = (token, enabledAgents = []) => {
   }) || null;
 };
 
-const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = []) => {
+const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = [], activeSkill = null) => {
   const combined = `${userPrompt}\n${documentContext}`;
-  const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר|צוק איתן|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combined);
-  const needsResearch = isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined);
-  const needsStructure = /(שלד|מבנה|outline|כותרות|פרקים|טיוטה)/i.test(combined) || String(documentContext || '').trim().length < 1600;
+  const skillId = String(activeSkill?.id || '').trim().toLowerCase();
+  const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combined);
+  const skillPrefersResearch = ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId);
+  const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
+  const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
+  const needsResearch = skillPrefersResearch || isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined);
+  const needsStructure = skillPrefersStructure || /(שלד|מבנה|outline|כותרות|פרקים|טיוטה)/i.test(combined) || String(documentContext || '').trim().length < 1600;
 
   const candidateOrder = [
     'manager',
     needsResearch ? 'researcher' : '',
     needsStructure ? 'designer' : '',
     'writer',
-    'proofreader',
+    (skillPrefersPolish || needsResearch || needsStructure) ? 'proofreader' : '',
   ].filter(Boolean);
 
   const orderedAgents = [];
@@ -927,45 +977,175 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
   orderedAgents.forEach((agent) => {
     const id = String(agent.id || '').toLowerCase();
     if (id.includes('manager')) stageGoals[agent.id] = 'בנה תוכנית קצרה, בחר שלבים נדרשים, והכן הוראות מסירה ממוקדות לסוכן הבא.';
-    else if (id.includes('research')) stageGoals[agent.id] = 'חלץ מהחומרים והטיוטה מקורות, כיווני חיפוש, נקודות עובדתיות וטענות שניתן לבסס. אין להמציא ציטוטים.';
-    else if (id.includes('design')) stageGoals[agent.id] = 'ארגן שלד טיעוני ברור, סדר פרקים ותתי-כותרות לפי מטרת העבודה.';
+    else if (id.includes('research')) stageGoals[agent.id] = skillPrefersResearch
+      ? 'התמקד באיתור פערי ידע, כיווני חיפוש, מקורות ומונחי חיפוש. אין להמציא ציטוטים.'
+      : 'חלץ מהחומרים והטיוטה מקורות, כיווני חיפוש, נקודות עובדתיות וטענות שניתן לבסס. אין להמציא ציטוטים.';
+    else if (id.includes('design')) stageGoals[agent.id] = skillPrefersStructure
+      ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי על בסיס הבקשה.'
+      : 'ארגן שלד טיעוני ברור, סדר פרקים ותתי-כותרות לפי מטרת העבודה.';
     else if (id.includes('writer')) stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים.';
-    else if (id.includes('proof')) stageGoals[agent.id] = 'בצע בקרת איכות סופית: דיוק, אחידות, בהירות, ועמידה בדרישות אקדמיות.';
+    else if (id.includes('proof')) stageGoals[agent.id] = skillPrefersPolish
+      ? 'בצע מעבר ליטוש קפדני: אחידות, בהירות, תיקון בעיות וטון עקבי לפני החזרה למשתמש.'
+      : 'בצע בקרת איכות סופית: דיוק, אחידות, בהירות, ועמידה בדרישות אקדמיות.';
   });
 
-  return {
-    summary: isAcademic
+  const summaryParts = [
+    activeSkill?.label ? `הסקיל הפעיל "${activeSkill.label}" משפיע על סדר העבודה.` : '',
+    isAcademic
       ? 'זוהתה משימה אקדמית או מבוססת מקורות; יש להפעיל חקר לפני כתיבה, ואז ללטש את הנוסח הסופי.'
       : 'זוהתה משימת כתיבה מורכבת; יש לתאם בין תכנון, ניסוח ובקרת איכות.',
+  ].filter(Boolean);
+
+  return {
+    summary: summaryParts.join(' '),
     orderedAgents,
     stageGoals,
     stageProviders: {},
-    needsFinalManagerReview: isAcademic,
+    needsFinalManagerReview: isAcademic || skillId === 'final-submission',
   };
 };
 
 const parseStagePacket = (reply = '') => {
   const raw = stripCodeFences(reply);
   const extract = (label) => {
-    const match = raw.match(new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?=\\n(?:DELIVERABLE|HANDOFF|CHECKLIST)\\s*:|$)`, 'i'));
+    const match = raw.match(new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?=\\n(?:DELIVERABLE|HANDOFF|MISSING|DECISION|CHECKLIST)\\s*:|$)`, 'i'));
     return String(match?.[1] || '').trim();
   };
 
   const deliverable = extract('DELIVERABLE');
   const handoff = extract('HANDOFF');
+  const missing = extract('MISSING');
+  const decision = extract('DECISION');
   const checklist = extract('CHECKLIST');
 
   return {
     raw,
     deliverable: deliverable || raw,
     handoff,
+    missing,
+    decision,
     checklist,
   };
 };
 
-const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1 }) => {
+const getCircularRoundLimit = (automation = {}) => Math.max(1, Math.min(4, Number(automation?.circularMaxRounds || 2)));
+
+const getDecisionMode = (automation = {}) => {
+  if (automation?.workflowMode === 'manager-auto') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
+  if (automation?.workflowMode === 'circular-team') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
+  return 'rules';
+};
+
+const getPacketReviewText = (packet = {}) => {
+  const structured = [packet.handoff, packet.missing, packet.decision, packet.checklist].filter(Boolean).join('\n');
+  return structured || String(packet.raw || '');
+};
+
+const inferGapTags = (packet = {}) => {
+  const text = getPacketReviewText(packet);
+  if (!text) return [];
+
+  const tags = [];
+  if (/(מקור|מקורות|ציטוט|citation|source|sources|מחקר|research|google scholar)/i.test(text)) tags.push('research');
+  if (/(מבנה|שלד|outline|כותרת|כותרות|פרקים|סדר|ארגון)/i.test(text)) tags.push('structure');
+  if (/(להרחיב|פירוט|דוגמא|דוגמה|ניסוח|שכתוב|rewrite|טיעון|כתיבה)/i.test(text)) tags.push('writing');
+  if (/(דיוק|אימות|בדיקת עובדות|טעות|חסר דיוק|לא מדויק)/i.test(text)) tags.push('accuracy');
+  if (/(ליטוש|פיסוק|דקדוק|בהירות|עקביות|אחידות|tone|style)/i.test(text)) tags.push('quality');
+  return [...new Set(tags)];
+};
+
+const getSuggestedSkillIdsFromPacket = (packet = {}, skillsConfig = getSkillsConfig()) => {
+  const gapTags = inferGapTags(packet);
+  const preferred = [];
+  if (gapTags.includes('research')) preferred.push('source-hunter', 'citation-weaver');
+  if (gapTags.includes('structure')) preferred.push('academic-structure');
+  if (gapTags.includes('writing')) preferred.push('draft-from-materials', 'style-guardian');
+  if (gapTags.includes('quality') || gapTags.includes('accuracy')) preferred.push('consistency-checker', 'final-submission', 'style-guardian');
+  return [...new Set(preferred)].filter((skillId) => (skillsConfig.skills?.[skillId]?.mode || 'manual') !== 'off');
+};
+
+const extractRequestedSkills = (packet = {}, skillsConfig = getSkillsConfig()) => {
+  const text = [packet.decision, packet.handoff, packet.missing, packet.raw].filter(Boolean).join('\n');
+  const explicit = [];
+  String(text || '').replace(/SKILL\s*:\s*([^\n]+)/gi, (_, chunk) => {
+    explicit.push(...String(chunk || '').split(/[>,/|]| ו/).map((item) => item.trim().toLowerCase()).filter(Boolean));
+    return _;
+  });
+
+  return [...new Set([...explicit, ...getSuggestedSkillIdsFromPacket(packet, skillsConfig)])]
+    .filter((skillId) => KNOWN_SKILL_IDS.includes(skillId))
+    .filter((skillId) => (skillsConfig.skills?.[skillId]?.mode || 'manual') !== 'off');
+};
+
+const extractRevisitAgents = (packet = {}, enabledAgents = []) => {
+  const text = [packet.handoff, packet.missing, packet.decision, packet.checklist, packet.raw].filter(Boolean).join('\n');
+  if (!text) return [];
+
+  const requestedTokens = [];
+  [
+    /REVISIT\s*:\s*([^\n]+)/gi,
+    /סבב נוסף\s*:\s*([^\n]+)/gi,
+    /חזור(?:ו)? אל\s*([^\n]+)/gi,
+  ].forEach((regex) => {
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      requestedTokens.push(String(match[1] || ''));
+    }
+  });
+
+  return requestedTokens
+    .flatMap((chunk) => chunk.split(/[>,/|]| ו/).map((item) => item.trim()).filter(Boolean))
+    .map((token) => resolveStageAgent(token, enabledAgents))
+    .filter(Boolean)
+    .filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index);
+};
+
+const getManagerReviewRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRunCounts, maxRounds }) => {
+  const reviewText = `${packet?.missing || ''}\n${packet?.decision || ''}\n${packet?.handoff || ''}`;
+  const suggestsAnotherPass = /(חסר|נדרש|דורש|לתקן|לחדד|לשפר|להרחיב|לא עקבי|אי-דיוק|פער)/i.test(reviewText);
+  if (!suggestsAnotherPass) return [];
+  if (getAgentRoleKey(stageAgent) === 'manager') return [];
+  const managerAgent = resolveStageAgent('manager', enabledAgents);
+  if (!managerAgent) return [];
+  if ((agentRunCounts?.[managerAgent.id] || 0) >= maxRounds) return [];
+  return [managerAgent];
+};
+
+const getDecisionDirectives = (packet = {}) => {
+  const decisionText = String(packet?.decision || '').trim();
+  return {
+    stop: /(^|\b)STOP(\b|$)|עצור|סיום סופי|מוכן להחזרה/i.test(decisionText),
+    managerDecide: /MANAGER_DECIDE|העבר למנהל|הכרעת מנהל/i.test(decisionText),
+  };
+};
+
+const getRuleDrivenRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRunCounts, maxRounds }) => {
+  const gapTags = inferGapTags(packet);
+  if (!gapTags.length) return [];
+
+  const requestedTokens = [];
+  if (gapTags.includes('research')) requestedTokens.push('researcher');
+  if (gapTags.includes('structure')) requestedTokens.push('designer');
+  if (gapTags.includes('writing') || gapTags.includes('accuracy')) requestedTokens.push('writer');
+  if (gapTags.includes('quality')) requestedTokens.push('proofreader');
+
+  if (getAgentRoleKey(stageAgent) === 'proofreader' && (gapTags.includes('writing') || gapTags.includes('structure') || gapTags.includes('accuracy'))) {
+    requestedTokens.unshift('writer');
+  }
+
+  return requestedTokens
+    .map((token) => resolveStageAgent(token, enabledAgents))
+    .filter(Boolean)
+    .filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index)
+    .filter((agent) => (agentRunCounts?.[agent.id] || 0) < maxRounds);
+};
+
+const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager' }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
   const currentOutputBlock = stagedOutput ? `תוצר עדכני עד כה:\n${stagedOutput}` : '';
+  const decisionGuidance = decisionMode === 'manager'
+    ? 'מצב העבודה כרגע הוא טייס אוטומטי: אתה חייב לציין בסוף במפורש מה עדיין חסר. אם נדרשת הכרעה נוספת, כתוב ב-DECISION: MANAGER_DECIDE והמנהל יחליט על הצעד הבא.'
+    : 'מצב העבודה כרגע הוא רגיל: אתה חייב לציין בסוף מה עדיין חסר, וב-DECISION להמליץ לפי כללים וסקילים על הצעד הבא, למשל REVISIT: writer או SKILL: source-hunter.';
 
   return [
     `בקשת המשתמש המקורית:\n${cleanUserPrompt}`,
@@ -973,18 +1153,23 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     batonBlock,
     currentOutputBlock,
     stageGoal ? `יעד השלב הנוכחי:\n${stageGoal}` : '',
-    `אתה פועל בשלב ${index + 1} מתוך ${total}.`,
+    revisitReason ? `למה הוחזרת עכשיו לסבב נוסף:\n${revisitReason}` : '',
+    `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
+    decisionGuidance,
+    allowCircular ? 'אם לדעתך צריך להחזיר סוכן קודם לעוד סבב, אפשר לציין זאת ב-DECISION או ב-HANDOFF עם REVISIT: writer, designer, researcher, proofreader או manager.' : '',
     'החזר את התשובה במבנה הבא בלבד:',
     'DELIVERABLE:\nהתוצר המלא שעובר לשלב הבא או חוזר למשתמש',
     'HANDOFF:\n2-5 נקודות קצרות לסוכן הבא: מה כבר נסגר, מה עוד חסר, ועל מה חשוב לשמור',
+    'MISSING:\nרשימת פערים קצרה. אם הכול מוכן כתוב: אין פערים מהותיים',
+    'DECISION:\nאחת מהאפשרויות: STOP / MANAGER_DECIDE / REVISIT: writer, designer, researcher, proofreader / SKILL: skill-id',
     'CHECKLIST:\n- 2-4 בדיקות איכות קצרות',
   ].filter(Boolean).join('\n\n');
 };
 
-const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabledAgents, automation, cfg, selectedProviders, runId, logEvent, onStatus }) => {
-  const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents);
-  if (automation.workflowMode !== 'manager-auto' || automation?.autopilotEnabled === false || !enabledAgents.length) return fallbackPlan;
+const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabledAgents, automation, cfg, selectedProviders, runId, logEvent, onStatus, activeSkill = null }) => {
+  const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill);
+  if (!['manager-auto', 'circular-team'].includes(automation.workflowMode) || automation?.autopilotEnabled === false || !enabledAgents.length) return fallbackPlan;
 
   const managerAgent = resolveStageAgent('manager', enabledAgents) || enabledAgents[0];
   const managerProvider = chooseProviderForAgent(managerAgent, cfg, selectedProviders);
@@ -1003,12 +1188,13 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabl
     const managerPlanText = await chatWithActiveProvider(
       `בקשת המשתמש:\n${cleanUserPrompt}`,
       String(documentContext || '').slice(0, 6000),
-      `${managerAgent?.prompt || ''}\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher","designer","writer","proofreader"],"goals":{"manager":"..."},"roleLabels":{"researcher":"בודק מקורות","writer":"מנסח סופי"},"providers":{"researcher":"perplexity"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה.\nמודלים זמינים כרגע:\n${availableProviders}`,
+      `${managerAgent?.prompt || ''}\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher","designer","writer","proofreader"],"goals":{"manager":"..."},"roleLabels":{"researcher":"בודק מקורות","writer":"מנסח סופי"},"providers":{"researcher":"perplexity"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nמודלים זמינים כרגע:\n${availableProviders}`,
       {
         providerOverride: managerProvider,
         modelOverride: managerAgent?.model || '',
         skipAutomation: true,
         skipMultiModel: true,
+        shouldPersistMemory: false,
         runId,
         agentLabel: managerAgent?.name || 'מנהל עבודה',
         onStatus: (payload = {}) => emitStatus(onStatus, {
@@ -1081,6 +1267,9 @@ const buildPersonalStyleInstructions = (profile = {}) => {
   if (profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
   if (profile.learningGameInsights?.length) parts.push(`תובנות שנלמדו ממשחקי ההיכרות: ${profile.learningGameInsights.join(' | ')}`);
+  if (profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
+  if (profile.preferredTrainingExamples?.length) parts.push(`דוגמאות ניסוח שקרובות במיוחד לסגנון המועדף: ${profile.preferredTrainingExamples.join(' | ')}`);
+  if (profile.dislikedStylePatterns?.length) parts.push(`יש להימנע במיוחד מ: ${profile.dislikedStylePatterns.join(', ')}`);
   if (profile.userBackground) parts.push(`רקע מקצועי או אישי של המשתמש: ${String(profile.userBackground).trim()}`);
   if (profile.writingGoals) parts.push(`מטרות הכתיבה המרכזיות: ${String(profile.writingGoals).trim()}`);
   if (profile.additionalContext) parts.push(`הקשר אישי נוסף שחשוב לזכור: ${String(profile.additionalContext).trim()}`);
@@ -1103,6 +1292,8 @@ const buildPersonalStyleInstructions = (profile = {}) => {
     if (profile.preferredConnectors?.length) parts.push(`מחברי טקסט שחוזרים אצל המשתמש: ${profile.preferredConnectors.join(', ')}`);
     if (profile.preferredSentenceOpeners?.length) parts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.join(', ')}`);
     if (profile.toneDescriptors?.length) parts.push(`מאפייני טון שנלמדו: ${profile.toneDescriptors.join(', ')}`);
+    if (profile.learnedVocabulary?.length) parts.push(`מונחים שנלמדו מהכתיבה שלך: ${profile.learnedVocabulary.slice(0, 14).join(', ')}`);
+    if (profile.learnedPhrases?.length) parts.push(`צירופים אופייניים שנלמדו: ${profile.learnedPhrases.slice(0, 8).join(', ')}`);
     if (fingerprint.avgSentenceWords) parts.push(`ממוצע מילים למשפט: ${fingerprint.avgSentenceWords}`);
     if (fingerprint.avgParagraphWords) parts.push(`ממוצע מילים לפסקה: ${fingerprint.avgParagraphWords}`);
     if (profile.learnedNotes?.length) parts.push(`תובנות שנלמדו מהקבצים: ${profile.learnedNotes.join(' | ')}`);
@@ -1140,7 +1331,18 @@ const emitStatus = (callback, payload) => {
 };
 
 const AGENT_DEBUG_STORAGE_KEY = 'wordai_agent_debug_logs';
+const APP_MEMORY_STORAGE_KEY = 'wordai_app_memory';
 const MAX_AGENT_DEBUG_LOGS = 250;
+const MAX_APP_MEMORY_ITEMS = 24;
+
+export const DEFAULT_APP_MEMORY = {
+  recentChats: [],
+  memoryNotes: [],
+  lastSelectedSkillId: 'none',
+  lastSelectedAgentId: '',
+  lastResolvedSkillLabel: '',
+  updatedAt: '',
+};
 
 const createRunId = () => {
   try {
@@ -1154,6 +1356,72 @@ const createRunId = () => {
 const trimLogText = (value = '', limit = 220) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
+};
+
+export const getAppMemory = () => {
+  const stored = readJsonFromStorage(APP_MEMORY_STORAGE_KEY, {});
+  return {
+    ...DEFAULT_APP_MEMORY,
+    ...stored,
+    recentChats: Array.isArray(stored.recentChats) ? stored.recentChats.slice(-MAX_APP_MEMORY_ITEMS) : [],
+    memoryNotes: Array.isArray(stored.memoryNotes) ? stored.memoryNotes.slice(0, 12) : [],
+  };
+};
+
+export const saveAppMemory = (memory = {}) => {
+  const current = getAppMemory();
+  const next = {
+    ...current,
+    ...memory,
+    recentChats: Array.isArray(memory.recentChats) ? memory.recentChats.slice(-MAX_APP_MEMORY_ITEMS) : current.recentChats,
+    memoryNotes: Array.isArray(memory.memoryNotes) ? memory.memoryNotes.slice(0, 12) : current.memoryNotes,
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(APP_MEMORY_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const clearAppMemory = () => {
+  localStorage.setItem(APP_MEMORY_STORAGE_KEY, JSON.stringify(DEFAULT_APP_MEMORY));
+};
+
+const extractMemoryNotes = (text = '') => {
+  const lines = String(text || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  return [...new Set(
+    lines
+      .filter((line) => /(תמיד|חשוב לי|מעדיף|העדף|בלי |אל |תזכור|שמור על)/.test(line))
+      .map((line) => trimLogText(line, 140))
+  )].slice(0, 4);
+};
+
+export const rememberConversationTurn = ({ userPrompt = '', reply = '', agentLabel = '', skillId = '', skillLabel = '' } = {}) => {
+  const current = getAppMemory();
+  const recentChats = [
+    ...current.recentChats,
+    {
+      ts: new Date().toISOString(),
+      userPrompt: trimLogText(userPrompt, 220),
+      replyPreview: trimLogText(reply, 220),
+      agentLabel: String(agentLabel || '').trim(),
+      skillId: String(skillId || '').trim(),
+      skillLabel: String(skillLabel || '').trim(),
+    },
+  ].slice(-MAX_APP_MEMORY_ITEMS);
+  const memoryNotes = [...new Set([...extractMemoryNotes(userPrompt), ...(current.memoryNotes || [])])].slice(0, 12);
+  return saveAppMemory({ ...current, recentChats, memoryNotes });
+};
+
+const buildAppMemoryInstructions = (memory = getAppMemory()) => {
+  const notes = Array.isArray(memory.memoryNotes) ? memory.memoryNotes.slice(0, 5) : [];
+  const recentChats = Array.isArray(memory.recentChats) ? memory.recentChats.slice(-3) : [];
+  const parts = [];
+  if (notes.length) parts.push(`דברים שחשוב לזכור מהמשתמש: ${notes.join(' | ')}`);
+  if (memory.lastSelectedSkillId && memory.lastSelectedSkillId !== 'none') parts.push(`הסקיל האחרון שנבחר: ${memory.lastSelectedSkillId}`);
+  if (memory.lastSelectedAgentId) parts.push(`הסוכן האחרון שנבחר: ${memory.lastSelectedAgentId}`);
+  if (recentChats.length) {
+    parts.push(`הקשר אחרון מהשיחות הקודמות:\n${recentChats.map((item, index) => `${index + 1}. משתמש: ${item.userPrompt}${item.skillLabel ? ` | סקיל: ${item.skillLabel}` : ''}${item.agentLabel ? ` | סוכן: ${item.agentLabel}` : ''}`).join('\n')}`);
+  }
+  return parts.join('\n');
 };
 
 const getModelNameForProvider = (provider, cfg, override = '') => {
@@ -1218,7 +1486,7 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
   const runLogs = runId ? logs.filter((log) => log.runId === runId) : logs.slice(-80);
   const hasApiAttempt = runLogs.some((log) => ['request-start', 'provider-start', 'attempt-start', 'multi-model-start'].includes(log.type));
   const hasApiSuccess = runLogs.some((log) => ['attempt-success', 'multi-model-success', 'workflow-success'].includes(log.type));
-  const managerRequired = automation?.enabled !== false && automation?.workflowMode === 'manager-auto' && automation?.autopilotEnabled !== false;
+  const managerRequired = automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(automation?.workflowMode || '') && automation?.autopilotEnabled !== false;
   const managerSuccess = runLogs.some((log) => log.type === 'manager-plan-success');
   const managerFailure = runLogs.some((log) => log.type === 'manager-plan-fallback' || (log.type === 'stage-error' && /מנהל|manager/i.test(`${log.agentLabel || ''} ${log.agentId || ''}`)));
   const lastError = [...runLogs].reverse().find((log) => log.state === 'error')?.errorMessage || '';
@@ -1370,6 +1638,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile());
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions();
+  const skillsConfig = getSkillsConfig();
   const skillResolution = resolveSkillForRequest({
     userPrompt: cleanUserPrompt,
     documentContext,
@@ -1377,7 +1646,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     autoUseDefault: options.autoUseDefaultSkill !== false,
   });
   const activeSkill = skillResolution.skill;
-  const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason);
+  const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason, activeSkill ? skillsConfig.skills?.[activeSkill.id] : null);
+  const appMemoryPrompt = options.includeAppMemory === false ? '' : buildAppMemoryInstructions(getAppMemory());
   const automation = getWorkspaceAutomation();
   const onStatus = options.onStatus;
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
@@ -1396,13 +1666,26 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     workflowMode: automation.workflowMode,
     ...extra,
   });
+  const rememberSuccessfulReply = (replyText = '') => {
+    if (options.shouldPersistMemory === false) return replyText;
+    try {
+      rememberConversationTurn({
+        userPrompt: cleanUserPrompt,
+        reply: String(replyText || ''),
+        agentLabel,
+        skillId: activeSkill?.id || '',
+        skillLabel: activeSkill?.label || '',
+      });
+    } catch {}
+    return replyText;
+  };
   const sysPrompt = `אתה העוזר החכם של מעבד התמלילים "WordFlow AI".
 ענה תמיד בעברית, קצר, ברור ומעשי.
 הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
 אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
 אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
 אם המשתמש מבקש תוכן חדש, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -1435,22 +1718,41 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         runId,
         logEvent,
         onStatus,
+        activeSkill,
       });
 
       const orderedAgents = executionPlan?.orderedAgents?.length ? executionPlan.orderedAgents : enabledAgents;
-      logEvent('workflow-start', `הופעלה סביבת עבודה עם ${orderedAgents.length} סוכנים`, {
+      const allowCircularWorkflow = automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false;
+      const decisionMode = getDecisionMode(automation);
+      const allowDecisionRevisits = allowCircularWorkflow || decisionMode === 'manager';
+      const skillsConfig = getSkillsConfig();
+      const maxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
+      const maxStageCount = Math.max(orderedAgents.length, orderedAgents.length * maxRoundsPerAgent);
+      const agentRunCounts = {};
+      const executionQueue = orderedAgents.map((agent) => ({ agent, revisitReason: '' }));
+
+      logEvent('workflow-start', `הופעלה סביבת עבודה${allowCircularWorkflow ? ' מעגלית' : decisionMode === 'manager' ? ' דינמית' : ''} עם ${orderedAgents.length} סוכנים`, {
         state: 'running',
         orderedAgents: orderedAgents.map((agent) => agent.name),
         planSummary: executionPlan?.summary || '',
+        circularEnabled: allowCircularWorkflow,
+        maxRoundsPerAgent,
+        decisionMode,
       });
 
       let stagedOutput = '';
+      let processedStages = 0;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
 
-      for (let index = 0; index < orderedAgents.length; index += 1) {
-        const stageAgent = orderedAgents[index];
-        const stageStart = Math.round((index / orderedAgents.length) * 100);
-        const stageSpan = Math.max(12, Math.round(100 / orderedAgents.length));
+      while (executionQueue.length && processedStages < maxStageCount) {
+        const queueItem = executionQueue.shift();
+        const stageAgent = queueItem?.agent;
+        if (!stageAgent?.id) continue;
+
+        const runCount = (agentRunCounts[stageAgent.id] || 0) + 1;
+        agentRunCounts[stageAgent.id] = runCount;
+        const stageStart = Math.round((processedStages / maxStageCount) * 100);
+        const stageSpan = Math.max(12, Math.round(100 / Math.max(1, maxStageCount)));
         const stageRoleKey = getAgentRoleKey(stageAgent);
         const stageGoal = executionPlan?.stageGoals?.[stageAgent.id]
           || executionPlan?.stageGoals?.[stageAgent.name]
@@ -1477,27 +1779,34 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           stagedOutput,
           batonNotes,
           planSummary: executionPlan?.summary || '',
-          index,
-          total: orderedAgents.length,
+          index: processedStages,
+          total: maxStageCount,
+          allowCircular: allowCircularWorkflow,
+          roundIndex: runCount - 1,
+          revisitReason: queueItem?.revisitReason || '',
+          decisionMode,
         });
 
-        logEvent('stage-start', `מתחיל שלב ${index + 1} מתוך ${orderedAgents.length}`, {
+        logEvent('stage-start', `מתחיל שלב ${processedStages + 1} מתוך ${maxStageCount}${runCount > 1 ? ` • סבב ${runCount}` : ''}`, {
           state: 'running',
           agentId: stageAgent.id,
           agentLabel: stageLabel,
           provider: stageProvider,
           model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
-          stageIndex: index + 1,
-          stageTotal: orderedAgents.length,
+          stageIndex: processedStages + 1,
+          stageTotal: maxStageCount,
+          roundIndex: runCount,
+          revisitReason: queueItem?.revisitReason || '',
           promptPreview: trimLogText(stagePrompt),
         });
 
         try {
-          const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / CHECKLIST בלבד.`, {
+          const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
             providerOverride: stageProvider,
             modelOverride: stageAgent.model || modelOverride,
             skipAutomation: true,
             skipMultiModel: true,
+            shouldPersistMemory: false,
             agentLabel: stageLabel,
             runId,
             onStatus: (payload = {}) => {
@@ -1511,7 +1820,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
                 agentId: stageAgent.id,
                 agentLabel: stageLabel,
                 progress: mappedProgress,
-                message: payload.message || `מעבד שלב ${index + 1} מתוך ${orderedAgents.length}`,
+                message: payload.message || `מעבד שלב ${processedStages + 1} מתוך ${maxStageCount}`,
               });
             },
           });
@@ -1520,34 +1829,97 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           stagedOutput = String(parsedReply.deliverable || stagedOutput || cleanUserPrompt).trim();
           if (parsedReply.handoff) {
             batonNotes.push(`${stageAgent.name}: ${parsedReply.handoff.replace(/\n+/g, ' ; ')}`);
-            if (batonNotes.length > 8) batonNotes.shift();
           }
 
-          logEvent('stage-success', `הושלם שלב ${index + 1} מתוך ${orderedAgents.length}`, {
+          if (parsedReply.missing) {
+            batonNotes.push(`${stageAgent.name} זיהה פערים: ${parsedReply.missing.replace(/\n+/g, ' ; ')}`);
+          }
+
+          const suggestedSkillIds = extractRequestedSkills(parsedReply, skillsConfig);
+          if (suggestedSkillIds.length) {
+            const suggestedSkillLabels = suggestedSkillIds.map((skillId) => SKILL_LIBRARY.find((item) => item.id === skillId)?.label || skillId);
+            batonNotes.push(`כללים/סקילים ממליצים להמשך על: ${suggestedSkillLabels.join(', ')}`);
+          }
+
+          while (batonNotes.length > 10) batonNotes.shift();
+
+          const directives = getDecisionDirectives(parsedReply);
+          if (directives.stop) {
+            executionQueue.length = 0;
+            logEvent('stage-stop-requested', 'השלב ביקש לעצור ולהחזיר תוצאה סופית', {
+              state: 'success',
+              agentId: stageAgent.id,
+              agentLabel: stageLabel,
+              decisionPreview: trimLogText(parsedReply.decision || ''),
+            });
+          } else if (allowDecisionRevisits) {
+            const priorityManager = directives.managerDecide
+              ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
+              : [];
+            const requestedRevisits = [
+              ...priorityManager,
+              ...extractRevisitAgents(parsedReply, orderedAgents),
+              ...(decisionMode === 'manager'
+                ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
+                : getRuleDrivenRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })),
+            ].filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index);
+
+            requestedRevisits.slice().reverse().forEach((revisitAgent) => {
+              if ((agentRunCounts[revisitAgent.id] || 0) >= maxRoundsPerAgent) return;
+              if (executionQueue.some((item) => item?.agent?.id === revisitAgent.id)) return;
+              executionQueue.unshift({ agent: revisitAgent, revisitReason: directives.managerDecide ? `${stageLabel} ביקש הכרעת מנהל` : `${stageLabel} זיהה שעדיין חסר משהו` });
+              logEvent('stage-revisit-scheduled', 'הסוכן הוחזר לסבב נוסף', {
+                state: 'running',
+                agentId: revisitAgent.id,
+                agentLabel: revisitAgent.name,
+                requestedBy: stageAgent.id,
+                requestedByLabel: stageLabel,
+                roundIndex: (agentRunCounts[revisitAgent.id] || 0) + 1,
+                decisionMode,
+                decisionPreview: trimLogText(parsedReply.decision || ''),
+                missingPreview: trimLogText(parsedReply.missing || ''),
+              });
+            });
+          }
+
+          logEvent('stage-success', `הושלם שלב ${processedStages + 1} מתוך ${maxStageCount}`, {
             state: 'success',
             agentId: stageAgent.id,
             agentLabel: stageLabel,
             provider: stageProvider,
             model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
-            stageIndex: index + 1,
-            stageTotal: orderedAgents.length,
+            stageIndex: processedStages + 1,
+            stageTotal: maxStageCount,
+            roundIndex: runCount,
             outputChars: stagedOutput.length,
             outputPreview: trimLogText(stagedOutput),
             handoffPreview: trimLogText(parsedReply.handoff || ''),
+            missingPreview: trimLogText(parsedReply.missing || ''),
+            decisionPreview: trimLogText(parsedReply.decision || ''),
+            suggestedSkillIds,
           });
+          processedStages += 1;
         } catch (error) {
-          logEvent('stage-error', `שגיאה בשלב ${index + 1} מתוך ${orderedAgents.length}`, {
+          logEvent('stage-error', `שגיאה בשלב ${processedStages + 1} מתוך ${maxStageCount}`, {
             state: 'error',
             agentId: stageAgent.id,
             agentLabel: stageLabel,
             provider: stageProvider,
             model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
-            stageIndex: index + 1,
-            stageTotal: orderedAgents.length,
+            stageIndex: processedStages + 1,
+            stageTotal: maxStageCount,
+            roundIndex: runCount,
             errorMessage: error?.message || 'שגיאה לא ידועה',
           });
           throw error;
         }
+      }
+
+      if (allowDecisionRevisits && executionQueue.length) {
+        logEvent('workflow-circular-limit', 'הגעת למגבלת הסבבים; עובר לסיכום סופי', {
+          state: 'retrying',
+          pendingAgents: executionQueue.map((item) => item?.agent?.name).filter(Boolean),
+        });
       }
 
       if (executionPlan?.needsFinalManagerReview) {
@@ -1565,11 +1937,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             total: orderedAgents.length + 1,
           });
 
-          const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש.`, {
+          const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
             providerOverride: reviewProvider,
             modelOverride: managerAgent.model || modelOverride,
             skipAutomation: true,
             skipMultiModel: true,
+            shouldPersistMemory: false,
             agentLabel: managerAgent.name,
             runId,
             onStatus: (payload = {}) => emitStatus(onStatus, {
@@ -1605,7 +1978,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         agentLabel: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,
         message: 'כל שלבי העבודה הושלמו'
       });
-      return finalOutput;
+      return rememberSuccessfulReply(finalOutput);
     }
   }
 
@@ -1655,6 +2028,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           modelOverride: taggedRouting.providerModels?.[providerId] || '',
           skipAutomation: true,
           skipMultiModel: true,
+          shouldPersistMemory: false,
           runId,
           agentLabel: providerLabel,
           onStatus,
@@ -1681,7 +2055,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         provider: collectedResponses[0].providerId,
         agentLabel: collectedResponses[0].providerLabel,
       });
-      return collectedResponses[0].content;
+      return rememberSuccessfulReply(collectedResponses[0].content);
     }
 
     const mergeProviderId = collectedResponses.find((item) => item.providerId === activeProvider)?.providerId || collectedResponses[0].providerId;
@@ -1707,6 +2081,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         modelOverride: taggedRouting.providerModels?.[mergeProviderId] || '',
         skipAutomation: true,
         skipMultiModel: true,
+        shouldPersistMemory: false,
         runId,
         agentLabel: `${agentLabel} · איחוד`,
         onStatus,
@@ -1722,14 +2097,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         outputPreview: trimLogText(mergedReply),
       });
 
-      return mergedReply;
+      return rememberSuccessfulReply(mergedReply);
     } catch (mergeError) {
       logEvent('multi-model-merge-fallback', 'איחוד התשובות נכשל, מחזיר את התשובה הטובה הראשונה', {
         state: 'error',
         provider: mergeProviderId,
         errorMessage: mergeError?.message || 'שגיאה לא ידועה',
       });
-      return collectedResponses[0].content;
+      return rememberSuccessfulReply(collectedResponses[0].content);
     }
   }
 
@@ -1823,7 +2198,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         responsePreview: trimLogText(result),
       });
       emitStatus(onStatus, { state: 'success', progress: 100, runId, provider: activeProvider, model: resolvedModel, agentLabel, attempt: attempt + 1, message: 'הושלם' });
-      return result;
+      return rememberSuccessfulReply(result);
     } catch (error) {
       lastError = error;
       const errMsg = error?.message || '';
@@ -1891,7 +2266,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         responseChars: String(fallbackText || '').length,
       });
       emitStatus(onStatus, { state: 'success', progress: 100, runId, provider: 'gemini', model: 'gemini-2.5-flash', agentLabel, message: 'הושלם (Gemini fallback)' });
-      return fallbackText;
+      return rememberSuccessfulReply(fallbackText);
     } catch (fallbackError) {
       logEvent('provider-fallback-error', 'גם Gemini fallback נכשל', {
         state: 'error',

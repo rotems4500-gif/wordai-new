@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig } from "./services/aiService";
+import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory } from "./services/aiService";
 
 const CONTEXT_PROMPTS = [
   'נראה ארוך אה?',
@@ -24,6 +24,21 @@ const QUICK_ACTIONS = [
   { id: 'conclusion',icon: '🏁', label: 'הוסף מסקנה',    prompt: 'כתוב מסקנה מתאימה למסמך',              sel: false },
   { id: 'sources',   icon: '📚', label: 'הצע מקורות',    prompt: 'הצע מקורות מחקריים רלוונטיים לנושא',   sel: false },
 ];
+
+const CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
+
+const getDefaultMessages = () => ([
+  { role: 'assistant', content: `שלום! אני ${getActiveProviderName()} — העוזר ה-AI שלך.\nאני קורא את ההקשר של המסמך, כך שאפשר לשאול גם בקצרה כמו "נראה ארוך אה?" או "יש מקור לזה?".` }
+]);
+
+const getSavedMessages = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CHAT_MEMORY_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) && parsed.length ? parsed.slice(-60) : getDefaultMessages();
+  } catch {
+    return getDefaultMessages();
+  }
+};
 
 const bbl = (isUser, compactMode = false) => ({
   maxWidth: compactMode ? '96%' : '90%',
@@ -92,9 +107,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [tab, setTab] = useState('chat');
   const workspaceAutomation = getWorkspaceAutomation();
   const roleAgents = getOrderedRoleAgents(workspaceAutomation.workflowMode);
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: `שלום! אני ${getActiveProviderName()} — העוזר ה-AI שלך.\nאני קורא את ההקשר של המסמך, כך שאפשר לשאול גם בקצרה כמו "נראה ארוך אה?" או "יש מקור לזה?".` }
-  ]);
+  const [messages, setMessages] = useState(() => getSavedMessages());
   const [input, setInput] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -102,9 +115,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [agentProgressMap, setAgentProgressMap] = useState({});
   const [showLogs, setShowLogs] = useState(mode !== 'sidebar');
   const [debugLogs, setDebugLogs] = useState(() => getAgentDebugLogs().slice(-60).reverse());
-  const [selectedAgentId, setSelectedAgentId] = useState('');
-  const [selectedSkillId, setSelectedSkillId] = useState('none');
-  const [resolvedSkillLabel, setResolvedSkillLabel] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
+  const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
+  const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [mentionMenu, setMentionMenu] = useState({ open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 });
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
@@ -221,6 +234,25 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     }
   }, [selectedSkillId, selectedAgentId, skillsConfig, roleAgents]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_MEMORY_STORAGE_KEY, JSON.stringify(messages.slice(-60)));
+      saveAppMemory({
+        ...getAppMemory(),
+        lastSelectedAgentId: selectedAgentId || '',
+        lastSelectedSkillId: selectedSkillId || 'none',
+        lastResolvedSkillLabel: resolvedSkillLabel || '',
+      });
+    } catch {}
+  }, [messages, selectedAgentId, selectedSkillId, resolvedSkillLabel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleReset = () => clearConversation();
+    window.addEventListener('wordai-chat-history-cleared', handleReset);
+    return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
+  }, []);
+
   const updateAgentStatus = (agentId, agentLabel, payload = {}) => {
     setActiveAgentStatus({
       agentLabel: agentLabel || payload.agentLabel || '',
@@ -274,6 +306,24 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const clearLogs = () => {
     clearAgentDebugLogs();
     setDebugLogs([]);
+  };
+
+  const clearConversation = () => {
+    try {
+      localStorage.removeItem(CHAT_MEMORY_STORAGE_KEY);
+      saveAppMemory({
+        recentChats: [],
+        memoryNotes: [],
+        lastSelectedAgentId: '',
+        lastSelectedSkillId: 'none',
+        lastResolvedSkillLabel: '',
+      });
+    } catch {}
+    setMessages(getDefaultMessages());
+    setInput('');
+    setSelectedAgentId('');
+    setSelectedSkillId('none');
+    setResolvedSkillLabel('');
   };
 
   const buildContext = () => (
@@ -411,7 +461,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         : currentBlockText
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
-    await executeRoleAgentTask(agent, task);
+    await executeRoleAgentTask(agent, task, {
+      skillId: selectedSkillId === 'none' ? '' : selectedSkillId,
+      autoUseDefaultSkill: selectedSkillId === 'none',
+    });
   };
 
   const runAction = (action) => {
@@ -532,6 +585,12 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       {/* ─── Chat ─── */}
       {tab === 'chat' && (
         <>
+          <div style={{ padding: '7px 12px', borderBottom: '1px solid #E2E8F0', background: '#F8FAFC', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, color: '#64748B' }}>הצ'אט, הסוכן והסקיל האחרון נשמרים מקומית.</span>
+            <button onClick={clearConversation} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 999, padding: '3px 8px', cursor: 'pointer', fontSize: 10, color: '#334155' }}>
+              נקה שיחה
+            </button>
+          </div>
           <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: compactMode ? 10 : 12, display: 'flex', flexDirection: 'column', gap: compactMode ? 8 : 10, background: mode === 'sidebar' ? '#FCFDFE' : 'transparent' }}>
             {reason === 'idle' && (
               <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 14, padding: '10px 12px', color: '#9A3412', fontSize: 12, fontWeight: 600 }}>
