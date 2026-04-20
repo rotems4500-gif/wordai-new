@@ -422,19 +422,38 @@ const normalizeToolLinkEntry = (entry = {}, fallback = {}) => {
   return { label, url };
 };
 
-export const getToolLinksConfig = (cfg = getProviderConfig()) => ({
-  googleSearch: normalizeToolLinkEntry(cfg?.toolLinks?.googleSearch, DEFAULT_PROVIDER_CONFIG.toolLinks.googleSearch),
-  scholar: normalizeToolLinkEntry(cfg?.toolLinks?.scholar, DEFAULT_PROVIDER_CONFIG.toolLinks.scholar),
-  modelHub: normalizeToolLinkEntry(cfg?.toolLinks?.modelHub, DEFAULT_PROVIDER_CONFIG.toolLinks.modelHub),
-  orbit: normalizeToolLinkEntry(cfg?.toolLinks?.orbit, DEFAULT_PROVIDER_CONFIG.toolLinks.orbit),
-});
+let providerConfigCache = null;
 
-export const buildExternalToolUrl = (toolId = '', query = '', cfg = getProviderConfig()) => {
-  const tool = getToolLinksConfig(cfg)?.[toolId];
+const resolveToolLinksConfigSource = (cfg = null) => {
+  if (cfg && typeof cfg === 'object') return cfg;
+  if (providerConfigCache && typeof providerConfigCache === 'object') return providerConfigCache;
+  try {
+    const stored = typeof localStorage !== 'undefined'
+      ? JSON.parse(localStorage.getItem('ai_provider_config') || '{}')
+      : {};
+    return { ...DEFAULT_PROVIDER_CONFIG, ...(stored || {}) };
+  } catch {
+    return DEFAULT_PROVIDER_CONFIG;
+  }
+};
+
+export const getToolLinksConfig = (cfg = null) => {
+  const source = resolveToolLinksConfigSource(cfg);
+  return {
+    googleSearch: normalizeToolLinkEntry(source?.toolLinks?.googleSearch, DEFAULT_PROVIDER_CONFIG.toolLinks.googleSearch),
+    scholar: normalizeToolLinkEntry(source?.toolLinks?.scholar, DEFAULT_PROVIDER_CONFIG.toolLinks.scholar),
+    modelHub: normalizeToolLinkEntry(source?.toolLinks?.modelHub, DEFAULT_PROVIDER_CONFIG.toolLinks.modelHub),
+    orbit: normalizeToolLinkEntry(source?.toolLinks?.orbit, DEFAULT_PROVIDER_CONFIG.toolLinks.orbit),
+  };
+};
+
+export const buildExternalToolUrl = (toolId = '', query = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const tool = getToolLinksConfig(safeCfg)?.[toolId];
   if (!tool?.url) return '';
 
   const cleanQuery = String(query || '').trim();
-  const scholarKey = String(cfg?.scholar?.key || '').trim();
+  const scholarKey = String(safeCfg?.scholar?.key || '').trim();
 
   let resolvedUrl = String(tool.url)
     .replace(/\{query\}/g, cleanQuery ? encodeURIComponent(cleanQuery) : '')
@@ -799,16 +818,20 @@ const normalizeProviderConfig = (config = {}) => {
 };
 
 export const getProviderConfig = () => {
+  if (providerConfigCache) return providerConfigCache;
   try {
     const stored = JSON.parse(localStorage.getItem('ai_provider_config') || '{}');
-    return normalizeProviderConfig(stored);
+    providerConfigCache = normalizeProviderConfig(stored);
+    return providerConfigCache;
   } catch {
-    return normalizeProviderConfig({});
+    providerConfigCache = normalizeProviderConfig({});
+    return providerConfigCache;
   }
 };
 
 export const saveProviderConfig = (config, options = {}) => {
   const safeConfig = normalizeProviderConfig(config);
+  providerConfigCache = safeConfig;
   localStorage.setItem('ai_provider_config', JSON.stringify(safeConfig));
   if (safeConfig.gemini?.key) localStorage.setItem('GEMINI_API_KEY', safeConfig.gemini.key);
   else localStorage.removeItem('GEMINI_API_KEY');
@@ -827,23 +850,30 @@ const pickNonEmptyString = (preferredValue = '', fallbackValue = '') => {
   return preferred || String(fallbackValue || '').trim();
 };
 
+const hasOwnSetting = (obj = {}, key = '') => Object.prototype.hasOwnProperty.call(obj || {}, key);
+
+const pickStoredString = (source = {}, key = '', fallbackValue = '') => {
+  if (hasOwnSetting(source, key)) return String(source?.[key] ?? '').trim();
+  return String(fallbackValue ?? '').trim();
+};
+
 const mergeProviderSettings = (providerId = '', diskValue = {}, localValue = {}) => {
   const merged = {
     ...(diskValue || {}),
     ...(localValue || {}),
   };
 
-  if ('key' in merged) merged.key = pickNonEmptyString(localValue?.key, diskValue?.key);
-  if ('baseUrl' in merged) merged.baseUrl = pickNonEmptyString(localValue?.baseUrl, diskValue?.baseUrl);
-  if ('name' in merged) merged.name = pickNonEmptyString(localValue?.name, diskValue?.name);
-  if ('model' in merged) merged.model = normalizeProviderModelName(providerId, pickNonEmptyString(localValue?.model, diskValue?.model));
+  if ('key' in merged) merged.key = pickStoredString(localValue, 'key', diskValue?.key);
+  if ('baseUrl' in merged) merged.baseUrl = pickStoredString(localValue, 'baseUrl', diskValue?.baseUrl);
+  if ('name' in merged) merged.name = pickStoredString(localValue, 'name', diskValue?.name);
+  if ('model' in merged) merged.model = normalizeProviderModelName(providerId, pickStoredString(localValue, 'model', diskValue?.model));
 
   return merged;
 };
 
 const mergeScholarSettings = (diskValue = {}, localValue = {}) => ({
-  provider: pickNonEmptyString(localValue?.provider, diskValue?.provider || DEFAULT_PROVIDER_CONFIG.scholar.provider),
-  key: pickNonEmptyString(localValue?.key, diskValue?.key),
+  provider: pickStoredString(localValue, 'provider', diskValue?.provider || DEFAULT_PROVIDER_CONFIG.scholar.provider) || DEFAULT_PROVIDER_CONFIG.scholar.provider,
+  key: pickStoredString(localValue, 'key', diskValue?.key),
 });
 
 const mergeToolLinksSettings = (diskValue = {}, localValue = {}) => {
@@ -851,8 +881,8 @@ const mergeToolLinksSettings = (diskValue = {}, localValue = {}) => {
     Object.entries(DEFAULT_PROVIDER_CONFIG.toolLinks).map(([toolId, defaults]) => [
       toolId,
       {
-        label: pickNonEmptyString(localValue?.[toolId]?.label, diskValue?.[toolId]?.label || defaults.label),
-        url: pickNonEmptyString(localValue?.[toolId]?.url, diskValue?.[toolId]?.url || defaults.url),
+        label: pickStoredString(localValue?.[toolId], 'label', diskValue?.[toolId]?.label || defaults.label) || defaults.label,
+        url: pickStoredString(localValue?.[toolId], 'url', diskValue?.[toolId]?.url || defaults.url),
       },
     ]),
   );
@@ -866,9 +896,7 @@ export const hydrateProviderConfigFromDisk = async () => {
     try {
       const diskConfig = await window.desktopApp.loadProviderConfig();
       if (!diskConfig || typeof diskConfig !== 'object' || diskConfig.ok === false) {
-        const current = getProviderConfig();
-        saveProviderConfig(current);
-        return current;
+        return getProviderConfig();
       }
 
       const localRaw = JSON.parse(localStorage.getItem('ai_provider_config') || '{}');
@@ -893,6 +921,7 @@ export const hydrateProviderConfigFromDisk = async () => {
       });
 
       saveProviderConfig(merged);
+      providerConfigCache = merged;
       return merged;
     } catch {
       return getProviderConfig();
@@ -912,11 +941,12 @@ const getProviderLabelMap = (cfg) => ({
   custom: cfg.custom.name || 'מנוע מותאם',
 });
 
-const getSelectedProviderIds = (cfg = getProviderConfig(), forceSingle = false) => {
-  if (forceSingle) return [cfg.active];
-  if (!cfg.multiModelEnabled) return [cfg.active];
-  const normalized = normalizeProviderIds(cfg.activeProviders || [cfg.active], cfg.active);
-  return [cfg.active, ...normalized.filter((providerId) => providerId !== cfg.active)];
+const getSelectedProviderIds = (cfg = null, forceSingle = false) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  if (forceSingle) return [safeCfg.active];
+  if (!safeCfg.multiModelEnabled) return [safeCfg.active];
+  const normalized = normalizeProviderIds(safeCfg.activeProviders || [safeCfg.active], safeCfg.active);
+  return [safeCfg.active, ...normalized.filter((providerId) => providerId !== safeCfg.active)];
 };
 
 export const getActiveProviderName = () => {
@@ -1065,10 +1095,11 @@ const safeJsonParse = (value = '', fallback = null) => {
   }
 };
 
-const getConfiguredProviderPool = (cfg = getProviderConfig(), preferredProviders = []) => {
-  const preferred = normalizeProviderIds(preferredProviders, cfg.active);
-  const configured = KNOWN_PROVIDER_IDS.filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
-  return [...new Set([...preferred, ...configured, cfg.active].filter(Boolean))];
+const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const preferred = normalizeProviderIds(preferredProviders, safeCfg.active);
+  const configured = KNOWN_PROVIDER_IDS.filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  return [...new Set([...preferred, ...configured, safeCfg.active].filter(Boolean))];
 };
 
 const getAgentRoleKey = (agent = {}) => {
@@ -1081,12 +1112,13 @@ const getAgentRoleKey = (agent = {}) => {
   return 'general';
 };
 
-const chooseProviderForAgent = (agent = {}, cfg = getProviderConfig(), preferredProviders = []) => {
+const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = []) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const explicitProvider = String(agent?.provider || '').trim();
-  if (explicitProvider && isProviderConfiguredForUse(explicitProvider, cfg)) return explicitProvider;
+  if (explicitProvider && isProviderConfiguredForUse(explicitProvider, safeCfg)) return explicitProvider;
 
   const roleKey = getAgentRoleKey(agent);
-  const pool = getConfiguredProviderPool(cfg, preferredProviders);
+  const pool = getConfiguredProviderPool(safeCfg, preferredProviders);
   const preferences = roleKey === 'researcher'
     ? ['perplexity', 'gemini', 'openai', 'claude', 'groq', 'custom', 'ollama']
     : roleKey === 'proofreader'
@@ -1097,7 +1129,7 @@ const chooseProviderForAgent = (agent = {}, cfg = getProviderConfig(), preferred
           ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
           : ['gemini', 'openai', 'claude', 'groq', 'custom', 'ollama', 'perplexity'];
 
-  return preferences.find((providerId) => pool.includes(providerId)) || cfg.active;
+  return preferences.find((providerId) => pool.includes(providerId)) || safeCfg.active;
 };
 
 const resolveStageAgent = (token, enabledAgents = []) => {
