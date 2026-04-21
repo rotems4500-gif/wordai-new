@@ -12,17 +12,23 @@ const WAND_ACTIONS = [
 
 export default function MagicWand({ sidebarOpen, documentContext, selectedText, onInsert, shortcuts = {} }) {
   const [open, setOpen] = useState(false);
+  const isOpenRef = useRef(false);
+  const activeRequestId = useRef(0);
   const [input, setInput] = useState('');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
   const popupRef = useRef(null);
+  const triggerRef = useRef(null);
   const inputRef = useRef(null);
 
   // סגור בלחיצה מחוץ לחלון
   useEffect(() => {
+    isOpenRef.current = open;
     if (!open) return;
     const handler = (e) => {
-      if (popupRef.current && !popupRef.current.contains(e.target)) {
+      const clickedInsidePopup = popupRef.current?.contains(e.target);
+      const clickedTrigger = triggerRef.current?.contains(e.target);
+      if (!clickedInsidePopup && !clickedTrigger) {
         setOpen(false);
       }
     };
@@ -50,10 +56,12 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     } else {
       setResult('');
       setInput('');
+      setLoading(false);
     }
   }, [open]);
 
   const run = async (prompt) => {
+    const reqId = ++activeRequestId.current;
     const ctx = selectedText
       ? `טקסט נבחר: "${selectedText}"\n\n${typeof documentContext === 'function' ? documentContext() : documentContext}`
       : (typeof documentContext === 'function' ? documentContext() : documentContext);
@@ -61,11 +69,17 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     setResult('');
     try {
       const res = await chatWithActiveProvider(prompt, ctx);
-      setResult(res);
+      if (isOpenRef.current && activeRequestId.current === reqId) {
+        setResult(res);
+      }
     } catch (err) {
-      setResult('❌ ' + err.message);
+      if (isOpenRef.current && activeRequestId.current === reqId) {
+        setResult('❌ ' + err.message);
+      }
     } finally {
-      setLoading(false);
+      if (isOpenRef.current && activeRequestId.current === reqId) {
+        setLoading(false);
+      }
     }
   };
 
@@ -129,7 +143,15 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
           {(loading || result) && (
             <div style={{ borderTop: '1px solid #E1DFDD', padding: '10px 12px', maxHeight: 200, overflowY: 'auto', background: '#FAFAFA' }}>
               {loading ? (
-                <div style={{ color: '#605E5C', fontSize: 12 }}>⏳ מחשב...</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px' }}>
+                  <div style={{ padding: '6px', background: '#F3F2F1', borderRadius: '6px', display: 'flex', gap: '10px', alignItems: 'center', animation: 'pulse 1.5s infinite' }}>
+                    <div style={{ width: '18px', height: '18px', borderRadius: '50%', border: '2px solid #0078D4', borderTopColor: 'transparent', animation: 'spin 1s linear infinite' }}></div>
+                    <div style={{ fontSize: '13px', color: '#323130', fontWeight: 600 }}>מעבד בקשה...</div>
+                  </div>
+                  <div style={{ width: '100%', height: '10px', background: '#EDEBE9', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.2s' }}></div>
+                  <div style={{ width: '85%', height: '10px', background: '#EDEBE9', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.4s' }}></div>
+                  <div style={{ width: '60%', height: '10px', background: '#EDEBE9', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.6s' }}></div>
+                </div>
               ) : (
                 <>
                   <div style={{ fontSize: 12, color: '#323130', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: 8, direction: 'rtl' }}>{result}</div>
@@ -147,7 +169,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
       )}
 
       {/* ─── כפתור ─── */}
-      <button onClick={() => setOpen(v => !v)} title={`עט קסמים AI (${shortcuts.magicWand || 'Ctrl+Space'})`}
+      <button ref={triggerRef} onClick={() => setOpen(v => !v)} title={`עט קסמים AI (${shortcuts.magicWand || 'Ctrl+Space'})`}
         style={{ width: 50, height: 50, borderRadius: '50%', background: open ? '#106EBE' : 'linear-gradient(135deg,#2B579A,#106EBE)', color: 'white', border: 'none', cursor: 'pointer', boxShadow: '0 4px 18px rgba(43,87,154,0.5)', fontSize: open ? 22 : 24, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', transform: open ? 'scale(1.08) rotate(20deg)' : 'scale(1)' }}>
         {open ? '×' : '✨'}
       </button>

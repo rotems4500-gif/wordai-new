@@ -1111,21 +1111,21 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'fadeIn 0.5s ease' }}>
                 <div style={{
                   ...modernMessageBubble(false),
-                  color: 'rgba(255,255,255,0.7)',
-                  fontStyle: 'italic',
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
+                  flexDirection: 'column',
+                  gap: 12,
+                  width: '80%',
+                  padding: '12px 14px',
                 }}>
-                  <div style={{
-                    width: '20px',
-                    height: '20px',
-                    border: '2px solid rgba(139, 92, 246, 0.3)',
-                    borderTop: '2px solid #A78BFA',
-                    borderRadius: '50%',
-                    animation: 'spin 1s linear infinite',
-                  }} />
-                  מחשב תשובה מושלמת...
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'rgba(15,23,42,0.6)', fontStyle: 'italic', fontSize: 13, fontWeight: 500 }}>
+                    <div style={{
+                      width: '18px', height: '18px', border: '2px solid rgba(139, 92, 246, 0.3)', borderTop: '2px solid #8B5CF6', borderRadius: '50%', animation: 'spin 1s linear infinite',
+                    }} />
+                    מסייע מחשב תשובה...
+                  </div>
+                  <div style={{ width: '100%', height: '10px', background: 'rgba(15,23,42,0.1)', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.1s' }}></div>
+                  <div style={{ width: '85%', height: '10px', background: 'rgba(15,23,42,0.1)', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.3s' }}></div>
+                  <div style={{ width: '65%', height: '10px', background: 'rgba(15,23,42,0.1)', borderRadius: '4px', animation: 'pulse 1.5s infinite 0.5s' }}></div>
                 </div>
               </div>
             )}

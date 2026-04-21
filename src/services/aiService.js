@@ -150,9 +150,11 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   enabled: false,
   preset: 'content-studio',
   workflowMode: 'manager-auto',
+  onlyFromMaterials: false,
   autoDispatch: true,
   autopilotEnabled: true,
   circularWorkflowEnabled: false,
+  circularMinRounds: 1,
   circularMaxRounds: 2,
   workspaceName: 'סביבת עבודה מותאמת',
   sharedGoal: '',
@@ -1041,6 +1043,7 @@ const buildWorkspaceAutomationInstructions = () => {
     : 'עבוד לפי סדר הסוכנים שהוגדר על ידי המשתמש.';
 
   const circularEnabled = automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false;
+  const circularRounds = normalizeCircularRounds(automation);
 
   const workflowMap = {
     'manager-auto': 'עבוד במצב AUTOPILOT מלא: קודם תכנן, אחר כך קבע לבד אילו תפקידים נדרשים, איזה מודל מתאים לכל שלב, ובאיזה סדר להפעיל אותם. החזר תהליך מתואם וסופי.',
@@ -1062,10 +1065,13 @@ const buildWorkspaceAutomationInstructions = () => {
       ? 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, ומנהל העבודה הוא זה שמכריע על הצעד הבא.'
       : 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, והמשך הזרימה ייקבע לפי כללים וסקילים פעילים.',
     ['manager-auto', 'circular-team'].includes(automation.workflowMode) && decisionMode === 'manager'
-      ? 'פעל כמו מנהל עבודה אמיתי: נתח את ההנחיה, את טיוטת המסמך ואת חומרי העזר, בחר אילו סוכנים באמת נדרשים, קבע סדר, והעבר ביניהם שרביט עם משימות ברורות.'
+      ? 'פעל כמו מנהל עבודה אמיתי: נתח את ההנחיות והחומרים, תכנן שלבים והעבר את השרביט באופן חכם לסוכנים מתאימים.'
       : '',
     circularEnabled
-      ? `מותר לבצע חזרה לסוכן קודם אם התוצר עדיין לא בשל. לכל היותר ${Math.max(1, Math.min(4, Number(automation.circularMaxRounds || 2)))} סבבים לכל סוכן.`
+      ? `מותר לבצע חזרה לסוכן קודם אם התוצר אינו בשל (מינימום ${circularRounds.minRounds} סבבים, ולכל היותר ${circularRounds.maxRounds} סבבים למשימה).`
+      : '',
+    automation.onlyFromMaterials
+      ? 'השתמש *אך ורק* בחומרי העזר המצורפים. אל תוסיף שום מידע חיצוני, ואל תמציא מידע שאינו קיים מפורשות בחומרים שקיבלת.'
       : '',
     automation.autoDispatch === false
       ? 'הצע חלוקת תפקידים, אך אל תדלג אוטומטית בין שלבים בלי צורך ברור.'
@@ -1236,7 +1242,14 @@ const parseStagePacket = (reply = '') => {
   };
 };
 
-const getCircularRoundLimit = (automation = {}) => Math.max(1, Math.min(4, Number(automation?.circularMaxRounds || 2)));
+const normalizeCircularRounds = (automation = {}) => {
+  const maxRounds = Math.max(1, Math.min(10, Number(automation?.circularMaxRounds || 2)));
+  const minRounds = Math.max(1, Math.min(maxRounds, Number(automation?.circularMinRounds || 1)));
+  return { minRounds, maxRounds };
+};
+
+const getCircularRoundLimit = (automation = {}) => normalizeCircularRounds(automation).maxRounds;
+const getCircularMinRoundLimit = (automation = {}) => normalizeCircularRounds(automation).minRounds;
 
 const getDecisionMode = (automation = {}) => {
   if (automation?.workflowMode === 'manager-auto') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
@@ -1564,6 +1577,19 @@ const createRunId = () => {
 const trimLogText = (value = '', limit = 220) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
+};
+
+const normalizeArtifactText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+
+const hasMeaningfulArtifact = (value = '', fallbackPrompt = '') => {
+  const normalized = normalizeArtifactText(value);
+  if (!normalized) return false;
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  if (normalized.length < 18 && wordCount < 3) return false;
+  if (/^(ok|okay|done|בוצע|טופל|הושלם|סבבה|אושר)$/i.test(normalized)) return false;
+  const normalizedPrompt = normalizeArtifactText(fallbackPrompt);
+  if (normalizedPrompt && normalized === normalizedPrompt) return false;
+  return true;
 };
 
 export const getAppMemory = () => {
@@ -1935,6 +1961,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       const allowDecisionRevisits = allowCircularWorkflow || decisionMode === 'manager';
       const skillsConfig = getSkillsConfig();
       const maxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
+      const minRoundsPerAgent = allowCircularWorkflow ? Math.min(maxRoundsPerAgent, getCircularMinRoundLimit(automation)) : 1;
       const maxStageCount = Math.max(orderedAgents.length, orderedAgents.length * maxRoundsPerAgent);
       const agentRunCounts = {};
       const executionQueue = orderedAgents.map((agent) => ({ agent, revisitReason: '' }));
@@ -1945,12 +1972,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         planSummary: executionPlan?.summary || '',
         circularEnabled: allowCircularWorkflow,
         maxRoundsPerAgent,
+        minRoundsPerAgent,
         decisionMode,
       });
 
       let stagedOutput = '';
       let processedStages = 0;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
+      const stageArtifacts = [];
 
       while (executionQueue.length && processedStages < maxStageCount) {
         const queueItem = executionQueue.shift();
@@ -2034,7 +2063,31 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           });
 
           const parsedReply = parseStagePacket(stageReply);
-          stagedOutput = String(parsedReply.deliverable || stagedOutput || cleanUserPrompt).trim();
+          const stageArtifact = String(parsedReply.deliverable || '').trim();
+          if (!hasMeaningfulArtifact(stageArtifact, cleanUserPrompt)) {
+            logEvent('stage-noop', `השלב ${processedStages + 1} לא החזיר תוצר שימושי`, {
+              state: 'error',
+              agentId: stageAgent.id,
+              agentLabel: stageLabel,
+              provider: stageProvider,
+              model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+              stageIndex: processedStages + 1,
+              stageTotal: maxStageCount,
+              roundIndex: runCount,
+              outputPreview: trimLogText(stageArtifact || stageReply || ''),
+              errorMessage: 'הסוכן לא סיפק deliverable מספק',
+            });
+            throw new Error(`הסוכן ${stageLabel} לא סיפק deliverable מספק. עצרתי כדי למנוע גז בניוטרל.`);
+          }
+
+          stagedOutput = stageArtifact;
+          stageArtifacts.push({
+            agentId: stageAgent.id,
+            agentLabel: stageLabel,
+            chars: stageArtifact.length,
+            preview: trimLogText(stageArtifact, 180),
+          });
+
           if (parsedReply.handoff) {
             batonNotes.push(`${stageAgent.name}: ${parsedReply.handoff.replace(/\n+/g, ' ; ')}`);
           }
@@ -2051,14 +2104,36 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
           while (batonNotes.length > 10) batonNotes.shift();
 
+          if (allowCircularWorkflow && runCount < minRoundsPerAgent) {
+            const alreadyQueued = executionQueue.some((item) => item?.agent?.id === stageAgent.id);
+            if (!alreadyQueued && runCount < maxRoundsPerAgent) {
+              executionQueue.push({ agent: stageAgent, revisitReason: 'עמידה במינימום סבבים מעגליים' });
+              logEvent('stage-revisit-scheduled', 'הסוכן הוחזר לסבב נוסף כדי לעמוד במינימום המוגדר', {
+                state: 'running',
+                agentId: stageAgent.id,
+                agentLabel: stageLabel,
+                roundIndex: runCount + 1,
+                minRoundsPerAgent,
+              });
+            }
+          }
+
           const directives = getDecisionDirectives(parsedReply);
-          if (directives.stop) {
+          const hasPendingMinRounds = allowCircularWorkflow && orderedAgents.some((agent) => (agentRunCounts[agent.id] || 0) < minRoundsPerAgent);
+          if (directives.stop && !hasPendingMinRounds) {
             executionQueue.length = 0;
             logEvent('stage-stop-requested', 'השלב ביקש לעצור ולהחזיר תוצאה סופית', {
               state: 'success',
               agentId: stageAgent.id,
               agentLabel: stageLabel,
               decisionPreview: trimLogText(parsedReply.decision || ''),
+            });
+          } else if (directives.stop && hasPendingMinRounds) {
+            logEvent('stage-stop-deferred', 'בקשת עצירה נדחתה עד השלמת מינימום סבבים', {
+              state: 'retrying',
+              agentId: stageAgent.id,
+              agentLabel: stageLabel,
+              minRoundsPerAgent,
             });
           } else if (allowDecisionRevisits) {
             const priorityManager = directives.managerDecide
@@ -2165,7 +2240,21 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           });
 
           const parsedManagerReply = parseStagePacket(managerReply);
-          stagedOutput = String(parsedManagerReply.deliverable || stagedOutput || cleanUserPrompt).trim();
+          const managerArtifact = String(parsedManagerReply.deliverable || '').trim();
+          if (!hasMeaningfulArtifact(managerArtifact, cleanUserPrompt)) {
+            logEvent('stage-noop', 'סקירת המנהל לא החזירה תוצר סופי שימושי', {
+              state: 'error',
+              agentId: managerAgent.id,
+              agentLabel: managerAgent.name,
+              provider: reviewProvider,
+              model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+              outputPreview: trimLogText(managerArtifact || managerReply || ''),
+              errorMessage: 'סקירת המנהל הסתיימה ללא deliverable תקין',
+            });
+            throw new Error('סקירת המנהל הסתיימה ללא deliverable תקין. עצרתי כדי למנוע תוצאה ריקה.');
+          }
+
+          stagedOutput = managerArtifact;
           if (parsedManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${parsedManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
         }
       }
@@ -2176,6 +2265,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         agentLabel: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,
         outputChars: finalOutput.length,
         outputPreview: trimLogText(finalOutput),
+        artifactCount: stageArtifacts.length,
+        stageArtifacts,
       });
       emitStatus(onStatus, {
         state: 'success',

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>מסך הבית — תצוגה מקדימה (GitHub)</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+    .animate-pulse { animation: pulse 3s ease-in-out infinite; }
+    .animate-bounce { animation: bounce 2s ease-in-out infinite; }
+    .animate-spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .backdrop-blur-xl { backdrop-filter: blur(24px); }
+    .backdrop-blur-md { backdrop-filter: blur(12px); }
+    .backdrop-blur-sm { backdrop-filter: blur(4px); }
+    .group:hover .group-hover\:opacity-100 { opacity: 1; }
+    .group:hover .group-hover\:scale-105 { transform: scale(1.05); }
+  </style>
+</head>
+<body>
+
+<div class="min-h-screen w-full bg-gradient-to-br from-slate-900 via-purple-900 to-indigo-900 relative overflow-hidden" dir="rtl">
+
+  <!-- Animated background blobs -->
+  <div class="absolute inset-0 pointer-events-none">
+    <div class="absolute top-20 right-20 w-72 h-72 bg-purple-500/10 rounded-full blur-3xl animate-pulse"></div>
+    <div class="absolute bottom-20 left-20 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse" style="animation-delay:2s"></div>
+    <div class="absolute top-1/2 left-1/2 w-80 h-80 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style="animation-delay:4s"></div>
+  </div>
+
+  <!-- Main content -->
+  <div class="relative z-10 max-w-7xl mx-auto px-6 py-12">
+
+    <!-- Hero -->
+    <div class="text-center mb-16">
+      <div class="mb-8">
+        <h1 class="text-6xl md:text-7xl font-bold text-white mb-4" style="text-shadow:2px 2px 20px rgba(0,0,0,0.5)">
+          יוצרים <span class="bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">תוכן חכם</span> ביחד? 🚀
+        </h1>
+        <p class="text-xl md:text-2xl text-white/80 max-w-3xl mx-auto leading-relaxed" style="text-shadow:1px 1px 10px rgba(0,0,0,0.3)">
+          AI שמבין אותך, יוצר איתך, וממשיך ללמוד מהסגנון שלך ⚡
+        </p>
+      </div>
+
+      <!-- Quick prompts rotator (static preview) -->
+      <div class="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 max-w-4xl mx-auto mb-8 shadow-2xl">
+        <div class="text-white/70 text-sm mb-4">רעיונות למסמכים:</div>
+        <div class="text-white text-lg font-medium" style="text-shadow:1px 1px 5px rgba(0,0,0,0.5)">
+          ✍️ כתוב לי מכתב פורמלי למעסיק
+        </div>
+        <div class="flex justify-center mt-4 gap-2">
+          <div class="w-6 h-2 rounded-full bg-pink-400"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+          <div class="w-2 h-2 rounded-full bg-white/30"></div>
+        </div>
+      </div>
+
+      <!-- Main Input Area -->
+      <div class="bg-white/10 backdrop-blur-xl border border-white/30 rounded-3xl p-8 max-w-5xl mx-auto shadow-2xl">
+        <div class="flex flex-col md:flex-row gap-4 items-center mb-6">
+          <div class="flex-1 relative w-full">
+            <input
+              type="text"
+              placeholder="מה תרצה ליצור היום? תכתוב כאן ואני אעזור לך..."
+              class="w-full px-6 py-4 bg-white/20 border border-white/30 rounded-2xl text-white placeholder-white/60 text-lg outline-none"
+            />
+            <div class="absolute left-4 top-1/2 -translate-y-1/2">
+              <div class="w-3 h-3 bg-pink-400 rounded-full animate-pulse"></div>
+            </div>
+          </div>
+          <button class="px-8 py-4 rounded-2xl font-bold text-lg bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-lg" style="box-shadow:0 10px 30px rgba(236,72,153,0.4)">
+            ✨ בואו נתחיל
+          </button>
+        </div>
+
+        <!-- Advanced options -->
+        <div class="bg-white/5 border border-white/10 rounded-2xl p-6 mb-6">
+          <div class="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
+            <div class="text-white/80 font-medium whitespace-nowrap">✨ חומרי עזר והנחיות</div>
+            <div class="flex flex-wrap items-center gap-2 justify-end">
+              <button class="px-3 py-2 bg-indigo-500/30 hover:bg-indigo-500/50 border border-indigo-400/30 rounded-xl text-white text-xs transition-all">טען סביבת עבודה</button>
+              <button class="px-3 py-2 bg-emerald-500/30 hover:bg-emerald-500/50 border border-emerald-400/30 rounded-xl text-white text-xs transition-all">קובץ הנחיות</button>
+              <button class="px-3 py-2 bg-blue-500/30 hover:bg-blue-500/50 border border-blue-400/30 rounded-xl text-white text-xs transition-all">הוסף מסמכי עזר</button>
+            </div>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4 text-right">
+            <textarea
+              placeholder="הנחיות קצרות למסמך המסוים הזה... (למשל: סגנון אקדמי, פסקאות קצרות)"
+              class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none resize-y min-h-[90px]"
+            ></textarea>
+            <div class="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] flex items-center justify-center">
+              <div class="text-white/40 text-xs text-center">בחר 'הוסף מסמכי עזר' כדי לבסס את הצ'אט עליהם.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick action tags -->
+        <div class="flex flex-wrap justify-center gap-3">
+          <button class="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl text-white/90 text-sm transition-all">🎯 הצעת פרויקט</button>
+          <button class="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl text-white/90 text-sm transition-all">📝 דוח מקצועי</button>
+          <button class="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl text-white/90 text-sm transition-all">🎨 כתיבה יצירתית</button>
+          <button class="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl text-white/90 text-sm transition-all">📊 ניתוח נתונים</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Templates Grid -->
+    <div>
+      <h2 class="text-3xl font-bold text-white mb-8 text-center" style="text-shadow:1px 1px 10px rgba(0,0,0,0.5)">
+        תבניות חכמות להתחלה מהירה
+      </h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
+
+        <!-- Template card: blank -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-slate-400 to-slate-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">✨</div>
+            <h3 class="text-xl font-bold text-white mb-2" style="text-shadow:1px 1px 5px rgba(0,0,0,0.5)">📄 דף ריק</h3>
+            <p class="text-white/70 text-sm mb-3">התחל עם רעיון חדש</p>
+            <p class="text-white/50 text-xs">יצירה חופשית ללא מגבלות</p>
+          </div>
+          <div class="mt-6 opacity-0 group-hover:opacity-100 transition-all duration-300">
+            <div class="w-full h-1 bg-white/20 rounded-full overflow-hidden">
+              <div class="h-full bg-gradient-to-r from-slate-400 to-slate-600 w-full"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Template card: academic -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl ring-2 ring-pink-400 bg-white/20">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-blue-400 to-indigo-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">📚</div>
+            <h3 class="text-xl font-bold text-white mb-2">🎓 מאמר אקדמי</h3>
+            <p class="text-white/70 text-sm mb-3">עבודת מחקר מקצועית</p>
+            <p class="text-white/50 text-xs">מבוא, פרקים, מקורות וסיכום</p>
+          </div>
+        </div>
+
+        <!-- Template card: report -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-emerald-400 to-teal-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">📈</div>
+            <h3 class="text-xl font-bold text-white mb-2">📊 דוח עסקי</h3>
+            <p class="text-white/70 text-sm mb-3">ניתוח וממצאים מסודרים</p>
+            <p class="text-white/50 text-xs">נתונים, גרפים והמלצות</p>
+          </div>
+        </div>
+
+        <!-- Template card: summary -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-yellow-400 to-orange-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">🔥</div>
+            <h3 class="text-xl font-bold text-white mb-2">⚡ סיכום מהיר</h3>
+            <p class="text-white/70 text-sm mb-3">נקודות מפתח בקצרה</p>
+            <p class="text-white/50 text-xs">תמצית יעילה של נושא מורכב</p>
+          </div>
+        </div>
+
+        <!-- Template card: proposal -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-purple-400 to-pink-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">🚀</div>
+            <h3 class="text-xl font-bold text-white mb-2">💡 הצעת פרויקט</h3>
+            <p class="text-white/70 text-sm mb-3">רעיון שמוכר את עצמו</p>
+            <p class="text-white/50 text-xs">רקע, מטרות ותוכנית פעולה</p>
+          </div>
+        </div>
+
+        <!-- Template card: creative -->
+        <div class="group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 mx-auto bg-gradient-to-br from-pink-400 to-rose-600 rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg">🌟</div>
+            <h3 class="text-xl font-bold text-white mb-2">🎨 כתיבה יצירתית</h3>
+            <p class="text-white/70 text-sm mb-3">סיפור, שיר או תוכן מקורי</p>
+            <p class="text-white/50 text-xs">בטא את עצמך ללא גבולות</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Quick Access Bar -->
+    <div class="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6">
+      <div class="flex flex-wrap justify-center gap-4">
+        <button class="flex items-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all">
+          📁 פתח מסמך קיים
+        </button>
+        <button class="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500/80 to-emerald-600/80 border border-white/30 rounded-xl text-white shadow-lg transition-all">
+          ⚡ המשך טיוטה אחרונה
+        </button>
+        <button class="flex items-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all">
+          ⚙️ הגדרות וסקילים
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
+    <h1 class="text-4xl font-bold text-slate-800 mb-4">מה תרצה ליצור היום?</h1>
+
+    <div class="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 px-4 py-3 shadow-sm">
+
+      <!-- Buttons row -->
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <button class="btn btn-primary px-5 min-h-0 h-10 rounded-xl text-sm">צור</button>
+        <button class="btn btn-outline btn-accent px-4 min-h-0 h-10 rounded-xl text-sm">טען סביבת עבודה</button>
+        <button class="btn btn-outline btn-secondary px-4 min-h-0 h-10 rounded-xl text-sm">קובץ הנחיות</button>
+        <button class="btn btn-outline btn-info px-4 min-h-0 h-10 rounded-xl text-sm">פתח מסמך לעריכה</button>
+        <input
+          placeholder="תאר את המסמך שברצונך לכתוב, למשל: @claude עבודה על הונגריה עם מקורות וסיכום"
+          class="input input-bordered flex-1 min-w-[260px] bg-white text-slate-700 text-right"
+        />
+      </div>
+
+      <div class="text-[11px] text-slate-500 text-right mb-2">
+        לפתיחת קובץ קיים שאפשר לערוך השתמש ב־"פתח מסמך לעריכה". אפשר גם לתייג מודל ישירות בבקשה: @claude, @gemini, @openai או אפילו כמה יחד.
+      </div>
+
+      <!-- Tags row -->
+      <div class="flex flex-wrap gap-2 mb-3 text-right">
+        <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">סוג מסמך: חופשי</span>
+        <span class="rounded-full px-3 py-1 text-xs bg-slate-100 text-slate-500">ללא קבצי עזר</span>
+        <span class="rounded-full px-3 py-1 text-xs bg-slate-100 text-slate-500">ללא הנחיות נוספות</span>
+      </div>
+
+      <!-- Instructions textarea -->
+      <div class="text-right border-t border-slate-200 pt-3 mt-3 mb-3">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <div class="text-xs text-slate-500">הנחיות למסמך הזה</div>
+          <button class="btn btn-outline btn-secondary btn-xs rounded-lg">טען קובץ הנחיות</button>
+        </div>
+        <textarea
+          placeholder="למשל: כתוב בסגנון אקדמי, שמור על טון ענייני ואל תמציא מקורות"
+          class="textarea textarea-bordered w-full min-h-[80px] rounded-xl resize-y"
+        ></textarea>
+        <div class="text-xs text-slate-500 mt-2">אפשר לחדד כאן מה חשוב לך למסמך, בלי כפילות ובלי אזור נוסף בהמשך המסך.</div>
+      </div>
+
+      <!-- Template type + Learning -->
+      <div class="grid md:grid-cols-2 gap-3 text-right">
+        <div>
+          <div class="text-xs text-slate-500 mb-1">סוג מסמך רצוי</div>
+          <select class="select select-bordered w-full rounded-xl bg-white">
+            <option>חופשי</option>
+            <option>עבודה אקדמית</option>
+            <option>דוח</option>
+            <option>מסמך משפטי</option>
+            <option>סיכום נושא</option>
+            <option>מסמך משרדי</option>
+          </select>
+        </div>
+        <div class="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-sm text-slate-600">
+          נמצאו 12 מסמכים קודמים • הסגנון הדומיננטי: אקדמי
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Settings notice -->
+  <div class="mb-8">
+    <div class="rounded-[24px] border border-blue-100 bg-blue-50 p-5 text-right">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-2xl font-bold text-slate-800">ההתאמות האישיות עברו להגדרות</h2>
+          <div class="text-sm text-slate-600">כדי לצמצם בלבול וכפילויות, כל ניהול הסקילים, הזיכרון, הסגנון האישי והלמידה מרוכז עכשיו במקום אחד ברור.</div>
+        </div>
+        <button class="btn btn-primary btn-sm rounded-xl">פתח מדריך והגדרות</button>
+      </div>
+      <div class="grid md:grid-cols-3 gap-3">
+        <div class="rounded-2xl border border-white/70 bg-white/80 p-4">
+          <div class="text-sm font-bold text-slate-800 mb-1">סקילים</div>
+          <div class="text-xs text-slate-600">שליטה מלאה על מצב ההפעלה, ניסוח ומילות זיהוי לכל סקיל.</div>
+        </div>
+        <div class="rounded-2xl border border-white/70 bg-white/80 p-4">
+          <div class="text-sm font-bold text-slate-800 mb-1">זיכרון</div>
+          <div class="text-xs text-slate-600">הצ׳אט וההעדפות נשמרים מקומית וממשיכים איתך לפגישה הבאה.</div>
+        </div>
+        <div class="rounded-2xl border border-white/70 bg-white/80 p-4">
+          <div class="text-sm font-bold text-slate-800 mb-1">מדריך</div>
+          <div class="text-xs text-slate-600">נוסף טאב ייעודי עם הסברים והדגמות מוכנות לעבודה.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Materials -->
+  <div class="mb-8">
+    <div class="card bg-base-100 border border-slate-200 rounded-2xl shadow-sm">
+      <div class="card-body p-4">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-2 gap-3">
+          <div>
+            <div class="text-lg font-bold text-slate-800">חומרי עזר</div>
+            <div class="text-xs text-slate-500 mt-1">כאן מצרפים קבצים למסמך. השארנו את זה במקום אחד ברור כדי שהמסך יהיה נקי יותר.</div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <select class="select select-bordered min-h-0 h-10 rounded-xl text-sm bg-white">
+              <option>מקור מידע כללי</option>
+              <option>חומר רקע</option>
+              <option>מסמך הפניה</option>
+            </select>
+            <button class="btn btn-outline btn-primary btn-sm rounded-xl">הוסף קבצים</button>
+          </div>
+        </div>
+        <div class="text-sm text-slate-500 py-2">עדיין לא הוספת חומרי עזר</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Templates -->
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-2xl font-bold text-slate-800">תבניות מהירות</h2>
+    <button class="btn btn-ghost btn-sm text-[#2B579A] font-semibold">מסמך ריק</button>
+  </div>
+
+  <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4 mb-10">
+    <!-- Template cards -->
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">מסמך ריק</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">מסמך ריק</div>
+      <div class="text-xs text-slate-500">התחל מאפס</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">עבודה אקדמית</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">עבודה אקדמית</div>
+      <div class="text-xs text-slate-500">מבוא, פרקים וסיכום</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">דוח מסודר</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">דוח מסודר</div>
+      <div class="text-xs text-slate-500">ממצאים והמלצות</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">סיכום נושא</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">סיכום נושא</div>
+      <div class="text-xs text-slate-500">נקודות מפתח מהירות</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">מסמך משרדי</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">מסמך משרדי</div>
+      <div class="text-xs text-slate-500">ניסוח מקצועי וענייני</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">הצעה</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">הצעה</div>
+      <div class="text-xs text-slate-500">רקע, מטרות ושלבים</div>
+    </div>
+    <div class="card relative bg-base-100 border border-slate-200 rounded-2xl p-4 text-right hover:shadow-lg hover:border-[#93C5FD] transition-all duration-200 cursor-pointer">
+      <span class="absolute left-3 top-3 inline-flex items-center justify-center w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-600 hover:text-[#2B579A]">✎</span>
+      <div class="h-28 rounded-xl bg-gradient-to-b from-white to-slate-100 border border-slate-200 mb-3 flex items-center justify-center text-[#2B579A] font-bold text-center px-2">מכתב רשמי</div>
+      <div class="font-semibold text-slate-800 text-sm mb-1">מכתב רשמי</div>
+      <div class="text-xs text-slate-500">פתיחה, גוף וסיום</div>
+    </div>
+  </div>
+
+  <!-- Recent docs -->
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-xl font-bold text-slate-800">אחרונים</h3>
+  </div>
+  <div class="card bg-base-100 border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+    <div class="px-5 py-8 text-sm text-slate-500 text-center">עדיין אין מסמכים אחרונים</div>
+  </div>
+
+</div>
+</body>
+</html>

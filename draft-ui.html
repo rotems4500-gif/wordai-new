@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מסמך 1 - Word</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600&family=Alef:wght@400;700&display=swap');
+
+        :root {
+            --word-blue: #2B579A;
+            --ribbon-bg: #F3F2F1;
+            --ribbon-border: #E1DFDD;
+            --ribbon-hover: #E1DFDD;
+            --text-color: #323130;
+            --group-label: #605E5C;
+            --page-bg: #E1DFDD;
+        }
+
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--page-bg); margin: 0; display: flex; height: 100vh; overflow: hidden; flex-direction: column; color: var(--text-color); }
+
+        /* --- Top Bar --- */
+        #top-bar { background-color: var(--word-blue); color: white; height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; font-size: 0.9rem; flex-shrink: 0; }
+        .top-search { background: rgba(255,255,255,0.2); border-radius: 4px; padding: 4px 12px; width: 400px; display: flex; align-items: center; gap: 8px; }
+        .top-search input { background: transparent; border: none; color: white; outline: none; width: 100%; font-family: inherit;}
+        .top-search input::placeholder { color: rgba(255,255,255,0.7); }
+
+        /* --- Ribbon Container --- */
+        #ribbon-container { background-color: var(--ribbon-bg); border-bottom: 1px solid var(--ribbon-border); display: flex; flex-direction: column; z-index: 20; flex-shrink: 0; }
+        #tabs-row { display: flex; list-style: none; padding: 0 4px; margin: 0; background-color: white; border-bottom: 1px solid var(--ribbon-border); overflow-x: auto; scrollbar-width: none; }
+        #tabs-row::-webkit-scrollbar { display: none; }
+        
+        .tab-btn { padding: 6px 16px; cursor: pointer; font-size: 0.85rem; border: none; background: transparent; color: var(--text-color); border-bottom: 2px solid transparent; white-space: nowrap; }
+        .tab-btn:hover { background-color: var(--ribbon-bg); }
+        .tab-btn.active { border-bottom-color: var(--word-blue); color: var(--word-blue); font-weight: 600; background-color: var(--ribbon-bg); }
+        .tab-btn.file-tab { background-color: var(--word-blue); color: white; border-radius: 4px 4px 0 0; margin-left: 4px; }
+
+        /* --- Toolbar Panels --- */
+        .toolbar-panel { display: none; padding: 4px 8px; align-items: flex-start; gap: 2px; min-height: 95px; background-color: var(--ribbon-bg); overflow-x: auto; overflow-y: hidden; white-space: nowrap; }
+        .toolbar-panel::-webkit-scrollbar { height: 6px; }
+        .toolbar-panel::-webkit-scrollbar-track { background: transparent; }
+        .toolbar-panel::-webkit-scrollbar-thumb { background: #C8C6C4; border-radius: 3px; }
+        .toolbar-panel.active { display: flex; }
+
+        .toolbar-group { display: flex; flex-direction: column; align-items: center; justify-content: space-between; height: 85px; padding: 0 8px; border-left: 1px solid var(--ribbon-border); flex-shrink: 0; }
+        .toolbar-group:last-child { border-left: none; }
+        .toolbar-group-items { display: flex; align-items: flex-start; gap: 4px; height: 100%; }
+        .toolbar-group-label { font-size: 11px; color: var(--group-label); text-align: center; margin-top: auto; padding-top: 4px; white-space: nowrap; }
+
+        .btn-column { display: flex; flex-direction: column; gap: 2px; justify-content: flex-start; height: 100%; }
+        
+        .checkbox-group { display: flex; flex-direction: column; gap: 4px; justify-content: center; height: 100%; font-size: 11px; color: #323130; padding: 0 4px; }
+        .checkbox-row { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        .checkbox-row input { margin: 0; cursor: pointer; }
+
+        /* כפתורי Ribbon */
+        .r-btn { background: transparent; border: 1px solid transparent; border-radius: 2px; cursor: pointer; color: var(--text-color); display: flex; align-items: center; justify-content: center; transition: background 0.1s; white-space: nowrap; }
+        .r-btn:hover { background-color: var(--ribbon-hover); border-color: #C8C6C4; }
+        .r-btn i { font-size: 16px; color: var(--word-blue); }
+        
+        .r-btn-large { flex-direction: column; padding: 4px 6px; min-width: 48px; height: 64px; font-size: 11px; gap: 4px; }
+        .r-btn-large i { font-size: 24px; }
+        
+        .r-btn-medium { padding: 4px 8px; font-size: 11px; gap: 6px; width: 100%; justify-content: flex-start; height: 22px; }
+        .r-btn-small { padding: 2px; width: 22px; height: 22px; font-size: 14px; }
+
+        .r-select { border: 1px solid #8A8886; border-radius: 2px; padding: 2px 4px; font-size: 11px; outline: none; font-family: inherit; height: 22px; }
+
+        /* גלריית סגנונות */
+        .styles-gallery { display: flex; border: 1px solid var(--ribbon-border); background: white; padding: 2px; gap: 2px; height: 64px; overflow-x: auto; max-width: 480px; scrollbar-width: none; }
+        .styles-gallery::-webkit-scrollbar { display: none; }
+        .style-item { border: 1px solid transparent; padding: 2px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; min-width: 60px; }
+        .style-item:hover { background: #F3F2F1; border-color: #C8C6C4; }
+        .style-item span { font-size: 11px; }
+
+        /* קלטים בפריסה */
+        .input-group { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #323130; }
+        .input-row { display: flex; align-items: center; gap: 4px; justify-content: space-between; }
+        .input-row input { width: 45px; border: 1px solid #8A8886; border-radius: 2px; padding: 1px 4px; text-align: left; }
+
+        /* --- Dropdowns & Dynamic Grid --- */
+        .dropdown-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
+        .dropdown-menu { position: absolute; top: 100%; right: 0; background: white; border: 1px solid #C8C6C4; box-shadow: 0 4px 16px rgba(0,0,0,0.15); border-radius: 2px; z-index: 100; display: none; flex-direction: column; padding: 12px; gap: 4px; }
+        .table-grid-title { font-size: 12px; color: #323130; font-weight: 600; margin-bottom: 6px; }
+        .table-grid-boxes { display: grid; grid-template-columns: repeat(10, 18px); gap: 2px; direction: rtl; }
+        .table-box { width: 18px; height: 18px; border: 1px solid #C8C6C4; cursor: pointer; background: white; transition: background 0.1s; }
+        .table-box.active { background: #CDE6F7; border-color: #2B579A; }
+        .table-grid-status { text-align: center; font-size: 12px; margin-top: 6px; color: #605E5C; height: 16px; font-weight: 600; }
+
+        /* --- Workspace --- */
+        #workspace { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+        /* --- Taskpane (AI Assistant) --- */
+        #taskpane { width: 320px; background-color: white; border-right: 1px solid var(--ribbon-border); display: flex; flex-direction: column; box-shadow: -2px 0 5px rgba(0,0,0,0.05); z-index: 10; flex-shrink: 0; }
+        .taskpane-header { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ribbon-border); font-weight: 600; font-size: 14px; }
+        .taskpane-content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; background-color: #FAFAFA; }
+        .tp-card { background: white; border: 1px solid #E1DFDD; border-radius: 4px; padding: 12px; }
+        .tp-card-title { font-weight: 600; font-size: 12px; color: #323130; margin-bottom: 8px; border-bottom: 1px solid #E1DFDD; padding-bottom: 4px; }
+        .tp-score { font-size: 24px; font-weight: 400; color: #323130; }
+        .tp-score-sub { font-size: 11px; color: #605E5C; }
+        .tp-item { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 4px 0; cursor: pointer; }
+        .tp-item:hover { background: #F3F2F1; }
+        .tp-item i { color: var(--word-blue); }
+
+        /* --- אזור העריכה (A4) --- */
+        #editor-wrapper { flex: 1; overflow-y: auto; overflow-x: auto; padding: 32px 16px; display: flex; justify-content: center; align-items: flex-start; transition: transform 0.2s; transform-origin: top center; background-color: #E1DFDD; }
+
+        #page {
+            background-color: white;
+            width: 21cm;
+            min-height: 29.7cm;
+            padding: 2.54cm;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            outline: none;
+            font-size: 12pt;
+            line-height: 1.5;
+            color: #000;
+            font-family: 'Alef', sans-serif;
+            position: relative;
+            transition: all 0.3s;
+            flex-shrink: 0;
+        }
+
+        #page::before {
+            content: "טיוטה"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg);
+            font-size: 120px; color: rgba(200, 200, 200, 0.2); pointer-events: none; z-index: 0; display: none; font-weight: bold;
+        }
+        #page.has-watermark::before { display: block; }
+        #page.has-borders { border: 2px solid var(--word-blue); }
+        #page[placeholder]:empty:after { content: attr(placeholder); color: #9ca3af; position: absolute; }
+
+        /* Document Styles */
+        #page p { margin: 0 0 8pt 0; position: relative; z-index: 1; transition: margin 0.2s; }
+        #page h1 { font-size: 24pt; color: #2B579A; margin: 24pt 0 6pt 0; font-weight: 600; position: relative; z-index: 1; }
+        #page h2 { font-size: 18pt; color: #2B579A; margin: 18pt 0 4pt 0; border-bottom: 1px solid #E1DFDD; padding-bottom: 4px; position: relative; z-index: 1; }
+        #page table { width: 100%; border-collapse: collapse; margin: 12pt 0; position: relative; z-index: 1; }
+        #page th, #page td { border: 1px solid #A6A6A6; padding: 6px; text-align: right; }
+        #page img { max-width: 100%; height: auto; display: block; margin: 12pt auto; border: 1px solid #E1DFDD; position: relative; z-index: 1; }
+        
+        .toc-container { border: 1px solid #E1DFDD; background: #FAFAFA; padding: 12px; margin-bottom: 16px; font-family: inherit; position: relative; z-index: 1; }
+        .toc-container h3 { margin-top: 0; color: #323130; font-size: 14pt; }
+        .toc-container ul { list-style: none; padding: 0; margin: 0; }
+        .toc-container a { text-decoration: none; color: var(--word-blue); }
+
+        .doc-comment { background-color: #FCE100; cursor: help; padding: 0 2px; }
+        .ai-suggestion { color: #C50F1F; text-decoration: underline; text-decoration-style: dashed; cursor: pointer; }
+        .ai-suggestion:hover { background-color: #FDE7E9; }
+
+        /* --- Inline AI Menu --- */
+        #inline-menu { position: absolute; background: white; border: 1px solid #C8C6C4; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: none; padding: 4px; gap: 2px; z-index: 50; flex-direction: row; align-items: center; }
+        .inline-btn { padding: 4px 8px; border: none; background: transparent; cursor: pointer; font-size: 12px; border-radius: 2px; display: flex; align-items: center; gap: 4px; }
+        .inline-btn:hover { background: #F3F2F1; }
+        .inline-btn i { color: var(--word-blue); }
+
+        /* --- Status Bar --- */
+        #status-bar { height: 24px; background-color: var(--word-blue); color: white; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 11px; z-index: 30; flex-shrink: 0; }
+        .status-items { display: flex; gap: 16px; align-items: center; }
+
+        /* --- File Menu --- */
+        #file-menu { position: fixed; top: 48px; left: 0; right: 0; bottom: 0; background-color: white; z-index: 100; display: none; flex-direction: row; }
+        .file-sidebar { width: 150px; background-color: var(--word-blue); color: white; display: flex; flex-direction: column; }
+        .file-sidebar-btn { padding: 12px 16px; border: none; background: transparent; color: white; text-align: right; cursor: pointer; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .file-sidebar-btn:hover { background-color: rgba(255,255,255,0.1); }
+        .file-sidebar-btn.back-btn { background-color: rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .file-content { flex: 1; padding: 40px; background: #FAFAFA; }
+        .file-title { font-size: 32px; color: #323130; margin-bottom: 20px; font-weight: 300; }
+        .action-card { background: white; border: 1px solid #E1DFDD; padding: 20px; border-radius: 4px; width: 300px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 10px; transition: box-shadow 0.2s; }
+        .action-card:hover { box-shadow: 0 4px 10px rgba(0,0,0,0.1); border-color: var(--word-blue); }
+        .action-card i { font-size: 48px; color: var(--word-blue); }
+        .action-card span { font-size: 16px; font-weight: 600; color: #323130; }
+
+        @media print {
+            body { background: white; }
+            #top-bar, #ribbon-container, #taskpane, #inline-menu, #status-bar { display: none !important; }
+            #workspace { display: block; overflow: visible; }
+            #editor-wrapper { padding: 0; display: block; overflow: visible; background-color: white; }
+            #page { box-shadow: none; margin: 0; padding: 0; width: 100%; min-height: auto; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Bar -->
+    <header id="top-bar">
+        <div class="flex items-center gap-4">
+            <i class="ph-fill ph-file-word text-2xl"></i>
+            <span>מסמך 1 - Word</span>
+        </div>
+        <div class="top-search">
+            <i class="ph ph-magnifying-glass"></i>
+            <input type="text" placeholder="חיפוש (Alt+Q)">
+        </div>
+        <div class="flex items-center gap-4">
+            <i class="ph-fill ph-megaphone text-lg"></i>
+            <div class="w-8 h-8 rounded-full bg-blue-400 flex items-center justify-center text-white font-bold">RL</div>
+        </div>
+    </header>
+
+    <!-- File Menu -->
+    <div id="file-menu">
+        <div class="file-sidebar">
+            <button class="file-sidebar-btn back-btn" onclick="toggleFileMenu(false)"><i class="ph ph-arrow-right"></i> חזור</button>
+            <button class="file-sidebar-btn"><i class="ph ph-house"></i> בית</button>
+            <button class="file-sidebar-btn"><i class="ph ph-file-plus"></i> חדש</button>
+            <button class="file-sidebar-btn"><i class="ph ph-folder-open"></i> פתח</button>
+        </div>
+        <div class="file-content">
+            <div class="file-title">מה תרצה לעשות היום?</div>
+            <div class="flex gap-4">
+                <div class="action-card" onclick="newDocument()">
+                    <i class="ph-fill ph-file-blank"></i><span>מסמך ריק חדש</span>
+                </div>
+                <div class="action-card" onclick="saveLocal()">
+                    <i class="ph-fill ph-floppy-disk"></i><span>שמירה מקומית</span>
+                </div>
+                <div class="action-card" onclick="exportToWord()">
+                    <i class="ph-fill ph-file-doc"></i><span>הורד כקובץ Word</span>
+                </div>
+                <div class="action-card" onclick="window.print(); toggleFileMenu(false);">
+                    <i class="ph-fill ph-printer"></i><span>הדפסה / ייצוא ל-PDF</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ribbon -->
+    <nav id="ribbon-container">
+        <ul id="tabs-row">
+            <li class="tab-btn file-tab" onclick="toggleFileMenu(true)">קובץ</li>
+            <li class="tab-btn active" onclick="switchTab('home', this)">בית</li>
+            <li class="tab-btn" onclick="switchTab('insert', this)">הוספה</li>
+            <li class="tab-btn" onclick="switchTab('design', this)">עיצוב</li>
+            <li class="tab-btn" onclick="switchTab('layout', this)">פריסה</li>
+            <li class="tab-btn" onclick="switchTab('references', this)">הפניות</li>
+            <li class="tab-btn" onclick="switchTab('review', this)">סקירה</li>
+            <li class="tab-btn" onclick="switchTab('view', this)">תצוגה</li>
+            <li class="tab-btn" style="color: var(--word-blue); font-weight: bold;" onclick="toggleTaskpane()">AI Perfect Assistant</li>
+        </ul>
+
+        <!-- 1. טאב: בית -->
+        <div id="panel-home" class="toolbar-panel active">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="execCmd('paste')"><i class="ph-fill ph-clipboard text-gray-700"></i><span>הדבק</span></button>
+                    <div class="flex flex-col gap-1">
+                        <button class="r-btn r-btn-small" onclick="execCmd('cut')" title="גזור"><i class="ph ph-scissors"></i></button>
+                        <button class="r-btn r-btn-small" onclick="execCmd('copy')" title="העתק"><i class="ph ph-copy"></i></button>
+                        <button class="r-btn r-btn-small" onclick="alert('מברשת עיצוב')" title="מברשת עיצוב"><i class="ph-fill ph-paint-brush"></i></button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">לוח גזירים</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items flex-col items-start gap-1">
+                    <div class="flex gap-1">
+                        <select class="r-select" style="width: 120px;" onchange="execCmd('fontName', this.value)">
+                            <option value="Alef" selected>Alef</option>
+                            <option value="Arial">Arial</option>
+                            <option value="David">David</option>
+                        </select>
+                        <select class="r-select" style="width: 50px;" onchange="execCmd('fontSize', this.value)">
+                            <option value="3" selected>12</option>
+                            <option value="4">14</option>
+                            <option value="5">18</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-1">
+                        <button class="r-btn r-btn-small font-bold" onclick="execCmd('bold')">B</button>
+                        <button class="r-btn r-btn-small italic" onclick="execCmd('italic')">I</button>
+                        <button class="r-btn r-btn-small underline" onclick="execCmd('underline')">U</button>
+                        <button class="r-btn r-btn-small line-through" onclick="execCmd('strikeThrough')">ab</button>
+                        <button class="r-btn r-btn-small" title="כתב תחתי" onclick="execCmd('subscript')">X<sub>2</sub></button>
+                        <button class="r-btn r-btn-small" title="כתב עילי" onclick="execCmd('superscript')">X<sup>2</sup></button>
+                        <input type="color" onchange="execCmd('foreColor', this.value)" style="width:20px;height:20px;border:none;padding:0;cursor:pointer;">
+                        <input type="color" value="#ffff00" onchange="execCmd('hiliteColor', this.value)" style="width:20px;height:20px;border:none;padding:0;cursor:pointer;">
+                    </div>
+                </div>
+                <div class="toolbar-group-label">גופן</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items flex-col items-start gap-1">
+                    <div class="flex gap-1">
+                        <button class="r-btn r-btn-small" onclick="execCmd('insertUnorderedList')"><i class="ph ph-list-bullets"></i></button>
+                        <button class="r-btn r-btn-small" onclick="execCmd('insertOrderedList')"><i class="ph ph-list-numbers"></i></button>
+                        <div style="width:1px; height:16px; background:#E1DFDD; margin:0 2px;"></div>
+                        <button class="r-btn r-btn-small" onclick="setDirection('rtl')"><i class="ph ph-text-outdent"></i></button>
+                        <button class="r-btn r-btn-small" onclick="setDirection('ltr')"><i class="ph ph-text-indent"></i></button>
+                    </div>
+                    <div class="flex gap-1">
+                        <button class="r-btn r-btn-small" onclick="execCmd('justifyRight')"><i class="ph ph-text-align-right"></i></button>
+                        <button class="r-btn r-btn-small" onclick="execCmd('justifyCenter')"><i class="ph ph-text-align-center"></i></button>
+                        <button class="r-btn r-btn-small" onclick="execCmd('justifyLeft')"><i class="ph ph-text-align-left"></i></button>
+                        <button class="r-btn r-btn-small" onclick="execCmd('justifyFull')"><i class="ph ph-text-align-justify"></i></button>
+                        <div style="width:1px; height:16px; background:#E1DFDD; margin:0 2px;"></div>
+                        <select class="r-select" style="width: 50px;" onchange="applyParagraphStyle('lineHeight', this.value)" title="ריווח שורות">
+                            <option value="1">1.0</option>
+                            <option value="1.15">1.15</option>
+                            <option value="1.5" selected>1.5</option>
+                            <option value="2.0">2.0</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">פסקה</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="styles-gallery">
+                        <div class="style-item" onclick="execCmd('formatBlock', 'P')"><span style="font-size:14px;">AaBb</span><span>רגיל</span></div>
+                        <div class="style-item" onclick="execCmd('formatBlock', 'H1')"><span style="font-size:14px; font-weight:bold; color:var(--word-blue);">AaBb</span><span>כותרת 1</span></div>
+                        <div class="style-item" onclick="execCmd('formatBlock', 'H2')"><span style="font-size:13px; font-weight:bold; color:#2B579A;">AaBb</span><span>כותרת 2</span></div>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">סגנונות</div>
+            </div>
+        </div>
+
+        <!-- 2. טאב: הוספה -->
+        <div id="panel-insert" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large">
+                        <i class="ph-fill ph-file"></i><span>עמוד שער <i class="ph-fill ph-caret-down text-[8px]"></i></span>
+                    </button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-file-blank"></i> עמוד ריק</button>
+                        <button class="r-btn r-btn-medium" onclick="execCmd('insertHTML', '<div style=\'page-break-after:always; margin:20px 0; border-bottom:1px dashed #ccc; text-align:center; color:#ccc; font-size:10px;\'>--- מעבר עמוד ---</div><p><br></p>')"><i class="ph-fill ph-file-dashed"></i> מעבר עמוד</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">עמודים</div>
+            </div>
+            
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="dropdown-wrapper">
+                        <button class="r-btn r-btn-large" onclick="toggleDropdown('table-dropdown')">
+                            <i class="ph-fill ph-table"></i><span>טבלה <i class="ph-fill ph-caret-down text-[8px]"></i></span>
+                        </button>
+                        <div id="table-dropdown" class="dropdown-menu">
+                            <div class="table-grid-title">הוספת טבלה</div>
+                            <div id="table-grid-boxes" class="table-grid-boxes" onmouseleave="resetTableGrid()"></div>
+                            <div id="table-grid-status" class="table-grid-status">טבלה</div>
+                            <div style="width:100%; height:1px; background:#E1DFDD; margin: 4px 0;"></div>
+                            <button class="r-btn r-btn-medium" onclick="insertTable()"><i class="ph-fill ph-table"></i> הוספת טבלה...</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">טבלאות</div>
+            </div>
+            
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <input type="file" id="imgUpload" accept="image/*" style="display:none;" onchange="insertImage(event)">
+                    <button class="r-btn r-btn-large" onclick="document.getElementById('imgUpload').click()">
+                        <i class="ph-fill ph-image"></i><span>תמונות <i class="ph-fill ph-caret-down text-[8px]"></i></span>
+                    </button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-shapes"></i> צורות <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-hexagon"></i> סמלים</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-cube"></i> מודלים תלת-ממדיים <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                    </div>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-tree-structure text-green-600"></i> SmartArt</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-chart-bar"></i> תרשים</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-camera"></i> צילום מסך <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">איורים</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large">
+                        <i class="ph-fill ph-puzzle-piece text-red-500"></i><span>קבל תוספות</span>
+                    </button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-squares-four text-red-500"></i> התוספות שלי <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-globe text-gray-600"></i> ויקיפדיה</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">תוספות</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="insertLink()">
+                        <i class="ph-fill ph-link text-gray-500"></i><span>קישור <i class="ph-fill ph-caret-down text-[8px]"></i></span>
+                    </button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-bookmark-simple"></i> סימניה</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-arrows-merge"></i> הפניה מקושרת</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">קישורים</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="addComment()">
+                        <i class="ph-fill ph-chat-circle-text text-yellow-500"></i><span>הערה</span>
+                    </button>
+                </div>
+                <div class="toolbar-group-label">הערות</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-browser"></i> כותרת עליונה <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-layout"></i> כותרת תחתונה <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-hash"></i> מספר עמוד <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">כותרת עליונה ותחתונה</div>
+            </div>
+            
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-textbox"></i><span>תיבת טקסט <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-text-t"></i> WordArt <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-signature"></i> שורת חתימה <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-calendar-blank"></i> תאריך ושעה</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">טקסט</div>
+            </div>
+            
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium" onclick="execCmd('insertHTML', '&nbsp;∑&nbsp;')"><i class="ph-fill ph-math-operations"></i> משוואה <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium" onclick="execCmd('insertHTML', '&nbsp;Ω&nbsp;')"><i class="ph-fill ph-omega"></i> סמל <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">סמלים</div>
+            </div>
+        </div>
+
+        <!-- 3. טאב: עיצוב -->
+        <div id="panel-design" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-swatches text-blue-700"></i><span>ערכות<br>נושא <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    
+                    <div class="styles-gallery" style="height: 64px; max-width: 480px; margin: 0 8px;">
+                        <div class="style-item" style="border: 1px solid #C8C6C4; background: #F3F2F1;" onclick="execCmd('formatBlock', 'P')"><span style="font-size:14px; color:#323130;">כותרת טקסט</span><span style="color:#605E5C;">בסיסי</span></div>
+                        <div class="style-item" onclick="execCmd('formatBlock', 'H1')"><span style="font-size:13px; font-weight:bold; color:var(--word-blue);">כותרת טקסט</span><span style="color:#605E5C;">כותרת 1</span></div>
+                        <div class="style-item" onclick="execCmd('formatBlock', 'H2')"><span style="font-size:12px; font-weight:bold; color:#2B579A; border-bottom: 1px solid #2B579A;">כותרת טקסט</span><span style="color:#605E5C;">כותרת 2</span></div>
+                        <div class="style-item"><span style="font-size:13px; color:#2B579A;">כותרת טקסט</span><span style="color:#605E5C;">כותרת 3</span></div>
+                        <div class="style-item"><span style="font-size:13px; color:#107C41;">כותרת טקסט</span><span style="color:#605E5C;">כותרת 4</span></div>
+                    </div>
+
+                    <div class="btn-column justify-center gap-1">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-palette text-blue-600"></i> צבעים <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-text-a-underline text-blue-600"></i> גופנים <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                    </div>
+
+                    <div class="btn-column justify-center gap-1 ml-2 pl-2 border-l border-gray-200">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-list-dashes text-gray-600"></i> מרווח בין פסקאות <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-intersect text-gray-500"></i> אפקטים <i class="ph-fill ph-caret-down text-[8px] ml-auto"></i></button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-check-circle text-green-600"></i> קבע כברירת מחדל</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">עיצוב מסמכים</div>
+            </div>
+            
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="toggleWatermark()"><i class="ph-fill ph-text-a-underline text-red-400"></i><span>סימן<br>מים <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div style="display:flex; flex-direction:column; align-items:center; padding:4px;" class="r-btn r-btn-large hover:bg-gray-100">
+                        <input type="color" onchange="document.getElementById('page').style.backgroundColor = this.value" value="#ffffff" style="cursor:pointer; margin-bottom: 2px; width: 20px; height: 16px; padding: 0; border: 1px solid #ccc;">
+                        <span style="font-size:11px; color:var(--text-color); margin-top: 2px;">צבע<br>עמוד <i class="ph-fill ph-caret-down text-[8px]"></i></span>
+                    </div>
+                    <button class="r-btn r-btn-large" onclick="togglePageBorders()"><i class="ph-fill ph-square text-orange-500"></i><span>גבולות<br>עמוד</span></button>
+                </div>
+                <div class="toolbar-group-label">רקע עמוד</div>
+            </div>
+        </div>
+
+        <!-- 4. טאב: פריסה -->
+        <div id="panel-layout" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="toggleMargins()"><i class="ph-fill ph-arrows-in-line-vertical"></i><span>שוליים</span></button>
+                    <button class="r-btn r-btn-large" onclick="toggleOrientation()"><i class="ph-fill ph-rectangle"></i><span>כיוון</span></button>
+                    <button class="r-btn r-btn-large" onclick="togglePageSize()"><i class="ph-fill ph-file"></i><span>גודל</span></button>
+                    <button class="r-btn r-btn-large" onclick="toggleColumns()"><i class="ph-fill ph-columns"></i><span>טורים</span></button>
+                </div>
+                <div class="toolbar-group-label">הגדרת עמוד</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items flex gap-2">
+                    <div class="input-group">
+                        <span style="font-weight:600; margin-bottom:2px;">כניסה</span>
+                        <div class="input-row">לפני: <input type="number" value="0" onchange="applyParagraphStyle('marginLeft', this.value+'cm')"> ס"מ</div>
+                        <div class="input-row">אחרי: <input type="number" value="0" onchange="applyParagraphStyle('marginRight', this.value+'cm')"> ס"מ</div>
+                    </div>
+                    <div style="width:1px; height:40px; background:#E1DFDD; margin:0 4px;"></div>
+                    <div class="input-group">
+                        <span style="font-weight:600; margin-bottom:2px;">מרווח</span>
+                        <div class="input-row">לפני: <input type="number" value="0" onchange="applyParagraphStyle('marginTop', this.value+'pt')"> נק'</div>
+                        <div class="input-row">אחרי: <input type="number" value="8" onchange="applyParagraphStyle('marginBottom', this.value+'pt')"> נק'</div>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">פסקה</div>
+            </div>
+        </div>
+
+        <!-- 5. טאב: הפניות -->
+        <div id="panel-references" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="generateTOC()"><i class="ph-fill ph-list-dashes"></i><span>תוכן עניינים <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-plus"></i> הוסף טקסט</button>
+                        <button class="r-btn r-btn-medium" onclick="generateTOC()"><i class="ph-fill ph-arrows-clockwise"></i> עדכן תוכן עניינים</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">תוכן עניינים</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="insertFootnote()"><i class="ph-fill ph-text-superscript"></i><span>הוסף הערת<br>שוליים</span></button>
+                </div>
+                <div class="toolbar-group-label">הערות שוליים</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-quotes"></i><span>הוסף ציטוט <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-books"></i> נהל מקורות</button>
+                        <div class="flex items-center gap-1 text-[11px] px-2">סגנון: <select class="r-select w-16"><option>APA</option></select></div>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-book-bookmark"></i> ביבליוגרפיה</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">ציטוטים וביבליוגרפיה</div>
+            </div>
+        </div>
+
+        <!-- 6. טאב: סקירה -->
+        <div id="panel-review" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="activateAgent('✨ תוקן המסמך')"><i class="ph-fill ph-check-circle text-blue-600"></i><span>עורך <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div class="btn-column"><button class="r-btn r-btn-medium"><i class="ph-fill ph-text-t"></i> ספירת מילים</button></div>
+                </div>
+                <div class="toolbar-group-label">הגהה</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" onclick="addComment()"><i class="ph-fill ph-chat-circle-text text-yellow-500"></i><span>הערה חדשה</span></button>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-chats"></i><span>הצג הערות</span></button>
+                </div>
+                <div class="toolbar-group-label">הערות</div>
+            </div>
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" style="background-color: #E1DFDD;"><i class="ph-fill ph-pencil-simple-line text-blue-600"></i><span>עקוב אחר<br>שינויים <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-check text-green-500"></i> קבל</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-x text-red-500"></i> דחה</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">מעקב ושינויים</div>
+            </div>
+        </div>
+
+        <!-- 7. טאב: תצוגה -->
+        <div id="panel-view" class="toolbar-panel">
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-book-open"></i> מצב קריאה</button>
+                        <button class="r-btn r-btn-medium" style="background-color: #E1DFDD;"><i class="ph-fill ph-file-text"></i> פריסת הדפסה</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-globe"></i> פריסת אינטרנט</button>
+                    </div>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-list"></i> מתאר</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-file-dashed"></i> טיוטה</button>
+                    </div>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-scan"></i><span>מיקוד</span></button>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-speaker-high"></i><span>תצוגת קריאה<br>מודרנית</span></button>
+                </div>
+                <div class="toolbar-group-label">תצוגות</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large" style="background-color: #E1DFDD;"><i class="ph-fill ph-arrows-down-up"></i><span>אנכי</span></button>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-book-open-text"></i><span>זה לצד זה</span></button>
+                </div>
+                <div class="toolbar-group-label">תנועה בעמוד</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <div class="checkbox-group">
+                        <label class="checkbox-row"><input type="checkbox"> סרגל</label>
+                        <label class="checkbox-row"><input type="checkbox"> קווי רשת</label>
+                        <label class="checkbox-row"><input type="checkbox"> חלונית הניווט</label>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">הצגה</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-magnifying-glass"></i><span>זום</span></button>
+                    <button class="r-btn r-btn-large" onclick="setZoom(1)"><i class="ph-fill ph-corners-in"></i><span>100%</span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-file"></i> עמוד אחד</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-files"></i> עמודים מרובים</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-arrows-left-right"></i> רוחב עמוד</button>
+                    </div>
+                </div>
+                <div class="toolbar-group-label">שינוי גודל תצוגה</div>
+            </div>
+
+            <div class="toolbar-group">
+                <div class="toolbar-group-items">
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-plus-square"></i><span>חלון<br>חדש</span></button>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-rows"></i><span>סדר<br>הכל</span></button>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-split-horizontal"></i><span>פצל</span></button>
+                    <div class="btn-column">
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-browsers"></i> הצג זה לצד זה</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-arrows-down-up"></i> גלילה סינכרונית</button>
+                        <button class="r-btn r-btn-medium"><i class="ph-fill ph-arrows-clockwise"></i> אפס מיקום חלון</button>
+                    </div>
+                    <button class="r-btn r-btn-large"><i class="ph-fill ph-arrows-left-right"></i><span>החלף<br>חלונות <i class="ph-fill ph-caret-down text-[8px]"></i></span></button>
+                </div>
+                <div class="toolbar-group-label">חלון</div>
+            </div>
+        </div>
+
+    </nav>
+
+    <!-- Workspace -->
+    <main id="workspace">
+        
+        <!-- התוסף הצידי של רותם (AI Perfect Assistant) -->
+        <aside id="taskpane">
+            <div class="taskpane-header">
+                <span>עורך</span>
+                <button class="r-btn r-btn-small" onclick="toggleTaskpane()"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="taskpane-content">
+                <div class="tp-card">
+                    <div class="tp-score">85</div>
+                    <div class="tp-score-sub">ציון עורך (מחושב ב-100 מילים)</div>
+                </div>
+                <div class="tp-card">
+                    <div class="tp-card-title">תיקונים</div>
+                    <div class="tp-item" onclick="activateAgent('✨ תוקן המסמך')"><span><i class="ph-fill ph-check-circle text-green-500 ml-2"></i>בדיקת איות</span><span>2 <i class="ph ph-caret-left"></i></span></div>
+                    <div class="tp-item" onclick="activateAgent('✨ דקדוק תוקן')"><span><i class="ph-fill ph-check-circle text-green-500 ml-2"></i>דקדוק</span><span>1 <i class="ph ph-caret-left"></i></span></div>
+                </div>
+                <div class="tp-card">
+                    <div class="tp-card-title">מיקודים</div>
+                    <div class="tp-item" onclick="activateAgent('🧬 תומצת ללא איבוד משמעות')"><span><i class="ph-fill ph-check-circle text-blue-500 ml-2"></i>שפה תמציתית</span><span><i class="ph ph-caret-left"></i></span></div>
+                    <div class="tp-item" onclick="activateAgent('👔 שוכתב לשפה אקדמית')"><span><i class="ph-fill ph-check-circle text-blue-500 ml-2"></i>שפה אקדמית</span><span><i class="ph ph-caret-left"></i></span></div>
+                    <div class="tp-item" onclick="activateAgent('📋 סוכם לנקודות')"><span><i class="ph-fill ph-list-bullets text-blue-500 ml-2"></i>סיכום (Bullet points)</span><span><i class="ph ph-caret-left"></i></span></div>
+                    <div class="tp-item" onclick="activateAgent('📊 הומר לטבלה')"><span><i class="ph-fill ph-table text-blue-500 ml-2"></i>המר טקסט לטבלה</span><span><i class="ph ph-caret-left"></i></span></div>
+                </div>
+                <div class="tp-card">
+                    <div class="tp-card-title">דמיון</div>
+                    <div class="tp-item" onclick="activateAgent('📚 הוספו מקורות')"><span><i class="ph-fill ph-quotes text-purple-500 ml-2"></i>בדוק דמיון למקורות מקוונים</span><span><i class="ph ph-caret-left"></i></span></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- אזור הדף A4 -->
+        <div id="editor-wrapper">
+            <div id="page" contenteditable="true" placeholder="התחל לכתוב כאן...">
+                <h1>מבוא</h1>
+                <p>כל הטאבים פעילים ומחוברים עכשיו. תוכל ללחוץ על עיצוב, פריסה, בית וכו' והתפריט יתחלף למעלה בהתאם.</p>
+            </div>
+        </div>
+
+        <!-- Inline AI Menu -->
+        <div id="inline-menu">
+            <button class="inline-btn" onclick="applyTrackChangeSuggestion('👔 שוכתב לאקדמי')"><i class="ph-fill ph-sparkle text-purple-500"></i> אקדמי</button>
+            <button class="inline-btn" onclick="applyTrackChangeSuggestion('🧬 קוצר ותומצת')"><i class="ph-fill ph-scissors text-blue-500"></i> קיצור</button>
+            <button class="inline-btn" onclick="applyTrackChangeSuggestion('📋 סוכם')"><i class="ph-fill ph-list-bullets text-blue-500"></i> סיכום</button>
+            <div style="width:1px; height:16px; background:#E1DFDD; margin:0 4px;"></div>
+            <button class="inline-btn" onclick="addComment()"><i class="ph-fill ph-chat-text text-yellow-500"></i> הערה</button>
+        </div>
+    </main>
+
+    <!-- Status Bar (למטה) -->
+    <footer id="status-bar">
+        <div class="status-items">
+            <span>עמוד 1 מתוך 1</span>
+            <span id="word-count">0 מילים</span>
+            <span><i class="ph ph-check text-green-400"></i> עברית (ישראל)</span>
+        </div>
+        <div class="status-items">
+            <span>מצב הדפסה</span>
+            <input type="range" min="50" max="150" value="100" class="w-24" onchange="setZoom(this.value / 100)">
+            <span>100%</span>
+        </div>
+    </footer>
+
+    <script>
+        const editor = document.getElementById('page');
+        const editorWrapper = document.getElementById('editor-wrapper');
+
+        // ספירת מילים
+        function updateWordCount() {
+            const text = editor.innerText || "";
+            const words = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+            document.getElementById('word-count').innerText = `${words} מילים`;
+        }
+        editor.addEventListener('input', updateWordCount);
+        updateWordCount();
+
+        // תפריט קובץ
+        function toggleFileMenu(show) { document.getElementById('file-menu').style.display = show ? 'flex' : 'none'; }
+        function newDocument() { if(confirm("למחוק מסמך נוכחי?")) { editor.innerHTML = "<h1>כותרת</h1><p>טקסט...</p>"; toggleFileMenu(false); } }
+        function saveLocal() { localStorage.setItem('word_ai_doc', editor.innerHTML); alert("נשמר מקומית."); toggleFileMenu(false); }
+        function exportToWord() {
+            const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export HTML to Word</title></head><body><div dir='rtl'>";
+            const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(header + editor.innerHTML + "</div></body></html>");
+            const link = document.createElement("a"); link.href = source; link.download = 'document.doc'; link.click(); toggleFileMenu(false);
+        }
+
+        // טאבים בריבון
+        function switchTab(tabId, btnElement) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.toolbar-panel').forEach(panel => panel.classList.remove('active'));
+            btnElement.classList.add('active');
+            document.getElementById('panel-' + tabId).classList.add('active');
+        }
+
+        function execCmd(command, value = null) {
+            if (command === 'formatBlock' && value) value = `<${value}>`;
+            document.execCommand(command, false, value);
+            editor.focus();
+        }
+
+        function setDirection(dir) {
+            const sel = window.getSelection();
+            if(sel.rangeCount > 0) {
+                let node = sel.getRangeAt(0).startContainer;
+                while (node && node !== editor && node.nodeType !== 1) { node = node.parentNode; }
+                if (node === editor) { document.execCommand('formatBlock', false, 'div'); node = sel.getRangeAt(0).startContainer.parentNode; }
+                if(node && node !== editor) { node.setAttribute('dir', dir); node.style.textAlign = dir === 'rtl' ? 'right' : 'left'; }
+            }
+            editor.focus();
+        }
+
+        // --- Dropdown Management (Table) ---
+        function toggleDropdown(id) {
+            const dropdown = document.getElementById(id);
+            const isVisible = dropdown.style.display === 'flex';
+            document.querySelectorAll('.dropdown-menu').forEach(menu => menu.style.display = 'none');
+            if (!isVisible) dropdown.style.display = 'flex';
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.dropdown-wrapper')) {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => menu.style.display = 'none');
+            }
+        });
+
+        function initTableGrid() {
+            const container = document.getElementById('table-grid-boxes');
+            if(!container) return;
+            let html = '';
+            for(let r=1; r<=8; r++) {
+                for(let c=1; c<=10; c++) {
+                    html += `<div class="table-box" data-row="${r}" data-col="${c}" onmouseover="highlightTableGrid(${r}, ${c})" onclick="insertDynamicTable(${r}, ${c})"></div>`;
+                }
+            }
+            container.innerHTML = html;
+        }
+
+        function highlightTableGrid(rows, cols) {
+            document.querySelectorAll('.table-box').forEach(box => {
+                const r = parseInt(box.dataset.row);
+                const c = parseInt(box.dataset.col);
+                if(r <= rows && c <= cols) box.classList.add('active');
+                else box.classList.remove('active');
+            });
+            document.getElementById('table-grid-status').innerText = `טבלה ${cols}x${rows}`;
+        }
+
+        function resetTableGrid() {
+            document.querySelectorAll('.table-box').forEach(box => box.classList.remove('active'));
+            document.getElementById('table-grid-status').innerText = 'טבלה';
+        }
+
+        function insertDynamicTable(rows, cols) {
+            let html = `<br><table border="1" style="width:100%; border-collapse:collapse;">`;
+            for(let r=0; r<rows; r++) {
+                html += '<tr>';
+                for(let c=0; c<cols; c++) {
+                    if(r === 0) html += `<th style="border:1px solid #A6A6A6; padding:6px; background-color:#f3f4f6; text-align:right;">כותרת ${c+1}</th>`;
+                    else html += `<td style="border:1px solid #A6A6A6; padding:6px; text-align:right;">-</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</table><br>';
+            execCmd('insertHTML', html);
+            document.getElementById('table-dropdown').style.display = 'none';
+            resetTableGrid();
+        }
+        initTableGrid(); // Initialize table grid
+
+        // פעולות הוספה
+        function insertTable() { execCmd('insertHTML', `<br><table border=1 style='width:100%'><tr><th>כותרת 1</th><th>כותרת 2</th></tr><tr><td>-</td><td>-</td></tr></table><br>`); }
+        function insertImage(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const r = new FileReader();
+                r.onload = e => execCmd('insertImage', e.target.result);
+                r.readAsDataURL(file);
+            }
+            event.target.value = '';
+        }
+
+        // פעולות עיצוב
+        function toggleWatermark() { editor.classList.toggle('has-watermark'); }
+        function togglePageBorders() { editor.classList.toggle('has-borders'); }
+
+        // פעולות פריסה
+        let isLandscape = false;
+        function toggleOrientation() {
+            isLandscape = !isLandscape;
+            editor.style.width = isLandscape ? '29.7cm' : '21cm';
+            editor.style.minHeight = isLandscape ? '21cm' : '29.7cm';
+        }
+        
+        let cols = 1;
+        function toggleColumns() {
+            cols = cols === 1 ? 2 : 1;
+            editor.style.columnCount = cols;
+            editor.style.columnGap = '1cm';
+        }
+
+        let marginsWide = false;
+        function toggleMargins() {
+            marginsWide = !marginsWide;
+            editor.style.padding = marginsWide ? '2.54cm 4cm' : '2.54cm';
+        }
+
+        let isA4 = true;
+        function togglePageSize() {
+            isA4 = !isA4;
+            if(isA4) {
+                editor.style.width = isLandscape ? '29.7cm' : '21cm';
+                editor.style.minHeight = isLandscape ? '21cm' : '29.7cm';
+            } else {
+                editor.style.width = isLandscape ? '27.94cm' : '21.59cm';
+                editor.style.minHeight = isLandscape ? '21.59cm' : '27.94cm';
+            }
+        }
+
+        function applyParagraphStyle(property, value) {
+            const sel = window.getSelection();
+            if(sel.rangeCount > 0) {
+                let node = sel.getRangeAt(0).startContainer;
+                while (node && node !== editor && node.nodeName !== 'P' && node.nodeName !== 'DIV' && node.nodeName !== 'H1' && node.nodeName !== 'H2') { node = node.parentNode; }
+                if(node && node !== editor) { node.style[property] = value; }
+            }
+            editor.focus();
+        }
+
+        // הפניות והערות שוליים
+        let fnCounter = 1;
+        function insertFootnote() {
+            const id = `fn-${fnCounter}`;
+            execCmd('insertHTML', `<sup><a href="#${id}-text" id="${id}">[${fnCounter}]</a></sup>`);
+            let fnContainer = document.getElementById('footnotes-container');
+            if(!fnContainer) {
+                editor.insertAdjacentHTML('beforeend', `<hr style="margin-top:30px; width: 30%; border:0; border-top:1px solid #000;"><div id="footnotes-container" style="font-size:10pt;"></div>`);
+                fnContainer = document.getElementById('footnotes-container');
+            }
+            const footnoteText = prompt(`הכנס טקסט להערת שוליים מספר ${fnCounter}:`);
+            fnContainer.insertAdjacentHTML('beforeend', `<div id="${id}-text"><a href="#${id}">[${fnCounter}]</a> ${footnoteText || 'הערה ריקה'}</div>`);
+            fnCounter++;
+        }
+
+        function generateTOC() {
+            const headings = editor.querySelectorAll('h1, h2');
+            if (headings.length === 0) return alert("לא נמצאו כותרות");
+            const existingToc = editor.querySelector('.toc-container');
+            if (existingToc) existingToc.remove();
+            let tocHTML = `<div class="toc-container" contenteditable="false"><h3>תוכן עניינים</h3><ul>`;
+            headings.forEach((heading, i) => {
+                const id = `heading-toc-${i}`;
+                heading.id = id;
+                tocHTML += `<li style="margin-right: ${heading.tagName==='H2'?'20px':'0'}; margin-bottom: 4px;"><a href="#${id}" onclick="document.getElementById('${id}').scrollIntoView({behavior:'smooth'}); return false;">${heading.innerText}</a></li>`;
+            });
+            tocHTML += `</ul></div><p><br></p>`;
+            editor.insertAdjacentHTML('afterbegin', tocHTML);
+        }
+
+        // סקירה והערות פנימיות
+        function addComment() {
+            const sel = window.getSelection();
+            if (!sel.toString().trim()) return alert("סמן טקסט להערה");
+            const text = prompt("הזן הערה:");
+            if (text) {
+                const span = document.createElement('span');
+                span.className = 'doc-comment'; span.title = `הערה: ${text}`; span.textContent = sel.toString();
+                const range = sel.getRangeAt(0); range.deleteContents(); range.insertNode(span); sel.removeAllRanges();
+            }
+        }
+
+        // תצוגה
+        function setZoom(scale) { editorWrapper.style.transform = `scale(${scale})`; }
+
+        // AI Assistant
+        function toggleTaskpane() {
+            const tp = document.getElementById('taskpane');
+            tp.style.display = tp.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function activateAgent(actionName) {
+            const sel = window.getSelection();
+            if(sel.toString().trim()) { applyTrackChangeSuggestion(actionName); } 
+            else { alert(`הופעל: ${actionName}.\nבמערכת המלאה, זה יפעיל את הסוכן על כל המסמך.`); }
+        }
+
+        // Inline Menu
+        const inlineMenu = document.getElementById('inline-menu');
+        editor.addEventListener('mouseup', () => {
+            setTimeout(() => {
+                const sel = window.getSelection();
+                if(sel.toString().trim() && !sel.focusNode.parentElement.closest('.toc-container')) {
+                    const rect = sel.getRangeAt(0).getBoundingClientRect();
+                    inlineMenu.style.display = 'flex';
+                    inlineMenu.style.top = `${rect.top + window.scrollY - inlineMenu.offsetHeight - 5}px`;
+                    inlineMenu.style.left = `${rect.left + window.scrollX}px`;
+                } else { inlineMenu.style.display = 'none'; }
+            }, 10);
+        });
+        document.addEventListener('mousedown', e => { if(!inlineMenu.contains(e.target) && e.target !== editor) inlineMenu.style.display = 'none'; });
+
+        function applyTrackChangeSuggestion(actionTag) {
+            const sel = window.getSelection();
+            if(!sel.toString()) return;
+            inlineMenu.style.display = 'none';
+            const originalText = sel.toString();
+            const span = document.createElement('span');
+            span.className = 'ai-suggestion';
+            span.title = 'הצעת AI (לחץ לאישור)';
+            span.textContent = `[${actionTag}: ${originalText}]`;
+            span.onclick = function() { this.parentNode.replaceChild(document.createTextNode(this.textContent.replace(/\[.*?:\s/, '').replace(/\]$/, '')), this); updateWordCount(); };
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(span);
+            updateWordCount();
+        }
+    </script>
+</body>
+</html>
