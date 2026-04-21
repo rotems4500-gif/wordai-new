@@ -66,6 +66,10 @@ const DEFAULT_INPUT_DIALOG = {
   fields: [],
   values: {},
   confirmLabel: 'אישור',
+  closeOnEscape: true,
+  closeOnBackdrop: false,
+  submitOnEnter: true,
+  submitOnCtrlEnterForTextarea: true,
   resolve: null,
 };
 
@@ -78,6 +82,14 @@ const EXPORT_DOC_STYLES = `<style>
     body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
     body > p:nth-child(5), body > p:nth-child(6) { text-align: center; color: #475569; }
   </style>`;
+
+const isLegacyHomeEnabled = () => {
+  try {
+    return localStorage.getItem('wordai_legacy_home_enabled') !== 'false';
+  } catch {
+    return true;
+  }
+};
 
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
@@ -112,7 +124,10 @@ function App() {
   const [wordPreferences, setWordPreferences] = React.useState(getWordPreferences());
   const [documentStyle, setDocumentStyle] = React.useState(() => localStorage.getItem('wordai_document_style') || 'academic');
   const [activeTemplateId, setActiveTemplateId] = React.useState(() => localStorage.getItem('wordai_active_template') || 'blank');
-  const [showStartScreen, setShowStartScreen] = React.useState(() => getWordPreferences().showStartExperience !== false);
+  const [showStartScreen, setShowStartScreen] = React.useState(() => {
+    if (isLegacyHomeEnabled()) return true;
+    return getWordPreferences().showStartExperience !== false;
+  });
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
@@ -213,6 +228,17 @@ function App() {
     });
   }, [editor]);
 
+  const runStartTransition = React.useCallback((applyChange, focusPosition = 'start') => {
+    if (!editor) {
+      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      return false;
+    }
+    applyChange(editor);
+    setShowStartScreen(false);
+    focusEditorSoon(focusPosition);
+    return true;
+  }, [editor, focusEditorSoon]);
+
   const openExternalLink = React.useCallback((url) => {
     if (!url) return;
     try {
@@ -220,6 +246,14 @@ function App() {
     } catch {
       window.location.href = url;
     }
+  }, []);
+
+  const sanitizeLinkUrl = React.useCallback((rawUrl = '') => {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    if (/^mailto:/i.test(value)) return value;
+    if (/^https?:\/\//i.test(value)) return value;
+    return '';
   }, []);
 
   const requestInputDialog = React.useCallback((config = {}) => new Promise((resolve) => {
@@ -236,6 +270,10 @@ function App() {
       fields,
       values: nextValues,
       confirmLabel: config.confirmLabel || 'אישור',
+      closeOnEscape: config.closeOnEscape !== false,
+      closeOnBackdrop: config.closeOnBackdrop === true,
+      submitOnEnter: config.submitOnEnter !== false,
+      submitOnCtrlEnterForTextarea: config.submitOnCtrlEnterForTextarea !== false,
       resolve,
     });
   }), []);
@@ -248,6 +286,10 @@ function App() {
       return { ...DEFAULT_INPUT_DIALOG };
     });
   }, []);
+
+  const submitInputDialog = React.useCallback(() => {
+    closeInputDialog(inputDialog.values || {});
+  }, [closeInputDialog, inputDialog.values]);
 
   const toggleFeedbackOption = React.useCallback((option) => {
     setFeedbackSurvey((prev) => ({
@@ -412,6 +454,17 @@ function App() {
     return () => document.removeEventListener('keydown', handler);
   }, [shortcuts, editor]);
 
+  React.useEffect(() => {
+    if (!inputDialog.open || inputDialog.closeOnEscape === false) return;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeInputDialog(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [inputDialog.open, inputDialog.closeOnEscape, closeInputDialog]);
+
   const initializedDocRef = React.useRef(false);
 
   const openUpdatesPanel = React.useCallback(() => {
@@ -480,7 +533,7 @@ function App() {
   React.useEffect(() => {
     if (!editor || initializedDocRef.current) return;
 
-    const shouldShowHome = wordPreferences.showStartExperience !== false;
+    const shouldShowHome = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
     const savedDraft = wordPreferences.keepLastAutosavedVersion === false
       ? null
       : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
@@ -807,17 +860,30 @@ function App() {
         if (result?.url) editor.chain().focus().setImage({ src: String(result.url).trim() }).run();
         break;
       }
-      case 'insertLink': editor.chain().focus().setLink({ href: value }).run(); break;
+      case 'insertLink': {
+        const href = sanitizeLinkUrl(value);
+        if (href) editor.chain().focus().setLink({ href }).run();
+        break;
+      }
       case 'insertLinkDialog': {
         const result = await requestInputDialog({
-          title: 'הוספת קישור',
-          description: 'אפשר להוסיף גם קישור למקור אקדמי או מערכת חיצונית.',
+          title: 'הוספת קישור מהיר',
+          description: 'הדבק כתובת. אפשר להגדיר גם טקסט להצגה במקום הכתובת.',
           fields: [
             { id: 'url', label: 'כתובת URL', placeholder: 'https://...' },
+            { id: 'text', label: 'טקסט להצגה (אופציונלי)', placeholder: 'למשל: מקור אקדמי מלא' },
           ],
           confirmLabel: 'הוסף קישור',
         });
-        if (result?.url) editor.chain().focus().setLink({ href: String(result.url).trim() }).run();
+        const href = sanitizeLinkUrl(result?.url || '');
+        const text = String(result?.text || '').trim();
+        if (!href) break;
+        if (!editor.state.selection.empty) {
+          editor.chain().focus().setLink({ href }).run();
+          break;
+        }
+        const content = text || href;
+        editor.chain().focus().insertContent(`<a href="${escHtml(href)}" target="_blank" rel="noopener noreferrer">${escHtml(content)}</a>`).run();
         break;
       }
       case 'insertBookmarkDialog': {
@@ -1639,56 +1705,93 @@ function App() {
           </aside>
         )}
 
-        <div id="editor-wrapper" className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 flex justify-center items-start bg-[#E1DFDD] relative">
+        <div id="editor-wrapper" className={`flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative ${showStartScreen ? '!hidden' : 'flex'}`} style={{ display: showStartScreen ? 'none' : 'flex' }}>
           {inputDialog.open && (
-            <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
-              <div className="w-[560px] max-w-[96%] rounded-[24px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
-                <div className="flex items-start justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800">{inputDialog.title || 'השלם פרטים'}</h3>
-                    {inputDialog.description ? <p className="text-sm text-slate-500 mt-1">{inputDialog.description}</p> : null}
+            <div
+              className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all duration-300"
+              dir="rtl"
+              onMouseDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (inputDialog.closeOnBackdrop) closeInputDialog(null);
+              }}
+            >
+              <div className="w-[520px] max-w-[96%] rounded-[24px] bg-white shadow-2xl border border-slate-200 p-6 md:p-8 transform transition-all scale-100 opacity-100 flex flex-col gap-6">
+                
+                {/* Header */}
+                <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+                  <div className="flex-1 text-right">
+                    <h3 className="text-2xl font-bold text-slate-800 tracking-tight">{inputDialog.title || 'השלם פרטים'}</h3>
+                    {inputDialog.description ? <p className="text-sm text-slate-500 mt-2 leading-relaxed">{inputDialog.description}</p> : null}
                   </div>
-                  <button className="btn btn-sm btn-ghost" onClick={() => closeInputDialog(null)}>סגור</button>
+                  <button 
+                    className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0" 
+                    onClick={() => closeInputDialog(null)}
+                    title="סגור"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
                 </div>
 
-                <div className="space-y-3">
-                  {(inputDialog.fields || []).map((field) => (
-                    <label key={field.id} className="block text-right">
-                      <div className="text-sm font-semibold text-slate-700 mb-1">{field.label}</div>
+                {/* Body */}
+                <div className="space-y-5">
+                  {(inputDialog.fields || []).map((field, idx) => (
+                    <label key={field.id} className="block text-right group">
+                      <div className="text-sm font-semibold text-slate-700 mb-2">{field.label}</div>
                       {field.type === 'textarea' ? (
                         <textarea
-                          className="textarea textarea-bordered w-full min-h-[110px]"
+                          autoFocus={idx === 0}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none min-h-[120px] resize-y"
                           placeholder={field.placeholder || ''}
                           value={inputDialog.values?.[field.id] || ''}
                           onChange={(e) => setInputDialog((prev) => ({
                             ...prev,
-                            values: {
-                              ...(prev.values || {}),
-                              [field.id]: e.target.value,
-                            },
+                            values: { ...prev.values, [field.id]: e.target.value },
                           }))}
+                          onKeyDown={(e) => {
+                            if (inputDialog.submitOnCtrlEnterForTextarea && e.key === 'Enter' && e.ctrlKey) {
+                              e.preventDefault();
+                              submitInputDialog();
+                            }
+                          }}
                         />
                       ) : (
                         <input
-                          className="input input-bordered w-full"
+                          type={field.type || 'text'}
+                          autoFocus={idx === 0}
+                          dir="rtl"
+                          className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl ${field.id === 'url' ? 'text-left dir-ltr font-mono text-sm' : 'text-slate-800'} placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none`}
                           placeholder={field.placeholder || ''}
                           value={inputDialog.values?.[field.id] || ''}
                           onChange={(e) => setInputDialog((prev) => ({
                             ...prev,
-                            values: {
-                              ...(prev.values || {}),
-                              [field.id]: e.target.value,
-                            },
+                            values: { ...prev.values, [field.id]: e.target.value },
                           }))}
+                          onKeyDown={(e) => {
+                            if (inputDialog.submitOnEnter && e.key === 'Enter') {
+                              e.preventDefault();
+                              submitInputDialog();
+                            }
+                          }}
                         />
                       )}
                     </label>
                   ))}
                 </div>
 
-                <div className="flex gap-3 justify-end mt-5">
-                  <button className="btn btn-ghost" onClick={() => closeInputDialog(null)}>ביטול</button>
-                  <button className="btn btn-primary" onClick={() => closeInputDialog(inputDialog.values || {})}>{inputDialog.confirmLabel || 'אישור'}</button>
+                {/* Footer */}
+                <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
+                  <button 
+                    className="px-6 py-2.5 rounded-xl font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 transition-colors" 
+                    onClick={() => closeInputDialog(null)}
+                  >
+                    ביטול
+                  </button>
+                  <button 
+                    className="px-8 py-2.5 rounded-xl font-semibold text-white bg-[#0066cc] hover:bg-blue-700 shadow-sm hover:shadow transition-all active:scale-[0.98]" 
+                    onClick={submitInputDialog}
+                  >
+                    {inputDialog.confirmLabel || 'אישור'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -1798,27 +1901,47 @@ function App() {
               </div>
             </div>
           )}
-          {showStartScreen && (
-            <div className="w-full flex-1 flex flex-col relative z-[50]">
-              <StartScreen
-                documentStyle={documentStyle}
-                onDocumentStyleChange={changeDocumentStyle}
-                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
-                lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
-                onCreateBlank={() => {
-                  if (!confirmReplaceCurrentDocument()) return;
-                  editor?.chain().focus().clearContent().run();
+          <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
+            <DocumentEditor
+              documentStyle={documentStyle}
+              viewMode={viewMode}
+              activeTemplateId={activeTemplateId}
+              onReady={handleEditorReady}
+              onWordCountChange={setWordCount}
+              onCommand={handleCommand}
+              wordPreferences={wordPreferences}
+              onOpenAssistant={() => {
+                setAssistantTrigger('manual');
+                setLastEditorActivityAt(Date.now());
+                setSidebarOpen(true);
+              }}
+            />
+          </div>
+
+        </div>
+
+        {showStartScreen && (
+          <div className="flex-1 overflow-y-auto">
+            <StartScreen
+              documentStyle={documentStyle}
+              onDocumentStyleChange={changeDocumentStyle}
+              hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
+              lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
+              onCreateBlank={() => {
+                if (!confirmReplaceCurrentDocument()) return;
+                runStartTransition((activeEditor) => {
+                  activeEditor.chain().focus().clearContent().run();
                   setCurrentFilePath('');
                   localStorage.setItem('wordai_active_template', 'blank');
                   syncPersistedAppSettings();
                   setActiveTemplateId('blank');
-                  setShowStartScreen(false);
-                  focusEditorSoon('start');
-                }}
-                onCreateTemplate={(template) => {
-                  if (!confirmReplaceCurrentDocument()) return;
-                  const templateId = typeof template === 'string' ? template : template?.id;
-                  const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                }, 'start');
+              }}
+              onCreateTemplate={(template) => {
+                if (!confirmReplaceCurrentDocument()) return;
+                const templateId = typeof template === 'string' ? template : template?.id;
+                const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                runStartTransition((activeEditor) => {
                   setCurrentFilePath('');
                   localStorage.setItem('wordai_active_template', templateId || 'blank');
                   syncPersistedAppSettings();
@@ -1833,116 +1956,67 @@ function App() {
                     letter: 'legal',
                   };
                   changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
-                  editor?.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
-                  setShowStartScreen(false);
-                  focusEditorSoon('start');
-                }}
-                onOpenDocument={() => handleCommand('openFile')}
-                onOpenLastDraft={() => {
-                  if (!confirmReplaceCurrentDocument()) return;
-                  const savedDraft = wordPreferences.keepLastAutosavedVersion === false
-                    ? null
-                    : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
-                  if (savedDraft && editor) editor.commands.setContent(savedDraft);
+                  activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
+                }, 'start');
+              }}
+              onOpenDocument={() => handleCommand('openFile')}
+              onOpenLastDraft={() => {
+                if (!confirmReplaceCurrentDocument()) return;
+                const savedDraft = wordPreferences.keepLastAutosavedVersion === false
+                  ? null
+                  : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+                runStartTransition((activeEditor) => {
+                  if (savedDraft) activeEditor.commands.setContent(savedDraft);
                   setCurrentFilePath('');
                   setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
-                  setShowStartScreen(false);
-                  focusEditorSoon('end');
-                }}
-                onOpenSettings={() => {
-                  setFileMenuTargetTab('guide');
-                  setFileMenuOpen(true);
-                }}
-                onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
-                  if (!confirmReplaceCurrentDocument()) return;
-                  setCurrentFilePath('');
-                  localStorage.setItem('wordai_active_template', templateId || 'blank');
-                  syncPersistedAppSettings();
-                  setActiveTemplateId(templateId || 'blank');
-                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                  changeDocumentStyle(requestedStyle || documentStyle);
-                  setAssistantTrigger('autopilot');
-                  setSidebarCompact(false);
-                  setSidebarOpen(true);
-                  setShowStartScreen(false);
-                  setLiveGeneration({
-                    active: true,
-                    state: 'running',
-                    prompt,
-                    summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                    logs: getAgentDebugLogs().slice(-5).reverse(),
-                  });
-                  if (editor) {
-                    editor.commands.setContent(buildLiveGenerationShell(prompt));
-                  }
-                  focusEditorSoon('start');
-
-                  try {
-                    const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
-                    const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
-                    const usedFallback = Boolean(result?.usedFallback);
-                    if (editor) {
-                      editor.commands.setContent(generated);
-                    }
-                    saveDocumentHistory({
-                      title: prompt,
-                      content: generated,
-                      templateId,
-                      source: 'start-screen',
-                    });
-                    persistLocalCache(generated);
-                    setLiveGeneration((prev) => ({
-                      ...prev,
-                      active: true,
-                      state: usedFallback ? 'warning' : 'success',
-                      prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt,
-                      summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                      logs: getAgentDebugLogs().slice(-5).reverse(),
-                    }));
-                    setFeedbackSurvey({
-                      ...DEFAULT_FEEDBACK_SURVEY,
-                      open: false,
-                      phase: 'details',
-                      prompt,
-                      templateId: templateId || 'blank',
-                      usedFallback,
-                    });
-                  } catch (error) {
-                    setLiveGeneration((prev) => ({
-                      ...prev,
-                      active: true,
-                      state: 'error',
-                      logs: getAgentDebugLogs().slice(-5).reverse(),
-                    }));
-                    if (editor) {
-                      editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
-                    }
-                  }
-                }}
-              />
-            </div>
-          )}
-
-          {!showStartScreen && (
-            <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
-              <DocumentEditor
-                documentStyle={documentStyle}
-                viewMode={viewMode}
-                activeTemplateId={activeTemplateId}
-                onReady={handleEditorReady}
-                onWordCountChange={setWordCount}
-                onCommand={handleCommand}
-                wordPreferences={wordPreferences}
-                onOpenAssistant={() => {
-                  setAssistantTrigger('manual');
-                  setLastEditorActivityAt(Date.now());
-                  setSidebarOpen(true);
-                }}
-              />
-            </div>
-          )}
-
-        </div>
+                }, 'end');
+              }}
+              onOpenSettings={() => {
+                setFileMenuTargetTab('guide');
+                setFileMenuOpen(true);
+              }}
+              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
+                if (!editor) {
+                  window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+                  return;
+                }
+                if (!confirmReplaceCurrentDocument()) return;
+                setCurrentFilePath('');
+                localStorage.setItem('wordai_active_template', templateId || 'blank');
+                syncPersistedAppSettings();
+                setActiveTemplateId(templateId || 'blank');
+                setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+                changeDocumentStyle(requestedStyle || documentStyle);
+                setAssistantTrigger('autopilot');
+                setSidebarCompact(false);
+                setSidebarOpen(true);
+                setShowStartScreen(false);
+                setLiveGeneration({
+                  active: true,
+                  state: 'running',
+                  prompt,
+                  summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
+                  logs: getAgentDebugLogs().slice(-5).reverse(),
+                });
+                editor.commands.setContent(buildLiveGenerationShell(prompt));
+                focusEditorSoon('start');
+                try {
+                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
+                  const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
+                  const usedFallback = Boolean(result?.usedFallback);
+                  editor.commands.setContent(generated);
+                  saveDocumentHistory({ title: prompt, content: generated, templateId, source: 'start-screen' });
+                  persistLocalCache(generated);
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation()), logs: getAgentDebugLogs().slice(-5).reverse() }));
+                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt, templateId: templateId || 'blank', usedFallback });
+                } catch (error) {
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getAgentDebugLogs().slice(-5).reverse() }));
+                  if (editor) editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+                }
+              }}
+            />
+          </div>
+        )}
 
         {/* עט קסמים צף */}
         {!showStartScreen && <MagicWand

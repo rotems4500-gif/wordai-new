@@ -1,0 +1,700 @@
+import React, { useState, useEffect } from 'react';
+
+export default function ProfileOnboarding({
+  profile,
+  updateField,
+  updateList,
+  STYLE_TRAINING_QUESTIONS,
+  STYLE_PRESET_OPTIONS,
+  trainingAnswers,
+  selectLearningOption,
+  toggleStyle,
+  resetLearningGame
+}) {
+  const [step, setStep] = useState(1);
+  const [animating, setAnimating] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const nextStep = () => {
+    if (step < 7) {
+      setAnimating(true);
+      setTimeout(() => {
+        setStep((s) => s + 1);
+        setAnimating(false);
+      }, 600);
+    }
+  };
+
+  const prevStep = () => {
+    if (step > 1) {
+      setAnimating(true);
+      setTimeout(() => {
+        setStep((s) => s - 1);
+        setAnimating(false);
+      }, 600);
+    }
+  };
+
+  const currentCoursesStr = (profile.currentCourses || []).join(', ');
+
+  const stepIcons = {
+    1: '👋',
+    2: '💼', 
+    3: '🎯',
+    4: '⚖️',
+    5: '🎨',
+    6: '📝',
+    7: '✨'
+  };
+
+  const stepTitles = {
+    1: 'הכירות',
+    2: 'סביבה',
+    3: 'קהל יעד',
+    4: 'חוקים',
+    5: 'משחק',
+    6: 'דוגמה',
+    7: 'סיום'
+    <div className="relative h-full flex flex-col justify-center min-h-[500px] overflow-hidden" dir="rtl">
+      {/* Animated Background - תרבקע רגוע יותר */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-600 via-slate-700 to-slate-800"></div>
+      <div className="absolute inset-0 bg-gradient-to-tl from-blue-900/30 via-purple-900/20 to-indigo-900/30 opacity-50"></div>
+      
+      {/* Floating Decorative Elements - פחות מסיח דעת */}
+      <div className="absolute top-10 right-10 w-16 h-16 bg-white bg-opacity-5 rounded-full animate-pulse" style={{ animationDuration: '4s' }}></div>
+      <div className="absolute bottom-20 left-10 w-12 h-12 bg-blue-300 bg-opacity-10 rounded-full animate-pulse" style={{ animationDuration: '6s' }}></div>
+      
+      {/* Main Glassmorphism Container */}
+      <div
+        className={`relative mx-auto w-full max-w-5xl px-2 mt-2 backdrop-blur-xl bg-slate-900/40 border border-white/20 rounded-3xl shadow-2xl overflow-hidden transition-all duration-1000 ${
+          mounted ? 'transform translate-y-0 opacity-100' : 'transform translate-y-10 opacity-0'
+        }`}
+        style={{
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+        }}
+      >
+        {/* Modern Progress Bar */}
+        <div className="relative px-4 py-6">
+          {/* Progress Track */}
+          <div className="relative mb-4">
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-full h-2 bg-white/20 rounded-full backdrop-blur-sm">
+                <div 
+                  className="h-full bg-gradient-to-r from-pink-400 via-purple-500 to-indigo-600 rounded-full shadow-lg transition-all duration-1000 ease-out"
+                  style={{ 
+                    width: `${(step / 7) * 100}%`,
+                    boxShadow: '0 0 20px rgba(168, 85, 247, 0.4)'
+                  }}
+                ></div>
+              </div>
+            </div>
+            
+            {/* Step Indicators */}
+            <div className="relative flex justify-between">
+              {[1, 2, 3, 4, 5, 6, 7].map((s) => (
+                <div key={s} className="flex flex-col items-center">
+                  <div 
+                    className={`relative z-10 w-16 h-16 rounded-full flex items-center justify-center font-bold text-base transition-all duration-700 border-4 ${
+                      s <= step 
+                        ? 'bg-gradient-to-br from-white to-purple-50 text-purple-700 border-purple-300 shadow-xl transform scale-110' 
+                        : 'bg-white/30 text-white/70 border-white/40 backdrop-blur-sm'
+                    }`}
+                    style={{
+                      boxShadow: s <= step ? '0 10px 25px rgba(168, 85, 247, 0.3)' : 'none',
+                      animationDelay: `${s * 0.1}s`
+                    }}
+                  >
+                    <span className="text-base">{stepIcons[s]}</span>
+                  </div>
+                  <div className={`mt-2 text-xs font-medium transition-all duration-500 ${
+                    s <= step ? 'text-white' : 'text-white/60'
+                  }`}>
+                    {stepTitles[s]}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Content Area with Glassmorphism */}
+        <div className="px-4 pb-4">
+          <div 
+            className={`bg-slate-900/50 backdrop-blur-md rounded-2xl p-4 border border-slate-700/50 shadow-xl transition-all duration-700 ${
+              animating 
+                ? 'transform translate-x-10 opacity-0 scale-95' 
+                : 'transform translate-x-0 opacity-100 scale-100'
+            }`}
+            style={{
+              boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 15px 35px rgba(0, 0, 0, 0.1)'
+            }}
+          >
+            {step === 1 && (
+              <div className="space-y-3 animate-in slide-in-from-right-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    👋 בואו נכיר!
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    ספר לי על עצמך כדי שאוכל לכתוב בסגנון שמתאים לך בדיוק
+                  </p>
+                </div>
+                
+                <div className="space-y-2">
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      איך תרצה שאקרא לך? ✨
+                    </label>
+                    <input
+                      value={profile.displayName || ''}
+                      onChange={(e) => updateField('displayName', e.target.value)}
+                      placeholder="השם שלך..."
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-blue-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      מוסד לימודים או מקום עבודה 🏢
+                    </label>
+                    <input
+                      value={profile.institutionName || ''}
+                      onChange={(e) => updateField('institutionName', e.target.value)}
+                      placeholder="אוניברסיטה, חברה, או ארגון..."
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-green-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      מה התחום שלך? 🎓
+                    </label>
+                    <input
+                      value={profile.studyTrack || ''}
+                      onChange={(e) => updateField('studyTrack', e.target.value)}
+                      placeholder="מסלול אקדמי, התמחות או תחום מקצועי..."
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      מה התפקיד שלך? 👤
+                    </label>
+                    <input
+                      value={profile.userRole || ''}
+                      onChange={(e) => updateField('userRole', e.target.value)}
+                      placeholder="סטודנט, חוקר, מנהל, יועץ..."
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      קורסים או פרויקטים פעילים 📚
+                    </label>
+                    <textarea
+                      value={currentCoursesStr}
+                      onChange={(e) => updateList('currentCourses', e.target.value)}
+                      placeholder="פרט על הקורסים, הנושאים או הפרויקטים שאתה עובד עליהם..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    💼 סביבת העבודה שלך
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    איך אתה כותב ובשביל מי? המידע הזה יעזור לי לדייק את הניסוחים
+                  </p>
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-green-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      הרקע שלך ככותב ✍️
+                    </label>
+                    <textarea
+                      value={profile.userBackground || ''}
+                      onChange={(e) => updateField('userBackground', e.target.value)}
+                      placeholder="מה מאפיין אותך? למשל: אוהב שפה פשוטה, כותב מאמרים אקדמיים, מעדיף סגנון עיתונאי..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-white transition-colors">
+                      המטרות שלך בכתיבה 🎯
+                    </label>
+                    <textarea
+                      value={profile.writingGoals || ''}
+                      onChange={(e) => updateField('writingGoals', e.target.value)}
+                      placeholder="למה אתה כותב? כתיבה שיווקית, עבודות אקדמיות, דוחות מקצועיים, תוכן למדיה חברתית..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-white transition-colors">
+                      הקהל שלך 👥
+                    </label>
+                    <textarea
+                      value={profile.defaultAudience || ''}
+                      onChange={(e) => updateField('defaultAudience', e.target.value)}
+                      placeholder="מי קורא את מה שאתה כותב? סטודנטים, עמיתים, לקוחות, הקהל הרחב..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                  
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-white transition-colors">
+                      העדפות עיצוב וסגנון 🎨
+                    </label>
+                    <textarea
+                      value={profile.formatPreferences || ''}
+                      onChange={(e) => updateField('formatPreferences', e.target.value)}
+                      placeholder="איך אתה אוהב לעצב טקסטים? קצר ולעניין, פסקאות ארוכות, עם כותרות משנה, רשימות..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+                        {step === 3 && (
+              <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    🎯 קהל יעד
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    איך תרצה שהטקסט ירגיש לאנשים שקוראים אותו?
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-pink-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      סגנון רשמי או חברי? (Tone)
+                    </label>
+                    <select
+                      value={profile.tonePreference || 'balanced'}
+                      onChange={(e) => updateField('tonePreference', e.target.value)}
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition-all duration-300 hover:bg-slate-800/80 cursor-pointer"
+                    >
+                      <option value="very_formal" className="bg-slate-800 text-white">רשמי לחלוטין (אקדמי / עסקי נוקשה)</option>
+                      <option value="formal" className="bg-slate-800 text-white">מכובד ומקצועי</option>
+                      <option value="balanced" className="bg-slate-800 text-white">מאוזן (נגיש אך מקצועי)</option>
+                      <option value="casual" className="bg-slate-800 text-white">חצי-רשמי / חברי</option>
+                      <option value="very_casual" className="bg-slate-800 text-white">סלנג וזורם לחלוטין</option>
+                    </select>
+                  </div>
+
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-white transition-colors">
+                      אורך פסקאות ופירוט עיקרי
+                    </label>
+                    <select
+                      value={profile.lengthPreference || 'default'}
+                      onChange={(e) => updateField('lengthPreference', e.target.value)}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                    >
+                      <option value="short" className="bg-slate-800 text-white">קצר ולעניין - ישר ולנקודה</option>
+                      <option value="default" className="bg-slate-800 text-white">ממוצע - עם מעט רקע והסבר</option>
+                      <option value="detailed" className="bg-slate-800 text-white">מפורט - הסברים ארוכים ודוגמאות</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 4 && (
+              <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    ⚖️ חוקי ברזל ואוצר מילים
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    מהם הדברים שיגרמו לטקסט להיראות בדיוק כמו שצריך?
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-red-300 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      ממה להימנע לחלוטין? 🚫
+                    </label>
+                    <textarea
+                      value={profile.avoidRules || ''}
+                      onChange={(e) => updateField('avoidRules', e.target.value)}
+                      placeholder="למשל: אל תשתמש באימוג'י, בלי מילים גבוהות מדי, אורך משפט עד 10 מילים..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-green-300 transition-colors">
+                      חוקים שתמיד צריך לקיים ✅
+                    </label>
+                    <textarea
+                      value={profile.alwaysRules || ''}
+                      onChange={(e) => updateField('alwaysRules', e.target.value)}
+                      placeholder="למשל: כתוב תמיד בלשון נקבה, תמיד תסיים במשפט מניע לפעולה, הוסף סימן קריאה בכותרת..."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                  </div>
+                  </div>
+
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white/90 mb-1 group-hover:text-blue-300 transition-colors">
+                      מילים או ביטויים אהובים עליך ✨
+                    </label>
+                    <textarea
+                      value={profile.favoritePhrases || ''}
+                      onChange={(e) => updateField('favoritePhrases', e.target.value)}
+                      placeholder="מילים שאתה משתמש בהן הרבה (למשל: 'סופר מעניין', 'בגדול', 'קלאסי'...)"
+                      rows={2}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 5 && (
+              <div className="space-y-3 animate-in slide-in-from-bottom-5 duration-700">
+                <div className="text-center mb-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-base font-bold text-white" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                      🎨 למד את הסגנון שלי
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={resetLearningGame}
+                      className="px-4 py-2 rounded-xl bg-slate-800/60 backdrop-blur-sm border border-slate-600 text-white text-sm font-semibold hover:bg-slate-800/80 transition-all duration-300 shadow-lg"
+                    >
+                      🔄 איפוס
+                    </button>
+                  </div>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    בחר את הניסוחים שמתאימים לך כדי שאלמד את הסגנון האישי שלך
+                  </p>
+                </div>
+
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
+                  {STYLE_TRAINING_QUESTIONS.map((question, index) => (
+                    <div 
+                      key={question.id} 
+                      className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-5 shadow-lg hover:bg-white/15 transition-all duration-300"
+                      style={{ animationDelay: `${index * 0.1}s` }}
+                    >
+                      <div className="text-base font-bold text-white mb-4 drop-shadow-sm">
+                        {question.title}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {question.options.map((option) => {
+                          const selected = trainingAnswers[question.id] === option.id;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => selectLearningOption(question.id, option.id)}
+                              className={`text-right p-4 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${
+                                selected
+                                  ? 'border-yellow-300 bg-yellow-400/20 text-white shadow-lg shadow-yellow-400/25'
+                                  : 'border-white/30 bg-white/10 text-white/90 hover:border-white/50 hover:bg-white/20'
+                              }`}
+                            >
+                              <div className="text-sm font-bold mb-1 text-shadow-sm">{option.label}</div>
+                              <div className="text-xs leading-relaxed opacity-90">{option.text}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <div className="bg-gradient-to-r from-white/10 to-white/20 backdrop-blur-md border border-white/30 rounded-2xl p-4 shadow-xl">
+                  <div className="text-sm font-bold text-white mb-1">💡 מה למדתי עד עכשיו:</div>
+                  <div className="text-sm text-white/80 leading-relaxed">
+                    {profile.styleTrainingSummary || 'עדיין אין מספיק בחירות כדי ללמוד את הסגנון שלך.'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+                        {step === 6 && (
+              <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    📝 הטאצ'ים הקטנים ודוגמת הזהב
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    כדי להגיע לתוצאה מושלמת, אצטרך לדעת מה ההרגלים שלך
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                         פתיח אהוב (Greetings)
+                      </label>
+                      <input
+                        value={profile.greetingStyle || ''}
+                        onChange={(e) => updateField('greetingStyle', e.target.value)}
+                        placeholder="למשל: היי צוות, שלום לכולם, או בלי פתיח..."
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        סיום אהוב (Sign-offs)
+                      </label>
+                      <input
+                        value={profile.signOffStyle || ''}
+                        onChange={(e) => updateField('signOffStyle', e.target.value)}
+                        placeholder="למשל: בברכה, תודה מראש, נדבר..."
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors">
+                        שימוש באימוג'י 😊
+                      </label>
+                      <select
+                        value={profile.emojiPreference || 'moderate'}
+                        onChange={(e) => updateField('emojiPreference', e.target.value)}
+                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                      >
+                        <option value="none" className="bg-slate-800 text-white">ללא אימוג'י בכלל</option>
+                        <option value="rare" className="bg-slate-800 text-white">מעט מאוד (רק בסוף)</option>
+                        <option value="moderate" className="bg-slate-800 text-white">במידה (כאן ושם לפי ההקשר)</option>
+                        <option value="lots" className="bg-slate-800 text-white">משתמש בהרבה אימוג'ים</option>
+                      </select>
+                    </div>
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors">
+                        הרגלי עיצוב רשימות
+                      </label>
+                      <select
+                        value={profile.listPreference || 'bullets'}
+                        onChange={(e) => updateField('listPreference', e.target.value)}
+                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                      >
+                        <option value="bullets" className="bg-slate-800 text-white">עדיפות לנקודות (Bullets •)</option>
+                        <option value="numbers" className="bg-slate-800 text-white">עדיפות למספרים (1,2,3)</option>
+                        <option value="hyphens" className="bg-slate-800 text-white">עדיפות לקווים מפרידים (-)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="group pt-2">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-purple-300 transition-colors">
+                      ✨ דוגמת הזהב - הדבק כאן טקסט לדוגמה שכתבת (רשות אך מומלץ)
+                    </label>
+                    <textarea
+                      value={profile.goldenExample || ''}
+                      onChange={(e) => updateField('goldenExample', e.target.value)}
+                      placeholder="טקסט קצר שכתבת (מייל, פוסט, או סיכום). אני אלמד לנתח בדיוק אותו..."
+                      rows={4}
+                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 7 && (
+              <div className="space-y-3 animate-in slide-in-from-top-5 duration-700">
+                <div className="text-center mb-4">
+                  <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 text-white rounded-full flex items-center justify-center text-5xl mb-4 mx-auto animate-bounce shadow-2xl shadow-green-400/50">
+                    ✨
+                  </div>
+                  <h2 className="text-4xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    הפרופיל מוכן! 🎉
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed max-w-md mx-auto" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    הסוכן יעבד את ההעדפות ויאמץ את סגנון הכתיבה שקבעת. עכשיו כל תוכן חדש יותאם אישית עבורך.
+                  </p>
+                </div>
+
+                <div className="bg-slate-900/50 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 shadow-xl">
+                  <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                    ⚙️ הגדרות אחרונות
+                  </h3>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-3" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        סגנונות מועדפים במסך הבית:
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {STYLE_PRESET_OPTIONS.map((style) => {
+                          const active = (profile.preferredHomeStyleIds || []).includes(style.id);
+                          return (
+                            <button
+                              key={style.id}
+                              type="button"
+                              onClick={() => toggleStyle(style.id)}
+                              className={`px-4 py-2 rounded-full border-2 text-sm font-medium transition-all duration-300 ${
+                                active 
+                                  ? 'border-yellow-300 bg-yellow-400/20 text-white shadow-lg shadow-yellow-400/25' 
+                                  : 'border-slate-500 bg-slate-800/40 text-white hover:border-slate-400 hover:bg-slate-800/60'
+                              }`}
+                            >
+                              {style.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                          אורך משפטים:
+                        </label>
+                        <select
+                          value={profile.sentenceLengthPreference || 'מאוזן'}
+                          onChange={(e) => updateField('sentenceLengthPreference', e.target.value)}
+                          className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400"
+                        >
+                          <option value="קצר" className="bg-slate-800">משפטים קצרים</option>
+                          <option value="מאוזן" className="bg-slate-800">משפטים מאוזנים</option>
+                          <option value="מעמיק" className="bg-slate-800">משפטים מעמיקים</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                          אורך פסקאות:
+                        </label>
+                        <select
+                          value={profile.paragraphLengthPreference || 'בינוני'}
+                          onChange={(e) => updateField('paragraphLengthPreference', e.target.value)}
+                          className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-purple-400"
+                        >
+                          <option value="תמציתי" className="bg-slate-800">פסקאות קצרות</option>
+                          <option value="בינוני" className="bg-slate-800">פסקאות בינוניות</option>
+                          <option value="מפורט" className="bg-slate-800">פסקאות מפורטות</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white/90 mb-1">
+                        חוקים אישיים לסגנון הכתיבה (אופציונלי):
+                      </label>
+                      <textarea
+                        value={profile.customStyleGuidance || ''}
+                        onChange={(e) => updateField('customStyleGuidance', e.target.value)}
+                        placeholder="לדוגמה: תמיד להשתמש בגוף ראשון רבים, לא להשתמש במילה 'מאוד'"
+                        rows={2}
+                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                    </div>
+
+                    <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4">
+                      <div className="text-sm text-white/90 mb-3">
+                        💡 סקיל הסגנון משתמש בלמידה אוטומטית. כשהאפשרות למטה פעילה, האפליקציה תלמד מקומית מהמסמך הפעיל ומהתיקונים שלך.
+                      </div>
+                      {profile.autoLearnedFromEditorAt && (
+                        <div className="text-xs text-white/70">
+                          עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}
+                        </div>
+                      )}
+                    </div>
+
+                    <label className="flex items-center gap-3 text-white cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={profile.learningConsent === true}
+                        onChange={(e) => updateField('learningConsent', e.target.checked)}
+                        className="w-5 h-5 rounded bg-white/20 border-white/40 text-green-500 focus:ring-2 focus:ring-green-400"
+                      />
+                      <span className="text-sm group-hover:text-white/100 transition-colors">
+                        🤖 אפשר לסוכן להמשיך ללמוד ולדייק איתי אוטומטית עם הזמן
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Modern Navigation Buttons */}
+        <div className="flex items-center justify-between px-4 py-6">
+          <button
+            onClick={prevStep}
+            disabled={step === 1}
+            className={`group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 ${
+              step === 1 
+                ? 'bg-slate-800/30 text-slate-400 cursor-not-allowed backdrop-blur-sm border border-slate-600/50' 
+                : 'bg-slate-800/60 text-white hover:bg-slate-800/80 backdrop-blur-md border border-slate-600 shadow-lg hover:shadow-xl transform hover:scale-105'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              ← חזור
+            </span>
+          </button>
+          
+          <div className="text-center">
+            <div className="text-white text-sm mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+              שלב {step} מתוך 7
+            </div>
+            <div className="w-24 h-2 bg-slate-700/50 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-blue-400 to-purple-500 transition-all duration-700"
+                style={{ width: `${(step / 7) * 100}%` }}
+              ></div>
+            </div>
+          </div>
+          
+          <button
+            onClick={nextStep}
+            disabled={step === 7}
+            className={`group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 ${
+              step === 4 
+                ? 'bg-white/10 text-white/40 cursor-not-allowed backdrop-blur-sm border border-white/20' 
+                : 'bg-gradient-to-r from-pink-500 to-purple-600 text-white hover:from-pink-600 hover:to-purple-700 shadow-lg hover:shadow-2xl transform hover:scale-105 border border-white/20'
+            }`}
+            style={{
+              boxShadow: step !== 4 ? '0 10px 30px rgba(236, 72, 153, 0.3)' : 'none'
+            }}
+          >
+            <span className="flex items-center gap-2">
+              {step === 7 ? 'סיום ✨' : 'המשך →'}
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
