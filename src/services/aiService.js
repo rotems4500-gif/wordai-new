@@ -1789,11 +1789,19 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
 
 const pushAgentDebugLog = (entry = {}) => {
   try {
+    const rawMessage = String(entry?.message || '').trim();
+    const rawError = String(entry?.errorMessage || '').trim();
+    const shouldAttachError = ['error', 'retrying'].includes(String(entry?.state || '')) && rawError;
+    const messageWithError = shouldAttachError && (!rawMessage || !rawMessage.includes(rawError))
+      ? `${rawMessage || 'אירעה שגיאה'} · שגיאה: ${rawError}`
+      : rawMessage;
+
     const record = {
       id: createRunId(),
       ts: new Date().toISOString(),
       state: 'info',
       ...entry,
+      message: messageWithError,
     };
     const next = [...getAgentDebugLogs(), record].slice(-MAX_AGENT_DEBUG_LOGS);
     localStorage.setItem(AGENT_DEBUG_STORAGE_KEY, JSON.stringify(next));

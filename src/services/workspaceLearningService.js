@@ -713,21 +713,39 @@ function normalizeGeneratedHtmlResponse(response = '') {
 export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, returnMeta = false }) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('צריך לכתוב נושא או בקשה למסמך');
-
-  const learning = await syncLearnedStyleFromWorkspace();
-  const materialPreviews = await Promise.all(selectedMaterials.map(async (item) => ({
-    ...item,
-    preview: await loadMaterialPreview(item),
-  })));
-
-  const templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
-  const notes = learning.notes?.join('\n') || '';
-  const materialsText = materialPreviews.map((item) => {
-    const preview = item.preview ? `\nתוכן עזר:\n${item.preview}` : '';
-    return `- ${item.title} (${item.label || 'כללי'})${preview}`;
-  }).join('\n');
-
   const runId = `doc-${Date.now()}`;
+
+  let templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
+  let notes = '';
+  let materialsText = '';
+
+  try {
+    const learning = await syncLearnedStyleFromWorkspace();
+    const materialPreviews = await Promise.all(selectedMaterials.map(async (item) => ({
+      ...item,
+      preview: await loadMaterialPreview(item),
+    })));
+
+    templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
+    notes = learning.notes?.join('\n') || '';
+    materialsText = materialPreviews.map((item) => {
+      const preview = item.preview ? `\nתוכן עזר:\n${item.preview}` : '';
+      return `- ${item.title} (${item.label || 'כללי'})${preview}`;
+    }).join('\n');
+  } catch (error) {
+    logAgentDebugEvent({
+      type: 'doc-generation-preparation-error',
+      state: 'error',
+      runId,
+      agentLabel: 'AUTOPILOT',
+      message: 'שגיאה מפורשת בשלב הכנת העבודה לפני קריאת API',
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+    });
+    const fallbackHtml = buildLocalDraft(cleanPrompt, templateId, instructions, selectedMaterials);
+    return returnMeta
+      ? { html: fallbackHtml, usedFallback: true, runId, errorMessage: error?.message || 'שגיאה לא ידועה' }
+      : fallbackHtml;
+  }
 
   try {
     logAgentDebugEvent({
@@ -740,11 +758,14 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       selectedMaterialsCount: selectedMaterials.length,
     });
 
+    const requestOptions = { runId, agentLabel: 'AUTOPILOT' };
+    if (selectedModel) requestOptions.providerOverride = selectedModel;
+
     const response = await chatWithActiveProvider(
       `צור עבורי מסמך מלא בנושא: ${cleanPrompt}`,
       materialsText,
       `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\n${notes}` : ''}`,
-      { runId, agentLabel: 'AUTOPILOT', providerOverride: selectedModel || cfg.active },
+      requestOptions,
     );
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
@@ -766,6 +787,14 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ? { html: cleanedResponse, usedFallback: false, runId, errorMessage: '' }
       : cleanedResponse;
   } catch (error) {
+    logAgentDebugEvent({
+      type: 'doc-generation-api-error',
+      state: 'error',
+      runId,
+      agentLabel: 'AUTOPILOT',
+      message: 'שגיאה מפורשת בבקשת API במהלך יצירת המסמך',
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+    });
     logAgentDebugEvent({
       type: 'doc-generation-fallback',
       state: 'error',
