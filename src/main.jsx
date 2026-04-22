@@ -1659,16 +1659,6 @@ function App() {
                     ))}
                   </div>
 
-                  {!!(liveGeneration.logs || []).length && (
-                    <div className="mt-2 rounded-xl bg-slate-900 text-slate-100 p-2 text-[11px] space-y-1 max-h-24 overflow-auto">
-                      {(liveGeneration.logs || []).slice(0, 3).map((log) => (
-                        <div key={log.id || `${log.ts}-${log.message}`}>
-                          {log.message || 'מעדכן סטטוס...'}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
                   {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
                     <div className="mt-2 flex gap-2">
                       <button

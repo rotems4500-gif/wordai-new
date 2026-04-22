@@ -2632,31 +2632,122 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
 };
 
 // Chef Mode Interview - generates document based on interview responses
+const formatChefResponseLine = (response = {}, index = 0) => {
+  const questionId = Number(response?.question) || index + 1;
+  const questionText = String(response?.questionText || '').trim();
+  const choices = Array.isArray(response?.choices) ? response.choices.filter(Boolean).join(' | ') : '';
+  const freeText = String(response?.freeText || '').trim();
+  const fallback = String(response?.answer || '').trim();
+  const answerText = [choices, freeText].filter(Boolean).join(' || ') || fallback || 'לא סופק';
+  const questionLabel = questionText ? `שאלה ${questionId}: ${questionText}` : `שאלה ${questionId}`;
+  return `${questionLabel}\nתשובה: ${answerText}`;
+};
+
+const formatChefMaterialsSummary = (selectedMaterials = []) => {
+  if (!Array.isArray(selectedMaterials) || !selectedMaterials.length) return 'ללא חומרי עזר נבחרים';
+  return selectedMaterials
+    .slice(0, 8)
+    .map((item, idx) => `- ${idx + 1}. ${String(item?.title || 'ללא שם')} (${String(item?.label || 'כללי')})`)
+    .join('\n');
+};
+
+const normalizeChefQuestionPayload = (payload = {}, fallbackStep = 1) => {
+  const options = Array.isArray(payload?.options) ? payload.options.filter(Boolean).map((item) => String(item).trim()).filter(Boolean).slice(0, 6) : [];
+  return {
+    shouldStop: Boolean(payload?.shouldStop),
+    question: String(payload?.question || '').trim() || `מה חשוב לך להדגיש בשלב ${fallbackStep}?`,
+    options,
+    placeholder: String(payload?.placeholder || '').trim() || 'אפשר גם לכתוב חופשי...',
+    reason: String(payload?.reason || '').trim() || 'dynamic',
+  };
+};
+
+export const chefModeGenerateQuestion = async (params = {}) => {
+  const cfg = getProviderConfig();
+  const maxQuestions = Number(params?.maxQuestions) > 0 ? Number(params.maxQuestions) : 13;
+  const step = Number(params?.step) > 0 ? Number(params.step) : 1;
+  const selectedModel = String(params?.selectedModel || cfg.active || 'gemini');
+  const responses = Array.isArray(params?.responses) ? params.responses : [];
+  const documentPrompt = String(params?.documentPrompt || '').trim();
+  const templateId = String(params?.templateId || 'blank').trim();
+  const instructions = String(params?.instructions || '').trim();
+  const selectedMaterials = Array.isArray(params?.selectedMaterials) ? params.selectedMaterials : [];
+
+  if (responses.length >= maxQuestions) {
+    return { shouldStop: true, question: '', options: [], placeholder: '', reason: 'max-questions-reached' };
+  }
+
+  const responsesText = responses.map((r, idx) => formatChefResponseLine(r, idx)).join('\n\n') || 'אין תשובות עדיין';
+  const materialsText = formatChefMaterialsSummary(selectedMaterials);
+  const prompt = [
+    'אתה סוכן Chef שמכין שאלת המשך אחת בלבד לתהליך אפיון מסמך.',
+    `שלב נוכחי: ${step} מתוך ${maxQuestions}.`,
+    'החזר JSON בלבד במבנה:',
+    '{"shouldStop":false,"question":"...","options":["..."],"placeholder":"...","reason":"..."}',
+    'כללים:',
+    '- השאלה חייבת להיות מותאמת לקונטקסט: פרומפט, תבנית, הנחיות וחומרי עזר.',
+    '- options: בין 3 ל-5 אפשרויות קצרות וברורות.',
+    '- אם יש מספיק מידע לכתיבה מלאה, החזר shouldStop=true ללא שאלה.',
+    '- אל תייצר שאלות כלליות מדי אם כבר יש תשובות בנושא.',
+    '',
+    `פרומפט יצירה: ${documentPrompt || 'לא הוזן פרומפט מפורש'}`,
+    `תבנית נבחרת: ${templateId}`,
+    `הנחיות משתמש: ${instructions || 'ללא הנחיות נוספות'}`,
+    `חומרי עזר:\n${materialsText}`,
+    '',
+    `תשובות קודמות:\n${responsesText}`,
+  ].join('\n');
+
+  try {
+    const raw = await chatWithActiveProvider(prompt, '', '', {
+      providerOverride: selectedModel,
+      skipAutomation: true,
+      skipMultiModel: true,
+      agentLabel: 'Chef Question Planner',
+      runId: `chef-q-${Date.now()}`,
+    });
+    const parsed = safeJsonParse(raw, null);
+    return normalizeChefQuestionPayload(parsed || {}, step);
+  } catch {
+    return normalizeChefQuestionPayload({
+      shouldStop: false,
+      question: `מה עוד חשוב לדייק כדי שהתוצאה תהיה בול למה שאתה צריך? (שלב ${step})`,
+      options: ['קהל יעד', 'טון כתיבה', 'מבנה מסמך', 'מידע שחייב להופיע'],
+      placeholder: 'אפשר לציין כאן דגשים ספציפיים... ',
+      reason: 'fallback',
+    }, step);
+  }
+};
+
 export const chefModeInterview = async (userResponses = [], selectedModel = 'gemini', onStatus = null) => {
   const cfg = getProviderConfig();
   
   // Format responses for the Chef agent
   const responsesText = userResponses
-    .map((r, idx) => `${idx + 1}. ${String(r.answer || '').trim()}`)
-    .join('\n');
+    .map((r, idx) => formatChefResponseLine(r, idx))
+    .join('\n\n');
 
   const systemPrompt = `== AGENT: CHEF ==
-אתה שף כתיבה מוצלח. קרא את תשובות הבישול של המשתמש - קודם חפש לעומק מה הוא רוצה, מה החשוב לו, אילו חרדות יש לו, איך הוא רואה את העתיד. אחרי שהבנת את החזון, צור מסמך מלא, מובנה, עוצמתי שמדבר אליו - לא ממשיך במסגרת גנרית. 
+אתה שף כתיבה שמזקק את תשובות המשתמש לבריף יצירה חד וברור.
 
-חשיבות של מבנה: בניית שלד שקורא טבעי וחזק. כל חלק משמעותי, כל משפט משנה ערך. 
+המטרה: להחזיר בריף טקסטואלי קצר שיישלח למנוע יצירת המסמך (לא מסמך HTML סופי).
 
-טון: בחר טון שמתחבר למה שהמשתמש ביקש - לא קשה, לא מתוק, אלא בדיוק זה שהוא צריך. 
+החזר בדיוק 6 שורות בפורמט הבא:
+נושא:
+מטרה:
+קהל יעד:
+טון וסגנון:
+מבנה ואורך:
+דגשים מחייבים:
 
-אורך: בדיוק כמו שביקש, לא יותר, לא פחות.
-
-חזר HTML תקין בעברית עם כותרות, פסקאות, מבנה ברור. כאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>
+אל תחזיר HTML, אל תחזיר markdown, ואל תוסיף הקדמות.
 == END AGENT ==`;
 
-  const userPrompt = `בואו נבשל משהו מעניין! הנה תשובות הבישול שלך:
+  const userPrompt = `הנה תשובות הבישול של המשתמש:
 
 ${responsesText}
 
-בחר לעומק אל תוך המשימה הזו. בחר טון מתאים, בנה מבנה משכנע, וצור מסמך שלם וממשי שדברים בו וגם מעורר השראה.`;
+זקק אותן לבריף יצירה חד וברור בהתאם לפורמט שהוגדר.`;
 
   const runId = `chef-${Date.now()}`;
   
@@ -2698,8 +2789,10 @@ ${responsesText}
       outputChars: response.length,
     });
 
+    const brief = String(response || '').trim();
     return {
-      html: response,
+      brief,
+      html: brief,
       success: true,
       runId,
     };
@@ -2714,6 +2807,60 @@ ${responsesText}
     });
 
     throw error;
+  }
+};
+
+export const chefModeDecideNextStep = async (userResponses = [], selectedModel = 'gemini', options = {}) => {
+  const cfg = getProviderConfig();
+  const maxQuestions = Number(options?.maxQuestions) > 0 ? Number(options.maxQuestions) : 13;
+  const currentQuestionId = Number(options?.currentQuestionId) || null;
+  const answeredCount = Array.isArray(userResponses) ? userResponses.length : 0;
+
+  if (answeredCount >= maxQuestions) {
+    return { shouldStop: true, reason: 'max-questions-reached' };
+  }
+
+  const documentPrompt = String(options?.documentPrompt || '').trim();
+  const templateId = String(options?.templateId || 'blank').trim();
+  const instructions = String(options?.instructions || '').trim();
+  const materialsText = formatChefMaterialsSummary(options?.selectedMaterials || []);
+  const responsesText = (userResponses || []).map((r, idx) => formatChefResponseLine(r, idx)).join('\n\n');
+  const prompt = [
+    'אתה מחליט אם יש מספיק מידע להתחיל כתיבת מסמך.',
+    `מספר שאלות מקסימלי: ${maxQuestions}.`,
+    currentQuestionId ? `השאלה האחרונה שנענתה: ${currentQuestionId}.` : '',
+    'החזר JSON בלבד במבנה:',
+    '{"shouldStop":true|false,"reason":"..."}',
+    'כללים:',
+    '- shouldStop=true רק אם ברור שיש מטרה, קהל, מבנה וטון.',
+    '- התחשב בפרומפט, בתבנית, בהנחיות ובחומרי העזר.',
+    '',
+    `פרומפט יצירה: ${documentPrompt || 'לא הוזן פרומפט מפורש'}`,
+    `תבנית: ${templateId}`,
+    `הנחיות: ${instructions || 'ללא הנחיות נוספות'}`,
+    `חומרי עזר:\n${materialsText}`,
+    '',
+    `תשובות עד כה:\n${responsesText || 'אין תשובות'}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await chatWithActiveProvider(prompt, '', '', {
+      providerOverride: selectedModel || cfg.active,
+      skipAutomation: true,
+      skipMultiModel: true,
+      agentLabel: 'Chef Decision',
+      runId: `chef-decision-${Date.now()}`,
+    });
+    const parsed = safeJsonParse(raw, null);
+    return {
+      shouldStop: Boolean(parsed?.shouldStop),
+      reason: String(parsed?.reason || '').trim() || 'ai-decision',
+    };
+  } catch {
+    return {
+      shouldStop: false,
+      reason: 'fallback-sequential',
+    };
   }
 };
 

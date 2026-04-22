@@ -279,10 +279,17 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const handleGenerate = async () => {
     if (!prompt.trim() || isGenerating) return;
-    
+
     setIsGenerating(true);
     try {
-      await onGenerateFromPrompt?.({ prompt, templateId: selectedTemplate, instructions: '', selectedMaterials: [], selectedModel: selectedModel });
+      const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
+      await onGenerateFromPrompt?.({
+        prompt,
+        templateId: selectedTemplate,
+        instructions: String(instructions || '').trim(),
+        selectedMaterials,
+        selectedModel,
+      });
     } finally {
       setIsGenerating(false);
     }
@@ -306,8 +313,15 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     try {
       setIsGenerating(true);
       const result = await chefModeInterview(responses, model);
-      const prompt = String(result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
-      await onGenerateFromPrompt?.({ prompt, templateId: selectedTemplate, instructions: '', selectedMaterials: [], selectedModel: model });
+      const generatedPrompt = String(result?.brief ?? result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
+      const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
+      await onGenerateFromPrompt?.({
+        prompt: generatedPrompt,
+        templateId: selectedTemplate,
+        instructions: String(instructions || '').trim(),
+        selectedMaterials,
+        selectedModel: model,
+      });
       setShowChefDialog(false);
     } catch (error) {
       console.error('שגיאה בשלב הבישול:', error);
@@ -322,12 +336,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   };
 
   return (
-    <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-900 via-purple-900 to-indigo-900 relative overflow-hidden" dir="rtl">
+    <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
       {/* Animated Background Elements */}
       <div className="absolute inset-0">
-        <div className="absolute top-20 right-20 w-72 h-72 bg-purple-500/10 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-20 left-20 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }}></div>
-        <div className="absolute top-1/2 left-1/2 w-80 h-80 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '4s' }}></div>
+        <div className="absolute top-20 right-20 w-72 h-72 bg-cyan-300/20 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-20 left-20 w-96 h-96 bg-sky-300/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }}></div>
+        <div className="absolute top-1/2 left-1/2 w-80 h-80 bg-amber-200/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '4s' }}></div>
       </div>
 
       {/* Floating Particles */}
@@ -355,9 +369,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           <div className="mb-8">
             <h1 className="text-6xl md:text-7xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 20px rgba(0,0,0,0.5)' }}>
               {profile?.displayName ? (
-                <>שלום <span className="bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">{profile.displayName}</span>! 👋</>
+                <>שלום <span className="bg-gradient-to-r from-cyan-200 to-amber-200 bg-clip-text text-transparent">{profile.displayName}</span>! 👋</>
               ) : (
-                <>יוצרים <span className="bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">תוכן חכם</span> ביחד? 🚀</>
+                <>יוצרים <span className="bg-gradient-to-r from-cyan-200 to-amber-200 bg-clip-text text-transparent">תוכן חכם</span> ביחד? 🚀</>
               )}
             </h1>
             <p className="text-xl md:text-2xl text-white/80 max-w-3xl mx-auto leading-relaxed" style={{ textShadow: '1px 1px 10px rgba(0,0,0,0.3)' }}>
@@ -366,7 +380,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           </div>
 
           {/* Quick Prompt Animation */}
-          <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 max-w-4xl mx-auto mb-8 shadow-2xl">
+          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-2xl p-6 max-w-4xl mx-auto mb-8 shadow-[0_20px_60px_rgba(2,6,23,0.45)]">
             <div className="text-white/70 text-sm mb-4">רעיונות למסמכים:</div>
             <div 
               className="text-white text-lg font-medium transition-all duration-500"
@@ -379,7 +393,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 <div
                   key={i}
                   className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    i === currentPromptIndex ? 'bg-pink-400 w-6' : 'bg-white/30'
+                    i === currentPromptIndex ? 'bg-cyan-200 w-6' : 'bg-white/30'
                   }`}
                 />
               ))}
@@ -387,7 +401,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           </div>
 
           {/* Main Input Area */}
-          <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-3xl p-8 max-w-5xl mx-auto shadow-2xl">
+          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-3xl p-8 max-w-5xl mx-auto shadow-[0_24px_80px_rgba(3,7,18,0.55)]">
             <div className="flex flex-col md:flex-row gap-4 items-center mb-6">
               <div className="flex-1 relative">
                 <input
@@ -396,10 +410,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
                   placeholder="מה תרצה ליצור היום? תכתוב כאן ואני אעזור לך..."
-                  className="w-full px-6 py-4 bg-white/20 backdrop-blur-sm border border-white/30 rounded-2xl text-white placeholder-white/60 text-lg outline-none focus:ring-2 focus:ring-pink-400 focus:border-transparent transition-all duration-300"
+                  className="w-full px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
                 />
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
-                  <div className="w-3 h-3 bg-pink-400 rounded-full animate-pulse"></div>
+                  <div className="w-3 h-3 bg-cyan-200 rounded-full animate-pulse"></div>
                 </div>
               </div>
               
@@ -409,10 +423,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 className={`px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 ${
                   !prompt.trim() || isGenerating
                     ? 'bg-gray-500/50 text-gray-300 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-lg hover:shadow-2xl'
+                    : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg hover:shadow-2xl'
                 }`}
                 style={{
-                  boxShadow: !prompt.trim() || isGenerating ? 'none' : '0 10px 30px rgba(236, 72, 153, 0.4)'
+                  boxShadow: !prompt.trim() || isGenerating ? 'none' : '0 10px 30px rgba(8, 145, 178, 0.45)'
                 }}
               >
                 {isGenerating ? (
@@ -428,9 +442,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <button
                 onClick={() => setShowChefDialog(true)}
                 disabled={isGenerating}
-                className="px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-orange-500 to-amber-600 text-white shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:cursor-not-allowed"
+                className="px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:text-gray-200 disabled:cursor-not-allowed"
                 style={{
-                  boxShadow: !isGenerating ? '0 10px 30px rgba(249, 115, 22, 0.4)' : 'none'
+                  boxShadow: !isGenerating ? '0 10px 30px rgba(245, 158, 11, 0.45)' : 'none'
                 }}
               >
                 👨‍🍳 בוא נבשל
@@ -438,17 +452,17 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
 
             {/* Advance Options Area */}
-            <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6 mb-6">
+            <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6 mb-6">
                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
                  <div className="text-white/80 font-medium whitespace-nowrap">✨ חומרי עזר והנחיות</div>
                  <div className="flex flex-wrap items-center gap-2 justify-end w-full">
-                   <button onClick={handleLoadWorkspace} className="px-3 py-2 bg-indigo-500/30 hover:bg-indigo-500/50 border border-indigo-400/30 rounded-xl text-white text-xs transition-all shadow-sm">
+                   <button onClick={handleLoadWorkspace} className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
                      טען סביבת עבודה
                    </button>
-                   <button onClick={() => instructionFileInputRef.current?.click()} className="px-3 py-2 bg-emerald-500/30 hover:bg-emerald-500/50 border border-emerald-400/30 rounded-xl text-white text-xs transition-all shadow-sm">
+                   <button onClick={() => instructionFileInputRef.current?.click()} className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
                      קובץ הנחיות
                    </button>
-                   <button onClick={() => fileInputRef.current?.click()} className="px-3 py-2 bg-blue-500/30 hover:bg-blue-500/50 border border-blue-400/30 rounded-xl text-white text-xs transition-all shadow-sm">
+                   <button onClick={() => fileInputRef.current?.click()} className="px-3 py-2 bg-blue-500/25 hover:bg-blue-500/35 border border-blue-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
                      {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
                    </button>
                    <input ref={instructionFileInputRef} type="file" accept=".txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
@@ -634,10 +648,17 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           <ChefModeDialog
             onStart={handleChefStart}
             onClose={handleChefClose}
+            onModelChange={setSelectedModel}
             onGoToEditor={() => {
               setShowChefDialog(false);
             }}
             selectedModel={selectedModel}
+            chefContext={{
+              prompt: String(prompt || '').trim(),
+              templateId: selectedTemplate,
+              instructions: String(instructions || '').trim(),
+              selectedMaterials: materials.filter((item) => selectedIds.includes(item.id)),
+            }}
           />
         )}
       </div>
