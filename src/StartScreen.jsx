@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ChefModeDialog from './ChefModeDialog';
 import {
   getHomeInstructions,
   getWorkspaceTemplateCards,
@@ -11,7 +12,7 @@ import {
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile } from './services/aiService';
+import { getOrderedRoleAgents, getWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -158,6 +159,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
+  const [showChefDialog, setShowChefDialog] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('gemini');
   
   const profile = getPersonalStyleProfile();
 
@@ -279,7 +282,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     
     setIsGenerating(true);
     try {
-      await onGenerateFromPrompt?.(prompt, selectedTemplate);
+      await onGenerateFromPrompt?.({ prompt, templateId: selectedTemplate, instructions: '', selectedMaterials: [], selectedModel: selectedModel });
     } finally {
       setIsGenerating(false);
     }
@@ -297,6 +300,25 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     } else {
       onCreateTemplate?.(template);
     }
+  };
+
+  const handleChefStart = async (responses, model) => {
+    try {
+      setIsGenerating(true);
+      const result = await chefModeInterview(responses, model);
+      const prompt = String(result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
+      await onGenerateFromPrompt?.({ prompt, templateId: selectedTemplate, instructions: '', selectedMaterials: [], selectedModel: model });
+      setShowChefDialog(false);
+    } catch (error) {
+      console.error('שגיאה בשלב הבישול:', error);
+      window.alert('שגיאה בשלב הבישול. בדוק את הקונסול.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleChefClose = () => {
+    setShowChefDialog(false);
   };
 
   return (
@@ -401,6 +423,17 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 ) : (
                   <>✨ בואו נתחיל</>
                 )}
+              </button>
+
+              <button
+                onClick={() => setShowChefDialog(true)}
+                disabled={isGenerating}
+                className="px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-orange-500 to-amber-600 text-white shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:cursor-not-allowed"
+                style={{
+                  boxShadow: !isGenerating ? '0 10px 30px rgba(249, 115, 22, 0.4)' : 'none'
+                }}
+              >
+                👨‍🍳 בוא נבשל
               </button>
             </div>
 
@@ -591,10 +624,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
               <div className="flex gap-3 justify-end mt-6">
                 <button type="button" onClick={() => setEditingCard(null)} className="px-5 py-2.5 rounded-xl text-white hover:bg-white/10 transition-colors">ביטול</button>
-                <button type="button" onClick={saveCardCustomization} className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-semibold shadow-lg hover:shadow-pink-500/25 transition-all">שמור</button>
+                <button type="button" onClick={() => { saveCardCustomization(); setEditingCard(null); }} className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-semibold shadow-lg hover:shadow-pink-500/25 transition-all">שמור</button>
               </div>
             </div>
           </div>
+        )}
+
+        {showChefDialog && (
+          <ChefModeDialog
+            onStart={handleChefStart}
+            onClose={handleChefClose}
+            onGoToEditor={() => {
+              setShowChefDialog(false);
+            }}
+            selectedModel={selectedModel}
+          />
         )}
       </div>
     </div>

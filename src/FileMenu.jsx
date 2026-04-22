@@ -1534,6 +1534,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   workflowMode: nextMode,
                   preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset,
                   circularWorkflowEnabled: nextMode === 'circular-team' ? true : false,
+                  autopilotEnabled: ['manager-auto', 'circular-team'].includes(nextMode) ? true : prev.autopilotEnabled,
                 }));
                 if (nextMode === 'manager-auto' || nextMode === 'circular-team') {
                   setAgents((prev) => {

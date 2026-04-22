@@ -2631,5 +2631,91 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
   });
 };
 
+// Chef Mode Interview - generates document based on interview responses
+export const chefModeInterview = async (userResponses = [], selectedModel = 'gemini', onStatus = null) => {
+  const cfg = getProviderConfig();
+  
+  // Format responses for the Chef agent
+  const responsesText = userResponses
+    .map((r, idx) => `${idx + 1}. ${String(r.answer || '').trim()}`)
+    .join('\n');
+
+  const systemPrompt = `== AGENT: CHEF ==
+אתה שף כתיבה מוצלח. קרא את תשובות הבישול של המשתמש - קודם חפש לעומק מה הוא רוצה, מה החשוב לו, אילו חרדות יש לו, איך הוא רואה את העתיד. אחרי שהבנת את החזון, צור מסמך מלא, מובנה, עוצמתי שמדבר אליו - לא ממשיך במסגרת גנרית. 
+
+חשיבות של מבנה: בניית שלד שקורא טבעי וחזק. כל חלק משמעותי, כל משפט משנה ערך. 
+
+טון: בחר טון שמתחבר למה שהמשתמש ביקש - לא קשה, לא מתוק, אלא בדיוק זה שהוא צריך. 
+
+אורך: בדיוק כמו שביקש, לא יותר, לא פחות.
+
+חזר HTML תקין בעברית עם כותרות, פסקאות, מבנה ברור. כאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>
+== END AGENT ==`;
+
+  const userPrompt = `בואו נבשל משהו מעניין! הנה תשובות הבישול שלך:
+
+${responsesText}
+
+בחר לעומק אל תוך המשימה הזו. בחר טון מתאים, בנה מבנה משכנע, וצור מסמך שלם וממשי שדברים בו וגם מעורר השראה.`;
+
+  const runId = `chef-${Date.now()}`;
+  
+  try {
+    logAgentDebugEvent({
+      type: 'chef-mode-start',
+      state: 'running',
+      runId,
+      agentLabel: 'שף בישול',
+      message: 'התחיל שלב הבישול',
+      responsesCount: userResponses.length,
+      selectedModel,
+    });
+
+    const response = await chatWithActiveProvider(
+      userPrompt,
+      '',
+      systemPrompt,
+      {
+        agentLabel: 'שף בישול',
+        runId,
+        onStatus,
+        skipAutomation: true,
+        skipMultiModel: true,
+        providerOverride: selectedModel || cfg.active,
+      }
+    );
+
+    if (!response || !String(response).trim()) {
+      throw new Error('לא קיבלנו תשובה מהשף');
+    }
+
+    logAgentDebugEvent({
+      type: 'chef-mode-success',
+      state: 'success',
+      runId,
+      agentLabel: 'שף בישול',
+      message: 'המסמך נוצר בהצלחה דרך שלב הבישול',
+      outputChars: response.length,
+    });
+
+    return {
+      html: response,
+      success: true,
+      runId,
+    };
+  } catch (error) {
+    logAgentDebugEvent({
+      type: 'chef-mode-error',
+      state: 'error',
+      runId,
+      agentLabel: 'שף בישול',
+      message: 'שגיאה בשלב הבישול',
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+    });
+
+    throw error;
+  }
+};
+
 // Legacy alias
 export const chatWithAi = chatWithActiveProvider;

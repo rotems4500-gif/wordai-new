@@ -745,7 +745,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         {[
           ['chat', "💬 צ'אט"],
           ['actions', '⚡ פעולות'],
-          ['agents', '🧩 סוכנים']
+          ['agents', '🧩 סוכנים'],
+          ['logs', '📋 לוגים']
         ].map(([id, label]) => (
           <button 
             key={id} 
@@ -2023,6 +2024,240 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Logs Tab */}
+      {tab === 'logs' && (
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          background: 'linear-gradient(160deg, #f8fbff 0%, #eef4ff 100%)',
+        }}>
+          {/* Logs Header */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+            paddingBottom: '12px',
+            borderBottom: '1px solid #dbe7ff',
+          }}>
+            <div>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: '#0f172a',
+                marginBottom: '4px',
+              }}>
+                📊 יומן פעילות סוכנים
+              </div>
+              <div style={{
+                fontSize: '11px',
+                color: '#475569',
+              }}>
+                {debugLogs.length} אירועים
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                onClick={copyLogsToClipboard} 
+                style={{ 
+                  border: '1px solid #c7d2fe', 
+                  background: '#eef2ff', 
+                  borderRadius: '20px', 
+                  padding: '8px 14px', 
+                  cursor: 'pointer', 
+                  fontSize: '12px',
+                  color: '#3730a3',
+                  fontWeight: 600,
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 2px 8px rgba(55, 48, 163, 0.12)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#e0e7ff';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#eef2ff';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+              >
+                📋 העתק הכל
+              </button>
+              <button 
+                onClick={clearLogs} 
+                style={{ 
+                  border: '1px solid #fecdd3', 
+                  background: '#fff1f2', 
+                  borderRadius: '20px', 
+                  padding: '8px 14px', 
+                  cursor: 'pointer', 
+                  fontSize: '12px',
+                  color: '#9f1239',
+                  fontWeight: 600,
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 2px 8px rgba(159, 18, 57, 0.08)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#ffe4e6';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#fff1f2';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+              >
+                🗑️ נקה הכל
+              </button>
+            </div>
+          </div>
+
+          {/* Logs List with Premium Styling */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {debugLogs.length ? debugLogs.map((log) => (
+              <div 
+                key={log.id} 
+                style={{ 
+                  border: '1px solid #dbe4ff', 
+                  borderRadius: '16px', 
+                  padding: '14px 16px', 
+                  background: log.state === 'error' 
+                    ? '#fff1f2' 
+                    : log.state === 'success' 
+                    ? '#f0fdf4' 
+                    : log.state === 'running'
+                    ? '#eff6ff'
+                    : '#f8fafc',
+                  fontSize: '12px',
+                  lineHeight: '1.6',
+                  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.06)',
+                  transition: 'all 0.3s ease',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = log.state === 'error' 
+                    ? '#ffe4e6' 
+                    : log.state === 'success' 
+                    ? '#dcfce7' 
+                    : log.state === 'running'
+                    ? '#dbeafe'
+                    : '#f1f5f9';
+                  e.currentTarget.style.transform = 'translateX(-4px)';
+                  e.currentTarget.style.borderColor = '#c7d2fe';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = log.state === 'error' 
+                    ? '#fff1f2' 
+                    : log.state === 'success' 
+                    ? '#f0fdf4' 
+                    : log.state === 'running'
+                    ? '#eff6ff'
+                    : '#f8fafc';
+                  e.currentTarget.style.transform = 'translateX(0)';
+                  e.currentTarget.style.borderColor = '#dbe4ff';
+                }}
+              >
+                {/* Log Status Icon and Label */}
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  marginBottom: '8px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{
+                      fontSize: '20px',
+                      filter: log.state === 'error' ? 'brightness(1.3)' : 'brightness(1)',
+                    }}>
+                      {log.state === 'error' ? '❌' : log.state === 'success' ? '✅' : log.state === 'running' ? '⏳' : '📌'}
+                    </span>
+                    <div>
+                      <div style={{ 
+                        fontWeight: 700, 
+                        color: '#0f172a',
+                        fontSize: '13px',
+                      }}>
+                        {log.agentLabel || '⚙️ מערכת'}
+                      </div>
+                      <div style={{ 
+                        fontSize: '10px',
+                        color: '#64748b',
+                      }}>
+                        {formatLogTime(log.ts)}
+                      </div>
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: '11px',
+                    background: log.state === 'error' 
+                      ? '#ffe4e6' 
+                      : log.state === 'success' 
+                      ? '#dcfce7' 
+                      : log.state === 'running'
+                      ? '#dbeafe'
+                      : '#e2e8f0',
+                    color: log.state === 'error' 
+                      ? '#9f1239' 
+                      : log.state === 'success' 
+                      ? '#166534' 
+                      : log.state === 'running'
+                      ? '#1d4ed8'
+                      : '#334155',
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    fontWeight: 600,
+                    textTransform: 'capitalize',
+                  }}>
+                    {log.state === 'error' ? 'שגיאה' : log.state === 'success' ? 'הצלחה' : log.state === 'running' ? 'בעדכון' : 'לא ידוע'}
+                  </span>
+                </div>
+
+                {/* Log Message */}
+                <div style={{ 
+                  color: '#1e293b',
+                  marginBottom: '8px',
+                  paddingRight: '28px',
+                  fontSize: '12px',
+                  lineHeight: '1.5',
+                }}>
+                  {log.message || 'ללא הודעה'}
+                </div>
+
+                {/* Log Details */}
+                {(log.provider || log.model || log.attempt || log.errorMessage || log.runId) && (
+                  <div style={{ 
+                    fontSize: '10px', 
+                    color: '#475569',
+                    paddingTop: '8px',
+                    borderTop: '1px solid #e2e8f0',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                  }}>
+                    {log.provider && <span>🔌 <strong>{log.provider}</strong></span>}
+                    {log.model && <span>🤖 <strong>{log.model}</strong></span>}
+                    {log.attempt && <span>🔄 ניסיון <strong>{log.attempt}</strong></span>}
+                    {log.errorMessage && <span>⚠️ {log.errorMessage}</span>}
+                    {log.runId && <span>📌 {String(log.runId).slice(0, 8)}</span>}
+                  </div>
+                )}
+              </div>
+            )) : (
+              <div style={{ 
+                fontSize: '13px', 
+                color: '#475569', 
+                textAlign: 'center',
+                padding: '40px 16px',
+                background: '#f8fafc',
+                borderRadius: '16px',
+                border: '1px dashed #c7d2fe',
+              }}>
+                📝 עדיין אין אירועים ביומן הפעילות
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

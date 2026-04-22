@@ -710,7 +710,7 @@ function normalizeGeneratedHtmlResponse(response = '') {
     .trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], returnMeta = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, returnMeta = false }) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('צריך לכתוב נושא או בקשה למסמך');
 
@@ -744,7 +744,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       `צור עבורי מסמך מלא בנושא: ${cleanPrompt}`,
       materialsText,
       `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\n${notes}` : ''}`,
-      { runId, agentLabel: 'AUTOPILOT' },
+      { runId, agentLabel: 'AUTOPILOT', providerOverride: selectedModel || cfg.active },
     );
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
