@@ -25,6 +25,7 @@ import {
   saveSkillsConfig,
   getAppMemory,
   clearAppMemory,
+  testProviderConnection,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
 
@@ -213,6 +214,55 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint }) 
   );
 }
 
+// ─── כפתור בדיקת תקינות API ───
+function ApiTestButton({ providerId, providerConfig }) {
+  const [status, setStatus] = useState(null); // null | 'loading' | 'ok' | 'fail'
+  const [resultText, setResultText] = useState('');
+
+  const handleTest = async () => {
+    setStatus('loading');
+    setResultText('');
+    try {
+      const result = await testProviderConnection(providerId, providerConfig);
+      if (result.ok) {
+        setStatus('ok');
+        const modelLabel = result.model ? ` (${result.model})` : '';
+        const tried = result.triedModels.length > 1 ? ` · ניסה ${result.triedModels.length} מודלים` : '';
+        setResultText(`✅ מחובר${modelLabel}${tried}`);
+      } else {
+        setStatus('fail');
+        const tried = result.triedModels.length ? ` · נוסו: ${result.triedModels.join(', ')}` : '';
+        setResultText(`❌ נכשל: ${result.error}${tried}`);
+      }
+    } catch (e) {
+      setStatus('fail');
+      setResultText(`❌ ${e?.message || 'שגיאה לא ידועה'}`);
+    }
+  };
+
+  const btnColor = status === 'ok' ? '#D1FAE5' : status === 'fail' ? '#FEE2E2' : '#F1F5F9';
+  const btnBorder = status === 'ok' ? '#6EE7B7' : status === 'fail' ? '#FCA5A5' : '#CBD5E1';
+  const btnTextColor = status === 'ok' ? '#065F46' : status === 'fail' ? '#991B1B' : '#334155';
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <button
+        type="button"
+        onClick={handleTest}
+        disabled={status === 'loading'}
+        style={{ fontSize: 11, padding: '4px 10px', background: btnColor, color: btnTextColor, border: `1px solid ${btnBorder}`, borderRadius: 6, cursor: status === 'loading' ? 'wait' : 'pointer', transition: 'all 0.15s' }}
+      >
+        {status === 'loading' ? '⏳ בודק...' : '🔌 בדוק חיבור'}
+      </button>
+      {resultText && (
+        <div style={{ marginTop: 4, fontSize: 11, color: status === 'ok' ? '#065F46' : '#991B1B', lineHeight: 1.5, direction: 'rtl' }}>
+          {resultText}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── קטע ספק ───
 const isProviderConfigured = (config, providerId) => {
   const provider = config?.[providerId] || {};
@@ -387,6 +437,7 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API חינמי ב: aistudio.google.com/app/apikey">
         <FieldRow label="מפתח API" type="password" placeholder="AIza..." value={config.gemini?.key}
           onChange={v => update('gemini', 'key', v)} hint="מתחיל ב-AIza" />
+        <ApiTestButton providerId="gemini" providerConfig={{ key: config.gemini?.key }} />
       </ProviderSection>
 
       {/* OpenAI */}
@@ -396,6 +447,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('openai', 'key', v)} hint="מתחיל ב-sk-" />
         <FieldRow label="מודל" placeholder="gpt-4o" value={config.openai?.model}
           onChange={v => update('openai', 'model', v)} hint="ברירת מחדל: gpt-4o" />
+        <ApiTestButton providerId="openai" providerConfig={{ key: config.openai?.key, model: config.openai?.model }} />
       </ProviderSection>
 
       {/* Claude */}
@@ -405,6 +457,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
         <FieldRow label="מודל" placeholder="claude-sonnet-4-6" value={config.claude?.model}
           onChange={v => update('claude', 'model', v)} />
+        <ApiTestButton providerId="claude" providerConfig={{ key: config.claude?.key, model: config.claude?.model }} />
       </ProviderSection>
 
       {/* Groq */}
@@ -414,6 +467,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('groq', 'key', v)} hint="מתחיל ב-gsk_" />
         <FieldRow label="מודל" placeholder="llama-3.3-70b-versatile" value={config.groq?.model}
           onChange={v => update('groq', 'model', v)} hint="ברירת מחדל: llama-3.3-70b-versatile" />
+        <ApiTestButton providerId="groq" providerConfig={{ key: config.groq?.key, model: config.groq?.model }} />
       </ProviderSection>
 
       {/* Perplexity */}
@@ -423,6 +477,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
         <FieldRow label="מודל" placeholder="sonar-pro" value={config.perplexity?.model}
           onChange={v => update('perplexity', 'model', v)} hint="sonar-pro = עם גישה לאינטרנט" />
+        <ApiTestButton providerId="perplexity" providerConfig={{ key: config.perplexity?.key, model: config.perplexity?.model }} />
       </ProviderSection>
 
       {/* Ollama */}
@@ -432,6 +487,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('ollama', 'baseUrl', v)} hint="ברירת מחדל כשאולמה רץ על המחשב" />
         <FieldRow label="שם מודל" placeholder="llama3.2" value={config.ollama?.model}
           onChange={v => update('ollama', 'model', v)} hint='בדוק מה הורדת: "ollama list" בטרמינל' />
+        <ApiTestButton providerId="ollama" providerConfig={{ baseUrl: config.ollama?.baseUrl, model: config.ollama?.model }} />
       </ProviderSection>
 
       <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false}
@@ -529,6 +585,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('custom', 'key', v)} />
         <FieldRow label="שם מודל" placeholder="llama-3.3-70b-versatile" value={config.custom?.model}
           onChange={v => update('custom', 'model', v)} hint="חובה — העתק מרשימת Models של הספק" />
+        <ApiTestButton providerId="custom" providerConfig={{ baseUrl: config.custom?.baseUrl, key: config.custom?.key, model: config.custom?.model }} />
       </ProviderSection>
     </div>
   );

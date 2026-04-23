@@ -2874,3 +2874,137 @@ export const chefModeDecideNextStep = async (userResponses = [], selectedModel =
 
 // Legacy alias
 export const chatWithAi = chatWithActiveProvider;
+
+// ═══════════════════════════════════════
+// בדיקת תקינות ספק — שולח הודעה קצרה ובודק תשובה
+// ═══════════════════════════════════════
+const PROVIDER_MODEL_FALLBACKS = {
+  gemini: ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.0-pro'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
+  claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
+  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+  perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
+  ollama: [],
+  custom: [],
+};
+
+const TEST_PROMPT = [{ role: 'user', content: 'אמור "אוקי" בלבד.' }];
+const GEMINI_TEST_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+const pingGemini = async (key, model, signal) => {
+  const url = `${GEMINI_TEST_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'אמור "אוקי" בלבד.' }] }] }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'ok';
+};
+
+const pingClaude = async (key, model, signal) => {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: 'user', content: 'אמור "אוקי" בלבד.' }] }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.content?.[0]?.text || 'ok';
+};
+
+const pingOpenAICompatible = async (baseUrl, key, model, signal) => {
+  const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    signal,
+    headers,
+    body: JSON.stringify({ model, messages: TEST_PROMPT, max_tokens: 16, stream: false }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || 'ok';
+};
+
+/**
+ * testProviderConnection — בודק חיבור לספק AI מסוים.
+ * מנסה תחילה את המודל הנבחר, ואם נכשל — ממשיך לגיבויים.
+ * מחזיר { ok, model, error, triedModels }
+ */
+export const testProviderConnection = async (providerId, providerConfig = {}) => {
+  const cfg = getProviderConfig();
+  const pCfg = { ...cfg[providerId], ...providerConfig };
+  const requestedModel = String(pCfg.model || '').trim();
+  const fallbacks = PROVIDER_MODEL_FALLBACKS[providerId] || [];
+  const modelsToTry = requestedModel
+    ? [requestedModel, ...fallbacks.filter((m) => m !== requestedModel)]
+    : fallbacks;
+
+  if (!modelsToTry.length) modelsToTry.push('default');
+
+  const triedModels = [];
+  let lastError = '';
+
+  for (const model of modelsToTry) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    triedModels.push(model);
+    try {
+      let reply = '';
+      if (providerId === 'gemini') {
+        const key = String(pCfg.key || '').trim();
+        if (!key) throw new Error('מפתח API חסר');
+        reply = await pingGemini(key, model, controller.signal);
+      } else if (providerId === 'claude') {
+        const key = String(pCfg.key || '').trim();
+        if (!key) throw new Error('מפתח API חסר');
+        reply = await pingClaude(key, model, controller.signal);
+      } else if (providerId === 'openai') {
+        const key = String(pCfg.key || '').trim();
+        if (!key) throw new Error('מפתח API חסר');
+        reply = await pingOpenAICompatible('https://api.openai.com/v1', key, model, controller.signal);
+      } else if (providerId === 'groq') {
+        const key = String(pCfg.key || '').trim();
+        if (!key) throw new Error('מפתח API חסר');
+        reply = await pingOpenAICompatible('https://api.groq.com/openai/v1', key, model, controller.signal);
+      } else if (providerId === 'perplexity') {
+        const key = String(pCfg.key || '').trim();
+        if (!key) throw new Error('מפתח API חסר');
+        reply = await pingOpenAICompatible('https://api.perplexity.ai', key, model, controller.signal);
+      } else if (providerId === 'ollama') {
+        const baseUrl = String(pCfg.baseUrl || 'http://localhost:11434/v1').trim();
+        reply = await pingOpenAICompatible(baseUrl, '', model, controller.signal);
+      } else if (providerId === 'custom') {
+        const baseUrl = String(pCfg.baseUrl || '').trim();
+        if (!baseUrl) throw new Error('כתובת API חסרה');
+        const key = String(pCfg.key || '').trim();
+        reply = await pingOpenAICompatible(baseUrl, key, model, controller.signal);
+      } else {
+        throw new Error(`ספק לא מוכר: ${providerId}`);
+      }
+      clearTimeout(timeout);
+      return { ok: true, model, reply: String(reply || '').slice(0, 80), triedModels, error: '' };
+    } catch (err) {
+      clearTimeout(timeout);
+      lastError = err?.name === 'AbortError' ? 'הבקשה פגה (timeout 12s)' : (err?.message || 'שגיאה לא ידועה');
+      // אם זה שגיאת אימות/מפתח/כתובת — אין טעם לנסות מודל אחר
+      if (/401|403|מפתח|כתובת/.test(lastError)) break;
+    }
+  }
+
+  return { ok: false, model: '', reply: '', triedModels, error: lastError };
+};
