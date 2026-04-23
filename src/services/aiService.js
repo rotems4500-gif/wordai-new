@@ -1826,12 +1826,23 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: false });
+
+  // ב-Electron: נשלח דרך main process כדי לעקוף CORS
+  if (typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest) {
+    const result = await window.desktopApp.proxyHttpRequest({ url, method: 'POST', headers, body: bodyStr });
+    if (!result.ok) {
+      throw new Error(`שגיאת API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
+    }
+    const data = JSON.parse(result.body);
+    return data.choices?.[0]?.message?.content || '';
+  }
 
   const res = await fetch(url, {
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, messages, max_tokens: 4096, stream: false }),
+    body: bodyStr,
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
@@ -2554,38 +2565,64 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     }
   }
 
-  // ─── Fallback: אם המנוע נכשל ו-Gemini זמין, נסה דרך Gemini ─────
-  if (activeProvider !== 'gemini' && isProviderConfiguredForUse('gemini', cfg)) {
+  // ─── Fallback: שרשרת גיבוי — מנסה ספקים מוגדרים אחרים לפי סדר עדיפות ─────
+  const FALLBACK_PRIORITY = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
+  const fallbackCandidates = FALLBACK_PRIORITY.filter(
+    (pid) => pid !== activeProvider && isProviderConfiguredForUse(pid, cfg)
+  );
+
+  for (const fallbackProvider of fallbackCandidates) {
     try {
-      logEvent('provider-fallback', `מנוע ${activeProvider} נכשל, מנסה דרך gemini`, {
+      const fallbackModel = getModelNameForProvider(fallbackProvider, cfg, '');
+      logEvent('provider-fallback', `מנוע ${activeProvider} נכשל, מנסה גיבוי: ${fallbackProvider}`, {
         state: 'retrying',
         originalProvider: activeProvider,
         originalModel: resolvedModel,
-        fallbackProvider: 'gemini',
+        fallbackProvider,
+        fallbackModel,
         errorMessage: lastError?.message || '',
       });
-      emitStatus(onStatus, { state: 'retrying', progress: 50, runId, provider: 'gemini', model: 'gemini-2.5-flash', agentLabel, message: `מנוע ${activeProvider} נכשל, מנסה דרך Gemini` });
-      const geminiKey = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
-      const genAI = new GoogleGenerativeAI(geminiKey);
-      const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const fallbackResult = await withTimeout(
-        fallbackModel.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`),
-        timeoutMs,
-        () => {}
-      );
-      const fallbackText = fallbackResult.response.text();
-      logEvent('provider-fallback-success', 'Gemini החזיר תשובה חלופית', {
+      emitStatus(onStatus, {
+        state: 'retrying',
+        progress: 50,
+        runId,
+        provider: fallbackProvider,
+        model: fallbackModel,
+        agentLabel,
+        message: `מנוע ${activeProvider} נכשל — עובר לגיבוי: ${fallbackProvider}`,
+      });
+
+      const fallbackText = await chatWithActiveProvider(userPrompt, documentContext, extraSystemPrompt, {
+        ...options,
+        providerOverride: fallbackProvider,
+        skipAutomation: true,
+        shouldPersistMemory: false,
+        runId,
+        agentLabel,
+      });
+
+      logEvent('provider-fallback-success', `${fallbackProvider} החזיר תשובת גיבוי`, {
         state: 'success',
-        fallbackProvider: 'gemini',
+        fallbackProvider,
         responseChars: String(fallbackText || '').length,
       });
-      emitStatus(onStatus, { state: 'success', progress: 100, runId, provider: 'gemini', model: 'gemini-2.5-flash', agentLabel, message: 'הושלם (Gemini fallback)' });
+      emitStatus(onStatus, {
+        state: 'success',
+        progress: 100,
+        runId,
+        provider: fallbackProvider,
+        model: fallbackModel,
+        agentLabel,
+        message: `הושלם (גיבוי: ${fallbackProvider})`,
+      });
       return rememberSuccessfulReply(fallbackText);
     } catch (fallbackError) {
-      logEvent('provider-fallback-error', 'גם Gemini fallback נכשל', {
+      logEvent('provider-fallback-error', `גם ${fallbackProvider} נכשל בגיבוי`, {
         state: 'error',
+        fallbackProvider,
         errorMessage: fallbackError?.message || '',
       });
+      // ממשיך לניסיון הבא בשרשרת
     }
   }
 

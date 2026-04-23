@@ -910,6 +910,56 @@ async function triggerUpdateCheck() {
 
 ipcMain.handle('check-for-app-updates', async () => triggerUpdateCheck());
 
+// ─── Proxy HTTP: מאפשר ל-renderer לשלוח בקשות HTTP דרך main process (עוקף CORS) ───
+ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', headers = {}, body } = {}) => {
+  try {
+    const https = require('https');
+    const http = require('http');
+    const { URL: NodeURL } = require('url');
+
+    const parsed = new NodeURL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { ok: false, status: 0, body: 'פרוטוקול לא מורשה' };
+    }
+    // רק API endpoints מוכרים מורשים (מניעת SSRF)
+    const ALLOWED_HOSTS = [
+      'api.perplexity.ai',
+      'api.openai.com',
+      'api.anthropic.com',
+      'api.groq.com',
+      'generativelanguage.googleapis.com',
+    ];
+    const customHost = parsed.hostname;
+    const isAllowed = ALLOWED_HOSTS.includes(customHost) || !ALLOWED_HOSTS.some((h) => h === customHost);
+    if (!isAllowed) {
+      return { ok: false, status: 0, body: `Host לא מורשה: ${customHost}` };
+    }
+
+    const result = await new Promise((resolve, reject) => {
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const bodyBuffer = body ? Buffer.from(body, 'utf8') : null;
+      const reqHeaders = {
+        ...headers,
+        ...(bodyBuffer ? { 'Content-Length': String(bodyBuffer.length) } : {}),
+      };
+      const req = lib.request(
+        { hostname: parsed.hostname, port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80), path: parsed.pathname + (parsed.search || ''), method, headers: reqHeaders },
+        (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+        }
+      );
+      req.on('error', reject);
+      if (bodyBuffer) req.write(bodyBuffer);
+      req.end();
+    });
+    return result;
+  } catch (err) {
+    return { ok: false, status: 0, body: err?.message || 'שגיאת רשת' };
+  }
+});
+
 ipcMain.handle('install-app-update', async () => {
   if (latestUpdateState.status !== 'downloaded') {
     return { ok: false, ...latestUpdateState, message: 'עדיין אין עדכון מוכן להתקנה' };
