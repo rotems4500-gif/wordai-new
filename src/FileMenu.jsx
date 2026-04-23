@@ -150,6 +150,15 @@ const STYLE_TRAINING_QUESTIONS = [
       { id: 'direct', label: 'אפשרות ב', text: 'ההצעה הזו היא הכיוון הנכון וצריך לקדם אותה כבר עכשיו.', insight: 'מעדיף טון החלטי, חד ובטוח.', avoid: 'זהירות יתר וניסוח מהוסס' },
     ],
   },
+  {
+    id: 'linguistic_register',
+    title: 'איזו רמה לשונית נשמעת לך נכון יותר?',
+    options: [
+      { id: 'academic', label: 'אקדמי', text: 'ניתוח הממצאים מעיד על מגמה ברורה הדורשת התייחסות מעמיקה בספרות המקצועית.', insight: 'מעדיף שפה אקדמית, מינוח מקצועי ומדויק.', avoid: 'שפה יומיומית ומינוח לא מקצועי' },
+      { id: 'standard', label: 'תקנית', text: 'הממצאים מראים מגמה ברורה שחשוב להתייחס אליה בצורה מסודרת.', insight: 'מעדיף שפה תקנית, תקינה ומאוזנת.', avoid: 'ז\'רגון אקדמי כבד מדי' },
+      { id: 'conversational', label: 'שיחתית', text: 'רואים בבירור מגמה מעניינת — שווה לחשוב על זה ולדון בה.', insight: 'מעדיף שפה שיחתית, נגישה וקרובה לקורא.', avoid: 'ניסוח רשמי מדי שמרחיק את הקורא' },
+    ],
+  },
 ];
 
 const buildLearningGameProfilePatch = (answers = {}) => {
@@ -160,12 +169,16 @@ const buildLearningGameProfilePatch = (answers = {}) => {
   const insights = mergeUniqueStrings(selectedOptions.map((option) => option.insight)).slice(0, 8);
   const preferredTrainingExamples = selectedOptions.map((option) => option.text).slice(0, 4);
   const dislikedStylePatterns = mergeUniqueStrings(selectedOptions.map((option) => option.avoid)).slice(0, 8);
+  const linguisticInsight = answers['linguistic_register']
+    ? (STYLE_TRAINING_QUESTIONS.find(q => q.id === 'linguistic_register')?.options.find(o => o.id === answers['linguistic_register'])?.insight || '')
+    : '';
 
   return {
     learningGameAnswers: answers,
-    learningGamesCompletedAt: Object.keys(answers).length >= STYLE_TRAINING_QUESTIONS.length ? new Date().toISOString() : '',
+   learningGamesCompletedAt: Object.keys(answers).filter(k => answers[k]).length >= STYLE_TRAINING_QUESTIONS.length ? new Date().toISOString() : '',
     learningGameInsights: insights,
-    styleTrainingSummary: insights.join(' '),
+   styleTrainingSummary: [...insights, ...(linguisticInsight ? [linguisticInsight] : [])].join(' '),
+   linguisticRegisterPreference: answers['linguistic_register'] || '',
     preferredTrainingExamples,
     dislikedStylePatterns,
   };
@@ -1591,7 +1604,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   workflowMode: nextMode,
                   preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset,
                   circularWorkflowEnabled: nextMode === 'circular-team' ? true : false,
-                  autopilotEnabled: ['manager-auto', 'circular-team'].includes(nextMode) ? true : prev.autopilotEnabled,
+                  autopilotEnabled: ['manager-auto', 'circular-team'].includes(nextMode) ? true : false,
                 }));
                 if (nextMode === 'manager-auto' || nextMode === 'circular-team') {
                   setAgents((prev) => {
@@ -2226,6 +2239,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
   const didHydrate = useRef(false);
+  const [inlineUpdateState, setInlineUpdateState] = useState({ status: 'idle', message: '' });
 
   useEffect(() => {
     if (initialSettingsTab) {
@@ -2353,12 +2367,54 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
           <div className="h-px bg-white/5 my-3 mx-2" />
 
           <div className="px-2 py-1 text-[10px] font-bold text-slate-500 tracking-widest mb-1">הגדרות מערכת</div>
-          <button
-            className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 hover:translate-x-[-2px] transition-transform w-full text-right group outline-none focus:ring-1 focus:ring-indigo-400/50"
-            onClick={() => { setActivePanel('settings'); setSettingsTab('updates'); }}>
-            <i className="ph-fill ph-arrow-circle-up text-lg text-emerald-400/70 group-hover:text-emerald-300 group-hover:scale-110 transition-transform" />
-            <span className="font-semibold text-[13px]">בדוק עדכונים</span>
-          </button>
+          <div className="flex flex-col gap-1">
+            <button
+              className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 hover:translate-x-[-2px] transition-transform w-full text-right group outline-none focus:ring-1 focus:ring-indigo-400/50"
+              disabled={inlineUpdateState.status === 'checking'}
+              onClick={async () => {
+                if (!window.desktopApp?.checkForAppUpdates) {
+                  setInlineUpdateState({ status: 'error', message: 'זמין רק באפליקציה' });
+                  return;
+                }
+                setInlineUpdateState({ status: 'checking', message: 'בודק...' });
+                try {
+                  const result = await window.desktopApp.checkForAppUpdates();
+                  const s = String(result?.status || '').toLowerCase();
+                  if (['downloaded', 'downloading', 'update-available', 'manual-download'].includes(s)) {
+                    setInlineUpdateState({ status: 'available', message: 'עדכון זמין!' });
+                  } else if (['up-to-date', 'not-available', 'dev-mode', 'unavailable'].includes(s)) {
+                    setInlineUpdateState({ status: 'uptodate', message: 'הגרסה עדכנית ✓' });
+                    setTimeout(() => setInlineUpdateState({ status: 'idle', message: '' }), 4000);
+                  } else {
+                    setInlineUpdateState({ status: 'uptodate', message: 'בדיקה הושלמה ✓' });
+                    setTimeout(() => setInlineUpdateState({ status: 'idle', message: '' }), 4000);
+                  }
+                } catch {
+                  setInlineUpdateState({ status: 'error', message: 'שגיאה בבדיקה' });
+                  setTimeout(() => setInlineUpdateState({ status: 'idle', message: '' }), 4000);
+                }
+              }}>
+              <i className={`ph-fill ph-arrow-circle-up text-lg transition-transform ${inlineUpdateState.status === 'checking' ? 'animate-spin text-yellow-400/80' : inlineUpdateState.status === 'available' ? 'text-yellow-400' : 'text-emerald-400/70 group-hover:text-emerald-300 group-hover:scale-110'}`} />
+              <div className="flex flex-col items-start">
+                <span className="font-semibold text-[13px]">בדוק עדכונים</span>
+                {inlineUpdateState.message && (
+                  <span className={`text-[10px] font-medium mt-0.5 ${inlineUpdateState.status === 'available' ? 'text-yellow-400' : inlineUpdateState.status === 'error' ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {inlineUpdateState.message}
+                  </span>
+                )}
+              </div>
+            </button>
+
+            {inlineUpdateState.status === 'available' && (
+              <div className="px-4">
+                <button
+                  className="text-[10px] bg-yellow-400/20 border border-yellow-400/40 text-yellow-300 px-2 py-0.5 rounded-lg hover:bg-yellow-400/40 transition-colors"
+                  onClick={() => { setActivePanel('settings'); setSettingsTab('updates'); }}>
+                  פרטים והתקנה
+                </button>
+              </div>
+            )}
+          </div>
 
           <button
             className="flex items-center gap-3 px-4 py-3 rounded-xl text-white bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/10 transition-all w-full text-right group mt-2 outline-none focus:ring-2 focus:ring-indigo-400/50"

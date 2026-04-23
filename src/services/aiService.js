@@ -111,6 +111,7 @@ export const DEFAULT_PERSONAL_STYLE = {
   styleTrainingSummary: '',
   preferredTrainingExamples: [],
   dislikedStylePatterns: [],
+    linguisticRegisterPreference: '',
   autoLearnedFromEditorAt: '',
   lastAutoLearnedSignature: '',
   autoLearnedVocabularyCounts: {},
@@ -261,7 +262,7 @@ export const DEFAULT_ROLE_AGENTS = [
   {
     id: 'writer',
     name: 'כותב תוכן',
-    prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. התאם את הניסוח לסגנון האישי של המשתמש והחזר תוצאה ישימה למסמך.',
+    prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. תן עדיפות עליונה למה שהמשתמש ביקש ולחומרי העזר שסיפק — ההגדרות המובנות (תבנית, קהל, מסלול) משמשות כרקע בלבד ולא מחליפות את המטלה. החזר תמיד HTML מעוצב עם תגיות <h1>, <h2>, <h3>, <p>, <ul>, <ol>, <strong> לפי הצורך — אל תחזיר גוש טקסט רציף ללא מבנה.',
     provider: '',
     model: '',
     enabled: true,
@@ -1491,6 +1492,10 @@ const buildPersonalStyleInstructions = (profile = {}) => {
   if (profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
   if (profile.preferredTrainingExamples?.length) parts.push(`דוגמאות ניסוח שקרובות במיוחד לסגנון המועדף: ${profile.preferredTrainingExamples.join(' | ')}`);
   if (profile.dislikedStylePatterns?.length) parts.push(`יש להימנע במיוחד מ: ${profile.dislikedStylePatterns.join(', ')}`);
+    if (profile.linguisticRegisterPreference) {
+      const registerLabels = { academic: 'אקדמי — מינוח מקצועי ודיוק לשוני', standard: 'תקנית — שפה תקנית ומאוזנת', conversational: 'שיחתית — שפה נגישה וקרובה לקורא' };
+      parts.push(`רמה לשונית מועדפת: ${registerLabels[profile.linguisticRegisterPreference] || profile.linguisticRegisterPreference}`);
+    }
   if (profile.userBackground) parts.push(`רקע מקצועי או אישי של המשתמש: ${String(profile.userBackground).trim()}`);
   if (profile.writingGoals) parts.push(`מטרות הכתיבה המרכזיות: ${String(profile.writingGoals).trim()}`);
   if (profile.additionalContext) parts.push(`הקשר אישי נוסף שחשוב לזכור: ${String(profile.additionalContext).trim()}`);
@@ -1927,6 +1932,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
 אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
 אם המשתמש מבקש תוכן חדש, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
+עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
+כשמחזירים מסמך או תוכן ארוך: השתמש תמיד ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר — אל תחזיר גוש טקסט רציף ללא היררכיה ומבנה.
 כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
@@ -2697,6 +2704,7 @@ export const chefModeGenerateQuestion = async (params = {}) => {
     '- options: בין 3 ל-5 אפשרויות קצרות וברורות.',
     '- אם יש מספיק מידע לכתיבה מלאה, החזר shouldStop=true ללא שאלה.',
     '- אל תייצר שאלות כלליות מדי אם כבר יש תשובות בנושא.',
+    '- אם כבר יש מטרה ברורה, קהל יעד, מבנה וטון בפרומפט או בתשובות קודמות — החזר shouldStop=true מיד. אל תשאל שאלות שוליות שלא מוסיפות מידע שאינו כבר ידוע.',
     '',
     `פרומפט יצירה: ${documentPrompt || 'לא הוזן פרומפט מפורש'}`,
     `תבנית נבחרת: ${templateId}`,

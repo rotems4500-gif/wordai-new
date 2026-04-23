@@ -25,3 +25,6 @@ my_personal_style.json
 past-works/*
 !past-works/.gitkeep
 src/__TEMP_ROUTING_OVERRIDE.js
+
+*.exe
+*.exe.blockmap

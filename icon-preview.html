@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>תצוגת אייקון</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 20% 20%, #fff2e9 0%, #ffe4d6 45%, #ffd9c5 100%);
+        font-family: "Segoe UI", Tahoma, sans-serif;
+      }
+
+      .preview-card {
+        width: min(460px, 90vw);
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #ffc7b0;
+        border-radius: 20px;
+        padding: 24px;
+        text-align: center;
+        box-shadow: 0 16px 40px rgba(255, 114, 76, 0.18);
+      }
+
+      .preview-card h1 {
+        margin: 0 0 12px;
+        color: #9a3e22;
+        font-size: 1.25rem;
+      }
+
+      .icon-frame {
+        width: 168px;
+        height: 168px;
+        margin: 0 auto 14px;
+        display: grid;
+        place-items: center;
+        border-radius: 28px;
+        background: linear-gradient(145deg, #fff7f1, #ffe8dc);
+        border: 1px solid #ffd1bf;
+      }
+
+      .icon-frame img {
+        width: 128px;
+        height: 128px;
+        border-radius: 24px;
+        display: block;
+      }
+
+      .path {
+        margin: 0;
+        color: #7c4a39;
+        font-size: 0.92rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="preview-card">
+      <h1>האייקון החדש</h1>
+      <div class="icon-frame">
+        <img src="./public/app-icon.png" alt="האייקון החדש של WordFlow AI" />
+      </div>
+      <p class="path">public/app-icon.png</p>
+    </main>
+  </body>
+</html>
