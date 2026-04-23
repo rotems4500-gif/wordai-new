@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { chefModeDecideNextStep, chefModeGenerateQuestion } from './services/aiService';
 
 const MAX_QUESTIONS = 13;
+const MIN_AUTO_STOP_RESPONSES = 5;
 
 const CHEF_MODEL_OPTIONS = [
   { value: 'gemini', label: 'Gemini' },
@@ -75,6 +76,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     return payload;
   };
 
+  const canAutoStop = (responsesCount) => Number(responsesCount || 0) >= MIN_AUTO_STOP_RESPONSES;
+
   useEffect(() => {
     const bootstrap = async () => {
       let loadedResponses = [];
@@ -100,7 +103,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         setIsLoadingQuestion(true);
         try {
           const firstQuestion = await requestDynamicQuestion(1, loadedResponses, loadedModel);
-          if (firstQuestion?.shouldStop && loadedResponses.length >= 3) {
+          if (firstQuestion?.shouldStop && canAutoStop(loadedResponses.length)) {
             if (typeof onStart === 'function') await onStart(loadedResponses, loadedModel);
             return;
           }
@@ -208,7 +211,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         instructions: chefContext?.instructions,
         selectedMaterials: chefContext?.selectedMaterials || [],
       });
-      if (decision?.shouldStop && newResponses.length >= 3) {
+      if (decision?.shouldStop && canAutoStop(newResponses.length)) {
         await handleFinish(newResponses);
         return;
       }
@@ -216,7 +219,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       setIsLoadingQuestion(true);
       const nextStep = questionFlow.length + 1;
       const dynamicQuestion = await requestDynamicQuestion(nextStep, newResponses, localModel);
-      if (dynamicQuestion?.shouldStop && newResponses.length >= 3) {
+      if (dynamicQuestion?.shouldStop && canAutoStop(newResponses.length)) {
         await handleFinish(newResponses);
         return;
       }
@@ -225,7 +228,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       goToQuestion(nextQuestionFlow.length - 1, newResponses, nextQuestionFlow);
     } catch (error) {
       console.warn('Chef flow fallback error', error);
-      if (newResponses.length >= 3) {
+      if (canAutoStop(newResponses.length)) {
         await handleFinish(newResponses);
       }
     } finally {
@@ -242,7 +245,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       return;
     }
 
-    if (responses.length >= 3) {
+    if (canAutoStop(responses.length)) {
       await handleFinish(responses);
       return;
     }
@@ -251,7 +254,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     try {
       const nextStep = questionFlow.length + 1;
       const dynamicQuestion = await requestDynamicQuestion(nextStep, responses, localModel);
-      if (dynamicQuestion?.shouldStop && responses.length >= 3) {
+      if (dynamicQuestion?.shouldStop && canAutoStop(responses.length)) {
         await handleFinish(responses);
         return;
       }

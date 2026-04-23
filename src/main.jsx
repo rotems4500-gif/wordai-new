@@ -8,6 +8,7 @@ import TopBar from './TopBar';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
+import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
 
@@ -91,6 +92,8 @@ const isLegacyHomeEnabled = () => {
   }
 };
 
+const getRecentAgentLogs = (limit = 18) => getAgentDebugLogs().slice(-limit).reverse();
+
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
@@ -136,7 +139,7 @@ function App() {
     state: 'idle',
     prompt: '',
     summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-    logs: getAgentDebugLogs().slice(-5).reverse(),
+    logs: getRecentAgentLogs(),
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
@@ -323,7 +326,7 @@ function App() {
       state: 'running',
       prompt: 'מנהל הצוות מתקן את המסמך לפי המשוב שלך',
       summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-      logs: getAgentDebugLogs().slice(-5).reverse(),
+      logs: getRecentAgentLogs(),
     });
 
     try {
@@ -355,7 +358,7 @@ function App() {
         state: usedFallback ? 'warning' : 'success',
         prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
         summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
+        logs: getRecentAgentLogs(),
       });
 
       setFeedbackSurvey({
@@ -377,7 +380,7 @@ function App() {
         state: 'error',
         prompt: 'עדכון המסמך נכשל',
         summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
+        logs: getRecentAgentLogs(),
       });
       alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
     }
@@ -413,7 +416,7 @@ function App() {
       setLiveGeneration((prev) => ({
         ...prev,
         summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
+        logs: getRecentAgentLogs(),
       }));
     };
 
@@ -1594,6 +1597,12 @@ function App() {
   };
   handleCommandRef.current = handleCommand;
 
+  const hasPendingUserApproval = Boolean(feedbackSurvey.prompt || feedbackSurvey.usedFallback)
+    && (liveGeneration.state === 'success' || liveGeneration.state === 'warning');
+  const shouldShowProgressOnlyPanel = liveGeneration.active
+    && (liveGeneration.state === 'running' || feedbackSurvey.open || hasPendingUserApproval);
+  const progressLogs = Array.isArray(liveGeneration.logs) ? liveGeneration.logs : [];
+
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       <TopBar
@@ -1636,62 +1645,94 @@ function App() {
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
-              <div className="border-b border-slate-200 bg-white px-3 py-3">
-                <div className="rounded-2xl border border-blue-200 bg-gradient-to-br from-white to-blue-50 p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
-                      <div className="text-sm font-bold text-slate-800">{liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה' : 'מכין את המסמך בלייב'}</div>
-                      <div className="text-[11px] text-slate-500">{liveGeneration.prompt || 'מעבד את הבקשה שלך'}</div>
+              <div className={`${shouldShowProgressOnlyPanel ? 'h-full overflow-hidden p-4' : 'border-b border-slate-200 bg-white px-3 py-3'}`}>
+                <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${shouldShowProgressOnlyPanel ? 'h-full flex flex-col p-4' : 'p-3'}`}>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0">
+                      <div className="text-base font-bold text-slate-900">
+                        {liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה בתהליך' : 'יוצר מסמך עכשיו'}
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1 truncate">{liveGeneration.prompt || 'מעבד את הבקשה שלך...'}</div>
                     </div>
-                    <div className={`text-[10px] font-bold px-2 py-1 rounded-full ${liveGeneration.state === 'success' ? 'bg-green-100 text-green-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'לבדיקה' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
+                    <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${liveGeneration.state === 'success' ? 'bg-emerald-100 text-emerald-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'ממתין לאישור' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    {(liveGeneration.summary?.stages || []).slice(0, 4).map((stage) => (
-                      <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-[11px] bg-white">
-                        <span className="font-medium text-slate-700">{stage.label}</span>
-                        <span className={`${stage.state === 'success' ? 'text-green-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
-                          {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '…' : '•'}
+                  <div className="space-y-2">
+                    {(liveGeneration.summary?.stages || []).slice(0, 6).map((stage) => (
+                      <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
+                        <span className="font-medium text-slate-700 truncate pr-2">{stage.label}</span>
+                        <span className={`font-bold ${stage.state === 'success' ? 'text-emerald-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
+                          {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '...' : '•'}
                         </span>
                       </div>
                     ))}
                   </div>
 
+                  {liveGeneration.state === 'running' && (
+                    <OneAxisAirHockeyGame title="הוקי בזמן שהצוות עובד" compact />
+                  )}
+
+                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
+                    <div className="text-[11px] font-bold text-slate-700 mb-2">לוג חי של ההרצה</div>
+                    <div className={`${shouldShowProgressOnlyPanel ? 'max-h-[34vh]' : 'max-h-32'} overflow-auto space-y-1.5 pr-1`}>
+                      {progressLogs.length ? progressLogs.map((log, index) => {
+                        const logTimeValue = log?.timestamp || log?.time || log?.ts;
+                        const logTime = logTimeValue ? new Date(logTimeValue).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+                        const logAgent = String(log?.agentLabel || log?.agentId || 'מערכת');
+                        const logMessage = String(log?.message || log?.type || 'עודכן סטטוס תהליך');
+                        return (
+                          <div key={`${logTime}-${logAgent}-${index}`} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                            <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 mb-0.5">
+                              <span className="font-semibold text-slate-600 truncate">{logAgent}</span>
+                              <span>{logTime}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-700 leading-4">{logMessage}</div>
+                          </div>
+                        );
+                      }) : (
+                        <div className="text-[11px] text-slate-500 px-1 py-1">הלוגים יופיעו כאן בזמן אמת...</div>
+                      )}
+                    </div>
+                  </div>
+
                   {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
-                    <div className="mt-2 flex gap-2">
+                    <div className="mt-3 flex gap-2">
                       <button
                         className="btn btn-sm btn-primary flex-1"
                         onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
                       >
-                        פתח תיקונים
+                        בקש תיקונים
                       </button>
                       <button
                         className="btn btn-sm btn-ghost flex-1"
                         onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
                       >
-                        המשך לערוך
+                        אשר והמשך לערוך
                       </button>
                     </div>
                   )}
                 </div>
               </div>
             )}
-            <AiSidebar
-              mode="sidebar"
-              compactMode={sidebarCompact}
-              onToggleCompact={() => setSidebarCompact((prev) => !prev)}
-              reason={assistantTrigger}
-              documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
-              selectedText={selectedText}
-              currentBlockText={currentBlockText}
-              wordPreferences={wordPreferences}
-              onInsert={(text) => {
-                if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
-              }}
-              onClose={closeAssistantPopup}
-            />
+
+            {!shouldShowProgressOnlyPanel && (
+              <AiSidebar
+                mode="sidebar"
+                compactMode={sidebarCompact}
+                onToggleCompact={() => setSidebarCompact((prev) => !prev)}
+                reason={assistantTrigger}
+                documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
+                selectedText={selectedText}
+                currentBlockText={currentBlockText}
+                wordPreferences={wordPreferences}
+                onInsert={(text) => {
+                  if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
+                }}
+                onClose={closeAssistantPopup}
+              />
+            )}
           </aside>
         )}
 
@@ -1986,7 +2027,7 @@ function App() {
                   state: 'running',
                   prompt,
                   summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                  logs: getAgentDebugLogs().slice(-5).reverse(),
+                  logs: getRecentAgentLogs(),
                 });
                 editor.commands.setContent(buildLiveGenerationShell(prompt));
                 focusEditorSoon('start');
@@ -1997,10 +2038,10 @@ function App() {
                   editor.commands.setContent(generated);
                   saveDocumentHistory({ title: prompt, content: generated, templateId, source: 'start-screen' });
                   persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation()), logs: getAgentDebugLogs().slice(-5).reverse() }));
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation()), logs: getRecentAgentLogs() }));
                   setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt, templateId: templateId || 'blank', usedFallback });
                 } catch (error) {
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getAgentDebugLogs().slice(-5).reverse() }));
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getRecentAgentLogs() }));
                   if (editor) editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
                 }
               }}

@@ -1,185 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory } from "./services/aiService";
-
-// ─── Mini Runner Game (בסגנון "אין אינטרנט") ───
-function MiniRunnerGame() {
-  const [score, setScore] = useState(0);
-  const [best, setBest] = useState(0);
-  const [crashed, setCrashed] = useState(false);
-  const [playerY, setPlayerY] = useState(0);
-  const [obstacles, setObstacles] = useState([]);
-  const [started, setStarted] = useState(false);
-
-  const velocityRef = useRef(0);
-  const gravityRef = useRef(-0.65);
-  const jumpRef = useRef(8.8);
-  const lastTsRef = useRef(0);
-  const scoreAccRef = useRef(0);
-  const obstacleTimerRef = useRef(0);
-
-  const jump = () => {
-    if (!started) setStarted(true);
-    if (crashed) {
-      setCrashed(false);
-      setScore(0);
-      setPlayerY(0);
-      setObstacles([]);
-      velocityRef.current = 0;
-      scoreAccRef.current = 0;
-      obstacleTimerRef.current = 0;
-      return;
-    }
-    if (playerY <= 0.5) velocityRef.current = jumpRef.current;
-  };
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.code === 'Space' || e.code === 'ArrowUp') {
-        e.preventDefault();
-        jump();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-
-  useEffect(() => {
-    let rafId = 0;
-
-    const tick = (ts) => {
-      const last = lastTsRef.current || ts;
-      const dt = Math.min(42, ts - last);
-      lastTsRef.current = ts;
-
-      if (started && !crashed) {
-        setPlayerY((prevY) => {
-          const nextVel = velocityRef.current + gravityRef.current * (dt / 16.7);
-          velocityRef.current = nextVel;
-          const nextY = Math.max(0, prevY + nextVel * (dt / 16.7));
-          if (nextY <= 0 && velocityRef.current < 0) velocityRef.current = 0;
-          return nextY;
-        });
-
-        obstacleTimerRef.current += dt;
-        const spawnEvery = 1000 + Math.random() * 500;
-        if (obstacleTimerRef.current >= spawnEvery) {
-          obstacleTimerRef.current = 0;
-          setObstacles((prev) => [...prev, { x: 100, w: 4 + Math.random() * 2, h: 10 + Math.random() * 14 }]);
-        }
-
-        setObstacles((prev) => prev
-          .map((o) => ({ ...o, x: o.x - (1.7 + score / 200) * (dt / 16.7) }))
-          .filter((o) => o.x + o.w > -2));
-
-        scoreAccRef.current += dt * 0.02;
-        const nextScore = Math.floor(scoreAccRef.current);
-        if (nextScore !== score) setScore(nextScore);
-      }
-
-      rafId = window.requestAnimationFrame(tick);
-    };
-
-    rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
-  }, [started, crashed, score]);
-
-  useEffect(() => {
-    if (score > best) setBest(score);
-  }, [score, best]);
-
-  useEffect(() => {
-    if (!started || crashed) return;
-    const playerLeft = 12;
-    const playerRight = 18;
-    const playerBottom = playerY;
-    const playerTop = playerY + 12;
-
-    for (const o of obstacles) {
-      const obstacleLeft = o.x;
-      const obstacleRight = o.x + o.w;
-      const obstacleBottom = 0;
-      const obstacleTop = o.h;
-
-      const overlapX = playerRight > obstacleLeft && playerLeft < obstacleRight;
-      const overlapY = playerTop > obstacleBottom && playerBottom < obstacleTop;
-      if (overlapX && overlapY) {
-        setCrashed(true);
-        break;
-      }
-    }
-  }, [obstacles, playerY, started, crashed]);
-
-  return (
-    <div style={{ margin: '8px 12px', padding: '10px 12px', background: 'rgba(255,255,255,0.06)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.12)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', fontWeight: 700 }}>Runner בזמן המתנה</span>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>Score {score} | Best {best}</span>
-      </div>
-
-      <button
-        type="button"
-        onClick={jump}
-        style={{
-          width: '100%',
-          height: 80,
-          borderRadius: 10,
-          border: '1px solid rgba(255,255,255,0.18)',
-          background: crashed ? 'linear-gradient(180deg, rgba(220,38,38,0.22), rgba(15,23,42,0.2))' : 'linear-gradient(180deg, rgba(15,23,42,0.25), rgba(30,41,59,0.18))',
-          position: 'relative',
-          overflow: 'hidden',
-          cursor: 'pointer',
-          padding: 0,
-        }}
-      >
-        <div style={{ position: 'absolute', left: 0, right: 0, bottom: 12, borderTop: '1px dashed rgba(255,255,255,0.22)' }} />
-
-        <div
-          style={{
-            position: 'absolute',
-            left: '12%',
-            bottom: `${12 + playerY}px`,
-            width: 18,
-            height: 12,
-            borderRadius: 2,
-            background: crashed ? '#f87171' : '#f8fafc',
-            boxShadow: '0 0 0 1px rgba(0,0,0,0.2)',
-          }}
-        />
-
-        {obstacles.map((o, idx) => (
-          <div
-            key={`${idx}-${Math.round(o.x)}`}
-            style={{
-              position: 'absolute',
-              left: `${o.x}%`,
-              bottom: 12,
-              width: `${o.w}%`,
-              height: `${o.h}px`,
-              borderRadius: 2,
-              background: 'rgba(134,239,172,0.9)',
-            }}
-          />
-        ))}
-
-        {!started && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 700 }}>
-            לחץ כדי להתחיל
-          </div>
-        )}
-
-        {crashed && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#fecaca', fontWeight: 700 }}>
-            נפסלת - לחץ לריסט
-          </div>
-        )}
-      </button>
-
-      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 6, textAlign: 'right' }}>
-        קפיצה: Space / ArrowUp / קליק
-      </div>
-    </div>
-  );
-}
+import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
 const CONTEXT_PROMPTS = [
   '🤔 נראה ארוך אה?',
@@ -1015,7 +836,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       )}
 
       {/* Modern Chat Interface */}
-        {loading && <MiniRunnerGame />}
+        {loading && <OneAxisAirHockeyGame title="הוקי בזמן המתנה" compact />}
 
         {/* Modern Chat Interface */}
       {tab === 'chat' && (
@@ -1499,9 +1320,12 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                   e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.1)';
                 }}
                 onBlur={(e) => {
+                  const inputEl = e.currentTarget;
                   setTimeout(() => {
-                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
-                    e.currentTarget.style.boxShadow = 'none';
+                    if (inputEl?.isConnected) {
+                      inputEl.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                      inputEl.style.boxShadow = 'none';
+                    }
                     closeMentionMenu();
                   }, 120);
                 }}

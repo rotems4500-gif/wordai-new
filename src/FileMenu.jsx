@@ -1477,7 +1477,8 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const presets = getWorkspaceAgentPresets();
   const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
   const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
-  const isAutopilotManagerMode = ['manager-auto', 'circular-team'].includes(automation?.workflowMode) && automation?.autopilotEnabled !== false;
+  const isManagerWorkflow = ['manager-auto', 'circular-team'].includes(automation?.workflowMode);
+  const isAutopilotManagerMode = isManagerWorkflow && automation?.autopilotEnabled !== false;
 
   const updateAgent = (index, field, value) => {
     setAgents(prev => prev.map((agent, i) => i === index ? { ...agent, [field]: value } : agent));
@@ -1536,7 +1537,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const removeAgent = (index) => {
     setAgents((prev) => {
       const target = prev[index];
-      if (['manager-auto', 'circular-team'].includes(automation?.workflowMode) && /manager|מנהל/i.test(`${target?.id || ''} ${target?.name || ''}`)) {
+      if (isAutopilotManagerMode && /manager|מנהל/i.test(`${target?.id || ''} ${target?.name || ''}`)) {
         return prev;
       }
       return prev.filter((_, i) => i !== index);
@@ -1684,7 +1685,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           </div>
         </div>
 
-        {['manager-auto', 'circular-team'].includes(automation?.workflowMode) && (
+        {isManagerWorkflow && (
           <div style={{ marginTop: 10, fontSize: 11, color: '#1E3A8A', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '8px 10px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, marginBottom: 4 }}>
               <input
@@ -1823,7 +1824,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {agents.map((agent, index) => {
-          if (['manager-auto', 'circular-team'].includes(automation?.workflowMode) && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
+          if (isAutopilotManagerMode && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
             return null;
           }
           return (
@@ -1840,24 +1841,24 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               />
               <button
                 type="button"
-                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0}
+                disabled={isAutopilotManagerMode || index === 0}
                 onClick={() => moveAgent(index, -1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === 0) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (isAutopilotManagerMode || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (isAutopilotManagerMode || index === 0) ? 'default' : 'pointer' }}
               >
                 ↑
               </button>
               <button
                 type="button"
-                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1}
+                disabled={isAutopilotManagerMode || index === agents.length - 1}
                 onClick={() => moveAgent(index, 1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (['manager-auto', 'circular-team'].includes(automation?.workflowMode) || index === agents.length - 1) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (isAutopilotManagerMode || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (isAutopilotManagerMode || index === agents.length - 1) ? 'default' : 'pointer' }}
               >
                 ↓
               </button>
               <button
                 onClick={() => removeAgent(index)}
-                disabled={['manager-auto', 'circular-team'].includes(automation?.workflowMode)}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? 'default' : 'pointer', opacity: ['manager-auto', 'circular-team'].includes(automation?.workflowMode) ? 0.6 : 1 }}
+                disabled={isAutopilotManagerMode}
+                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: isAutopilotManagerMode ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: isAutopilotManagerMode ? 'default' : 'pointer', opacity: isAutopilotManagerMode ? 0.6 : 1 }}
               >
                 מחק
               </button>
@@ -1925,7 +1926,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         })}
       </div>
 
-      {!['manager-auto', 'circular-team'].includes(automation?.workflowMode) && (
+      {!isAutopilotManagerMode && (
         <button
           onClick={addAgent}
           style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
