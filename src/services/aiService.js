@@ -669,10 +669,40 @@ export const savePersonalStyleProfile = (profile) => {
   syncPersistedAppSettings();
 };
 
-export const getWorkspaceAutomation = () => ({
-  ...DEFAULT_WORKSPACE_AUTOMATION,
-  ...readJsonFromStorage('wordai_workspace_automation', {}),
-});
+export const getWorkspaceAutomation = () => {
+  // קבל את התצורה הבסיסית עם activeWorkspaceId
+  const baseAutomation = {
+    ...DEFAULT_WORKSPACE_AUTOMATION,
+    ...readJsonFromStorage('wordai_workspace_automation', {}),
+  };
+
+  // קבל את ה-activeWorkspaceId
+  const activeWorkspaceId = baseAutomation.activeWorkspaceId || 'default-content-studio';
+  
+  // אם זו סביבת ברירת מחדל, החזר את התצורה הבסיסית
+  if (activeWorkspaceId === 'default-content-studio') {
+    return baseAutomation;
+  }
+  
+  // אחרת, קבל את התצורה מסביבת העבודה הפעילה
+  const library = getWorkspacesLibrary();
+  const activeWorkspace = library[activeWorkspaceId];
+  
+  if (activeWorkspace?.automation) {
+    return {
+      ...DEFAULT_WORKSPACE_AUTOMATION,
+      ...activeWorkspace.automation,
+      activeWorkspaceId: activeWorkspaceId, // וודא שה-ID נשמר
+    };
+  }
+  
+  // אם אין סביבה פעילה או שהיא לא קיימת, חזור לברירת מחדל
+  console.warn(`סביבת עבודה לא נמצאה: ${activeWorkspaceId}, חוזר לברירת מחדל`);
+  return {
+    ...baseAutomation,
+    activeWorkspaceId: 'default-content-studio',
+  };
+};
 
 export const saveWorkspaceAutomation = (config) => {
   localStorage.setItem('wordai_workspace_automation', JSON.stringify({
@@ -683,9 +713,25 @@ export const saveWorkspaceAutomation = (config) => {
 };
 
 export const getWorkspacesLibrary = () => {
-  const stored = readJsonFromStorage('wordai_workspaces_library', null);
-  if (!stored || typeof stored !== 'object') return DEFAULT_WORKSPACES_LIBRARY;
-  return stored;
+  try {
+    const stored = readJsonFromStorage('wordai_workspaces_library', null);
+    if (!stored || typeof stored !== 'object') {
+      console.log('📁 יצירת ספריית סביבות חדשה');
+      return DEFAULT_WORKSPACES_LIBRARY;
+    }
+    
+    // וודא שיש לפחות סביבת ברירת מחדל
+    if (!stored['default-content-studio']) {
+      console.log('🔧 מתקן סביבת ברירת מחדל חסרה');
+      stored['default-content-studio'] = DEFAULT_WORKSPACES_LIBRARY['default-content-studio'];
+      saveWorkspacesLibrary(stored);
+    }
+    
+    return stored;
+  } catch (error) {
+    console.error('❌ שגיאה בטעינת ספריית סביבות:', error);
+    return DEFAULT_WORKSPACES_LIBRARY;
+  }
 };
 
 export const saveWorkspacesLibrary = (library = {}) => {
@@ -741,18 +787,54 @@ export const deleteWorkspace = (workspaceId) => {
 };
 
 export const switchToWorkspace = (workspaceId) => {
+  console.log(`🔄 מחליף לסביבת עבודה: ${workspaceId}`);
+  
   const library = getWorkspacesLibrary();
-  if (!library[workspaceId]) return;
+  if (!library[workspaceId]) {
+    console.error(`❌ סביבת עבודה לא נמצאה: ${workspaceId}`);
+    return false;
+  }
   
   const workspace = library[workspaceId];
-  // תחילה עדכן את activeWorkspaceId ב-automation
-  saveWorkspaceAutomation({
-    ...workspace.automation,
+  console.log(`✅ נמצאה סביבת עבודה:`, workspace.automation?.workspaceName || workspaceId);
+  
+  // עדכן את ה-activeWorkspaceId ברמה הכללית
+  const currentAutomation = readJsonFromStorage('wordai_workspace_automation', {});
+  const updatedAutomation = {
+    ...currentAutomation,
     activeWorkspaceId: workspaceId,
-  });
-  // אחרי זה עדכן את הסוכנים (getRoleAgents יקרא מהסביבה הנכונה)
-  localStorage.setItem('wordai_role_agents', JSON.stringify(workspace.agents));
+  };
+  
+  // שמור את העדכון הכללי
+  localStorage.setItem('wordai_workspace_automation', JSON.stringify(updatedAutomation));
+  
+  // עדכן את הסוכנים של הסביבה החדשה
+  if (workspace.agents && Array.isArray(workspace.agents)) {
+    localStorage.setItem('wordai_role_agents', JSON.stringify(workspace.agents));
+    console.log(`🤖 עודכנו ${workspace.agents.length} סוכנים`);
+  }
+  
+  // סינכרון הגדרות
   syncPersistedAppSettings();
+  
+  // אימות שהמעבר הצליח
+  const verifyAutomation = getWorkspaceAutomation();
+  if (verifyAutomation.activeWorkspaceId === workspaceId) {
+    console.log(`🎉 מעבר הצליח לסביבה: ${verifyAutomation.workspaceName || workspaceId}`);
+    console.log(`📊 מצב זרימת עבודה: ${verifyAutomation.workflowMode}`);
+    
+    // פרסם אירוע עדכון
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('wordai-workspace-changed', { 
+        detail: { workspaceId, workspace: verifyAutomation } 
+      }));
+    }
+    
+    return true;
+  } else {
+    console.error(`❌ המעבר נכשל! צפוי: ${workspaceId}, בפועל: ${verifyAutomation.activeWorkspaceId}`);
+    return false;
+  }
 };
 
 export const updateCurrentWorkspace = (updates = {}) => {
@@ -761,7 +843,10 @@ export const updateCurrentWorkspace = (updates = {}) => {
   const library = getWorkspacesLibrary();
   const workspace = library[workspaceId];
 
-  if (!workspace) return;
+  if (!workspace) {
+    console.error(`❌ לא ניתן לעדכן סביבה לא קיימת: ${workspaceId}`);
+    return false;
+  }
 
   const updatedWorkspace = {
     ...workspace,
@@ -772,6 +857,37 @@ export const updateCurrentWorkspace = (updates = {}) => {
 
   library[workspaceId] = updatedWorkspace;
   saveWorkspacesLibrary(library);
+  
+  console.log(`💾 עודכנה סביבת עבודה: ${workspaceId}`);
+  return true;
+};
+
+// פונקציית עזר לדיבוג - מציגה מידע על הסביבה הפעילה
+export const debugWorkspaceInfo = () => {
+  const automation = getWorkspaceAutomation();
+  const library = getWorkspacesLibrary();
+  const agents = getRoleAgents();
+  
+  console.group('🔍 מידע סביבת עבודה נוכחית');
+  console.log('🏢 סביבה פעילה:', automation.activeWorkspaceId);
+  console.log('📊 מצב זרימת עבודה:', automation.workflowMode);
+  console.log('🏷️ שם סביבה:', automation.workspaceName || 'ללא שם');
+  console.log('🤖 כמות סוכנים:', agents.length);
+  console.log('📁 כמות סביבות זמינות:', Object.keys(library).length);
+  
+  if (agents.length > 0) {
+    console.log('👥 סוכנים פעילים:', agents.map(a => a.name).join(', '));
+  }
+  
+  console.groupEnd();
+  
+  return {
+    automation,
+    library,
+    agents,
+    totalWorkspaces: Object.keys(library).length,
+    totalAgents: agents.length,
+  };
 };
 
 export const getSharedAgentInstructions = () => String(localStorage.getItem('wordai_shared_agent_instructions') || '').trim();
@@ -787,7 +903,9 @@ export const getRoleAgents = () => {
   const library = getWorkspacesLibrary();
   const workspace = library[workspaceId];
 
+  // אם יש סוכנים בסביבה הפעילה - השתמש בהם
   if (workspace && Array.isArray(workspace.agents) && workspace.agents.length) {
+    console.log(`🚀 טוען סוכנים מסביבה: ${workspaceId} (${workspace.agents.length} סוכנים)`);
     return workspace.agents.map((agent, index) => {
       const provider = agent.provider || '';
       return {
@@ -801,9 +919,18 @@ export const getRoleAgents = () => {
     });
   }
 
+  // אחרת - נסה לטעון מ-localStorage הכללי
   const stored = readJsonFromStorage('wordai_role_agents', null);
-  if (stored === null) return DEFAULT_ROLE_AGENTS;
-  if (!Array.isArray(stored)) return DEFAULT_ROLE_AGENTS;
+  if (stored === null) {
+    console.log('⚠️ לא נמצאו סוכנים, טוען סוכנים בסיסיים');
+    return DEFAULT_ROLE_AGENTS;
+  }
+  if (!Array.isArray(stored)) {
+    console.log('⚠️ נתוני סוכנים פגומים, טוען סוכנים בסיסיים');
+    return DEFAULT_ROLE_AGENTS;
+  }
+  
+  console.log(`💾 טוען סוכנים מ-localStorage כללי (${stored.length} סוכנים)`);
   return stored.map((agent, index) => {
     const provider = agent.provider || '';
     return {
@@ -834,8 +961,29 @@ export const saveRoleAgents = (agents) => {
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
   updateCurrentWorkspace({ agents: cleanAgents });
   syncPersistedAppSettings();
+  
+  console.log(`💾 נשמרו ${cleanAgents.length} סוכנים`);
 };
 
+// הצגת כל הסביבות הזמינות
+export const listAllWorkspaces = () => {
+  const library = getWorkspacesLibrary();
+  const automation = getWorkspaceAutomation();
+  
+  console.group('🌍 כל סביבות העבודה הזמינות');
+  
+  Object.entries(library).forEach(([id, workspace]) => {
+    const isActive = automation.activeWorkspaceId === id;
+    const prefix = isActive ? '▶️' : '⚪';
+    console.log(`${prefix} ${id}: ${workspace.automation?.workspaceName || 'ללא שם'} (${workspace.agents?.length || 0} סוכנים)`);
+  });
+  
+  console.groupEnd();
+  
+  return library;
+};
+
+// יצוא הפונקציות החדשות לחלונית
 export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().workflowMode) => {
   const agents = getRoleAgents().filter((agent) => agent.enabled !== false);
   if (workflowMode === 'custom-order') return agents;
@@ -3244,3 +3392,10 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
 
   return { ok: false, model: '', reply: '', triedModels, error: lastError };
 };
+
+// יצוא הפונקציות החדשות לחלונית
+if (typeof window !== 'undefined') {
+  window.debugWorkspaceInfo = debugWorkspaceInfo;
+  window.listAllWorkspaces = listAllWorkspaces;
+  window.switchToWorkspace = switchToWorkspace;
+}

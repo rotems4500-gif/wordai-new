@@ -11,6 +11,40 @@ const CONTEXT_PROMPTS = [
   '🚀 איך ממשיכים מכאן?',
 ];
 
+// Enhanced action categories with better organization and visual identity
+const ACTION_CATEGORIES = {
+  edit: { 
+    title: '✂️ עריכה מדויקת', 
+    subtitle: 'תיקון ושיפור הטקסט הנבחר',
+    gradient: 'linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(220, 38, 127, 0.1) 100%)',
+    borderColor: 'rgba(239, 68, 68, 0.3)'
+  },
+  style: { 
+    title: '🎨 עיצוב סגנון', 
+    subtitle: 'שינוי טון וסגנון הכתיבה',
+    gradient: 'linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%)',
+    borderColor: 'rgba(59, 130, 246, 0.3)'
+  },
+  transform: { 
+    title: '🔄 טרנספורמציה', 
+    subtitle: 'שינוי מבנה ואורך התוכן',
+    gradient: 'linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(16, 185, 129, 0.1) 100%)',
+    borderColor: 'rgba(34, 197, 94, 0.3)'
+  },
+  language: { 
+    title: '🌐 שפה ותרגום', 
+    subtitle: 'תרגום ועיבוד לשוני',
+    gradient: 'linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(168, 85, 247, 0.1) 100%)',
+    borderColor: 'rgba(139, 92, 246, 0.3)'
+  },
+  generate: {
+    title: '✨ יצירה חדשה',
+    subtitle: 'יצירת תוכן חדש מהיסוד',
+    gradient: 'linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(245, 158, 11, 0.1) 100%)',
+    borderColor: 'rgba(251, 146, 60, 0.3)'
+  }
+};
+
 const MODERN_QUICK_ACTIONS = [
   { 
     id: 'fix', 
@@ -18,7 +52,8 @@ const MODERN_QUICK_ACTIONS = [
     label: 'תקן שגיאות', 
     prompt: 'תקן שגיאות כתיב ודקדוק', 
     sel: true,
-    color: 'from-red-400 to-pink-500',
+    color: 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)',
+    hoverColor: 'linear-gradient(135deg, #F87171 0%, #EF4444 100%)',
     category: 'edit'
   },
   { 
@@ -27,7 +62,18 @@ const MODERN_QUICK_ACTIONS = [
     label: 'הפוך לאנושי', 
     prompt: 'שכתב בסגנון אנושי וטבעי', 
     sel: true,
-    color: 'from-blue-400 to-indigo-500',
+    color: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
+    hoverColor: 'linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%)',
+    category: 'style'
+  },
+  { 
+    id: 'formal', 
+    icon: '🎓', 
+    label: 'פורמלי', 
+    prompt: 'שכתב בסגנון פורמלי ומקצועי', 
+    sel: true,
+    color: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)',
+    hoverColor: 'linear-gradient(135deg, #818CF8 0%, #6366F1 100%)',
     category: 'style'
   },
   { 
@@ -36,7 +82,8 @@ const MODERN_QUICK_ACTIONS = [
     label: 'סכם', 
     prompt: 'סכם בנקודות עיקריות קצרות', 
     sel: true,
-    color: 'from-green-400 to-emerald-500',
+    color: 'linear-gradient(135deg, #22C55E 0%, #16A34A 100%)',
+    hoverColor: 'linear-gradient(135deg, #4ADE80 0%, #22C55E 100%)',
     category: 'transform'
   },
   { 
@@ -45,17 +92,9 @@ const MODERN_QUICK_ACTIONS = [
     label: 'הרחב', 
     prompt: 'הרחב עם פרטים ודוגמאות נוספות', 
     sel: true,
-    color: 'from-purple-400 to-violet-500',
+    color: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+    hoverColor: 'linear-gradient(135deg, #34D399 0%, #10B981 100%)',
     category: 'transform'
-  },
-  { 
-    id: 'academic', 
-    icon: '🎓', 
-    label: 'אקדמי', 
-    prompt: 'שכתב בסגנון אקדמי ופורמלי', 
-    sel: true,
-    color: 'from-amber-400 to-orange-500',
-    category: 'style'
   },
   { 
     id: 'translate', 
@@ -63,18 +102,25 @@ const MODERN_QUICK_ACTIONS = [
     label: 'תרגם לאנגלית', 
     prompt: 'תרגם לאנגלית בצורה טבעית', 
     sel: true,
-    color: 'from-teal-400 to-cyan-500',
+    color: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)',
+    hoverColor: 'linear-gradient(135deg, #A78BFA 0%, #8B5CF6 100%)',
     category: 'language'
   },
 ];
 
 const QUICK_PROMPTS = [
-  { text: '🚀 המשך לכתוב את הטקסט הבא', icon: '➡️', category: 'write' },
-  { text: '🎯 כתוב מבוא מתאים למסמך', icon: '🚀', category: 'write' },
-  { text: '🏁 כתוב מסקנה מתאימה למסמך', icon: '🏁', category: 'write' },
-  { text: '📚 הצע מקורות מחקריים רלוונטיים', icon: '📚', category: 'research' },
-  { text: '💡 תן רעיונות להמשך', icon: '💡', category: 'ideas' },
-  { text: '🔍 בדוק עובדות ונתונים', icon: '🔍', category: 'check' },
+  { text: '🚀 המשך לכתוב את הטקסט הבא', icon: '➡️', category: 'generate', 
+    color: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)' },
+  { text: '🎯 כתוב מבוא מתאים למסמך', icon: '🚀', category: 'generate',
+    color: 'linear-gradient(135deg, #FB923C 0%, #EA580C 100%)' },
+  { text: '🏁 כתוב מסקנה מתאימה למסמך', icon: '🏁', category: 'generate',
+    color: 'linear-gradient(135deg, #F97316 0%, #C2410C 100%)' },
+  { text: '📚 הצע מקורות מחקריים רלוונטיים', icon: '📚', category: 'generate',
+    color: 'linear-gradient(135deg, #A855F7 0%, #9333EA 100%)' },
+  { text: '💡 תן רעיונות להמשך', icon: '💡', category: 'generate',
+    color: 'linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%)' },
+  { text: '🔍 בדוק עובדות ונתונים', icon: '🔍', category: 'generate',
+    color: 'linear-gradient(135deg, #06B6D4 0%, #0891B2 100%)' },
 ];
 
 const CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
@@ -603,137 +649,280 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   });
 
   return (
-    <div 
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        position: 'relative',
-        overflow: 'hidden',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-      dir="rtl"
-    >
-      {/* Animated Background */}
+    <>
+      {/* CSS Animations */}
+      <style>{`
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+
+        @keyframes float {
+          0%, 100% {
+            transform: translateY(0px) rotate(0deg);
+          }
+          33% {
+            transform: translateY(-10px) rotate(1deg);
+          }
+          66% {
+            transform: translateY(-5px) rotate(-0.5deg);
+          }
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 0.7;
+            transform: scale(1.05);
+          }
+        }
+
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @keyframes shimmer {
+          0% {
+            transform: translateX(-100%);
+          }
+          50% {
+            transform: translateX(100%);
+          }
+          100% {
+            transform: translateX(100%);
+          }
+        }
+
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes messageSlide {
+          from {
+            opacity: 0;
+            transform: translateX(30px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes glow {
+          0%, 100% {
+            box-shadow: 0 0 5px rgba(139, 92, 246, 0.4);
+          }
+          50% {
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.8);
+          }
+        }
+      `}</style>
+      
       <div 
         style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: `
-            radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
-            radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.2) 0%, transparent 50%)
-          `,
-          animation: 'float 20s ease-in-out infinite',
-          opacity: 0.4,
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          position: 'relative',
+          overflow: 'hidden',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
         }}
-      />
-
-      {/* Minimal Header */}
-      <div style={{
-        background: 'rgba(255, 255, 255, 0.1)',
-        backdropFilter: 'blur(20px)',
-        padding: '8px 12px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-        position: 'relative',
-        zIndex: 10,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{
-            width: 28,
-            height: 28,
-            borderRadius: '50%',
-            background: 'linear-gradient(135deg, #FF6B6B, #4ECDC4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 14,
-            animation: 'pulse 2s ease-in-out infinite',
-          }}>
-            🤖
-          </div>
-          <div>
-            <div style={{ 
-              color: 'white', 
-              fontWeight: 700, 
-              fontSize: 14,
-              textShadow: '0 2px 4px rgba(0,0,0,0.3)'
-            }}>
-              WordFlow AI ✨
-            </div>
-            <div style={{ 
-              color: 'rgba(255,255,255,0.8)', 
-              fontSize: 10, 
-            }}>
-              {getActiveProviderName()}
-            </div>
-          </div>
-        </div>
+        dir="rtl"
+      >
+        {/* Enhanced Animated Background */}
+        <div 
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: `
+              radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.4) 0%, transparent 60%),
+              radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 60%),
+              radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.25) 0%, transparent 60%),
+              radial-gradient(circle at 60% 70%, rgba(168, 85, 247, 0.2) 0%, transparent 50%)
+            `,
+            animation: 'float 25s ease-in-out infinite',
+            opacity: 0.6,
+          }}
+        />
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {mode === 'sidebar' && (
-            <button
+        {/* Floating particles */}
+        {[...Array(6)].map((_, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              width: `${4 + (i % 3) * 2}px`,
+              height: `${4 + (i % 3) * 2}px`,
+              background: `rgba(255, 255, 255, ${0.1 + (i % 4) * 0.05})`,
+              borderRadius: '50%',
+              top: `${10 + (i * 15)}%`,
+              left: `${5 + (i * 12)}%`,
+              animation: `float ${8 + (i % 3) * 2}s ease-in-out ${i * 0.5}s infinite`,
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
+
+        {/* Enhanced Header with Improved Design */}
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.12)',
+          backdropFilter: 'blur(25px)',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
+          position: 'relative',
+          zIndex: 10,
+          boxShadow: '0 4px 15px rgba(0, 0, 0, 0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #FF6B6B, #4ECDC4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              animation: 'pulse 2s ease-in-out infinite',
+              boxShadow: '0 4px 15px rgba(255, 107, 107, 0.3)',
+            }}>
+              🤖
+            </div>
+            <div>
+              <div style={{ 
+                color: 'white', 
+                fontWeight: 800, 
+                fontSize: 16,
+                textShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                background: 'linear-gradient(45deg, #ffffff, #f0f0f0)',
+                WebkitBackgroundClip: 'text',
+                backgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+              }}>
+                WordFlow AI ✨
+              </div>
+              <div style={{ 
+                color: 'rgba(255,255,255,0.85)', 
+                fontSize: 11, 
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}>
+                <div style={{
+                  width: 6,
+                  height: 6,
+                  background: '#22C55E',
+                  borderRadius: '50%',
+                  animation: 'pulse 2s ease-in-out infinite',
+                }} />
+                {getActiveProviderName()}
+              </div>
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {mode === 'sidebar' && (
+              <button
+                style={{
+                  color: 'rgba(255,255,255,0.9)',
+                  background: 'rgba(255,255,255,0.18)',
+                  backdropFilter: 'blur(12px)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 16,
+                  padding: '10px 16px',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+                }}
+                onClick={onToggleCompact}
+                title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.3)';
+                  e.currentTarget.style.transform = 'scale(1.08) translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.15)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.18)';
+                  e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+                }}
+              >
+                {compactMode ? '⤢' : '⤡'}
+              </button>
+            )}
+            <button 
               style={{
                 color: 'rgba(255,255,255,0.9)',
                 background: 'rgba(255,255,255,0.15)',
-                backdropFilter: 'blur(10px)',
+                backdropFilter: 'blur(12px)',
                 border: '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 12,
-                padding: '8px 12px',
+                borderRadius: 16,
+                padding: '10px 14px',
                 cursor: 'pointer',
-                fontSize: 14,
-                transition: 'all 0.3s ease',
+                fontSize: 18,
+                fontWeight: 700,
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
               }}
-              onClick={onToggleCompact}
-              title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
+              onClick={onClose}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.25)';
-                e.currentTarget.style.transform = 'scale(1.05)';
+                e.currentTarget.style.background = 'rgba(255, 68, 68, 0.25)';
+                e.currentTarget.style.borderColor = 'rgba(255, 68, 68, 0.4)';
+                e.currentTarget.style.transform = 'scale(1.1) rotate(90deg)';
+                e.currentTarget.style.boxShadow = '0 8px 20px rgba(255, 68, 68, 0.2)';
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = 'rgba(255,255,255,0.15)';
-                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)';
+                e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
               }}
             >
-              {compactMode ? '⤢' : '⤡'}
+              ×
             </button>
-          )}
-          <button 
-            style={{
-              color: 'rgba(255,255,255,0.8)',
-              background: 'rgba(255,255,255,0.1)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255,255,255,0.15)',
-              borderRadius: 12,
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: 18,
-              transition: 'all 0.3s ease',
-            }}
-            onClick={onClose}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 68, 68, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(255, 68, 68, 0.3)';
-              e.currentTarget.style.transform = 'rotate(90deg)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
-              e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)';
-              e.currentTarget.style.transform = 'rotate(0deg)';
-            }}
-          >
-            ×
-          </button>
+          </div>
         </div>
-      </div>
 
       {/* Modern Navigation Tabs */}
       <div style={{
@@ -1462,12 +1651,11 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         </div>
       )}
 
-      {/* Modern Actions Tab */}
+      {/* Modern Actions Tab with Enhanced Categories */}
       {tab === 'actions' && (
         <div style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '16px',
           background: `
             radial-gradient(circle at 20% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
             radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
@@ -1476,174 +1664,326 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           backdropFilter: 'blur(20px)',
         }}>
           
-          {/* Context Status */}
-          {localContext ? (
-            <div style={{
-              fontSize: 12,
-              color: '#86EFAC',
-              marginBottom: 16,
-              padding: '12px 16px',
-              background: 'rgba(34, 197, 94, 0.15)',
-              border: '1px solid rgba(34, 197, 94, 0.3)',
-              borderRadius: 16,
-              backdropFilter: 'blur(10px)',
-              textAlign: 'center',
-              fontWeight: 600,
-            }}>
-              ✨ הסוכן מחובר להקשר הכתיבה הנוכחי שלך
-            </div>
-          ) : (
-            <div style={{
-              fontSize: 12,
-              color: '#FDE047',
-              marginBottom: 16,
-              padding: '12px 16px',
-              background: 'rgba(234, 179, 8, 0.15)',
-              border: '1px solid rgba(234, 179, 8, 0.3)',
-              borderRadius: 16,
-              backdropFilter: 'blur(10px)',
-              textAlign: 'center',
-              fontWeight: 600,
-            }}>
-              💡 מקם את הסמן בפסקה או בחר טקסט לעזרה מדויקת יותר
-            </div>
-          )}
-
-          {/* Text Editing Actions */}
+          {/* Context Status with Enhanced Design */}
           <div style={{
-            marginBottom: 24,
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            background: 'rgba(255, 255, 255, 0.08)',
+            backdropFilter: 'blur(15px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            padding: '12px 16px',
           }}>
-            <h3 style={{
-              fontSize: 14,
-              fontWeight: 700,
-              color: 'white',
-              marginBottom: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}>
-              ✂️ עריכת הטקסט הנבחר
-            </h3>
-            
-            {selectionActions.length ? (
+            {localContext ? (
               <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                gap: 12,
+                fontSize: 12,
+                color: '#86EFAC',
+                padding: '10px 16px',
+                background: 'rgba(34, 197, 94, 0.15)',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+                borderRadius: 16,
+                backdropFilter: 'blur(10px)',
+                textAlign: 'center',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
               }}>
-                {selectionActions.map((action, index) => (
-                  <button 
-                    key={action.id}
-                    onClick={() => runAction(action)}
-                    style={{
-                      ...modernActionButton(action),
-                      animation: `slideIn 0.3s ease ${index * 0.1}s both`,
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'scale(1.05) translateY(-4px)';
-                      e.currentTarget.style.boxShadow = '0 12px 25px rgba(0, 0, 0, 0.15)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'scale(1) translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.05)';
-                    }}
-                  >
-                    <div style={{
-                      fontSize: 24,
-                      marginBottom: 4,
-                    }}>
-                      {action.icon}
-                    </div>
-                    <span style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      textAlign: 'center',
-                      lineHeight: 1.2,
-                    }}>
-                      {action.label}
-                    </span>
-                  </button>
-                ))}
+                <div style={{
+                  width: 8,
+                  height: 8,
+                  background: '#22C55E',
+                  borderRadius: '50%',
+                  animation: 'pulse 2s ease-in-out infinite',
+                }} />
+                ✨ הסוכן מחובר להקשר הכתיבה הנוכחי שלך
               </div>
             ) : (
               <div style={{
                 fontSize: 12,
-                color: 'rgba(255,255,255,0.6)',
-                padding: '16px',
-                background: 'rgba(255, 255, 255, 0.05)',
-                borderRadius: 12,
-                border: '1px dashed rgba(255, 255, 255, 0.2)',
+                color: '#FDE047',
+                padding: '10px 16px',
+                background: 'rgba(234, 179, 8, 0.15)',
+                border: '1px solid rgba(234, 179, 8, 0.3)',
+                borderRadius: 16,
+                backdropFilter: 'blur(10px)',
                 textAlign: 'center',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
               }}>
-                🔄 אין פעולות עריכה זמינות כרגע
+                <div style={{
+                  width: 8,
+                  height: 8,
+                  background: '#FBBF24',
+                  borderRadius: '50%',
+                  animation: 'pulse 2s ease-in-out infinite',
+                }} />
+                💡 מקם את הסמן בפסקה או בחר טקסט לעזרה מדויקת יותר
               </div>
             )}
           </div>
 
-          {/* Content Generation Actions */}
-          <div>
-            <h3 style={{
-              fontSize: 14,
-              fontWeight: 700,
-              color: 'white',
-              marginBottom: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}>
-              ✨ יצירת תוכן חדש
-            </h3>
-            
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: 12,
-              marginBottom: 16,
-            }}>
-              {QUICK_PROMPTS.map((prompt, index) => (
-                <button 
-                  key={index}
-                  onClick={() => setInput(prompt.text)}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '16px 12px',
-                    border: 'none',
-                    borderRadius: 16,
-                    cursor: 'pointer',
-                    background: 'rgba(255, 255, 255, 0.08)',
+          <div style={{ padding: '16px' }}>
+            {/* Grouped Actions by Category */}
+            {Object.entries(
+              MODERN_QUICK_ACTIONS.reduce((groups, action) => {
+                const category = action.category || 'other';
+                if (!groups[category]) groups[category] = [];
+                groups[category].push(action);
+                return groups;
+              }, {})
+            ).map(([categoryKey, actions], categoryIndex) => {
+              const categoryConfig = ACTION_CATEGORIES[categoryKey];
+              if (!categoryConfig || !actions.length) return null;
+              
+              return (
+                <div key={categoryKey} style={{
+                  marginBottom: 32,
+                  animation: `slideIn 0.6s ease ${categoryIndex * 0.2}s both`,
+                }}>
+                  {/* Category Header */}
+                  <div style={{
+                    marginBottom: 16,
+                    padding: '16px 20px',
+                    background: categoryConfig.gradient,
+                    border: `1px solid ${categoryConfig.borderColor}`,
+                    borderRadius: 20,
                     backdropFilter: 'blur(15px)',
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: 'white',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    animation: `slideIn 0.4s ease ${index * 0.1}s both`,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
-                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
-                    e.currentTarget.style.transform = 'scale(1.05) translateY(-4px)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-                    e.currentTarget.style.transform = 'scale(1) translateY(0)';
-                  }}
-                >
-                  <div style={{ fontSize: 20 }}>
-                    {prompt.icon}
-                  </div>
-                  <span style={{
-                    textAlign: 'center',
-                    lineHeight: 1.3,
+                    position: 'relative',
+                    overflow: 'hidden',
                   }}>
-                    {prompt.text.replace(/🚀|🎯|🏁|📚|💡|🔍/g, '')}
-                  </span>
-                </button>
-              ))}
+                    {/* Animated background pattern */}
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: `
+                        radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 90% 80%, rgba(255, 255, 255, 0.05) 0%, transparent 50%)
+                      `,
+                      animation: 'float 8s ease-in-out infinite',
+                      pointerEvents: 'none',
+                    }} />
+                    
+                    <div style={{
+                      position: 'relative',
+                      zIndex: 2,
+                    }}>
+                      <h3 style={{
+                        fontSize: 16,
+                        fontWeight: 700,
+                        color: 'white',
+                        marginBottom: 4,
+                        textShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                      }}>
+                        {categoryConfig.title}
+                      </h3>
+                      <p style={{
+                        fontSize: 13,
+                        color: 'rgba(255, 255, 255, 0.9)',
+                        margin: 0,
+                        fontWeight: 500,
+                      }}>
+                        {categoryConfig.subtitle}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* Actions Grid */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: 16,
+                  }}>
+                    {actions.map((action, index) => (
+                      <button 
+                        key={action.id}
+                        onClick={() => runAction(action)}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: '20px 16px',
+                          border: 'none',
+                          borderRadius: 20,
+                          cursor: 'pointer',
+                          background: action.color,
+                          backdropFilter: 'blur(15px)',
+                          transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'white',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          animation: `slideIn 0.5s ease ${(categoryIndex * 0.3) + (index * 0.1)}s both`,
+                          position: 'relative',
+                          overflow: 'hidden',
+                          textShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                          boxShadow: '0 8px 25px rgba(0, 0, 0, 0.1)',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'scale(1.05) translateY(-6px) rotateY(5deg)';
+                          e.currentTarget.style.background = action.hoverColor || action.color;
+                          e.currentTarget.style.boxShadow = '0 20px 40px rgba(0, 0, 0, 0.2)';
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'scale(1) translateY(0) rotateY(0deg)';
+                          e.currentTarget.style.background = action.color;
+                          e.currentTarget.style.boxShadow = '0 8px 25px rgba(0, 0, 0, 0.1)';
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                        }}
+                      >
+                        {/* Shimmer effect */}
+                        <div style={{
+                          position: 'absolute',
+                          top: '-50%',
+                          left: '-50%',
+                          width: '200%',
+                          height: '200%',
+                          background: 'linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1), transparent)',
+                          transform: 'translateX(-100%)',
+                          transition: 'transform 0.6s ease',
+                          animation: 'shimmer 3s ease-in-out infinite',
+                          pointerEvents: 'none',
+                        }} />
+                        
+                        <div style={{
+                          fontSize: 28,
+                          marginBottom: 4,
+                          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))',
+                        }}>
+                          {action.icon}
+                        </div>
+                        <span style={{
+                          textAlign: 'center',
+                          lineHeight: 1.3,
+                          fontWeight: 700,
+                          fontSize: 14,
+                        }}>
+                          {action.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Content Generation Section */}
+            <div style={{
+              marginTop: 32,
+              animation: 'slideIn 0.6s ease 1.2s both',
+            }}>
+              <div style={{
+                marginBottom: 16,
+                padding: '16px 20px',
+                background: ACTION_CATEGORIES.generate.gradient,
+                border: `1px solid ${ACTION_CATEGORIES.generate.borderColor}`,
+                borderRadius: 20,
+                backdropFilter: 'blur(15px)',
+                position: 'relative',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: `
+                    radial-gradient(circle at 15% 25%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
+                    radial-gradient(circle at 85% 75%, rgba(255, 255, 255, 0.05) 0%, transparent 50%)
+                  `,
+                  animation: 'float 10s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }} />
+                
+                <div style={{ position: 'relative', zIndex: 2 }}>
+                  <h3 style={{
+                    fontSize: 16,
+                    fontWeight: 700,
+                    color: 'white',
+                    marginBottom: 4,
+                    textShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  }}>
+                    {ACTION_CATEGORIES.generate.title}
+                  </h3>
+                  <p style={{
+                    fontSize: 13,
+                    color: 'rgba(255, 255, 255, 0.9)',
+                    margin: 0,
+                    fontWeight: 500,
+                  }}>
+                    {ACTION_CATEGORIES.generate.subtitle}
+                  </p>
+                </div>
+              </div>
+              
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 16,
+              }}>
+                {QUICK_PROMPTS.map((prompt, index) => (
+                  <button 
+                    key={index}
+                    onClick={() => setInput(prompt.text)}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '20px 16px',
+                      border: 'none',
+                      borderRadius: 20,
+                      cursor: 'pointer',
+                      background: prompt.color,
+                      backdropFilter: 'blur(15px)',
+                      transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: 'white',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      animation: `slideIn 0.5s ease ${1.4 + (index * 0.1)}s both`,
+                      position: 'relative',
+                      overflow: 'hidden',
+                      textShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                      boxShadow: '0 8px 25px rgba(0, 0, 0, 0.1)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'scale(1.05) translateY(-6px)';
+                      e.currentTarget.style.boxShadow = '0 20px 40px rgba(0, 0, 0, 0.2)';
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1) translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 8px 25px rgba(0, 0, 0, 0.1)';
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 24,
+                      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))',
+                    }}>
+                      {prompt.icon}
+                    </div>
+                    <span style={{
+                      textAlign: 'center',
+                      lineHeight: 1.3,
+                      fontWeight: 700,
+                    }}>
+                      {prompt.text.replace(/🚀|🎯|🏁|📚|💡|🔍/g, '')}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
