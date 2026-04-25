@@ -472,8 +472,14 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API ב: platform.openai.com/api-keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-..." value={config.openai?.key}
           onChange={v => update('openai', 'key', v)} hint="מתחיל ב-sk-" />
-        <FieldRow label="מודל" placeholder="gpt-4o" value={config.openai?.model}
-          onChange={v => update('openai', 'model', v)} hint="ברירת מחדל: gpt-4o" />
+        <FieldRow
+          label="מודל"
+          placeholder="gpt-4o"
+          value={config.openai?.model}
+          onChange={v => update('openai', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.openai}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
         <ApiTestButton providerId="openai" providerConfig={{ key: config.openai?.key, model: config.openai?.model }} />
       </ProviderSection>
 
@@ -482,8 +488,14 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API ב: console.anthropic.com/settings/keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-ant-..." value={config.claude?.key}
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
-        <FieldRow label="מודל" placeholder="claude-sonnet-4-6" value={config.claude?.model}
-          onChange={v => update('claude', 'model', v)} />
+        <FieldRow
+          label="מודל"
+          placeholder="claude-sonnet-4-6"
+          value={config.claude?.model}
+          onChange={v => update('claude', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.claude}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
         <ApiTestButton providerId="claude" providerConfig={{ key: config.claude?.key, model: config.claude?.model }} />
       </ProviderSection>
 
@@ -492,8 +504,14 @@ function AiSettings({ config, setConfig }) {
         description="מהיר מאוד ובחינם! קבל מפתח API ב: console.groq.com — לא דורש כרטיס אשראי">
         <FieldRow label="מפתח API" type="password" placeholder="gsk_..." value={config.groq?.key}
           onChange={v => update('groq', 'key', v)} hint="מתחיל ב-gsk_" />
-        <FieldRow label="מודל" placeholder="llama-3.3-70b-versatile" value={config.groq?.model}
-          onChange={v => update('groq', 'model', v)} hint="ברירת מחדל: llama-3.3-70b-versatile" />
+        <FieldRow
+          label="מודל"
+          placeholder="llama-3.3-70b-versatile"
+          value={config.groq?.model}
+          onChange={v => update('groq', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.groq}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
         <ApiTestButton providerId="groq" providerConfig={{ key: config.groq?.key, model: config.groq?.model }} />
       </ProviderSection>
 
@@ -502,8 +520,14 @@ function AiSettings({ config, setConfig }) {
         description="AI עם גישה לאינטרנט בזמן אמת. מפתח ב: perplexity.ai/settings/api">
         <FieldRow label="מפתח API" type="password" placeholder="pplx-..." value={config.perplexity?.key}
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
-        <FieldRow label="מודל" placeholder="sonar-pro" value={config.perplexity?.model}
-          onChange={v => update('perplexity', 'model', v)} hint="sonar-pro = עם גישה לאינטרנט" />
+        <FieldRow
+          label="מודל"
+          placeholder="sonar-pro"
+          value={config.perplexity?.model}
+          onChange={v => update('perplexity', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.perplexity}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
         <ApiTestButton providerId="perplexity" providerConfig={{ key: config.perplexity?.key, model: config.perplexity?.model }} />
       </ProviderSection>
 
@@ -512,8 +536,14 @@ function AiSettings({ config, setConfig }) {
         description="הרץ AI ישירות על המחשב שלך! הורד מ-ollama.com — פרטי, חינמי, ללא אינטרנט">
         <FieldRow label="כתובת שרת" placeholder="http://localhost:11434/v1" value={config.ollama?.baseUrl}
           onChange={v => update('ollama', 'baseUrl', v)} hint="ברירת מחדל כשאולמה רץ על המחשב" />
-        <FieldRow label="שם מודל" placeholder="llama3.2" value={config.ollama?.model}
-          onChange={v => update('ollama', 'model', v)} hint='בדוק מה הורדת: "ollama list" בטרמינל' />
+        <FieldRow
+          label="שם מודל"
+          placeholder="llama3.2"
+          value={config.ollama?.model}
+          onChange={v => update('ollama', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.ollama}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
         <ApiTestButton providerId="ollama" providerConfig={{ baseUrl: config.ollama?.baseUrl, model: config.ollama?.model }} />
       </ProviderSection>
 
