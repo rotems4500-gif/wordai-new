@@ -745,11 +745,14 @@ export const switchToWorkspace = (workspaceId) => {
   if (!library[workspaceId]) return;
   
   const workspace = library[workspaceId];
+  // תחילה עדכן את activeWorkspaceId ב-automation
   saveWorkspaceAutomation({
     ...workspace.automation,
     activeWorkspaceId: workspaceId,
   });
-  saveRoleAgents(workspace.agents);
+  // אחרי זה עדכן את הסוכנים (getRoleAgents יקרא מהסביבה הנכונה)
+  localStorage.setItem('wordai_role_agents', JSON.stringify(workspace.agents));
+  syncPersistedAppSettings();
 };
 
 export const updateCurrentWorkspace = (updates = {}) => {
