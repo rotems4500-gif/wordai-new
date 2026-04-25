@@ -836,7 +836,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       )}
 
       {/* Modern Chat Interface */}
-        {loading && <OneAxisAirHockeyGame title="הוקי בזמן המתנה" compact />}
+        {loading && <OneAxisAirHockeyGame title="הוקי בזמן המתנה" compact startInPopup />}
 
         {/* Modern Chat Interface */}
       {tab === 'chat' && (

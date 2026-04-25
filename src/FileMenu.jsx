@@ -17,6 +17,12 @@ import {
   saveWorkspaceAutomation,
   getWorkspaceAgentPresets,
   buildWorkspaceAgentPreset,
+  getWorkspacesLibrary,
+  saveWorkspacesLibrary,
+  createNewWorkspace,
+  deleteWorkspace,
+  switchToWorkspace,
+  updateCurrentWorkspace,
   getAgentDebugLogs,
   clearAgentDebugLogs,
   getLatestAgentRunSummary,
@@ -41,7 +47,7 @@ const POPULAR_CUSTOM = [
 ];
 
 const PROVIDER_MODEL_OPTIONS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
   openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
   claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
@@ -450,7 +456,15 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API חינמי ב: aistudio.google.com/app/apikey">
         <FieldRow label="מפתח API" type="password" placeholder="AIza..." value={config.gemini?.key}
           onChange={v => update('gemini', 'key', v)} hint="מתחיל ב-AIza" />
-        <ApiTestButton providerId="gemini" providerConfig={{ key: config.gemini?.key }} />
+        <FieldRow
+          label="מודל"
+          placeholder="gemini-2.5-flash"
+          value={config.gemini?.model}
+          onChange={v => update('gemini', 'model', v)}
+          options={PROVIDER_MODEL_OPTIONS.gemini}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
+        <ApiTestButton providerId="gemini" providerConfig={{ key: config.gemini?.key, model: config.gemini?.model }} />
       </ProviderSection>
 
       {/* OpenAI */}
@@ -1473,6 +1487,205 @@ function PersonalStyleSettings({ profile, setProfile }) {
   );
 }
 
+function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
+  const [workspacesLib, setWorkspacesLib] = useState(getWorkspacesLibrary());
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [newWorkspacePreset, setNewWorkspacePreset] = useState('content-studio');
+  const presets = getWorkspaceAgentPresets();
+
+  const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
+  const activeWorkspace = workspacesLib[activeWorkspaceId];
+
+  const handleCreateWorkspace = () => {
+    if (!newWorkspaceName.trim()) return;
+    const newId = createNewWorkspace(newWorkspaceName, newWorkspacePreset);
+    setWorkspacesLib(getWorkspacesLibrary());
+    switchToWorkspace(newId);
+    setAutomation(prev => ({ ...prev, activeWorkspaceId: newId }));
+    setNewWorkspaceName('');
+    setShowNewForm(false);
+    onWorkspaceChange?.();
+  };
+
+  const handleSwitchWorkspace = (workspaceId) => {
+    switchToWorkspace(workspaceId);
+    setAutomation(prev => ({ ...prev, activeWorkspaceId: workspaceId }));
+    onWorkspaceChange?.();
+  };
+
+  const handleDeleteWorkspace = (workspaceId) => {
+    if (workspaceId === 'default-content-studio') return;
+    if (confirm(`האם אתה בטוח שברצונך למחוק את הסביבה "${workspacesLib[workspaceId]?.name}"?`)) {
+      deleteWorkspace(workspaceId);
+      setWorkspacesLib(getWorkspacesLibrary());
+      if (activeWorkspaceId === workspaceId) {
+        handleSwitchWorkspace('default-content-studio');
+      }
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 20, border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#F9FAFB' }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 12 }}>
+        📦 ניהול סביבות עבודה
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 8 }}>סביבה פעילה</div>
+        <select
+          value={activeWorkspaceId}
+          onChange={(e) => handleSwitchWorkspace(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '10px 12px',
+            border: '1px solid #D1D5DB',
+            borderRadius: 8,
+            fontSize: 12,
+            background: 'white',
+            cursor: 'pointer',
+          }}
+        >
+          {Object.entries(workspacesLib).map(([id, ws]) => (
+            <option key={id} value={id}>
+              {ws.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {activeWorkspace && (
+        <div style={{
+          padding: '10px 12px',
+          background: 'white',
+          border: '1px solid #D1D5DB',
+          borderRadius: 8,
+          fontSize: 11,
+          color: '#4B5563',
+          lineHeight: 1.6,
+          marginBottom: 10,
+        }}>
+          <strong>סוכנים בסביבה:</strong>{' '}
+          {activeWorkspace.agents?.map(a => a.name).join(', ') || 'אין סוכנים'}
+          <br />
+          <strong>סדר עבודה:</strong> {activeWorkspace.automation?.workflowMode || 'לא מוגדר'}
+          <br />
+          <strong>עודכנה:</strong> {new Date(activeWorkspace.lastModified).toLocaleDateString('he-IL')}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <button
+          onClick={() => setShowNewForm(!showNewForm)}
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            background: '#10B981',
+            color: 'white',
+            border: 'none',
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          {showNewForm ? '❌ בטל' : '➕ סביבה חדשה'}
+        </button>
+        {activeWorkspaceId !== 'default-content-studio' && (
+          <button
+            onClick={() => handleDeleteWorkspace(activeWorkspaceId)}
+            style={{
+              padding: '10px 12px',
+              background: '#EF4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            🗑️ מחק
+          </button>
+        )}
+      </div>
+
+      {showNewForm && (
+        <div style={{
+          border: '1px solid #DBEAFE',
+          borderRadius: 8,
+          padding: '12px',
+          background: '#F0F9FF',
+          marginBottom: 12,
+        }}>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ display: 'block', fontSize: 11, color: '#1E40AF', fontWeight: 600, marginBottom: 4 }}>
+              שם הסביבה החדשה
+            </label>
+            <input
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              placeholder="למשל: צוות מחקר"
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                border: '1px solid #93C5FD',
+                borderRadius: 6,
+                fontSize: 12,
+              }}
+              onKeyPress={(e) => e.key === 'Enter' && handleCreateWorkspace()}
+            />
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ display: 'block', fontSize: 11, color: '#1E40AF', fontWeight: 600, marginBottom: 4 }}>
+              יוצאת מ-Preset
+            </label>
+            <select
+              value={newWorkspacePreset}
+              onChange={(e) => setNewWorkspacePreset(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                border: '1px solid #93C5FD',
+                borderRadius: 6,
+                fontSize: 12,
+                background: 'white',
+              }}
+            >
+              {Object.entries(presets).map(([id, p]) => (
+                <option key={id} value={id}>{p.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={handleCreateWorkspace}
+            disabled={!newWorkspaceName.trim()}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              background: newWorkspaceName.trim() ? '#3B82F6' : '#D1D5DB',
+              color: 'white',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: newWorkspaceName.trim() ? 'pointer' : 'not-allowed',
+            }}
+          >
+            ✅ צור סביבה
+          </button>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
+        💡 <strong>טיפ:</strong> כל סביבה שומרת את הסוכנים שלה, ההגדרות, והסדר העבודה בנפרד. בחירת סביבה אחרת תטעין את כל ההגדרות שלה באופן מיידי.
+      </div>
+    </div>
+  );
+}
+
 function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, config }) {
   const presets = getWorkspaceAgentPresets();
   const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
@@ -2479,7 +2692,16 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   {settingsTab === 'guide'       && <GuideSettings />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
-                  {settingsTab === 'agents'      && <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />}
+                  {settingsTab === 'agents'      && (
+                    <div>
+                      <WorkspacesManager 
+                        automation={workspaceAutomationState} 
+                        setAutomation={setWorkspaceAutomationState}
+                        onWorkspaceChange={() => setRoleAgents(getRoleAgents())}
+                      />
+                      <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />
+                    </div>
+                  )}
                   {settingsTab === 'updates'     && <UpdateSettings />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}

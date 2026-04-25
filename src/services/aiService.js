@@ -13,7 +13,7 @@ export const DEFAULT_PROVIDER_CONFIG = {
   active: 'gemini',
   activeProviders: ['gemini'],
   multiModelEnabled: false,
-  gemini:     { key: '' },
+  gemini:     { key: '', model: 'gemini-2.5-flash' },
   openai:     { key: '', model: 'gpt-4o' },
   claude:     { key: '', model: 'claude-sonnet-4-6' },
   groq:       { key: '', model: 'llama-3.3-70b-versatile' },
@@ -163,6 +163,32 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   maxRetries: 2,
   requestTimeoutMs: 45,
   showProgress: true,
+  activeWorkspaceId: 'default-content-studio',
+};
+
+export const DEFAULT_WORKSPACES_LIBRARY = {
+  'default-content-studio': {
+    id: 'default-content-studio',
+    name: 'סטודיו תוכן (ברירת מחדל)',
+    automation: {
+      enabled: true,
+      preset: 'content-studio',
+      workflowMode: 'manager-auto',
+      autoDispatch: true,
+      autopilotEnabled: true,
+      workspaceName: 'סטודיו תוכן',
+      circularWorkflowEnabled: false,
+      circularMinRounds: 1,
+      circularMaxRounds: 2,
+      sharedGoal: '',
+      retryEnabled: true,
+      maxRetries: 2,
+      requestTimeoutMs: 45,
+      showProgress: true,
+    },
+    agents: DEFAULT_ROLE_AGENTS,
+    lastModified: new Date().toISOString(),
+  },
 };
 
 export const SKILL_LIBRARY = [
@@ -313,6 +339,7 @@ const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_word_preferences',
   'wordai_personal_style',
   'wordai_workspace_automation',
+  'wordai_workspaces_library',
   'wordai_shared_agent_instructions',
   'wordai_role_agents',
   'wordai_home_instructions',
@@ -655,6 +682,95 @@ export const saveWorkspaceAutomation = (config) => {
   syncPersistedAppSettings();
 };
 
+export const getWorkspacesLibrary = () => {
+  const stored = readJsonFromStorage('wordai_workspaces_library', null);
+  if (!stored || typeof stored !== 'object') return DEFAULT_WORKSPACES_LIBRARY;
+  return stored;
+};
+
+export const saveWorkspacesLibrary = (library = {}) => {
+  const cleaned = {};
+  Object.entries(library).forEach(([key, workspace]) => {
+    if (!workspace || typeof workspace !== 'object') return;
+    cleaned[key] = {
+      id: workspace.id || key,
+      name: String(workspace.name || `סביבה #${Object.keys(cleaned).length + 1}`).trim(),
+      automation: workspace.automation || DEFAULT_WORKSPACE_AUTOMATION,
+      agents: Array.isArray(workspace.agents) ? workspace.agents : DEFAULT_ROLE_AGENTS,
+      lastModified: new Date().toISOString(),
+    };
+  });
+  localStorage.setItem('wordai_workspaces_library', JSON.stringify(cleaned));
+  syncPersistedAppSettings();
+  return cleaned;
+};
+
+export const createNewWorkspace = (name = '', basePresetId = 'content-studio') => {
+  const library = getWorkspacesLibrary();
+  const presets = getWorkspaceAgentPresets();
+  const basePreset = presets[basePresetId] || presets['content-studio'];
+  
+  const newId = `workspace-${Date.now()}`;
+  const newWorkspace = {
+    id: newId,
+    name: String(name || 'סביבה חדשה').trim() || 'סביבה חדשה',
+    automation: {
+      ...DEFAULT_WORKSPACE_AUTOMATION,
+      ...(basePreset?.automation || {}),
+      workspaceName: String(name || 'סביבה חדשה').trim(),
+    },
+    agents: basePreset?.agents || DEFAULT_ROLE_AGENTS,
+    lastModified: new Date().toISOString(),
+  };
+
+  library[newId] = newWorkspace;
+  saveWorkspacesLibrary(library);
+  return newId;
+};
+
+export const deleteWorkspace = (workspaceId) => {
+  if (workspaceId === 'default-content-studio') return;
+  const library = getWorkspacesLibrary();
+  delete library[workspaceId];
+  saveWorkspacesLibrary(library);
+  const automation = getWorkspaceAutomation();
+  if (automation.activeWorkspaceId === workspaceId) {
+    automation.activeWorkspaceId = 'default-content-studio';
+    saveWorkspaceAutomation(automation);
+  }
+};
+
+export const switchToWorkspace = (workspaceId) => {
+  const library = getWorkspacesLibrary();
+  if (!library[workspaceId]) return;
+  
+  const workspace = library[workspaceId];
+  saveWorkspaceAutomation({
+    ...workspace.automation,
+    activeWorkspaceId: workspaceId,
+  });
+  saveRoleAgents(workspace.agents);
+};
+
+export const updateCurrentWorkspace = (updates = {}) => {
+  const automation = getWorkspaceAutomation();
+  const workspaceId = automation.activeWorkspaceId || 'default-content-studio';
+  const library = getWorkspacesLibrary();
+  const workspace = library[workspaceId];
+
+  if (!workspace) return;
+
+  const updatedWorkspace = {
+    ...workspace,
+    ...updates,
+    id: workspace.id,
+    lastModified: new Date().toISOString(),
+  };
+
+  library[workspaceId] = updatedWorkspace;
+  saveWorkspacesLibrary(library);
+};
+
 export const getSharedAgentInstructions = () => String(localStorage.getItem('wordai_shared_agent_instructions') || '').trim();
 
 export const saveSharedAgentInstructions = (value = '') => {
@@ -663,6 +779,25 @@ export const saveSharedAgentInstructions = (value = '') => {
 };
 
 export const getRoleAgents = () => {
+  const automation = getWorkspaceAutomation();
+  const workspaceId = automation.activeWorkspaceId || 'default-content-studio';
+  const library = getWorkspacesLibrary();
+  const workspace = library[workspaceId];
+
+  if (workspace && Array.isArray(workspace.agents) && workspace.agents.length) {
+    return workspace.agents.map((agent, index) => {
+      const provider = agent.provider || '';
+      return {
+        id: agent.id || `custom-${index + 1}`,
+        name: agent.name || `סוכן ${index + 1}`,
+        prompt: agent.prompt || '',
+        provider,
+        model: normalizeProviderModelName(provider, agent.model || ''),
+        enabled: agent.enabled !== false,
+      };
+    });
+  }
+
   const stored = readJsonFromStorage('wordai_role_agents', null);
   if (stored === null) return DEFAULT_ROLE_AGENTS;
   if (!Array.isArray(stored)) return DEFAULT_ROLE_AGENTS;
@@ -694,6 +829,7 @@ export const saveRoleAgents = (agents) => {
     });
 
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
+  updateCurrentWorkspace({ agents: cleanAgents });
   syncPersistedAppSettings();
 };
 
@@ -738,6 +874,53 @@ const WORKSPACE_AGENT_PRESETS = {
       { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי עם מבוא, גוף, דיון וסיכום. הקפד על רצף טיעוני והיררכיית כותרות.', provider: '', model: '', enabled: true },
       { id: 'writer', name: 'כותב אקדמי', prompt: 'כתוב בעברית אקדמית, פורמלית ומדויקת, בהתאם לסגנון המשתמש. הימנע מהמצאות.', provider: '', model: '', enabled: true },
       { id: 'proofreader', name: 'מגיה אקדמי', prompt: 'בצע ליטוש סופי של ניסוח, בהירות, פיסוק ואחידות אקדמית.', provider: '', model: '', enabled: true },
+    ],
+  },
+  'academic-dual-research': {
+    label: 'אקדמי מאומת - Claude מוביל',
+    description: 'קלוד מנהל, Perplexity מחקר אקדמי, Gemini מחקר משלים, כתיבה ובקרה סופית עם הפניות למקורות.',
+    automation: { enabled: true, preset: 'academic-dual-research', workflowMode: 'custom-order', autoDispatch: true, autopilotEnabled: false },
+    agents: [
+      {
+        id: 'manager',
+        name: 'מנהל עבודה - Claude',
+        prompt: 'פעל כמנהל העבודה הראשי. פרק את המטלה לשלבים ברורים לפי ההנחיות, קבע מה בדיוק צריך לאסוף, ומהם הקריטריונים לעבודה מוצלחת לפני כתיבה.',
+        provider: 'claude',
+        model: '',
+        enabled: true,
+      },
+      {
+        id: 'researcher-academic',
+        name: 'אוסף מחקר אקדמי - Perplexity',
+        prompt: 'אסוף חומרים מחקריים ואקדמיים בלבד: מושגי יסוד, כיווני חיפוש, מקורות אמינים, ציטוטים רלוונטיים וקישורים. אל תמציא מקורות. ציין תמיד מאיפה הגיע כל ממצא.',
+        provider: 'perplexity',
+        model: '',
+        enabled: true,
+      },
+      {
+        id: 'researcher-general',
+        name: 'אוסף משלים - Gemini',
+        prompt: 'אסוף מידע משלים שאינו אקדמי גרידא: הקשרים, דוגמאות, ניסוחים, וסיכום תובנות. אל תמציא עובדות או מקורות, וסמן בבירור מה מקור כל טענה.',
+        provider: 'gemini',
+        model: '',
+        enabled: true,
+      },
+      {
+        id: 'writer',
+        name: 'כותב העבודה - Claude',
+        prompt: 'כתוב את העבודה לפי ההנחיות בלבד ועל בסיס החומרים שנאספו בשלבים הקודמים. שלב הפניות ברורות לכל פסקה משמעותית וציין בסוף רשימת מקורות מסודרת לפי מה שנאסף בפועל.',
+        provider: 'claude',
+        model: '',
+        enabled: true,
+      },
+      {
+        id: 'manager-review',
+        name: 'בקרת התאמה - Claude',
+        prompt: 'בצע ביקורת סופית כמנהל עבודה: בדוק שהעבודה עומדת בהנחיות, שהמבנה נכון, שאין טענות לא מבוססות, ושיש הפניות מספקות למקורות. החזר הערות ותיקוני חובה אם צריך.',
+        provider: 'claude',
+        model: '',
+        enabled: true,
+      },
     ],
   },
   'product-desk': {
@@ -812,6 +995,7 @@ const normalizeProviderConfig = (config = {}) => {
     active: safeActive,
   };
   merged.claude.model = normalizeProviderModelName('claude', merged.claude.model || DEFAULT_PROVIDER_CONFIG.claude.model);
+  merged.gemini.model = normalizeProviderModelName('gemini', merged.gemini.model || DEFAULT_PROVIDER_CONFIG.gemini.model);
   merged.perplexity.model = normalizeProviderModelName('perplexity', merged.perplexity.model || DEFAULT_PROVIDER_CONFIG.perplexity.model);
   merged.ollama.model = normalizeProviderModelName('ollama', merged.ollama.model || DEFAULT_PROVIDER_CONFIG.ollama.model);
   merged.custom.model = normalizeProviderModelName('custom', merged.custom.model || '');
@@ -1668,7 +1852,7 @@ const getModelNameForProvider = (provider, cfg, override = '') => {
 
   switch (provider) {
     case 'gemini':
-      return 'gemini-2.5-flash';
+      return normalizeProviderModelName('gemini', cfg.gemini.model || 'gemini-2.5-flash');
     case 'openai':
       return normalizeProviderModelName('openai', cfg.openai.model || 'gpt-4o');
     case 'claude':
@@ -1913,6 +2097,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
   const runId = options.runId || createRunId();
+  const disableFallback = options.disableFallback === true;
   const resolvedModel = getModelNameForProvider(activeProvider, cfg, modelOverride);
   const logEvent = (type, message, extra = {}) => pushAgentDebugLog({
     runId,
@@ -2439,7 +2624,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const key = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
         if (!key) throw new Error('מפתח Gemini לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         const genAI = new GoogleGenerativeAI(key);
-        const mdl = genAI.getGenerativeModel({ model: modelOverride || "gemini-2.5-flash" });
+        const mdl = genAI.getGenerativeModel({ model: modelOverride || cfg.gemini.model || "gemini-2.5-flash" });
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
         return result.response.text();
       }
@@ -2566,63 +2751,66 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   }
 
   // ─── Fallback: שרשרת גיבוי — מנסה ספקים מוגדרים אחרים לפי סדר עדיפות ─────
-  const FALLBACK_PRIORITY = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
-  const fallbackCandidates = FALLBACK_PRIORITY.filter(
-    (pid) => pid !== activeProvider && isProviderConfiguredForUse(pid, cfg)
-  );
+  if (!disableFallback) {
+    const FALLBACK_PRIORITY = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
+    const fallbackCandidates = FALLBACK_PRIORITY.filter(
+      (pid) => pid !== activeProvider && isProviderConfiguredForUse(pid, cfg)
+    );
 
-  for (const fallbackProvider of fallbackCandidates) {
-    try {
-      const fallbackModel = getModelNameForProvider(fallbackProvider, cfg, '');
-      logEvent('provider-fallback', `מנוע ${activeProvider} נכשל, מנסה גיבוי: ${fallbackProvider}`, {
-        state: 'retrying',
-        originalProvider: activeProvider,
-        originalModel: resolvedModel,
-        fallbackProvider,
-        fallbackModel,
-        errorMessage: lastError?.message || '',
-      });
-      emitStatus(onStatus, {
-        state: 'retrying',
-        progress: 50,
-        runId,
-        provider: fallbackProvider,
-        model: fallbackModel,
-        agentLabel,
-        message: `מנוע ${activeProvider} נכשל — עובר לגיבוי: ${fallbackProvider}`,
-      });
+    for (const fallbackProvider of fallbackCandidates) {
+      try {
+        const fallbackModel = getModelNameForProvider(fallbackProvider, cfg, '');
+        logEvent('provider-fallback', `מנוע ${activeProvider} נכשל, מנסה גיבוי: ${fallbackProvider}`, {
+          state: 'retrying',
+          originalProvider: activeProvider,
+          originalModel: resolvedModel,
+          fallbackProvider,
+          fallbackModel,
+          errorMessage: lastError?.message || '',
+        });
+        emitStatus(onStatus, {
+          state: 'retrying',
+          progress: 50,
+          runId,
+          provider: fallbackProvider,
+          model: fallbackModel,
+          agentLabel,
+          message: `מנוע ${activeProvider} נכשל — עובר לגיבוי: ${fallbackProvider}`,
+        });
 
-      const fallbackText = await chatWithActiveProvider(userPrompt, documentContext, extraSystemPrompt, {
-        ...options,
-        providerOverride: fallbackProvider,
-        skipAutomation: true,
-        shouldPersistMemory: false,
-        runId,
-        agentLabel,
-      });
+        const fallbackText = await chatWithActiveProvider(userPrompt, documentContext, extraSystemPrompt, {
+          ...options,
+          providerOverride: fallbackProvider,
+          skipAutomation: true,
+          shouldPersistMemory: false,
+          disableFallback: true,
+          runId,
+          agentLabel,
+        });
 
-      logEvent('provider-fallback-success', `${fallbackProvider} החזיר תשובת גיבוי`, {
-        state: 'success',
-        fallbackProvider,
-        responseChars: String(fallbackText || '').length,
-      });
-      emitStatus(onStatus, {
-        state: 'success',
-        progress: 100,
-        runId,
-        provider: fallbackProvider,
-        model: fallbackModel,
-        agentLabel,
-        message: `הושלם (גיבוי: ${fallbackProvider})`,
-      });
-      return rememberSuccessfulReply(fallbackText);
-    } catch (fallbackError) {
-      logEvent('provider-fallback-error', `גם ${fallbackProvider} נכשל בגיבוי`, {
-        state: 'error',
-        fallbackProvider,
-        errorMessage: fallbackError?.message || '',
-      });
-      // ממשיך לניסיון הבא בשרשרת
+        logEvent('provider-fallback-success', `${fallbackProvider} החזיר תשובת גיבוי`, {
+          state: 'success',
+          fallbackProvider,
+          responseChars: String(fallbackText || '').length,
+        });
+        emitStatus(onStatus, {
+          state: 'success',
+          progress: 100,
+          runId,
+          provider: fallbackProvider,
+          model: fallbackModel,
+          agentLabel,
+          message: `הושלם (גיבוי: ${fallbackProvider})`,
+        });
+        return rememberSuccessfulReply(fallbackText);
+      } catch (fallbackError) {
+        logEvent('provider-fallback-error', `גם ${fallbackProvider} נכשל בגיבוי`, {
+          state: 'error',
+          fallbackProvider,
+          errorMessage: fallbackError?.message || '',
+        });
+        // ממשיך לניסיון הבא בשרשרת
+      }
     }
   }
 

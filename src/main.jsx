@@ -1671,7 +1671,7 @@ function App() {
                   </div>
 
                   {liveGeneration.state === 'running' && (
-                    <OneAxisAirHockeyGame title="הוקי בזמן שהצוות עובד" compact />
+                    <OneAxisAirHockeyGame title="הוקי בזמן שהצוות עובד" compact startInPopup />
                   )}
 
                   <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
