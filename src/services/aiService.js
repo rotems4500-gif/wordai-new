@@ -641,17 +641,50 @@ export const savePersonalStyleProfile = (profile) => {
   syncPersistedAppSettings();
 };
 
-export const getWorkspaceAutomation = () => ({
-  ...DEFAULT_WORKSPACE_AUTOMATION,
-  ...readJsonFromStorage('wordai_workspace_automation', {}),
-});
+export const getWorkspaceAutomation = () => {
+  console.log('📊 getWorkspaceAutomation() - בודק נתוני אוטומציה...');
+  
+  const defaultConfig = DEFAULT_WORKSPACE_AUTOMATION;
+  console.log('📜 Default config:', defaultConfig);
+  
+  const storedConfig = readJsonFromStorage('wordai_workspace_automation', {});
+  console.log('💾 Stored config from localStorage:', storedConfig);
+  
+  const finalConfig = {
+    ...defaultConfig,
+    ...storedConfig,
+  };
+  
+  console.log('⚙️ Final merged config:', {
+    enabled: finalConfig.enabled,
+    workflowMode: finalConfig.workflowMode,
+    autopilotEnabled: finalConfig.autopilotEnabled,
+    workspaceName: finalConfig.workspaceName,
+    preset: finalConfig.preset
+  });
+  
+  return finalConfig;
+};
 
 export const saveWorkspaceAutomation = (config) => {
-  localStorage.setItem('wordai_workspace_automation', JSON.stringify({
+  console.log('💾 saveWorkspaceAutomation() - שומר הגדרות אוטומציה...');
+  console.log('📥 Input config:', config);
+  
+  const finalConfig = {
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...config,
-  }));
+  };
+  
+  console.log('📤 Final config to save:', finalConfig);
+  
+  localStorage.setItem('wordai_workspace_automation', JSON.stringify(finalConfig));
+  
+  // אימות שהנתונים נשמרו
+  const verification = JSON.parse(localStorage.getItem('wordai_workspace_automation') || '{}');
+  console.log('✅ אימות שמירה - automation config בפועל ב-localStorage:', verification);
+  
   syncPersistedAppSettings();
+  console.log('🔄 syncPersistedAppSettings() הושלם');
 };
 
 export const getSharedAgentInstructions = () => String(localStorage.getItem('wordai_shared_agent_instructions') || '').trim();
@@ -662,12 +695,23 @@ export const saveSharedAgentInstructions = (value = '') => {
 };
 
 export const getRoleAgents = () => {
+  console.log('📊 getRoleAgents() - בודק נתוני סוכנים...');
+  
   const stored = readJsonFromStorage('wordai_role_agents', null);
-  if (stored === null) return DEFAULT_ROLE_AGENTS;
-  if (!Array.isArray(stored)) return DEFAULT_ROLE_AGENTS;
-  return stored.map((agent, index) => {
+  console.log('💾 Raw localStorage data:', stored);
+  
+  if (stored === null) {
+    console.log('⚠️ אין נתוני סוכנים, משתמש בברירות מחדל');
+    return DEFAULT_ROLE_AGENTS;
+  }
+  if (!Array.isArray(stored)) {
+    console.log('❌ נתוני סוכנים לא תקינים, משתמש בברירות מחדל');
+    return DEFAULT_ROLE_AGENTS;
+  }
+  
+  const agents = stored.map((agent, index) => {
     const provider = agent.provider || '';
-    return {
+    const processedAgent = {
       id: agent.id || `custom-${index + 1}`,
       name: agent.name || `סוכן ${index + 1}`,
       prompt: agent.prompt || '',
@@ -675,14 +719,27 @@ export const getRoleAgents = () => {
       model: normalizeProviderModelName(provider, agent.model || ''),
       enabled: agent.enabled !== false,
     };
+    console.log(`🤖 Processed agent ${index + 1}:`, {
+      name: processedAgent.name,
+      provider: processedAgent.provider,
+      model: processedAgent.model,
+      enabled: processedAgent.enabled
+    });
+    return processedAgent;
   });
+  
+  console.log(`✅ החזר ${agents.length} סוכנים פעילים`);
+  return agents;
 };
 
 export const saveRoleAgents = (agents) => {
+  console.log('💾 saveRoleAgents() - שומר נתוני סוכנים...');
+  console.log('📥 Input agents:', agents);
+  
   const cleanAgents = (Array.isArray(agents) ? agents : [])
     .map((agent, index) => {
       const provider = String(agent.provider || '').trim();
-      return {
+      const cleanAgent = {
         id: agent.id || `custom-${index + 1}`,
         name: String(agent.name || '').trim(),
         prompt: String(agent.prompt || '').trim(),
@@ -690,15 +747,32 @@ export const saveRoleAgents = (agents) => {
         model: normalizeProviderModelName(provider, String(agent.model || '').trim()),
         enabled: agent.enabled !== false,
       };
+      console.log(`🧹 Cleaned agent ${index + 1}:`, cleanAgent);
+      return cleanAgent;
     });
 
+  console.log('📤 Final agents to save:', cleanAgents);
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
+  
+  // אימות שהנתונים נשמרו
+  const verification = JSON.parse(localStorage.getItem('wordai_role_agents') || '[]');
+  console.log('✅ אימות שמירה - נתונים בפועל ב-localStorage:', verification);
+  
   syncPersistedAppSettings();
+  console.log('🔄 syncPersistedAppSettings() הושלם');
 };
 
 export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().workflowMode) => {
+  console.log('🎯 getOrderedRoleAgents() - מסדר סוכנים לפי workflow...');
+  console.log('🔧 Workflow mode:', workflowMode);
+  
   const agents = getRoleAgents().filter((agent) => agent.enabled !== false);
-  if (workflowMode === 'custom-order') return agents;
+  console.log('👥 Filtered enabled agents:', agents.map(a => ({ name: a.name, enabled: a.enabled, provider: a.provider, model: a.model })));
+  
+  if (workflowMode === 'custom-order') {
+    console.log('🎨 Using custom order - returning agents as-is');
+    return agents;
+  }
 
   const desiredOrders = {
     'manager-auto': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
@@ -709,15 +783,25 @@ export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().wor
   };
 
   const order = desiredOrders[workflowMode];
-  if (!order) return agents;
+  if (!order) {
+    console.log('❌ Unknown workflow mode, returning unsorted agents');
+    return agents;
+  }
+  
+  console.log('📋 Desired order for', workflowMode + ':', order);
 
   const getRank = (agent) => {
     const id = String(agent.id || '').toLowerCase();
     const index = order.findIndex((item) => id.includes(item));
-    return index === -1 ? 999 : index;
+    const rank = index === -1 ? 999 : index;
+    console.log(`🏆 Agent "${agent.name}" (id: ${id}) -> rank: ${rank}`);
+    return rank;
   };
 
-  return [...agents].sort((a, b) => getRank(a) - getRank(b));
+  const sortedAgents = [...agents].sort((a, b) => getRank(a) - getRank(b));
+  console.log('✅ Final sorted agents:', sortedAgents.map(a => ({ name: a.name, provider: a.provider, model: a.model })));
+  
+  return sortedAgents;
 };
 
 const WORKSPACE_AGENT_PRESETS = {
@@ -2633,3 +2717,83 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
 
 // Legacy alias
 export const chatWithAi = chatWithActiveProvider;
+
+// יצוא הפונקציות החדשות לחלונית
+if (typeof window !== 'undefined') {
+  // פונקציית debug מיוחדת לבדיקת מידע מלא
+  window.wordaiDebugInfo = () => {
+    console.clear();
+    console.log('🚀 WordFlow AI - Debug Information Report');
+    console.log('====================================');
+    
+    // בדיקה 1: נתוני אוטומציה
+    console.group('📊 1. Workspace Automation Status');
+    const automation = getWorkspaceAutomation();
+    console.log('Raw automation data:', automation);
+    console.log('Enabled:', automation.enabled);
+    console.log('Workflow Mode:', automation.workflowMode);
+    console.log('Workspace Name:', automation.workspaceName);
+    console.log('Preset:', automation.preset);
+    console.groupEnd();
+    
+    // בדיקה 2: נתוני סוכנים
+    console.group('🤖 2. Role Agents Data');
+    const agents = getRoleAgents();
+    console.log('Raw agents data:', agents);
+    console.log('Total agents:', agents.length);
+    agents.forEach((agent, i) => {
+      console.log(`Agent ${i + 1}:`, {
+        name: agent.name,
+        provider: agent.provider,
+        model: agent.model,
+        enabled: agent.enabled,
+        hasPrompt: !!agent.prompt
+      });
+    });
+    console.groupEnd();
+    
+    // בדיקה 3: סוכנים מסודרים
+    console.group('🎯 3. Ordered Agents for Workflow');
+    const orderedAgents = getOrderedRoleAgents();
+    console.log('Ordered agents:', orderedAgents.map(a => ({
+      name: a.name,
+      provider: a.provider,
+      model: a.model
+    })));
+    console.groupEnd();
+    
+    // בדיקה 4: localStorage raw data
+    console.group('💾 4. Raw localStorage Data');
+    console.log('wordai_workspace_automation:', localStorage.getItem('wordai_workspace_automation'));
+    console.log('wordai_role_agents:', localStorage.getItem('wordai_role_agents'));
+    console.groupEnd();
+    
+    // בדיקה 5: סיכום
+    console.group('✅ 5. Summary');
+    const realDataCheck = {
+      automationDataExists: !!automation.workspaceName,
+      agentsHaveNames: agents.filter(a => a.name && a.name !== 'סוכן 1').length > 0,
+      agentsHaveProviders: agents.filter(a => a.provider).length > 0,
+      agentsHaveModels: agents.filter(a => a.model).length > 0
+    };
+    console.log('Are logs showing real data?', realDataCheck);
+    
+    if (realDataCheck.agentsHaveNames || realDataCheck.agentsHaveProviders) {
+      console.log('✅ הלוגים מציגים נתונים אמיתיים!');
+    } else {
+      console.log('❌ הלוגים מציגים נתונים גנריים/ברירת מחדל');
+    }
+    console.groupEnd();
+    
+    return {
+      automation,
+      agents,
+      orderedAgents,
+      isDataReal: realDataCheck.agentsHaveNames || realDataCheck.agentsHaveProviders
+    };
+  };
+  
+  console.log('🔧 WordFlow AI Debug Functions Available:');
+  console.log('   Type: window.wordaiDebugInfo() - מידע debug מלא');
+  console.log('   Or just run the function above in console!');
+}
