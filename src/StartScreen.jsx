@@ -12,7 +12,7 @@ import {
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview } from './services/aiService';
+import { getOrderedRoleAgents, getWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -173,6 +173,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [instructionFileName, setInstructionFileName] = useState('');
   const [loadedWorkspace, setLoadedWorkspace] = useState(null);
   const [uploadKind, setUploadKind] = useState('general');
+  const [workspacesList, setWorkspacesList] = useState([]);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState('');
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
@@ -205,6 +207,15 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (typeof getWorkspaceAutomation === 'function') {
       const auto = getWorkspaceAutomation();
       if (auto?.enabled) setLoadedWorkspace(auto);
+      setCurrentWorkspaceId(auto?.activeWorkspaceId || 'default-content-studio');
+    }
+    if (typeof getWorkspacesLibrary === 'function') {
+      const library = getWorkspacesLibrary();
+      const workspacesList = Object.values(library).map(ws => ({
+        id: ws.id,
+        name: ws.name
+      }));
+      setWorkspacesList(workspacesList);
     }
   }, []);
 
@@ -264,6 +275,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       return;
     }
     setLoadedWorkspace({ ...automation, agents });
+  };
+
+  const handleWorkspaceChange = async (event) => {
+    const selectedWorkspaceId = event.target.value;
+    if (!selectedWorkspaceId || selectedWorkspaceId === currentWorkspaceId) return;
+    
+    try {
+      await switchToWorkspace(selectedWorkspaceId);
+      setCurrentWorkspaceId(selectedWorkspaceId);
+      
+      // טען את ה-workspace החדש
+      if (typeof getWorkspaceAutomation === 'function' && typeof getOrderedRoleAgents === 'function') {
+        const automation = getWorkspaceAutomation();
+        const agents = getOrderedRoleAgents(automation.workflowMode);
+        if (automation?.enabled) {
+          setLoadedWorkspace({ ...automation, agents });
+        }
+      }
+    } catch (error) {
+      console.error('שגיאה בהחלפת סביבת עבודה:', error);
+      window.alert('שגיאה בהחלפת סביבת העבודה');
+    }
   };
 
   
@@ -456,9 +489,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
                  <div className="text-white/80 font-medium whitespace-nowrap">✨ חומרי עזר והנחיות</div>
                  <div className="flex flex-wrap items-center gap-2 justify-end w-full">
-                   <button onClick={handleLoadWorkspace} className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
-                     טען סביבת עבודה
-                   </button>
+                   <select 
+                     value={currentWorkspaceId} 
+                     onChange={handleWorkspaceChange} 
+                     className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[120px]"
+                   >
+                     <option value="" disabled className="bg-gray-800 text-gray-300">בחר סביבת עבודה</option>
+                     {workspacesList.map(workspace => (
+                       <option key={workspace.id} value={workspace.id} className="bg-gray-800 text-white">
+                         {workspace.name}
+                       </option>
+                     ))}
+                   </select>
                    <button onClick={() => instructionFileInputRef.current?.click()} className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
                      קובץ הנחיות
                    </button>
