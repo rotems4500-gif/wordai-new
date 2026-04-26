@@ -26,13 +26,30 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          npm ci --no-audit --no-fund
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "npm ci failed, retrying with npm install"
+          # Ensure stale artifacts from reused/self-hosted runners do not lock optional native modules.
+          if (Test-Path node_modules) {
+            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+          }
+
+          function Invoke-NpmInstall {
+            npm ci --no-audit --no-fund
+            if ($LASTEXITCODE -eq 0) { return 0 }
+
+            Write-Host "npm ci failed, cleaning transient native module folders and retrying"
+            Remove-Item -Recurse -Force node_modules\.lightningcss-win32-x64-msvc-* -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force node_modules\.rollup-win32-x64-msvc-* -ErrorAction SilentlyContinue
+
             npm install --no-audit --no-fund
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
+            if ($LASTEXITCODE -eq 0) { return 0 }
+
+            Write-Host "npm install failed, last retry with npm ci"
+            npm ci --no-audit --no-fund
+            return $LASTEXITCODE
+          }
+
+          $result = Invoke-NpmInstall
+          if ($result -ne 0) {
+            exit $result
           }
 
       - name: Validate tag matches package version
