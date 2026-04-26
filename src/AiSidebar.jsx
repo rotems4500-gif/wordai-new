@@ -2609,6 +2609,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         </div>
       )}
     </div>
+    </>
   );
 }
 
