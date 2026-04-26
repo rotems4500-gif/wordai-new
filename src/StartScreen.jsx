@@ -203,20 +203,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   };
 
   useEffect(() => {
+    const refreshWorkspaceState = () => {
+      if (typeof getWorkspaceAutomation === 'function') {
+        const auto = getWorkspaceAutomation();
+        if (auto?.enabled) setLoadedWorkspace(auto);
+        setCurrentWorkspaceId(auto?.activeWorkspaceId || 'default-content-studio');
+      }
+      if (typeof getWorkspacesLibrary === 'function') {
+        const library = getWorkspacesLibrary();
+        const nextWorkspacesList = Object.values(library).map((ws) => ({
+          id: ws.id,
+          name: ws.name,
+        }));
+        setWorkspacesList(nextWorkspacesList);
+      }
+    };
+
     if (typeof loadProjectMaterials === 'function') loadProjectMaterials().then(setMaterials).catch(()=>null);
-    if (typeof getWorkspaceAutomation === 'function') {
-      const auto = getWorkspaceAutomation();
-      if (auto?.enabled) setLoadedWorkspace(auto);
-      setCurrentWorkspaceId(auto?.activeWorkspaceId || 'default-content-studio');
-    }
-    if (typeof getWorkspacesLibrary === 'function') {
-      const library = getWorkspacesLibrary();
-      const workspacesList = Object.values(library).map(ws => ({
-        id: ws.id,
-        name: ws.name
-      }));
-      setWorkspacesList(workspacesList);
-    }
+    refreshWorkspaceState();
+
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('wordai-workspace-changed', refreshWorkspaceState);
+    return () => window.removeEventListener('wordai-workspace-changed', refreshWorkspaceState);
   }, []);
 
   const handleUpload = async (event) => {
@@ -282,12 +290,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (!selectedWorkspaceId || selectedWorkspaceId === currentWorkspaceId) return;
     
     try {
-      await switchToWorkspace(selectedWorkspaceId);
-      setCurrentWorkspaceId(selectedWorkspaceId);
+      const switched = await switchToWorkspace(selectedWorkspaceId);
+      if (!switched) {
+        window.alert('לא הצלחתי להחליף סביבת עבודה. בדוק שהסביבה קיימת.');
+        return;
+      }
       
       // טען את ה-workspace החדש
       if (typeof getWorkspaceAutomation === 'function' && typeof getOrderedRoleAgents === 'function') {
         const automation = getWorkspaceAutomation();
+        setCurrentWorkspaceId(automation?.activeWorkspaceId || selectedWorkspaceId);
         const agents = getOrderedRoleAgents(automation.workflowMode);
         if (automation?.enabled) {
           setLoadedWorkspace({ ...automation, agents });

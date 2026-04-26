@@ -669,84 +669,214 @@ export const savePersonalStyleProfile = (profile) => {
   syncPersistedAppSettings();
 };
 
+const DEFAULT_WORKSPACE_ID = 'default-content-studio';
+
+const sanitizeWorkspaceName = (value = '', fallback = 'סביבה חדשה') => {
+  const clean = String(value || '').trim();
+  return clean || String(fallback || 'סביבה חדשה').trim() || 'סביבה חדשה';
+};
+
+const normalizeAgentRecord = (agent = {}, index = 0) => {
+  const provider = String(agent.provider || '').trim();
+  return {
+    id: String(agent.id || `custom-${index + 1}`),
+    name: String(agent.name || `סוכן ${index + 1}`).trim() || `סוכן ${index + 1}`,
+    prompt: String(agent.prompt || '').trim(),
+    provider,
+    model: normalizeProviderModelName(provider, String(agent.model || '').trim()),
+    enabled: agent.enabled !== false,
+  };
+};
+
+const cloneAgentRecords = (agents = []) => {
+  const source = Array.isArray(agents) ? agents : [];
+  return source.map((agent, index) => normalizeAgentRecord(agent, index));
+};
+
+const getFallbackRoleAgents = () => cloneAgentRecords(Array.isArray(DEFAULT_ROLE_AGENTS) ? DEFAULT_ROLE_AGENTS : []);
+
+const normalizeWorkspaceAutomationRecord = (automation = {}, workspaceId = DEFAULT_WORKSPACE_ID, workspaceName = '') => {
+  const merged = {
+    ...DEFAULT_WORKSPACE_AUTOMATION,
+    ...(automation && typeof automation === 'object' ? automation : {}),
+  };
+  merged.activeWorkspaceId = workspaceId;
+  merged.workspaceName = sanitizeWorkspaceName(merged.workspaceName || workspaceName || '', 'סביבת עבודה מותאמת');
+  return merged;
+};
+
+const normalizeWorkspaceRecord = (workspaceId = '', workspace = {}, fallbackName = '') => {
+  const safeId = String(workspace?.id || workspaceId || '').trim() || `workspace-${Date.now()}`;
+  const safeName = sanitizeWorkspaceName(
+    workspace?.name || workspace?.automation?.workspaceName || fallbackName,
+    safeId === DEFAULT_WORKSPACE_ID ? 'סטודיו תוכן (ברירת מחדל)' : 'סביבה חדשה'
+  );
+  const safeAgents = cloneAgentRecords(Array.isArray(workspace?.agents) && workspace.agents.length ? workspace.agents : getFallbackRoleAgents());
+  const safeAutomation = normalizeWorkspaceAutomationRecord(workspace?.automation || {}, safeId, safeName);
+  return {
+    id: safeId,
+    name: safeName,
+    automation: safeAutomation,
+    agents: safeAgents,
+    lastModified: workspace?.lastModified || new Date().toISOString(),
+  };
+};
+
+const persistWorkspacePointer = (partial = {}) => {
+  const current = readJsonFromStorage('wordai_workspace_automation', {});
+  const next = {
+    ...DEFAULT_WORKSPACE_AUTOMATION,
+    ...(current && typeof current === 'object' ? current : {}),
+    ...(partial && typeof partial === 'object' ? partial : {}),
+  };
+  next.activeWorkspaceId = String(next.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  localStorage.setItem('wordai_workspace_automation', JSON.stringify(next));
+  return next;
+};
+
+const emitWorkspaceChangedEvent = (reason = 'workspace-updated', workspaceId = '') => {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent === 'undefined') return;
+  const automation = getWorkspaceAutomation();
+  const activeId = String(workspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const library = getWorkspacesLibrary();
+  window.dispatchEvent(new CustomEvent('wordai-workspace-changed', {
+    detail: {
+      reason,
+      workspaceId: activeId,
+      workspace: library[activeId] || null,
+      automation,
+    },
+  }));
+};
+
 export const getWorkspaceAutomation = () => {
-  // קבל את התצורה הבסיסית עם activeWorkspaceId
   const baseAutomation = {
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...readJsonFromStorage('wordai_workspace_automation', {}),
   };
-
-  // קבל את ה-activeWorkspaceId
-  const activeWorkspaceId = baseAutomation.activeWorkspaceId || 'default-content-studio';
-  
-  // אם זו סביבת ברירת מחדל, החזר את התצורה הבסיסית
-  if (activeWorkspaceId === 'default-content-studio') {
-    return baseAutomation;
-  }
-  
-  // אחרת, קבל את התצורה מסביבת העבודה הפעילה
   const library = getWorkspacesLibrary();
-  const activeWorkspace = library[activeWorkspaceId];
-  
-  if (activeWorkspace?.automation) {
-    return {
-      ...DEFAULT_WORKSPACE_AUTOMATION,
-      ...activeWorkspace.automation,
-      activeWorkspaceId: activeWorkspaceId, // וודא שה-ID נשמר
-    };
+  let activeWorkspaceId = String(baseAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+
+  if (!library[activeWorkspaceId]) {
+    activeWorkspaceId = DEFAULT_WORKSPACE_ID;
+    persistWorkspacePointer({ activeWorkspaceId });
   }
-  
-  // אם אין סביבה פעילה או שהיא לא קיימת, חזור לברירת מחדל
-  console.warn(`סביבת עבודה לא נמצאה: ${activeWorkspaceId}, חוזר לברירת מחדל`);
-  return {
+
+  const activeWorkspace = library[activeWorkspaceId] || normalizeWorkspaceRecord(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {}, 'סטודיו תוכן (ברירת מחדל)');
+  return normalizeWorkspaceAutomationRecord({
     ...baseAutomation,
-    activeWorkspaceId: 'default-content-studio',
-  };
+    ...(activeWorkspace?.automation || {}),
+  }, activeWorkspaceId, activeWorkspace?.name || 'סביבת עבודה מותאמת');
 };
 
 export const saveWorkspaceAutomation = (config) => {
-  localStorage.setItem('wordai_workspace_automation', JSON.stringify({
-    ...DEFAULT_WORKSPACE_AUTOMATION,
-    ...config,
-  }));
+  const currentAutomation = getWorkspaceAutomation();
+  const activeWorkspaceId = String(currentAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const library = getWorkspacesLibrary();
+  const workspace = normalizeWorkspaceRecord(activeWorkspaceId, library[activeWorkspaceId] || {}, currentAutomation.workspaceName || 'סביבת עבודה מותאמת');
+  const nextWorkspaceName = sanitizeWorkspaceName(
+    config?.workspaceName || workspace?.name || workspace?.automation?.workspaceName,
+    workspace?.name || 'סביבת עבודה מותאמת'
+  );
+  const nextAutomation = normalizeWorkspaceAutomationRecord({
+    ...workspace.automation,
+    ...(config && typeof config === 'object' ? config : {}),
+    workspaceName: nextWorkspaceName,
+  }, activeWorkspaceId, nextWorkspaceName);
+
+  library[activeWorkspaceId] = normalizeWorkspaceRecord(activeWorkspaceId, {
+    ...workspace,
+    name: nextWorkspaceName,
+    automation: nextAutomation,
+    agents: workspace.agents,
+    lastModified: new Date().toISOString(),
+  }, nextWorkspaceName);
+
+  saveWorkspacesLibrary(library);
+  persistWorkspacePointer(nextAutomation);
   syncPersistedAppSettings();
+  emitWorkspaceChangedEvent('workspace-automation-saved', activeWorkspaceId);
+  return nextAutomation;
 };
 
 export const getWorkspacesLibrary = () => {
   try {
-    const stored = readJsonFromStorage('wordai_workspaces_library', null);
-    if (!stored || typeof stored !== 'object') {
-      console.log('📁 יצירת ספריית סביבות חדשה');
-      return DEFAULT_WORKSPACES_LIBRARY;
+    const stored = readJsonFromStorage('wordai_workspaces_library', {});
+    const source = (stored && typeof stored === 'object') ? stored : {};
+    const cleaned = {};
+    let needsRepair = !stored || typeof stored !== 'object';
+
+    Object.entries(source).forEach(([key, workspace]) => {
+      if (!workspace || typeof workspace !== 'object') {
+        needsRepair = true;
+        return;
+      }
+      const normalized = normalizeWorkspaceRecord(key, workspace);
+      cleaned[normalized.id] = normalized;
+      if (
+        normalized.id !== key
+        || !Array.isArray(workspace.agents)
+        || !workspace.automation
+        || String(workspace.name || '').trim() !== normalized.name
+      ) {
+        needsRepair = true;
+      }
+    });
+
+    if (!cleaned[DEFAULT_WORKSPACE_ID]) {
+      cleaned[DEFAULT_WORKSPACE_ID] = normalizeWorkspaceRecord(
+        DEFAULT_WORKSPACE_ID,
+        DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
+        'סטודיו תוכן (ברירת מחדל)'
+      );
+      needsRepair = true;
     }
-    
-    // וודא שיש לפחות סביבת ברירת מחדל
-    if (!stored['default-content-studio']) {
-      console.log('🔧 מתקן סביבת ברירת מחדל חסרה');
-      stored['default-content-studio'] = DEFAULT_WORKSPACES_LIBRARY['default-content-studio'];
-      saveWorkspacesLibrary(stored);
+
+    if (needsRepair) {
+      localStorage.setItem('wordai_workspaces_library', JSON.stringify(cleaned));
+      syncPersistedAppSettings();
     }
-    
-    return stored;
+
+    return cleaned;
   } catch (error) {
     console.error('❌ שגיאה בטעינת ספריית סביבות:', error);
-    return DEFAULT_WORKSPACES_LIBRARY;
+    return {
+      [DEFAULT_WORKSPACE_ID]: normalizeWorkspaceRecord(
+        DEFAULT_WORKSPACE_ID,
+        DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
+        'סטודיו תוכן (ברירת מחדל)'
+      ),
+    };
   }
 };
 
 export const saveWorkspacesLibrary = (library = {}) => {
   const cleaned = {};
-  Object.entries(library).forEach(([key, workspace]) => {
+  Object.entries(library || {}).forEach(([key, workspace]) => {
     if (!workspace || typeof workspace !== 'object') return;
-    cleaned[key] = {
-      id: workspace.id || key,
-      name: String(workspace.name || `סביבה #${Object.keys(cleaned).length + 1}`).trim(),
-      automation: workspace.automation || DEFAULT_WORKSPACE_AUTOMATION,
-      agents: Array.isArray(workspace.agents) ? workspace.agents : DEFAULT_ROLE_AGENTS,
+    const normalized = normalizeWorkspaceRecord(key, workspace, `סביבה #${Object.keys(cleaned).length + 1}`);
+    cleaned[normalized.id] = {
+      ...normalized,
       lastModified: new Date().toISOString(),
     };
   });
+
+  if (!cleaned[DEFAULT_WORKSPACE_ID]) {
+    cleaned[DEFAULT_WORKSPACE_ID] = normalizeWorkspaceRecord(
+      DEFAULT_WORKSPACE_ID,
+      DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
+      'סטודיו תוכן (ברירת מחדל)'
+    );
+  }
+
   localStorage.setItem('wordai_workspaces_library', JSON.stringify(cleaned));
+
+  const pointer = readJsonFromStorage('wordai_workspace_automation', {});
+  const activeWorkspaceId = String(pointer.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  if (!cleaned[activeWorkspaceId]) {
+    persistWorkspacePointer({ activeWorkspaceId: DEFAULT_WORKSPACE_ID });
+  }
+
   syncPersistedAppSettings();
   return cleaned;
 };
@@ -755,110 +885,122 @@ export const createNewWorkspace = (name = '', basePresetId = 'content-studio') =
   const library = getWorkspacesLibrary();
   const presets = getWorkspaceAgentPresets();
   const basePreset = presets[basePresetId] || presets['content-studio'];
-  
-  const newId = `workspace-${Date.now()}`;
-  const newWorkspace = {
+  const baseName = sanitizeWorkspaceName(name || basePreset?.label || 'סביבה חדשה', 'סביבה חדשה');
+  const seedId = `workspace-${Date.now()}`;
+  let newId = seedId;
+  while (library[newId]) {
+    newId = `${seedId}-${Math.floor(Math.random() * 1000)}`;
+  }
+
+  const nextWorkspace = normalizeWorkspaceRecord(newId, {
     id: newId,
-    name: String(name || 'סביבה חדשה').trim() || 'סביבה חדשה',
+    name: baseName,
     automation: {
       ...DEFAULT_WORKSPACE_AUTOMATION,
       ...(basePreset?.automation || {}),
-      workspaceName: String(name || 'סביבה חדשה').trim(),
+      workspaceName: baseName,
+      preset: basePresetId || basePreset?.automation?.preset || 'content-studio',
+      activeWorkspaceId: newId,
     },
-    agents: basePreset?.agents || DEFAULT_ROLE_AGENTS,
+    agents: cloneAgentRecords(basePreset?.agents || getFallbackRoleAgents()),
     lastModified: new Date().toISOString(),
-  };
+  }, baseName);
 
-  library[newId] = newWorkspace;
+  library[newId] = nextWorkspace;
   saveWorkspacesLibrary(library);
+  emitWorkspaceChangedEvent('workspace-created', newId);
   return newId;
 };
 
 export const deleteWorkspace = (workspaceId) => {
-  if (workspaceId === 'default-content-studio') return;
+  const targetId = String(workspaceId || '').trim();
+  if (!targetId || targetId === DEFAULT_WORKSPACE_ID) return false;
+
   const library = getWorkspacesLibrary();
-  delete library[workspaceId];
+  if (!library[targetId]) return false;
+
+  delete library[targetId];
   saveWorkspacesLibrary(library);
+
   const automation = getWorkspaceAutomation();
-  if (automation.activeWorkspaceId === workspaceId) {
-    automation.activeWorkspaceId = 'default-content-studio';
-    saveWorkspaceAutomation(automation);
+  if (automation.activeWorkspaceId === targetId) {
+    switchToWorkspace(DEFAULT_WORKSPACE_ID);
+  } else {
+    emitWorkspaceChangedEvent('workspace-deleted', targetId);
   }
+  return true;
 };
 
 export const switchToWorkspace = (workspaceId) => {
-  console.log(`🔄 מחליף לסביבת עבודה: ${workspaceId}`);
-  
+  const targetId = String(workspaceId || '').trim();
+  if (!targetId) return false;
+
   const library = getWorkspacesLibrary();
-  if (!library[workspaceId]) {
-    console.error(`❌ סביבת עבודה לא נמצאה: ${workspaceId}`);
+  if (!library[targetId]) {
+    console.error(`❌ סביבת עבודה לא נמצאה: ${targetId}`);
     return false;
   }
-  
-  const workspace = library[workspaceId];
-  console.log(`✅ נמצאה סביבת עבודה:`, workspace.automation?.workspaceName || workspaceId);
-  
-  // עדכן את ה-activeWorkspaceId ברמה הכללית
-  const currentAutomation = readJsonFromStorage('wordai_workspace_automation', {});
-  const updatedAutomation = {
-    ...currentAutomation,
-    activeWorkspaceId: workspaceId,
-  };
-  
-  // שמור את העדכון הכללי
-  localStorage.setItem('wordai_workspace_automation', JSON.stringify(updatedAutomation));
-  
-  // עדכן את הסוכנים של הסביבה החדשה
-  if (workspace.agents && Array.isArray(workspace.agents)) {
-    localStorage.setItem('wordai_role_agents', JSON.stringify(workspace.agents));
-    console.log(`🤖 עודכנו ${workspace.agents.length} סוכנים`);
-  }
-  
-  // סינכרון הגדרות
+
+  const workspace = normalizeWorkspaceRecord(targetId, library[targetId], library[targetId]?.name || targetId);
+  library[targetId] = workspace;
+  saveWorkspacesLibrary(library);
+
+  const automationSnapshot = normalizeWorkspaceAutomationRecord(workspace.automation || {}, targetId, workspace.name);
+  persistWorkspacePointer(automationSnapshot);
+  localStorage.setItem('wordai_role_agents', JSON.stringify(cloneAgentRecords(workspace.agents || [])));
   syncPersistedAppSettings();
-  
-  // אימות שהמעבר הצליח
+
   const verifyAutomation = getWorkspaceAutomation();
-  if (verifyAutomation.activeWorkspaceId === workspaceId) {
-    console.log(`🎉 מעבר הצליח לסביבה: ${verifyAutomation.workspaceName || workspaceId}`);
-    console.log(`📊 מצב זרימת עבודה: ${verifyAutomation.workflowMode}`);
-    
-    // פרסם אירוע עדכון
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('wordai-workspace-changed', { 
-        detail: { workspaceId, workspace: verifyAutomation } 
-      }));
-    }
-    
+  if (verifyAutomation.activeWorkspaceId === targetId) {
+    emitWorkspaceChangedEvent('workspace-switched', targetId);
     return true;
-  } else {
-    console.error(`❌ המעבר נכשל! צפוי: ${workspaceId}, בפועל: ${verifyAutomation.activeWorkspaceId}`);
-    return false;
   }
+  console.error(`❌ המעבר נכשל! צפוי: ${targetId}, בפועל: ${verifyAutomation.activeWorkspaceId}`);
+  return false;
 };
 
 export const updateCurrentWorkspace = (updates = {}) => {
   const automation = getWorkspaceAutomation();
-  const workspaceId = automation.activeWorkspaceId || 'default-content-studio';
+  const workspaceId = String(automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const library = getWorkspacesLibrary();
-  const workspace = library[workspaceId];
+  const workspace = normalizeWorkspaceRecord(workspaceId, library[workspaceId] || {}, automation.workspaceName || 'סביבת עבודה מותאמת');
 
   if (!workspace) {
     console.error(`❌ לא ניתן לעדכן סביבה לא קיימת: ${workspaceId}`);
     return false;
   }
 
-  const updatedWorkspace = {
+  const nextName = sanitizeWorkspaceName(updates?.name || workspace?.name, workspace?.name || 'סביבה חדשה');
+  const nextAutomation = normalizeWorkspaceAutomationRecord({
+    ...workspace.automation,
+    ...(updates?.automation && typeof updates.automation === 'object' ? updates.automation : {}),
+    ...(updates?.workspaceName ? { workspaceName: updates.workspaceName } : {}),
+  }, workspaceId, nextName);
+  const nextAgents = updates?.agents ? cloneAgentRecords(updates.agents) : cloneAgentRecords(workspace.agents || []);
+
+  const updatedWorkspace = normalizeWorkspaceRecord(workspaceId, {
     ...workspace,
-    ...updates,
-    id: workspace.id,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    name: nextName,
+    automation: nextAutomation,
+    agents: nextAgents,
     lastModified: new Date().toISOString(),
-  };
+  }, nextName);
 
   library[workspaceId] = updatedWorkspace;
   saveWorkspacesLibrary(library);
-  
-  console.log(`💾 עודכנה סביבת עבודה: ${workspaceId}`);
+
+  persistWorkspacePointer({
+    ...nextAutomation,
+    activeWorkspaceId: workspaceId,
+  });
+
+  if (updates?.agents) {
+    localStorage.setItem('wordai_role_agents', JSON.stringify(nextAgents));
+  }
+
+  syncPersistedAppSettings();
+  emitWorkspaceChangedEvent('workspace-updated', workspaceId);
   return true;
 };
 
@@ -899,70 +1041,28 @@ export const saveSharedAgentInstructions = (value = '') => {
 
 export const getRoleAgents = () => {
   const automation = getWorkspaceAutomation();
-  const workspaceId = automation.activeWorkspaceId || 'default-content-studio';
+  const workspaceId = String(automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const library = getWorkspacesLibrary();
   const workspace = library[workspaceId];
 
-  // אם יש סוכנים בסביבה הפעילה - השתמש בהם
   if (workspace && Array.isArray(workspace.agents) && workspace.agents.length) {
-    console.log(`🚀 טוען סוכנים מסביבה: ${workspaceId} (${workspace.agents.length} סוכנים)`);
-    return workspace.agents.map((agent, index) => {
-      const provider = agent.provider || '';
-      return {
-        id: agent.id || `custom-${index + 1}`,
-        name: agent.name || `סוכן ${index + 1}`,
-        prompt: agent.prompt || '',
-        provider,
-        model: normalizeProviderModelName(provider, agent.model || ''),
-        enabled: agent.enabled !== false,
-      };
-    });
+    return cloneAgentRecords(workspace.agents);
   }
 
-  // אחרת - נסה לטעון מ-localStorage הכללי
   const stored = readJsonFromStorage('wordai_role_agents', null);
-  if (stored === null) {
-    console.log('⚠️ לא נמצאו סוכנים, טוען סוכנים בסיסיים');
-    return DEFAULT_ROLE_AGENTS;
+  if (Array.isArray(stored) && stored.length) {
+    return cloneAgentRecords(stored);
   }
-  if (!Array.isArray(stored)) {
-    console.log('⚠️ נתוני סוכנים פגומים, טוען סוכנים בסיסיים');
-    return DEFAULT_ROLE_AGENTS;
-  }
-  
-  console.log(`💾 טוען סוכנים מ-localStorage כללי (${stored.length} סוכנים)`);
-  return stored.map((agent, index) => {
-    const provider = agent.provider || '';
-    return {
-      id: agent.id || `custom-${index + 1}`,
-      name: agent.name || `סוכן ${index + 1}`,
-      prompt: agent.prompt || '',
-      provider,
-      model: normalizeProviderModelName(provider, agent.model || ''),
-      enabled: agent.enabled !== false,
-    };
-  });
+
+  return getFallbackRoleAgents();
 };
 
 export const saveRoleAgents = (agents) => {
-  const cleanAgents = (Array.isArray(agents) ? agents : [])
-    .map((agent, index) => {
-      const provider = String(agent.provider || '').trim();
-      return {
-        id: agent.id || `custom-${index + 1}`,
-        name: String(agent.name || '').trim(),
-        prompt: String(agent.prompt || '').trim(),
-        provider,
-        model: normalizeProviderModelName(provider, String(agent.model || '').trim()),
-        enabled: agent.enabled !== false,
-      };
-    });
+  const cleanAgents = cloneAgentRecords(Array.isArray(agents) ? agents : []);
 
   localStorage.setItem('wordai_role_agents', JSON.stringify(cleanAgents));
   updateCurrentWorkspace({ agents: cleanAgents });
-  syncPersistedAppSettings();
-  
-  console.log(`💾 נשמרו ${cleanAgents.length} סוכנים`);
+  return cleanAgents;
 };
 
 // הצגת כל הסביבות הזמינות
@@ -975,7 +1075,7 @@ export const listAllWorkspaces = () => {
   Object.entries(library).forEach(([id, workspace]) => {
     const isActive = automation.activeWorkspaceId === id;
     const prefix = isActive ? '▶️' : '⚪';
-    console.log(`${prefix} ${id}: ${workspace.automation?.workspaceName || 'ללא שם'} (${workspace.agents?.length || 0} סוכנים)`);
+    console.log(`${prefix} ${id}: ${workspace.name || workspace.automation?.workspaceName || 'ללא שם'} (${workspace.agents?.length || 0} סוכנים)`);
   });
   
   console.groupEnd();
@@ -2021,9 +2121,23 @@ const getModelNameForProvider = (provider, cfg, override = '') => {
   }
 };
 
-export const getAgentDebugLogs = () => {
+export const getAgentDebugLogs = (filters = {}) => {
   const logs = readJsonFromStorage(AGENT_DEBUG_STORAGE_KEY, []);
-  return Array.isArray(logs) ? logs : [];
+  const entries = Array.isArray(logs) ? logs : [];
+  const safeFilters = (filters && typeof filters === 'object') ? filters : {};
+  const workspaceId = String(safeFilters.workspaceId || '').trim();
+  const runId = String(safeFilters.runId || '').trim();
+  const includeUnscoped = safeFilters.includeUnscoped !== false;
+
+  return entries.filter((log) => {
+    if (workspaceId) {
+      const logWorkspaceId = String(log?.activeWorkspaceId || '').trim();
+      if (logWorkspaceId && logWorkspaceId !== workspaceId) return false;
+      if (!logWorkspaceId && !includeUnscoped) return false;
+    }
+    if (runId && String(log?.runId || '').trim() !== runId) return false;
+    return true;
+  });
 };
 
 export const clearAgentDebugLogs = () => {
@@ -2038,12 +2152,17 @@ export const clearAgentDebugLogs = () => {
 export const logAgentDebugEvent = (entry = {}) => pushAgentDebugLog(entry);
 
 export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) => {
-  const logs = getAgentDebugLogs();
-  const orderedAgents = getOrderedRoleAgents(automation?.workflowMode || 'manager-auto');
+  const activeWorkspaceId = String(automation?.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const logs = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true });
+  const latestLog = logs.length ? logs[logs.length - 1] : null;
+  const runWorkflowMode = String(latestLog?.workflowMode || automation?.workflowMode || 'manager-auto');
+  const orderedAgents = getOrderedRoleAgents(runWorkflowMode);
 
   if (!logs.length) {
     return {
       runId: '',
+      workspaceId: activeWorkspaceId,
+      workspaceName: automation?.workspaceName || '',
       criteria: [
         { key: 'model', label: 'המודל מילא את התפקיד שלו', state: 'idle', details: 'אין הרצה עדיין' },
         { key: 'manager', label: 'המנהל שלט בצוות', state: 'idle', details: 'אין הרצה עדיין' },
@@ -2058,9 +2177,11 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
   const lastRunLog = [...logs].reverse().find((log) => log.runId) || logs[logs.length - 1];
   const runId = lastRunLog?.runId || '';
   const runLogs = runId ? logs.filter((log) => log.runId === runId) : logs.slice(-80);
+  const summaryWorkspaceId = String(lastRunLog?.activeWorkspaceId || activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const summaryWorkspaceName = String(lastRunLog?.workspaceName || automation?.workspaceName || '').trim();
   const hasApiAttempt = runLogs.some((log) => ['request-start', 'provider-start', 'attempt-start', 'multi-model-start'].includes(log.type));
   const hasApiSuccess = runLogs.some((log) => ['attempt-success', 'multi-model-success', 'workflow-success'].includes(log.type));
-  const managerRequired = automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(automation?.workflowMode || '') && automation?.autopilotEnabled !== false;
+  const managerRequired = automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(runWorkflowMode) && automation?.autopilotEnabled !== false;
   const managerSuccess = runLogs.some((log) => log.type === 'manager-plan-success');
   const managerFailure = runLogs.some((log) => log.type === 'manager-plan-fallback' || (log.type === 'stage-error' && /מנהל|manager/i.test(`${log.agentLabel || ''} ${log.agentId || ''}`)));
   const lastError = [...runLogs].reverse().find((log) => log.state === 'error')?.errorMessage || '';
@@ -2091,7 +2212,8 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
     const error = stageErrorByAgent.get(agentId);
     return {
       id: agentId,
-      label: success?.agentLabel || error?.agentLabel || started?.agentLabel || agent?.name || agentId,
+      label: success?.agentName || success?.agentLabel || error?.agentName || error?.agentLabel || started?.agentName || started?.agentLabel || agent?.name || agentId,
+      configuredName: success?.agentName || error?.agentName || started?.agentName || agent?.name || '',
       state: success ? 'success' : error ? 'error' : 'idle',
       details: success?.message || error?.errorMessage || started?.message || 'לא הופעל',
       provider: success?.provider || error?.provider || started?.provider || '',
@@ -2101,6 +2223,8 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
 
   return {
     runId,
+    workspaceId: summaryWorkspaceId,
+    workspaceName: summaryWorkspaceName,
     criteria: [
       {
         key: 'model',
@@ -2129,6 +2253,7 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
 
 const pushAgentDebugLog = (entry = {}) => {
   try {
+    const automation = getWorkspaceAutomation();
     const rawMessage = String(entry?.message || '').trim();
     const rawError = String(entry?.errorMessage || '').trim();
     const shouldAttachError = ['error', 'retrying'].includes(String(entry?.state || '')) && rawError;
@@ -2140,6 +2265,10 @@ const pushAgentDebugLog = (entry = {}) => {
       id: createRunId(),
       ts: new Date().toISOString(),
       state: 'info',
+      activeWorkspaceId: String(entry?.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID,
+      workspaceName: String(entry?.workspaceName || automation.workspaceName || '').trim(),
+      workflowMode: String(entry?.workflowMode || automation.workflowMode || '').trim(),
+      agentName: String(entry?.agentName || entry?.agentLabel || '').trim(),
       ...entry,
       message: messageWithError,
     };
@@ -2244,6 +2373,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const automation = getWorkspaceAutomation();
   const onStatus = options.onStatus;
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
+  const agentName = options.agentName || agentLabel;
   const timeoutMs = Math.max(10000, Number(automation.requestTimeoutMs || 45) * 1000);
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
@@ -2254,7 +2384,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     runId,
     type,
     message,
+    activeWorkspaceId: extra.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID,
+    workspaceName: extra.workspaceName || automation.workspaceName || '',
     agentLabel: extra.agentLabel || agentLabel,
+    agentName: extra.agentName || extra.agentLabel || agentName,
     provider: extra.provider || activeProvider,
     model: extra.model || resolvedModel,
     workflowMode: automation.workflowMode,
@@ -2331,6 +2464,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       logEvent('workflow-start', `הופעלה סביבת עבודה${allowCircularWorkflow ? ' מעגלית' : decisionMode === 'manager' ? ' דינמית' : ''} עם ${orderedAgents.length} סוכנים`, {
         state: 'running',
         orderedAgents: orderedAgents.map((agent) => agent.name),
+        orderedAgentIds: orderedAgents.map((agent) => agent.id),
         planSummary: executionPlan?.summary || '',
         circularEnabled: allowCircularWorkflow,
         maxRoundsPerAgent,
@@ -2390,6 +2524,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           state: 'running',
           agentId: stageAgent.id,
           agentLabel: stageLabel,
+          agentName: stageAgent.name || stageLabel,
           provider: stageProvider,
           model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
           stageIndex: processedStages + 1,
@@ -2407,6 +2542,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             skipMultiModel: true,
             shouldPersistMemory: false,
             agentLabel: stageLabel,
+            agentName: stageAgent.name || stageLabel,
             runId,
             onStatus: (payload = {}) => {
               const localProgress = Number(payload.progress ?? 0);
@@ -2431,6 +2567,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               state: 'error',
               agentId: stageAgent.id,
               agentLabel: stageLabel,
+              agentName: stageAgent.name || stageLabel,
               provider: stageProvider,
               model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
               stageIndex: processedStages + 1,
@@ -2474,6 +2611,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
                 state: 'running',
                 agentId: stageAgent.id,
                 agentLabel: stageLabel,
+                agentName: stageAgent.name || stageLabel,
                 roundIndex: runCount + 1,
                 minRoundsPerAgent,
               });
@@ -2488,6 +2626,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               state: 'success',
               agentId: stageAgent.id,
               agentLabel: stageLabel,
+              agentName: stageAgent.name || stageLabel,
               decisionPreview: trimLogText(parsedReply.decision || ''),
             });
           } else if (directives.stop && hasPendingMinRounds) {
@@ -2495,6 +2634,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               state: 'retrying',
               agentId: stageAgent.id,
               agentLabel: stageLabel,
+              agentName: stageAgent.name || stageLabel,
               minRoundsPerAgent,
             });
           } else if (allowDecisionRevisits) {
@@ -2517,6 +2657,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
                 state: 'running',
                 agentId: revisitAgent.id,
                 agentLabel: revisitAgent.name,
+                agentName: revisitAgent.name,
                 requestedBy: stageAgent.id,
                 requestedByLabel: stageLabel,
                 roundIndex: (agentRunCounts[revisitAgent.id] || 0) + 1,
@@ -2531,6 +2672,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             state: 'success',
             agentId: stageAgent.id,
             agentLabel: stageLabel,
+            agentName: stageAgent.name || stageLabel,
             provider: stageProvider,
             model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
             stageIndex: processedStages + 1,
@@ -2549,6 +2691,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             state: 'error',
             agentId: stageAgent.id,
             agentLabel: stageLabel,
+            agentName: stageAgent.name || stageLabel,
             provider: stageProvider,
             model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
             stageIndex: processedStages + 1,
@@ -2589,6 +2732,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             skipMultiModel: true,
             shouldPersistMemory: false,
             agentLabel: managerAgent.name,
+            agentName: managerAgent.name,
             runId,
             onStatus: (payload = {}) => emitStatus(onStatus, {
               ...payload,
@@ -2608,6 +2752,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               state: 'error',
               agentId: managerAgent.id,
               agentLabel: managerAgent.name,
+              agentName: managerAgent.name,
               provider: reviewProvider,
               model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
               outputPreview: trimLogText(managerArtifact || managerReply || ''),
@@ -2625,6 +2770,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       logEvent('workflow-success', 'כל שלבי העבודה הושלמו', {
         state: 'success',
         agentLabel: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,
+        agentName: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,
         outputChars: finalOutput.length,
         outputPreview: trimLogText(finalOutput),
         artifactCount: stageArtifacts.length,
@@ -3014,6 +3160,7 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
     providerOverride,
     modelOverride: agent.model,
     agentLabel: agent.name || 'סוכן תפקידי',
+    agentName: agent.name || 'סוכן תפקידי',
     onStatus: runtimeOptions.onStatus,
     skillId: runtimeOptions.skillId || '',
     autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,

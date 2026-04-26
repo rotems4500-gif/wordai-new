@@ -207,8 +207,8 @@ const findMentionedSkill = (skills = [], token = '') => {
 
 export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {} }) {
   const [tab, setTab] = useState('chat');
-  const workspaceAutomation = getWorkspaceAutomation();
-  const roleAgents = getOrderedRoleAgents(workspaceAutomation.workflowMode);
+  const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
+  const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
   const [messages, setMessages] = useState(() => getSavedMessages());
   const [input, setInput] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
@@ -216,7 +216,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [activeAgentStatus, setActiveAgentStatus] = useState({ agentLabel: '', progress: 0, message: 'מוכן', state: 'idle' });
   const [agentProgressMap, setAgentProgressMap] = useState({});
   const [showLogs, setShowLogs] = useState(false);
-  const [debugLogs, setDebugLogs] = useState(() => getAgentDebugLogs().slice(-60).reverse());
+  const [debugLogs, setDebugLogs] = useState(() => {
+    const initialAutomation = getWorkspaceAutomation();
+    return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse();
+  });
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
@@ -301,6 +304,20 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   }, [messages, loading]);
 
   useEffect(() => {
+    const syncWorkspace = () => {
+      const nextAutomation = getWorkspaceAutomation();
+      setWorkspaceAutomation(nextAutomation);
+      setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
+      setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse());
+    };
+
+    syncWorkspace();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('wordai-workspace-changed', syncWorkspace);
+    return () => window.removeEventListener('wordai-workspace-changed', syncWorkspace);
+  }, []);
+
+  useEffect(() => {
     setAgentProgressMap((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -321,12 +338,12 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   }, [roleAgents]);
 
   useEffect(() => {
-    const syncLogs = () => setDebugLogs(getAgentDebugLogs().slice(-60).reverse());
+    const syncLogs = () => setDebugLogs(getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse());
     syncLogs();
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-agent-logs-updated', syncLogs);
     return () => window.removeEventListener('wordai-agent-logs-updated', syncLogs);
-  }, []);
+  }, [workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (selectedSkillId !== 'none' && (skillsConfig.skills?.[selectedSkillId]?.mode || 'manual') === 'off') {
@@ -392,13 +409,21 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     }
   };
 
+  const getLogAgentTitle = (log = {}) => {
+    const primary = String(log.agentName || log.agentLabel || '').trim() || 'מערכת';
+    const secondary = String(log.agentLabel || '').trim();
+    if (secondary && secondary !== primary) return `${primary} · ${secondary}`;
+    return primary;
+  };
+
   const copyLogsToClipboard = async () => {
     try {
-      const text = getAgentDebugLogs().map((log) => {
+      const text = getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: true }).map((log) => {
         const parts = [
           formatLogTime(log.ts),
-          log.agentLabel || 'מערכת',
+          getLogAgentTitle(log),
           log.message || '',
+          log.workspaceName ? `סביבה: ${log.workspaceName}` : '',
           log.provider ? `מנוע: ${log.provider}` : '',
           log.model ? `מודל: ${log.model}` : '',
           log.attempt ? `ניסיון: ${log.attempt}` : '',
@@ -2338,9 +2363,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                         marginBottom: 6,
                         fontSize: 11,
                       }}>
-                        <span style={{ fontWeight: 700, color: 'white' }}>
-                          {log.agentLabel || 'מערכת'}
-                        </span>
+                        <span style={{ fontWeight: 700, color: 'white' }}>{getLogAgentTitle(log)}</span>
                         <span style={{ color: 'rgba(255,255,255,0.6)' }}>
                           {formatLogTime(log.ts)}
                         </span>
@@ -2352,6 +2375,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                         {[
                           log.provider ? `מנוע: ${log.provider}` : '',
                           log.model ? `מודל: ${log.model}` : '',
+                          log.workspaceName ? `סביבה: ${log.workspaceName}` : '',
                           log.attempt ? `ניסיון ${log.attempt}` : '',
                           log.errorMessage ? `שגיאה: ${log.errorMessage}` : '',
                           log.runId ? `הרצה ${String(log.runId).slice(0, 8)}` : '',
@@ -2527,7 +2551,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                         color: '#0f172a',
                         fontSize: '13px',
                       }}>
-                        {log.agentLabel || '⚙️ מערכת'}
+                        {getLogAgentTitle(log)}
                       </div>
                       <div style={{ 
                         fontSize: '10px',
@@ -2586,6 +2610,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                   }}>
                     {log.provider && <span>🔌 <strong>{log.provider}</strong></span>}
                     {log.model && <span>🤖 <strong>{log.model}</strong></span>}
+                    {log.workspaceName && <span>🏢 {log.workspaceName}</span>}
                     {log.attempt && <span>🔄 ניסיון <strong>{log.attempt}</strong></span>}
                     {log.errorMessage && <span>⚠️ {log.errorMessage}</span>}
                     {log.runId && <span>📌 {String(log.runId).slice(0, 8)}</span>}

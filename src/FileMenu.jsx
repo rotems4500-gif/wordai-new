@@ -1527,26 +1527,43 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
   const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
   const activeWorkspace = workspacesLib[activeWorkspaceId];
 
+  useEffect(() => {
+    const syncLibrary = () => {
+      const nextAutomation = getWorkspaceAutomation();
+      setWorkspacesLib(getWorkspacesLibrary());
+      setAutomation((prev) => (JSON.stringify(prev) === JSON.stringify(nextAutomation) ? prev : nextAutomation));
+      onWorkspaceChange?.();
+    };
+
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('wordai-workspace-changed', syncLibrary);
+    return () => window.removeEventListener('wordai-workspace-changed', syncLibrary);
+  }, [setAutomation, onWorkspaceChange]);
+
   const handleCreateWorkspace = () => {
-    if (!newWorkspaceName.trim()) return;
-    const newId = createNewWorkspace(newWorkspaceName, newWorkspacePreset);
+    const fallbackName = presets[newWorkspacePreset]?.label ? `${presets[newWorkspacePreset].label} חדש` : 'סביבה חדשה';
+    const nextName = String(newWorkspaceName || '').trim() || fallbackName;
+    const newId = createNewWorkspace(nextName, newWorkspacePreset);
     setWorkspacesLib(getWorkspacesLibrary());
-    switchToWorkspace(newId);
-    setAutomation(prev => ({ ...prev, activeWorkspaceId: newId }));
+    const switched = switchToWorkspace(newId);
+    if (switched) {
+      setAutomation(getWorkspaceAutomation());
+    }
     setNewWorkspaceName('');
     setShowNewForm(false);
     onWorkspaceChange?.();
   };
 
   const handleSwitchWorkspace = (workspaceId) => {
-    switchToWorkspace(workspaceId);
-    setAutomation(prev => ({ ...prev, activeWorkspaceId: workspaceId }));
+    const switched = switchToWorkspace(workspaceId);
+    if (!switched) return;
+    setAutomation(getWorkspaceAutomation());
     onWorkspaceChange?.();
   };
 
   const handleDeleteWorkspace = (workspaceId) => {
     if (workspaceId === 'default-content-studio') return;
-    if (confirm(`האם אתה בטוח שברצונך למחוק את הסביבה "${workspacesLib[workspaceId]?.name}"?`)) {
+    if (window.confirm(`האם אתה בטוח שברצונך למחוק את הסביבה "${workspacesLib[workspaceId]?.name}"?`)) {
       deleteWorkspace(workspaceId);
       setWorkspacesLib(getWorkspacesLibrary());
       if (activeWorkspaceId === workspaceId) {
@@ -1665,6 +1682,9 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
               }}
               onKeyPress={(e) => e.key === 'Enter' && handleCreateWorkspace()}
             />
+            <div style={{ marginTop: 6, fontSize: 10, color: '#475569' }}>
+              שם בפועל: <strong>{String(newWorkspaceName || '').trim() || `${presets[newWorkspacePreset]?.label || 'סביבה חדשה'} חדש`}</strong>
+            </div>
           </div>
 
           <div style={{ marginBottom: 10 }}>
@@ -1687,21 +1707,23 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
                 <option key={id} value={id}>{p.label}</option>
               ))}
             </select>
+            <div style={{ marginTop: 6, fontSize: 10, color: '#475569', lineHeight: 1.6 }}>
+              {presets[newWorkspacePreset]?.description || 'Preset מותאם כברירת מחדל.'}
+            </div>
           </div>
 
           <button
             onClick={handleCreateWorkspace}
-            disabled={!newWorkspaceName.trim()}
             style={{
               width: '100%',
               padding: '10px 12px',
-              background: newWorkspaceName.trim() ? '#3B82F6' : '#D1D5DB',
+              background: '#3B82F6',
               color: 'white',
               border: 'none',
               borderRadius: 6,
               fontSize: 12,
               fontWeight: 600,
-              cursor: newWorkspaceName.trim() ? 'pointer' : 'not-allowed',
+              cursor: 'pointer',
             }}
           >
             ✅ צור סביבה
@@ -2303,20 +2325,32 @@ function UpdateSettings() {
 }
 
 function DebugConsoleSettings({ automation }) {
-  const [logs, setLogs] = useState(() => getAgentDebugLogs().slice(-120).reverse());
+  const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
+  const [logs, setLogs] = useState(() => getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).slice(-120).reverse());
   const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
+
+  const getAgentTitle = (log = {}) => {
+    const primary = String(log.agentName || log.agentLabel || '').trim() || 'מערכת';
+    const secondary = String(log.agentLabel || '').trim();
+    if (secondary && secondary !== primary) return `${primary} · ${secondary}`;
+    return primary;
+  };
 
   useEffect(() => {
     const sync = () => {
-      setLogs(getAgentDebugLogs().slice(-120).reverse());
+      setLogs(getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).slice(-120).reverse());
       setSummary(getLatestAgentRunSummary(automation));
     };
 
     sync();
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-agent-logs-updated', sync);
-    return () => window.removeEventListener('wordai-agent-logs-updated', sync);
-  }, [automation]);
+    window.addEventListener('wordai-workspace-changed', sync);
+    return () => {
+      window.removeEventListener('wordai-agent-logs-updated', sync);
+      window.removeEventListener('wordai-workspace-changed', sync);
+    };
+  }, [automation, activeWorkspaceId]);
 
   const getStatusMeta = (state) => {
     if (state === 'success') return { icon: '✓', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' };
@@ -2335,10 +2369,11 @@ function DebugConsoleSettings({ automation }) {
 
   const copyLogs = async () => {
     try {
-      const text = getAgentDebugLogs().map((log) => {
+      const text = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).map((log) => {
         const parts = [
           formatTime(log.ts),
-          log.agentLabel || 'מערכת',
+          getAgentTitle(log),
+          log.workspaceName ? `סביבה: ${log.workspaceName}` : '',
           log.message || '',
           log.provider ? `מנוע: ${log.provider}` : '',
           log.model ? `מודל: ${log.model}` : '',
@@ -2361,6 +2396,10 @@ function DebugConsoleSettings({ automation }) {
       <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 14, lineHeight: 1.7 }}>
         כאן אפשר לראות בדיוק מה קרה בהרצה האחרונה: האם הופעל API, האם AUTOPILOT ניהל את הצוות, ואילו שלבים הושלמו או נכשלו.
       </p>
+
+      <div style={{ marginBottom: 14, border: '1px solid #E2E8F0', background: '#F8FAFC', borderRadius: 10, padding: '8px 10px', fontSize: 11, color: '#334155' }}>
+        סביבת עבודה פעילה בלוגים: <strong>{summary?.workspaceName || automation?.workspaceName || 'ללא שם'}</strong> ({summary?.workspaceId || activeWorkspaceId})
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, marginBottom: 14 }}>
         {(summary?.criteria || []).map((item) => {
@@ -2386,6 +2425,9 @@ function DebugConsoleSettings({ automation }) {
               <div key={stage.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, border: `1px solid ${meta.border}`, borderRadius: 10, padding: '8px 10px', background: meta.bg }}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937' }}>{stage.label}</div>
+                  {stage.configuredName && stage.configuredName !== stage.label && (
+                    <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>שם מוגדר: {stage.configuredName}</div>
+                  )}
                   <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>{stage.details || 'לא הופעל'}</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2418,7 +2460,7 @@ function DebugConsoleSettings({ automation }) {
             return (
               <div key={log.id} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: '8px 10px', background: 'rgba(255,255,255,0.04)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#E2E8F0' }}>{log.agentLabel || 'מערכת'}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#E2E8F0' }}>{getAgentTitle(log)}</span>
                   <span style={{ fontSize: 10, color: '#94A3B8' }}>{formatTime(log.ts)}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -2426,7 +2468,7 @@ function DebugConsoleSettings({ automation }) {
                   <span style={{ fontSize: 11, color: '#F8FAFC', lineHeight: 1.5 }}>{log.message || 'ללא הודעה'}</span>
                 </div>
                 <div style={{ fontSize: 10, color: '#94A3B8' }}>
-                  {[log.provider, log.model, log.errorMessage].filter(Boolean).join(' • ')}
+                  {[log.workspaceName ? `סביבה: ${log.workspaceName}` : '', log.provider, log.model, log.errorMessage].filter(Boolean).join(' • ')}
                 </div>
               </div>
             );
@@ -2491,6 +2533,19 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
       setSettingsTab(initialSettingsTab);
     }
   }, [initialSettingsTab]);
+
+  useEffect(() => {
+    const syncWorkspaceState = () => {
+      const nextAutomation = getWorkspaceAutomation();
+      const nextAgents = getRoleAgents();
+      setWorkspaceAutomationState((prev) => (JSON.stringify(prev) === JSON.stringify(nextAutomation) ? prev : nextAutomation));
+      setRoleAgents((prev) => (JSON.stringify(prev) === JSON.stringify(nextAgents) ? prev : nextAgents));
+    };
+
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('wordai-workspace-changed', syncWorkspaceState);
+    return () => window.removeEventListener('wordai-workspace-changed', syncWorkspaceState);
+  }, []);
 
   useEffect(() => {
     const syncProfile = () => {
@@ -2727,7 +2782,10 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       <WorkspacesManager 
                         automation={workspaceAutomationState} 
                         setAutomation={setWorkspaceAutomationState}
-                        onWorkspaceChange={() => setRoleAgents(getRoleAgents())}
+                        onWorkspaceChange={() => {
+                          const nextAgents = getRoleAgents();
+                          setRoleAgents((prev) => (JSON.stringify(prev) === JSON.stringify(nextAgents) ? prev : nextAgents));
+                        }}
                       />
                       <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />
                     </div>

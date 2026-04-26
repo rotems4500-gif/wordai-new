@@ -92,7 +92,10 @@ const isLegacyHomeEnabled = () => {
   }
 };
 
-const getRecentAgentLogs = (limit = 18) => getAgentDebugLogs().slice(-limit).reverse();
+const getRecentAgentLogs = (limit = 18) => {
+  const automation = getWorkspaceAutomation();
+  return getAgentDebugLogs({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', includeUnscoped: true }).slice(-limit).reverse();
+};
 
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
