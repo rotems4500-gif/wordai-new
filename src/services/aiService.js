@@ -2101,7 +2101,25 @@ const buildAppMemoryInstructions = (memory = getAppMemory()) => {
 };
 
 const getModelNameForProvider = (provider, cfg, override = '') => {
-  if (override) return normalizeProviderModelName(provider, override);
+  const normalizedOverride = normalizeProviderModelName(provider, override);
+  const isClearlyCrossProviderOverride = (() => {
+    if (!normalizedOverride) return false;
+    if (provider === 'custom' || provider === 'ollama') return false;
+
+    const value = String(normalizedOverride).toLowerCase();
+    const foreignFamiliesByProvider = {
+      gemini: /^(claude|gpt|o\d+|sonar|pplx)/,
+      claude: /^(gemini|learnlm|gpt|o\d+|sonar|pplx)/,
+      openai: /^(claude|gemini|learnlm|sonar|pplx)/,
+      perplexity: /^(claude|gemini|learnlm|gpt|o\d+)/,
+      groq: /^(claude|gemini|learnlm|sonar|pplx)/,
+    };
+
+    const matcher = foreignFamiliesByProvider[provider];
+    return Boolean(matcher && matcher.test(value));
+  })();
+
+  if (normalizedOverride && !isClearlyCrossProviderOverride) return normalizedOverride;
 
   switch (provider) {
     case 'gemini':
@@ -2933,31 +2951,31 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const key = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
         if (!key) throw new Error('מפתח Gemini לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         const genAI = new GoogleGenerativeAI(key);
-        const mdl = genAI.getGenerativeModel({ model: modelOverride || cfg.gemini.model || "gemini-2.5-flash" });
+        const mdl = genAI.getGenerativeModel({ model: resolvedModel });
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
         return result.response.text();
       }
       case 'openai': {
         if (!cfg.openai.key) throw new Error('מפתח OpenAI לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, modelOverride || cfg.openai.model || 'gpt-4o', [
+        return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
         ], signal);
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, normalizeProviderModelName('claude', modelOverride || cfg.claude.model || 'claude-sonnet-4-6'), sysPrompt, cleanUserPrompt, signal);
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal);
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, modelOverride || cfg.groq.model || 'llama-3.3-70b-versatile', [
+        return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
         ], signal);
       }
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
-        const ollamaModel = modelOverride || cfg.ollama.model || 'llama3.2';
+        const ollamaModel = resolvedModel;
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
@@ -2965,7 +2983,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, normalizeProviderModelName('perplexity', modelOverride || cfg.perplexity.model || 'sonar-pro'), [
+        return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
         ], signal);
@@ -2973,7 +2991,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       case 'custom': {
         const { baseUrl, key, model, name } = cfg.custom;
         if (!baseUrl || !model) throw new Error(`מנוע "${name || 'מותאם אישית'}" לא מוגדר במלואו — עבור להגדרות AI`);
-        return callOpenAICompatible(baseUrl, key, modelOverride || model, [
+        return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
         ], signal);
