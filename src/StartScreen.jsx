@@ -76,6 +76,7 @@ const QUICK_PROMPTS = [
 
 const WORKFLOW_LABELS = {
   'manager-auto': 'מנהל אוטומטי בוחר מסלול',
+  'circular-team': 'סביבה מעגלית',
   'manager-pipeline': 'מנהל ← מקורות ← מבנה ← כתיבה ← ליטוש',
   'design-first': 'מבנה קודם',
   'research-first': 'חקר קודם',
@@ -176,6 +177,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [workspacesList, setWorkspacesList] = useState([]);
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState('');
   const [autopilotEnabled, setAutopilotEnabled] = useState(true);
+  const [actualWorkflowMode, setActualWorkflowMode] = useState('manager-auto');
+  const [quickWorkflowMode, setQuickWorkflowMode] = useState('circular-team');
+  const [circularWorkflowEnabled, setCircularWorkflowEnabled] = useState(true);
+  const [circularMaxRounds, setCircularMaxRounds] = useState(2);
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
@@ -203,14 +208,37 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setEditingCard(null);
   };
 
+  const buildLoadedWorkspaceState = (automation) => {
+    if (!automation?.enabled) return null;
+    const agents = typeof getOrderedRoleAgents === 'function'
+      ? getOrderedRoleAgents(automation.workflowMode)
+      : [];
+    return { ...automation, agents };
+  };
+
+  const applyAutomationSnapshot = (automation) => {
+    if (!automation) return;
+    const nextWorkflowMode = String(automation?.workflowMode || 'manager-auto');
+    setLoadedWorkspace(buildLoadedWorkspaceState(automation));
+    setCurrentWorkspaceId(automation?.activeWorkspaceId || 'default-content-studio');
+    setAutopilotEnabled(automation?.autopilotEnabled !== false);
+    setActualWorkflowMode(nextWorkflowMode);
+    setQuickWorkflowMode(['circular-team', 'custom-order'].includes(nextWorkflowMode) ? nextWorkflowMode : '__keep-current__');
+    setCircularWorkflowEnabled(automation?.circularWorkflowEnabled !== false);
+    setCircularMaxRounds(Math.max(1, Math.min(4, Number(automation?.circularMaxRounds) || 2)));
+  };
+
+  const persistAutomationUpdates = (updates = {}) => {
+    if (typeof saveWorkspaceAutomation !== 'function') return;
+    const nextAutomation = saveWorkspaceAutomation(updates);
+    applyAutomationSnapshot(nextAutomation);
+  };
+
   useEffect(() => {
     const refreshWorkspaceState = () => {
       if (typeof getWorkspaceAutomation === 'function') {
         const auto = getWorkspaceAutomation();
-        if (auto?.enabled) setLoadedWorkspace(auto);
-        else setLoadedWorkspace(null);
-        setCurrentWorkspaceId(auto?.activeWorkspaceId || 'default-content-studio');
-        setAutopilotEnabled(auto?.autopilotEnabled !== false);
+        applyAutomationSnapshot(auto);
       }
       if (typeof getWorkspacesLibrary === 'function') {
         const library = getWorkspacesLibrary();
@@ -267,8 +295,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         return;
       }
       const labeledText = 'קובץ הנחיות: ' + file.name + '\n' + String(extracted).trim();
-      const nextInstructions = instructions.trim() ? instructions.trim() + '\n\n---\n' + labeledText : labeledText;
-      setInstructions(nextInstructions);
+      setInstructions((prev) => {
+        const currentInstructions = String(prev || '').trim();
+        const nextInstructions = currentInstructions ? currentInstructions + '\n\n---\n' + labeledText : labeledText;
+        if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
+        return nextInstructions;
+      });
       setInstructionFileName(file.name);
     } catch (error) {
       console.error(error);
@@ -302,14 +334,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       // טען את ה-workspace החדש
       if (typeof getWorkspaceAutomation === 'function' && typeof getOrderedRoleAgents === 'function') {
         const automation = getWorkspaceAutomation();
-        setCurrentWorkspaceId(automation?.activeWorkspaceId || selectedWorkspaceId);
-        const agents = getOrderedRoleAgents(automation.workflowMode);
-        if (automation?.enabled) {
-          setLoadedWorkspace({ ...automation, agents });
-        } else {
-          setLoadedWorkspace(null);
-        }
-        setAutopilotEnabled(automation?.autopilotEnabled !== false);
+        applyAutomationSnapshot({
+          ...automation,
+          activeWorkspaceId: automation?.activeWorkspaceId || selectedWorkspaceId,
+        });
       }
     } catch (error) {
       console.error('שגיאה בהחלפת סביבת עבודה:', error);
@@ -320,8 +348,39 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const handleAutopilotToggle = (event) => {
     const checked = Boolean(event.target.checked);
     setAutopilotEnabled(checked);
-    if (typeof saveWorkspaceAutomation !== 'function') return;
-    saveWorkspaceAutomation({ autopilotEnabled: checked });
+    persistAutomationUpdates({ autopilotEnabled: checked });
+  };
+
+  const handleWorkflowModeChange = (event) => {
+    const nextMode = event.target.value === 'custom-order' ? 'custom-order' : 'circular-team';
+    setQuickWorkflowMode(nextMode);
+    setActualWorkflowMode(nextMode);
+    persistAutomationUpdates({
+      workflowMode: nextMode,
+      circularWorkflowEnabled: nextMode === 'circular-team' ? circularWorkflowEnabled : false,
+    });
+  };
+
+  const handleCircularWorkflowToggle = (event) => {
+    const checked = Boolean(event.target.checked);
+    setCircularWorkflowEnabled(checked);
+    setActualWorkflowMode('circular-team');
+    setQuickWorkflowMode('circular-team');
+    persistAutomationUpdates({
+      workflowMode: 'circular-team',
+      circularWorkflowEnabled: checked,
+    });
+  };
+
+  const handleCircularMaxRoundsChange = (event) => {
+    const nextRounds = Math.max(1, Math.min(4, Number(event.target.value) || 2));
+    setCircularMaxRounds(nextRounds);
+    setActualWorkflowMode('circular-team');
+    setQuickWorkflowMode('circular-team');
+    persistAutomationUpdates({
+      workflowMode: 'circular-team',
+      circularMaxRounds: nextRounds,
+    });
   };
 
   
@@ -538,12 +597,91 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     </label>
                  </div>
                </div>
+
+               <div className="flex flex-wrap items-center justify-end gap-2 mb-4">
+                 <button
+                   type="button"
+                   onClick={() => instructionFileInputRef.current?.click()}
+                   className="px-3 py-2 bg-fuchsia-500/25 hover:bg-fuchsia-500/35 border border-fuchsia-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                 >
+                   קובץ הנחיות
+                 </button>
+                 <select
+                   value={uploadKind}
+                   onChange={(e) => setUploadKind(e.target.value)}
+                   className="px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/25 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[140px]"
+                 >
+                   {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => (
+                     <option key={item.id} value={item.id} className="bg-slate-900 text-white">{item.label}</option>
+                   ))}
+                 </select>
+                 <button
+                   type="button"
+                   onClick={() => fileInputRef.current?.click()}
+                   className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                 >
+                   {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
+                 </button>
+                 <input ref={instructionFileInputRef} type="file" accept=".txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
+                 <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
+               </div>
+
+               <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
+                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+                   <div className="text-white font-semibold text-sm">🔁 הגדרות זרימת עבודה מהירה</div>
+                   {instructionFileName ? (
+                     <span className="text-[11px] text-fuchsia-100 bg-fuchsia-500/20 border border-fuchsia-200/30 px-3 py-1 rounded-full">קובץ הנחיות: {instructionFileName}</span>
+                   ) : null}
+                 </div>
+                 <select
+                   value={quickWorkflowMode}
+                   onChange={handleWorkflowModeChange}
+                   className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
+                 >
+                   <option value="__keep-current__" className="bg-slate-900 text-white" disabled>השאר מצב קיים: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}</option>
+                   <option value="circular-team" className="bg-slate-900 text-white">סביבה מעגלית</option>
+                   <option value="custom-order" className="bg-slate-900 text-white">סדר ידני</option>
+                 </select>
+                 {quickWorkflowMode === 'circular-team' ? (
+                   <div className="mt-3 border border-cyan-200/20 bg-cyan-400/10 rounded-xl p-3">
+                     <label className="flex items-center gap-2 text-white text-xs font-semibold mb-3">
+                       <input
+                         type="checkbox"
+                         checked={circularWorkflowEnabled}
+                         onChange={handleCircularWorkflowToggle}
+                         className="checkbox checkbox-xs border-cyan-200 rounded bg-white/20"
+                       />
+                       אפשר חזרה לסוכן קודם
+                     </label>
+                     <div className="flex items-center justify-between gap-3">
+                       <span className="text-white/75 text-xs">מקסימום סבבים</span>
+                       <input
+                         type="number"
+                         min="1"
+                         max="4"
+                         value={circularMaxRounds}
+                         onChange={handleCircularMaxRoundsChange}
+                         className="w-20 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm text-center outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
+                       />
+                     </div>
+                   </div>
+                 ) : quickWorkflowMode === 'custom-order' ? (
+                   <div className="mt-3 text-[11px] text-white/70">במצב סדר ידני, המערכת תרוץ לפי סדר הסוכנים שהגדרת בסביבת העבודה.</div>
+                 ) : (
+                   <div className="mt-3 text-[11px] text-white/70">מצב העבודה הנוכחי נשמר כפי שהוגדר בסביבת העבודה: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}.</div>
+                 )}
+               </div>
                
                <div className="grid md:grid-cols-2 gap-4 text-right">
                  <div>
                    <textarea
                      value={instructions}
-                     onChange={(e) => setInstructions(e.target.value)}
+                     onChange={(e) => {
+                       const nextInstructions = e.target.value;
+                       setInstructions(nextInstructions);
+                       if (!nextInstructions.trim()) setInstructionFileName('');
+                       if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
+                     }}
                      placeholder="הנחיות קצרות למסמך המסוים הזה... (למשל: סגנון אקדמי, פסקאות קצרות)"
                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-1 focus:ring-pink-400 focus:border-transparent resize-y min-h-[90px] h-full"
                    />
@@ -569,7 +707,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  <div className="mt-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
                    <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
                    <div className="text-amber-200/80 text-xs">
-                     {loadedWorkspace?.autopilotEnabled === false
+                     {loadedWorkspace?.workflowMode === 'custom-order' || loadedWorkspace?.autopilotEnabled === false
                        ? ((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')
                        : (WORKFLOW_LABELS[loadedWorkspace?.workflowMode] || loadedWorkspace?.workflowMode || 'manager-auto')}
                    </div>
