@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Workspace Flow Preview</title>
+  <style>
+    :root {
+      --surface: #ffffff;
+      --bg: #f4f7ff;
+      --text: #172033;
+      --muted: #5f6b82;
+      --border: #dce3f2;
+      --primary: #2f66e8;
+      --primary-soft: #eaf1ff;
+      --success: #13b886;
+      --danger: #ef4444;
+      --card-shadow: 0 16px 40px rgba(25, 42, 70, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      background:
+        radial-gradient(circle at 20% 0%, #dfe8ff 0%, transparent 42%),
+        radial-gradient(circle at 80% 100%, #d7fff0 0%, transparent 36%),
+        var(--bg);
+      color: var(--text);
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    @media (min-width: 980px) {
+      .container {
+        grid-template-columns: 1fr 1fr;
+        align-items: start;
+      }
+    }
+
+    .workspace-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: var(--card-shadow);
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.7;
+      margin-bottom: 14px;
+      background: #f8fbff;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+
+    .field { margin-bottom: 12px; }
+
+    .label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #42506a;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    select,
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 12px;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+    }
+
+    select:focus,
+    input:focus {
+      border-color: #8db1ff;
+      box-shadow: 0 0 0 4px rgba(47, 102, 232, 0.12);
+    }
+
+    .inline { display: flex; gap: 8px; align-items: center; }
+
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); filter: brightness(1.03); }
+    .btn-success { background: var(--success); flex: 1; }
+    .btn-primary { background: var(--primary); flex: 1; }
+    .btn-danger { background: var(--danger); }
+    .btn-soft {
+      background: var(--primary-soft);
+      border: 1px solid #c5d7ff;
+      color: #2148a5;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .advanced {
+      border: 1px solid #cfe0ff;
+      border-radius: 12px;
+      background: #f2f7ff;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    .hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #5f6b82;
+    }
+
+    .saved-list,
+    .meta,
+    .tip,
+    .agents-entry {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fbfdff;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+
+    .saved-list-title {
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .saved-item {
+      border: 1px solid #e6ebf7;
+      border-radius: 8px;
+      background: #fff;
+      padding: 7px 8px;
+      font-size: 11px;
+      margin-bottom: 6px;
+      line-height: 1.6;
+      color: #4f5d78;
+    }
+
+    .saved-item.selected {
+      border-color: #b9cdfc;
+      background: #f2f7ff;
+    }
+
+    .saved-item:last-child { margin-bottom: 0; }
+
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+
+    .chip {
+      display: inline-block;
+      background: #edf2ff;
+      color: #2b4bb0;
+      border: 1px solid #cad9ff;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      margin-inline-start: 6px;
+    }
+
+    .tip {
+      font-size: 11px;
+      color: #5f6b82;
+      line-height: 1.7;
+      margin-bottom: 0;
+    }
+
+    .agents-entry {
+      background: #f1f7ff;
+      border-color: #cfe0ff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .agents-entry strong { font-size: 12px; color: #1d3b88; }
+    .agents-entry span { font-size: 11px; color: #4f5d78; }
+
+    .hidden { display: none; }
+
+    .toast {
+      position: fixed;
+      bottom: 18px;
+      left: 18px;
+      background: #0f172a;
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <section class="workspace-card" aria-label="יצירה ושמירה של סביבות עבודה">
+      <div class="title">📦 יצירה ושמירה של סביבות עבודה</div>
+      <div class="subtitle">כאן שומרים ומנהלים סביבות עבודה. דף הבית מיועד רק לבחירת סביבת העבודה להפעלה.</div>
+
+      <div class="field">
+        <label class="label" for="last-saved">סביבה אחרונה שנשמרה</label>
+        <input id="last-saved" value="צוות מחקר" readonly />
+      </div>
+
+      <div class="saved-list">
+        <div class="saved-list-title" id="saved-list-title">סביבות שמורות (0)</div>
+        <div id="saved-list-items"></div>
+      </div>
+
+      <div class="inline" style="margin-bottom: 12px;">
+        <button class="btn btn-success" type="button" id="quick-create">⚡ צור סביבה פשוטה</button>
+        <button class="btn btn-primary" type="button" id="toggle-advanced">יצירה מתקדמת</button>
+      </div>
+
+      <div class="advanced hidden" id="advanced-panel" aria-label="יצירת סביבת עבודה מתקדמת">
+        <div class="field">
+          <label class="label" for="new-workspace-name">שם הסביבה החדשה</label>
+          <input id="new-workspace-name" placeholder="למשל: צוות מחקר" value="" />
+          <div class="hint">שם בפועל: <strong id="name-preview">סביבה חדשה</strong></div>
+        </div>
+        <div class="hint" style="margin-bottom: 10px;">הסביבה תיווצר עם הגדרות ברירת מחדל ותהפוך מיד לסביבה הפעילה לעריכת סוכנים.</div>
+        <button class="btn btn-primary" id="create-advanced" type="button" style="width:100%;">✅ צור סביבה</button>
+      </div>
+
+      <div class="agents-entry">
+        <div>
+          <strong>איפה מוסיפים עוד סוכנים?</strong>
+          <span>כאן למטה, ב"הוספת סוכן בפועל". הסוכן מתווסף לסביבה הפעילה שמוצגת במסך הזה.</span>
+        </div>
+        <button class="btn btn-primary" id="add-agent-demo" type="button" style="flex:0 0 auto;">⬇️ מעבר להוספת סוכן</button>
+      </div>
+
+      <div class="saved-list" id="agent-builder">
+        <div class="saved-list-title">🧩 ניהול סוכנים מלא</div>
+        <div class="hint" style="margin-bottom: 8px;">ניהול עבור סביבה: <strong id="agent-target-name">-</strong></div>
+        <div class="hint" id="agent-progress" style="margin-bottom: 8px; color:#1d4ed8; font-weight:700;"></div>
+        <div class="inline" style="margin-bottom: 8px;">
+          <input id="agent-name-input" placeholder="שם סוכן, למשל: בודק עובדות" />
+          <button class="btn btn-primary" id="add-agent-live" type="button" style="flex:0 0 auto;">➕ הוסף סוכן</button>
+        </div>
+        <div id="agent-list-items"></div>
+      </div>
+
+      <div class="tip">💡 יצירה, מחיקה וניהול סביבות עבודה נעשים כאן. זרימת עבודה מהירה נקבעת בדף הבית.</div>
+    </section>
+
+    <section class="workspace-card" aria-label="דף הבית - בחירת סביבת עבודה">
+      <div class="title">🏠 דף הבית - בחירת סביבת עבודה</div>
+
+      <div class="toolbar">
+        <span class="btn-soft">✨ חומרי עזר והנחיות</span>
+        <span class="btn-soft">מסמכי עזר</span>
+        <span class="btn-soft">קובץ הנחיות</span>
+      </div>
+
+      <div class="field">
+        <label class="label" for="home-workspace">סביבת עבודה לשימוש עכשיו</label>
+        <div class="inline">
+          <select id="home-workspace"></select>
+        </div>
+        <label class="inline" style="margin-top:8px; font-size:12px; color:#3f4d67; font-weight:700;">
+          <input id="home-autopilot" type="checkbox" style="width:auto;" checked />
+          הפעל אוטופיילוט
+        </label>
+      </div>
+
+      <div class="saved-list" id="workflow-builder">
+        <div class="saved-list-title">🔁 הגדרות זרימת עבודה מהירה</div>
+        <div class="inline" style="margin-bottom: 8px;">
+          <select id="workflow-mode" style="flex:1;">
+            <option value="circular-team">סביבה מעגלית</option>
+            <option value="custom-order">סדר ידני</option>
+          </select>
+        </div>
+        <div id="circular-controls" class="hidden" style="border:1px solid #cfe0ff; border-radius:10px; background:#f2f7ff; padding:10px;">
+          <label class="inline" style="margin-bottom:8px; font-size:12px; color:#3f4d67; font-weight:700;">
+            <input id="circular-enabled" type="checkbox" style="width:auto;" checked />
+            אפשר חזרה לסוכן קודם
+          </label>
+          <div class="inline" style="margin-top:4px;">
+            <span class="label" style="margin:0; min-width:130px;">מקסימום סבבים</span>
+            <input id="circular-max-rounds" type="number" min="1" max="4" value="2" style="width:90px;" />
+          </div>
+        </div>
+      </div>
+
+      <div class="meta">
+        <strong>סביבה נוכחית:</strong> <span id="meta-workspace">-</span>
+        <br />
+        <strong>סדר עבודה:</strong> <span id="meta-workflow">-</span>
+        <span class="chip" id="meta-autopilot-chip">Autopilot</span>
+        <br />
+        <strong>סוכנים:</strong> <span id="meta-agents">-</span>
+      </div>
+
+      <div class="tip">כאן בוחרים סביבת עבודה ומגדירים זרימה מהירה לפני יצירת המסמך.</div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const defaultProfile = { workflow: 'manager-auto', agents: ['מנהל', 'חוקר', 'כותב', 'עורך'] };
+
+    const state = {
+      workspaces: [
+        { id: crypto.randomUUID(), name: 'צוות מחקר', updatedAt: '26/04/2026' },
+        { id: crypto.randomUUID(), name: 'כתיבה שיווקית', updatedAt: '24/04/2026' },
+        { id: crypto.randomUUID(), name: 'סטודיו תוכן (ברירת מחדל)', updatedAt: '21/04/2026', locked: true }
+      ],
+      activeWorkspaceId: null,
+      lastSavedWorkspaceName: 'צוות מחקר',
+      autopilotEnabled: true,
+      workflowMode: 'circular-team',
+      circularWorkflowEnabled: true,
+      circularMaxRounds: 2,
+    };
+
+    const workflowLabels = {
+      'circular-team': 'סביבה מעגלית',
+      'custom-order': 'סדר ידני',
+    };
+
+    const els = {
+      lastSaved: document.getElementById('last-saved'),
+      quickCreate: document.getElementById('quick-create'),
+      toggleAdvanced: document.getElementById('toggle-advanced'),
+      advancedPanel: document.getElementById('advanced-panel'),
+      createAdvanced: document.getElementById('create-advanced'),
+      workflowMode: document.getElementById('workflow-mode'),
+      circularControls: document.getElementById('circular-controls'),
+      circularEnabled: document.getElementById('circular-enabled'),
+      circularMaxRounds: document.getElementById('circular-max-rounds'),
+      newWorkspaceName: document.getElementById('new-workspace-name'),
+      namePreview: document.getElementById('name-preview'),
+      savedListTitle: document.getElementById('saved-list-title'),
+      savedListItems: document.getElementById('saved-list-items'),
+      homeWorkspace: document.getElementById('home-workspace'),
+      homeAutopilot: document.getElementById('home-autopilot'),
+      metaWorkspace: document.getElementById('meta-workspace'),
+      metaWorkflow: document.getElementById('meta-workflow'),
+      metaAutopilotChip: document.getElementById('meta-autopilot-chip'),
+      metaAgents: document.getElementById('meta-agents'),
+      agentTargetName: document.getElementById('agent-target-name'),
+      agentProgress: document.getElementById('agent-progress'),
+      agentNameInput: document.getElementById('agent-name-input'),
+      addAgentLive: document.getElementById('add-agent-live'),
+      agentListItems: document.getElementById('agent-list-items'),
+      addAgentDemo: document.getElementById('add-agent-demo'),
+      toast: document.getElementById('toast')
+    };
+
+    const showToast = (text) => {
+      els.toast.textContent = text;
+      els.toast.classList.add('show');
+      setTimeout(() => els.toast.classList.remove('show'), 1700);
+    };
+
+    const nowDate = () => {
+      const d = new Date();
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}/${month}/${year}`;
+    };
+
+    const simpleName = () => {
+      const base = 'סביבה חדשה';
+      const names = new Set(state.workspaces.map((w) => w.name));
+      if (!names.has(base)) return base;
+      let i = 2;
+      while (names.has(`${base} ${i}`)) i += 1;
+      return `${base} ${i}`;
+    };
+
+    const fallbackWorkspaceName = () => simpleName();
+    const providerOptions = ['', 'gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
+    const providerModelOptions = {
+      gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+      openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
+      claude: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+      groq: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'],
+      perplexity: ['sonar-pro', 'sonar'],
+      ollama: ['llama3.2', 'qwen2.5', 'mistral'],
+      custom: ['custom-model'],
+    };
+
+    const getActive = () => state.workspaces.find((w) => w.id === state.activeWorkspaceId) || state.workspaces[0];
+    const isAutopilotEnabled = () => state.autopilotEnabled !== false;
+    const createDefaultAgents = () => defaultProfile.agents.map((name, index) => ({
+      id: `agent-${Date.now()}-${index}`,
+      name,
+      prompt: '',
+      provider: '',
+      model: '',
+      enabled: true,
+    }));
+    const workspaceAgents = {};
+    state.workspaces.forEach((w) => {
+      workspaceAgents[w.id] = createDefaultAgents();
+    });
+
+    const renderSavedList = () => {
+      els.savedListTitle.textContent = `סביבות שמורות (${state.workspaces.length})`;
+      els.savedListItems.replaceChildren();
+      state.workspaces.forEach((w) => {
+        const selected = w.id === state.activeWorkspaceId;
+        const wrapper = document.createElement('div');
+        wrapper.className = `saved-item${selected ? ' selected' : ''}`;
+
+        const top = document.createElement('div');
+        top.style.display = 'flex';
+        top.style.alignItems = 'center';
+        top.style.justifyContent = 'space-between';
+        top.style.gap = '8px';
+
+        const title = document.createElement('strong');
+        title.textContent = w.name;
+        top.appendChild(title);
+
+        if (!w.locked) {
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'btn btn-danger';
+          removeBtn.style.padding = '4px 8px';
+          removeBtn.style.fontSize = '11px';
+          removeBtn.textContent = 'מחק';
+          removeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!confirm(`למחוק את סביבת העבודה "${w.name}"?`)) return;
+            state.workspaces = state.workspaces.filter((item) => item.id !== w.id);
+            delete workspaceAgents[w.id];
+            if (state.activeWorkspaceId === w.id) {
+              state.activeWorkspaceId = state.workspaces[0]?.id || null;
+            }
+            render();
+            showToast('הסביבה נמחקה');
+          });
+          top.appendChild(removeBtn);
+        }
+
+        wrapper.appendChild(top);
+
+        const updated = document.createElement('div');
+        updated.textContent = `עודכנה: ${w.updatedAt}`;
+        wrapper.appendChild(updated);
+
+        els.savedListItems.appendChild(wrapper);
+      });
+    };
+
+    const renderHomeSelect = () => {
+      els.homeWorkspace.replaceChildren();
+      state.workspaces.forEach((w) => {
+        const option = document.createElement('option');
+        option.value = w.id;
+        option.textContent = w.name;
+        option.selected = w.id === state.activeWorkspaceId;
+        els.homeWorkspace.appendChild(option);
+      });
+    };
+
+    const renderMeta = () => {
+      const active = getActive();
+      const profile = defaultProfile;
+      const agents = workspaceAgents[active.id] || [...defaultProfile.agents];
+      const orderedNames = agents
+        .filter((agent) => agent?.enabled !== false)
+        .map((agent) => String(agent?.name || '').trim())
+        .filter(Boolean);
+      const autopilotEnabled = isAutopilotEnabled();
+      els.metaWorkspace.textContent = active.name;
+      els.metaWorkflow.textContent = autopilotEnabled
+        ? (workflowLabels[state.workflowMode] || state.workflowMode || profile.workflow)
+        : (orderedNames.join(' ← ') || 'אין סדר מוגדר');
+      els.metaAutopilotChip.textContent = autopilotEnabled ? 'Autopilot' : 'Manual';
+      els.metaAutopilotChip.style.background = autopilotEnabled ? '#edf2ff' : '#f1f5f9';
+      els.metaAutopilotChip.style.borderColor = autopilotEnabled ? '#cad9ff' : '#cbd5e1';
+      els.metaAutopilotChip.style.color = autopilotEnabled ? '#2b4bb0' : '#334155';
+      els.metaAgents.textContent = agents.map((agent) => agent.name).join(', ');
+      els.agentTargetName.textContent = active.name;
+      els.lastSaved.value = state.lastSavedWorkspaceName;
+      els.homeAutopilot.checked = state.autopilotEnabled !== false;
+    };
+
+    const renderWorkflowControls = () => {
+      els.workflowMode.value = state.workflowMode;
+      const isCircular = state.workflowMode === 'circular-team';
+      els.circularControls.classList.toggle('hidden', !isCircular);
+      els.circularEnabled.checked = state.circularWorkflowEnabled === true;
+      els.circularMaxRounds.value = String(state.circularMaxRounds || 2);
+    };
+
+    const moveAgent = (index, direction) => {
+      const active = getActive();
+      const list = [...(workspaceAgents[active.id] || [])];
+      const target = index + direction;
+      if (target < 0 || target >= list.length) return;
+      const [item] = list.splice(index, 1);
+      list.splice(target, 0, item);
+      workspaceAgents[active.id] = list;
+      render();
+    };
+
+    const updateAgent = (index, field, value) => {
+      const active = getActive();
+      const list = [...(workspaceAgents[active.id] || [])];
+      list[index] = { ...list[index], [field]: value };
+      workspaceAgents[active.id] = list;
+      renderMeta();
+      renderAgentList();
+    };
+
+    const renderAgentList = () => {
+      const active = getActive();
+      const agents = workspaceAgents[active.id] || [];
+      els.agentListItems.replaceChildren();
+      const activeCount = agents.filter((agent) => agent.enabled !== false).length;
+      els.agentProgress.textContent = `סה"כ סוכנים: ${agents.length} | פעילים: ${activeCount}`;
+      if (!agents.length) {
+        const empty = document.createElement('div');
+        empty.className = 'saved-item';
+        empty.textContent = 'אין סוכנים עדיין בסביבה הזו.';
+        els.agentListItems.appendChild(empty);
+        return;
+      }
+
+      agents.forEach((agent, index) => {
+        const row = document.createElement('div');
+        row.className = 'saved-item';
+        row.style.padding = '10px';
+
+        const top = document.createElement('div');
+        top.style.display = 'flex';
+        top.style.alignItems = 'center';
+        top.style.gap = '8px';
+        top.style.marginBottom = '8px';
+
+        const badge = document.createElement('span');
+        badge.textContent = String(index + 1);
+        badge.style.minWidth = '28px';
+        badge.style.height = '28px';
+        badge.style.borderRadius = '999px';
+        badge.style.background = '#eef4ff';
+        badge.style.color = '#2b579a';
+        badge.style.display = 'inline-flex';
+        badge.style.alignItems = 'center';
+        badge.style.justifyContent = 'center';
+        badge.style.fontWeight = '700';
+        top.appendChild(badge);
+
+        const nameInput = document.createElement('input');
+        nameInput.value = agent.name || '';
+        nameInput.placeholder = 'שם הסוכן';
+        nameInput.addEventListener('input', (e) => updateAgent(index, 'name', e.target.value));
+        top.appendChild(nameInput);
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'btn btn-soft';
+        upBtn.textContent = '↑';
+        upBtn.disabled = index === 0;
+        upBtn.style.opacity = index === 0 ? '0.5' : '1';
+        upBtn.addEventListener('click', () => moveAgent(index, -1));
+        top.appendChild(upBtn);
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.className = 'btn btn-soft';
+        downBtn.textContent = '↓';
+        downBtn.disabled = index === agents.length - 1;
+        downBtn.style.opacity = index === agents.length - 1 ? '0.5' : '1';
+        downBtn.addEventListener('click', () => moveAgent(index, 1));
+        top.appendChild(downBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'btn btn-danger';
+        deleteBtn.style.padding = '8px 10px';
+        deleteBtn.textContent = 'מחק';
+        deleteBtn.addEventListener('click', () => {
+          const next = [...agents];
+          next.splice(index, 1);
+          workspaceAgents[active.id] = next;
+          render();
+        });
+        top.appendChild(deleteBtn);
+        row.appendChild(top);
+
+        const prompt = document.createElement('textarea');
+        prompt.rows = 3;
+        prompt.placeholder = 'הוראות לסוכן';
+        prompt.value = agent.prompt || '';
+        prompt.style.width = '100%';
+        prompt.style.padding = '10px 12px';
+        prompt.style.border = '1px solid var(--border)';
+        prompt.style.borderRadius = '10px';
+        prompt.style.fontSize = '12px';
+        prompt.style.marginBottom = '8px';
+        prompt.addEventListener('input', (e) => updateAgent(index, 'prompt', e.target.value));
+        row.appendChild(prompt);
+
+        const modelWrap = document.createElement('div');
+        modelWrap.style.display = 'grid';
+        modelWrap.style.gridTemplateColumns = '1fr 1fr';
+        modelWrap.style.gap = '8px';
+        modelWrap.style.marginBottom = '8px';
+
+        const providerBox = document.createElement('div');
+        const providerLabel = document.createElement('div');
+        providerLabel.className = 'label';
+        providerLabel.style.marginBottom = '4px';
+        providerLabel.textContent = 'ספק מועדף';
+        providerBox.appendChild(providerLabel);
+
+        const providerSelect = document.createElement('select');
+        providerOptions.forEach((providerId) => {
+          const option = document.createElement('option');
+          option.value = providerId;
+          option.textContent = providerId ? providerId : 'כמו הספק הפעיל';
+          if (providerId === (agent.provider || '')) option.selected = true;
+          providerSelect.appendChild(option);
+        });
+        providerSelect.addEventListener('change', (e) => {
+          updateAgent(index, 'provider', e.target.value);
+          if (e.target.value && !((providerModelOptions[e.target.value] || []).includes(agent.model || ''))) {
+            updateAgent(index, 'model', '');
+          }
+        });
+        providerBox.appendChild(providerSelect);
+        modelWrap.appendChild(providerBox);
+
+        const modelBox = document.createElement('div');
+        const modelLabel = document.createElement('div');
+        modelLabel.className = 'label';
+        modelLabel.style.marginBottom = '4px';
+        modelLabel.textContent = 'מודל מועדף לסוכן';
+        modelBox.appendChild(modelLabel);
+
+        const modelSelect = document.createElement('select');
+        const models = providerModelOptions[agent.provider || ''] || [];
+        const firstModelOption = document.createElement('option');
+        firstModelOption.value = '';
+        firstModelOption.textContent = 'בחר מודל מהרשימה';
+        modelSelect.appendChild(firstModelOption);
+        models.forEach((modelName) => {
+          const option = document.createElement('option');
+          option.value = modelName;
+          option.textContent = modelName;
+          if (modelName === agent.model) option.selected = true;
+          modelSelect.appendChild(option);
+        });
+        modelSelect.addEventListener('change', (e) => updateAgent(index, 'model', e.target.value));
+        modelBox.appendChild(modelSelect);
+        modelWrap.appendChild(modelBox);
+        row.appendChild(modelWrap);
+
+        const customModel = document.createElement('input');
+        customModel.value = agent.model || '';
+        customModel.style.direction = 'ltr';
+        customModel.placeholder = 'אפשר גם להקליד ידנית: gemini-2.5-flash / gpt-4o / claude-sonnet-4-6';
+        customModel.style.marginBottom = '8px';
+        customModel.addEventListener('input', (e) => updateAgent(index, 'model', e.target.value));
+        row.appendChild(customModel);
+
+        const enabledWrap = document.createElement('label');
+        enabledWrap.style.display = 'flex';
+        enabledWrap.style.alignItems = 'center';
+        enabledWrap.style.gap = '8px';
+        enabledWrap.style.fontSize = '12px';
+        enabledWrap.style.color = '#323130';
+        const enabledInput = document.createElement('input');
+        enabledInput.type = 'checkbox';
+        enabledInput.checked = agent.enabled !== false;
+        enabledInput.addEventListener('change', (e) => updateAgent(index, 'enabled', e.target.checked));
+        enabledWrap.appendChild(enabledInput);
+        const enabledText = document.createElement('span');
+        enabledText.textContent = 'פעיל בחלונית ה-AI';
+        enabledWrap.appendChild(enabledText);
+        row.appendChild(enabledWrap);
+
+        els.agentListItems.appendChild(row);
+      });
+    };
+
+    const render = () => {
+      renderSavedList();
+      renderHomeSelect();
+      renderMeta();
+      renderWorkflowControls();
+      renderAgentList();
+    };
+
+    const createWorkspace = ({ name }) => {
+      const cleanName = String(name || '').trim() ? String(name) : fallbackWorkspaceName();
+      const ws = { id: crypto.randomUUID(), name: cleanName, updatedAt: nowDate() };
+      state.workspaces.unshift(ws);
+      workspaceAgents[ws.id] = createDefaultAgents();
+      state.activeWorkspaceId = ws.id;
+      state.lastSavedWorkspaceName = ws.name;
+      render();
+      showToast(`נוצרה סביבה: ${ws.name}`);
+    };
+
+    const updatePreview = () => {
+      const typed = els.newWorkspaceName.value;
+      const fallback = fallbackWorkspaceName();
+      els.namePreview.textContent = typed.trim() ? typed : fallback;
+    };
+
+    state.activeWorkspaceId = state.workspaces[0].id;
+    render();
+    updatePreview();
+
+    els.quickCreate.addEventListener('click', () => createWorkspace({ name: '' }));
+    els.toggleAdvanced.addEventListener('click', () => {
+      els.advancedPanel.classList.toggle('hidden');
+      els.toggleAdvanced.textContent = els.advancedPanel.classList.contains('hidden') ? 'יצירה מתקדמת' : 'הסתר מתקדם';
+    });
+
+    els.createAdvanced.addEventListener('click', () => {
+      createWorkspace({ name: els.newWorkspaceName.value });
+      els.newWorkspaceName.value = '';
+      updatePreview();
+    });
+
+    els.newWorkspaceName.addEventListener('input', updatePreview);
+
+    els.workflowMode.addEventListener('change', (e) => {
+      state.workflowMode = e.target.value;
+      render();
+      showToast(`זרימת עבודה: ${workflowLabels[state.workflowMode] || state.workflowMode}`);
+    });
+
+    els.circularEnabled.addEventListener('change', (e) => {
+      state.circularWorkflowEnabled = Boolean(e.target.checked);
+      renderMeta();
+      showToast(state.circularWorkflowEnabled ? 'חזרה לסוכן קודם פעילה' : 'חזרה לסוכן קודם כבויה');
+    });
+
+    els.circularMaxRounds.addEventListener('change', (e) => {
+      const nextValue = Math.max(1, Math.min(4, Number(e.target.value) || 2));
+      state.circularMaxRounds = nextValue;
+      e.target.value = String(nextValue);
+      showToast(`מקסימום סבבים: ${nextValue}`);
+    });
+
+    els.homeWorkspace.addEventListener('change', (e) => {
+      state.activeWorkspaceId = e.target.value;
+      render();
+      showToast(`נבחרה סביבה: ${getActive().name}`);
+    });
+
+    els.homeAutopilot.addEventListener('change', (e) => {
+      state.autopilotEnabled = Boolean(e.target.checked);
+      renderMeta();
+      showToast(state.autopilotEnabled ? 'Autopilot הופעל' : 'Autopilot כובה');
+    });
+
+    els.addAgentLive.addEventListener('click', () => {
+      const active = getActive();
+      const name = String(els.agentNameInput.value || '').trim() || 'סוכן חדש';
+      workspaceAgents[active.id] = [
+        ...(workspaceAgents[active.id] || []),
+        {
+          id: `agent-${Date.now()}`,
+          name,
+          prompt: 'כתוב כאן את התפקיד וההנחיות של הסוכן.',
+          provider: '',
+          model: '',
+          enabled: true,
+        },
+      ];
+      els.agentNameInput.value = '';
+      render();
+      showToast(`נוסף סוכן "${name}" ל-${active.name}`);
+    });
+
+    els.agentNameInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      els.addAgentLive.click();
+    });
+
+    els.addAgentDemo.addEventListener('click', () => {
+      const target = document.getElementById('agent-builder');
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast('אפשר להוסיף סוכן ממש עכשיו 👇');
+    });
+  </script>
+</body>
+</html>

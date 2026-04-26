@@ -672,8 +672,9 @@ export const savePersonalStyleProfile = (profile) => {
 const DEFAULT_WORKSPACE_ID = 'default-content-studio';
 
 const sanitizeWorkspaceName = (value = '', fallback = 'סביבה חדשה') => {
-  const clean = String(value || '').trim();
-  return clean || String(fallback || 'סביבה חדשה').trim() || 'סביבה חדשה';
+  const raw = String(value ?? '');
+  if (raw.trim()) return raw;
+  return String(fallback || 'סביבה חדשה').trim() || 'סביבה חדשה';
 };
 
 const normalizeAgentRecord = (agent = {}, index = 0) => {
@@ -817,7 +818,7 @@ export const getWorkspacesLibrary = () => {
         normalized.id !== key
         || !Array.isArray(workspace.agents)
         || !workspace.automation
-        || String(workspace.name || '').trim() !== normalized.name
+        || String(workspace.name ?? '') !== normalized.name
       ) {
         needsRepair = true;
       }

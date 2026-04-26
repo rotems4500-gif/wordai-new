@@ -18,11 +18,9 @@ import {
   getWorkspaceAgentPresets,
   buildWorkspaceAgentPreset,
   getWorkspacesLibrary,
-  saveWorkspacesLibrary,
   createNewWorkspace,
-  deleteWorkspace,
   switchToWorkspace,
-  updateCurrentWorkspace,
+  deleteWorkspace,
   getAgentDebugLogs,
   clearAgentDebugLogs,
   getLatestAgentRunSummary,
@@ -1517,15 +1515,13 @@ function PersonalStyleSettings({ profile, setProfile }) {
   );
 }
 
-function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
+function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAgents }) {
   const [workspacesLib, setWorkspacesLib] = useState(getWorkspacesLibrary());
-  const [showNewForm, setShowNewForm] = useState(false);
+  const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [newWorkspacePreset, setNewWorkspacePreset] = useState('content-studio');
-  const presets = getWorkspaceAgentPresets();
-
-  const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
-  const activeWorkspace = workspacesLib[activeWorkspaceId];
+  const [lastSavedWorkspaceName, setLastSavedWorkspaceName] = useState('');
+  const [quickAgentName, setQuickAgentName] = useState('');
+  const [quickAgentStatus, setQuickAgentStatus] = useState('');
 
   useEffect(() => {
     const syncLibrary = () => {
@@ -1540,90 +1536,102 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
     return () => window.removeEventListener('wordai-workspace-changed', syncLibrary);
   }, [setAutomation, onWorkspaceChange]);
 
-  const handleCreateWorkspace = () => {
-    const fallbackName = presets[newWorkspacePreset]?.label ? `${presets[newWorkspacePreset].label} חדש` : 'סביבה חדשה';
-    const nextName = String(newWorkspaceName || '').trim() || fallbackName;
-    const newId = createNewWorkspace(nextName, newWorkspacePreset);
-    setWorkspacesLib(getWorkspacesLibrary());
+  const buildSimpleWorkspaceName = () => {
+    const usedNames = new Set(
+      Object.values(workspacesLib)
+        .map((ws) => String(ws?.name || '').trim())
+        .filter(Boolean)
+    );
+
+    if (!usedNames.has('סביבה חדשה')) return 'סביבה חדשה';
+    let index = 2;
+    while (usedNames.has(`סביבה חדשה ${index}`)) index += 1;
+    return `סביבה חדשה ${index}`;
+  };
+
+  const getWorkspaceFallbackName = () => buildSimpleWorkspaceName();
+
+  const createAndSwitchWorkspace = (useTypedName = true) => {
+    const fallbackName = getWorkspaceFallbackName();
+    const typedName = useTypedName ? String(newWorkspaceName ?? '') : '';
+    const nextName = typedName.trim() ? typedName : fallbackName;
+    const newId = createNewWorkspace(nextName, 'content-studio');
     const switched = switchToWorkspace(newId);
-    if (switched) {
-      setAutomation(getWorkspaceAutomation());
+    if (!switched) {
+      window.alert('הסביבה נוצרה, אבל לא הצלחתי לעבור אליה אוטומטית. נסה לבחור אותה מהרשימה.');
+      return;
     }
+    const nextLibrary = getWorkspacesLibrary();
+    const savedWorkspaceName = String(nextLibrary?.[newId]?.name || nextName);
+    setWorkspacesLib(nextLibrary);
+    setAutomation(getWorkspaceAutomation());
+    setLastSavedWorkspaceName(savedWorkspaceName);
     setNewWorkspaceName('');
-    setShowNewForm(false);
+    setShowAdvancedCreate(false);
     onWorkspaceChange?.();
   };
 
-  const handleSwitchWorkspace = (workspaceId) => {
-    const switched = switchToWorkspace(workspaceId);
-    if (!switched) return;
+  const handleQuickCreateWorkspace = () => createAndSwitchWorkspace(false);
+
+  const handleDeleteWorkspace = (workspaceId, workspaceName) => {
+    const targetId = String(workspaceId || '').trim();
+    if (!targetId || targetId === 'default-content-studio') return;
+    if (!window.confirm(`למחוק את סביבת העבודה "${workspaceName || targetId}"?`)) return;
+    const deleted = deleteWorkspace(targetId);
+    if (!deleted) {
+      window.alert('לא הצלחתי למחוק את סביבת העבודה.');
+      return;
+    }
+    const nextLibrary = getWorkspacesLibrary();
+    setWorkspacesLib(nextLibrary);
     setAutomation(getWorkspaceAutomation());
     onWorkspaceChange?.();
   };
 
-  const handleDeleteWorkspace = (workspaceId) => {
-    if (workspaceId === 'default-content-studio') return;
-    if (window.confirm(`האם אתה בטוח שברצונך למחוק את הסביבה "${workspacesLib[workspaceId]?.name}"?`)) {
-      deleteWorkspace(workspaceId);
-      setWorkspacesLib(getWorkspacesLibrary());
-      if (activeWorkspaceId === workspaceId) {
-        handleSwitchWorkspace('default-content-studio');
-      }
-    }
+  const savedWorkspaces = Object.values(workspacesLib || {})
+    .filter((ws) => ws && typeof ws === 'object')
+    .sort((a, b) => String(b?.lastModified || '').localeCompare(String(a?.lastModified || '')));
+
+  const handleAddQuickAgent = () => {
+    const agentName = String(quickAgentName || '').trim() || 'סוכן חדש';
+    setAgents((prev) => ([
+      ...(Array.isArray(prev) ? prev : []),
+      {
+        id: `custom-${Date.now()}`,
+        name: agentName,
+        prompt: 'כתוב כאן את התפקיד וההנחיות של הסוכן.',
+        provider: '',
+        model: '',
+        enabled: true,
+      },
+    ]));
+    setQuickAgentName('');
+    setQuickAgentStatus(`נוסף סוכן חדש לסביבה הפעילה: ${automation?.workspaceName || 'ללא שם'}`);
+    setTimeout(() => setQuickAgentStatus(''), 2500);
   };
 
   return (
     <div style={{ marginBottom: 20, border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#F9FAFB' }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 12 }}>
-        📦 ניהול סביבות עבודה
+        📦 יצירה ושמירה של סביבות עבודה
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 8 }}>סביבה פעילה</div>
-        <select
-          value={activeWorkspaceId}
-          onChange={(e) => handleSwitchWorkspace(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '10px 12px',
-            border: '1px solid #D1D5DB',
-            borderRadius: 8,
-            fontSize: 12,
-            background: 'white',
-            cursor: 'pointer',
-          }}
-        >
-          {Object.entries(workspacesLib).map(([id, ws]) => (
-            <option key={id} value={id}>
-              {ws.name}
-            </option>
-          ))}
-        </select>
+        <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.7 }}>
+          כאן יוצרים סביבות עבודה ומגדירים להן סוכנים ישירות, בלי תלות בדף הבית.
+        </div>
       </div>
 
-      {activeWorkspace && (
-        <div style={{
-          padding: '10px 12px',
-          background: 'white',
-          border: '1px solid #D1D5DB',
-          borderRadius: 8,
-          fontSize: 11,
-          color: '#4B5563',
-          lineHeight: 1.6,
-          marginBottom: 10,
-        }}>
-          <strong>סוכנים בסביבה:</strong>{' '}
-          {activeWorkspace.agents?.map(a => a.name).join(', ') || 'אין סוכנים'}
-          <br />
-          <strong>סדר עבודה:</strong> {activeWorkspace.automation?.workflowMode || 'לא מוגדר'}
-          <br />
-          <strong>עודכנה:</strong> {new Date(activeWorkspace.lastModified).toLocaleDateString('he-IL')}
+      {lastSavedWorkspaceName ? (
+        <div style={{ marginBottom: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid #BBF7D0', background: '#F0FDF4', color: '#166534', fontSize: 11 }}>
+          נשמרה סביבת עבודה: <strong>{lastSavedWorkspaceName}</strong>
         </div>
-      )}
+      ) : null}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <button
-          onClick={() => setShowNewForm(!showNewForm)}
+          onClick={handleQuickCreateWorkspace}
+          aria-label="צור סביבת עבודה פשוטה חדשה"
           style={{
             flex: 1,
             padding: '10px 12px',
@@ -1636,28 +1644,29 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
             cursor: 'pointer',
           }}
         >
-          {showNewForm ? '❌ בטל' : '➕ סביבה חדשה'}
+          ⚡ צור סביבה פשוטה
         </button>
-        {activeWorkspaceId !== 'default-content-studio' && (
-          <button
-            onClick={() => handleDeleteWorkspace(activeWorkspaceId)}
-            style={{
-              padding: '10px 12px',
-              background: '#EF4444',
-              color: 'white',
-              border: 'none',
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            🗑️ מחק
-          </button>
-        )}
+        <button
+          onClick={() => setShowAdvancedCreate((prev) => !prev)}
+          aria-label="הצג או הסתר יצירת סביבת עבודה מתקדמת"
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            background: '#3B82F6',
+            color: 'white',
+            border: 'none',
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {showAdvancedCreate ? 'הסתר מתקדם' : 'יצירה מתקדמת'}
+        </button>
       </div>
 
-      {showNewForm && (
+      {showAdvancedCreate && (
         <div style={{
           border: '1px solid #DBEAFE',
           borderRadius: 8,
@@ -1670,6 +1679,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
               שם הסביבה החדשה
             </label>
             <input
+              aria-label="שם סביבת העבודה החדשה"
               value={newWorkspaceName}
               onChange={(e) => setNewWorkspaceName(e.target.value)}
               placeholder="למשל: צוות מחקר"
@@ -1680,40 +1690,24 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
                 borderRadius: 6,
                 fontSize: 12,
               }}
-              onKeyPress={(e) => e.key === 'Enter' && handleCreateWorkspace()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  createAndSwitchWorkspace();
+                }
+              }}
             />
             <div style={{ marginTop: 6, fontSize: 10, color: '#475569' }}>
-              שם בפועל: <strong>{String(newWorkspaceName || '').trim() || `${presets[newWorkspacePreset]?.label || 'סביבה חדשה'} חדש`}</strong>
+              שם בפועל: <strong>{String(newWorkspaceName ?? '').trim() ? String(newWorkspaceName ?? '') : getWorkspaceFallbackName()}</strong>
             </div>
           </div>
 
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ display: 'block', fontSize: 11, color: '#1E40AF', fontWeight: 600, marginBottom: 4 }}>
-              יוצאת מ-Preset
-            </label>
-            <select
-              value={newWorkspacePreset}
-              onChange={(e) => setNewWorkspacePreset(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #93C5FD',
-                borderRadius: 6,
-                fontSize: 12,
-                background: 'white',
-              }}
-            >
-              {Object.entries(presets).map(([id, p]) => (
-                <option key={id} value={id}>{p.label}</option>
-              ))}
-            </select>
-            <div style={{ marginTop: 6, fontSize: 10, color: '#475569', lineHeight: 1.6 }}>
-              {presets[newWorkspacePreset]?.description || 'Preset מותאם כברירת מחדל.'}
-            </div>
+          <div style={{ marginBottom: 10, fontSize: 10, color: '#475569', lineHeight: 1.6 }}>
+            הסביבה החדשה תיווצר עם הגדרות ברירת מחדל ותהפוך מיד לסביבה הפעילה לעריכת סוכנים.
           </div>
 
           <button
-            onClick={handleCreateWorkspace}
+            onClick={() => createAndSwitchWorkspace()}
             style={{
               width: '100%',
               padding: '10px 12px',
@@ -1731,8 +1725,81 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange }) {
         </div>
       )}
 
+      <div style={{ marginBottom: 12, background: 'white', border: '1px solid #D1D5DB', borderRadius: 8, padding: '10px 12px' }}>
+        <div style={{ fontSize: 12, color: '#374151', fontWeight: 700, marginBottom: 8 }}>
+          סביבות שמורות ({savedWorkspaces.length})
+        </div>
+        <div style={{ display: 'grid', gap: 6, maxHeight: 170, overflow: 'auto' }}>
+          {savedWorkspaces.map((ws) => (
+            <div key={ws.id} style={{ fontSize: 11, color: '#4B5563', border: '1px solid #E5E7EB', borderRadius: 6, padding: '8px', background: '#F9FAFB' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <strong style={{ color: '#111827' }}>{ws.name || ws.id}</strong>
+                {String(ws.id) !== 'default-content-studio' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteWorkspace(ws.id, ws.name)}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                  >
+                    מחק
+                  </button>
+                ) : null}
+              </div>
+              <div style={{ color: '#6B7280', marginTop: 4 }}>
+                עודכנה: {new Date(ws.lastModified || Date.now()).toLocaleDateString('he-IL')}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
-        💡 <strong>טיפ:</strong> כל סביבה שומרת את הסוכנים שלה, ההגדרות, והסדר העבודה בנפרד. בחירת סביבה אחרת תטעין את כל ההגדרות שלה באופן מיידי.
+        💡 <strong>טיפ:</strong> אחרי יצירת סביבה חדשה, אפשר להוסיף לה סוכן מיד מהאזור למטה.
+      </div>
+
+      <div style={{ marginTop: 10, border: '1px solid #DBEAFE', borderRadius: 10, background: '#EFF6FF', padding: '10px 12px' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#1D4ED8', marginBottom: 6 }}>
+          הוספת סוכן מהירה
+        </div>
+        <div style={{ fontSize: 11, color: '#475569', marginBottom: 8, lineHeight: 1.6 }}>
+          הסוכן יתווסף לסביבה הפעילה כרגע: <strong>{automation?.workspaceName || 'ללא שם'}</strong>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: quickAgentStatus ? 6 : 0 }}>
+          <input
+            value={quickAgentName}
+            onChange={(e) => setQuickAgentName(e.target.value)}
+            placeholder="שם סוכן, למשל: בודק עובדות"
+            style={{ flex: 1, padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 12 }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddQuickAgent();
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleAddQuickAgent}
+            style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#2563EB', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+          >
+            ➕ צור סוכן
+          </button>
+        </div>
+        {quickAgentStatus ? <div style={{ fontSize: 11, color: '#166534' }}>{quickAgentStatus}</div> : null}
+      </div>
+
+      <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof document === 'undefined') return;
+            const target = document.getElementById('role-agents-settings');
+            if (!target) return;
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #C7D2FE', background: '#EEF2FF', color: '#3730A3', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+        >
+          ➕ פתח הגדרות סוכנים מלאות
+        </button>
       </div>
     </div>
   );
@@ -1744,6 +1811,24 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
   const isManagerWorkflow = ['manager-auto', 'circular-team'].includes(automation?.workflowMode);
   const isAutopilotManagerMode = isManagerWorkflow && automation?.autopilotEnabled !== false;
+  const selectedWorkflowMode = automation?.workflowMode === 'manager-auto'
+    ? 'circular-team'
+    : (automation?.workflowMode || 'manager-pipeline');
+  const [workspaceNameDraft, setWorkspaceNameDraft] = useState(automation?.workspaceName || '');
+
+  useEffect(() => {
+    setWorkspaceNameDraft(automation?.workspaceName || '');
+  }, [automation?.activeWorkspaceId, automation?.workspaceName]);
+
+  const commitWorkspaceNameDraft = () => {
+    const nextName = String(workspaceNameDraft ?? '');
+    if (!nextName.trim()) {
+      setWorkspaceNameDraft(automation?.workspaceName || '');
+      return;
+    }
+    if (nextName === String(automation?.workspaceName || '')) return;
+    setAutomation((prev) => ({ ...prev, workspaceName: nextName }));
+  };
 
   const updateAgent = (index, field, value) => {
     setAgents(prev => prev.map((agent, i) => i === index ? { ...agent, [field]: value } : agent));
@@ -1862,7 +1947,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           <div>
             <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>סדר עבודה</div>
             <select
-              value={automation?.workflowMode || 'manager-pipeline'}
+              value={selectedWorkflowMode}
               onChange={(e) => {
                 const nextMode = e.target.value;
                 setAutomation(prev => ({
@@ -1870,9 +1955,8 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   workflowMode: nextMode,
                   preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset,
                   circularWorkflowEnabled: nextMode === 'circular-team' ? true : false,
-                  autopilotEnabled: ['manager-auto', 'circular-team'].includes(nextMode) ? true : false,
                 }));
-                if (nextMode === 'manager-auto' || nextMode === 'circular-team') {
+                if (nextMode === 'circular-team') {
                   setAgents((prev) => {
                     const hasManager = prev.some((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
                     const hasAdditionalRoles = prev.some((agent) => !/manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
@@ -1889,7 +1973,6 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               }}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
-              <option value="manager-auto">טייס אוטומטי — מנהל הצוות מחליט</option>
               <option value="circular-team">סביבה מעגלית — שיפור בסבבים</option>
               <option value="manager-pipeline">מצב רגיל — כללים וסקילים מובילים</option>
               <option value="design-first">מבנה קודם</option>
@@ -1919,11 +2002,19 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           <div>
             <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>שם סביבת העבודה</div>
             <input
-              value={automation?.workspaceName || ''}
-              onChange={(e) => setAutomation(prev => ({ ...prev, workspaceName: e.target.value }))}
+              value={workspaceNameDraft}
+              onChange={(e) => setWorkspaceNameDraft(e.target.value)}
+              onBlur={commitWorkspaceNameDraft}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitWorkspaceNameDraft();
+                }
+              }}
               placeholder="למשל: צוות כתיבה אקדמי"
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
             />
+            <div style={{ marginTop: 4, fontSize: 10, color: '#64748B' }}>אפשר להקליד שם עם רווחים. השמירה מתבצעת ב-Enter או ביציאה מהשדה.</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>Retry אוטומטי</div>
@@ -2089,9 +2180,6 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {agents.map((agent, index) => {
-          if (isAutopilotManagerMode && !/manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) {
-            return null;
-          }
           return (
           <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
@@ -2106,24 +2194,32 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               />
               <button
                 type="button"
-                disabled={isAutopilotManagerMode || index === 0}
+                disabled={index === 0}
                 onClick={() => moveAgent(index, -1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (isAutopilotManagerMode || index === 0) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (isAutopilotManagerMode || index === 0) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === 0 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === 0 ? 'default' : 'pointer' }}
               >
                 ↑
               </button>
               <button
                 type="button"
-                disabled={isAutopilotManagerMode || index === agents.length - 1}
+                disabled={index === agents.length - 1}
                 onClick={() => moveAgent(index, 1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: (isAutopilotManagerMode || index === agents.length - 1) ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: (isAutopilotManagerMode || index === agents.length - 1) ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === agents.length - 1 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === agents.length - 1 ? 'default' : 'pointer' }}
               >
                 ↓
               </button>
               <button
                 onClick={() => removeAgent(index)}
-                disabled={isAutopilotManagerMode}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #FCA5A5', background: isAutopilotManagerMode ? '#FFF5F5' : '#FEF2F2', color: '#B91C1C', cursor: isAutopilotManagerMode ? 'default' : 'pointer', opacity: isAutopilotManagerMode ? 0.6 : 1 }}
+                disabled={isAutopilotManagerMode && /manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  border: '1px solid #FCA5A5',
+                  background: (isAutopilotManagerMode && /manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) ? '#FFF5F5' : '#FEF2F2',
+                  color: '#B91C1C',
+                  cursor: (isAutopilotManagerMode && /manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) ? 'default' : 'pointer',
+                  opacity: (isAutopilotManagerMode && /manager|מנהל/i.test(`${agent.id || ''} ${agent.name || ''}`)) ? 0.6 : 1,
+                }}
               >
                 מחק
               </button>
@@ -2191,13 +2287,17 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         })}
       </div>
 
-      {!isAutopilotManagerMode && (
-        <button
-          onClick={addAgent}
-          style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
-        >
-          + הוסף סוכן תפקידי
-        </button>
+      <button
+        onClick={addAgent}
+        style={{ marginTop: 14, padding: '9px 16px', borderRadius: 8, border: '1px dashed #93C5FD', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 600 }}
+      >
+        + הוסף סוכן תפקידי
+      </button>
+
+      {isAutopilotManagerMode && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+          אפשר לערוך כאן חופשי את ההוראות והסדר. בזמן ריצה, מצב AUTOPILOT רשאי לסטות מהסדר אם מנהל העבודה מזהה צורך בכך.
+        </div>
       )}
     </div>
   );
@@ -2782,12 +2882,15 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       <WorkspacesManager 
                         automation={workspaceAutomationState} 
                         setAutomation={setWorkspaceAutomationState}
+                        setAgents={setRoleAgents}
                         onWorkspaceChange={() => {
                           const nextAgents = getRoleAgents();
                           setRoleAgents((prev) => (JSON.stringify(prev) === JSON.stringify(nextAgents) ? prev : nextAgents));
                         }}
                       />
-                      <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />
+                      <div id="role-agents-settings">
+                        <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />
+                      </div>
                     </div>
                   )}
                   {settingsTab === 'updates'     && <UpdateSettings />}

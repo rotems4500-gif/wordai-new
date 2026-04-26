@@ -12,7 +12,7 @@ import {
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace } from './services/aiService';
+import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -175,6 +175,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [uploadKind, setUploadKind] = useState('general');
   const [workspacesList, setWorkspacesList] = useState([]);
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState('');
+  const [autopilotEnabled, setAutopilotEnabled] = useState(true);
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
@@ -207,7 +208,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       if (typeof getWorkspaceAutomation === 'function') {
         const auto = getWorkspaceAutomation();
         if (auto?.enabled) setLoadedWorkspace(auto);
+        else setLoadedWorkspace(null);
         setCurrentWorkspaceId(auto?.activeWorkspaceId || 'default-content-studio');
+        setAutopilotEnabled(auto?.autopilotEnabled !== false);
       }
       if (typeof getWorkspacesLibrary === 'function') {
         const library = getWorkspacesLibrary();
@@ -303,12 +306,22 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const agents = getOrderedRoleAgents(automation.workflowMode);
         if (automation?.enabled) {
           setLoadedWorkspace({ ...automation, agents });
+        } else {
+          setLoadedWorkspace(null);
         }
+        setAutopilotEnabled(automation?.autopilotEnabled !== false);
       }
     } catch (error) {
       console.error('שגיאה בהחלפת סביבת עבודה:', error);
       window.alert('שגיאה בהחלפת סביבת העבודה');
     }
+  };
+
+  const handleAutopilotToggle = (event) => {
+    const checked = Boolean(event.target.checked);
+    setAutopilotEnabled(checked);
+    if (typeof saveWorkspaceAutomation !== 'function') return;
+    saveWorkspaceAutomation({ autopilotEnabled: checked });
   };
 
   
@@ -499,7 +512,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             {/* Advance Options Area */}
             <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6 mb-6">
                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
-                 <div className="text-white/80 font-medium whitespace-nowrap">✨ חומרי עזר והנחיות</div>
+                 <div className="text-white/80 font-medium whitespace-nowrap">✨ סביבת עבודה ומצב הפעלה</div>
                  <div className="flex flex-wrap items-center gap-2 justify-end w-full">
                    <select 
                      value={currentWorkspaceId} 
@@ -513,14 +526,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                        </option>
                      ))}
                    </select>
-                   <button onClick={() => instructionFileInputRef.current?.click()} className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
-                     קובץ הנחיות
-                   </button>
-                   <button onClick={() => fileInputRef.current?.click()} className="px-3 py-2 bg-blue-500/25 hover:bg-blue-500/35 border border-blue-200/45 rounded-xl text-white text-xs transition-all shadow-sm">
-                     {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
-                   </button>
-                   <input ref={instructionFileInputRef} type="file" accept=".txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
-                   <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
+                    <label className="px-3 py-2 bg-violet-500/25 hover:bg-violet-500/35 border border-violet-200/45 rounded-xl text-white text-xs transition-all shadow-sm cursor-pointer min-w-[150px] inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={autopilotEnabled}
+                        onChange={handleAutopilotToggle}
+                        className="checkbox checkbox-xs border-violet-200 rounded bg-white/20"
+                        aria-label="הפעל אוטופיילוט"
+                      />
+                      הפעל אוטופיילוט
+                    </label>
                  </div>
                </div>
                
@@ -553,8 +568,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                {loadedWorkspace && (
                  <div className="mt-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
                    <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
-                   <div className="text-amber-200/80 text-xs">{loadedWorkspace.workflow}</div>
-                   <div className="text-amber-200/60 text-[10px] mt-1">{loadedWorkspace.agents?.join(' • ')}</div>
+                   <div className="text-amber-200/80 text-xs">
+                     {loadedWorkspace?.autopilotEnabled === false
+                       ? ((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')
+                       : (WORKFLOW_LABELS[loadedWorkspace?.workflowMode] || loadedWorkspace?.workflowMode || 'manager-auto')}
+                   </div>
+                   <div className="text-amber-200/60 text-[10px] mt-1">
+                     {(loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' • ')}
+                   </div>
                  </div>
                )}
             </div>
