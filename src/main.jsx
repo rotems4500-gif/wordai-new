@@ -94,7 +94,7 @@ const isLegacyHomeEnabled = () => {
 
 const getRecentAgentLogs = (limit = 18) => {
   const automation = getWorkspaceAutomation();
-  return getAgentDebugLogs({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', includeUnscoped: true }).slice(-limit).reverse();
+  return getAgentDebugLogs({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', includeUnscoped: false }).slice(-limit).reverse();
 };
 
 function App() {

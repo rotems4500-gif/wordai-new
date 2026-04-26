@@ -218,7 +218,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [showLogs, setShowLogs] = useState(false);
   const [debugLogs, setDebugLogs] = useState(() => {
     const initialAutomation = getWorkspaceAutomation();
-    return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse();
+    return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse();
   });
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
@@ -308,7 +308,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       const nextAutomation = getWorkspaceAutomation();
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
-      setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse());
+      setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
     };
 
     syncWorkspace();
@@ -338,7 +338,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   }, [roleAgents]);
 
   useEffect(() => {
-    const syncLogs = () => setDebugLogs(getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: true }).slice(-60).reverse());
+    const syncLogs = () => setDebugLogs(getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
     syncLogs();
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-agent-logs-updated', syncLogs);
@@ -418,7 +418,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
   const copyLogsToClipboard = async () => {
     try {
-      const text = getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: true }).map((log) => {
+      const text = getAgentDebugLogs({ workspaceId: workspaceAutomation.activeWorkspaceId, includeUnscoped: false }).map((log) => {
         const parts = [
           formatLogTime(log.ts),
           getLogAgentTitle(log),

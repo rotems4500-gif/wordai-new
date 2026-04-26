@@ -919,11 +919,12 @@ export const deleteWorkspace = (workspaceId) => {
   const library = getWorkspacesLibrary();
   if (!library[targetId]) return false;
 
+  const wasActive = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() === targetId;
+
   delete library[targetId];
   saveWorkspacesLibrary(library);
 
-  const automation = getWorkspaceAutomation();
-  if (automation.activeWorkspaceId === targetId) {
+  if (wasActive) {
     switchToWorkspace(DEFAULT_WORKSPACE_ID);
   } else {
     emitWorkspaceChangedEvent('workspace-deleted', targetId);
@@ -2153,7 +2154,7 @@ export const logAgentDebugEvent = (entry = {}) => pushAgentDebugLog(entry);
 
 export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) => {
   const activeWorkspaceId = String(automation?.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
-  const logs = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true });
+  const logs = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false });
   const latestLog = logs.length ? logs[logs.length - 1] : null;
   const runWorkflowMode = String(latestLog?.workflowMode || automation?.workflowMode || 'manager-auto');
   const orderedAgents = getOrderedRoleAgents(runWorkflowMode);

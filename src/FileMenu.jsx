@@ -2326,7 +2326,7 @@ function UpdateSettings() {
 
 function DebugConsoleSettings({ automation }) {
   const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
-  const [logs, setLogs] = useState(() => getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).slice(-120).reverse());
+  const [logs, setLogs] = useState(() => getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).slice(-120).reverse());
   const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
 
   const getAgentTitle = (log = {}) => {
@@ -2338,7 +2338,7 @@ function DebugConsoleSettings({ automation }) {
 
   useEffect(() => {
     const sync = () => {
-      setLogs(getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).slice(-120).reverse());
+      setLogs(getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).slice(-120).reverse());
       setSummary(getLatestAgentRunSummary(automation));
     };
 
@@ -2369,7 +2369,7 @@ function DebugConsoleSettings({ automation }) {
 
   const copyLogs = async () => {
     try {
-      const text = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: true }).map((log) => {
+      const text = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).map((log) => {
         const parts = [
           formatTime(log.ts),
           getAgentTitle(log),
