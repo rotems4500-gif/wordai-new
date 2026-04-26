@@ -425,7 +425,11 @@ function App() {
 
     syncLiveGeneration();
     window.addEventListener('wordai-agent-logs-updated', syncLiveGeneration);
-    return () => window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
+    window.addEventListener('wordai-workspace-changed', syncLiveGeneration);
+    return () => {
+      window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
+      window.removeEventListener('wordai-workspace-changed', syncLiveGeneration);
+    };
   }, []);
 
   // Ref allows the keyboard shortcut effect to call handleCommand without

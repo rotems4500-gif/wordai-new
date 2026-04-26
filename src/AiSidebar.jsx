@@ -436,7 +436,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   };
 
   const clearLogs = () => {
-    clearAgentDebugLogs();
+    clearAgentDebugLogs(workspaceAutomation.activeWorkspaceId);
     setDebugLogs([]);
   };
 

@@ -2141,11 +2141,21 @@ export const getAgentDebugLogs = (filters = {}) => {
   });
 };
 
-export const clearAgentDebugLogs = () => {
+export const clearAgentDebugLogs = (workspaceId = '') => {
   try {
-    localStorage.setItem(AGENT_DEBUG_STORAGE_KEY, JSON.stringify([]));
+    const targetWorkspaceId = String(workspaceId || '').trim();
+    if (!targetWorkspaceId) {
+      localStorage.setItem(AGENT_DEBUG_STORAGE_KEY, JSON.stringify([]));
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wordai-agent-logs-updated', { detail: [] }));
+      }
+      return;
+    }
+
+    const nextLogs = getAgentDebugLogs().filter((log) => String(log?.activeWorkspaceId || '').trim() !== targetWorkspaceId);
+    localStorage.setItem(AGENT_DEBUG_STORAGE_KEY, JSON.stringify(nextLogs));
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('wordai-agent-logs-updated', { detail: [] }));
+      window.dispatchEvent(new CustomEvent('wordai-agent-logs-updated', { detail: nextLogs }));
     }
   } catch {}
 };

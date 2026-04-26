@@ -2386,7 +2386,7 @@ function DebugConsoleSettings({ automation }) {
   };
 
   const resetLogs = () => {
-    clearAgentDebugLogs();
+    clearAgentDebugLogs(activeWorkspaceId);
     setLogs([]);
     setSummary(getLatestAgentRunSummary(automation));
   };
