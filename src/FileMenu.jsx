@@ -1561,7 +1561,7 @@ function GuideSettings() {
   );
 }
 
-function OnboardingTabContainer({ profile, setProfile }) {
+function OnboardingTabContainer({ profile, setProfile, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {} }) {
   const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
   const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
   const markOnboardingComplete = () => setProfile((prev) => (
@@ -1615,6 +1615,8 @@ function OnboardingTabContainer({ profile, setProfile }) {
       selectLearningOption={selectLearningOption}
       toggleStyle={toggleStyle}
       resetLearningGame={resetLearningGame}
+      onOpenAiSettings={onOpenAiSettings}
+      onOpenPersonalStyle={onOpenPersonalStyle}
       onComplete={markOnboardingComplete}
     />
   );
@@ -2559,6 +2561,28 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           />
         </div>
 
+        <div style={{ marginTop: 10, border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px', background: '#FFFFFF' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1E293B', fontWeight: 700, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={automation?.appendAgentNotesToOutput === true}
+              onChange={(e) => setAutomation(prev => ({ ...prev, appendAgentNotesToOutput: e.target.checked }))}
+            />
+            צרף בסוף המסמך נספח הערות סוכנים (כולל סיכום מנהל והערכת מרצה)
+          </label>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.7, marginBottom: 8 }}>
+            כשפעיל, המסמך יקבל בסוף נספח שמרכז הערות לפי סוכן, המלצות מנהל עבודה והערכת היצמדות להנחיות.
+          </div>
+          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>הנחיה מותאמת להערות הסוכן בסוף העבודה</div>
+          <textarea
+            value={automation?.agentNotesInstruction || ''}
+            onChange={(e) => setAutomation(prev => ({ ...prev, agentNotesInstruction: e.target.value }))}
+            placeholder="למשל: ציין פערים מתודולוגיים, מה לתקן לפני הגשה, ומה נשמר מצוין לפי ההנחיות"
+            rows={2}
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
+          />
+        </div>
+
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
             <input
@@ -3361,7 +3385,14 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   {settingsTab === 'updates'     && <UpdateSettings />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
-                  {settingsTab === 'onboarding'  && <OnboardingTabContainer profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                  {settingsTab === 'onboarding'  && (
+                    <OnboardingTabContainer
+                      profile={personalStyleState}
+                      setProfile={setPersonalStyleState}
+                      onOpenAiSettings={() => setSettingsTab('ai')}
+                      onOpenPersonalStyle={() => setSettingsTab('personal')}
+                    />
+                  )}
                   {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
                   {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
                   {settingsTab === 'appearance'  && <AppearanceSettings />}       

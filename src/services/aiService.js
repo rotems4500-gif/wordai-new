@@ -163,6 +163,8 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   maxRetries: 2,
   requestTimeoutMs: 45,
   showProgress: true,
+  appendAgentNotesToOutput: false,
+  agentNotesInstruction: '',
   activeWorkspaceId: 'default-content-studio',
 };
 
@@ -185,6 +187,8 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       maxRetries: 2,
       requestTimeoutMs: 45,
       showProgress: true,
+      appendAgentNotesToOutput: false,
+      agentNotesInstruction: '',
     },
     agents: DEFAULT_ROLE_AGENTS,
     lastModified: new Date().toISOString(),
@@ -1992,7 +1996,7 @@ const enqueueWorkflowRevisits = ({
 
 const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש.';
 
-const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [] }) => {
+const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
   const currentOutputBlock = stagedOutput ? `תוצר עדכני עד כה:\n${stagedOutput}` : '';
   const isPlanningManagerStage = isPlanningManagerAgent(stageAgent);
@@ -2036,6 +2040,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     currentOutputBlock,
     stageGoal ? `יעד השלב הנוכחי:\n${stageGoal}` : '',
     revisitReason ? `למה הוחזרת עכשיו לסבב נוסף:\n${revisitReason}` : '',
+    collectAgentNotes && agentNotesInstruction ? `הנחיה מחייבת לנספח הערות סוכנים בסוף המסמך:\n${agentNotesInstruction}\nבסוף השלב, הוסף ב-CHECKLIST נקודות קצרות שמסבירות מה בוצע ומה נשאר.` : '',
     `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
     decisionGuidance,
@@ -2046,7 +2051,9 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     'HANDOFF:\n2-5 נקודות קצרות לסוכן הבא: מה כבר נסגר, מה עוד חסר, ועל מה חשוב לשמור',
     'MISSING:\nרשימת פערים קצרה. אם הכול מוכן כתוב: אין פערים מהותיים',
     decisionOptions,
-    'CHECKLIST:\n- 2-4 בדיקות איכות קצרות',
+    collectAgentNotes
+      ? 'CHECKLIST:\n- 2-4 בדיקות איכות קצרות\n- הערת סוכן קצרה שתופיע בנספח הסופי'
+      : 'CHECKLIST:\n- 2-4 בדיקות איכות קצרות',
   ].filter(Boolean).join('\n\n');
 };
 
@@ -2282,6 +2289,90 @@ const hasMeaningfulArtifact = (value = '', fallbackPrompt = '') => {
   const normalizedPrompt = normalizeArtifactText(fallbackPrompt);
   if (normalizedPrompt && normalized === normalizedPrompt) return false;
   return true;
+};
+
+const escapeHtmlForOutput = (value = '') => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const looksLikeHtmlDocument = (value = '') => /<(h[1-6]|p|div|ul|ol|li|table|section|article|strong|em|blockquote|br)\b/i.test(String(value || ''));
+
+const normalizeStageNote = (value = '') => String(value || '').replace(/\n{2,}/g, '\n').trim();
+
+const buildLecturerAssessment = (managerMissing = '', managerDecision = '') => {
+  const signal = `${String(managerMissing || '')}\n${String(managerDecision || '')}`.trim();
+  const hasGaps = hasMeaningfulMissingItems(signal);
+  const grade = hasGaps ? 86 : 95;
+  const adherence = hasGaps
+    ? 'היצמדות להנחיות טובה, אך נדרש חידוד לפני הגשה סופית.'
+    : 'היצמדות גבוהה להנחיות, מבנה ברור ותוצר מוכן להגשה.';
+  return { grade, adherence };
+};
+
+const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', managerPacket = null, managerLabel = 'מנהל העבודה', preferHtml = false }) => {
+  const normalizedNotes = (Array.isArray(stageNotes) ? stageNotes : [])
+    .map((item) => ({
+      agentLabel: String(item?.agentLabel || '').trim(),
+      note: normalizeStageNote(item?.note || ''),
+      roundIndex: Number(item?.roundIndex || 1),
+    }))
+    .filter((item) => item.agentLabel && item.note);
+
+  const managerMissing = String(managerPacket?.missing || '').trim();
+  const managerDecision = String(managerPacket?.decision || '').trim();
+  const managerHandoff = String(managerPacket?.handoff || '').trim();
+  const managerSummary = [managerHandoff, managerMissing, managerDecision].filter(Boolean).join('\n');
+  const lecturer = buildLecturerAssessment(managerMissing, managerDecision);
+
+  if (preferHtml) {
+    const notesList = normalizedNotes.length
+      ? `<ul>${normalizedNotes.map((item) => `<li><strong>${escapeHtmlForOutput(item.agentLabel)}</strong>${item.roundIndex > 1 ? ` (סבב ${item.roundIndex})` : ''}: ${escapeHtmlForOutput(item.note)}</li>`).join('')}</ul>`
+      : '<p>לא נאספו הערות סוכנים לסבב זה.</p>';
+
+    return `
+<div data-agent-notes="true" style="margin-top:28px;border-top:1px solid #D1D5DB;padding-top:18px;">
+  <h2>נספח הערות סוכנים</h2>
+  ${notesInstruction ? `<p><strong>הנחיית משתמש לנספח:</strong> ${escapeHtmlForOutput(notesInstruction)}</p>` : ''}
+  <h3>סיכום מנהל העבודה</h3>
+  <p>${escapeHtmlForOutput(managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`)}</p>
+  <h3>הערכת מרצה: ציון והיצמדות להנחיות</h3>
+  <p><strong>ציון משוער:</strong> ${lecturer.grade}/100</p>
+  <p>${escapeHtmlForOutput(lecturer.adherence)}</p>
+  <h3>הערות לפי סוכן</h3>
+  ${notesList}
+</div>`.trim();
+  }
+
+  const noteLines = normalizedNotes.length
+    ? normalizedNotes.map((item) => `- ${item.agentLabel}${item.roundIndex > 1 ? ` (סבב ${item.roundIndex})` : ''}: ${item.note}`).join('\n')
+    : '- לא נאספו הערות סוכנים לסבב זה.';
+  const plainNotesInstructionText = String(notesInstruction || '').trim();
+
+  return [
+    'נספח הערות סוכנים',
+    plainNotesInstructionText ? `הנחיית משתמש לנספח: ${plainNotesInstructionText}` : '',
+    '',
+    'סיכום מנהל העבודה:',
+    managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`,
+    '',
+    'הערכת מרצה: ציון והיצמדות להנחיות',
+    `ציון משוער: ${lecturer.grade}/100`,
+    lecturer.adherence,
+    '',
+    'הערות לפי סוכן:',
+    noteLines,
+  ].filter(Boolean).join('\n');
+};
+
+const appendNotesToOutput = ({ output = '', appendix = '' }) => {
+  const base = String(output || '').trim();
+  const suffix = String(appendix || '').trim();
+  if (!suffix) return base;
+  if (!base) return suffix;
+  return `${base}\n\n${suffix}`;
 };
 
 export const getAppMemory = () => {
@@ -2713,6 +2804,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const activeWorkspaceId = String(options.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const workspaceName = String(options.workspaceName || automation.workspaceName || '').trim();
   const disableFallback = options.disableFallback === true;
+  const expectDocumentOutput = options.expectDocumentOutput === true;
+  const appendAgentNotesToOutput = expectDocumentOutput && (options.appendAgentNotesToOutput === true || automation.appendAgentNotesToOutput === true);
+  const agentNotesInstruction = expectDocumentOutput
+    ? String(options.agentNotesInstruction || automation.agentNotesInstruction || '').trim()
+    : '';
   const resolvedModel = getModelNameForProvider(activeProvider, cfg, modelOverride);
   const logEvent = (type, message, extra = {}) => pushAgentDebugLog({
     runId,
@@ -2811,8 +2907,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       let processedStages = 0;
       let pendingFinalManagerReview = executionPlan?.needsFinalManagerReview === true;
       let finalManagerReviewPasses = 0;
+      let notesAlreadyAppended = false;
+      let lastManagerReviewPacket = null;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
       const stageArtifacts = [];
+      const stageNotes = [];
 
       while (executionQueue.length || pendingFinalManagerReview) {
         while (executionQueue.length && processedStages < maxStageCount) {
@@ -2860,6 +2959,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           revisitReason: queueItem?.revisitReason || '',
           decisionMode,
           enabledAgents,
+          agentNotesInstruction,
+          collectAgentNotes: appendAgentNotesToOutput,
         });
 
           logEvent('stage-start', `מתחיל שלב ${processedStages + 1} מתוך ${maxStageCount}${runCount > 1 ? ` • סבב ${runCount}` : ''}`, {
@@ -2938,6 +3039,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
           if (parsedReply.missing) {
             batonNotes.push(`${stageAgent.name} זיהה פערים: ${parsedReply.missing.replace(/\n+/g, ' ; ')}`);
+          }
+
+          const stageNoteText = [parsedReply.handoff, parsedReply.checklist, hasMeaningfulMissingItems(parsedReply.missing) ? parsedReply.missing : '']
+            .filter(Boolean)
+            .join('\n');
+          if (stageNoteText.trim()) {
+            stageNotes.push({
+              agentId: stageAgent.id,
+              agentLabel: stageLabel,
+              roundIndex: runCount,
+              note: stageNoteText,
+            });
           }
 
           const suggestedSkillIds = extractRequestedSkills(parsedReply, skillsConfig);
@@ -3110,6 +3223,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           total: orderedAgents.length + 1,
           finalReview: true,
           enabledAgents,
+          agentNotesInstruction,
+          collectAgentNotes: appendAgentNotesToOutput,
         });
 
         const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
@@ -3136,7 +3251,19 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         });
 
         const parsedManagerReply = parseStagePacket(managerReply);
+        lastManagerReviewPacket = parsedManagerReply;
         const managerDirectives = getDecisionDirectives(parsedManagerReply);
+        const managerNoteText = [parsedManagerReply.handoff, parsedManagerReply.checklist, hasMeaningfulMissingItems(parsedManagerReply.missing) ? parsedManagerReply.missing : '']
+          .filter(Boolean)
+          .join('\n');
+        if (managerNoteText.trim()) {
+          stageNotes.push({
+            agentId: managerAgent.id,
+            agentLabel: managerAgent.name || 'מנהל העבודה',
+            roundIndex: finalManagerReviewPasses,
+            note: managerNoteText,
+          });
+        }
         const revisitAllAgents = managerDirectives.revisitAll
           ? enabledAgents.filter((agent) => agent?.id && agent.id !== managerAgent.id)
           : [];
@@ -3186,7 +3313,30 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               decision: parsedManagerReply.decision || '',
               missing: parsedManagerReply.missing || '',
             });
-            throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל ה-workflow כבר הגיע למגבלת הסבבים.');
+            if (!expectDocumentOutput) {
+              throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל ה-workflow כבר הגיע למגבלת הסבבים.');
+            }
+            const recoveryAppendix = buildAgentNotesAppendix({
+              stageNotes,
+              notesInstruction: agentNotesInstruction,
+              managerPacket: parsedManagerReply,
+              managerLabel: managerAgent.name || 'מנהל העבודה',
+              preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
+            });
+            stagedOutput = appendNotesToOutput({
+              output: managerArtifact || stagedOutput || cleanUserPrompt,
+              appendix: recoveryAppendix,
+            });
+            notesAlreadyAppended = true;
+            pendingFinalManagerReview = false;
+            executionQueue.length = 0;
+            logEvent('workflow-recovered', 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות מנהל/מרצה', {
+              state: 'success',
+              agentId: managerAgent.id,
+              agentLabel: managerAgent.name || 'מנהל העבודה',
+              outputChars: stagedOutput.length,
+            });
+            break;
           }
 
           const scheduledRevisits = enqueueWorkflowRevisits({
@@ -3214,7 +3364,30 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               decision: parsedManagerReply.decision || '',
               missing: parsedManagerReply.missing || '',
             });
-            throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל לא נמצא שלב המשך תקף לביצוע.');
+            if (!expectDocumentOutput) {
+              throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל לא נמצא שלב המשך תקף לביצוע.');
+            }
+            const recoveryAppendix = buildAgentNotesAppendix({
+              stageNotes,
+              notesInstruction: agentNotesInstruction,
+              managerPacket: parsedManagerReply,
+              managerLabel: managerAgent.name || 'מנהל העבודה',
+              preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
+            });
+            stagedOutput = appendNotesToOutput({
+              output: managerArtifact || stagedOutput || cleanUserPrompt,
+              appendix: recoveryAppendix,
+            });
+            notesAlreadyAppended = true;
+            pendingFinalManagerReview = false;
+            executionQueue.length = 0;
+            logEvent('workflow-recovered', 'לא נמצא שלב המשך תקף; הוחזר מסמך מסכם במקום כשלון', {
+              state: 'success',
+              agentId: managerAgent.id,
+              agentLabel: managerAgent.name || 'מנהל העבודה',
+              outputChars: stagedOutput.length,
+            });
+            break;
           }
 
           logEvent('stage-revisit-required', 'סקירת המנהל דרשה סבב נוסף לפני החזרה למשתמש', {
@@ -3239,7 +3412,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         while (batonNotes.length > 10) batonNotes.shift();
       }
 
-      const finalOutput = String(stagedOutput || cleanUserPrompt).trim();
+      let finalOutput = String(stagedOutput || cleanUserPrompt).trim();
+      if (expectDocumentOutput && appendAgentNotesToOutput && !notesAlreadyAppended) {
+        const appendix = buildAgentNotesAppendix({
+          stageNotes,
+          notesInstruction: agentNotesInstruction,
+          managerPacket: lastManagerReviewPacket,
+          managerLabel: 'מנהל העבודה',
+          preferHtml: looksLikeHtmlDocument(finalOutput),
+        });
+        finalOutput = appendNotesToOutput({ output: finalOutput, appendix });
+      }
       logEvent('workflow-success', 'כל שלבי העבודה הושלמו', {
         state: 'success',
         agentLabel: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,

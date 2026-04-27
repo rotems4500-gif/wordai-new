@@ -768,7 +768,17 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
-    const requestOptions = { runId, agentLabel: 'AUTOPILOT', activeWorkspaceId: requestWorkspaceId, workspaceName: requestWorkspaceName };
+    const requestOptions = {
+      runId,
+      agentLabel: 'AUTOPILOT',
+      activeWorkspaceId: requestWorkspaceId,
+      workspaceName: requestWorkspaceName,
+      expectDocumentOutput: true,
+      appendAgentNotesToOutput: automation?.appendAgentNotesToOutput === true,
+      agentNotesInstruction: automation?.appendAgentNotesToOutput === true
+        ? String(automation?.agentNotesInstruction || '').trim()
+        : '',
+    };
     if (selectedModel) requestOptions.providerOverride = selectedModel;
 
     const response = await chatWithActiveProvider(
