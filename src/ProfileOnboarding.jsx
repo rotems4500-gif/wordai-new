@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
+const PROVIDER_QUICK_LINKS = [
+  { id: 'gemini', label: 'Gemini', keyUrl: 'https://aistudio.google.com/app/apikey', keyHint: 'Google AI Studio' },
+  { id: 'openai', label: 'OpenAI', keyUrl: 'https://platform.openai.com/api-keys', keyHint: 'OpenAI Platform' },
+  { id: 'claude', label: 'Claude', keyUrl: 'https://console.anthropic.com/settings/keys', keyHint: 'Anthropic Console' },
+  { id: 'groq', label: 'Groq', keyUrl: 'https://console.groq.com/keys', keyHint: 'Groq Console' },
+  { id: 'perplexity', label: 'Perplexity', keyUrl: 'https://www.perplexity.ai/settings/api', keyHint: 'Perplexity Settings' },
+  { id: 'openrouter', label: 'OpenRouter', keyUrl: 'https://openrouter.ai/keys', keyHint: 'OpenRouter Keys' },
+];
+
 export default function ProfileOnboarding({
   profile,
   updateField,
@@ -10,6 +19,8 @@ export default function ProfileOnboarding({
   selectLearningOption,
   toggleStyle,
   resetLearningGame,
+  onOpenAiSettings = () => {},
+  onOpenPersonalStyle = () => {},
   onComplete = () => {}
 }) {
   const [step, setStep] = useState(1);
@@ -644,6 +655,42 @@ export default function ProfileOnboarding({
                         🤖 אפשר לסוכן להמשיך ללמוד ולדייק איתי אוטומטית עם הזמן
                       </span>
                     </label>
+
+                    <div className="bg-slate-800/40 border border-slate-600/70 rounded-xl p-4 space-y-3">
+                      <div className="text-sm font-semibold text-white">🔐 חיבור ספק AI + קישורים ישירים להוצאת API key</div>
+                      <div className="text-xs text-white/80 leading-relaxed">
+                        אחרי יצירת המפתח, פתח את הגדרות ה-AI, הדבק את המפתח ולחץ "בדוק חיבור".
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {PROVIDER_QUICK_LINKS.map((provider) => (
+                          <a
+                            key={provider.id}
+                            href={provider.keyUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-3 py-1.5 rounded-full border border-slate-400/70 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors"
+                          >
+                            {provider.label} · {provider.keyHint}
+                          </a>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={onOpenAiSettings}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-500/70 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                        >
+                          פתח הגדרות AI
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onOpenPersonalStyle}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/70 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+                        >
+                          פתח העלאת חומרים ללמידה
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -2075,8 +2075,8 @@ function App() {
                   setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
                 }, 'end');
               }}
-              onOpenSettings={() => {
-                setFileMenuTargetTab('guide');
+              onOpenSettings={(targetTab = 'guide') => {
+                setFileMenuTargetTab(targetTab || 'guide');
                 setFileMenuOpen(true);
               }}
               onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {

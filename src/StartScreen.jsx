@@ -164,6 +164,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [selectedModel, setSelectedModel] = useState('gemini');
   
   const profile = getPersonalStyleProfile();
+  const onboardingDone = Boolean(profile?.onboardingCompletedAt);
 
   const fileInputRef = useRef(null);
   const instructionFileInputRef = useRef(null);
@@ -809,7 +810,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             )}
             
             <button
-              onClick={onOpenSettings}
+              onClick={() => onOpenSettings('onboarding')}
+              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500/80 to-orange-600/80 hover:from-amber-600/80 hover:to-orange-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
+            >
+              {onboardingDone ? '🧭 עדכון פרופיל היכרות' : '🎯 התחלת היכרות חכמה'}
+            </button>
+
+            <button
+              onClick={() => onOpenSettings('guide')}
               className="flex items-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
             >
               ⚙️ הגדרות וסקילים
