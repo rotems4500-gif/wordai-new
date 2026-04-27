@@ -231,6 +231,43 @@
       opacity: 1;
       transform: translateY(0);
     }
+
+    .spaced-row { margin-bottom: 12px; }
+    .compact-row { margin-bottom: 8px; }
+    .advanced-hint { margin-bottom: 10px; }
+    .hint-compact { margin-bottom: 8px; }
+    .progress-hint {
+      margin-bottom: 8px;
+      color: #1d4ed8;
+      font-weight: 700;
+    }
+    .w-full { width: 100%; }
+    .flex-fixed { flex: 0 0 auto; }
+    .inline-label-strong {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #3f4d67;
+      font-weight: 700;
+    }
+    .inline-label-compact {
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: #3f4d67;
+      font-weight: 700;
+    }
+    .checkbox-auto { width: auto; }
+    .circular-controls {
+      border: 1px solid #cfe0ff;
+      border-radius: 10px;
+      background: #f2f7ff;
+      padding: 10px;
+    }
+    .circular-row { margin-top: 4px; }
+    .circular-label-text {
+      margin: 0;
+      min-width: 130px;
+    }
+    .circular-max-input { width: 90px; }
   </style>
 </head>
 <body>
@@ -249,7 +286,7 @@
         <div id="saved-list-items"></div>
       </div>
 
-      <div class="inline" style="margin-bottom: 12px;">
+      <div class="inline spaced-row">
         <button class="btn btn-success" type="button" id="quick-create">⚡ צור סביבה פשוטה</button>
         <button class="btn btn-primary" type="button" id="toggle-advanced">יצירה מתקדמת</button>
       </div>
@@ -260,8 +297,8 @@
           <input id="new-workspace-name" placeholder="למשל: צוות מחקר" value="" />
           <div class="hint">שם בפועל: <strong id="name-preview">סביבה חדשה</strong></div>
         </div>
-        <div class="hint" style="margin-bottom: 10px;">הסביבה תיווצר עם הגדרות ברירת מחדל ותהפוך מיד לסביבה הפעילה לעריכת סוכנים.</div>
-        <button class="btn btn-primary" id="create-advanced" type="button" style="width:100%;">✅ צור סביבה</button>
+        <div class="hint advanced-hint">הסביבה תיווצר עם הגדרות ברירת מחדל ותהפוך מיד לסביבה הפעילה לעריכת סוכנים.</div>
+        <button class="btn btn-primary w-full" id="create-advanced" type="button">✅ צור סביבה</button>
       </div>
 
       <div class="agents-entry">
@@ -269,16 +306,16 @@
           <strong>איפה מוסיפים עוד סוכנים?</strong>
           <span>כאן למטה, ב"הוספת סוכן בפועל". הסוכן מתווסף לסביבה הפעילה שמוצגת במסך הזה.</span>
         </div>
-        <button class="btn btn-primary" id="add-agent-demo" type="button" style="flex:0 0 auto;">⬇️ מעבר להוספת סוכן</button>
+        <button class="btn btn-primary flex-fixed" id="add-agent-demo" type="button">⬇️ מעבר להוספת סוכן</button>
       </div>
 
       <div class="saved-list" id="agent-builder">
         <div class="saved-list-title">🧩 ניהול סוכנים מלא</div>
-        <div class="hint" style="margin-bottom: 8px;">ניהול עבור סביבה: <strong id="agent-target-name">-</strong></div>
-        <div class="hint" id="agent-progress" style="margin-bottom: 8px; color:#1d4ed8; font-weight:700;"></div>
-        <div class="inline" style="margin-bottom: 8px;">
+        <div class="hint hint-compact">ניהול עבור סביבה: <strong id="agent-target-name">-</strong></div>
+        <div class="hint progress-hint" id="agent-progress"></div>
+        <div class="inline compact-row">
           <input id="agent-name-input" placeholder="שם סוכן, למשל: בודק עובדות" />
-          <button class="btn btn-primary" id="add-agent-live" type="button" style="flex:0 0 auto;">➕ הוסף סוכן</button>
+          <button class="btn btn-primary flex-fixed" id="add-agent-live" type="button">➕ הוסף סוכן</button>
         </div>
         <div id="agent-list-items"></div>
       </div>
@@ -300,28 +337,28 @@
         <div class="inline">
           <select id="home-workspace"></select>
         </div>
-        <label class="inline" style="margin-top:8px; font-size:12px; color:#3f4d67; font-weight:700;">
-          <input id="home-autopilot" type="checkbox" style="width:auto;" checked />
+        <label class="inline inline-label-strong">
+          <input id="home-autopilot" class="checkbox-auto" type="checkbox" checked />
           הפעל אוטופיילוט
         </label>
       </div>
 
       <div class="saved-list" id="workflow-builder">
         <div class="saved-list-title">🔁 הגדרות זרימת עבודה מהירה</div>
-        <div class="inline" style="margin-bottom: 8px;">
-          <select id="workflow-mode" style="flex:1;">
+        <div class="inline compact-row">
+          <select id="workflow-mode" class="w-full" title="בחירת סוג זרימת עבודה מהירה" aria-label="בחירת סוג זרימת עבודה מהירה">
             <option value="circular-team">סביבה מעגלית</option>
             <option value="custom-order">סדר ידני</option>
           </select>
         </div>
-        <div id="circular-controls" class="hidden" style="border:1px solid #cfe0ff; border-radius:10px; background:#f2f7ff; padding:10px;">
-          <label class="inline" style="margin-bottom:8px; font-size:12px; color:#3f4d67; font-weight:700;">
-            <input id="circular-enabled" type="checkbox" style="width:auto;" checked />
+        <div id="circular-controls" class="hidden circular-controls">
+          <label class="inline inline-label-compact">
+            <input id="circular-enabled" class="checkbox-auto" type="checkbox" checked />
             אפשר חזרה לסוכן קודם
           </label>
-          <div class="inline" style="margin-top:4px;">
-            <span class="label" style="margin:0; min-width:130px;">מקסימום סבבים</span>
-            <input id="circular-max-rounds" type="number" min="1" max="4" value="2" style="width:90px;" />
+          <div class="inline circular-row">
+            <span class="label circular-label-text">מקסימום סבבים</span>
+            <input id="circular-max-rounds" class="circular-max-input" type="number" min="1" max="4" value="2" />
           </div>
         </div>
       </div>

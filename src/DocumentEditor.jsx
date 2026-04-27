@@ -31,7 +31,7 @@ const DOC_STYLE_PRESETS = {
 
 const getSavedTypographyDefaults = (prefs = {}) => {
   try {
-    const savedFont = String(prefs.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
+    const savedFont = String(prefs.defaultFontStack || localStorage.getItem('default-font-stack') || prefs.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
     const savedSizeRaw = String(prefs.defaultFontSize || localStorage.getItem('default-size') || '').trim();
     const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
     return { savedFont, savedSize };
@@ -111,8 +111,10 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       dom.style.width = '100%';
       dom.style.maxWidth = '100%';
       dom.style.marginInline = '0';
+      dom.style.fontSize = savedSize || preset.fontSize;
+      dom.style.fontFamily = savedFont || preset.fontFamily;
     }
-  }, [documentStyle, activeTemplateId, viewMode]);
+  }, [documentStyle, activeTemplateId, viewMode, wordPreferences?.defaultFontFamily, wordPreferences?.defaultFontStack, wordPreferences?.defaultFontSize]);
 
   // editor חייב להיות מוגדר לפני useCallback שמשתמשים בו
   const editor = useEditor({

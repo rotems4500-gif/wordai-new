@@ -9,7 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
 
 const DOCUMENT_STYLE_PRESETS = {
@@ -27,6 +27,13 @@ const buildLiveGenerationShell = (promptText = '') => `
   <h1>${String(promptText || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
   <p>טוען מבנה, מקורות וניסוח...</p>
 `;
+
+const normalizeStoredDefaultFont = (value = '') => {
+  const firstFamily = String(value || '').split(',')[0] || '';
+  return firstFamily.replace(/^['"]+|['"]+$/g, '').trim() || 'Alef';
+};
+
+const getActiveWorkspaceId = () => String(getWorkspaceAutomation().activeWorkspaceId || '').trim();
 
 const FEEDBACK_OPTION_GROUPS = [
   {
@@ -92,9 +99,11 @@ const isLegacyHomeEnabled = () => {
   }
 };
 
-const getRecentAgentLogs = (limit = 18) => {
+const getRecentAgentLogs = (limit = 18, filters = {}) => {
   const automation = getWorkspaceAutomation();
-  return getAgentDebugLogs({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', includeUnscoped: false }).slice(-limit).reverse();
+  const workspaceId = String(filters.workspaceId || automation?.activeWorkspaceId || 'default-content-studio').trim();
+  const runId = String(filters.runId || '').trim();
+  return getAgentDebugLogs({ workspaceId, runId, includeUnscoped: false }).slice(-limit).reverse();
 };
 
 function App() {
@@ -143,12 +152,32 @@ function App() {
     prompt: '',
     summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
     logs: getRecentAgentLogs(),
+    runId: '',
+    workspaceId: getWorkspaceAutomation().activeWorkspaceId || '',
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
+  const activeWorkspaceIdRef = React.useRef(getActiveWorkspaceId());
+  const workspaceEpochRef = React.useRef(0);
+  const activeGenerationRequestIdRef = React.useRef(0);
   const pendingImportRef = React.useRef(null);
+  const beginGenerationRequest = (runIdPrefix = 'doc') => {
+    const requestId = activeGenerationRequestIdRef.current + 1;
+    activeGenerationRequestIdRef.current = requestId;
+    return {
+      requestId,
+      runId: `${runIdPrefix}-${Date.now()}-${requestId}`,
+      workspaceEpoch: workspaceEpochRef.current,
+      workspaceId: getActiveWorkspaceId(),
+    };
+  };
+  const isGenerationRequestCurrent = (request) => (
+    activeGenerationRequestIdRef.current === request.requestId
+    && workspaceEpochRef.current === request.workspaceEpoch
+    && getActiveWorkspaceId() === request.workspaceId
+  );
   const [activeFormats, setActiveFormats] = React.useState({
     bold: false,
     italic: false,
@@ -192,7 +221,7 @@ function App() {
       styleOverrides = {};
     }
     const currentOverride = styleOverrides?.[styleId] || {};
-    const savedFont = String(wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
+    const savedFont = String(wordPreferences.defaultFontStack || localStorage.getItem('default-font-stack') || wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
     const savedSizeRaw = String(wordPreferences.defaultFontSize || localStorage.getItem('default-size') || '').trim();
     const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
     dom.setAttribute('data-doc-style', styleId);
@@ -324,12 +353,16 @@ function App() {
     setFeedbackSurvey((prev) => ({ ...prev, submitting: true }));
     setAssistantTrigger('autopilot');
     setSidebarOpen(true);
+    const generationRequest = beginGenerationRequest('doc-feedback');
+    const originWorkspaceId = generationRequest.workspaceId;
     setLiveGeneration({
       active: true,
       state: 'running',
       prompt: 'מנהל הצוות מתקן את המסמך לפי המשוב שלך',
-      summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-      logs: getRecentAgentLogs(),
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
     });
 
     try {
@@ -338,11 +371,13 @@ function App() {
         originalPrompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
         feedback: feedbackText,
+        runId: generationRequest.runId,
         returnMeta: true,
       });
 
       const revisedHtml = result?.html || editor?.getHTML?.() || '';
       const usedFallback = Boolean(result?.usedFallback);
+  if (!isGenerationRequestCurrent(generationRequest)) return;
 
       if (editor && revisedHtml) {
         editor.commands.setContent(revisedHtml);
@@ -360,8 +395,10 @@ function App() {
         active: true,
         state: usedFallback ? 'warning' : 'success',
         prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getRecentAgentLogs(),
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
       });
 
       setFeedbackSurvey({
@@ -377,13 +414,16 @@ function App() {
         alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
       }
     } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) return;
       setFeedbackSurvey((prev) => ({ ...prev, submitting: false }));
       setLiveGeneration({
         active: true,
         state: 'error',
         prompt: 'עדכון המסמך נכשל',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getRecentAgentLogs(),
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
       });
       alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
     }
@@ -415,12 +455,30 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    const syncLiveGeneration = () => {
-      setLiveGeneration((prev) => ({
-        ...prev,
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getRecentAgentLogs(),
-      }));
+    const syncLiveGeneration = (event) => {
+      const nextAutomation = getWorkspaceAutomation();
+      const nextWorkspaceId = getActiveWorkspaceId();
+      const previousWorkspaceId = activeWorkspaceIdRef.current;
+      const isWorkspaceChange = event?.type === 'wordai-workspace-changed';
+      const hasWorkspaceSwitched = isWorkspaceChange && previousWorkspaceId !== nextWorkspaceId;
+      if (hasWorkspaceSwitched) {
+        workspaceEpochRef.current += 1;
+        setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+      }
+      setLiveGeneration((prev) => {
+        const scopedRunId = hasWorkspaceSwitched ? '' : String(prev.runId || '').trim();
+        const scopedWorkspaceId = nextWorkspaceId || previousWorkspaceId;
+        return {
+          ...(hasWorkspaceSwitched
+            ? { active: false, state: 'idle', prompt: '', runId: '' }
+            : prev),
+          summary: getLatestAgentRunSummary(nextAutomation, scopedRunId),
+          logs: getRecentAgentLogs(18, { workspaceId: scopedWorkspaceId, runId: scopedRunId }),
+          runId: scopedRunId,
+          workspaceId: scopedWorkspaceId,
+        };
+      });
+      activeWorkspaceIdRef.current = nextWorkspaceId || previousWorkspaceId;
     };
 
     syncLiveGeneration();
@@ -811,14 +869,22 @@ function App() {
         break;
       }
       case 'saveDefaultTypography': {
-        const currentFont = editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef';
+        const currentFontStack = String(editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef').trim();
+        const currentFont = normalizeStoredDefaultFont(currentFontStack);
         const currentSize = editor.getAttributes('textStyle')?.fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt';
         localStorage.setItem('default-font', currentFont);
+        localStorage.setItem('default-font-stack', currentFontStack || currentFont);
         localStorage.setItem('default-size', currentSize);
-        syncPersistedAppSettings();
+        saveWordPreferences({
+          ...wordPreferences,
+          defaultFontFamily: currentFont,
+          defaultFontStack: currentFontStack || currentFont,
+          defaultFontSize: currentSize,
+        });
         setWordPreferences((prev) => ({
           ...prev,
           defaultFontFamily: currentFont,
+          defaultFontStack: currentFontStack || currentFont,
           defaultFontSize: currentSize,
         }));
         applyDocumentStyleToEditor(documentStyle);
@@ -1648,7 +1714,7 @@ function App() {
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         {!showStartScreen && sidebarOpen && (
           <aside
-            className="order-last h-full shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)]"
+            className="order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden"
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
@@ -2029,26 +2095,32 @@ function App() {
                 setSidebarCompact(false);
                 setSidebarOpen(true);
                 setShowStartScreen(false);
+                const generationRequest = beginGenerationRequest('doc');
+                const originWorkspaceId = generationRequest.workspaceId;
                 setLiveGeneration({
                   active: true,
                   state: 'running',
                   prompt,
-                  summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                  logs: getRecentAgentLogs(),
+                  summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+                  logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+                  runId: generationRequest.runId,
+                  workspaceId: originWorkspaceId,
                 });
                 editor.commands.setContent(buildLiveGenerationShell(prompt));
                 focusEditorSoon('start');
                 try {
-                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
+                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, runId: generationRequest.runId, returnMeta: true });
                   const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
                   const usedFallback = Boolean(result?.usedFallback);
+                  if (!isGenerationRequestCurrent(generationRequest)) return;
                   editor.commands.setContent(generated);
                   saveDocumentHistory({ title: prompt, content: generated, templateId, source: 'start-screen' });
                   persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation()), logs: getRecentAgentLogs() }));
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
                   setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt, templateId: templateId || 'blank', usedFallback });
                 } catch (error) {
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getRecentAgentLogs() }));
+                  if (!isGenerationRequestCurrent(generationRequest)) return;
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
                   if (editor) editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
                 }
               }}

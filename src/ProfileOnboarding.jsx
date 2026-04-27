@@ -9,7 +9,8 @@ export default function ProfileOnboarding({
   trainingAnswers,
   selectLearningOption,
   toggleStyle,
-  resetLearningGame
+  resetLearningGame,
+  onComplete = () => {}
 }) {
   const [step, setStep] = useState(1);
   const [animating, setAnimating] = useState(false);
@@ -679,8 +680,8 @@ export default function ProfileOnboarding({
           </div>
           
           <button
-            onClick={nextStep}
-            disabled={step === 7}
+            onClick={step === 7 ? onComplete : nextStep}
+            disabled={false}
             className={`group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 ${
               step === 4 
                 ? 'bg-white/10 text-white/40 cursor-not-allowed backdrop-blur-sm border border-white/20' 
@@ -691,7 +692,7 @@ export default function ProfileOnboarding({
             }}
           >
             <span className="flex items-center gap-2">
-              {step === 7 ? 'סיום ✨' : 'המשך →'}
+              {step === 7 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
             </span>
           </button>
         </div>

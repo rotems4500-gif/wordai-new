@@ -1,0 +1,2735 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WordAI Onboarding Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&family=IBM+Plex+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f6f1e8;
+      --bg-strong: #efe6d6;
+      --paper: rgba(255, 252, 246, 0.88);
+      --paper-strong: #fffdf9;
+      --ink: #1f2933;
+      --muted: #6b7280;
+      --line: rgba(31, 41, 51, 0.12);
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --accent-soft: rgba(15, 118, 110, 0.12);
+      --warn: #c2410c;
+      --peach: #f97316;
+      --gold: #d4a72c;
+      --shadow: 0 30px 80px rgba(58, 47, 38, 0.15);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top right, rgba(249, 115, 22, 0.18), transparent 22%),
+        radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.18), transparent 28%),
+        linear-gradient(180deg, #fbf7ef 0%, #f3ebde 100%);
+      color: var(--ink);
+      font-family: "Heebo", "IBM Plex Sans Hebrew", sans-serif;
+    }
+
+    body {
+      padding: 32px;
+    }
+
+    .ambient {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .ambient::before,
+    .ambient::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(16px);
+      opacity: 0.7;
+    }
+
+    .ambient::before {
+      width: 280px;
+      height: 280px;
+      right: 4%;
+      top: 8%;
+      background: rgba(15, 118, 110, 0.12);
+      animation: drift 14s ease-in-out infinite;
+    }
+
+    .ambient::after {
+      width: 360px;
+      height: 360px;
+      left: 3%;
+      bottom: 2%;
+      background: rgba(249, 115, 22, 0.12);
+      animation: drift 18s ease-in-out infinite reverse;
+    }
+
+    @keyframes drift {
+      0%, 100% { transform: translate3d(0, 0, 0); }
+      50% { transform: translate3d(0, -18px, 0) scale(1.04); }
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1440px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+      border-radius: var(--radius-xl);
+    }
+
+    .summary {
+      position: sticky;
+      top: 24px;
+      padding: 24px;
+      overflow: hidden;
+    }
+
+    .summary::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 180px;
+      height: 180px;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+      color: var(--accent-strong);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .eyebrow .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--peach), var(--gold));
+      box-shadow: 0 0 0 6px rgba(249, 115, 22, 0.12);
+    }
+
+    .summary h1 {
+      margin: 18px 0 10px;
+      font-size: clamp(30px, 4vw, 42px);
+      line-height: 1.05;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .summary p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    .progress-block {
+      margin-top: 28px;
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.68);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .progress-track {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(31, 41, 51, 0.08);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 0;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), #3b82f6);
+      transition: width 0.28s ease;
+    }
+
+    .summary-grid {
+      margin-top: 22px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .mini-panel {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.64);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+    }
+
+    .mini-panel h2,
+    .mini-panel h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      color: var(--accent-strong);
+      text-transform: uppercase;
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .provider-guide-list {
+      margin-bottom: 18px;
+    }
+
+    .summary-item {
+      display: grid;
+      gap: 4px;
+      padding-bottom: 10px;
+      border-bottom: 1px dashed rgba(31, 41, 51, 0.12);
+    }
+
+    .summary-item:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .summary-item strong {
+      font-size: 13px;
+    }
+
+    .summary-item span {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .checklist {
+      display: grid;
+      gap: 10px;
+    }
+
+    .check {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(15, 118, 110, 0.06);
+      border: 1px solid transparent;
+      font-size: 14px;
+    }
+
+    .check.done {
+      background: rgba(15, 118, 110, 0.1);
+      border-color: rgba(15, 118, 110, 0.16);
+    }
+
+    .check-badge {
+      min-width: 64px;
+      padding: 6px 10px;
+      text-align: center;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(31, 41, 51, 0.08);
+      color: var(--muted);
+    }
+
+    .check.done .check-badge {
+      background: rgba(15, 118, 110, 0.14);
+      color: var(--accent-strong);
+    }
+
+    .main {
+      padding: 28px;
+    }
+
+    .main-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .main-head h2 {
+      margin: 10px 0 6px;
+      font-size: clamp(28px, 3vw, 38px);
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .main-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+      max-width: 620px;
+    }
+
+    .ghost-btn,
+    .primary-btn,
+    .secondary-btn {
+      appearance: none;
+      border: 0;
+      font-family: inherit;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+
+    .ghost-btn:hover,
+    .primary-btn:hover,
+    .secondary-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .ghost-btn {
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(31, 41, 51, 0.06);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .stepper {
+      display: grid;
+      grid-template-columns: repeat(var(--step-count, 8), minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .step-pill {
+      position: relative;
+      padding: 14px 14px 14px 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(31, 41, 51, 0.08);
+      background: rgba(255, 255, 255, 0.64);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 74px;
+      transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .step-pill.active {
+      background: rgba(15, 118, 110, 0.1);
+      border-color: rgba(15, 118, 110, 0.24);
+      transform: translateY(-2px);
+    }
+
+    .step-pill.done {
+      background: rgba(15, 118, 110, 0.06);
+      border-color: rgba(15, 118, 110, 0.14);
+    }
+
+    .step-index {
+      width: 34px;
+      height: 34px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: rgba(31, 41, 51, 0.08);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 800;
+      flex: none;
+    }
+
+    .step-pill.active .step-index,
+    .step-pill.done .step-index {
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: white;
+    }
+
+    .step-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .step-copy strong {
+      font-size: 14px;
+      line-height: 1.1;
+    }
+
+    .step-copy span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .stage {
+      display: none;
+      padding: 24px;
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+    }
+
+    .stage.active {
+      display: block;
+      animation: stageIn 0.32s ease;
+    }
+
+    .is-hidden {
+      display: none;
+    }
+
+    @keyframes stageIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .stage h3 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.15;
+    }
+
+    .stage p.lead {
+      margin: 0 0 24px;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .hero-grid,
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero-grid,
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .surface {
+      padding: 18px;
+      border-radius: 20px;
+      background: var(--paper-strong);
+      border: 1px solid var(--line);
+      min-height: 100%;
+    }
+
+    .surface h4 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .surface p,
+    .surface li {
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .surface ul {
+      margin: 0;
+      padding-inline-start: 18px;
+    }
+
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .provider-card,
+    .choice-card,
+    .tone-card {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      padding: 18px;
+      border-radius: 18px;
+      background: var(--paper-strong);
+      border: 1px solid var(--line);
+      cursor: pointer;
+      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .provider-card:hover,
+    .choice-card:hover,
+    .tone-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(15, 118, 110, 0.24);
+      box-shadow: 0 18px 34px rgba(15, 118, 110, 0.08);
+    }
+
+    .provider-card.active,
+    .choice-card.active,
+    .tone-card.active {
+      border-color: rgba(15, 118, 110, 0.34);
+      background: linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.9));
+    }
+
+    .provider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .provider-name {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      width: fit-content;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(31, 41, 51, 0.08);
+      color: var(--muted);
+    }
+
+    .tag.success {
+      background: rgba(15, 118, 110, 0.12);
+      color: var(--accent-strong);
+    }
+
+    .tag.warn {
+      background: rgba(194, 65, 12, 0.1);
+      color: var(--warn);
+    }
+
+    .field-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 12px;
+    }
+
+    label.field {
+      display: grid;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .field span,
+    .slider-head {
+      color: var(--ink);
+    }
+
+    .field small {
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid rgba(31, 41, 51, 0.14);
+      border-radius: 14px;
+      padding: 14px 16px;
+      font: inherit;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: rgba(15, 118, 110, 0.38);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .split-input {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 12px;
+    }
+
+    .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .secondary-btn {
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--accent-strong);
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .chip-set {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .chip {
+      padding: 12px 14px;
+      border: 1px solid rgba(31, 41, 51, 0.1);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--ink);
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    }
+
+    .chip.active {
+      border-color: rgba(15, 118, 110, 0.28);
+      background: rgba(15, 118, 110, 0.12);
+      color: var(--accent-strong);
+    }
+
+    .slider-wrap {
+      display: grid;
+      gap: 10px;
+    }
+
+    .survey-stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .support-text {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .upload-layout,
+    .agent-layout {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .upload-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .upload-list,
+    .agent-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .upload-item,
+    .agent-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 14px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.84);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+    }
+
+    .upload-item strong,
+    .agent-line strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .upload-item span,
+    .agent-line span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .permission-row {
+      display: flex;
+      gap: 12px;
+      align-items: start;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(15, 118, 110, 0.08);
+      border: 1px solid rgba(15, 118, 110, 0.12);
+      margin-top: 16px;
+      cursor: pointer;
+    }
+
+    .permission-row input {
+      margin-top: 4px;
+      accent-color: var(--accent);
+    }
+
+    .agent-recommendation {
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .space-top-md {
+      margin-top: 12px;
+    }
+
+    .space-top-lg {
+      margin-top: 16px;
+    }
+
+    .single-column {
+      grid-template-columns: 1fr;
+    }
+
+    .slider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .trust-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+    }
+
+    .bullets {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .bullet {
+      display: flex;
+      gap: 12px;
+      align-items: start;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .bullet strong {
+      color: var(--ink);
+    }
+
+    .bullet-mark {
+      width: 12px;
+      height: 12px;
+      margin-top: 6px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--gold), var(--peach));
+      flex: none;
+    }
+
+    .stage-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(31, 41, 51, 0.08);
+    }
+
+    .stage-note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      max-width: 460px;
+    }
+
+    .stage-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .primary-btn {
+      padding: 14px 20px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: white;
+      font-size: 15px;
+      font-weight: 800;
+      box-shadow: 0 18px 34px rgba(15, 118, 110, 0.18);
+    }
+
+    .final-wrap {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1.15fr 0.85fr;
+    }
+
+    .success-panel {
+      padding: 24px;
+      border-radius: 24px;
+      background: linear-gradient(145deg, rgba(15, 118, 110, 0.1), rgba(255, 255, 255, 0.92));
+      border: 1px solid rgba(15, 118, 110, 0.16);
+    }
+
+    .success-panel h4 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .success-panel p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .launch-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .launch-item {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.84);
+      border: 1px solid rgba(31, 41, 51, 0.08);
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .launch-item strong {
+      font-size: 15px;
+    }
+
+    .launch-item span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .status-ring {
+      min-width: 84px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.12);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    @media (max-width: 1120px) {
+      body {
+        padding: 18px;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .summary {
+        position: static;
+      }
+
+      .stepper,
+      .provider-grid,
+      .hero-grid,
+      .grid-2,
+      .grid-3,
+      .field-grid,
+      .choice-grid,
+      .upload-layout,
+      .agent-layout,
+      .trust-grid,
+      .final-wrap {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .main,
+      .summary,
+      .stage {
+        padding: 20px;
+      }
+
+      .main-head,
+      .stage-footer {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .stepper {
+        gap: 10px;
+      }
+
+      .stage-actions {
+        justify-content: stretch;
+      }
+
+      .stage-actions button {
+        width: 100%;
+      }
+
+      .split-input {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient"></div>
+
+  <div class="shell">
+    <aside class="card summary">
+      <div class="eyebrow"><span class="dot"></span> Prototype / Soft Onboarding</div>
+      <h1>היכרות ראשונה שמביאה את המשתמש לערך מהר</h1>
+      <p>
+        דוגמת flow ל-onboarding חדש: לא חוסם את הכניסה לעורך, אבל כן בונה פרופיל שימוש,
+        setup של AI, וטון עבודה אישי כבר מהרגע הראשון.
+      </p>
+
+      <div class="progress-block">
+        <div class="progress-meta">
+          <span>התקדמות</span>
+          <strong id="progressLabel">שלב 1 מתוך 5</strong>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+
+      <div class="summary-grid">
+        <section class="mini-panel">
+          <h2>תקציר חי</h2>
+          <div class="summary-list">
+            <div class="summary-item">
+              <strong>שם לתצוגה</strong>
+              <span id="summaryName">עדיין לא הוגדר</span>
+            </div>
+            <div class="summary-item">
+              <strong>Provider נבחר</strong>
+              <span id="summaryProvider">Gemini</span>
+            </div>
+            <div class="summary-item">
+              <strong>חוג / קורסים</strong>
+              <span id="summaryProfile">טרם מולא</span>
+            </div>
+            <div class="summary-item">
+              <strong>שימושים מרכזיים</strong>
+              <span id="summaryUseCases">טרם נבחר</span>
+            </div>
+            <div class="summary-item">
+              <strong>טון עבודה</strong>
+              <span id="summaryTone">ברור ומדויק</span>
+            </div>
+            <div class="summary-item">
+              <strong>חומרי למידה</strong>
+              <span id="summaryMaterials">טרם נוספו</span>
+            </div>
+            <div class="summary-item">
+              <strong>צוות סוכנים</strong>
+              <span id="summaryAgents">טרם נוצר</span>
+            </div>
+            <div class="summary-item">
+              <strong>מצב למידה</strong>
+              <span id="summaryTrust">טרם נבחר</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="mini-panel">
+          <h3>Checklist</h3>
+          <div class="checklist">
+            <div class="check" id="checkProvider">
+              <span>חיבור AI בסיסי</span>
+              <span class="check-badge">חסר</span>
+            </div>
+            <div class="check" id="checkProfile">
+              <span>פרופיל שימוש</span>
+              <span class="check-badge">חסר</span>
+            </div>
+            <div class="check" id="checkStyle">
+              <span>העדפות סגנון</span>
+              <span class="check-badge">חסר</span>
+            </div>
+            <div class="check" id="checkMaterials">
+              <span>חומרי למידה מאושרים</span>
+              <span class="check-badge">חסר</span>
+            </div>
+            <div class="check" id="checkAgents">
+              <span>צוות סוכנים מומלץ</span>
+              <span class="check-badge">חסר</span>
+            </div>
+            <div class="check" id="checkTrust">
+              <span>סקירת אמון</span>
+              <span class="check-badge">חסר</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+    <main class="card main">
+      <div class="main-head">
+        <div>
+          <div class="eyebrow">Onboarding Preview</div>
+          <h2>מסלול קצר, ברור, וניתן להשלמה חוזרת</h2>
+          <p>
+            הפרוטוטייפ מדגים onboarding בתוך משטח אחד: Welcome, חיבור provider, הגדרת שימושים,
+            התאמת style, ואמון. זו לא אפליקציה מלאה, אלא בסיס שיחה למעבר ל-StartScreen ול-React.
+          </p>
+        </div>
+        <button class="ghost-btn" id="skipToEditorBtn" type="button">דלג לעורך</button>
+      </div>
+
+      <div class="stepper" id="stepper"></div>
+
+      <section class="stage active" data-stage="0">
+        <h3>ברוכים הבאים. נגדיר את המערכת סביב איך שאתה באמת עובד.</h3>
+        <p class="lead">
+          המטרה כאן היא לא להעמיס שאלון, אלא להוריד חיכוך. בשתי דקות אתה יכול להפעיל AI, לבחור
+          סגנון בסיסי, ולהגיע למסמך ראשון עם הגדרות טובות.
+        </p>
+
+        <div class="hero-grid">
+          <div class="surface">
+            <h4>מה המשתמש מקבל מהמסלול הזה</h4>
+            <ul>
+              <li>חיבור מהיר ל-provider פעיל עם API key.</li>
+              <li>דיפולטים חכמים לפי סוג העבודה שלו.</li>
+              <li>בסיס ניסוחי מותאם בלי להסתבך בהגדרות עמוקות.</li>
+              <li>כניסה מהירה לעורך גם אם חלק מהשלבים נדחו לאחר כך.</li>
+            </ul>
+          </div>
+
+          <div class="surface">
+            <h4>הגדרה קצרה אישית</h4>
+            <div class="grid-3">
+              <label class="field">
+                <span>שם פרטי</span>
+                <input id="firstName" type="text" placeholder="למשל: רותם" />
+              </label>
+              <label class="field">
+                <span>איך נקרא לך בממשק?</span>
+                <input id="displayName" type="text" placeholder="למשל: רותם" />
+              </label>
+              <label class="field">
+                <span>מה התפקיד שלך כרגע?</span>
+                <input id="userRole" type="text" placeholder="למשל: סטודנט, יועץ, מרצה" />
+              </label>
+            </div>
+
+            <div class="inline-actions">
+              <span class="tag success">Soft onboarding</span>
+              <span class="tag">אפשר להמשיך אחר כך</span>
+              <span class="tag">לא מוסיפים storage חדש</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            ההמלצה המוצרית היא להתחיל בתוך StartScreen הקיים, לא ב-wizard חוסם מעל כל האפליקציה.
+          </div>
+          <div class="stage-actions">
+            <button class="secondary-btn" type="button" data-action="skip">המשך בלי הגדרה</button>
+            <button class="primary-btn" type="button" data-action="next">המשך לחיבור AI</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="1">
+        <h3>נבחר provider ונחבר key או endpoint מקומי</h3>
+        <p class="lead">
+          השלב הזה הוא לב ה-value. אם יש key או endpoint מקומי מוכן, אפשר להתחיל לעבוד באמת. אם לא, עדיין אפשר להתקדם ולהשלים מאוחר יותר.
+        </p>
+
+        <div class="provider-grid" id="providerGrid">
+          <button class="provider-card active" type="button" data-provider="gemini">
+            <div class="provider-head">
+              <div class="provider-name">Gemini</div>
+              <span class="tag success">מהיר להתחלה</span>
+            </div>
+            <span>מתאים לכתיבה כללית, אקדמית ותהליכי draft מהירים.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="openai">
+            <div class="provider-head">
+              <div class="provider-name">OpenAI</div>
+              <span class="tag">גמיש</span>
+            </div>
+            <span>מתאים למסמכים מורכבים, ניסוח עשיר ותרחישים כלליים.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="claude">
+            <div class="provider-head">
+              <div class="provider-name">Claude</div>
+              <span class="tag">ליטוש</span>
+            </div>
+            <span>מתאים לקריאה עמוקה, ליטוש טקסטים ארוכים וניסוח מאוזן.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="groq">
+            <div class="provider-head">
+              <div class="provider-name">Groq</div>
+              <span class="tag success">מהיר וזול</span>
+            </div>
+            <span>מתאים לטיוטות, רעיונות וסבבי עבודה קצרים עם latency נמוך.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="perplexity">
+            <div class="provider-head">
+              <div class="provider-name">Perplexity</div>
+              <span class="tag warn">מחקר</span>
+            </div>
+            <span>מתאים לתהליכי מחקר, fact-finding ותוכן עם חיבור למקורות.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="deepseek">
+            <div class="provider-head">
+              <div class="provider-name">DeepSeek</div>
+              <span class="tag">חסכוני</span>
+            </div>
+            <span>מתאים לשכתוב, עבודה בנפח גבוה ועלויות נמוכות יחסית.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="openrouter">
+            <div class="provider-head">
+              <div class="provider-name">OpenRouter</div>
+              <span class="tag">רב-מודלי</span>
+            </div>
+            <span>מתאים למי שרוצה לעבור בין מודלים רבים דרך endpoint אחד.</span>
+          </button>
+
+          <button class="provider-card" type="button" data-provider="local-custom">
+            <div class="provider-head">
+              <div class="provider-name">Local / Custom</div>
+              <span class="tag success">מקומי</span>
+            </div>
+            <span>מתאים ל-LM Studio או endpoint מקומי תואם OpenAI שרץ על loopback.</span>
+          </button>
+        </div>
+
+        <div class="surface">
+          <div class="summary-list provider-guide-list">
+            <div class="summary-item">
+              <strong id="providerGuideTitle">איך משיגים מפתח ל-Gemini</strong>
+              <span><a id="providerGuideLink" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer noopener">פתח את Google AI Studio</a></span>
+            </div>
+            <div class="summary-item">
+              <strong>לפי השימוש הצפוי</strong>
+              <span id="providerGuideLine1">מתאים לכתיבה כללית, אקדמית וטיוטות שרוצים להניע מהר.</span>
+              <span id="providerGuideLine2">בחירה טובה להתחלה כשצריך איזון בין מחיר, מהירות ואיכות.</span>
+            </div>
+            <div class="summary-item">
+              <strong>הדרכה קצרה</strong>
+              <span id="providerGuideSteps">פתח את הדשבורד של הספק, צור key חדש, הדבק כאן ובדוק חיבור לפני שממשיכים.</span>
+            </div>
+          </div>
+
+          <div class="split-input">
+            <label class="field">
+              <span id="apiKeyLabel">API key</span>
+              <input id="apiKey" type="password" placeholder="AIza... / sk-..." />
+              <small id="apiKeyHelper">מפתח חינמי, לרוב מתחיל ב-AIza.</small>
+            </label>
+
+            <label class="field is-hidden" id="baseUrlField">
+              <span>Base URL</span>
+              <input id="baseUrl" type="text" placeholder="http://localhost:11434/v1" />
+              <small id="baseUrlHelper">פטור מ-key זמין רק ל-loopback מוכר על 11434 או 1234.</small>
+            </label>
+
+            <label class="field">
+              <span>מודל מועדף</span>
+              <select id="modelSelect">
+                <option value="auto">בחירה אוטומטית</option>
+                <option value="flash">Gemini Flash</option>
+                <option value="gpt-4o-mini">GPT-4o mini</option>
+                <option value="sonar">Perplexity Sonar</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="inline-actions">
+            <button class="secondary-btn" id="testConnectionBtn" type="button">בדוק חיבור</button>
+            <span class="tag" id="connectionStatus">טרם נבדק</span>
+            <a class="tag" id="providerLinkTag" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer noopener">פתח עמוד מפתח</a>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            גם אם המשתמש מדלג כאן, נשמור onboarding כ-setup חלקי ונאפשר כניסה לעורך עם CTA להשלמה מאוחרת.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">דלג על ההגדרה כרגע</button>
+            <button class="primary-btn" type="button" data-action="next">המשך לפרופיל שימוש</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="2">
+        <h3>נאסוף קצת הקשר אישי כדי לא לדבר אליך גנרית</h3>
+        <p class="lead">
+          כאן אנחנו שואלים רק מה שבאמת יעזור ל-AI ולסוכנים: שימושים, חוג או מסלול, קורסים פעילים ומה אתה מנסה להשיג מהכתיבה.
+        </p>
+
+        <div class="grid-2">
+          <div class="surface">
+            <h4>שימושים מרכזיים</h4>
+            <div class="chip-set" id="useCaseChips">
+              <button class="chip" type="button" data-chip-group="useCases" data-value="עבודות אקדמיות">עבודות אקדמיות</button>
+              <button class="chip" type="button" data-chip-group="useCases" data-value="מסמכים ללקוחות">מסמכים ללקוחות</button>
+              <button class="chip" type="button" data-chip-group="useCases" data-value="סיכומים והערות">סיכומים והערות</button>
+              <button class="chip" type="button" data-chip-group="useCases" data-value="דוחות ומחקר">דוחות ומחקר</button>
+              <button class="chip" type="button" data-chip-group="useCases" data-value="כתיבה שיווקית">כתיבה שיווקית</button>
+              <button class="chip" type="button" data-chip-group="useCases" data-value="מצגות ותסריטים">מצגות ותסריטים</button>
+            </div>
+
+            <div class="field-grid space-top-md">
+              <label class="field">
+                <span>מוסד / חברה / מסגרת</span>
+                <input id="institutionName" type="text" placeholder="אוניברסיטה, סטארטאפ, ארגון" />
+              </label>
+              <label class="field">
+                <span>חוג / מסלול / תחום</span>
+                <input id="studyTrack" type="text" placeholder="למשל: מדעי המחשב, חינוך, שיווק" />
+              </label>
+              <label class="field">
+                <span>קהל יעד עיקרי</span>
+                <input id="targetAudience" type="text" placeholder="מרצים, לקוחות, הנהלה, קוראים כלליים" />
+              </label>
+            </div>
+          </div>
+
+          <div class="surface">
+            <h4>פרטים שיעזרו לסוכנים לדייק</h4>
+            <label class="field">
+              <span>קורסים / פרויקטים פעילים</span>
+              <textarea id="currentCourses" placeholder="למשל: סמינר בחינוך, קורס AI, פרויקט UX. אפשר להפריד בפסיקים או בשורות."></textarea>
+            </label>
+
+            <label class="field space-top-md">
+              <span>מה אתה מנסה להשיג במסמכים שלך?</span>
+              <textarea id="writingGoals" placeholder="למשל: להגיש עבודה ברמה גבוהה, לכתוב דוחות ללקוחות מהר יותר, לבנות מסמכי מוצר חדים."></textarea>
+            </label>
+
+            <label class="field space-top-md">
+              <span>עוד הקשר שחשוב למערכת לדעת</span>
+              <textarea id="userBackground" placeholder="למשל: אני כותב בעברית רשמית, עובד מול מקורות, אוהב מבנה ברור ופתיח קצר."></textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            ב-React נרצה למחזר כאן שדות שכבר קיימים כמו `studyTrack`, `currentCourses`, `institutionName`, `userRole` ו-`writingGoals`.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">דלג זמנית</button>
+            <button class="primary-btn" type="button" data-action="next">המשך להתאמת style</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="3">
+        <h3>נכוון את הטון ונשאל שאלות שיסבירו לסוכנים איך לכתוב</h3>
+        <p class="lead">
+          השלב הזה אמור להרגיש כמו התאמה אישית, לא כמו מילוי טופס. נוסיף כמה שאלות קצרות שיחדדו מבנה, עומק, מילים להימנע מהן ורמת רשמיות רצויה.
+        </p>
+
+        <div class="grid-3" id="toneGrid">
+          <button class="tone-card active" type="button" data-tone="ברור ומדויק">
+            <strong>ברור ומדויק</strong>
+            <span>משפטים נקיים, בלי רעש, עם היררכיה ברורה.</span>
+          </button>
+          <button class="tone-card" type="button" data-tone="רשמי ומשכנע">
+            <strong>רשמי ומשכנע</strong>
+            <span>מתאים למסמכים מול גורמים מקצועיים ולקוחות.</span>
+          </button>
+          <button class="tone-card" type="button" data-tone="חכם אך נגיש">
+            <strong>חכם אך נגיש</strong>
+            <span>שומר על עומק אבל לא מכביד על הקורא.</span>
+          </button>
+        </div>
+
+        <div class="grid-2 space-top-lg">
+          <div class="surface survey-stack">
+            <div class="slider-wrap">
+              <div class="slider-head">
+                <span>רמת רשמיות</span>
+                <strong id="formalityValue">65%</strong>
+              </div>
+              <input id="formalityRange" type="range" min="0" max="100" value="65" />
+            </div>
+
+            <div>
+              <div class="support-text">איזה מבנה אתה מעדיף כברירת מחדל?</div>
+              <div class="choice-grid space-top-md">
+                <button class="choice-card" type="button" data-structure-pref="פתיח חד ומהיר">
+                  <strong>פתיח חד ומהיר</strong>
+                  <span>להגיע מהר לנקודה בלי הקדמות ארוכות.</span>
+                </button>
+                <button class="choice-card" type="button" data-structure-pref="מבנה אקדמי מלא">
+                  <strong>מבנה אקדמי מלא</strong>
+                  <span>מבוא, טיעון, דיון וסיכום מסודר.</span>
+                </button>
+                <button class="choice-card" type="button" data-structure-pref="שלד קצר להמשך">
+                  <strong>שלד קצר להמשך</strong>
+                  <span>עדיף draft רזה שאפשר להמשיך ללטש.</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="bullets">
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>נמוך:</strong> שפה קלה, חיה, מהירה.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>גבוה:</strong> טון פורמלי, מהודק ומוכן להגשה.</span></div>
+            </div>
+          </div>
+
+          <div class="surface survey-stack">
+            <div>
+              <div class="support-text">כמה עומק, דוגמאות ומקורות אתה מצפה לראות?</div>
+              <div class="choice-grid space-top-md">
+                <button class="choice-card" type="button" data-evidence-pref="תמציתי וישיר">
+                  <strong>תמציתי וישיר</strong>
+                  <span>מעט דוגמאות, הרבה פוקוס.</span>
+                </button>
+                <button class="choice-card" type="button" data-evidence-pref="מאוזן ומדגים">
+                  <strong>מאוזן ומדגים</strong>
+                  <span>שילוב של טיעון, דוגמה והסבר.</span>
+                </button>
+                <button class="choice-card" type="button" data-evidence-pref="עמוק ומבוסס מקורות">
+                  <strong>עמוק ומבוסס מקורות</strong>
+                  <span>להביא מקורות, הקשרים והסתייגויות.</span>
+                </button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>מילים או ביטויים שכדאי להימנע מהם</span>
+              <textarea id="avoidWords" placeholder="למשל: תכלס, מדהים, למנף, או כל ביטוי שלא מתאים לך."></textarea>
+            </label>
+
+            <label class="field">
+              <span>הנחיות ניסוח שחשוב לשמור</span>
+              <textarea id="styleNotes" placeholder="למשל: פתיח קצר, כותרות ברורות, בלי מילים מתנצלות, לסיים עם מסקנה אופרטיבית."></textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            בגרסת React כדאי למפות את התשובות האלה ל-`styleTrainingSummary`, `preferredTrainingExamples`, `tonePreferences` ולכללי ניסוח של הסוכנים.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">דלג בינתיים</button>
+            <button class="primary-btn" type="button" data-action="next">המשך לחומרי למידה</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="4">
+        <h3>אפשר להעלות עבודות קודמות, דוגמאות וחומרי קורס. רק באישור שלך.</h3>
+        <p class="lead">
+          זה השלב שבו המערכת לומדת ניסיון וסגנון אמיתי מתוך חומרים שהמשתמש בוחר. בלי אישור מפורש, הקבצים לא יסומנו כלמידה פעילה.
+        </p>
+
+        <div class="upload-layout">
+          <div class="surface">
+            <h4>מה אפשר ללמד מהקבצים</h4>
+            <div class="bullets">
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>דוגמת כתיבה אישית:</strong> טון, אוצר מילים וקצב ניסוח.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>תבנית מסמך או דף שער:</strong> מבנה, היררכיה ועיצוב מועדף.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>חומר קורס או רקע:</strong> עולם מושגים, דרישות והקשרים אקדמיים.</span></div>
+            </div>
+
+            <label class="permission-row">
+              <input id="materialLearningConsent" type="checkbox" />
+              <span>
+                <strong>אני מאשר להשתמש בקבצים שאעלה ללמידת ניסיון וסגנון.</strong><br />
+                אפשר לשנות את ההחלטה אחר כך מתוך ההגדרות, והקבצים נשארים כחומרי עזר מקומיים.
+              </span>
+            </label>
+          </div>
+
+          <div class="surface">
+            <h4>הוסף עבודות קודמות או חומרי עזר</h4>
+            <div class="upload-toolbar">
+              <select id="uploadKindSelect">
+                <option value="general">קובץ עזר כללי</option>
+                <option value="cover-page">דף שער לדוגמה</option>
+                <option value="template-example">תבנית מסמך לדוגמה</option>
+                <option value="writing-sample">דוגמת כתיבה אישית</option>
+                <option value="course-material">חומר קורס או רקע</option>
+              </select>
+              <button class="secondary-btn" id="uploadMaterialsBtn" type="button">בחר קבצים</button>
+              <span class="tag" id="uploadStatus">לא נבחרו קבצים</span>
+            </div>
+
+            <input id="materialsFileInput" type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" hidden />
+
+            <div class="upload-list" id="uploadList">
+              <div class="upload-item">
+                <div>
+                  <strong>עדיין אין קבצים</strong>
+                  <span>במימוש האמיתי זה יתחבר ישירות ל-`MATERIAL_UPLOAD_PRESETS`, `saveHelperMaterial` ו-`loadProjectMaterials`.</span>
+                </div>
+                <span class="tag">Preview</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            זה reuse ישיר של מנגנון ה-upload שכבר קיים ב-StartScreen וב-FileMenu. אין צורך לבנות נתיב חדש לקבצים רק בגלל onboarding.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">דלג על העלאה כרגע</button>
+            <button class="primary-btn" type="button" data-action="next">המשך לצוות סוכנים</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="5">
+        <h3>ניצור צוות סוכנים אוטומטי לפי סקר קצר</h3>
+        <p class="lead">
+          במקום שהמשתמש יגדיר ידנית כל agent, אפשר למפות את הסקר ל-preset קיים ולתת לו צוות מומלץ כבר מהיום הראשון.
+        </p>
+
+        <div class="agent-layout">
+          <div class="surface survey-stack">
+            <div>
+              <div class="support-text">איזה סוג עבודה אתה עושה בעיקר?</div>
+              <div class="choice-grid space-top-md">
+                <button class="choice-card" type="button" data-team-intent="academic">
+                  <strong>אקדמי</strong>
+                  <span>עבודות, סמינרים, סיכומים והגשות.</span>
+                </button>
+                <button class="choice-card" type="button" data-team-intent="verified-research">
+                  <strong>מחקר מאומת</strong>
+                  <span>דרישה לבקרה גבוהה ומקורות מסודרים.</span>
+                </button>
+                <button class="choice-card" type="button" data-team-intent="product">
+                  <strong>מוצר / לקוחות</strong>
+                  <span>מסמכי אפיון, דוחות, תוכן שיווקי והצעות.</span>
+                </button>
+                <button class="choice-card" type="button" data-team-intent="general">
+                  <strong>כתיבה כללית</strong>
+                  <span>תוכן כללי, draft מהיר ושימושים מעורבים.</span>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="support-text">כמה ביקורת ומחקר אתה מצפה מהצוות?</div>
+              <div class="choice-grid space-top-md">
+                <button class="choice-card" type="button" data-research-depth="light">
+                  <strong>מהיר וקל</strong>
+                  <span>פחות מחקר, יותר זרימה ומהירות.</span>
+                </button>
+                <button class="choice-card" type="button" data-research-depth="balanced">
+                  <strong>מאוזן</strong>
+                  <span>גם קצב טוב וגם שכבת בדיקה.</span>
+                </button>
+                <button class="choice-card" type="button" data-research-depth="strict">
+                  <strong>קפדני</strong>
+                  <span>עדיפות לבקרה, אימות וסבבי תיקון.</span>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="support-text">איך אתה רוצה שהצוות ירוץ?</div>
+              <div class="choice-grid space-top-md">
+                <button class="choice-card" type="button" data-collaboration-mode="manager-auto">
+                  <strong>מנהל אוטומטי</strong>
+                  <span>המערכת בוחרת מסלול לבד.</span>
+                </button>
+                <button class="choice-card" type="button" data-collaboration-mode="circular-team">
+                  <strong>סביבה מעגלית</strong>
+                  <span>שיפורים בסבבים אם מתגלים פערים.</span>
+                </button>
+                <button class="choice-card" type="button" data-collaboration-mode="design-first">
+                  <strong>מבנה קודם</strong>
+                  <span>מתאים במיוחד למסמכי מוצר ואפיון שבהם חשוב לבנות שלד חד לפני כתיבה.</span>
+                </button>
+                <button class="choice-card" type="button" data-collaboration-mode="custom-order">
+                  <strong>סדר מותאם</strong>
+                  <span>לתרחישים קשיחים או מחקריים יותר.</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="surface agent-recommendation">
+            <h4>הצוות שייווצר עבורך</h4>
+            <div class="summary-list">
+              <div class="summary-item">
+                <strong id="recommendedPresetLabel">טרם נוצר צוות</strong>
+                <span id="recommendedPresetCopy">ענה על שלוש השאלות כדי למפות אוטומטית ל-preset קיים כמו `content-studio`, `academic-lab` או `product-desk`.</span>
+              </div>
+            </div>
+
+            <div class="inline-actions">
+              <span class="tag" id="recommendedWorkflowTag">Workflow יופיע כאן</span>
+              <span class="tag" id="agentStatusTag">טרם נוצר</span>
+            </div>
+
+            <div class="agent-list" id="recommendedAgentList">
+              <div class="agent-line">
+                <div>
+                  <strong>המלצה תופיע כאן</strong>
+                  <span>במימוש האמיתי זה יתחבר ל-`buildWorkspaceAgentPreset`, `saveRoleAgents` ו-`saveWorkspaceAutomation`.</span>
+                </div>
+                <span class="tag">Preset</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            ברירת המחדל צריכה להיות reuse של presets קיימים. רק אם הסקר לא מתאים לשום preset סביר, עוברים ל-`custom-workspace`.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">השאר default team</button>
+            <button class="primary-btn" type="button" data-action="next">המשך לאמון והרשאות</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="6">
+        <h3>שקיפות, למידה והרשאות</h3>
+        <p class="lead">
+          זה המקום להסביר בפשטות מה נשמר מקומית, מה עושה learning consent, ואיך המשתמש שומר שליטה מלאה. בלי שפה משפטית מיותרת.
+        </p>
+
+        <div class="trust-grid">
+          <div class="surface">
+            <h4>מה קורה עם המידע שלך</h4>
+            <div class="bullets">
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>מפתחות API:</strong> נשמרים בקונפיגורציית provider הקיימת בדסקטופ.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>העדפות כתיבה:</strong> נשמרות מקומית בתוך ה-`personal style profile` הקיים.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>עבודות עבר שהועלו:</strong> נשארות חומרי לימוד מקומיים וניתנות להסרה או החלפה.</span></div>
+              <div class="bullet"><span class="bullet-mark"></span><span><strong>צוות הסוכנים:</strong> מבוסס preset או workspace automation קיים, לא מנגנון צדדי חדש.</span></div>
+            </div>
+          </div>
+
+          <div class="surface">
+            <h4>בחר מצב התנהגות</h4>
+            <div class="grid-2 single-column">
+              <button class="choice-card" type="button" data-trust="מקומי בלבד">
+                <strong>מקומי בלבד</strong>
+                <span>שומר הגדרות בסיסיות, בלי למידה פעילה ממסמכים.</span>
+              </button>
+              <button class="choice-card" type="button" data-trust="למידה מאושרת">
+                <strong>למידה מאושרת</strong>
+                <span>מאפשר שימוש בחומרים נבחרים כדי לדייק את הסגנון לאורך זמן.</span>
+              </button>
+              <button class="choice-card" type="button" data-trust="להחליט אחר כך">
+                <strong>להחליט אחר כך</strong>
+                <span>נמשיך לעבודה עכשיו ונציג את ההסבר שוב בהגדרות.</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            זה המקום לנסח אמון. לא "אישור תנאים", אלא הסבר תכליתי שמסביר מה יקרה, איפה, ואיך אפשר לשנות החלטה.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" data-action="skip">הגדר אחר כך</button>
+            <button class="primary-btn" type="button" data-action="next">סיום והמשך לעורך</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stage" data-stage="7">
+        <h3>המערכת מוכנה לעבודה ראשונה</h3>
+        <p class="lead">
+          במסך הסיום אנחנו לא חוגגים סתם. אנחנו מחזירים למשתמש תחושת שליטה: מה הוגדר, מה נשאר פתוח, ולאן נכנסים עכשיו.
+        </p>
+
+        <div class="final-wrap">
+          <div class="success-panel">
+            <span class="tag success" id="finalStatusTag">Onboarding כמעט הושלם</span>
+            <h4 id="finalHeadline">הכול מוכן למסמך הראשון שלך</h4>
+            <p id="finalCopy">
+              הגדרת provider, כיוון שימוש והעדפות style בסיסיות. אפשר עכשיו לפתוח מסמך ראשון,
+              או לעבור למסך ההגדרות כדי לחדד פרטים נוספים.
+            </p>
+
+            <div class="launch-list">
+              <div class="launch-item">
+                <div>
+                  <strong>פתח מסמך חדש</strong>
+                  <span>כניסה מהירה לעורך עם דיפולטים ראשוניים</span>
+                </div>
+                <div class="status-ring">Primary CTA</div>
+              </div>
+              <div class="launch-item">
+                <div>
+                  <strong>השלם בהגדרות</strong>
+                  <span>מעבר ל-FileMenu לטיוב provider, style וחומרי לימוד</span>
+                </div>
+                <div class="status-ring">Secondary</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="surface">
+            <h4>מה נשמר מהפרוטוטייפ</h4>
+            <div class="summary-list">
+              <div class="summary-item">
+                <strong>תזכורת ארכיטקטונית</strong>
+                <span>אין storage חדש. משתמשים ב-provider config הקיים עבור מפתחות, וב-`personal style profile` עבור כל מצב ה-onboarding, ה-profile וה-style.</span>
+              </div>
+              <div class="summary-item">
+                <strong>Resume אמיתי</strong>
+                <span>צריך לשמור `onboardingProgressStep`, `onboardingCompletedAt`, checklist והפניות לקבצים/צוות שנוצרו.</span>
+              </div>
+              <div class="summary-item">
+                <strong>לימוד ניסיון</strong>
+                <span>העלאת עבודות עבר נשענת על `MATERIAL_UPLOAD_PRESETS`, `saveHelperMaterial` ו-`loadProjectMaterials` שכבר קיימים.</span>
+              </div>
+              <div class="summary-item">
+                <strong>צוות סוכנים אוטומטי</strong>
+                <span>ב-phase 1 ההמלצה נשענת על presets קיימים כמו `content-studio`, `academic-lab` ו-`product-desk`; `academic-dual-research` נשמר למסלול multi-provider מאוחר יותר.</span>
+              </div>
+              <div class="summary-item">
+                <strong>מסלול fallback</strong>
+                <span>פתיחה מחודשת דרך StartScreen או דרך settings לפי מה שחסר.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-footer">
+          <div class="stage-note">
+            זהו הסיום המומלץ ל-phase 1: להחזיר את המשתמש לעורך, לא לעכב אותו עם עוד שאלות.
+          </div>
+          <div class="stage-actions">
+            <button class="ghost-btn" type="button" data-action="back">חזור</button>
+            <button class="secondary-btn" type="button" id="openSettingsBtn">פתח הגדרות</button>
+            <button class="primary-btn" type="button" id="openEditorBtn">פתח מסמך ראשון</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const steps = [
+      { title: 'פתיחה', subtitle: 'ערך מיידי' },
+      { title: 'AI Setup', subtitle: 'Provider וגישה' },
+      { title: 'פרופיל', subtitle: 'חוג וקורסים' },
+      { title: 'Style', subtitle: 'העדפות כתיבה' },
+      { title: 'למידה', subtitle: 'עבודות קודמות' },
+      { title: 'צוות', subtitle: 'סוכנים אוטומטיים' },
+      { title: 'אמון', subtitle: 'שליטה והרשאות' },
+      { title: 'סיום', subtitle: 'Ready to write' },
+    ];
+
+    const providerSetupCatalog = [
+      {
+        id: 'gemini',
+        label: 'Gemini',
+        apiPlaceholder: 'AIza...',
+        keyHint: 'מפתח חינמי, לרוב מתחיל ב-AIza.',
+        keyUrl: 'https://aistudio.google.com/app/apikey',
+        keyLinkLabel: 'פתח את Google AI Studio',
+        recommendation: [
+          'מתאים לכתיבה כללית, אקדמית וטיוטות שרוצים להניע מהר.',
+          'בחירה טובה להתחלה כשצריך איזון בין מחיר, מהירות ואיכות.',
+        ],
+        steps: 'פתח את Google AI Studio, צור API key חדש, הדבק כאן ובחר מודל כמו Gemini Flash.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'flash', label: 'Gemini Flash' },
+          { value: 'pro', label: 'Gemini Pro' },
+        ],
+      },
+      {
+        id: 'openai',
+        label: 'OpenAI',
+        apiPlaceholder: 'sk-...',
+        keyHint: 'המפתח מתחיל בדרך כלל ב-sk-.',
+        keyUrl: 'https://platform.openai.com/api-keys',
+        keyLinkLabel: 'פתח את OpenAI API Keys',
+        recommendation: [
+          'מתאים למסמכים מורכבים, שכתוב איכותי ותרחישים כלליים.',
+          'בחירה טובה כשצריך מודלים יציבים ומערכת כלים רחבה.',
+        ],
+        steps: 'פתח את OpenAI API Keys, צור Secret key חדש, הדבק כאן ובחר GPT-4o mini או GPT-4.1.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'gpt-4o-mini', label: 'GPT-4o mini' },
+          { value: 'gpt-4.1', label: 'GPT-4.1' },
+        ],
+      },
+      {
+        id: 'claude',
+        label: 'Claude',
+        apiPlaceholder: 'sk-ant-...',
+        keyHint: 'המפתח מתחיל בדרך כלל ב-sk-ant-.',
+        keyUrl: 'https://console.anthropic.com/settings/keys',
+        keyLinkLabel: 'פתח את Anthropic Keys',
+        recommendation: [
+          'מתאים לליטוש מסמכים, קריאה עמוקה וניסוח מאוזן.',
+          'בחירה טובה כשצריך תשובות שקולות על טקסטים ארוכים.',
+        ],
+        steps: 'פתח את Anthropic Console, צור API key חדש, הדבק כאן ובחר Claude Sonnet.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+          { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+        ],
+      },
+      {
+        id: 'groq',
+        label: 'Groq',
+        apiPlaceholder: 'gsk_...',
+        keyHint: 'המפתח מתחיל בדרך כלל ב-gsk_ ואפשר להתחיל בלי כרטיס אשראי.',
+        keyUrl: 'https://console.groq.com/keys',
+        keyLinkLabel: 'פתח את Groq Console',
+        recommendation: [
+          'מתאים לטיוטות מהירות, רעיונות וסבבי עבודה קצרים.',
+          'טוב כשחשוב לקבל תשובות זריזות ולא לשלם הרבה.',
+        ],
+        steps: 'פתח את Groq Console, צור key חדש, הדבק כאן ובחר מודל מהיר מהרשימה.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
+          { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+        ],
+      },
+      {
+        id: 'perplexity',
+        label: 'Perplexity',
+        apiPlaceholder: 'pplx-...',
+        keyHint: 'המפתח מתחיל בדרך כלל ב-pplx-.',
+        keyUrl: 'https://www.perplexity.ai/settings/api',
+        keyLinkLabel: 'פתח את Perplexity API',
+        recommendation: [
+          'מתאים למחקר, fact-checking ותוכן שצריך חיבור למקורות.',
+          'בחירה טובה כשחשוב לעבוד עם אינטרנט חי ושכבת מחקר מובנית.',
+        ],
+        steps: 'פתח את Perplexity API, צור key חדש, הדבק כאן ובחר Sonar או Sonar Pro.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'sonar', label: 'Perplexity Sonar' },
+          { value: 'sonar-pro', label: 'Perplexity Sonar Pro' },
+        ],
+      },
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        runtimeProviderLabel: 'Custom API',
+        apiPlaceholder: 'sk-...',
+        keyHint: 'המפתח מופק ב-DeepSeek Platform ומתחיל לרוב ב-sk-.',
+        keyUrl: 'https://platform.deepseek.com/api_keys',
+        keyLinkLabel: 'פתח את DeepSeek Platform',
+        recommendation: [
+          'מתאים לשכתוב, עבודה בנפח גבוה ועלויות נמוכות יחסית.',
+          'בחירה טובה כשרוצים להרחיב את סל הספקים מעבר לברירות המחדל.',
+        ],
+        steps: 'פתח את DeepSeek Platform, צור key חדש, והדבק כאן כמו כל ספק OpenAI-compatible.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'deepseek-chat', label: 'DeepSeek Chat' },
+          { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+        ],
+        requiresBaseUrl: true,
+        defaultBaseUrl: 'https://api.deepseek.com/v1',
+        baseUrlPlaceholder: 'https://api.deepseek.com/v1',
+        baseUrlHint: 'ב-runtime הספק הזה נפתח דרך Custom עם endpoint מוכן מראש.',
+      },
+      {
+        id: 'openrouter',
+        label: 'OpenRouter',
+        runtimeProviderLabel: 'Custom API',
+        apiPlaceholder: 'sk-or-v1-...',
+        keyHint: 'המפתח מתחיל בדרך כלל ב-sk-or-v1-.',
+        keyUrl: 'https://openrouter.ai/keys',
+        keyLinkLabel: 'פתח את OpenRouter Keys',
+        recommendation: [
+          'מתאים למי שרוצה לבחור מתוך הרבה מודלים דרך endpoint אחד.',
+          'טוב להשוואות מהירות ולהתאמה שוטפת של מודל למשימה.',
+        ],
+        steps: 'פתח את OpenRouter Keys, צור key חדש, הדבק כאן ובחר openrouter/auto או מודל ידני.',
+        models: [
+          { value: 'auto', label: 'בחירה אוטומטית' },
+          { value: 'openrouter/auto', label: 'OpenRouter Auto' },
+          { value: 'anthropic/claude-3.7-sonnet', label: 'Claude Sonnet דרך OpenRouter' },
+        ],
+        requiresBaseUrl: true,
+        defaultBaseUrl: 'https://openrouter.ai/api/v1',
+        baseUrlPlaceholder: 'https://openrouter.ai/api/v1',
+        baseUrlHint: 'גם כאן ה-flow ממלא Custom עם baseUrl ומודל ראשוני.',
+      },
+      {
+        id: 'local-custom',
+        label: 'Local / Custom',
+        runtimeProviderLabel: 'Custom API',
+        apiPlaceholder: 'אופציונלי בשרת מקומי',
+        keyHint: 'המסלול הזה מיועד ל-runtime מקומי מאושר. בלי key נתמך רק ב-loopback של LM Studio או endpoint מקומי תואם על 1234/11434.',
+        keyUrl: 'docs/new-user-onboarding-plan.md',
+        keyLinkLabel: 'פתח מדריך למסלול local/custom',
+        recommendation: [
+          'מתאים לפרטיות מקומית או למי שכבר מריץ endpoint תואם OpenAI על המחשב.',
+          'המסלול הזה נשען על baseUrl מקומי ומודל זמין, ולא רק על שדה key.',
+        ],
+        steps: 'הפעל LM Studio או endpoint מקומי תואם OpenAI, הזן baseUrl כמו http://localhost:1234/v1, בחר מודל ולחץ בדוק חיבור.',
+        models: [
+          { value: 'llama3.1:8b', label: 'Llama 3.1 8B' },
+          { value: 'qwen2.5:7b', label: 'Qwen 2.5 7B' },
+          { value: 'custom-local-model', label: 'מודל מקומי אחר' },
+        ],
+        requiresApiKey: false,
+        requiresBaseUrl: true,
+        defaultBaseUrl: 'http://localhost:1234/v1',
+        baseUrlPlaceholder: 'http://localhost:1234/v1',
+        baseUrlHint: 'פטור מ-key מיוצג כאן רק ל-loopback מקומי מוכר על פורטים 1234 או 11434.',
+      },
+    ];
+
+    const providerSetupById = providerSetupCatalog.reduce((acc, provider) => {
+      acc[provider.id] = provider;
+      return acc;
+    }, {});
+
+    const providerSetupByLabel = providerSetupCatalog.reduce((acc, provider) => {
+      acc[provider.label] = provider;
+      return acc;
+    }, {});
+
+    const modelOptionsByProvider = Object.fromEntries(
+      providerSetupCatalog.map((provider) => [provider.label, provider.models])
+    );
+
+    const materialPresets = {
+      general: { id: 'general', label: 'קובץ עזר כללי' },
+      'cover-page': { id: 'cover-page', label: 'דף שער לדוגמה' },
+      'template-example': { id: 'template-example', label: 'תבנית מסמך לדוגמה' },
+      'writing-sample': { id: 'writing-sample', label: 'דוגמת כתיבה אישית' },
+      'course-material': { id: 'course-material', label: 'חומר קורס או רקע' },
+    };
+
+    const workflowLabels = {
+      'manager-auto': 'מנהל אוטומטי בוחר מסלול',
+      'circular-team': 'סביבה מעגלית',
+      'design-first': 'מבנה קודם',
+      'custom-order': 'סדר מותאם',
+    };
+
+    const agentPresetCatalog = {
+      'content-studio': {
+        label: 'סטודיו תוכן',
+        description: 'מנהל עבודה אוטומטי, מעצב מבנה, כותב, חוקר ומגיה למסמכים כלליים.',
+        workflowMode: 'manager-auto',
+        agents: ['מנהל עבודה', 'מעצב מבנה', 'כותב', 'חוקר', 'מגיה'],
+      },
+      'academic-lab': {
+        label: 'צוות אקדמי',
+        description: 'צוות שמכוון לעבודות, סמינרים וסיכומים פורמליים.',
+        workflowMode: 'manager-auto',
+        agents: ['מנהל עבודה אקדמי', 'חוקר ספרות', 'בונה שלד אקדמי', 'כותב אקדמי', 'מגיה אקדמי'],
+      },
+      'academic-dual-research': {
+        label: 'אקדמי מאומת',
+        description: 'צוות מחקר קפדני עם איסוף מקורות כפול, כתיבה ובקרת התאמה סופית.',
+        workflowMode: 'custom-order',
+        agents: ['מנהל עבודה', 'חוקר אקדמי', 'אוסף משלים', 'כותב העבודה', 'בקרת התאמה'],
+      },
+      'product-desk': {
+        label: 'צוות מוצר',
+        description: 'מתאים למסמכי אפיון, הצעות, דוחות ותוכן שיווקי.',
+        workflowMode: 'design-first',
+        agents: ['מנהל מוצר', 'מעצב חוויה', 'קופירייטר', 'אנליסט שוק', 'עורך סופי'],
+      },
+      'custom-workspace': {
+        label: 'סביבה מותאמת אישית',
+        description: 'צוות בסיסי שמיועד לשלב שבו רוצים להתחיל מהמלצה ואז לערוך ידנית.',
+        workflowMode: 'custom-order',
+        agents: ['מנהל', 'חוקר', 'כותב', 'עורך'],
+      },
+    };
+
+    const state = {
+      currentStep: 0,
+      firstName: '',
+      displayName: '',
+      userRole: '',
+      providerGuideId: 'gemini',
+      provider: 'Gemini',
+      connectedProviders: 1,
+      apiKey: '',
+      baseUrl: '',
+      model: 'auto',
+      useCases: [],
+      targetAudience: '',
+      institutionName: '',
+      studyTrack: '',
+      currentCoursesText: '',
+      writingGoals: '',
+      userBackground: '',
+      tone: 'ברור ומדויק',
+      formality: 65,
+      structurePreference: '',
+      evidencePreference: '',
+      avoidWords: '',
+      styleNotes: '',
+      uploadKind: 'general',
+      uploadedMaterials: [],
+      teamIntent: '',
+      researchDepth: '',
+      collaborationMode: '',
+      trust: '',
+      connectionTested: false,
+      lastVerifiedSignature: '',
+      touched: {
+        profile: false,
+        style: false,
+        materials: false,
+        agents: false,
+        trust: false,
+      },
+    };
+
+    const stepper = document.getElementById('stepper');
+    const stages = Array.from(document.querySelectorAll('.stage'));
+    const materialsFileInput = document.getElementById('materialsFileInput');
+
+    function splitTextList(text = '') {
+      return String(text || '')
+        .split(/[\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function isLearningApproved() {
+      return state.trust === 'למידה מאושרת';
+    }
+
+    function setTrustChoice(choice) {
+      state.trust = choice;
+      state.touched.trust = Boolean(choice);
+    }
+
+    function getSelectedProvider() {
+      return providerSetupById[state.providerGuideId] || providerSetupByLabel[state.provider] || providerSetupById.gemini;
+    }
+
+    function isLocalOpenAICompatibleBaseUrl(baseUrl = '') {
+      try {
+        const parsed = new URL(String(baseUrl || '').trim());
+        const hostname = String(parsed.hostname || '').trim().toLowerCase();
+        const port = String(parsed.port || '').trim() || (parsed.protocol === 'https:' ? '443' : '80');
+        if (!hostname) return false;
+        const isLoopbackHost = hostname === 'localhost'
+          || hostname === '::1'
+          || /^127(?:\.\d+){3}$/.test(hostname);
+        if (!isLoopbackHost) return false;
+        return port === '11434' || port === '1234';
+      } catch {
+        return false;
+      }
+    }
+
+    function canUseLocalProviderWithoutKey(provider = getSelectedProvider()) {
+      return provider.requiresBaseUrl === true
+        && provider.requiresApiKey === false
+        && Boolean(state.baseUrl.trim())
+        && Boolean(state.model)
+        && isLocalOpenAICompatibleBaseUrl(state.baseUrl);
+    }
+
+    function hasProviderConfiguration(provider = getSelectedProvider()) {
+      if (provider.requiresBaseUrl === true) {
+        return Boolean(state.baseUrl.trim() && state.model && (state.apiKey.trim() || canUseLocalProviderWithoutKey(provider)));
+      }
+      return Boolean(state.apiKey.trim());
+    }
+
+    function getProviderVerificationSignature(provider = getSelectedProvider()) {
+      return [
+        provider.id || provider.label || '',
+        String(state.baseUrl || '').trim(),
+        String(state.model || '').trim(),
+        String(state.apiKey || '').trim(),
+      ].join('::');
+    }
+
+    function isProviderReady(provider = getSelectedProvider()) {
+      return state.connectionTested === true && state.lastVerifiedSignature === getProviderVerificationSignature(provider);
+    }
+
+    function renderModelOptions() {
+      const select = document.getElementById('modelSelect');
+      const provider = getSelectedProvider();
+      const options = modelOptionsByProvider[provider.label] || modelOptionsByProvider.Gemini;
+      const currentValue = options.some((option) => option.value === state.model) ? state.model : options[0].value;
+      state.model = currentValue;
+      select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('');
+      select.value = currentValue;
+    }
+
+    function renderProviderGuide() {
+      const provider = getSelectedProvider();
+      const requiresBaseUrl = provider.requiresBaseUrl === true;
+      const requiresApiKey = provider.requiresApiKey !== false;
+      document.getElementById('providerGuideTitle').textContent = requiresBaseUrl
+        ? `איך מחברים endpoint ל-${provider.label}`
+        : `איך משיגים מפתח ל-${provider.label}`;
+      document.getElementById('providerGuideLine1').textContent = provider.recommendation[0];
+      document.getElementById('providerGuideLine2').textContent = provider.recommendation[1];
+      document.getElementById('providerGuideSteps').textContent = provider.steps;
+      document.getElementById('apiKeyLabel').textContent = requiresApiKey ? 'API key' : 'API key (אופציונלי)';
+      document.getElementById('apiKey').placeholder = provider.apiPlaceholder;
+      document.getElementById('apiKeyHelper').textContent = provider.keyHint;
+
+      const guideLink = document.getElementById('providerGuideLink');
+      guideLink.href = provider.keyUrl;
+      guideLink.textContent = provider.keyLinkLabel;
+
+      const baseUrlField = document.getElementById('baseUrlField');
+      baseUrlField.style.display = requiresBaseUrl ? '' : 'none';
+      document.getElementById('baseUrl').value = state.baseUrl;
+      document.getElementById('baseUrl').placeholder = provider.baseUrlPlaceholder || 'http://localhost:11434/v1';
+      document.getElementById('baseUrlHelper').textContent = provider.baseUrlHint || '';
+
+      const providerLinkTag = document.getElementById('providerLinkTag');
+      providerLinkTag.href = provider.keyUrl;
+      providerLinkTag.textContent = requiresBaseUrl ? 'פתח מדריך חיבור' : 'פתח עמוד מפתח';
+    }
+
+    function deriveTeamRecommendation() {
+      if (!state.teamIntent || !state.researchDepth || !state.collaborationMode) {
+        return { presetId: '', label: '', description: '', agents: [], workflowMode: '' };
+      }
+
+      let presetId = 'content-studio';
+      const dualResearchAvailable = state.connectedProviders > 1;
+
+      if (state.teamIntent === 'verified-research') presetId = dualResearchAvailable ? 'academic-dual-research' : 'academic-lab';
+      else if (state.teamIntent === 'academic' && state.researchDepth === 'strict') presetId = dualResearchAvailable ? 'academic-dual-research' : 'academic-lab';
+      else if (state.teamIntent === 'academic') presetId = 'academic-lab';
+      else if (state.teamIntent === 'product') presetId = 'product-desk';
+
+      const preset = agentPresetCatalog[presetId] || agentPresetCatalog['content-studio'];
+      const workflowMode = presetId === 'academic-dual-research'
+        ? 'custom-order'
+        : (state.collaborationMode || preset.workflowMode);
+      const needsDualResearch = state.teamIntent === 'verified-research' || (state.teamIntent === 'academic' && state.researchDepth === 'strict');
+
+      const descriptionSuffix = state.researchDepth === 'light'
+        ? ' עם דגש על מהירות ופחות סבבי בקרה.'
+        : state.researchDepth === 'strict'
+          ? ' עם דגש על בדיקות קפדניות ואימות.'
+          : ' עם איזון בין מהירות, מחקר וליטוש.';
+      const availabilitySuffix = needsDualResearch && !dualResearchAvailable
+        ? ' ב-preview הזה מוגדר provider יחיד, לכן ההמלצה יורדת זמנית ל-academic-lab עד לחיבור stack רב-ספקי.'
+        : '';
+
+      return {
+        presetId,
+        label: preset.label,
+        description: `${preset.description}${descriptionSuffix}${availabilitySuffix}`,
+        agents: preset.agents,
+        workflowMode,
+      };
+    }
+
+    function renderAgentRecommendation() {
+      const recommendation = deriveTeamRecommendation();
+      const labelElement = document.getElementById('recommendedPresetLabel');
+      const copyElement = document.getElementById('recommendedPresetCopy');
+      const workflowElement = document.getElementById('recommendedWorkflowTag');
+      const statusElement = document.getElementById('agentStatusTag');
+      const listElement = document.getElementById('recommendedAgentList');
+
+      if (!recommendation.presetId) {
+        labelElement.textContent = 'טרם נוצר צוות';
+        copyElement.textContent = 'ענה על שלוש השאלות כדי למפות אוטומטית ל-preset קיים בלי להמציא flow חדש.';
+        workflowElement.textContent = 'Workflow יופיע כאן';
+        workflowElement.className = 'tag';
+        statusElement.textContent = 'טרם נוצר';
+        statusElement.className = 'tag';
+        listElement.innerHTML = `
+          <div class="agent-line">
+            <div>
+              <strong>אין עדיין המלצה</strong>
+              <span>כשהשאלון יושלם, המערכת תציע preset קיים ותסביר מי הסוכנים שירוצו.</span>
+            </div>
+            <span class="tag">Survey</span>
+          </div>
+        `;
+        return;
+      }
+
+      labelElement.textContent = recommendation.label;
+      copyElement.textContent = recommendation.description;
+      workflowElement.textContent = workflowLabels[recommendation.workflowMode] || recommendation.workflowMode;
+      workflowElement.className = 'tag success';
+      statusElement.textContent = 'ייווצר אוטומטית';
+      statusElement.className = 'tag success';
+      listElement.innerHTML = recommendation.agents.map((agentName, index) => `
+        <div class="agent-line">
+          <div>
+            <strong>${agentName}</strong>
+            <span>תפקיד ${index + 1} בצוות המומלץ מהסקר.</span>
+          </div>
+          <span class="tag">Agent ${index + 1}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderUploadList() {
+      const listElement = document.getElementById('uploadList');
+      const statusElement = document.getElementById('uploadStatus');
+      const learningApproved = isLearningApproved();
+
+      if (!state.uploadedMaterials.length) {
+        listElement.innerHTML = `
+          <div class="upload-item">
+            <div>
+              <strong>עדיין אין קבצים</strong>
+              <span>אפשר להעלות דוגמאות כתיבה, חומרי קורס, תבניות מסמך או דפי שער.</span>
+            </div>
+            <span class="tag">Preview</span>
+          </div>
+        `;
+        statusElement.textContent = 'לא נבחרו קבצים';
+        statusElement.className = 'tag';
+        return;
+      }
+
+      listElement.innerHTML = state.uploadedMaterials.map((item) => `
+        <div class="upload-item">
+          <div>
+            <strong>${item.name}</strong>
+            <span>${item.label} · ${item.learningHint}</span>
+          </div>
+          <span class="tag">${item.label}</span>
+        </div>
+      `).join('');
+
+      if (learningApproved) {
+        statusElement.textContent = `${state.uploadedMaterials.length} קבצים סומנו ללמידה`;
+        statusElement.className = 'tag success';
+      } else {
+        statusElement.textContent = `${state.uploadedMaterials.length} קבצים נוספו בלי אישור למידה`;
+        statusElement.className = 'tag warn';
+      }
+    }
+
+    function renderStepper() {
+      stepper.style.setProperty('--step-count', String(steps.length));
+      stepper.innerHTML = steps.map((step, index) => {
+        const classes = [ 'step-pill' ];
+        if (index === state.currentStep) classes.push('active');
+        if (index < state.currentStep) classes.push('done');
+        return `
+          <div class="${classes.join(' ')}">
+            <div class="step-index">${index + 1}</div>
+            <div class="step-copy">
+              <strong>${step.title}</strong>
+              <span>${step.subtitle}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderStages() {
+      stages.forEach((stage, index) => {
+        stage.classList.toggle('active', index === state.currentStep);
+      });
+    }
+
+    function updateChecklistItem(elementId, done) {
+      const element = document.getElementById(elementId);
+      if (!element) return;
+      element.classList.toggle('done', done);
+      const badge = element.querySelector('.check-badge');
+      badge.textContent = done ? 'מוכן' : 'חסר';
+    }
+
+    function renderSummary() {
+      const courses = splitTextList(state.currentCoursesText);
+      const recommendation = deriveTeamRecommendation();
+      const provider = getSelectedProvider();
+      const hasBaseUrl = Boolean(state.baseUrl.trim());
+      const providerConfigured = hasProviderConfiguration(provider);
+      const providerReady = isProviderReady(provider);
+      const runtimeProviderLabel = provider.runtimeProviderLabel ? `${provider.runtimeProviderLabel} · ${provider.label}` : state.provider;
+      const profileReady = state.touched.profile && (
+        Boolean(state.firstName.trim()) ||
+        Boolean(state.displayName.trim()) ||
+        Boolean(state.userRole.trim()) ||
+        Boolean(state.userBackground.trim()) ||
+        Boolean(state.targetAudience.trim()) ||
+        Boolean(state.institutionName.trim()) ||
+        Boolean(state.studyTrack.trim()) ||
+        Boolean(state.writingGoals.trim()) ||
+        courses.length > 0 ||
+        state.useCases.length > 0
+      );
+      const styleReady = state.touched.style && (
+        Boolean(state.tone.trim()) ||
+        Boolean(state.styleNotes.trim()) ||
+        Boolean(state.avoidWords.trim()) ||
+        Boolean(state.structurePreference.trim()) ||
+        Boolean(state.evidencePreference.trim()) ||
+        state.formality !== 65
+      );
+      const learningApproved = isLearningApproved();
+      const trustReady = state.touched.trust;
+      const materialsReady = state.uploadedMaterials.length > 0
+        ? (state.touched.materials && trustReady)
+        : trustReady;
+      const agentsReady = state.touched.agents && Boolean(recommendation.presetId);
+
+      const profileParts = [];
+      if (state.studyTrack.trim()) profileParts.push(`חוג: ${state.studyTrack.trim()}`);
+      if (courses.length) profileParts.push(`${courses.length} קורסים פעילים`);
+      if (state.institutionName.trim()) profileParts.push(state.institutionName.trim());
+
+      const toneParts = [state.tone];
+      if (state.structurePreference) toneParts.push(state.structurePreference);
+      if (state.evidencePreference) toneParts.push(state.evidencePreference);
+
+      const materialsText = state.uploadedMaterials.length
+        ? !trustReady
+          ? `${state.uploadedMaterials.length} קבצים ממתינים להחלטת trust`
+          : learningApproved
+            ? `${state.uploadedMaterials.length} קבצים מאושרים ללמידה`
+            : `${state.uploadedMaterials.length} קבצים נוספו בלי אישור למידה`
+        : trustReady
+          ? 'דולג כרגע'
+          : 'טרם נוספו';
+
+      const agentsText = recommendation.presetId
+        ? `${recommendation.label} · ${workflowLabels[recommendation.workflowMode] || recommendation.workflowMode}`
+        : 'טרם נוצר';
+
+      document.getElementById('summaryName').textContent = state.displayName || state.firstName || 'עדיין לא הוגדר';
+  document.getElementById('summaryProvider').textContent = provider.requiresBaseUrl && hasBaseUrl ? `${runtimeProviderLabel} · ${state.baseUrl.trim()}` : runtimeProviderLabel;
+      document.getElementById('summaryProfile').textContent = profileParts.length ? profileParts.join(' · ') : 'טרם מולא';
+      document.getElementById('summaryUseCases').textContent = state.useCases.length ? state.useCases.join(' • ') : 'טרם נבחר';
+      document.getElementById('summaryTone').textContent = toneParts.filter(Boolean).join(' · ');
+      document.getElementById('summaryMaterials').textContent = materialsText;
+      document.getElementById('summaryAgents').textContent = agentsText;
+      document.getElementById('summaryTrust').textContent = state.trust || 'טרם נבחר';
+
+      const progress = Math.min(((Math.min(state.currentStep, stages.length - 1) + 1) / stages.length) * 100, 100);
+      document.getElementById('progressFill').style.width = `${progress}%`;
+      document.getElementById('progressLabel').textContent = state.currentStep >= stages.length
+        ? 'המסלול הסתיים'
+        : `שלב ${state.currentStep + 1} מתוך ${stages.length}`;
+
+      updateChecklistItem('checkProvider', providerReady);
+      updateChecklistItem('checkProfile', profileReady);
+      updateChecklistItem('checkStyle', styleReady);
+      updateChecklistItem('checkMaterials', materialsReady);
+      updateChecklistItem('checkAgents', agentsReady);
+      updateChecklistItem('checkTrust', trustReady);
+
+      const finalHeadline = document.getElementById('finalHeadline');
+      const finalCopy = document.getElementById('finalCopy');
+      const finalStatusTag = document.getElementById('finalStatusTag');
+      if (finalHeadline && finalCopy) {
+        const providerText = state.connectionTested === true
+          ? provider.requiresBaseUrl
+            ? `${runtimeProviderLabel}: בדיקת endpoint עברה`
+            : `${runtimeProviderLabel}: בדיקת דוגמה עברה`
+          : providerConfigured
+            ? provider.requiresBaseUrl
+              ? state.apiKey.trim()
+                ? `${runtimeProviderLabel}: baseUrl, model ו-key הוגדרו`
+                : `${runtimeProviderLabel}: endpoint מקומי הוגדר בלי key`
+              : `${runtimeProviderLabel}: key הוזן ומוכן להפעלה`
+            : provider.requiresBaseUrl
+              ? !hasBaseUrl
+                ? `${runtimeProviderLabel}: עדיין חסר baseUrl`
+                : state.apiKey.trim()
+                  ? `${runtimeProviderLabel}: הוזנו endpoint ו-key אבל חסר מודל או בדיקה`
+                  : `${runtimeProviderLabel}: בלי key נדרש loopback מוכר על 11434/1234`
+              : `${runtimeProviderLabel}: עדיין ללא key`;
+
+        const materialsFinal = state.uploadedMaterials.length
+          ? !trustReady
+            ? `נוספו ${state.uploadedMaterials.length} קבצים, אבל עדיין לא ניתנה החלטת trust לגביהם.`
+            : learningApproved
+              ? `נוספו ${state.uploadedMaterials.length} קבצים שמסומנים ללמידת ניסיון.`
+              : `נוספו ${state.uploadedMaterials.length} קבצים בלי אישור למידה.`
+          : trustReady
+            ? 'לא נוספו כרגע עבודות עבר או חומרי עזר, וזה תקין ל-phase 1.'
+            : 'לא נוספו עדיין עבודות עבר או חומרי עזר.';
+
+        const agentsFinal = recommendation.presetId
+          ? `הצוות המומלץ הוא ${recommendation.label} ב-${workflowLabels[recommendation.workflowMode] || recommendation.workflowMode}.`
+          : 'צוות סוכנים אוטומטי עדיין לא הוגדר.';
+
+        const trustText = state.trust === 'למידה מאושרת'
+          ? 'המערכת תוכל ללמוד מחומרים שתאשר.'
+          : state.trust === 'להחליט אחר כך'
+            ? 'הסכמת הלמידה נשארה פתוחה להמשך.'
+            : state.trust === 'מקומי בלבד'
+              ? 'ההגדרות נשארות במצב מקומי בלבד.'
+              : 'בחירת trust עדיין פתוחה להמשך.';
+
+        const missing = [];
+        if (!providerReady) missing.push('אימות provider');
+        if (!profileReady) missing.push('דיוק פרופיל אישי');
+        if (!styleReady) missing.push('חידוד style');
+        if (!materialsReady) missing.push('החלטה על חומרי למידה או דילוג מפורש');
+        if (!agentsReady) missing.push('צוות סוכנים אוטומטי');
+        if (!trustReady) missing.push('החלטת learning');
+
+        const suffix = missing.length
+          ? `עדיין כדאי להשלים: ${missing.join(', ')}.`
+          : 'כל מרכיבי phase 1.5 סומנו כהושלמו.';
+
+        finalHeadline.textContent = missing.length === 0
+          ? ((state.displayName || state.firstName) ? `${state.displayName || state.firstName}, אפשר להתחיל לעבוד` : 'הכול מוכן למסמך הראשון שלך')
+          : ((state.displayName || state.firstName) ? `${state.displayName || state.firstName}, אפשר להתחיל גם עם setup חלקי` : 'אפשר להתחיל גם עם setup חלקי');
+
+        if (finalStatusTag) {
+          finalStatusTag.textContent = missing.length === 0 ? 'Onboarding הושלם' : 'Partial setup';
+          finalStatusTag.className = missing.length === 0 ? 'tag success' : 'tag';
+        }
+
+        finalCopy.textContent = `${providerText}. ${materialsFinal} ${agentsFinal} ${trustText} ${suffix}`;
+      }
+    }
+
+    function render() {
+      renderModelOptions();
+      renderProviderGuide();
+      renderStepper();
+      renderStages();
+      renderUploadList();
+      renderAgentRecommendation();
+      document.getElementById('uploadKindSelect').value = state.uploadKind;
+      document.getElementById('materialLearningConsent').checked = isLearningApproved();
+      document.querySelectorAll('[data-team-intent]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.teamIntent === state.teamIntent);
+      });
+      document.querySelectorAll('[data-research-depth]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.researchDepth === state.researchDepth);
+      });
+      document.querySelectorAll('[data-collaboration-mode]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.collaborationMode === state.collaborationMode);
+      });
+      document.querySelectorAll('[data-trust]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.trust === state.trust);
+      });
+      renderSummary();
+    }
+
+    function nextStep() {
+      state.currentStep = Math.min(state.currentStep + 1, stages.length - 1);
+      render();
+    }
+
+    function backStep() {
+      state.currentStep = Math.max(state.currentStep - 1, 0);
+      render();
+    }
+
+    function skipStep() {
+      if (state.currentStep === 5) {
+        state.teamIntent = 'general';
+        state.researchDepth = 'balanced';
+        state.collaborationMode = 'manager-auto';
+        state.touched.agents = true;
+      } else if (state.currentStep === 6) {
+        setTrustChoice('להחליט אחר כך');
+      }
+
+      nextStep();
+    }
+
+    document.querySelectorAll('[data-action="next"]').forEach((button) => {
+      button.addEventListener('click', nextStep);
+    });
+
+    document.querySelectorAll('[data-action="back"]').forEach((button) => {
+      button.addEventListener('click', backStep);
+    });
+
+    document.querySelectorAll('[data-action="skip"]').forEach((button) => {
+      button.addEventListener('click', skipStep);
+    });
+
+    document.getElementById('skipToEditorBtn').addEventListener('click', () => {
+      window.alert('במימוש אמיתי הכפתור הזה יכניס לעורך, ישמור onboarding כ-partial setup, וישאיר CTA להשלמת provider, חומרים או צוות סוכנים.');
+    });
+
+    document.getElementById('openSettingsBtn').addEventListener('click', () => {
+      window.alert('במימוש אמיתי: פתיחת FileMenu בלשונית provider/profile/agents/materials להשלמה.');
+    });
+
+    document.getElementById('openEditorBtn').addEventListener('click', () => {
+      window.alert('במימוש אמיתי: כניסה לעורך עם provider, profile, חומרי עזר וצוות הסוכנים שהומלצו.');
+    });
+
+    document.getElementById('firstName').addEventListener('input', (event) => {
+      state.firstName = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('displayName').addEventListener('input', (event) => {
+      state.displayName = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('userRole').addEventListener('input', (event) => {
+      state.userRole = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.querySelectorAll('[data-provider]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-provider]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        const nextProvider = providerSetupById[button.dataset.provider] || providerSetupById.gemini;
+        state.providerGuideId = nextProvider.id;
+        state.provider = nextProvider.runtimeProviderLabel || nextProvider.label;
+        state.connectionTested = false;
+        state.lastVerifiedSignature = '';
+        state.apiKey = '';
+        state.baseUrl = nextProvider.requiresBaseUrl ? (nextProvider.defaultBaseUrl || state.baseUrl || '') : '';
+        state.model = nextProvider.models?.[0]?.value || 'auto';
+        document.getElementById('apiKey').value = '';
+        const status = document.getElementById('connectionStatus');
+        status.textContent = 'טרם נבדק';
+        status.className = 'tag';
+        render();
+      });
+    });
+
+    document.getElementById('apiKey').addEventListener('input', (event) => {
+      state.apiKey = event.target.value;
+      state.connectionTested = false;
+      state.lastVerifiedSignature = '';
+      const status = document.getElementById('connectionStatus');
+      status.textContent = event.target.value.trim() ? 'מוכן לבדיקה' : 'טרם נבדק';
+      status.className = 'tag';
+      renderSummary();
+    });
+
+    document.getElementById('baseUrl').addEventListener('input', (event) => {
+      state.baseUrl = event.target.value;
+      state.connectionTested = false;
+      state.lastVerifiedSignature = '';
+      const status = document.getElementById('connectionStatus');
+      status.textContent = event.target.value.trim() ? 'ה-endpoint הוזן, אפשר לבדוק' : 'טרם נבדק';
+      status.className = 'tag';
+      renderSummary();
+    });
+
+    document.getElementById('modelSelect').addEventListener('change', (event) => {
+      state.model = event.target.value;
+      state.connectionTested = false;
+      state.lastVerifiedSignature = '';
+      const status = document.getElementById('connectionStatus');
+      status.textContent = 'טרם נבדק';
+      status.className = 'tag';
+      renderSummary();
+    });
+
+    document.getElementById('testConnectionBtn').addEventListener('click', () => {
+      const status = document.getElementById('connectionStatus');
+      const provider = getSelectedProvider();
+      const hasKey = state.apiKey.trim().length > 0;
+      const hasBaseUrl = state.baseUrl.trim().length > 0;
+
+      if (provider.requiresBaseUrl === true) {
+        const canConnect = hasBaseUrl
+          && Boolean(state.model)
+          && (hasKey || (provider.requiresApiKey === false && isLocalOpenAICompatibleBaseUrl(state.baseUrl)));
+        state.connectionTested = canConnect;
+        state.lastVerifiedSignature = canConnect ? getProviderVerificationSignature(provider) : '';
+        status.textContent = canConnect
+          ? hasKey
+            ? 'בדיקת endpoint הצליחה עם key לדוגמה'
+            : 'ה-endpoint המקומי מוכן לעבודה'
+          : !hasBaseUrl
+            ? 'חסר baseUrl לבדיקה'
+            : 'נדרש key או loopback מוכר על 11434/1234';
+        status.className = canConnect ? 'tag success' : 'tag warn';
+        renderSummary();
+        return;
+      }
+
+      state.connectionTested = hasKey;
+      state.lastVerifiedSignature = hasKey ? getProviderVerificationSignature(provider) : '';
+      status.textContent = hasKey ? 'חיבור לדוגמה הצליח' : 'אין key לבדיקה';
+      status.className = hasKey ? 'tag success' : 'tag warn';
+      renderSummary();
+    });
+
+    document.querySelectorAll('[data-chip-group="useCases"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const value = button.dataset.value;
+        state.touched.profile = true;
+        const exists = state.useCases.includes(value);
+        if (exists) {
+          state.useCases = state.useCases.filter((item) => item !== value);
+          button.classList.remove('active');
+        } else {
+          state.useCases = [...state.useCases, value];
+          button.classList.add('active');
+        }
+        renderSummary();
+      });
+    });
+
+    document.getElementById('targetAudience').addEventListener('input', (event) => {
+      state.targetAudience = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('institutionName').addEventListener('input', (event) => {
+      state.institutionName = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('studyTrack').addEventListener('input', (event) => {
+      state.studyTrack = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('currentCourses').addEventListener('input', (event) => {
+      state.currentCoursesText = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('writingGoals').addEventListener('input', (event) => {
+      state.writingGoals = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.getElementById('userBackground').addEventListener('input', (event) => {
+      state.userBackground = event.target.value;
+      state.touched.profile = true;
+      renderSummary();
+    });
+
+    document.querySelectorAll('[data-tone]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-tone]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.tone = button.dataset.tone;
+        state.touched.style = true;
+        renderSummary();
+      });
+    });
+
+    document.querySelectorAll('[data-structure-pref]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-structure-pref]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.structurePreference = button.dataset.structurePref;
+        state.touched.style = true;
+        renderSummary();
+      });
+    });
+
+    document.querySelectorAll('[data-evidence-pref]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-evidence-pref]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.evidencePreference = button.dataset.evidencePref;
+        state.touched.style = true;
+        renderSummary();
+      });
+    });
+
+    document.getElementById('formalityRange').addEventListener('input', (event) => {
+      state.formality = Number(event.target.value);
+      state.touched.style = true;
+      document.getElementById('formalityValue').textContent = `${state.formality}%`;
+      renderSummary();
+    });
+
+    document.getElementById('avoidWords').addEventListener('input', (event) => {
+      state.avoidWords = event.target.value;
+      state.touched.style = true;
+      renderSummary();
+    });
+
+    document.getElementById('styleNotes').addEventListener('input', (event) => {
+      state.styleNotes = event.target.value;
+      state.touched.style = true;
+      renderSummary();
+    });
+
+    document.getElementById('uploadKindSelect').addEventListener('change', (event) => {
+      state.uploadKind = event.target.value;
+    });
+
+    document.getElementById('materialLearningConsent').addEventListener('change', (event) => {
+      setTrustChoice(event.target.checked ? 'למידה מאושרת' : 'מקומי בלבד');
+      state.touched.materials = true;
+      render();
+    });
+
+    document.getElementById('uploadMaterialsBtn').addEventListener('click', () => {
+      materialsFileInput.click();
+    });
+
+    materialsFileInput.addEventListener('change', (event) => {
+      const files = Array.from(event.target.files || []);
+      if (!files.length) return;
+      const meta = materialPresets[state.uploadKind] || materialPresets['general'];
+      const additions = files.map((file) => ({
+        name: file.name,
+        label: meta.label,
+        learningHint: `מיועד לסוג "${meta.label}" ויישמר כחומר עזר מקומי.`,
+      }));
+      state.uploadedMaterials = [...state.uploadedMaterials, ...additions].slice(-8);
+      state.touched.materials = true;
+      event.target.value = '';
+      render();
+    });
+
+    document.querySelectorAll('[data-team-intent]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-team-intent]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.teamIntent = button.dataset.teamIntent;
+        state.touched.agents = true;
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-research-depth]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-research-depth]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.researchDepth = button.dataset.researchDepth;
+        state.touched.agents = true;
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-collaboration-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-collaboration-mode]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        state.collaborationMode = button.dataset.collaborationMode;
+        state.touched.agents = true;
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-trust]').forEach((button) => {
+      button.addEventListener('click', () => {
+        setTrustChoice(button.dataset.trust);
+        render();
+      });
+    });
+
+    render();
+  </script>
+</body>
+</html>

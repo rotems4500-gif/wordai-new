@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory } from "./services/aiService";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
@@ -123,7 +123,11 @@ const QUICK_PROMPTS = [
     color: 'linear-gradient(135deg, #06B6D4 0%, #0891B2 100%)' },
 ];
 
-const CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
+const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
+const getChatMemoryStorageKey = (workspaceId = '') => {
+  const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
+  return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}`;
+};
 
 const getDefaultMessages = () => ([
   { 
@@ -133,10 +137,21 @@ const getDefaultMessages = () => ([
   }
 ]);
 
-const getSavedMessages = () => {
+const getSavedMessages = (workspaceId = '') => {
+  const storageKey = getChatMemoryStorageKey(workspaceId);
   try {
-    const parsed = JSON.parse(localStorage.getItem(CHAT_MEMORY_STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) && parsed.length ? parsed.slice(-60) : getDefaultMessages();
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    if (Array.isArray(parsed) && parsed.length) return parsed.slice(-60);
+
+    const legacyParsed = JSON.parse(localStorage.getItem(LEGACY_CHAT_MEMORY_STORAGE_KEY) || '[]');
+    if (Array.isArray(legacyParsed) && legacyParsed.length) {
+      const migratedMessages = legacyParsed.slice(-60);
+      localStorage.setItem(storageKey, JSON.stringify(migratedMessages));
+      localStorage.removeItem(LEGACY_CHAT_MEMORY_STORAGE_KEY);
+      return migratedMessages;
+    }
+
+    return getDefaultMessages();
   } catch {
     return getDefaultMessages();
   }
@@ -165,8 +180,9 @@ const getShellStyle = (mode, compactMode = false) => ({
   border: mode === 'sidebar' ? 'none' : '1px solid #E5E7EB',
   display: 'flex',
   flexDirection: 'column',
+  flex: mode === 'sidebar' ? '1 1 0' : '0 0 auto',
   flexShrink: 0,
-  height: mode === 'sidebar' ? '100%' : 'auto',
+  height: mode === 'sidebar' ? 'auto' : 'auto',
   minHeight: 0,
   maxHeight: mode === 'popup' ? '74vh' : '100%',
   margin: mode === 'popup' ? '8px 8px 8px 0' : '0',
@@ -209,7 +225,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [tab, setTab] = useState('chat');
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
-  const [messages, setMessages] = useState(() => getSavedMessages());
+  const [messages, setMessages] = useState(() => getSavedMessages(getWorkspaceAutomation().activeWorkspaceId));
   const [input, setInput] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -308,6 +324,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       const nextAutomation = getWorkspaceAutomation();
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
+      setMessages(getSavedMessages(nextAutomation.activeWorkspaceId));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
     };
 
@@ -356,7 +373,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_MEMORY_STORAGE_KEY, JSON.stringify(messages.slice(-60)));
+      localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(messages.slice(-60)));
       saveAppMemory({
         ...getAppMemory(),
         lastSelectedAgentId: selectedAgentId || '',
@@ -365,13 +382,6 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       });
     } catch {}
   }, [messages, selectedAgentId, selectedSkillId, resolvedSkillLabel]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const handleReset = () => clearConversation();
-    window.addEventListener('wordai-chat-history-cleared', handleReset);
-    return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
-  }, []);
 
   useEffect(() => {
     if (tab !== 'agents' && showLogs) setShowLogs(false);
@@ -440,9 +450,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     setDebugLogs([]);
   };
 
-  const clearConversation = () => {
+  const clearConversation = useCallback(() => {
     try {
-      localStorage.removeItem(CHAT_MEMORY_STORAGE_KEY);
+      localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId));
+      localStorage.removeItem(LEGACY_CHAT_MEMORY_STORAGE_KEY);
       saveAppMemory({
         recentChats: [],
         memoryNotes: [],
@@ -456,7 +467,20 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     setSelectedAgentId('');
     setSelectedSkillId('none');
     setResolvedSkillLabel('');
-  };
+  }, [workspaceAutomation.activeWorkspaceId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleReset = (event) => {
+      const targetWorkspaceId = String(event?.detail?.workspaceId || '').trim();
+      const shouldClearAll = event?.detail?.clearAll === true;
+      const activeWorkspaceId = String(workspaceAutomation.activeWorkspaceId || '').trim();
+      if (!shouldClearAll && targetWorkspaceId && targetWorkspaceId !== activeWorkspaceId) return;
+      clearConversation();
+    };
+    window.addEventListener('wordai-chat-history-cleared', handleReset);
+    return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
+  }, [clearConversation, workspaceAutomation.activeWorkspaceId]);
 
   const buildContext = () => (
     selectedText
@@ -776,9 +800,11 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       <div 
         style={{
           width: '100%',
-          height: '100%',
+          height: mode === 'sidebar' ? 'auto' : '100%',
           display: 'flex',
           flexDirection: 'column',
+          flex: mode === 'sidebar' ? '1 1 0' : '0 0 auto',
+          minHeight: 0,
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
           position: 'relative',
           overflow: 'hidden',

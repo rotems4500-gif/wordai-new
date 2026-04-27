@@ -503,6 +503,22 @@ export const buildExternalToolUrl = (toolId = '', query = '', cfg = null) => {
   return resolvedUrl;
 };
 
+const isLocalOpenAICompatibleBaseUrl = (baseUrl = '') => {
+  try {
+    const parsed = new URL(String(baseUrl || '').trim());
+    const hostname = String(parsed.hostname || '').trim().toLowerCase();
+    const port = String(parsed.port || '').trim() || (parsed.protocol === 'https:' ? '443' : '80');
+    if (!hostname) return false;
+    const isLoopbackHost = hostname === 'localhost'
+      || hostname === '::1'
+      || /^127(?:\.\d+){3}$/.test(hostname);
+    if (!isLoopbackHost) return false;
+    return port === '11434' || port === '1234';
+  } catch {
+    return false;
+  }
+};
+
 const isProviderConfiguredForUse = (providerId, cfg) => {
   const provider = cfg?.[providerId] || {};
   switch (providerId) {
@@ -512,10 +528,14 @@ const isProviderConfiguredForUse = (providerId, cfg) => {
     case 'groq':
     case 'perplexity':
       return Boolean(String(provider.key || '').trim());
-    case 'ollama':
-      return Boolean(String(provider.baseUrl || '').trim() && String(provider.model || '').trim());
-    case 'custom':
-      return Boolean(String(provider.baseUrl || '').trim() && String(provider.model || '').trim());
+    case 'ollama': {
+      const baseUrl = String(provider.baseUrl || '').trim();
+      return Boolean(baseUrl && String(provider.model || '').trim() && isLocalOpenAICompatibleBaseUrl(baseUrl));
+    }
+    case 'custom': {
+      const baseUrl = String(provider.baseUrl || '').trim();
+      return Boolean(baseUrl && String(provider.model || '').trim() && (String(provider.key || '').trim() || isLocalOpenAICompatibleBaseUrl(baseUrl)));
+    }
     default:
       return false;
   }
@@ -784,6 +804,13 @@ export const saveWorkspaceAutomation = (config) => {
     ...(config && typeof config === 'object' ? config : {}),
     workspaceName: nextWorkspaceName,
   }, activeWorkspaceId, nextWorkspaceName);
+
+  if (
+    String(workspace?.name || '').trim() === nextWorkspaceName
+    && JSON.stringify(currentAutomation) === JSON.stringify(nextAutomation)
+  ) {
+    return currentAutomation;
+  }
 
   library[activeWorkspaceId] = normalizeWorkspaceRecord(activeWorkspaceId, {
     ...workspace,
@@ -1465,12 +1492,32 @@ const buildSkillSystemPrompt = (skill = null, reason = 'manual', skillConfig = n
   ].filter(Boolean).join('\n');
 };
 
+const buildResponseModePrompt = ({ strictFormatting = false } = {}) => {
+  if (strictFormatting) {
+    return [
+      'לתפקיד או לכלי הפעיל עשויה להיות דרישת פורמט מדויקת.',
+      'אם נדרש פלט מדויק כמו HTML, JSON, רשימה מסוימת, נוסח מתוקן בלבד או מבנה קשיח אחר, שמור עליו בדיוק.',
+      'גם במצב כזה אל תוסיף מבוא, סיכום, כותרות או חלקים שלא נדרשו.',
+    ].join('\n');
+  }
+
+  return [
+    'כלל עליון: בצע בדיוק את המטלה שהמשתמש ביקש.',
+    'אל תוסיף מבוא, סיכום, "מה עשיתי", כותרות קבועות, סעיפים קשיחים או רשימות אם המשתמש לא ביקש אותם והם לא הכרחיים באמת כדי להשלים מטלה מורכבת.',
+    'אם המשתמש ביקש תשובה קצרה, הכרעה ישירה, ניסוח יחיד או תיקון נקודתי, החזר בדיוק את זה.',
+    'אם השאלה נקודתית, ענה ישירות בלי עטיפה מיותרת.',
+    'השתמש ב-HTML ובמבנה מסמך רק כשהמשתמש ביקש טיוטה, קטע מוכן להדבקה, מסמך ארוך, או פורמט מובנה מפורש.',
+    'הנחיות תפקיד, סקיל, workflow, template או ברירות מחדל אחרות הן רקע עוזר בלבד: במקרה של התנגשות, המטלה המפורשת של המשתמש קודמת.',
+    'אם יש דרישת פורמט מפורשת בתוך הכלי או בבקשה עצמה, שמור עליה, אבל עדיין בלי להוסיף חלקים שלא התבקשו.',
+  ].join('\n');
+};
+
 const buildWorkspaceAutomationInstructions = () => {
   const automation = getWorkspaceAutomation();
   if (!automation.enabled) return '';
 
-  const decisionMode = getDecisionMode(automation);
   const enabledAgents = getOrderedRoleAgents(automation.workflowMode);
+  const decisionMode = getDecisionMode(automation, enabledAgents);
   const agentNames = enabledAgents.map((agent) => agent.name).filter(Boolean);
   const agentInstructions = enabledAgents
     .map((agent) => `${agent.name}: ${String(agent.prompt || '').trim()}`)
@@ -1541,13 +1588,20 @@ const safeJsonParse = (value = '', fallback = null) => {
 
 const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const preferred = normalizeProviderIds(preferredProviders, safeCfg.active);
+  const requestedPreferred = normalizeProviderIds(preferredProviders, '');
+  const preferred = requestedPreferred
+    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  if (requestedPreferred.length) return preferred;
   const configured = KNOWN_PROVIDER_IDS.filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
-  return [...new Set([...preferred, ...configured, safeCfg.active].filter(Boolean))];
+  if (!configured.length) return isProviderConfiguredForUse(safeCfg.active, safeCfg) ? [safeCfg.active] : [];
+  return configured;
 };
+
+const isManagerReviewAgent = (agent = {}) => /manager.*review|review.*manager|מנהל.*בדיק|בדיק.*מנהל/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 
 const getAgentRoleKey = (agent = {}) => {
   const value = `${String(agent?.id || '')} ${String(agent?.name || '')}`.toLowerCase();
+  if (isManagerReviewAgent(agent)) return 'manager';
   if (/(research|source|חוקר|מקורות)/i.test(value)) return 'researcher';
   if (/(design|structure|outline|מבנה|מעצב)/i.test(value)) return 'designer';
   if (/(proof|review|editor|מגיה|בודק)/i.test(value)) return 'proofreader';
@@ -1556,13 +1610,26 @@ const getAgentRoleKey = (agent = {}) => {
   return 'general';
 };
 
+const isPlanningManagerAgent = (agent = {}) => getAgentRoleKey(agent) === 'manager' && !isManagerReviewAgent(agent);
+
 const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = []) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const requestedPool = normalizeProviderIds(preferredProviders, safeCfg.active);
+  const routingPool = requestedPool
+    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
   const explicitProvider = String(agent?.provider || '').trim();
-  if (explicitProvider && isProviderConfiguredForUse(explicitProvider, safeCfg)) return explicitProvider;
+  if (explicitProvider) {
+    if (!isProviderConfiguredForUse(explicitProvider, safeCfg)) return '';
+    if (routingPool.length && !routingPool.includes(explicitProvider)) return '';
+    return explicitProvider;
+  }
 
   const roleKey = getAgentRoleKey(agent);
-  const pool = getConfiguredProviderPool(safeCfg, preferredProviders);
+  if (requestedPool.length && !routingPool.length) return '';
+  const pool = routingPool.length
+    ? routingPool
+    : getSelectedProviderIds(safeCfg).filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  if (!pool.length) return '';
   const preferences = roleKey === 'researcher'
     ? ['perplexity', 'gemini', 'openai', 'claude', 'groq', 'custom', 'ollama']
     : roleKey === 'proofreader'
@@ -1573,7 +1640,23 @@ const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [])
           ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
           : ['gemini', 'openai', 'claude', 'groq', 'custom', 'ollama', 'perplexity'];
 
-  return preferences.find((providerId) => pool.includes(providerId)) || safeCfg.active;
+  return preferences.find((providerId) => pool.includes(providerId)) || pool[0] || safeCfg.active;
+};
+
+const resolveExplicitProviderCandidate = (candidates = [], allowedProviders = [], cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const normalizedAllowedProviders = normalizeProviderIds(allowedProviders, '')
+    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeProviderIds([candidate], '')[0] || '';
+    if (!normalizedCandidate) continue;
+    if (!normalizedAllowedProviders.includes(normalizedCandidate)) continue;
+    if (!isProviderConfiguredForUse(normalizedCandidate, safeCfg)) continue;
+    return normalizedCandidate;
+  }
+
+  return '';
 };
 
 const resolveStageAgent = (token, enabledAgents = []) => {
@@ -1581,6 +1664,7 @@ const resolveStageAgent = (token, enabledAgents = []) => {
   if (!needle) return null;
 
   const aliases = {
+    'manager-review': ['manager-review', 'manager_review', 'manager review', 'managerreview', 'בקרת התאמה'],
     manager: ['manager', 'מנהל'],
     researcher: ['researcher', 'research', 'sources', 'source', 'חוקר', 'מקורות'],
     designer: ['designer', 'design', 'structure', 'outline', 'מעצב', 'מבנה'],
@@ -1588,16 +1672,39 @@ const resolveStageAgent = (token, enabledAgents = []) => {
     proofreader: ['proofreader', 'review', 'editor', 'מגיה', 'בודק'],
   };
 
+  const canonicalEntry = Object.entries(aliases).find(([canonical, list]) => canonical === needle || list.includes(needle));
+  if (canonicalEntry) {
+    const [canonical] = canonicalEntry;
+    if (canonical === 'manager-review') {
+      return enabledAgents.find((agent) => isManagerReviewAgent(agent)) || null;
+    }
+    if (canonical === 'manager') {
+      return enabledAgents.find((agent) => isPlanningManagerAgent(agent)) || null;
+    }
+    const roleMatch = enabledAgents.find((agent) => getAgentRoleKey(agent) === canonical);
+    if (roleMatch) return roleMatch;
+  }
+
+  const exactMatch = enabledAgents.find((agent) => {
+    const id = String(agent?.id || '').toLowerCase();
+    const name = String(agent?.name || '').toLowerCase();
+    return id === needle || name === needle;
+  });
+  if (exactMatch) return exactMatch;
+
   return enabledAgents.find((agent) => {
     const id = String(agent?.id || '').toLowerCase();
     const name = String(agent?.name || '').toLowerCase();
-    if (id === needle || id.includes(needle) || name.includes(needle)) return true;
+    if (id.includes(needle) || name.includes(needle)) return true;
     return Object.entries(aliases).some(([canonical, list]) => {
       const tokenMatched = canonical === needle || list.some((alias) => needle.includes(alias) || alias.includes(needle));
       return tokenMatched && (id.includes(canonical) || list.some((alias) => id.includes(alias) || name.includes(alias)));
     });
   }) || null;
 };
+
+const resolvePlanningManagerAgent = (enabledAgents = []) => enabledAgents.find((agent) => isPlanningManagerAgent(agent)) || null;
+const resolveFinalManagerReviewAgent = (enabledAgents = []) => enabledAgents.find((agent) => isManagerReviewAgent(agent)) || resolvePlanningManagerAgent(enabledAgents);
 
 const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = [], activeSkill = null) => {
   const combined = `${userPrompt}\n${documentContext}`;
@@ -1619,24 +1726,42 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
 
   const orderedAgents = [];
   candidateOrder.forEach((token) => {
+    const roleMatches = token === 'manager'
+      ? enabledAgents.filter((agent) => isPlanningManagerAgent(agent))
+      : enabledAgents.filter((agent) => getAgentRoleKey(agent) === token && !isManagerReviewAgent(agent));
+    if (roleMatches.length) {
+      roleMatches.forEach((match) => {
+        if (!orderedAgents.some((agent) => agent.id === match.id)) orderedAgents.push(match);
+      });
+      return;
+    }
     const match = resolveStageAgent(token, enabledAgents);
     if (match && !orderedAgents.some((agent) => agent.id === match.id)) orderedAgents.push(match);
   });
+
+  if (skillPrefersPolish || needsResearch || needsStructure || isAcademic) {
+    enabledAgents
+      .filter((agent) => isManagerReviewAgent(agent))
+      .forEach((agent) => {
+        if (!orderedAgents.some((item) => item.id === agent.id)) orderedAgents.push(agent);
+      });
+  }
 
   if (!orderedAgents.length) orderedAgents.push(...enabledAgents);
 
   const stageGoals = {};
   orderedAgents.forEach((agent) => {
-    const id = String(agent.id || '').toLowerCase();
-    if (id.includes('manager')) stageGoals[agent.id] = 'בנה תוכנית קצרה, בחר שלבים נדרשים, והכן הוראות מסירה ממוקדות לסוכן הבא.';
-    else if (id.includes('research')) stageGoals[agent.id] = skillPrefersResearch
+    const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+    if (roleKey === 'manager-review') stageGoals[agent.id] = DEFAULT_MANAGER_REVIEW_GOAL;
+    else if (roleKey === 'manager') stageGoals[agent.id] = 'בנה תוכנית קצרה, בחר שלבים נדרשים, והכן הוראות מסירה ממוקדות לסוכן הבא.';
+    else if (roleKey === 'researcher') stageGoals[agent.id] = skillPrefersResearch
       ? 'התמקד באיתור פערי ידע, כיווני חיפוש, מקורות ומונחי חיפוש. אין להמציא ציטוטים.'
       : 'חלץ מהחומרים והטיוטה מקורות, כיווני חיפוש, נקודות עובדתיות וטענות שניתן לבסס. אין להמציא ציטוטים.';
-    else if (id.includes('design')) stageGoals[agent.id] = skillPrefersStructure
+    else if (roleKey === 'designer') stageGoals[agent.id] = skillPrefersStructure
       ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי על בסיס הבקשה.'
       : 'ארגן שלד טיעוני ברור, סדר פרקים ותתי-כותרות לפי מטרת העבודה.';
-    else if (id.includes('writer')) stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים.';
-    else if (id.includes('proof')) stageGoals[agent.id] = skillPrefersPolish
+    else if (roleKey === 'writer') stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים.';
+    else if (roleKey === 'proofreader') stageGoals[agent.id] = skillPrefersPolish
       ? 'בצע מעבר ליטוש קפדני: אחידות, בהירות, תיקון בעיות וטון עקבי לפני החזרה למשתמש.'
       : 'בצע בקרת איכות סופית: דיוק, אחידות, בהירות, ועמידה בדרישות אקדמיות.';
   });
@@ -1647,13 +1772,15 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
       ? 'זוהתה משימה אקדמית או מבוססת מקורות; יש להפעיל חקר לפני כתיבה, ואז ללטש את הנוסח הסופי.'
       : 'זוהתה משימת כתיבה מורכבת; יש לתאם בין תכנון, ניסוח ובקרת איכות.',
   ].filter(Boolean);
+  const lastAgent = orderedAgents[orderedAgents.length - 1] || null;
+  const alreadyEndsWithManagerReview = Boolean(lastAgent) && isManagerReviewAgent(lastAgent);
 
   return {
     summary: summaryParts.join(' '),
     orderedAgents,
     stageGoals,
     stageProviders: {},
-    needsFinalManagerReview: isAcademic || skillId === 'final-submission',
+    needsFinalManagerReview: (isAcademic || skillId === 'final-submission') && Boolean(resolveFinalManagerReviewAgent(enabledAgents)) && !alreadyEndsWithManagerReview,
   };
 };
 
@@ -1689,7 +1816,10 @@ const normalizeCircularRounds = (automation = {}) => {
 const getCircularRoundLimit = (automation = {}) => normalizeCircularRounds(automation).maxRounds;
 const getCircularMinRoundLimit = (automation = {}) => normalizeCircularRounds(automation).minRounds;
 
-const getDecisionMode = (automation = {}) => {
+const getDecisionMode = (automation = {}, enabledAgents = null) => {
+  const resolvedAgents = Array.isArray(enabledAgents) ? enabledAgents : getOrderedRoleAgents(automation.workflowMode);
+  const hasManagerAgent = Boolean(resolvePlanningManagerAgent(resolvedAgents));
+  if (!hasManagerAgent) return 'rules';
   if (automation?.workflowMode === 'manager-auto') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
   if (automation?.workflowMode === 'circular-team') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
   return 'rules';
@@ -1759,12 +1889,17 @@ const extractRevisitAgents = (packet = {}, enabledAgents = []) => {
     .filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index);
 };
 
-const getManagerReviewRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRunCounts, maxRounds }) => {
+const getManagerReviewRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRunCounts, maxRounds, forceManagerDecide = false }) => {
   const reviewText = `${packet?.missing || ''}\n${packet?.decision || ''}\n${packet?.handoff || ''}`;
   const suggestsAnotherPass = /(חסר|נדרש|דורש|לתקן|לחדד|לשפר|להרחיב|לא עקבי|אי-דיוק|פער)/i.test(reviewText);
-  if (!suggestsAnotherPass) return [];
-  if (getAgentRoleKey(stageAgent) === 'manager') return [];
-  const managerAgent = resolveStageAgent('manager', enabledAgents);
+  if (!forceManagerDecide && !suggestsAnotherPass) return [];
+  if (isPlanningManagerAgent(stageAgent)) {
+    if (forceManagerDecide) {
+      throw new Error('מנהל העבודה דרש הכרעה נוספת אך לא סיפק שלב המשך תקף.');
+    }
+    return [];
+  }
+  const managerAgent = resolvePlanningManagerAgent(enabledAgents);
   if (!managerAgent) return [];
   if ((agentRunCounts?.[managerAgent.id] || 0) >= maxRounds) return [];
   return [managerAgent];
@@ -1772,10 +1907,27 @@ const getManagerReviewRevisitAgents = ({ stageAgent, packet, enabledAgents, agen
 
 const getDecisionDirectives = (packet = {}) => {
   const decisionText = String(packet?.decision || '').trim();
+  const revisitTokens = [];
+  let revisitMatch;
+  const revisitRegex = /REVISIT\s*:\s*([^\n]+)/gi;
+  while ((revisitMatch = revisitRegex.exec(decisionText)) !== null) {
+    revisitTokens.push(...String(revisitMatch[1] || '')
+      .split(/[>,/|]| ו/)
+      .map((item) => item.trim())
+      .filter(Boolean));
+  }
   return {
     stop: /(^|\b)STOP(\b|$)|עצור|סיום סופי|מוכן להחזרה/i.test(decisionText),
     managerDecide: /MANAGER_DECIDE|העבר למנהל|הכרעת מנהל/i.test(decisionText),
+    revisitAll: revisitTokens.some((token) => /^(all|כולם|הכול|הכל)$/i.test(token)),
+    revisitRole: revisitTokens,
   };
+};
+
+const hasMeaningfulMissingItems = (missingText = '') => {
+  const normalized = String(missingText || '').trim();
+  if (!normalized) return false;
+  return !/^(אין\s+פערים(?:\s+מהותיים)?|אין\s+חוסרים|none|n\/a|no\s+gaps?|no\s+missing(?:\s+items)?)$/i.test(normalized);
 };
 
 const getRuleDrivenRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRunCounts, maxRounds }) => {
@@ -1799,12 +1951,83 @@ const getRuleDrivenRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRu
     .filter((agent) => (agentRunCounts?.[agent.id] || 0) < maxRounds);
 };
 
-const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager' }) => {
+const enqueueWorkflowRevisits = ({
+  requestedRevisits = [],
+  executionQueue,
+  agentRunCounts,
+  maxRounds,
+  logEvent,
+  requestedByAgent = null,
+  requestedByLabel = '',
+  decisionMode = 'rules',
+  decisionPreview = '',
+  missingPreview = '',
+  revisitReason = 'נדרש סבב נוסף',
+}) => {
+  const scheduledAgents = [];
+
+  requestedRevisits.slice().reverse().forEach((revisitAgent) => {
+    if (!revisitAgent?.id) return;
+    if ((agentRunCounts?.[revisitAgent.id] || 0) >= maxRounds) return;
+    if (executionQueue.some((item) => item?.agent?.id === revisitAgent.id)) return;
+
+    executionQueue.unshift({ agent: revisitAgent, revisitReason });
+    scheduledAgents.push(revisitAgent);
+    logEvent('stage-revisit-scheduled', 'הסוכן הוחזר לסבב נוסף', {
+      state: 'running',
+      agentId: revisitAgent.id,
+      agentLabel: revisitAgent.name,
+      agentName: revisitAgent.name,
+      requestedBy: requestedByAgent?.id || '',
+      requestedByLabel: requestedByLabel || requestedByAgent?.name || '',
+      roundIndex: (agentRunCounts?.[revisitAgent.id] || 0) + 1,
+      decisionMode,
+      decisionPreview,
+      missingPreview,
+    });
+  });
+
+  return scheduledAgents.reverse();
+};
+
+const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש.';
+
+const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [] }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
   const currentOutputBlock = stagedOutput ? `תוצר עדכני עד כה:\n${stagedOutput}` : '';
+  const isPlanningManagerStage = isPlanningManagerAgent(stageAgent);
+  const isManagerReviewStage = isManagerReviewAgent(stageAgent);
+  const revisitTargetAgents = (Array.isArray(enabledAgents) ? enabledAgents : [])
+    .filter((agent) => agent?.id)
+    .filter((agent) => {
+      if (finalReview || isManagerReviewStage || isPlanningManagerStage) return agent.id !== stageAgent?.id;
+      return true;
+    });
+  const revisitTargetList = revisitTargetAgents.map((agent) => agent.id).join(', ')
+    || 'writer, designer, researcher, proofreader, manager';
+  const revisitTargetsHelp = `יעדי REVISIT זמינים כרגע: ${revisitTargetList}`;
   const decisionGuidance = decisionMode === 'manager'
-    ? 'מצב העבודה כרגע הוא טייס אוטומטי: אתה חייב לציין בסוף במפורש מה עדיין חסר. אם נדרשת הכרעה נוספת, כתוב ב-DECISION: MANAGER_DECIDE והמנהל יחליט על הצעד הבא.'
-    : 'מצב העבודה כרגע הוא רגיל: אתה חייב לציין בסוף מה עדיין חסר, וב-DECISION להמליץ לפי כללים וסקילים על הצעד הבא, למשל REVISIT: writer או SKILL: source-hunter.';
+    ? (finalReview
+      ? 'אתה בשער בקרה סופי: אם צריך סבב תיקון, ציין במפורש REVISIT לסוכן המתאים. אל תחזיר את אותו סוכן לעצמו; אם הכול מוכן כתוב STOP.'
+      : isPlanningManagerStage
+      ? 'מצב העבודה כרגע הוא טייס אוטומטי ואתה המנהל המכריע: ציין במפורש מה עדיין חסר, ואם צריך סבב נוסף כתוב ב-DECISION: REVISIT: writer/designer/researcher/proofreader/manager. אם הכול מוכן כתוב STOP.'
+      : isManagerReviewStage
+        ? 'אתה שלב ביקורת ניהולי סופי: בדוק את התוצר, ואם צריך סבב תיקון כתוב ב-DECISION: REVISIT לסוכן אחר מתאים. אם הכול מוכן כתוב STOP.'
+      : 'מצב העבודה כרגע הוא טייס אוטומטי: אתה חייב לציין בסוף במפורש מה עדיין חסר. אם נדרשת הכרעה נוספת, כתוב ב-DECISION: MANAGER_DECIDE והמנהל יחליט על הצעד הבא.')
+    : (isManagerReviewStage
+      ? 'אתה שלב ביקורת ניהולי סופי: אם צריך תיקון, כתוב במפורש REVISIT לסוכן המתאים; אם הכול מוכן כתוב STOP.'
+      : 'מצב העבודה כרגע הוא רגיל: אתה חייב לציין בסוף מה עדיין חסר, וב-DECISION להמליץ לפי כללים וסקילים על הצעד הבא באמצעות agent id קונקרטי או SKILL מתאים.');
+  const decisionOptions = decisionMode === 'manager'
+    ? (finalReview
+      ? `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`
+      : isPlanningManagerStage
+      ? `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`
+      : isManagerReviewStage
+        ? `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`
+      : `DECISION:\nאחת מהאפשרויות: STOP / MANAGER_DECIDE / REVISIT: ${revisitTargetList} / SKILL: skill-id`)
+    : (isManagerReviewStage
+      ? `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`
+      : `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`);
 
   return [
     `בקשת המשתמש המקורית:\n${cleanUserPrompt}`,
@@ -1816,23 +2039,26 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
     decisionGuidance,
-    allowCircular ? 'אם לדעתך צריך להחזיר סוכן קודם לעוד סבב, אפשר לציין זאת ב-DECISION או ב-HANDOFF עם REVISIT: writer, designer, researcher, proofreader או manager.' : '',
+    revisitTargetsHelp,
+    allowCircular ? 'אם לדעתך צריך להחזיר סוכן קודם לעוד סבב, ציין זאת ב-DECISION או ב-HANDOFF עם REVISIT לאחד מה-agent ids הזמינים.' : '',
     'החזר את התשובה במבנה הבא בלבד:',
     'DELIVERABLE:\nהתוצר המלא שעובר לשלב הבא או חוזר למשתמש',
     'HANDOFF:\n2-5 נקודות קצרות לסוכן הבא: מה כבר נסגר, מה עוד חסר, ועל מה חשוב לשמור',
     'MISSING:\nרשימת פערים קצרה. אם הכול מוכן כתוב: אין פערים מהותיים',
-    'DECISION:\nאחת מהאפשרויות: STOP / MANAGER_DECIDE / REVISIT: writer, designer, researcher, proofreader / SKILL: skill-id',
+    decisionOptions,
     'CHECKLIST:\n- 2-4 בדיקות איכות קצרות',
   ].filter(Boolean).join('\n\n');
 };
 
-const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabledAgents, automation, cfg, selectedProviders, runId, logEvent, onStatus, activeSkill = null }) => {
+const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null }) => {
   const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill);
   if (!['manager-auto', 'circular-team'].includes(automation.workflowMode) || automation?.autopilotEnabled === false || !enabledAgents.length) return fallbackPlan;
 
-  const managerAgent = resolveStageAgent('manager', enabledAgents) || enabledAgents[0];
+  const managerAgent = resolvePlanningManagerAgent(enabledAgents);
+  if (!managerAgent) return fallbackPlan;
   const managerProvider = chooseProviderForAgent(managerAgent, cfg, selectedProviders);
-  const availableProviders = getConfiguredProviderPool(cfg, selectedProviders)
+  const availableProviders = normalizeProviderIds(selectedProviders, '')
+    .filter((providerId) => isProviderConfiguredForUse(providerId, cfg))
     .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, '')}`)
     .join('\n');
 
@@ -1847,10 +2073,13 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabl
     const managerPlanText = await chatWithActiveProvider(
       `בקשת המשתמש:\n${cleanUserPrompt}`,
       String(documentContext || '').slice(0, 6000),
-      `${managerAgent?.prompt || ''}\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher","designer","writer","proofreader"],"goals":{"manager":"..."},"roleLabels":{"researcher":"בודק מקורות","writer":"מנסח סופי"},"providers":{"researcher":"perplexity"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nמודלים זמינים כרגע:\n${availableProviders}`,
+      `${managerAgent?.prompt || ''}\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher","designer","writer","proofreader","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher":"בודק מקורות","writer":"מנסח סופי","manager-review":"בקרת התאמה"},"providers":{"researcher":"perplexity","manager-review":"claude"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nמודלים זמינים כרגע:\n${availableProviders}`,
       {
         providerOverride: managerProvider,
+        preferredProviders: managerProvider ? [managerProvider] : preferredProviders,
+        strictProviderOverride: true,
         modelOverride: managerAgent?.model || '',
+        strictFormatting: true,
         skipAutomation: true,
         skipMultiModel: true,
         shouldPersistMemory: false,
@@ -1876,23 +2105,44 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabl
       .filter(Boolean)
       .filter((agent, index, arr) => arr.findIndex((item) => item.id === agent.id) === index);
 
-    if (!orderedAgents.length) return fallbackPlan;
+    const normalizedOrderedAgents = [
+      ...orderedAgents.filter((agent) => !isManagerReviewAgent(agent)),
+      ...orderedAgents.filter((agent) => isManagerReviewAgent(agent)),
+    ];
+
+    if (!normalizedOrderedAgents.length) return fallbackPlan;
 
     logEvent('manager-plan-success', 'מנהל העבודה בחר מסלול הרצה דינמי', {
       state: 'success',
       agentLabel: managerAgent?.name || 'מנהל עבודה',
-      orderedAgents: orderedAgents.map((agent) => agent.name),
+      orderedAgents: normalizedOrderedAgents.map((agent) => agent.name),
       outputPreview: trimLogText(parsedPlan.summary || ''),
+    });
+
+    const resolvedFinalReviewer = resolveFinalManagerReviewAgent(enabledAgents);
+    const lastPlannedAgent = normalizedOrderedAgents[normalizedOrderedAgents.length - 1] || null;
+    const alreadyEndsWithManagerReview = Boolean(lastPlannedAgent) && Boolean(resolvedFinalReviewer) && lastPlannedAgent.id === resolvedFinalReviewer.id;
+    const dynamicStageGoals = { ...(parsedPlan.goals || {}) };
+    normalizedOrderedAgents.forEach((agent) => {
+      const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+      const resolvedGoal = parsedPlan?.goals?.[agent.id]
+        || parsedPlan?.goals?.[agent.name]
+        || parsedPlan?.goals?.[String(agent.id || '').toLowerCase()]
+        || parsedPlan?.goals?.[roleKey]
+        || '';
+      if (resolvedGoal) dynamicStageGoals[agent.id] = resolvedGoal;
     });
 
     return {
       ...fallbackPlan,
       summary: String(parsedPlan.summary || fallbackPlan.summary || '').trim(),
-      orderedAgents,
-      stageGoals: { ...fallbackPlan.stageGoals, ...(parsedPlan.goals || {}) },
+      orderedAgents: normalizedOrderedAgents,
+      stageGoals: { ...fallbackPlan.stageGoals, ...dynamicStageGoals },
       stageLabels: parsedPlan.roleLabels || parsedPlan.stageLabels || {},
       stageProviders: parsedPlan.providers || {},
-      needsFinalManagerReview: parsedPlan.needsFinalManagerReview === true,
+      needsFinalManagerReview: !alreadyEndsWithManagerReview && (typeof parsedPlan.needsFinalManagerReview === 'boolean'
+        ? parsedPlan.needsFinalManagerReview
+        : fallbackPlan.needsFinalManagerReview),
     };
   } catch (error) {
     logEvent('manager-plan-fallback', 'תכנון דינמי נכשל, עובר למסלול בטוח', {
@@ -2061,6 +2311,30 @@ export const clearAppMemory = () => {
   localStorage.setItem(APP_MEMORY_STORAGE_KEY, JSON.stringify(DEFAULT_APP_MEMORY));
 };
 
+export const clearSidebarChatHistory = ({ workspaceId = '', clearAll = false } = {}) => {
+  const legacyKey = 'wordai_sidebar_messages';
+  const activeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const scopedKey = `${legacyKey}:${activeWorkspaceId}`;
+
+  if (clearAll) {
+    Object.keys(localStorage)
+      .filter((key) => key === legacyKey || key.startsWith(`${legacyKey}:`))
+      .forEach((key) => localStorage.removeItem(key));
+  } else {
+    localStorage.removeItem(scopedKey);
+    localStorage.removeItem(legacyKey);
+  }
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('wordai-chat-history-cleared', {
+      detail: {
+        workspaceId: activeWorkspaceId,
+        clearAll,
+      },
+    }));
+  }
+};
+
 const extractMemoryNotes = (text = '') => {
   const lines = String(text || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
   return [...new Set(
@@ -2181,16 +2455,18 @@ export const clearAgentDebugLogs = (workspaceId = '') => {
 
 export const logAgentDebugEvent = (entry = {}) => pushAgentDebugLog(entry);
 
-export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) => {
+export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), targetRunId = '') => {
   const activeWorkspaceId = String(automation?.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const logs = getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false });
-  const latestLog = logs.length ? logs[logs.length - 1] : null;
+  const requestedRunId = String(targetRunId || '').trim();
+  const scopedLogs = requestedRunId ? logs.filter((log) => String(log?.runId || '').trim() === requestedRunId) : logs;
+  const latestLog = scopedLogs.length ? scopedLogs[scopedLogs.length - 1] : null;
   const runWorkflowMode = String(latestLog?.workflowMode || automation?.workflowMode || 'manager-auto');
   const orderedAgents = getOrderedRoleAgents(runWorkflowMode);
 
-  if (!logs.length) {
+  if (!scopedLogs.length) {
     return {
-      runId: '',
+      runId: requestedRunId,
       workspaceId: activeWorkspaceId,
       workspaceName: automation?.workspaceName || '',
       criteria: [
@@ -2204,9 +2480,13 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation()) 
     };
   }
 
-  const lastRunLog = [...logs].reverse().find((log) => log.runId) || logs[logs.length - 1];
-  const runId = lastRunLog?.runId || '';
-  const runLogs = runId ? logs.filter((log) => log.runId === runId) : logs.slice(-80);
+  const lastRunLog = requestedRunId
+    ? scopedLogs[scopedLogs.length - 1]
+    : ([...logs].reverse().find((log) => log.runId) || logs[logs.length - 1]);
+  const runId = requestedRunId || lastRunLog?.runId || '';
+  const runLogs = requestedRunId
+    ? scopedLogs
+    : (runId ? logs.filter((log) => log.runId === runId) : logs.slice(-80));
   const summaryWorkspaceId = String(lastRunLog?.activeWorkspaceId || activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const summaryWorkspaceName = String(lastRunLog?.workspaceName || automation?.workspaceName || '').trim();
   const hasApiAttempt = runLogs.some((log) => ['request-start', 'provider-start', 'attempt-start', 'multi-model-start'].includes(log.type));
@@ -2380,13 +2660,34 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const taggedRouting = extractTaggedModelRouting(userPrompt);
   const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
   const taggedProviders = normalizeProviderIds(taggedRouting.taggedProviders, '');
-  const selectedProviders = options.providerOverride
-    ? [options.providerOverride]
-    : taggedProviders.length
-      ? taggedProviders
+  const preferredProviders = normalizeProviderIds(options.preferredProviders, '');
+  const constrainedProviders = preferredProviders.length
+    ? preferredProviders
+    : taggedProviders;
+  const selectedProviders = constrainedProviders.length
+    ? constrainedProviders
+    : options.providerOverride && options.strictProviderOverride === true
+      ? [options.providerOverride]
       : getSelectedProviderIds(cfg, options.skipMultiModel === true);
-  const activeProvider = options.providerOverride || taggedProviders[0] || selectedProviders[0] || cfg.active;
-  const modelOverride = options.modelOverride || taggedRouting.providerModels?.[activeProvider] || taggedRouting.taggedModel || '';
+  const automationPreferredProviders = constrainedProviders.length || selectedProviders.length > 1
+    ? selectedProviders
+    : [];
+  const configuredSelectedProviders = selectedProviders
+    .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+  if (constrainedProviders.length && !configuredSelectedProviders.length) {
+    throw new Error('אין ספק AI זמין בתוך ה-pool שנבחר.');
+  }
+  const taggedProviderInPool = taggedProviders.find((providerId) => configuredSelectedProviders.includes(providerId));
+  const activeProvider = options.providerOverride
+    || (preferredProviders.length
+      ? taggedProviderInPool
+      : (taggedProviders.length ? taggedProviderInPool : ''))
+    || configuredSelectedProviders[0]
+    || selectedProviders[0]
+    || cfg.active;
+  const taggedModelOverride = taggedRouting.providerModels?.[activeProvider]
+    || (preferredProviders.length ? '' : taggedRouting.taggedModel);
+  const modelOverride = options.modelOverride || taggedModelOverride || '';
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile());
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions();
@@ -2399,6 +2700,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   });
   const activeSkill = skillResolution.skill;
   const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason, activeSkill ? skillsConfig.skills?.[activeSkill.id] : null);
+  const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
   const appMemoryPrompt = options.includeAppMemory === false ? '' : buildAppMemoryInstructions(getAppMemory());
   const automation = getWorkspaceAutomation();
   const onStatus = options.onStatus;
@@ -2408,14 +2710,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
   const runId = options.runId || createRunId();
+  const activeWorkspaceId = String(options.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const workspaceName = String(options.workspaceName || automation.workspaceName || '').trim();
   const disableFallback = options.disableFallback === true;
   const resolvedModel = getModelNameForProvider(activeProvider, cfg, modelOverride);
   const logEvent = (type, message, extra = {}) => pushAgentDebugLog({
     runId,
     type,
     message,
-    activeWorkspaceId: extra.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID,
-    workspaceName: extra.workspaceName || automation.workspaceName || '',
+    activeWorkspaceId: extra.activeWorkspaceId || activeWorkspaceId,
+    workspaceName: extra.workspaceName || workspaceName,
     agentLabel: extra.agentLabel || agentLabel,
     agentName: extra.agentName || extra.agentLabel || agentName,
     provider: extra.provider || activeProvider,
@@ -2441,10 +2745,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
 אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
 אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
-אם המשתמש מבקש תוכן חדש, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
+אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
-כשמחזירים מסמך או תוכן ארוך: השתמש תמיד ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר — אל תחזיר גוש טקסט רציף ללא היררכיה ומבנה.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}`;
+כשמחזירים מסמך או תוכן ארוך שמיועד להדבקה במסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר — אל תחזיר גוש טקסט רציף ללא היררכיה ומבנה.
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -2474,6 +2778,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         automation,
         cfg,
         selectedProviders,
+        preferredProviders: automationPreferredProviders,
         runId,
         logEvent,
         onStatus,
@@ -2482,7 +2787,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
       const orderedAgents = executionPlan?.orderedAgents?.length ? executionPlan.orderedAgents : enabledAgents;
       const allowCircularWorkflow = automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false;
-      const decisionMode = getDecisionMode(automation);
+      const decisionMode = getDecisionMode(automation, enabledAgents);
       const allowDecisionRevisits = allowCircularWorkflow || decisionMode === 'manager';
       const skillsConfig = getSkillsConfig();
       const maxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
@@ -2504,38 +2809,44 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
       let stagedOutput = '';
       let processedStages = 0;
+      let pendingFinalManagerReview = executionPlan?.needsFinalManagerReview === true;
+      let finalManagerReviewPasses = 0;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
       const stageArtifacts = [];
 
-      while (executionQueue.length && processedStages < maxStageCount) {
-        const queueItem = executionQueue.shift();
-        const stageAgent = queueItem?.agent;
-        if (!stageAgent?.id) continue;
+      while (executionQueue.length || pendingFinalManagerReview) {
+        while (executionQueue.length && processedStages < maxStageCount) {
+          const queueItem = executionQueue.shift();
+          const stageAgent = queueItem?.agent;
+          if (!stageAgent?.id) continue;
 
-        const runCount = (agentRunCounts[stageAgent.id] || 0) + 1;
-        agentRunCounts[stageAgent.id] = runCount;
-        const stageStart = Math.round((processedStages / maxStageCount) * 100);
-        const stageSpan = Math.max(12, Math.round(100 / Math.max(1, maxStageCount)));
-        const stageRoleKey = getAgentRoleKey(stageAgent);
-        const stageGoal = executionPlan?.stageGoals?.[stageAgent.id]
+          const runCount = (agentRunCounts[stageAgent.id] || 0) + 1;
+          agentRunCounts[stageAgent.id] = runCount;
+          const stageStart = Math.round((processedStages / maxStageCount) * 100);
+          const stageSpan = Math.max(12, Math.round(100 / Math.max(1, maxStageCount)));
+          const stageRoleKey = getAgentRoleKey(stageAgent);
+          const stageRoutingKey = isManagerReviewAgent(stageAgent) ? 'manager-review' : stageRoleKey;
+          const stageGoalKey = isManagerReviewAgent(stageAgent) ? 'manager-review' : stageRoleKey;
+          const stageGoal = executionPlan?.stageGoals?.[stageAgent.id]
           || executionPlan?.stageGoals?.[stageAgent.name]
           || executionPlan?.stageGoals?.[String(stageAgent.id || '').toLowerCase()]
-          || executionPlan?.stageGoals?.[stageRoleKey]
-          || '';
-        const stageLabel = executionPlan?.stageLabels?.[stageAgent.id]
+          || executionPlan?.stageGoals?.[stageGoalKey]
+          || (isManagerReviewAgent(stageAgent) ? DEFAULT_MANAGER_REVIEW_GOAL : '');
+          const stageLabel = executionPlan?.stageLabels?.[stageAgent.id]
           || executionPlan?.stageLabels?.[stageAgent.name]
           || executionPlan?.stageLabels?.[String(stageAgent.id || '').toLowerCase()]
-          || executionPlan?.stageLabels?.[stageRoleKey]
+          || executionPlan?.stageLabels?.[stageRoutingKey]
           || stageAgent.name;
-        const requestedProvider = executionPlan?.stageProviders?.[stageAgent.id]
-          || executionPlan?.stageProviders?.[stageAgent.name]
-          || executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()]
-          || executionPlan?.stageProviders?.[stageRoleKey]
-          || '';
-        const stageProvider = (requestedProvider && isProviderConfiguredForUse(requestedProvider, cfg))
-          ? requestedProvider
-          : chooseProviderForAgent(stageAgent, cfg, selectedProviders);
-        const stagePrompt = buildStagePrompt({
+          const allowedStageProviders = normalizeProviderIds(selectedProviders, '')
+          .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+          const normalizedRequestedProvider = resolveExplicitProviderCandidate([
+            executionPlan?.stageProviders?.[stageAgent.id],
+            executionPlan?.stageProviders?.[stageAgent.name],
+            executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
+            executionPlan?.stageProviders?.[stageRoutingKey],
+          ], allowedStageProviders, cfg);
+          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, selectedProviders);
+          const stagePrompt = buildStagePrompt({
           cleanUserPrompt,
           stageGoal,
           stageAgent,
@@ -2548,9 +2859,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           roundIndex: runCount - 1,
           revisitReason: queueItem?.revisitReason || '',
           decisionMode,
+          enabledAgents,
         });
 
-        logEvent('stage-start', `מתחיל שלב ${processedStages + 1} מתוך ${maxStageCount}${runCount > 1 ? ` • סבב ${runCount}` : ''}`, {
+          logEvent('stage-start', `מתחיל שלב ${processedStages + 1} מתוך ${maxStageCount}${runCount > 1 ? ` • סבב ${runCount}` : ''}`, {
           state: 'running',
           agentId: stageAgent.id,
           agentLabel: stageLabel,
@@ -2564,10 +2876,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           promptPreview: trimLogText(stagePrompt),
         });
 
-        try {
+          try {
           const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
             providerOverride: stageProvider,
-            modelOverride: stageAgent.model || modelOverride,
+            preferredProviders: stageProvider ? [stageProvider] : automationPreferredProviders,
+            strictProviderOverride: true,
+            modelOverride: stageAgent.model || taggedRouting.providerModels?.[stageProvider] || '',
+            strictFormatting: true,
             skipAutomation: true,
             skipMultiModel: true,
             shouldPersistMemory: false,
@@ -2669,33 +2984,52 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             });
           } else if (allowDecisionRevisits) {
             const priorityManager = directives.managerDecide
-              ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
+              ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent, forceManagerDecide: true })
               : [];
             const requestedRevisits = [
               ...priorityManager,
-              ...extractRevisitAgents(parsedReply, orderedAgents),
+              ...extractRevisitAgents(parsedReply, enabledAgents),
               ...(decisionMode === 'manager'
-                ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
-                : getRuleDrivenRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents: orderedAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })),
+                ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
+                : getRuleDrivenRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })),
             ].filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index);
-
-            requestedRevisits.slice().reverse().forEach((revisitAgent) => {
-              if ((agentRunCounts[revisitAgent.id] || 0) >= maxRoundsPerAgent) return;
-              if (executionQueue.some((item) => item?.agent?.id === revisitAgent.id)) return;
-              executionQueue.unshift({ agent: revisitAgent, revisitReason: directives.managerDecide ? `${stageLabel} ביקש הכרעת מנהל` : `${stageLabel} זיהה שעדיין חסר משהו` });
-              logEvent('stage-revisit-scheduled', 'הסוכן הוחזר לסבב נוסף', {
-                state: 'running',
-                agentId: revisitAgent.id,
-                agentLabel: revisitAgent.name,
-                agentName: revisitAgent.name,
-                requestedBy: stageAgent.id,
-                requestedByLabel: stageLabel,
-                roundIndex: (agentRunCounts[revisitAgent.id] || 0) + 1,
-                decisionMode,
-                decisionPreview: trimLogText(parsedReply.decision || ''),
-                missingPreview: trimLogText(parsedReply.missing || ''),
-              });
+            const fallbackPlanningManager = isManagerReviewAgent(stageAgent)
+              ? resolvePlanningManagerAgent(enabledAgents)
+              : null;
+            const fallbackWorkerAgent = isManagerReviewAgent(stageAgent)
+              ? ['writer', 'proofreader', 'designer', 'researcher']
+                .map((roleKey) => enabledAgents.find((agent) => agent?.id && agent.id !== stageAgent.id && getAgentRoleKey(agent) === roleKey))
+                .find(Boolean)
+                || enabledAgents.find((agent) => agent?.id && agent.id !== stageAgent.id)
+                || null
+              : null;
+            const revisitTargets = requestedRevisits.length
+              ? requestedRevisits
+              : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(parsedReply.missing) && fallbackPlanningManager && fallbackPlanningManager.id !== stageAgent.id
+                ? [fallbackPlanningManager]
+                : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(parsedReply.missing) && fallbackWorkerAgent
+                  ? [fallbackWorkerAgent]
+                  : []))
+                ;
+            const filteredRequestedRevisits = (isManagerReviewAgent(stageAgent) || isPlanningManagerAgent(stageAgent))
+              ? revisitTargets.filter((agent) => agent?.id && agent.id !== stageAgent.id)
+              : revisitTargets;
+            enqueueWorkflowRevisits({
+              requestedRevisits: filteredRequestedRevisits,
+              executionQueue,
+              agentRunCounts,
+              maxRounds: maxRoundsPerAgent,
+              logEvent,
+              requestedByAgent: stageAgent,
+              requestedByLabel: stageLabel,
+              decisionMode,
+              decisionPreview: trimLogText(parsedReply.decision || ''),
+              missingPreview: trimLogText(parsedReply.missing || ''),
+              revisitReason: directives.managerDecide ? `${stageLabel} ביקש הכרעת מנהל` : `${stageLabel} זיהה שעדיין חסר משהו`,
             });
+            if (isManagerReviewAgent(stageAgent) && filteredRequestedRevisits.length) {
+              pendingFinalManagerReview = true;
+            }
           }
 
           logEvent('stage-success', `הושלם שלב ${processedStages + 1} מתוך ${maxStageCount}`, {
@@ -2733,67 +3067,176 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         }
       }
 
-      if (allowDecisionRevisits && executionQueue.length) {
-        logEvent('workflow-circular-limit', 'הגעת למגבלת הסבבים; עובר לסיכום סופי', {
-          state: 'retrying',
-          pendingAgents: executionQueue.map((item) => item?.agent?.name).filter(Boolean),
-        });
-      }
-
-      if (executionPlan?.needsFinalManagerReview) {
-        const managerAgent = resolveStageAgent('manager', enabledAgents);
-        if (managerAgent) {
-          const reviewProvider = chooseProviderForAgent(managerAgent, cfg, selectedProviders);
-          const reviewPrompt = buildStagePrompt({
-            cleanUserPrompt,
-            stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. החזר נוסח סופי בלבד.',
-            stageAgent: managerAgent,
-            stagedOutput,
-            batonNotes,
-            planSummary: executionPlan?.summary || '',
-            index: orderedAgents.length,
-            total: orderedAgents.length + 1,
+        if (allowDecisionRevisits && executionQueue.length) {
+          logEvent('workflow-circular-limit', 'הגעת למגבלת הסבבים; עובר לסיכום סופי', {
+            state: 'retrying',
+            pendingAgents: executionQueue.map((item) => item?.agent?.name).filter(Boolean),
           });
+          executionQueue.length = 0;
+        }
 
-          const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
-            providerOverride: reviewProvider,
-            modelOverride: managerAgent.model || modelOverride,
-            skipAutomation: true,
-            skipMultiModel: true,
-            shouldPersistMemory: false,
+        if (!pendingFinalManagerReview) break;
+
+        const managerAgent = resolveFinalManagerReviewAgent(enabledAgents);
+        if (!managerAgent) {
+          throw new Error('נדרשת סקירת manager סופית, אבל אין סוכן manager פעיל ב-workflow הנוכחי.');
+        }
+
+        const nextFinalManagerReviewPass = finalManagerReviewPasses + 1;
+        const allowedFinalReviewBudget = maxRoundsPerAgent + (isPlanningManagerAgent(managerAgent) ? 1 : 0);
+        if (((agentRunCounts[managerAgent.id] || 0) + nextFinalManagerReviewPass) > allowedFinalReviewBudget) {
+          throw new Error('סקירת manager סופית חרגה ממגבלת הסבבים המותרת עבור אותו סוכן.');
+        }
+        finalManagerReviewPasses = nextFinalManagerReviewPass;
+        const managerRoleKey = isManagerReviewAgent(managerAgent) ? 'manager-review' : getAgentRoleKey(managerAgent);
+        const allowedReviewProviders = normalizeProviderIds(selectedProviders, '')
+          .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+        const normalizedReviewProvider = resolveExplicitProviderCandidate([
+          executionPlan?.stageProviders?.['manager-review'],
+          executionPlan?.stageProviders?.[managerAgent.id],
+          executionPlan?.stageProviders?.[managerAgent.name],
+          executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
+          executionPlan?.stageProviders?.[managerRoleKey],
+        ], allowedReviewProviders, cfg);
+        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, selectedProviders);
+        const reviewPrompt = buildStagePrompt({
+          cleanUserPrompt,
+          stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. החזר נוסח סופי בלבד.',
+          stageAgent: managerAgent,
+          stagedOutput,
+          batonNotes,
+          planSummary: executionPlan?.summary || '',
+          index: orderedAgents.length,
+          total: orderedAgents.length + 1,
+          finalReview: true,
+          enabledAgents,
+        });
+
+        const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
+          providerOverride: reviewProvider,
+          preferredProviders: reviewProvider ? [reviewProvider] : automationPreferredProviders,
+          strictProviderOverride: true,
+          modelOverride: managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || '',
+          strictFormatting: true,
+          skipAutomation: true,
+          skipMultiModel: true,
+          shouldPersistMemory: false,
+          agentLabel: managerAgent.name,
+          agentName: managerAgent.name,
+          runId,
+          onStatus: (payload = {}) => emitStatus(onStatus, {
+            ...payload,
+            runId,
+            provider: payload.provider || reviewProvider,
+            model: payload.model || managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+            agentLabel: managerAgent.name,
+            progress: Math.max(92, Number(payload.progress ?? 96)),
+            message: payload.message || 'מנהל העבודה מבצע סקירה סופית',
+          }),
+        });
+
+        const parsedManagerReply = parseStagePacket(managerReply);
+        const managerDirectives = getDecisionDirectives(parsedManagerReply);
+        const revisitAllAgents = managerDirectives.revisitAll
+          ? enabledAgents.filter((agent) => agent?.id && agent.id !== managerAgent.id)
+          : [];
+        const managerRevisitAgents = [
+          ...revisitAllAgents,
+          ...extractRevisitAgents(parsedManagerReply, enabledAgents),
+          ...getRuleDrivenRevisitAgents({ stageAgent: managerAgent, packet: parsedManagerReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent }),
+        ]
+          .filter((agent, index, list) => agent?.id ? list.findIndex((item) => item.id === agent.id) === index : false)
+          .filter((agent) => agent.id !== managerAgent.id);
+        const managerArtifact = String(parsedManagerReply.deliverable || '').trim();
+        if (!hasMeaningfulArtifact(managerArtifact, cleanUserPrompt)) {
+          logEvent('stage-noop', 'סקירת המנהל לא החזירה תוצר סופי שימושי', {
+            state: 'error',
+            agentId: managerAgent.id,
             agentLabel: managerAgent.name,
             agentName: managerAgent.name,
-            runId,
-            onStatus: (payload = {}) => emitStatus(onStatus, {
-              ...payload,
-              runId,
-              provider: payload.provider || reviewProvider,
-              model: payload.model || managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-              agentLabel: managerAgent.name,
-              progress: Math.max(92, Number(payload.progress ?? 96)),
-              message: payload.message || 'מנהל העבודה מבצע סקירה סופית',
-            }),
+            provider: reviewProvider,
+            model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+            outputPreview: trimLogText(managerArtifact || managerReply || ''),
+            errorMessage: 'סקירת המנהל הסתיימה ללא deliverable תקין',
           });
+          throw new Error('סקירת המנהל הסתיימה ללא deliverable תקין. עצרתי כדי למנוע תוצאה ריקה.');
+        }
 
-          const parsedManagerReply = parseStagePacket(managerReply);
-          const managerArtifact = String(parsedManagerReply.deliverable || '').trim();
-          if (!hasMeaningfulArtifact(managerArtifact, cleanUserPrompt)) {
-            logEvent('stage-noop', 'סקירת המנהל לא החזירה תוצר סופי שימושי', {
+        const managerNeedsRevisit = managerDirectives.managerDecide || managerDirectives.revisitAll || managerRevisitAgents.length || hasMeaningfulMissingItems(parsedManagerReply.missing);
+        if (managerNeedsRevisit) {
+          const fallbackPlanningManager = resolvePlanningManagerAgent(enabledAgents);
+          const fallbackWorkerAgent = ['writer', 'proofreader', 'designer', 'researcher']
+            .map((roleKey) => enabledAgents.find((agent) => agent?.id && agent.id !== managerAgent.id && getAgentRoleKey(agent) === roleKey))
+            .find(Boolean)
+            || enabledAgents.find((agent) => agent?.id && agent.id !== managerAgent.id)
+            || null;
+          const revisitTargets = managerRevisitAgents.length
+            ? managerRevisitAgents
+            : (fallbackPlanningManager && fallbackPlanningManager.id !== managerAgent.id
+              ? [fallbackPlanningManager]
+              : (fallbackWorkerAgent ? [fallbackWorkerAgent] : []));
+          if (processedStages >= maxStageCount || finalManagerReviewPasses >= maxRoundsPerAgent) {
+            logEvent('stage-revisit-required', 'סקירת המנהל דרשה סבב נוסף אך ה-workflow כבר הגיע למגבלת הסבבים', {
               state: 'error',
               agentId: managerAgent.id,
               agentLabel: managerAgent.name,
               agentName: managerAgent.name,
               provider: reviewProvider,
               model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-              outputPreview: trimLogText(managerArtifact || managerReply || ''),
-              errorMessage: 'סקירת המנהל הסתיימה ללא deliverable תקין',
+              decision: parsedManagerReply.decision || '',
+              missing: parsedManagerReply.missing || '',
             });
-            throw new Error('סקירת המנהל הסתיימה ללא deliverable תקין. עצרתי כדי למנוע תוצאה ריקה.');
+            throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל ה-workflow כבר הגיע למגבלת הסבבים.');
           }
 
-          stagedOutput = managerArtifact;
+          const scheduledRevisits = enqueueWorkflowRevisits({
+            requestedRevisits: revisitTargets,
+            executionQueue,
+            agentRunCounts,
+            maxRounds: maxRoundsPerAgent,
+            logEvent,
+            requestedByAgent: managerAgent,
+            requestedByLabel: managerAgent.name,
+            decisionMode,
+            decisionPreview: trimLogText(parsedManagerReply.decision || ''),
+            missingPreview: trimLogText(parsedManagerReply.missing || ''),
+            revisitReason: 'סקירת manager סופית דרשה סבב נוסף',
+          });
+
+          if (!scheduledRevisits.length) {
+            logEvent('stage-revisit-required', 'סקירת המנהל דרשה סבב נוסף אך לא נמצא שלב המשך תקף', {
+              state: 'error',
+              agentId: managerAgent.id,
+              agentLabel: managerAgent.name,
+              agentName: managerAgent.name,
+              provider: reviewProvider,
+              model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+              decision: parsedManagerReply.decision || '',
+              missing: parsedManagerReply.missing || '',
+            });
+            throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל לא נמצא שלב המשך תקף לביצוע.');
+          }
+
+          logEvent('stage-revisit-required', 'סקירת המנהל דרשה סבב נוסף לפני החזרה למשתמש', {
+            state: 'retrying',
+            agentId: managerAgent.id,
+            agentLabel: managerAgent.name,
+            agentName: managerAgent.name,
+            provider: reviewProvider,
+            model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+            decision: parsedManagerReply.decision || '',
+            missing: parsedManagerReply.missing || '',
+            requestedAgents: scheduledRevisits.map((agent) => agent.id),
+          });
           if (parsedManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${parsedManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
+          while (batonNotes.length > 10) batonNotes.shift();
+          continue;
         }
+
+        stagedOutput = managerArtifact;
+        pendingFinalManagerReview = false;
+        if (parsedManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${parsedManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
+        while (batonNotes.length > 10) batonNotes.shift();
       }
 
       const finalOutput = String(stagedOutput || cleanUserPrompt).trim();
@@ -2862,6 +3305,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       try {
         const providerReply = await chatWithActiveProvider(cleanUserPrompt, documentContext, extraSystemPrompt, {
           providerOverride: providerId,
+          preferredProviders: runnableProviders,
+          strictProviderOverride: true,
           modelOverride: taggedRouting.providerModels?.[providerId] || '',
           skipAutomation: true,
           skipMultiModel: true,
@@ -2915,6 +3360,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     try {
       const mergedReply = await chatWithActiveProvider(mergePrompt, documentContext, 'אחד את כל הטיוטות לתשובה סופית חזקה אחת.', {
         providerOverride: mergeProviderId,
+        preferredProviders: collectedResponses.map((item) => item.providerId),
+        strictProviderOverride: true,
         modelOverride: taggedRouting.providerModels?.[mergeProviderId] || '',
         skipAutomation: true,
         skipMultiModel: true,
@@ -2976,6 +3423,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
         const ollamaModel = resolvedModel;
+        if (!isLocalOpenAICompatibleBaseUrl(ollamaUrl)) {
+          throw new Error('Ollama זמין רק עם endpoint מקומי מאושר — עבור להגדרות AI');
+        }
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
@@ -2991,6 +3441,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       case 'custom': {
         const { baseUrl, key, model, name } = cfg.custom;
         if (!baseUrl || !model) throw new Error(`מנוע "${name || 'מותאם אישית'}" לא מוגדר במלואו — עבור להגדרות AI`);
+        if (!String(key || '').trim() && !isLocalOpenAICompatibleBaseUrl(baseUrl)) {
+          throw new Error(`מנוע "${name || 'מותאם אישית'}" דורש API key או endpoint מקומי מאושר — עבור להגדרות AI`);
+        }
         return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
@@ -3008,6 +3461,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   });
   emitStatus(onStatus, { state: 'running', progress: 12, runId, provider: activeProvider, model: resolvedModel, agentLabel, message: 'מתחיל עיבוד' });
   let lastError = null;
+  const fallbackPool = constrainedProviders.length || selectedProviders.length > 1
+    ? getConfiguredProviderPool(cfg, selectedProviders)
+    : getConfiguredProviderPool(cfg);
+  const hasPinnedSingleTaggedProvider = !preferredProviders.length && taggedProviders.length === 1;
+  const allowCrossProviderFallback = !disableFallback
+    && !hasPinnedSingleTaggedProvider
+    && options.strictProviderOverride !== true
+    && fallbackPool.length > 1;
 
   for (let attempt = 0; attempt <= effectiveRetries; attempt += 1) {
     try {
@@ -3078,11 +3539,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   }
 
   // ─── Fallback: שרשרת גיבוי — מנסה ספקים מוגדרים אחרים לפי סדר עדיפות ─────
-  if (!disableFallback) {
-    const FALLBACK_PRIORITY = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
-    const fallbackCandidates = FALLBACK_PRIORITY.filter(
-      (pid) => pid !== activeProvider && isProviderConfiguredForUse(pid, cfg)
-    );
+  if (allowCrossProviderFallback) {
+    const fallbackCandidates = fallbackPool.filter((pid) => pid !== activeProvider);
 
     for (const fallbackProvider of fallbackCandidates) {
       try {
@@ -3105,9 +3563,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           message: `מנוע ${activeProvider} נכשל — עובר לגיבוי: ${fallbackProvider}`,
         });
 
-        const fallbackText = await chatWithActiveProvider(userPrompt, documentContext, extraSystemPrompt, {
+        const fallbackText = await chatWithActiveProvider(cleanUserPrompt, documentContext, extraSystemPrompt, {
           ...options,
           providerOverride: fallbackProvider,
+          preferredProviders: [fallbackProvider],
+          strictProviderOverride: true,
+          modelOverride: taggedRouting.providerModels?.[fallbackProvider] || '',
           skipAutomation: true,
           shouldPersistMemory: false,
           disableFallback: true,
@@ -3157,7 +3618,7 @@ export const callAiAgent = async (agentId, selectedText, context = "") => {
   if (!agentConf) throw new Error("Invalid agent ID");
   const fullPrompt = buildPrompt(agentConf, selectedText, context);
   // משתמש במנוע הפעיל הנבחר (לא תמיד Gemini)
-  return chatWithActiveProvider(fullPrompt, context, '', { skipAutomation: true });
+  return chatWithActiveProvider(fullPrompt, context, '', { skipAutomation: true, skipMultiModel: true, strictFormatting: true });
 };
 
 export const applyInlineAi = async (editor, agentId) => {
@@ -3185,9 +3646,11 @@ export const applyInlineAi = async (editor, agentId) => {
 export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '', runtimeOptions = {}) => {
   if (!agent?.prompt) throw new Error('לסוכן התפקידי אין הנחיה שמורה');
   const cfg = getProviderConfig();
-  const providerOverride = chooseProviderForAgent(agent, cfg, getSelectedProviderIds(cfg));
+  const selectedProviders = getSelectedProviderIds(cfg);
+  const providerOverride = chooseProviderForAgent(agent, cfg, selectedProviders);
   return chatWithActiveProvider(userPrompt, documentContext, agent.prompt, {
     providerOverride,
+    preferredProviders: selectedProviders,
     modelOverride: agent.model,
     agentLabel: agent.name || 'סוכן תפקידי',
     agentName: agent.name || 'סוכן תפקידי',
@@ -3270,6 +3733,8 @@ export const chefModeGenerateQuestion = async (params = {}) => {
   try {
     const raw = await chatWithActiveProvider(prompt, '', '', {
       providerOverride: selectedModel,
+      strictProviderOverride: true,
+      strictFormatting: true,
       skipAutomation: true,
       skipMultiModel: true,
       agentLabel: 'Chef Question Planner',
@@ -3339,6 +3804,8 @@ ${responsesText}
         agentLabel: 'שף בישול',
         runId,
         onStatus,
+        strictProviderOverride: true,
+        strictFormatting: true,
         skipAutomation: true,
         skipMultiModel: true,
         providerOverride: selectedModel || cfg.active,
@@ -3415,6 +3882,8 @@ export const chefModeDecideNextStep = async (userResponses = [], selectedModel =
   try {
     const raw = await chatWithActiveProvider(prompt, '', '', {
       providerOverride: selectedModel || cfg.active,
+      strictProviderOverride: true,
+      strictFormatting: true,
       skipAutomation: true,
       skipMultiModel: true,
       agentLabel: 'Chef Decision',
@@ -3511,9 +3980,11 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
   const pCfg = { ...cfg[providerId], ...providerConfig };
   const requestedModel = String(pCfg.model || '').trim();
   const fallbacks = PROVIDER_MODEL_FALLBACKS[providerId] || [];
-  const modelsToTry = requestedModel
-    ? [requestedModel, ...fallbacks.filter((m) => m !== requestedModel)]
-    : fallbacks;
+  const modelsToTry = providerId === 'ollama'
+    ? [requestedModel || 'llama3.2']
+    : requestedModel
+      ? [requestedModel, ...fallbacks.filter((m) => m !== requestedModel)]
+      : fallbacks;
 
   if (!modelsToTry.length) modelsToTry.push('default');
 
@@ -3548,11 +4019,13 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
         reply = await pingOpenAICompatible('https://api.perplexity.ai', key, model, controller.signal);
       } else if (providerId === 'ollama') {
         const baseUrl = String(pCfg.baseUrl || 'http://localhost:11434/v1').trim();
+        if (!isLocalOpenAICompatibleBaseUrl(baseUrl)) throw new Error('כתובת Ollama חייבת להיות מקומית');
         reply = await pingOpenAICompatible(baseUrl, '', model, controller.signal);
       } else if (providerId === 'custom') {
         const baseUrl = String(pCfg.baseUrl || '').trim();
         if (!baseUrl) throw new Error('כתובת API חסרה');
         const key = String(pCfg.key || '').trim();
+        if (!key && !isLocalOpenAICompatibleBaseUrl(baseUrl)) throw new Error('מפתח API חסר');
         reply = await pingOpenAICompatible(baseUrl, key, model, controller.signal);
       } else {
         throw new Error(`ספק לא מוכר: ${providerId}`);

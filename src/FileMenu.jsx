@@ -29,6 +29,7 @@ import {
   saveSkillsConfig,
   getAppMemory,
   clearAppMemory,
+  clearSidebarChatHistory,
   testProviderConnection,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
@@ -40,9 +41,318 @@ const POPULAR_CUSTOM = [
   { name: 'Perplexity',             url: 'https://api.perplexity.ai',               note: 'מפתח ב-perplexity.ai/settings/api',       model: 'sonar-pro',    keyNote: 'מתחיל ב-pplx-' },
   { name: 'Together.ai',            url: 'https://api.together.xyz/v1',             note: 'מפתח ב-api.together.ai',                   model: 'meta-llama/Llama-3-70b-chat-hf',       keyNote: 'מפתח ארוך' },
   { name: 'DeepSeek',               url: 'https://api.deepseek.com/v1',             note: 'מפתח ב-platform.deepseek.com',             model: 'deepseek-chat',                        keyNote: 'מתחיל ב-sk-' },
+  { name: 'OpenRouter',             url: 'https://openrouter.ai/api/v1',            note: 'מפתח ב-openrouter.ai/keys',               model: 'openrouter/auto',                      keyNote: 'מתחיל ב-sk-or-v1-' },
+  { name: 'xAI (Grok)',             url: 'https://api.x.ai/v1',                     note: 'מפתח ב-console.x.ai',                      model: 'grok-3-mini-beta',                     keyNote: 'מפתח בחשבון xAI' },
   { name: 'Ollama (מקומי - חינם)', url: 'http://localhost:11434/v1',              note: 'הורד מ-ollama.com — ✅ לא דורש מפתח',    model: 'llama3.2',                             keyNote: 'ריק (לא נדרש)' },
   { name: 'LM Studio (מקומי)',      url: 'http://localhost:1234/v1',               note: 'הורד מ-lmstudio.ai — ✅ לא דורש מפתח',  model: 'loaded-model',                         keyNote: 'ריק (לא נדרש)' },
 ];
+
+const PROVIDER_SETUP_CATALOG = [
+  {
+    id: 'gemini',
+    label: 'Gemini',
+    setupMode: 'builtin',
+    badge: 'מהיר להתחלה',
+    keyUrl: 'https://aistudio.google.com/app/apikey',
+    keyCta: 'פתח את Google AI Studio',
+    keyHint: 'מפתח חינמי, לרוב מתחיל ב-AIza.',
+    recommendation: [
+      'מתאים לכתיבה כללית, אקדמית וטיוטות שרוצים להניע מהר.',
+      'בחירה טובה להתחלה כשצריך איזון בין מחיר, מהירות ואיכות.',
+    ],
+    setupSteps: [
+      'פתח את Google AI Studio וצור API key חדש.',
+      'הדבק את המפתח כאן ובחר מודל כמו gemini-2.5-flash.',
+      'לחץ על "בדוק חיבור" לפני שממשיכים.',
+    ],
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    setupMode: 'builtin',
+    badge: 'גמיש',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    keyCta: 'פתח את OpenAI API Keys',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-sk-.',
+    recommendation: [
+      'מתאים למסמכים מורכבים, שכתוב איכותי ועבודה כללית ברמה גבוהה.',
+      'טוב כשצריך מודלים יציבים עם הרבה כלים והרחבות סביבם.',
+    ],
+    setupSteps: [
+      'היכנס ל-platform.openai.com/api-keys.',
+      'צור Secret key חדש ושמור אותו במקום בטוח.',
+      'הדבק אותו כאן ובחר מודל כמו gpt-4o או gpt-4.1.',
+    ],
+  },
+  {
+    id: 'claude',
+    label: 'Claude',
+    setupMode: 'builtin',
+    badge: 'ליטוש',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    keyCta: 'פתח את Anthropic Keys',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-sk-ant-.',
+    recommendation: [
+      'מתאים לעבודה זהירה, ניסוח נקי, וקריאה עמוקה של טקסטים ארוכים.',
+      'בחירה טובה לליטוש מסמכים, סיכום וכתיבה עם טון מאוזן.',
+    ],
+    setupSteps: [
+      'פתח את console.anthropic.com/settings/keys.',
+      'צור API key חדש בחשבון Anthropic.',
+      'הדבק אותו כאן ובחר מודל Claude מתאים.',
+    ],
+  },
+  {
+    id: 'groq',
+    label: 'Groq',
+    setupMode: 'builtin',
+    badge: 'מהיר וזול',
+    keyUrl: 'https://console.groq.com/keys',
+    keyCta: 'פתח את Groq Console',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-gsk_ ואפשר להתחיל בלי כרטיס אשראי.',
+    recommendation: [
+      'מתאים לטיוטות מהירות, רעיונות, ניסויים ותשובות בזמני תגובה קצרים.',
+      'טוב כשחשוב להרגיש זריזות ולאו דווקא להשתמש במודל היקר ביותר.',
+    ],
+    setupSteps: [
+      'פתח את console.groq.com/keys והתחבר.',
+      'צור API key חדש והעתק אותו.',
+      'הדבק כאן ובדוק חיבור עם מודל Groq מהרשימה.',
+    ],
+  },
+  {
+    id: 'perplexity',
+    label: 'Perplexity',
+    setupMode: 'builtin',
+    badge: 'מחקר',
+    keyUrl: 'https://www.perplexity.ai/settings/api',
+    keyCta: 'פתח את Perplexity API',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-pplx-.',
+    recommendation: [
+      'מתאים למחקר, fact-checking וחיפוש מבוסס מקורות בזמן אמת.',
+      'בחירה טובה כשצריך אינטרנט חי וניתוח מהיר של מקורות.',
+    ],
+    setupSteps: [
+      'פתח את perplexity.ai/settings/api.',
+      'צור מפתח API והעתק אותו.',
+      'הדבק כאן ובחר מודל Sonar מתאים.',
+    ],
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama',
+    setupMode: 'builtin',
+    badge: 'מקומי',
+    keyUrl: 'https://ollama.com/download',
+    keyCta: 'פתח את Ollama Download',
+    keyHint: 'לא צריך מפתח. רק התקנה מקומית ומודל טעון.',
+    recommendation: [
+      'מתאים למי שרוצה פרטיות מלאה ועבודה מקומית בלי לשלוח טקסט החוצה.',
+      'טוב כשאפשר לוותר על שירות ענן לטובת שליטה מלאה במחשב המקומי.',
+    ],
+    setupSteps: [
+      'התקן את Ollama מאתר ollama.com.',
+      'הרץ מודל כמו llama3.2 או qwen2.5 במחשב שלך.',
+      'פתח את כרטיס Ollama, ודא שהכתובת המקומית והמודל נכונים, ואז בדוק חיבור.',
+    ],
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    setupMode: 'custom',
+    badge: 'חסכוני',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    keyCta: 'פתח את DeepSeek Platform',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-sk-.',
+    recommendation: [
+      'מתאים לטקסטים ארוכים, שכתוב, וכתיבה בנפח גבוה עם עלות נמוכה יחסית.',
+      'טוב כשחשוב לחסוך בעלויות ועדיין לקבל פלט חזק בטקסט.',
+    ],
+    setupSteps: [
+      'פתח את platform.deepseek.com/api_keys וצור מפתח.',
+      'הדבק את המפתח בחלק של Custom או בכרטיס המוכן.',
+      'השתמש ב-base URL ובמודל deepseek-chat שמולאו עבורך.',
+    ],
+    customConfig: {
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+    },
+  },
+  {
+    id: 'mistral',
+    label: 'Mistral',
+    setupMode: 'custom',
+    badge: 'אירופי',
+    keyUrl: 'https://console.mistral.ai/api-keys',
+    keyCta: 'פתח את Mistral Console',
+    keyHint: 'מפתח אלפאנומרי מ-console.mistral.ai.',
+    recommendation: [
+      'מתאים לכתיבה עסקית, סיכומים ושימושים שדורשים מודלים אירופיים.',
+      'בחירה טובה כשצריך חלופה איכותית ל-OpenAI-compatible דרך Custom.',
+    ],
+    setupSteps: [
+      'היכנס ל-console.mistral.ai/api-keys.',
+      'צור מפתח חדש והעתק אותו.',
+      'מלא אוטומטית את Custom עם base URL ומודל Mistral.',
+    ],
+    customConfig: {
+      name: 'Mistral AI',
+      baseUrl: 'https://api.mistral.ai/v1',
+      model: 'mistral-large-latest',
+    },
+  },
+  {
+    id: 'together',
+    label: 'Together.ai',
+    setupMode: 'custom',
+    badge: 'מודלים פתוחים',
+    keyUrl: 'https://api.together.ai/settings/api-keys',
+    keyCta: 'פתח את Together API',
+    keyHint: 'המפתח נוצר ב-Together.ai ומשמש ספק OpenAI-compatible.',
+    recommendation: [
+      'מתאים למודלים פתוחים, ניסויים ועלות גמישה יחסית.',
+      'בחירה טובה כשצריך מגוון מודלים בלי להינעל לספק יחיד.',
+    ],
+    setupSteps: [
+      'פתח את Together API וצור key חדש.',
+      'הדבק את המפתח ב-Custom עם ה-base URL של Together.',
+      'התחל עם מודל Llama או החלף לשם מודל אחר מהרשימה שלהם.',
+    ],
+    customConfig: {
+      name: 'Together.ai',
+      baseUrl: 'https://api.together.xyz/v1',
+      model: 'meta-llama/Llama-3-70b-chat-hf',
+    },
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    setupMode: 'custom',
+    badge: 'רב-מודלי',
+    keyUrl: 'https://openrouter.ai/keys',
+    keyCta: 'פתח את OpenRouter Keys',
+    keyHint: 'המפתח מתחיל בדרך כלל ב-sk-or-v1-.',
+    recommendation: [
+      'מתאים למי שרוצה גישה למבחר גדול של מודלים דרך endpoint אחד.',
+      'טוב להשוואות, ניסויים ובחירת מודל לפי משימה בלי להחליף ספק כל פעם.',
+    ],
+    setupSteps: [
+      'פתח את openrouter.ai/keys וצור key.',
+      'הדבק את המפתח כאן כדי לעבוד דרך Custom/OpenAI-compatible.',
+      'השתמש במודל openrouter/auto או החלף לשם מודל ידני.',
+    ],
+    customConfig: {
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openrouter/auto',
+    },
+  },
+  {
+    id: 'custom',
+    label: 'Custom API',
+    setupMode: 'custom',
+    badge: 'OpenAI-compatible',
+    keyUrl: 'https://platform.openai.com/docs/api-reference/introduction',
+    keyCta: 'פתח דוגמת OpenAI-compatible',
+    keyHint: 'אם הספק לא מזוהה, צריך Base URL, API key ושם מודל. פטור ממפתח נתמך רק ל-loopback מקומי מאושר של Ollama או LM Studio על 11434/1234.',
+    recommendation: [
+      'מתאים לכל ספק שתואם את פרוטוקול OpenAI ולא קיבל כרטיס מובנה.',
+      'טוב כשיש לך Base URL, key ומודל אבל הספק עדיין לא מופיע ברשימה.',
+    ],
+    setupSteps: [
+      'מצא בתיעוד של הספק את Base URL, המפתח ושם המודל.',
+      'מלא את שדות Custom ושמור על כתובת שמסתיימת בדרך כלל ב-/v1.',
+      'בדוק חיבור עם המודל שבחרת לפני שממשיכים.',
+    ],
+  },
+  {
+    id: 'xai',
+    label: 'xAI (Grok)',
+    setupMode: 'custom',
+    badge: 'Grok',
+    keyUrl: 'https://console.x.ai',
+    keyCta: 'פתח את xAI Console',
+    keyHint: 'המפתח מנוהל בחשבון xAI/Grok API.',
+    recommendation: [
+      'מתאים לשיחות יצירתיות, רעיונות מהירים ועבודה עם משפחת Grok.',
+      'טוב כשרוצים חלופה נוספת דרך endpoint תואם OpenAI.',
+    ],
+    setupSteps: [
+      'פתח את console.x.ai וצור API key.',
+      'מלא את Custom עם כתובת xAI והדבק את המפתח.',
+      'התחל מ-grok-3-mini-beta או החלף למודל אחר בחשבון.',
+    ],
+    customConfig: {
+      name: 'xAI (Grok)',
+      baseUrl: 'https://api.x.ai/v1',
+      model: 'grok-3-mini-beta',
+    },
+  },
+  {
+    id: 'lmstudio',
+    label: 'LM Studio',
+    setupMode: 'custom',
+    badge: 'מקומי',
+    keyUrl: 'https://lmstudio.ai/download',
+    keyCta: 'פתח את LM Studio',
+    keyHint: 'לא צריך מפתח. רק להפעיל Local Server מתוך LM Studio.',
+    recommendation: [
+      'מתאים להרצה מקומית של מודלים בלי לשלוח טקסט לענן.',
+      'בחירה טובה כשצריך סביבת פיתוח מקומית וגמישות בבחירת מודל.',
+    ],
+    setupSteps: [
+      'התקן את LM Studio והורד מודל מתאים.',
+      'הפעל Local Server מתוך האפליקציה.',
+      'מלא אוטומטית את Custom עם הכתובת המקומית ובדוק חיבור.',
+    ],
+    customConfig: {
+      name: 'LM Studio (מקומי)',
+      baseUrl: 'http://localhost:1234/v1',
+      model: 'loaded-model',
+    },
+  },
+];
+
+const PROVIDER_SETUP_INDEX = PROVIDER_SETUP_CATALOG.reduce((acc, provider) => {
+  acc[provider.id] = provider;
+  return acc;
+}, {});
+
+const isLocalOpenAICompatibleBaseUrl = (baseUrl = '') => {
+  try {
+    const parsed = new URL(String(baseUrl || '').trim());
+    const hostname = String(parsed.hostname || '').trim().toLowerCase();
+    const port = String(parsed.port || '').trim() || (parsed.protocol === 'https:' ? '443' : '80');
+    if (!hostname) return false;
+    const isLoopbackHost = hostname === 'localhost'
+      || hostname === '::1'
+      || /^127(?:\.\d+){3}$/.test(hostname);
+    if (!isLoopbackHost) return false;
+    return port === '11434' || port === '1234';
+  } catch {
+    return false;
+  }
+};
+const normalizeProviderIdentity = (value = '') => String(value || '').trim().toLowerCase().replace(/\/+$/, '');
+
+const deriveProviderGuideId = (config = {}) => {
+  if (config?.active && config.active !== 'custom' && PROVIDER_SETUP_INDEX[config.active]) return config.active;
+
+  const customName = normalizeProviderIdentity(config?.custom?.name || '');
+  const customBaseUrl = normalizeProviderIdentity(config?.custom?.baseUrl || '');
+  const match = PROVIDER_SETUP_CATALOG.find((provider) => {
+    if (!provider.customConfig) return false;
+    if (config?.active === 'custom' && provider.setupMode !== 'custom') return false;
+    const providerName = normalizeProviderIdentity(provider.customConfig.name || '');
+    const providerBaseUrl = normalizeProviderIdentity(provider.customConfig.baseUrl || '');
+    return (providerName && customName === providerName) || (providerBaseUrl && customBaseUrl === providerBaseUrl);
+  });
+
+  if (match) return match.id;
+  if (config?.active === 'custom') return 'custom';
+  return 'gemini';
+};
 
 const PROVIDER_MODEL_OPTIONS = {
   gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
@@ -51,10 +361,27 @@ const PROVIDER_MODEL_OPTIONS = {
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
   ollama: ['llama3.2', 'qwen2.5', 'mistral'],
-  custom: ['deepseek-chat', 'mistral-large-latest', 'loaded-model'],
+  custom: ['deepseek-chat', 'mistral-large-latest', 'openrouter/auto', 'grok-3-mini-beta', 'loaded-model'],
 };
 
 const DEFAULT_FONT_OPTIONS = ['Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'Arial', 'Calibri', 'David', 'Georgia', 'Segoe UI', 'Tahoma', 'Times New Roman'];
+
+const DEFAULT_FONT_STACKS = {
+  Alef: "'Alef', sans-serif",
+  Heebo: "'Heebo', 'Segoe UI', sans-serif",
+  Assistant: "'Assistant', 'Segoe UI', sans-serif",
+  'Frank Ruhl Libre': "'Frank Ruhl Libre', 'Times New Roman', serif",
+  'Miriam Libre': "'Miriam Libre', 'Times New Roman', serif",
+  Arial: 'Arial, sans-serif',
+  Calibri: "Calibri, 'Segoe UI', sans-serif",
+  David: "'David', 'Times New Roman', serif",
+  Georgia: "Georgia, 'Times New Roman', serif",
+  'Segoe UI': "'Segoe UI', sans-serif",
+  Tahoma: "Tahoma, 'Segoe UI', sans-serif",
+  'Times New Roman': "'Times New Roman', serif",
+};
+
+const getDefaultFontStack = (fontLabel = 'Alef') => DEFAULT_FONT_STACKS[fontLabel] || fontLabel || 'Alef';
 
 const ACTION_VISIBILITY_OPTIONS = [
   { id: 'fix', label: 'תיקון מהיר', hint: 'כתיב, דקדוק וליטוש' },
@@ -291,21 +618,29 @@ const isProviderConfigured = (config, providerId) => {
     case 'perplexity':
     case 'scholar':
       return Boolean(String(provider.key || '').trim());
-    case 'ollama':
-      return Boolean(String(provider.baseUrl || '').trim() && String(provider.model || '').trim());
-    case 'custom':
-      return Boolean(String(provider.baseUrl || '').trim() && String(provider.model || '').trim());
+    case 'ollama': {
+      const baseUrl = String(provider.baseUrl || '').trim();
+      return Boolean(baseUrl && String(provider.model || '').trim() && isLocalOpenAICompatibleBaseUrl(baseUrl));
+    }
+    case 'custom': {
+      const baseUrl = String(provider.baseUrl || '').trim();
+      return Boolean(baseUrl && String(provider.model || '').trim() && (String(provider.key || '').trim() || isLocalOpenAICompatibleBaseUrl(baseUrl)));
+    }
     default:
       return false;
   }
 };
 
-function ProviderSection({ title, icon, description, active, configured, onActivate, children, allowActivate = true }) {
+function ProviderSection({ title, icon, description, active, configured, onActivate, children, allowActivate = true, expandedHint = false }) {
   const [expanded, setExpanded] = useState(active || configured);
 
   useEffect(() => {
     if (active) setExpanded(true);
   }, [active]);
+
+  useEffect(() => {
+    if (expandedHint) setExpanded(true);
+  }, [expandedHint]);
 
   return (
     <div style={{ border: `2px solid ${active ? '#2B579A' : '#E1DFDD'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
@@ -353,6 +688,8 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
 // ─── הגדרות AI ───
 function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
+  const [selectedGuideId, setSelectedGuideId] = useState(() => deriveProviderGuideId(config));
+  const [openedGuideProviderId, setOpenedGuideProviderId] = useState('');
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
   const updateToolLink = (toolId, field, value) =>
@@ -369,9 +706,13 @@ function AiSettings({ config, setConfig }) {
   const activate = (id) => setConfig(prev => ({
     ...prev,
     active: id,
-    activeProviders: [id, ...Array.from(new Set([...(Array.isArray(prev.activeProviders) ? prev.activeProviders : [prev.active]), id].filter(Boolean))).filter((providerId) => providerId !== id)],
+    activeProviders: [id, ...Array.from(new Set([...(Array.isArray(prev.activeProviders) && prev.activeProviders.length ? prev.activeProviders : [prev.active]), id].filter(Boolean))).filter((providerId) => providerId !== id)],
   }));
-  const selectedProviders = new Set(Array.isArray(config.activeProviders) && config.activeProviders.length ? config.activeProviders : [config.active]);
+  const selectedProviders = new Set(
+    config.multiModelEnabled === true
+      ? (Array.isArray(config.activeProviders) && config.activeProviders.length ? config.activeProviders : [config.active])
+      : [config.active]
+  );
   const toggleMultiProvider = (providerId) => {
     setConfig((prev) => {
       const current = new Set(Array.isArray(prev.activeProviders) && prev.activeProviders.length ? prev.activeProviders : [prev.active]);
@@ -389,6 +730,45 @@ function AiSettings({ config, setConfig }) {
       };
     });
   };
+  useEffect(() => {
+    setSelectedGuideId((currentGuideId) => {
+      const currentGuide = PROVIDER_SETUP_INDEX[currentGuideId];
+      const nextGuideId = currentGuide && currentGuide.setupMode !== 'builtin'
+        ? deriveProviderGuideId({ ...config, active: 'custom' })
+        : deriveProviderGuideId(config);
+      return nextGuideId === currentGuideId ? currentGuideId : nextGuideId;
+    });
+  }, [config.active, config.custom?.name, config.custom?.baseUrl]);
+  const providerGuide = PROVIDER_SETUP_INDEX[selectedGuideId] || PROVIDER_SETUP_INDEX.gemini;
+  const applyGuidePreset = (guide) => {
+    if (!guide) return;
+    setSelectedGuideId(guide.id);
+    if (guide.setupMode === 'builtin') {
+      setOpenedGuideProviderId(guide.id);
+      return;
+    }
+
+    setConfig((prev) => {
+      const nextCustomName = guide.customConfig?.name || prev.custom?.name || '';
+      const nextCustomBaseUrl = guide.customConfig?.baseUrl || prev.custom?.baseUrl || '';
+      const preserveExistingKey = !guide.customConfig || (
+        normalizeProviderIdentity(prev.custom?.name || '') === normalizeProviderIdentity(nextCustomName)
+        && normalizeProviderIdentity(prev.custom?.baseUrl || '') === normalizeProviderIdentity(nextCustomBaseUrl)
+      );
+
+      return {
+        ...prev,
+        custom: {
+          ...prev.custom,
+          name: nextCustomName,
+          baseUrl: nextCustomBaseUrl,
+          key: preserveExistingKey ? (prev.custom?.key || '') : '',
+          model: guide.customConfig?.model || prev.custom?.model || '',
+        },
+      };
+    });
+    setShowCustomHelp(true);
+  };
 
   return (
     <div>
@@ -400,16 +780,91 @@ function AiSettings({ config, setConfig }) {
         לדוגמה: אפשר להפעיל ביחד Gemini + Claude, וכל בקשה תעבור דרך שניהם ואז תאוחד לתשובה אחת.
       </div>
 
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 16, padding: '14px', background: 'white', marginBottom: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>בחר מדריך הגדרה לפי השימוש הצפוי</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+              הבחירה כאן לא מחליפה את ברירת המחדל הפעילה. ספקים מובנים יפתחו את הכרטיס שלהם, וספקים תואמי OpenAI ימלאו אוטומטית את אזור Custom עם הכתובת והמודל הראשוני.
+            </div>
+          </div>
+          <a
+            href={providerGuide.keyUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 11, color: '#1D4ED8', textDecoration: 'underline', fontWeight: 700 }}
+          >
+            {providerGuide.keyCta}
+          </a>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 12 }}>
+          {PROVIDER_SETUP_CATALOG.map((guide) => {
+            const selected = providerGuide.id === guide.id;
+            return (
+              <button
+                key={guide.id}
+                type="button"
+                onClick={() => setSelectedGuideId(guide.id)}
+                style={{
+                  textAlign: 'right',
+                  border: `1px solid ${selected ? '#93C5FD' : '#E5E7EB'}`,
+                  borderRadius: 14,
+                  padding: '12px 12px 10px',
+                  background: selected ? '#EFF6FF' : '#F8FAFC',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <strong style={{ fontSize: 13, color: '#0F172A' }}>{guide.label}</strong>
+                  <span style={{ fontSize: 10, color: selected ? '#1D4ED8' : '#475569', background: selected ? '#DBEAFE' : 'white', border: '1px solid #CBD5E1', borderRadius: 999, padding: '2px 8px' }}>{guide.badge}</span>
+                </div>
+                <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.6 }}>{guide.recommendation[0]}</div>
+                <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginTop: 4 }}>{guide.recommendation[1]}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, padding: '12px 14px', background: '#F8FBFF' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>איך משיגים גישה ל-{providerGuide.label}</div>
+              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{providerGuide.keyHint}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => applyGuidePreset(providerGuide)}
+              style={{ fontSize: 11, padding: '7px 12px', background: '#1D4ED8', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            >
+              {providerGuide.setupMode === 'builtin' ? 'פתח את הכרטיס המתאים' : 'מלא הגדרות עזר ב-Custom'}
+            </button>
+          </div>
+          <ol style={{ margin: 0, paddingRight: 18, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, color: '#334155', lineHeight: 1.7 }}>
+            {providerGuide.setupSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </div>
+      </div>
+
       <div style={{ border: '1px solid #D1FAE5', borderRadius: 12, padding: '12px', background: '#F0FDF4', marginBottom: 18 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#166534', fontWeight: 700, marginBottom: 8 }}>
           <input
             type="checkbox"
             checked={config.multiModelEnabled === true}
-            onChange={(e) => setConfig((prev) => ({
+            onChange={(e) => setConfig((prev) => {
+              const preservedProviders = Array.isArray(prev.activeProviders) && prev.activeProviders.length
+                ? prev.activeProviders
+                : [prev.active].filter(Boolean);
+              return {
               ...prev,
               multiModelEnabled: e.target.checked,
-              activeProviders: Array.from(new Set([...(Array.isArray(prev.activeProviders) ? prev.activeProviders : [prev.active]), prev.active].filter(Boolean))),
-            }))}
+                activeProviders: preservedProviders.includes(prev.active)
+                  ? preservedProviders
+                  : [prev.active, ...preservedProviders].filter(Boolean),
+              };
+            })}
           />
           הפעל מצב Multi-Model
         </label>
@@ -430,7 +885,7 @@ function AiSettings({ config, setConfig }) {
           ].map(([providerId, label]) => {
             const configured = isProviderConfigured(config, providerId);
             const isSelected = selectedProviders.has(providerId);
-            const isDisabled = !configured && !isSelected;
+            const isDisabled = config.multiModelEnabled !== true || (!configured && !isSelected);
             return (
               <label key={providerId} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: isDisabled ? '#64748B' : '#14532D', background: 'white', border: `1px solid ${isDisabled ? '#E5E7EB' : '#BBF7D0'}`, borderRadius: 999, padding: '6px 10px', opacity: isDisabled ? 0.7 : 1 }}>
                 <input
@@ -450,7 +905,7 @@ function AiSettings({ config, setConfig }) {
       </div>
 
       {/* Gemini */}
-      <ProviderSection title="Google Gemini" icon="🔵" active={config.active === 'gemini'} configured={isProviderConfigured(config, 'gemini')} onActivate={() => activate('gemini')}
+      <ProviderSection title="Google Gemini" icon="🔵" active={config.active === 'gemini'} configured={isProviderConfigured(config, 'gemini')} onActivate={() => activate('gemini')} expandedHint={openedGuideProviderId === 'gemini'}
         description="קבל מפתח API חינמי ב: aistudio.google.com/app/apikey">
         <FieldRow label="מפתח API" type="password" placeholder="AIza..." value={config.gemini?.key}
           onChange={v => update('gemini', 'key', v)} hint="מתחיל ב-AIza" />
@@ -466,7 +921,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* OpenAI */}
-      <ProviderSection title="OpenAI (ChatGPT / GPT-4)" icon="🟢" active={config.active === 'openai'} configured={isProviderConfigured(config, 'openai')} onActivate={() => activate('openai')}
+      <ProviderSection title="OpenAI (ChatGPT / GPT-4)" icon="🟢" active={config.active === 'openai'} configured={isProviderConfigured(config, 'openai')} onActivate={() => activate('openai')} expandedHint={openedGuideProviderId === 'openai'}
         description="קבל מפתח API ב: platform.openai.com/api-keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-..." value={config.openai?.key}
           onChange={v => update('openai', 'key', v)} hint="מתחיל ב-sk-" />
@@ -482,7 +937,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Claude */}
-      <ProviderSection title="Claude (Anthropic)" icon="🟠" active={config.active === 'claude'} configured={isProviderConfigured(config, 'claude')} onActivate={() => activate('claude')}
+      <ProviderSection title="Claude (Anthropic)" icon="🟠" active={config.active === 'claude'} configured={isProviderConfigured(config, 'claude')} onActivate={() => activate('claude')} expandedHint={openedGuideProviderId === 'claude'}
         description="קבל מפתח API ב: console.anthropic.com/settings/keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-ant-..." value={config.claude?.key}
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
@@ -498,7 +953,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Groq */}
-      <ProviderSection title="Groq (מהיר ובחינם)" icon="⚡" active={config.active === 'groq'} configured={isProviderConfigured(config, 'groq')} onActivate={() => activate('groq')}
+      <ProviderSection title="Groq (מהיר ובחינם)" icon="⚡" active={config.active === 'groq'} configured={isProviderConfigured(config, 'groq')} onActivate={() => activate('groq')} expandedHint={openedGuideProviderId === 'groq'}
         description="מהיר מאוד ובחינם! קבל מפתח API ב: console.groq.com — לא דורש כרטיס אשראי">
         <FieldRow label="מפתח API" type="password" placeholder="gsk_..." value={config.groq?.key}
           onChange={v => update('groq', 'key', v)} hint="מתחיל ב-gsk_" />
@@ -514,7 +969,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Perplexity */}
-      <ProviderSection title="Perplexity AI" icon="🔍" active={config.active === 'perplexity'} configured={isProviderConfigured(config, 'perplexity')} onActivate={() => activate('perplexity')}
+      <ProviderSection title="Perplexity AI" icon="🔍" active={config.active === 'perplexity'} configured={isProviderConfigured(config, 'perplexity')} onActivate={() => activate('perplexity')} expandedHint={openedGuideProviderId === 'perplexity'}
         description="AI עם גישה לאינטרנט בזמן אמת. מפתח ב: perplexity.ai/settings/api">
         <FieldRow label="מפתח API" type="password" placeholder="pplx-..." value={config.perplexity?.key}
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
@@ -530,7 +985,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Ollama */}
-      <ProviderSection title="Ollama (מקומי — חינמי לחלוטין)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')}
+      <ProviderSection title="Ollama (מקומי — חינמי לחלוטין)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')} expandedHint={openedGuideProviderId === 'ollama'}
         description="הרץ AI ישירות על המחשב שלך! הורד מ-ollama.com — פרטי, חינמי, ללא אינטרנט">
         <FieldRow label="כתובת שרת" placeholder="http://localhost:11434/v1" value={config.ollama?.baseUrl}
           onChange={v => update('ollama', 'baseUrl', v)} hint="ברירת מחדל כשאולמה רץ על המחשב" />
@@ -583,6 +1038,7 @@ function AiSettings({ config, setConfig }) {
 
       <ProviderSection title={config.custom?.name || 'מנוע אחר (מותאם אישית)'} icon="🔌"
         active={config.active === 'custom'} configured={isProviderConfigured(config, 'custom')} onActivate={() => activate('custom')}
+        expandedHint={showCustomHelp}
         description="">
 
         {/* כפתור הסבר */}
@@ -601,7 +1057,7 @@ function AiSettings({ config, setConfig }) {
             </p>
             <ul style={{ paddingRight: 18, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <li><strong>כתובת API (Base URL)</strong> — מופיעה בתיעוד תחת &ldquo;API Reference&rdquo; או &ldquo;Endpoint&rdquo;. נראית כך: <code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>https://api.groq.com/openai/v1</code></li>
-              <li><strong>מפתח API</strong> — מחרוזת שהספק נותן, לפעמים מתחילה ב-<code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>sk-</code>. <em>לשרתים מקומיים (Ollama, LM Studio) לא נדרש.</em></li>
+              <li><strong>מפתח API</strong> — מחרוזת שהספק נותן, לפעמים מתחילה ב-<code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>sk-</code>. <em>ללא מפתח נתמך רק ב-loopback מקומי מאושר של Ollama או LM Studio על פורטים 11434 או 1234.</em></li>
               <li><strong>שם מודל</strong> — השם הטכני כמו <code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>llama-3.3-70b-versatile</code>. מופיע ברשימת Models בתיעוד.</li>
             </ul>
 
@@ -758,7 +1214,7 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
             <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>גופן כללי למסמכים חדשים</div>
             <select
               value={prefs.defaultFontFamily || 'Alef'}
-              onChange={(e) => setFlag('defaultFontFamily', e.target.value)}
+              onChange={(e) => setPrefs(prev => ({ ...prev, defaultFontFamily: e.target.value, defaultFontStack: getDefaultFontStack(e.target.value) }))}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
               {DEFAULT_FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
@@ -1025,10 +1481,7 @@ function GuideSettings() {
   const resetSavedMemory = () => {
     clearAppMemory();
     try {
-      localStorage.removeItem('wordai_sidebar_messages');
-      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wordai-chat-history-cleared'));
-      }
+      clearSidebarChatHistory({ clearAll: true });
     } catch {}
     setMemorySnapshot(getAppMemory());
   };
@@ -1111,6 +1564,15 @@ function GuideSettings() {
 function OnboardingTabContainer({ profile, setProfile }) {
   const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
   const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
+  const markOnboardingComplete = () => setProfile((prev) => (
+    prev.onboardingCompletedAt
+      ? prev
+      : {
+          ...prev,
+          onboardingCompletedAt: new Date().toISOString(),
+          onboardingVersion: prev.onboardingVersion || 1,
+        }
+  ));
   const toggleStyle = (styleId) => setProfile((prev) => {
     const current = Array.isArray(prev.preferredHomeStyleIds) ? prev.preferredHomeStyleIds : [];
     const next = current.includes(styleId)
@@ -1153,6 +1615,7 @@ function OnboardingTabContainer({ profile, setProfile }) {
       selectLearningOption={selectLearningOption}
       toggleStyle={toggleStyle}
       resetLearningGame={resetLearningGame}
+      onComplete={markOnboardingComplete}
     />
   );
 }
@@ -2672,6 +3135,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
     localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
+    localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
     saveSkillsConfig(skillsState);
@@ -2709,6 +3173,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
     localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
+    localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
     saveSkillsConfig(skillsState);

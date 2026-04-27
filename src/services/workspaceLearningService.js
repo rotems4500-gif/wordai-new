@@ -3,6 +3,7 @@ import {
   getPersonalStyleProfile,
   savePersonalStyleProfile,
   logAgentDebugEvent,
+  getWorkspaceAutomation,
   syncPersistedAppSettings,
 } from './aiService';
 
@@ -710,10 +711,17 @@ function normalizeGeneratedHtmlResponse(response = '') {
     .trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, returnMeta = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, runId: providedRunId = '', returnMeta = false }) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('צריך לכתוב נושא או בקשה למסמך');
-  const runId = `doc-${Date.now()}`;
+  const runId = String(providedRunId || `doc-${Date.now()}`).trim();
+  const automation = getWorkspaceAutomation();
+  const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
+  const requestWorkspaceName = String(automation?.workspaceName || '').trim();
+  const requestLogContext = {
+    activeWorkspaceId: requestWorkspaceId,
+    workspaceName: requestWorkspaceName,
+  };
 
   let templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
   let notes = '';
@@ -740,6 +748,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: 'AUTOPILOT',
       message: 'שגיאה מפורשת בשלב הכנת העבודה לפני קריאת API',
       errorMessage: error?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
     });
     const fallbackHtml = buildLocalDraft(cleanPrompt, templateId, instructions, selectedMaterials);
     return returnMeta
@@ -756,9 +765,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       message: 'התחילה יצירת מסמך חדש',
       templateId,
       selectedMaterialsCount: selectedMaterials.length,
+      ...requestLogContext,
     });
 
-    const requestOptions = { runId, agentLabel: 'AUTOPILOT' };
+    const requestOptions = { runId, agentLabel: 'AUTOPILOT', activeWorkspaceId: requestWorkspaceId, workspaceName: requestWorkspaceName };
     if (selectedModel) requestOptions.providerOverride = selectedModel;
 
     const response = await chatWithActiveProvider(
@@ -781,6 +791,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: 'AUTOPILOT',
       message: 'המסמך נוצר בהצלחה דרך ה-API',
       outputChars: cleanedResponse.length,
+      ...requestLogContext,
     });
 
     return returnMeta
@@ -794,6 +805,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: 'AUTOPILOT',
       message: 'שגיאה מפורשת בבקשת API במהלך יצירת המסמך',
       errorMessage: error?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
     });
     logAgentDebugEvent({
       type: 'doc-generation-fallback',
@@ -802,6 +814,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: 'AUTOPILOT',
       message: 'יצירת המסמך עברה לשלד מקומי במקום תשובת AI',
       errorMessage: error?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
     });
     const fallbackHtml = buildLocalDraft(cleanPrompt, templateId, instructions, selectedMaterials);
     return returnMeta
@@ -810,16 +823,23 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   }
 }
 
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', returnMeta = false }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', runId: providedRunId = '', returnMeta = false }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
   if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
 
+  const automation = getWorkspaceAutomation();
+  const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
+  const requestWorkspaceName = String(automation?.workspaceName || '').trim();
+  const requestLogContext = {
+    activeWorkspaceId: requestWorkspaceId,
+    workspaceName: requestWorkspaceName,
+  };
   const learning = await syncLearnedStyleFromWorkspace();
   const notes = learning.notes?.join('\n') || '';
   const templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
-  const runId = `doc-feedback-${Date.now()}`;
+  const runId = String(providedRunId || `doc-feedback-${Date.now()}`).trim();
 
   try {
     logAgentDebugEvent({
@@ -829,13 +849,14 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       agentLabel: 'מנהל הצוות',
       message: 'מנהל הצוות קיבל משוב ומעדכן את המסמך',
       templateId,
+      ...requestLogContext,
     });
 
     const response = await chatWithActiveProvider(
       'שפר את המסמך הקיים בהתאם למשוב המשתמש',
       `נושא המסמך: ${originalPrompt || 'לא צוין'}\n\nמשוב המשתמש:\n${cleanFeedback}\n\nהמסמך הקיים ב-HTML:\n${cleanHtml}`,
       `פעל כמנהל צוות התוכן של WordFlow AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}`,
-      { runId, agentLabel: 'מנהל הצוות' },
+      { runId, agentLabel: 'מנהל הצוות', activeWorkspaceId: requestWorkspaceId, workspaceName: requestWorkspaceName },
     );
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
@@ -850,6 +871,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       agentLabel: 'מנהל הצוות',
       message: 'המסמך עודכן בהתאם למשוב המשתמש',
       outputChars: cleanedResponse.length,
+      ...requestLogContext,
     });
 
     return returnMeta
@@ -863,6 +885,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       agentLabel: 'מנהל הצוות',
       message: 'מנהל הצוות לא הצליח להשלים את עדכון המסמך',
       errorMessage: error?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
     });
 
     return returnMeta
