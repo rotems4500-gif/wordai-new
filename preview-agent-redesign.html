@@ -1,0 +1,1974 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WordAI Unified Redesign Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700&family=Heebo:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4ecdf;
+      --bg-soft: #fbf7ef;
+      --surface: rgba(255, 251, 245, 0.86);
+      --surface-strong: #fffaf2;
+      --surface-muted: #f0e6d7;
+      --line: rgba(44, 47, 43, 0.11);
+      --line-strong: rgba(19, 23, 20, 0.18);
+      --ink: #17211f;
+      --muted: #66706b;
+      --accent: #0e766c;
+      --accent-strong: #0c5d56;
+      --accent-soft: rgba(14, 118, 108, 0.12);
+      --signal: #bf6d2f;
+      --signal-soft: rgba(191, 109, 47, 0.14);
+      --berry: #914f5f;
+      --shadow: 0 28px 70px rgba(70, 48, 25, 0.12);
+      --shadow-soft: 0 18px 40px rgba(70, 48, 25, 0.08);
+      --radius-xl: 32px;
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --radius-sm: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top right, rgba(14, 118, 108, 0.11), transparent 24%),
+        radial-gradient(circle at bottom left, rgba(191, 109, 47, 0.12), transparent 28%),
+        linear-gradient(180deg, #fbf7ef 0%, #f3eadc 100%);
+      color: var(--ink);
+      font-family: "Heebo", sans-serif;
+    }
+
+    body {
+      padding: 34px;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::before {
+      background:
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0, rgba(255, 255, 255, 0.18) 1px, transparent 1px, transparent 120px),
+        repeating-linear-gradient(180deg, rgba(23, 33, 31, 0.025) 0, rgba(23, 33, 31, 0.025) 1px, transparent 1px, transparent 120px);
+      opacity: 0.55;
+    }
+
+    body::after {
+      background:
+        radial-gradient(circle at 12% 14%, rgba(255, 255, 255, 0.58), transparent 17%),
+        radial-gradient(circle at 84% 22%, rgba(14, 118, 108, 0.10), transparent 19%),
+        radial-gradient(circle at 80% 78%, rgba(191, 109, 47, 0.09), transparent 20%);
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 1520px;
+      margin: 0 auto;
+      display: grid;
+      gap: 26px;
+    }
+
+    .hero,
+    .section,
+    .design-strip {
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.78);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      min-height: 320px;
+    }
+
+    .hero-copy {
+      padding: 42px 42px 38px;
+      position: relative;
+      display: grid;
+      gap: 22px;
+      align-content: start;
+    }
+
+    .hero-copy::after {
+      content: "";
+      position: absolute;
+      width: 320px;
+      height: 320px;
+      left: -100px;
+      top: -120px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(14, 118, 108, 0.14), transparent 70%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      width: fit-content;
+      padding: 9px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      background: rgba(255, 255, 255, 0.7);
+      color: var(--accent-strong);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .hero h1,
+    .section h2,
+    .token-card strong,
+    .screen-title,
+    .focus-copy h3,
+    .onboard-copy h3,
+    .chat-heading h3,
+    .mini-title {
+      font-family: "Frank Ruhl Libre", serif;
+    }
+
+    .hero h1 {
+      margin: 0;
+      max-width: 14ch;
+      font-size: clamp(42px, 6vw, 72px);
+      line-height: 0.95;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 62ch;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.8;
+    }
+
+    .principles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .principle-chip,
+    .feedback-tag,
+    .provider-pill,
+    .mini-pill,
+    .tone-chip,
+    .step-chip,
+    .choice-chip,
+    .top-pill,
+    .bubble-tag,
+    .subtle-chip {
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .principle-chip {
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .hero-side {
+      border-right: 1px solid rgba(19, 23, 20, 0.08);
+      padding: 26px;
+      background:
+        linear-gradient(180deg, rgba(14, 118, 108, 0.10), transparent 36%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.32));
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .token-card {
+      padding: 18px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 250, 244, 0.9);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+      display: grid;
+      gap: 10px;
+    }
+
+    .token-card strong {
+      font-size: 26px;
+      letter-spacing: -0.02em;
+    }
+
+    .token-card span,
+    .token-card p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+      margin: 0;
+    }
+
+    .swatches {
+      display: flex;
+      gap: 10px;
+    }
+
+    .swatch {
+      flex: 1;
+      min-height: 44px;
+      border-radius: 12px;
+      border: 1px solid rgba(19, 23, 20, 0.07);
+    }
+
+    .swatch.a { background: #fff7ee; }
+    .swatch.b { background: #0e766c; }
+    .swatch.c { background: #bf6d2f; }
+    .swatch.d { background: #213432; }
+
+    .design-strip {
+      padding: 18px 24px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .strip-block {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.66);
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 6px;
+    }
+
+    .strip-block strong {
+      font-size: 14px;
+    }
+
+    .strip-block span {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .section {
+      padding: 30px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+
+    .section-copy {
+      display: grid;
+      gap: 10px;
+    }
+
+    .section-index {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: var(--signal);
+      text-transform: uppercase;
+    }
+
+    .section h2 {
+      margin: 0;
+      font-size: clamp(34px, 4vw, 50px);
+      line-height: 0.98;
+      letter-spacing: -0.03em;
+    }
+
+    .section p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.8;
+      font-size: 16px;
+    }
+
+    .feedback-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .feedback-tag {
+      padding: 11px 14px;
+      font-size: 13px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--ink);
+    }
+
+    .feedback-tag strong {
+      color: var(--accent-strong);
+    }
+
+    .mock-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .mock-window,
+    .mini-card,
+    .hierarchy-demo,
+    .drawer-card {
+      background: var(--surface-strong);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+      border-radius: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .mock-window {
+      min-height: 620px;
+    }
+
+    .window-bar {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 242, 233, 0.88);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .window-left,
+    .window-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 7px;
+    }
+
+    .window-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #d8cabc;
+    }
+
+    .window-dot:nth-child(1) { background: #d0845b; }
+    .window-dot:nth-child(2) { background: #d4a72c; }
+    .window-dot:nth-child(3) { background: #1d8a77; }
+
+    .screen-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .ghost-button,
+    .secondary-button,
+    .primary-button,
+    .flat-button,
+    .chip-button {
+      border: 0;
+      font: inherit;
+      cursor: pointer;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+    }
+
+    .ghost-button,
+    .flat-button,
+    .chip-button {
+      padding: 10px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--ink);
+    }
+
+    .ghost-button:hover,
+    .secondary-button:hover,
+    .primary-button:hover,
+    .flat-button:hover,
+    .chip-button:hover,
+    .provider-option:hover,
+    .step-button:hover,
+    .style-card:hover {
+      transform: translateY(-1px);
+    }
+
+    .primary-button {
+      padding: 14px 20px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--accent) 0%, #1a8d83 100%);
+      color: #fff;
+      box-shadow: 0 16px 28px rgba(14, 118, 108, 0.24);
+    }
+
+    .secondary-button {
+      padding: 14px 18px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--ink);
+      border: 1px solid rgba(19, 23, 20, 0.10);
+    }
+
+    .top-pill,
+    .provider-pill,
+    .bubble-tag,
+    .mini-pill,
+    .subtle-chip,
+    .choice-chip,
+    .tone-chip {
+      padding: 9px 12px;
+      font-size: 12px;
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--ink);
+    }
+
+    .provider-pill {
+      color: var(--accent-strong);
+      background: rgba(14, 118, 108, 0.08);
+      border-color: rgba(14, 118, 108, 0.14);
+    }
+
+    .subtle-chip {
+      color: var(--signal);
+      background: var(--signal-soft);
+      border-color: rgba(191, 109, 47, 0.16);
+    }
+
+    .start-layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 566px;
+    }
+
+    .start-rail {
+      border-left: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(248, 242, 233, 0.9), rgba(255, 251, 245, 0.7));
+      padding: 24px 18px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .rail-card,
+    .resume-card,
+    .workspace-card,
+    .focus-card,
+    .status-card,
+    .progress-card,
+    .style-card,
+    .provider-sheet,
+    .message,
+    .draft-tile,
+    .editor-card,
+    .side-note,
+    .summary-card,
+    .step-panel,
+    .chat-composer,
+    .advanced-drawer,
+    .app-topbar,
+    .doc-top,
+    .mini-surface,
+    .drawer-row {
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .rail-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .rail-label,
+    .micro-label,
+    .mini-label {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .draft-list,
+    .resume-list,
+    .quick-actions,
+    .outline-list,
+    .style-grid,
+    .thread,
+    .drawer-list,
+    .token-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .draft-tile {
+      padding: 14px;
+      display: grid;
+      gap: 6px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    }
+
+    .draft-tile.active {
+      border-color: rgba(14, 118, 108, 0.22);
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.08), rgba(255, 255, 255, 0.92));
+    }
+
+    .draft-tile strong,
+    .resume-card strong,
+    .workspace-card strong,
+    .summary-card strong,
+    .provider-sheet strong,
+    .status-card strong,
+    .editor-card strong,
+    .mini-surface strong {
+      font-size: 15px;
+    }
+
+    .draft-tile span,
+    .resume-card span,
+    .workspace-card span,
+    .summary-card span,
+    .provider-sheet span,
+    .status-card span,
+    .editor-card span,
+    .mini-surface span,
+    .progress-card p,
+    .message p,
+    .side-note span,
+    .step-panel p,
+    .drawer-row span,
+    .choice-line span {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin: 0;
+    }
+
+    .start-main {
+      padding: 24px;
+      display: grid;
+      gap: 18px;
+      background:
+        radial-gradient(circle at top left, rgba(14, 118, 108, 0.10), transparent 23%),
+        linear-gradient(180deg, rgba(255, 251, 245, 0.98), rgba(246, 238, 226, 0.65));
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .topbar-left,
+    .topbar-right,
+    .composer-actions,
+    .chat-top,
+    .drawer-head,
+    .doc-controls,
+    .onboard-top,
+    .provider-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .focus-card {
+      padding: 30px;
+      display: grid;
+      gap: 18px;
+      background: linear-gradient(145deg, rgba(255, 252, 247, 0.92), rgba(249, 240, 228, 0.78));
+    }
+
+    .focus-copy {
+      display: grid;
+      gap: 8px;
+      max-width: 760px;
+    }
+
+    .focus-copy h3,
+    .onboard-copy h3,
+    .chat-heading h3,
+    .mini-title {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+    }
+
+    .focus-copy p,
+    .onboard-copy p,
+    .chat-heading p,
+    .mini-copy {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.8;
+      font-size: 15px;
+    }
+
+    .composer-box,
+    .chat-composer {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .composer-box textarea,
+    .chat-composer textarea,
+    .key-input {
+      width: 100%;
+      border: 0;
+      outline: none;
+      resize: none;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+    }
+
+    .composer-box textarea {
+      min-height: 118px;
+      font-size: 20px;
+      line-height: 1.7;
+    }
+
+    .chat-composer textarea {
+      min-height: 74px;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .composer-footer,
+    .choice-line,
+    .message-head,
+    .provider-row,
+    .progress-line,
+    .editor-line,
+    .resume-actions,
+    .summary-meta,
+    .doc-head-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .intent-row,
+    .choice-row,
+    .tone-row,
+    .step-buttons,
+    .provider-list,
+    .chat-quick-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .quick-actions {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .summary-card,
+    .workspace-card,
+    .status-card,
+    .provider-sheet,
+    .progress-card,
+    .editor-card,
+    .mini-surface,
+    .drawer-card {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .hierarchy-demo,
+    .mini-card,
+    .drawer-card {
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .mini-stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .cta-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .provider-sheet {
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.08), rgba(255, 255, 255, 0.9));
+    }
+
+    .provider-option,
+    .style-card,
+    .step-button {
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      background: rgba(255, 255, 255, 0.82);
+      font: inherit;
+      padding: 12px 14px;
+      border-radius: 16px;
+      text-align: right;
+      cursor: pointer;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .provider-option {
+      display: grid;
+      gap: 5px;
+      min-width: 128px;
+      flex: 1;
+    }
+
+    .provider-option strong,
+    .style-card strong,
+    .drawer-row strong {
+      font-size: 14px;
+    }
+
+    .provider-option span,
+    .style-card span,
+    .step-button span {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .provider-option.active,
+    .style-card.active,
+    .step-button.active {
+      border-color: rgba(14, 118, 108, 0.22);
+      box-shadow: 0 14px 22px rgba(14, 118, 108, 0.10);
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.08), rgba(255, 255, 255, 0.96));
+    }
+
+    .choice-chip {
+      background: rgba(255, 255, 255, 0.68);
+    }
+
+    .callout {
+      position: absolute;
+      max-width: 220px;
+      padding: 12px 14px;
+      border-radius: 18px;
+      background: rgba(23, 33, 31, 0.92);
+      color: #fff;
+      box-shadow: 0 18px 40px rgba(18, 22, 20, 0.18);
+      font-size: 12px;
+      line-height: 1.65;
+      z-index: 2;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #f0d8c1;
+      font-size: 12px;
+    }
+
+    .callout::after {
+      content: "";
+      position: absolute;
+      width: 34px;
+      height: 1px;
+      background: rgba(23, 33, 31, 0.92);
+      top: 50%;
+    }
+
+    .callout.a { top: 148px; left: 24px; }
+    .callout.a::after { left: 100%; }
+    .callout.b { bottom: 118px; right: 28px; }
+    .callout.b::after { right: 100%; }
+    .callout.c { top: 98px; left: 34px; }
+    .callout.c::after { left: 100%; }
+    .callout.d { bottom: 44px; left: 34px; }
+    .callout.d::after { left: 100%; }
+    .callout.e { top: 140px; left: 28px; }
+    .callout.e::after { left: 100%; }
+    .callout.f { bottom: 124px; right: 34px; }
+    .callout.f::after { right: 100%; }
+
+    .onboard-layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 588px;
+    }
+
+    .onboard-side {
+      border-left: 1px solid var(--line);
+      padding: 24px 18px;
+      display: grid;
+      gap: 16px;
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.10), rgba(255, 255, 255, 0.5));
+      align-content: start;
+    }
+
+    .summary-card.active,
+    .resume-card.active {
+      border-color: rgba(14, 118, 108, 0.20);
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.09), rgba(255, 255, 255, 0.94));
+    }
+
+    .resume-card,
+    .workspace-card,
+    .summary-card {
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .onboard-main {
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+      background:
+        radial-gradient(circle at top right, rgba(191, 109, 47, 0.08), transparent 26%),
+        linear-gradient(180deg, rgba(255, 251, 245, 0.98), rgba(244, 235, 223, 0.68));
+    }
+
+    .step-panel {
+      padding: 24px;
+      display: none;
+      gap: 18px;
+      background: rgba(255, 255, 255, 0.88);
+    }
+
+    .step-panel.active {
+      display: grid;
+    }
+
+    .mini-stat-grid,
+    .provider-grid,
+    .editor-grid,
+    .chat-layout {
+      display: grid;
+      gap: 14px;
+    }
+
+    .mini-stat-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .mini-surface {
+      min-height: 92px;
+      align-content: start;
+    }
+
+    .provider-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .style-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .progress-track {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(23, 33, 31, 0.08);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 72%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent) 0%, #2f8f88 100%);
+    }
+
+    .app-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      min-height: 620px;
+    }
+
+    .editor-zone {
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 238, 226, 0.52));
+      border-left: 1px solid var(--line);
+    }
+
+    .app-topbar {
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .doc-top {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.06), rgba(255, 255, 255, 0.95));
+    }
+
+    .editor-grid {
+      grid-template-columns: minmax(0, 1.4fr) minmax(200px, 0.6fr);
+    }
+
+    .editor-card {
+      min-height: 354px;
+    }
+
+    .editor-line {
+      justify-content: flex-start;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px dashed rgba(19, 23, 20, 0.08);
+    }
+
+    .editor-line:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .line-number {
+      width: 28px;
+      color: rgba(23, 33, 31, 0.34);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .line-block {
+      flex: 1;
+      display: grid;
+      gap: 6px;
+    }
+
+    .line-bar {
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(23, 33, 31, 0.10), rgba(23, 33, 31, 0.04));
+    }
+
+    .line-bar.long { width: 92%; }
+    .line-bar.mid { width: 70%; }
+    .line-bar.short { width: 45%; }
+
+    .chat-side {
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+      background: linear-gradient(180deg, rgba(250, 244, 236, 0.95), rgba(245, 238, 228, 0.88));
+    }
+
+    .chat-heading {
+      display: grid;
+      gap: 8px;
+    }
+
+    .chat-heading h3 {
+      font-size: 28px;
+    }
+
+    .chat-heading p {
+      font-size: 14px;
+    }
+
+    .status-card,
+    .progress-card,
+    .advanced-drawer {
+      padding: 16px;
+    }
+
+    .thread {
+      min-height: 284px;
+      align-content: start;
+    }
+
+    .message {
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .message.user {
+      background: rgba(23, 33, 31, 0.90);
+      border-color: rgba(23, 33, 31, 0.90);
+    }
+
+    .message.user strong,
+    .message.user p {
+      color: #fff;
+    }
+
+    .message.assistant {
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.08), rgba(255, 255, 255, 0.95));
+    }
+
+    .message-head strong {
+      font-size: 13px;
+    }
+
+    .chat-composer {
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .advanced-drawer {
+      display: grid;
+      gap: 12px;
+      background: rgba(255, 255, 255, 0.74);
+      max-height: 0;
+      overflow: hidden;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-width: 0;
+      transition: max-height 0.25s ease, padding 0.25s ease, border-width 0.25s ease;
+    }
+
+    .advanced-drawer.open {
+      max-height: 280px;
+      padding-top: 16px;
+      padding-bottom: 16px;
+      border-width: 1px;
+    }
+
+    .drawer-row {
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.86);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(14, 118, 108, 0.10);
+    }
+
+    .hidden-text {
+      display: none;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    @media (max-width: 1280px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-side {
+        border-right: 0;
+        border-top: 1px solid rgba(19, 23, 20, 0.08);
+      }
+
+      .design-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mock-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .mini-stack {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 1080px) {
+      body {
+        padding: 18px;
+      }
+
+      .start-layout,
+      .onboard-layout,
+      .app-layout,
+      .editor-grid,
+      .quick-actions,
+      .style-grid,
+      .provider-grid,
+      .mini-stat-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .start-rail,
+      .onboard-side,
+      .editor-zone {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .callout {
+        position: static;
+        max-width: none;
+        margin: 0 24px 16px;
+      }
+
+      .callout::after {
+        display: none;
+      }
+
+      .mock-window {
+        min-height: 0;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .design-strip,
+      .mini-stack {
+        grid-template-columns: 1fr;
+      }
+
+      .section,
+      .hero-copy,
+      .hero-side {
+        padding: 20px;
+      }
+
+      .focus-card,
+      .step-panel,
+      .chat-side,
+      .editor-zone,
+      .onboard-main,
+      .start-main,
+      .start-rail,
+      .onboard-side {
+        padding: 16px;
+      }
+
+      .focus-copy h3,
+      .onboard-copy h3,
+      .chat-heading h3 {
+        font-size: 28px;
+      }
+
+      .composer-box textarea {
+        min-height: 96px;
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">Preview / Unified Product Direction</span>
+        <h1>מסלול חדש ל-WordAI: פחות רעש, יותר כתיבה.</h1>
+        <p>
+          הכיוון החדש ממקד את הכניסה הראשונה סביב פעולה אחת ברורה, מעביר את ההיכרות לפורמט קצר ו-resume-first,
+          ומנקה את חוויית ה-chat כדי שתרגיש כמו שולחן עבודה רגוע ולא כמו מרכז שליטה עמוס.
+        </p>
+        <div class="principles">
+          <span class="principle-chip">כניסה מהירה לכתיבה</span>
+          <span class="principle-chip">resume-first onboarding</span>
+          <span class="principle-chip">Provider ברור וקומפקטי</span>
+          <span class="principle-chip">CTA אחד בכל מסך</span>
+          <span class="principle-chip">Chat רגוע ואחיד</span>
+        </div>
+      </div>
+      <aside class="hero-side">
+        <div class="token-card">
+          <span class="mini-label">Visual Direction</span>
+          <strong>Editorial Warmth</strong>
+          <p>שפה ויזואלית אחידה עם בסיס נייר חם, קווי מתאר רכים, טורקיז עמוק לאמון, וטרקוטה להדגשה ממוקדת.</p>
+          <div class="swatches">
+            <div class="swatch a"></div>
+            <div class="swatch b"></div>
+            <div class="swatch c"></div>
+            <div class="swatch d"></div>
+          </div>
+        </div>
+        <div class="token-card">
+          <span class="mini-label">Interaction Model</span>
+          <strong>קל, שקט, רציף</strong>
+          <p>מעט כרטיסים, מעט שכבות, ורק משטח התקדמות אחד. כל פעולה משנית נוכחת אבל לא גונבת קשב מהפעולה הראשית.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="design-strip">
+      <div class="strip-block">
+        <strong>StartScreen</strong>
+        <span>שדה כתיבה ראשי, פס המשך טיוטות מצומצם, ו-provider pill אחד קבוע.</span>
+      </div>
+      <div class="strip-block">
+        <strong>Onboarding</strong>
+        <span>שלושה צעדים קצרים בלבד, resume בראש, ו-skip for now זמין כבר מהמסך הראשון.</span>
+      </div>
+      <div class="strip-block">
+        <strong>Provider Setup</strong>
+        <span>אותו רכיב בחירה וסטטוס בכל מקום: Home, Onboarding, Chat.</span>
+      </div>
+      <div class="strip-block">
+        <strong>AI Sidebar</strong>
+        <span>מבט chat-first, drawer מתקדם נסתר, וטיפוגרפיה רגועה יותר לצפיפות נמוכה.</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div class="section-copy">
+          <span class="section-index">01 / StartScreen Redesign</span>
+          <h2>עמוד פתיחה שמביא את המשתמש לכתיבה בתוך שניות.</h2>
+          <p>
+            במקום גריד עמוס והחלטות מוקדמות, המסך מציג פעולה ראשית אחת, המשך טיוטה נוכח אך משני, והגדרת provider נגישה אך לא תופסת את הבמה.
+          </p>
+        </div>
+        <div class="feedback-row">
+          <span class="feedback-tag"><strong>UX Architect</strong> פחות עומס במסך הראשון</span>
+          <span class="feedback-tag"><strong>ui-designer</strong> היררכיית CTA ברורה</span>
+          <span class="feedback-tag"><strong>Product Brainstorm</strong> first useful result in minutes</span>
+        </div>
+      </div>
+
+      <div class="mock-grid">
+        <div class="mock-window">
+          <div class="window-bar">
+            <div class="window-left">
+              <div class="window-dots">
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+              </div>
+              <span class="screen-title">StartScreen / fast entry</span>
+            </div>
+            <div class="window-right">
+              <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+              <button class="ghost-button">הגדרות</button>
+            </div>
+          </div>
+
+          <div class="start-layout">
+            <aside class="start-rail">
+              <div class="rail-card">
+                <span class="rail-label">Resume</span>
+                <div class="draft-list">
+                  <div class="draft-tile active">
+                    <strong>הצעת פרויקט לעירייה</strong>
+                    <span>נערך לפני 18 דקות · 72% הושלם</span>
+                  </div>
+                  <div class="draft-tile">
+                    <strong>סיכום מקורות למחקר</strong>
+                    <span>נשמר אוטומטית · 3 חומרי עזר</span>
+                  </div>
+                </div>
+                <button class="secondary-button">המשך טיוטה אחרונה</button>
+              </div>
+
+              <div class="rail-card">
+                <span class="rail-label">Provider</span>
+                <strong>חיבור פעיל אחד, תמיד גלוי</strong>
+                <span>המשתמש רואה מיד אם אפשר להתחיל, בלי לפתוח תפריט עמוק.</span>
+                <div class="provider-actions">
+                  <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+                  <button class="flat-button">החלף</button>
+                </div>
+              </div>
+
+              <div class="rail-card">
+                <span class="rail-label">ללא עומס</span>
+                <span>אין 6 כרטיסי תבנית מעל הקפל. רק שלוש פעולות משניות עם ניסוח ברור.</span>
+              </div>
+            </aside>
+
+            <main class="start-main">
+              <div class="topbar">
+                <div class="topbar-right">
+                  <span class="top-pill">מוכן לכתיבה תוך 15 שניות</span>
+                  <span class="subtle-chip">Primary Flow</span>
+                </div>
+                <div class="topbar-left">
+                  <button class="chip-button">טען מסמך</button>
+                  <button class="chip-button">חומרי עזר</button>
+                </div>
+              </div>
+
+              <div class="focus-card">
+                <div class="focus-copy">
+                  <span class="mini-label">One clear action</span>
+                  <h3>מה צריך לצאת מהכתיבה הזאת?</h3>
+                  <p>Prompt אחד חופשי, CTA יחיד, וכמה intent chips לעזרה מהירה במקום מערכת בחירה עמוסה.</p>
+                </div>
+
+                <div class="composer-box">
+                  <textarea title="שדה הדגמה לבקשת כתיבה" placeholder="כתוב בקשת כתיבה ראשית">אני צריך טיוטה להצעת שיתוף פעולה עם שני מסלולי תקציב וגרסה קצרה למייל פתיחה.</textarea>
+                  <div class="composer-footer">
+                    <div class="intent-row">
+                      <span class="choice-chip">הצעה</span>
+                      <span class="choice-chip">מסמך רשמי</span>
+                      <span class="choice-chip">טון בטוח</span>
+                    </div>
+                    <div class="composer-actions">
+                      <button class="secondary-button">המשך טיוטה</button>
+                      <button class="primary-button">התחל לנסח</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="quick-actions">
+                  <div class="workspace-card">
+                    <span class="mini-label">Quick Start</span>
+                    <strong>דף ריק</strong>
+                    <span>ללא שאלות מקדימות.</span>
+                  </div>
+                  <div class="workspace-card">
+                    <span class="mini-label">Assist</span>
+                    <strong>העלה חומר רק אם צריך</strong>
+                    <span>תוספת משנית, לא חסם כניסה.</span>
+                  </div>
+                  <div class="workspace-card">
+                    <span class="mini-label">Open</span>
+                    <strong>פתח מסמך קיים</strong>
+                    <span>תחת אותה היררכיה של פעולות.</span>
+                  </div>
+                </div>
+              </div>
+            </main>
+          </div>
+
+          <div class="callout a">
+            <strong>Feedback: StartScreen overloaded</strong>
+            שורת כתיבה אחת גדולה מחליפה גריד כבד של תבניות ומקצרת את זמן ההחלטה.
+          </div>
+          <div class="callout b">
+            <strong>Feedback: CTA hierarchy</strong>
+            כפתור ראשי יחיד בצבע חזק. כל פעולה אחרת נשארת משנית ונקראת לפי תועלת.
+          </div>
+        </div>
+
+        <div class="mini-stack">
+          <div class="provider-sheet">
+            <span class="mini-label">Compact Provider Sheet</span>
+            <strong>Provider setup נשאר ברור אבל לא תופס מסך מלא.</strong>
+            <span>אותו רכיב בחירה קטן מלווה את כל הממשק ומוריד את תחושת הפירוק בין home ל-settings.</span>
+            <div class="provider-list">
+              <button class="provider-option active" type="button" data-provider="OpenAI">
+                <strong>OpenAI</strong>
+                <span>ברירת מחדל מומלצת להתחלה</span>
+              </button>
+              <button class="provider-option" type="button" data-provider="Anthropic">
+                <strong>Anthropic</strong>
+                <span>למסמכים ארוכים וניתוח מדויק</span>
+              </button>
+              <button class="provider-option" type="button" data-provider="Gemini">
+                <strong>Gemini</strong>
+                <span>זמין כבחירה חלופית שקופה</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="hierarchy-demo">
+            <span class="mini-label">CTA Hierarchy</span>
+            <div class="cta-stack">
+              <button class="primary-button">Primary / התחל לנסח</button>
+              <button class="secondary-button">Secondary / המשך טיוטה</button>
+              <button class="ghost-button">Tertiary / פתח מסמך</button>
+            </div>
+            <span class="mini-copy">אותו יחס בין צבע, משקל וגודל נשמר גם ב-onboarding וגם בצד ה-chat.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div class="section-copy">
+          <span class="section-index">02 / Onboarding And Resume</span>
+          <h2>Onboarding קצר, ברור, ומבוסס חזרה מהירה במקום טופס כבד.</h2>
+          <p>
+            זרימה של שלושה צעדים בלבד: resume, provider, style. כל שאלה שאינה קריטית מקופלת, ו-skip for now נוכח בצורה מכבדת כבר מהמסך הראשון.
+          </p>
+        </div>
+        <div class="feedback-row">
+          <span class="feedback-tag"><strong>UX Architect</strong> resume-first במקום forced setup</span>
+          <span class="feedback-tag"><strong>Bug Reviewer</strong> provider activation נראה וגלוי</span>
+          <span class="feedback-tag"><strong>Product Brainstorm</strong> skip for now חזק וברור</span>
+        </div>
+      </div>
+
+      <div class="mock-grid">
+        <div class="mock-window">
+          <div class="window-bar">
+            <div class="window-left">
+              <div class="window-dots">
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+              </div>
+              <span class="screen-title">Onboarding / resume-first flow</span>
+            </div>
+            <div class="window-right">
+              <span class="top-pill">3 צעדים קצרים</span>
+              <button class="ghost-button">Skip for now</button>
+            </div>
+          </div>
+
+          <div class="onboard-layout">
+            <aside class="onboard-side">
+              <div class="summary-card active" data-summary-card="0">
+                <span class="mini-label">Step 1</span>
+                <strong>חוזרים מהמקום שבו עצרת</strong>
+                <span>טיוטה אחרונה, workspace קודם והצעת המשך אחת בלבד.</span>
+              </div>
+              <div class="summary-card" data-summary-card="1">
+                <span class="mini-label">Step 2</span>
+                <strong>Provider מהיר</strong>
+                <span>בחירה אחת ברורה והפעלה מיידית של provider פעיל.</span>
+              </div>
+              <div class="summary-card" data-summary-card="2">
+                <span class="mini-label">Step 3</span>
+                <strong>Style קצר</strong>
+                <span>רק 3 כיווני כתיבה ראשונים, בלי שאלון ארוך.</span>
+              </div>
+
+              <div class="progress-card">
+                <div class="progress-line">
+                  <strong>התקדמות רגועה</strong>
+                  <span data-step-progress>1/3</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <p>אין שכבות loading נוספות. רק מדד אחד פשוט שמראה כמה נשאר.</p>
+              </div>
+
+              <div class="resume-card active">
+                <strong>המשך מסמך: “מזכר הנהלה”</strong>
+                <span>נסגר לפני יום אחד · provider כבר זוהה</span>
+                <div class="resume-actions">
+                  <button class="secondary-button">פתח</button>
+                  <button class="flat-button">דחה להמשך</button>
+                </div>
+              </div>
+            </aside>
+
+            <main class="onboard-main">
+              <div class="onboard-top">
+                <div class="step-buttons">
+                  <button class="step-button active" type="button" data-step="0">
+                    <strong>Resume</strong>
+                    <span>חוזרים לעבודה</span>
+                  </button>
+                  <button class="step-button" type="button" data-step="1">
+                    <strong>Provider</strong>
+                    <span>חיבור קצר</span>
+                  </button>
+                  <button class="step-button" type="button" data-step="2">
+                    <strong>Style</strong>
+                    <span>התאמה אישית קלה</span>
+                  </button>
+                </div>
+                <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+              </div>
+
+              <section class="step-panel active" data-step-panel="0">
+                <div class="onboard-copy">
+                  <span class="mini-label">Resume First</span>
+                  <h3>יש לנו מספיק מידע כדי להחזיר אותך ישר לכתיבה.</h3>
+                  <p>הצעד הראשון אינו שאלון. הוא הצעה אחת להמשך, עם אפשרות להתחיל מאפס או לדלג כרגע.</p>
+                </div>
+
+                <div class="mini-stat-grid">
+                  <div class="mini-surface">
+                    <span class="mini-label">Workspace</span>
+                    <strong>תיקיית מכרזים</strong>
+                    <span>4 מסמכים פעילים כבר זוהו.</span>
+                  </div>
+                  <div class="mini-surface">
+                    <span class="mini-label">Provider</span>
+                    <strong data-provider-label>OpenAI מחובר</strong>
+                    <span>מוכן לעבודה בלי מסך נוסף.</span>
+                  </div>
+                  <div class="mini-surface">
+                    <span class="mini-label">Style</span>
+                    <strong>טון רשמי-חד</strong>
+                    <span>אפשר לשנות גם מאוחר יותר.</span>
+                  </div>
+                </div>
+
+                <div class="workspace-card">
+                  <span class="mini-label">Primary decision</span>
+                  <strong>המשך מהמקום האחרון</strong>
+                  <span>המערכת מציגה מה זוהה ומה יקרה בלחיצה אחת, במקום לגרור את המשתמש דרך setup ארוך.</span>
+                  <div class="resume-actions">
+                    <button class="secondary-button">התחל מחדש</button>
+                    <button class="primary-button">המשך למסמך</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="step-panel" data-step-panel="1">
+                <div class="onboard-copy">
+                  <span class="mini-label">Provider Clarity</span>
+                  <h3>אותו מסך גם מחבר provider וגם הופך אותו לפעיל.</h3>
+                  <p>הבחירה אינה מתפזרת בין quick setup, settings ו-chat. המשתמש בוחר כאן, ורואה מיד מי provider הפעיל.</p>
+                </div>
+
+                <div class="provider-grid">
+                  <button class="provider-option active" type="button" data-provider="OpenAI">
+                    <strong>OpenAI</strong>
+                    <span>Recommended default</span>
+                  </button>
+                  <button class="provider-option" type="button" data-provider="Anthropic">
+                    <strong>Anthropic</strong>
+                    <span>Long-form analysis</span>
+                  </button>
+                  <button class="provider-option" type="button" data-provider="Gemini">
+                    <strong>Gemini</strong>
+                    <span>Secondary option</span>
+                  </button>
+                  <div class="provider-sheet">
+                    <span class="mini-label">API key</span>
+                    <strong>שדה קצר ולא מאיים</strong>
+                    <textarea class="key-input" rows="2">sk-demo-key-...-wordai-preview</textarea>
+                    <div class="resume-actions">
+                      <button class="flat-button">בדוק חיבור</button>
+                      <button class="primary-button">שמור והפעל</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="step-panel" data-step-panel="2">
+                <div class="onboard-copy">
+                  <span class="mini-label">Visible Value</span>
+                  <h3>Personal style מוצג כתועלת מיידית, לא כמשימה בירוקרטית.</h3>
+                  <p>במקום טופס כבד, המשתמש בוחר שלושה כיווני כתיבה ראשוניים ורואה היכן הם יופיעו אחר כך ב-chat ובעורך.</p>
+                </div>
+
+                <div class="style-grid">
+                  <button class="style-card active" type="button">
+                    <strong>תמציתי ומדויק</strong>
+                    <span>שורות קצרות, ניסוח בטוח.</span>
+                  </button>
+                  <button class="style-card" type="button">
+                    <strong>רשמי וייצוגי</strong>
+                    <span>פתיחות מהוקצעות, שפה הנהלתית.</span>
+                  </button>
+                  <button class="style-card" type="button">
+                    <strong>חם ומשכנע</strong>
+                    <span>תנועה רכה יותר בין פסקאות.</span>
+                  </button>
+                </div>
+
+                <div class="workspace-card">
+                  <span class="mini-label">Preview</span>
+                  <strong>כך זה יופיע ב-chat ובעורך</strong>
+                  <div class="tone-row">
+                    <span class="tone-chip">Apply “תמציתי ומדויק”</span>
+                    <span class="tone-chip">פתיחה רשמית</span>
+                    <span class="tone-chip">סיכום חד</span>
+                  </div>
+                  <div class="resume-actions">
+                    <button class="secondary-button">דלג לעת עתה</button>
+                    <button class="primary-button">סיים ופתח Workspace</button>
+                  </div>
+                </div>
+              </section>
+            </main>
+          </div>
+
+          <div class="callout c">
+            <strong>Feedback: onboarding feels heavy</strong>
+            שלושה צעדים קצרים בלבד, עם resume לפני כל שאלה אחרת.
+          </div>
+          <div class="callout d">
+            <strong>Feedback: provider flow fragmented</strong>
+            "שמור והפעל" מבהיר שה-provider הנבחר גם נשמר וגם הופך לפעיל מיד.
+          </div>
+        </div>
+
+        <div class="mini-stack">
+          <div class="mini-card">
+            <span class="mini-label">Shorter By Default</span>
+            <div class="resume-list">
+              <div class="summary-card active">
+                <strong>1. Resume</strong>
+                <span>חיזוק שימושיות לפני איסוף נתונים.</span>
+              </div>
+              <div class="summary-card">
+                <strong>2. Provider</strong>
+                <span>מסך אחד עם סטטוס גלוי.</span>
+              </div>
+              <div class="summary-card">
+                <strong>3. Style</strong>
+                <span>בחירה קלה ולא שאלון.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-card">
+            <span class="mini-label">Questions That Can Wait</span>
+            <div class="drawer-row">
+              <strong>פרטי הגשה, cover page, חומרים משלימים</strong>
+              <span>מתקדם</span>
+            </div>
+            <div class="drawer-row">
+              <strong>Agent presets ו-skills</strong>
+              <span>נפתח רק אחרי setup בסיסי</span>
+            </div>
+            <span class="mini-copy">כך ה-onboarding נשאר קצר, והעומק עובר להמשך הדרך במקום למסך הראשון.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div class="section-copy">
+          <span class="section-index">03 / AI Sidebar And Chat</span>
+          <h2>Sidebar קל יותר: chat-first, מתקדם נסתר, ושפה רגועה יותר ליד המסמך.</h2>
+          <p>
+            ה-sidebar החדש מתנהג כמו שותף כתיבה: כותרת קצרה, סטטוס אחד, רצף הודעות נקי, ו-drawer מתקדם שמתקפל כברירת מחדל כדי להוריד רעש חזותי.
+          </p>
+        </div>
+        <div class="feedback-row">
+          <span class="feedback-tag"><strong>ui-designer</strong> lighter calmer chat</span>
+          <span class="feedback-tag"><strong>UI Design</strong> פחות כרטיסים ומתחים חזותיים</span>
+          <span class="feedback-tag"><strong>Lead Developer</strong> controls מתקדמים מופרדים מה-chat הראשי</span>
+        </div>
+      </div>
+
+      <div class="mock-grid">
+        <div class="mock-window">
+          <div class="window-bar">
+            <div class="window-left">
+              <div class="window-dots">
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+              </div>
+              <span class="screen-title">Editor + AI Sidebar / calmer workspace</span>
+            </div>
+            <div class="window-right">
+              <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+              <button class="ghost-button">Focus Mode</button>
+            </div>
+          </div>
+
+          <div class="app-layout">
+            <main class="editor-zone">
+              <div class="app-topbar">
+                <div class="doc-controls">
+                  <span class="top-pill">מסמך פעיל</span>
+                  <span class="subtle-chip">Autosave רגוע</span>
+                </div>
+                <div class="doc-controls">
+                  <button class="ghost-button">ייצא</button>
+                  <button class="ghost-button">הערות</button>
+                </div>
+              </div>
+
+              <div class="doc-top">
+                <div class="doc-head-row">
+                  <div>
+                    <span class="mini-label">Document</span>
+                    <strong>הצעת שיתוף פעולה אסטרטגית</strong>
+                  </div>
+                  <div class="tone-row">
+                    <span class="tone-chip">Style: תמציתי ומדויק</span>
+                    <span class="tone-chip">Outline locked</span>
+                  </div>
+                </div>
+                <span class="muted">המסמך מראה בבירור שה-style שנבחר ב-onboarding נשמר ומופעל גם כאן.</span>
+              </div>
+
+              <div class="editor-grid">
+                <div class="editor-card">
+                  <span class="mini-label">Draft</span>
+                  <div class="editor-line">
+                    <span class="line-number">01</span>
+                    <div class="line-block">
+                      <div class="line-bar long"></div>
+                      <div class="line-bar mid"></div>
+                    </div>
+                  </div>
+                  <div class="editor-line">
+                    <span class="line-number">02</span>
+                    <div class="line-block">
+                      <div class="line-bar long"></div>
+                      <div class="line-bar long"></div>
+                      <div class="line-bar short"></div>
+                    </div>
+                  </div>
+                  <div class="editor-line">
+                    <span class="line-number">03</span>
+                    <div class="line-block">
+                      <div class="line-bar long"></div>
+                      <div class="line-bar mid"></div>
+                    </div>
+                  </div>
+                  <div class="editor-line">
+                    <span class="line-number">04</span>
+                    <div class="line-block">
+                      <div class="line-bar long"></div>
+                      <div class="line-bar short"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="editor-card">
+                  <span class="mini-label">AI impact</span>
+                  <strong>שינויים מוצעים</strong>
+                  <span>פתיחה חדה יותר</span>
+                  <span>הדגשת שני מסלולי תקציב</span>
+                  <span>גרסת מייל נלווית בסוף</span>
+                </div>
+              </div>
+            </main>
+
+            <aside class="chat-side">
+              <div class="chat-top">
+                <div class="chat-heading">
+                  <span class="mini-label">Chat First</span>
+                  <h3>שיחה על המסמך</h3>
+                  <p>פחות widgets, יותר מקום לתוכן ולהכוונה רציפה.</p>
+                </div>
+                <button class="ghost-button" id="toggleAdvanced" type="button">מתקדם</button>
+              </div>
+
+              <div class="status-card">
+                <div class="summary-meta">
+                  <strong>Provider פעיל</strong>
+                  <span data-provider-label>OpenAI מחובר</span>
+                </div>
+                <div class="choice-line">
+                  <span>Agent controls עברו ל-drawer נפרד כדי להשאיר את ה-chat קל ושקט.</span>
+                </div>
+              </div>
+
+              <div class="progress-card">
+                <div class="progress-line">
+                  <strong>Generating outline refinement</strong>
+                  <span>68%</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill"></div>
+                </div>
+                <p>משטח התקדמות יחיד מחליף spinner, toast ו-status bar כפולים.</p>
+              </div>
+
+              <div class="thread">
+                <div class="message assistant">
+                  <div class="message-head">
+                    <strong>WordAI</strong>
+                    <span>לפני רגע</span>
+                  </div>
+                  <p>קיצרתי את הפתיחה, שמרתי על טון ייצוגי, והבלטתי את שני מסלולי התקציב כבר בפסקה הראשונה.</p>
+                  <div class="chat-quick-row">
+                    <span class="bubble-tag">החל על המסמך</span>
+                    <span class="bubble-tag">צור גרסת מייל</span>
+                  </div>
+                </div>
+                <div class="message user">
+                  <div class="message-head">
+                    <strong>אתה</strong>
+                    <span>לפני 2 דק׳</span>
+                  </div>
+                  <p>שמור על טון בטוח, תן פתיחה רשמית יותר, ותוסיף שורת סיכום לביצוע.</p>
+                </div>
+                <div class="message assistant">
+                  <div class="message-head">
+                    <strong>WordAI</strong>
+                    <span>Draft ready</span>
+                  </div>
+                  <p>אוכל גם להחיל אוטומטית את ה-style “תמציתי ומדויק” על כל פסקאות הסיום.</p>
+                </div>
+              </div>
+
+              <div class="chat-composer">
+                <div class="chat-quick-row">
+                  <span class="choice-chip">Apply “תמציתי ומדויק”</span>
+                  <span class="choice-chip">שפר פתיחה</span>
+                  <span class="choice-chip">סכם ללקוח</span>
+                </div>
+                <textarea title="שדה הדגמה להודעת chat" placeholder="כתוב הודעה ל-chat">שפר את הפסקה השנייה כך שתישמע החלטית יותר אבל לא אגרסיבית.</textarea>
+                <div class="composer-footer">
+                  <span class="muted">Enter לשליחה · Shift+Enter לשורה חדשה</span>
+                  <button class="primary-button">שלח</button>
+                </div>
+              </div>
+
+              <div class="advanced-drawer" id="advancedDrawer">
+                <div class="drawer-head">
+                  <strong>Advanced controls</strong>
+                  <span class="muted">מופיע רק לפי דרישה</span>
+                </div>
+                <div class="drawer-row">
+                  <strong>Provider</strong>
+                  <span data-provider-label>OpenAI מחובר</span>
+                </div>
+                <div class="drawer-row">
+                  <strong>Agent preset</strong>
+                  <span>Professional Writer</span>
+                </div>
+                <div class="drawer-row">
+                  <strong>Skills</strong>
+                  <span>3 פעילים</span>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="callout e">
+            <strong>Feedback: AI sidebar too crowded</strong>
+            ה-header קצר, ה-provider מוצג פעם אחת, וכל הפקדים המתקדמים מתקפלים לאזור נסתר.
+          </div>
+          <div class="callout f">
+            <strong>Feedback: visual language inconsistent</strong>
+            אותן פינות, אותה טיפוגרפיה ואותו יחס צבע חוזרים כאן כמו ב-home וב-onboarding.
+          </div>
+        </div>
+
+        <div class="mini-stack">
+          <div class="mini-card">
+            <span class="mini-label">Unified Tokens</span>
+            <div class="token-list">
+              <div class="side-note">
+                <strong>צבע ראשי</strong>
+                <span>טורקיז עמוק לאמון ולפעולה</span>
+              </div>
+              <div class="side-note">
+                <strong>צבע משני</strong>
+                <span>טרקוטה להדגשות והקשרים</span>
+              </div>
+              <div class="side-note">
+                <strong>טיפוגרפיה</strong>
+                <span>Frank Ruhl Libre לכותרות, Heebo למשטחי UI</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-card">
+            <span class="mini-label">Calm Density Rules</span>
+            <div class="drawer-row">
+              <strong>שכבת status אחת</strong>
+              <span>ללא spinner כפול</span>
+            </div>
+            <div class="drawer-row">
+              <strong>הודעה + פעולה קרובה</strong>
+              <span>אין כרטיסי ביניים מיותרים</span>
+            </div>
+            <div class="drawer-row">
+              <strong>מתקדם לפי דרישה</strong>
+              <span>לא ברירת מחדל</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      const stepButtons = Array.from(document.querySelectorAll(".step-button"));
+      const panels = Array.from(document.querySelectorAll("[data-step-panel]"));
+      const summaryCards = Array.from(document.querySelectorAll("[data-summary-card]"));
+      const progressFill = document.getElementById("progressFill");
+      const progressText = document.querySelector("[data-step-progress]");
+      const providerButtons = Array.from(document.querySelectorAll(".provider-option[data-provider]"));
+      const providerLabels = Array.from(document.querySelectorAll("[data-provider-label]"));
+      const advancedToggle = document.getElementById("toggleAdvanced");
+      const advancedDrawer = document.getElementById("advancedDrawer");
+
+      function setStep(index) {
+        stepButtons.forEach((button, buttonIndex) => {
+          button.classList.toggle("active", buttonIndex === index);
+        });
+
+        panels.forEach((panel, panelIndex) => {
+          panel.classList.toggle("active", panelIndex === index);
+        });
+
+        summaryCards.forEach((card, cardIndex) => {
+          card.classList.toggle("active", cardIndex === index);
+        });
+
+        if (progressFill) {
+          progressFill.style.width = `${((index + 1) / 3) * 100}%`;
+        }
+
+        if (progressText) {
+          progressText.textContent = `${index + 1}/3`;
+        }
+      }
+
+      function setProvider(provider) {
+        providerButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.provider === provider);
+        });
+
+        providerLabels.forEach((label) => {
+          label.textContent = `${provider} מחובר`;
+        });
+      }
+
+      stepButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          setStep(Number(button.dataset.step || 0));
+        });
+      });
+
+      providerButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          setProvider(button.dataset.provider || "OpenAI");
+        });
+      });
+
+      if (advancedToggle && advancedDrawer) {
+        advancedToggle.addEventListener("click", () => {
+          advancedDrawer.classList.toggle("open");
+          advancedToggle.textContent = advancedDrawer.classList.contains("open") ? "סגור מתקדם" : "מתקדם";
+        });
+      }
+
+      setStep(0);
+      setProvider("OpenAI");
+    }());
+  </script>
+</body>
+</html>

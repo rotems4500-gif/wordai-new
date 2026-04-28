@@ -406,6 +406,40 @@ function writePersistedProviderConfig(config = {}) {
   return { ok: true, filePath };
 }
 
+function normalizeProxyHost(value = '') {
+  return String(value || '').replace(/^\[|\]$/g, '').toLowerCase();
+}
+
+function isLoopbackProxyHost(hostname = '') {
+  return hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d+){3}$/.test(hostname);
+}
+
+function getAllowedPersistedCustomTarget() {
+  try {
+    const { URL: NodeURL } = require('url');
+    const providerConfig = readPersistedProviderConfig();
+    const customBaseUrl = String(providerConfig?.custom?.baseUrl || '').trim();
+    if (!customBaseUrl) return null;
+
+    const parsed = new NodeURL(customBaseUrl);
+    const normalizedHost = normalizeProxyHost(parsed.hostname || '');
+    if (!normalizedHost) return null;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (parsed.username || parsed.password) return null;
+
+    const resolvedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    if (parsed.protocol === 'http:' && !isLoopbackProxyHost(normalizedHost)) return null;
+
+    return {
+      protocol: parsed.protocol,
+      host: normalizedHost,
+      port: resolvedPort,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function getPersistedAppSettingsPath() {
   const dir = app.getPath('userData');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -918,32 +952,58 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
     const { URL: NodeURL } = require('url');
 
     const parsed = new NodeURL(url);
+    const normalizedHost = normalizeProxyHost(parsed.hostname || '');
+    const normalizedMethod = String(method || 'POST').toUpperCase();
+    const resolvedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       return { ok: false, status: 0, body: 'פרוטוקול לא מורשה' };
     }
-    // רק API endpoints מוכרים מורשים (מניעת SSRF)
-    const ALLOWED_HOSTS = [
+    if (parsed.username || parsed.password) {
+      return { ok: false, status: 0, body: 'כתובת עם פרטי הזדהות אינה מורשית' };
+    }
+
+    // רק endpoints מוכרים או loopback מקומי מאושר של Ollama/LM Studio מורשים.
+    const ALLOWED_HTTPS_HOSTS = new Set([
       'api.perplexity.ai',
       'api.openai.com',
       'api.anthropic.com',
       'api.groq.com',
       'generativelanguage.googleapis.com',
-    ];
-    const customHost = parsed.hostname;
-    const isAllowed = ALLOWED_HOSTS.includes(customHost) || !ALLOWED_HOSTS.some((h) => h === customHost);
-    if (!isAllowed) {
-      return { ok: false, status: 0, body: `Host לא מורשה: ${customHost}` };
+      'api.deepseek.com',
+      'api.mistral.ai',
+      'api.together.xyz',
+      'openrouter.ai',
+      'api.x.ai',
+    ]);
+    const ALLOWED_LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+    const ALLOWED_LOCAL_PORTS = new Set([11434, 1234]);
+    const isAllowedLocalDevTarget = ALLOWED_LOCAL_HOSTS.has(normalizedHost) && ALLOWED_LOCAL_PORTS.has(resolvedPort);
+    const allowedPersistedCustomTarget = getAllowedPersistedCustomTarget();
+    const isAllowedPersistedCustomTarget = Boolean(
+      allowedPersistedCustomTarget
+      && normalizedHost === allowedPersistedCustomTarget.host
+      && resolvedPort === allowedPersistedCustomTarget.port
+      && parsed.protocol === allowedPersistedCustomTarget.protocol
+    );
+
+    if (parsed.protocol === 'http:' && !isAllowedLocalDevTarget && !isAllowedPersistedCustomTarget) {
+      return { ok: false, status: 0, body: 'HTTP מותר רק ל-loopback מקומי מאושר' };
+    }
+    if (!isAllowedLocalDevTarget && !isAllowedPersistedCustomTarget && !ALLOWED_HTTPS_HOSTS.has(normalizedHost)) {
+      return { ok: false, status: 0, body: `Host לא מורשה: ${normalizedHost}` };
     }
 
     const result = await new Promise((resolve, reject) => {
       const lib = parsed.protocol === 'https:' ? https : http;
       const bodyBuffer = body ? Buffer.from(body, 'utf8') : null;
       const reqHeaders = {
-        ...headers,
+        ...Object.fromEntries(
+          Object.entries(headers || {}).filter(([headerName]) => !['host', 'content-length', 'connection'].includes(String(headerName || '').toLowerCase()))
+        ),
         ...(bodyBuffer ? { 'Content-Length': String(bodyBuffer.length) } : {}),
       };
       const req = lib.request(
-        { hostname: parsed.hostname, port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80), path: parsed.pathname + (parsed.search || ''), method, headers: reqHeaders },
+        { hostname: parsed.hostname, port: resolvedPort, path: parsed.pathname + (parsed.search || ''), method: normalizedMethod, headers: reqHeaders },
         (res) => {
           const chunks = [];
           res.on('data', (chunk) => chunks.push(chunk));

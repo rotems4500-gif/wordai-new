@@ -9,7 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
 
 const DOCUMENT_STYLE_PRESETS = {
@@ -30,6 +30,8 @@ const GENERATION_LABEL_FALLBACKS = {
   letter: 'מכתב רשמי',
 };
 
+const MAGIC_WAND_SELECTION_CONTEXT_SIDE = 420;
+
 const buildGenerationLabel = ({ promptText = '', instructionsText = '', templateId = 'blank' } = {}) => {
   const cleanPrompt = String(promptText || '').trim();
   if (cleanPrompt) return cleanPrompt;
@@ -46,6 +48,19 @@ const buildGenerationLabel = ({ promptText = '', instructionsText = '', template
     .trim();
 
   return normalizedLine || GENERATION_LABEL_FALLBACKS[templateId] || GENERATION_LABEL_FALLBACKS.blank;
+};
+
+const shouldAutoOpenOnboarding = (profile = {}) => {
+  if (String(profile?.onboardingCompletedAt || '').trim()) return false;
+  if (String(profile?.onboardingDismissedAt || '').trim()) return false;
+  const snoozedUntil = String(profile?.onboardingSnoozedUntil || '').trim();
+  if (snoozedUntil) {
+    const snoozeDate = new Date(snoozedUntil);
+    if (Number.isNaN(snoozeDate.getTime())) return true;
+    return snoozeDate.getTime() <= Date.now();
+  }
+
+  return !hasMeaningfulPersonalProfileData(profile);
 };
 
 const buildLiveGenerationShell = (titleText = 'מסמך חדש') => `
@@ -94,6 +109,7 @@ const DEFAULT_FEEDBACK_SURVEY = {
   freeText: '',
   usedFallback: false,
   submitting: false,
+  submissionRequestId: null,
 };
 
 const DEFAULT_INPUT_DIALOG = {
@@ -140,15 +156,26 @@ function App() {
   React.useEffect(() => {
     if (window.__mountTimer) clearTimeout(window.__mountTimer);
 
+    let isMounted = true;
+
     (async () => {
-      await hydrateAppSettingsFromDisk().catch(() => {});
-      await hydrateProviderConfigFromDisk().catch(() => {});
-      setShortcuts(getShortcutsConfig());
-      setAssistantBehavior(getAssistantBehavior());
-      setWordPreferences(getWordPreferences());
-      setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
-      setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+      try {
+        await hydrateAppSettingsFromDisk().catch(() => {});
+        await hydrateProviderConfigFromDisk().catch(() => {});
+        if (!isMounted) return;
+        setShortcuts(getShortcutsConfig());
+        setAssistantBehavior(getAssistantBehavior());
+        setWordPreferences(getWordPreferences());
+        setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
+        setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+      } finally {
+        if (isMounted) setSettingsHydrated(true);
+      }
     })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const [editor, setEditor] = React.useState(null);
@@ -162,6 +189,7 @@ function App() {
   const [updateCheckToken, setUpdateCheckToken] = React.useState(0);
   const [formatPainterActive, setFormatPainterActive] = React.useState(false);
   const [selectedText, setSelectedText] = React.useState('');
+  const [selectionContext, setSelectionContext] = React.useState(null);
   const [currentBlockText, setCurrentBlockText] = React.useState('');
   const [trackChanges, setTrackChanges] = React.useState(false);
   const [shortcuts, setShortcuts] = React.useState(getShortcutsConfig());
@@ -188,6 +216,7 @@ function App() {
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
+  const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
   const activeWorkspaceIdRef = React.useRef(getActiveWorkspaceId());
   const workspaceEpochRef = React.useRef(0);
@@ -368,6 +397,12 @@ function App() {
   const submitDocumentFeedback = React.useCallback(async () => {
     const selectedOptions = feedbackSurvey.selectedOptions || [];
     const freeText = String(feedbackSurvey.freeText || '').trim();
+    const surveySnapshot = {
+      ...feedbackSurvey,
+      selectedOptions: [...selectedOptions],
+      freeText,
+      phase: 'details',
+    };
 
     if (!selectedOptions.length && !freeText) {
       alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
@@ -380,11 +415,17 @@ function App() {
       freeText ? `בקשה חופשית:\n${freeText}` : '',
     ].filter(Boolean).join('\n\n');
 
-    setFeedbackSurvey((prev) => ({ ...prev, submitting: true }));
-    setAssistantTrigger('manual');
-    setSidebarOpen(true);
     const generationRequest = beginGenerationRequest('doc-feedback');
     const originWorkspaceId = generationRequest.workspaceId;
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      open: false,
+      phase: 'details',
+      submitting: true,
+      submissionRequestId: generationRequest.requestId,
+    }));
+    setAssistantTrigger('manual');
+    setSidebarOpen(true);
     setLiveGeneration({
       active: true,
       state: 'running',
@@ -394,6 +435,20 @@ function App() {
       runId: generationRequest.runId,
       workspaceId: originWorkspaceId,
     });
+
+    const clearHiddenFeedbackSubmittingAfterStale = () => {
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId || prev.open || !prev.submitting) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          submitting: false,
+          submissionRequestId: null,
+        };
+      });
+    };
 
     try {
       const result = await reviseDocumentWithFeedback({
@@ -407,7 +462,10 @@ function App() {
 
       const revisedHtml = result?.html || editor?.getHTML?.() || '';
       const usedFallback = Boolean(result?.usedFallback);
-  if (!isGenerationRequestCurrent(generationRequest)) return;
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return;
+      }
 
       if (editor && revisedHtml) {
         editor.commands.setContent(revisedHtml);
@@ -444,8 +502,16 @@ function App() {
         alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
       }
     } catch (error) {
-      if (!isGenerationRequestCurrent(generationRequest)) return;
-      setFeedbackSurvey((prev) => ({ ...prev, submitting: false }));
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return;
+      }
+      setFeedbackSurvey({
+        ...surveySnapshot,
+        open: true,
+        phase: 'details',
+        submitting: false,
+      });
       setLiveGeneration({
         active: true,
         state: 'error',
@@ -458,6 +524,11 @@ function App() {
       alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
     }
   }, [feedbackSurvey, editor, activeTemplateId]);
+
+  const closeFeedbackSurvey = React.useCallback(() => {
+    setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+    setLiveGeneration((prev) => ({ ...prev, active: false }));
+  }, []);
 
   const updateActiveFormats = React.useCallback((currentEditor) => {
     if (!currentEditor) return;
@@ -553,15 +624,48 @@ function App() {
   }, [shortcuts, editor]);
 
   React.useEffect(() => {
-    if (!inputDialog.open || inputDialog.closeOnEscape === false) return;
+    const topmostOverlay = fileMenuOpen
+      ? ''
+      : inputDialog.open && inputDialog.closeOnEscape !== false
+        ? 'input-dialog'
+        : feedbackSurvey.open
+          ? 'feedback-survey'
+          : sidebarOpen && !showStartScreen
+            ? 'ai-sidebar'
+            : '';
+    if (!topmostOverlay) return;
+
     const onKeyDown = (event) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+
+      if (topmostOverlay === 'input-dialog') {
+        event.preventDefault();
+        closeInputDialog(null);
+        return;
+      }
+
+      if (topmostOverlay === 'feedback-survey') {
+        event.preventDefault();
+        closeFeedbackSurvey();
+        return;
+      }
+
       event.preventDefault();
-      closeInputDialog(null);
+      closeAssistantPopup();
     };
+
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [inputDialog.open, inputDialog.closeOnEscape, closeInputDialog]);
+  }, [
+    inputDialog.open,
+    inputDialog.closeOnEscape,
+    feedbackSurvey.open,
+    sidebarOpen,
+    fileMenuOpen,
+    showStartScreen,
+    closeInputDialog,
+    closeFeedbackSurvey,
+  ]);
 
   const initializedDocRef = React.useRef(false);
 
@@ -588,8 +692,16 @@ function App() {
     const syncState = (includePages = false) => {
       if (frameId) window.cancelAnimationFrame(frameId);
       frameId = window.requestAnimationFrame(() => {
-        const { from, to, empty } = editor.state.selection;
-        setSelectedText(empty ? '' : editor.state.doc.textBetween(from, to, ' '));
+        const { doc, selection } = editor.state;
+        const { from, to, empty } = selection;
+        const selectionText = empty ? '' : doc.textBetween(from, to, ' ');
+        const docEnd = doc.content.size;
+        setSelectedText(selectionText);
+        setSelectionContext(empty ? null : {
+          before: doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim(),
+          selection: selectionText,
+          after: doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim(),
+        });
         setCurrentBlockText(editor.state.selection.$from.parent?.textContent || '');
         setLastEditorActivityAt(Date.now());
         if (includePages) {
@@ -630,12 +742,13 @@ function App() {
   }, [editor, documentStyle, applyDocumentStyleToEditor]);
 
   React.useEffect(() => {
-    if (!editor || initializedDocRef.current) return;
+    if (!editor || initializedDocRef.current || !settingsHydrated) return;
 
     const shouldShowHome = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
     const savedDraft = wordPreferences.keepLastAutosavedVersion === false
       ? null
       : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+    const profile = getPersonalStyleProfile();
 
     if (shouldShowHome) {
       setShowStartScreen(true);
@@ -647,8 +760,13 @@ function App() {
       focusEditorSoon('start');
     }
 
+    if (shouldAutoOpenOnboarding(profile)) {
+      setFileMenuTargetTab('onboarding');
+      setFileMenuOpen(true);
+    }
+
     initializedDocRef.current = true;
-  }, [editor, wordPreferences, focusEditorSoon]);
+  }, [editor, settingsHydrated, wordPreferences, focusEditorSoon]);
 
   React.useEffect(() => {
     if (!editor) return;
@@ -726,11 +844,11 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [editor, lastEditorActivityAt, sidebarOpen, assistantBehavior]);
 
-  const closeAssistantPopup = () => {
+  const closeAssistantPopup = React.useCallback(() => {
     setSidebarOpen(false);
     setAssistantTrigger('manual');
     setLastEditorActivityAt(Date.now());
-  };
+  }, []);
 
   const hasMeaningfulContent = React.useCallback(() => {
     return hasMeaningfulEditorContent(editor);
@@ -1946,10 +2064,7 @@ function App() {
                   </div>
                   <button
                     className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                      setLiveGeneration((prev) => ({ ...prev, active: false }));
-                    }}
+                    onClick={closeFeedbackSurvey}
                   >
                     סגור
                   </button>
@@ -1965,10 +2080,7 @@ function App() {
                   <div className="flex flex-col md:flex-row gap-3">
                     <button
                       className="btn btn-primary flex-1"
-                      onClick={() => {
-                        setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                        setLiveGeneration((prev) => ({ ...prev, active: false }));
-                      }}
+                      onClick={closeFeedbackSurvey}
                     >
                       כן, המסמך טוב
                     </button>
@@ -2060,6 +2172,11 @@ function App() {
             <StartScreen
               documentStyle={documentStyle}
               onDocumentStyleChange={changeDocumentStyle}
+              escapeBlocked={fileMenuOpen || inputDialog.open || feedbackSurvey.open}
+              onClose={() => {
+                setShowStartScreen(false);
+                focusEditorSoon('start');
+              }}
               hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
               lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
               onCreateBlank={() => {
@@ -2164,8 +2281,10 @@ function App() {
         {/* עט קסמים צף */}
         {!showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
+          escapeBlocked={fileMenuOpen || inputDialog.open || feedbackSurvey.open || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
           selectedText={selectedText}
+          selectionContext={selectionContext}
           shortcuts={shortcuts}
           onInsert={(text) => {
             if (editor) editor.chain().focus().insertContent(text).run();

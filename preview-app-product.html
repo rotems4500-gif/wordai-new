@@ -1,0 +1,2013 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WordAI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700&family=Heebo:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4ecdf;
+      --bg-soft: #fbf7ef;
+      --surface: rgba(255, 251, 245, 0.84);
+      --surface-strong: #fffaf2;
+      --surface-muted: #f0e6d7;
+      --paper: #fffdf8;
+      --line: rgba(44, 47, 43, 0.11);
+      --line-strong: rgba(19, 23, 20, 0.18);
+      --ink: #17211f;
+      --ink-soft: #31403d;
+      --muted: #66706b;
+      --accent: #0e766c;
+      --accent-strong: #0c5d56;
+      --accent-soft: rgba(14, 118, 108, 0.12);
+      --signal: #bf6d2f;
+      --signal-soft: rgba(191, 109, 47, 0.14);
+      --berry: #8e5a66;
+      --berry-soft: rgba(142, 90, 102, 0.11);
+      --shadow: 0 28px 70px rgba(70, 48, 25, 0.12);
+      --shadow-soft: 0 18px 40px rgba(70, 48, 25, 0.08);
+      --radius-xl: 34px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 16%, rgba(255, 255, 255, 0.64), transparent 16%),
+        radial-gradient(circle at 84% 18%, rgba(14, 118, 108, 0.11), transparent 19%),
+        radial-gradient(circle at 78% 76%, rgba(191, 109, 47, 0.12), transparent 20%),
+        linear-gradient(180deg, #fbf7ef 0%, #f3eadc 100%);
+      color: var(--ink);
+      font-family: "Heebo", sans-serif;
+      padding: 28px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::before {
+      background:
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0, rgba(255, 255, 255, 0.18) 1px, transparent 1px, transparent 120px),
+        repeating-linear-gradient(180deg, rgba(23, 33, 31, 0.024) 0, rgba(23, 33, 31, 0.024) 1px, transparent 1px, transparent 120px);
+      opacity: 0.5;
+    }
+
+    body::after {
+      background:
+        radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.2), transparent 40%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 24%);
+    }
+
+    a,
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      border: 0;
+      background: none;
+      color: inherit;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 1500px;
+      margin: 0 auto;
+      display: grid;
+      gap: 26px;
+    }
+
+    .masthead,
+    .screen {
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.78);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+
+    .masthead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 18px 22px;
+      position: sticky;
+      top: 18px;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.3)),
+        linear-gradient(160deg, var(--accent), var(--accent-strong));
+      color: white;
+      font-weight: 800;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 18px 30px rgba(14, 118, 108, 0.18);
+    }
+
+    .brand-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .brand-copy strong,
+    .hero-copy h2,
+    .modal-head h2,
+    .doc-header h2,
+    .sidebar-head h3,
+    .section-note strong,
+    .panel strong,
+    .provider-choice strong,
+    .style-choice strong,
+    .step-tab strong,
+    .doc-sheet h3,
+    .modal-side h3 {
+      font-family: "Frank Ruhl Libre", serif;
+    }
+
+    .brand-copy strong {
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .brand-copy span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .nav-pills,
+    .masthead-actions,
+    .window-left,
+    .window-right,
+    .inline-actions,
+    .chip-row,
+    .status-tags,
+    .doc-meta,
+    .window-dots,
+    .shell-pills,
+    .summary-tags,
+    .message-actions,
+    .filter-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .nav-pill,
+    .ghost-button,
+    .flat-button,
+    .primary-button,
+    .secondary-button,
+    .choice-chip,
+    .mini-pill,
+    .tone-chip,
+    .provider-pill {
+      border-radius: 999px;
+      line-height: 1;
+      transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
+    }
+
+    .nav-pill,
+    .ghost-button,
+    .flat-button,
+    .secondary-button {
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      background: rgba(255, 255, 255, 0.68);
+      color: var(--ink-soft);
+      padding: 11px 16px;
+      font-weight: 700;
+    }
+
+    .nav-pill:hover,
+    .ghost-button:hover,
+    .flat-button:hover,
+    .secondary-button:hover,
+    .provider-choice:hover,
+    .style-choice:hover,
+    .step-tab:hover,
+    .quick-card:hover,
+    .doc-item:hover,
+    .summary-card:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .nav-pill.active {
+      background: rgba(14, 118, 108, 0.14);
+      border-color: rgba(14, 118, 108, 0.18);
+      color: var(--accent-strong);
+    }
+
+    .primary-button {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+      color: white;
+      padding: 12px 18px;
+      font-weight: 800;
+      box-shadow: 0 18px 30px rgba(14, 118, 108, 0.22);
+    }
+
+    .primary-button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 22px 34px rgba(14, 118, 108, 0.28);
+    }
+
+    .secondary-button {
+      background: rgba(255, 255, 255, 0.78);
+      color: var(--ink);
+    }
+
+    .flat-button {
+      background: rgba(14, 118, 108, 0.08);
+      color: var(--accent-strong);
+    }
+
+    .choice-chip,
+    .mini-pill,
+    .tone-chip {
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.68);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--ink-soft);
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .mini-pill {
+      background: rgba(14, 118, 108, 0.08);
+      color: var(--accent-strong);
+    }
+
+    .tone-chip {
+      background: var(--signal-soft);
+      color: #8b4d1d;
+      border-color: rgba(191, 109, 47, 0.12);
+    }
+
+    .provider-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.76);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--accent-strong);
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(14, 118, 108, 0.12);
+      flex: 0 0 auto;
+    }
+
+    .screen {
+      padding: 0 0 26px;
+      animation: revealUp 720ms ease both;
+    }
+
+    .screen:nth-of-type(2) {
+      animation-delay: 70ms;
+    }
+
+    .screen:nth-of-type(3) {
+      animation-delay: 140ms;
+    }
+
+    .screen:nth-of-type(4) {
+      animation-delay: 210ms;
+    }
+
+    .window-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px 22px;
+      border-bottom: 1px solid rgba(19, 23, 20, 0.08);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.36));
+    }
+
+    .window-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: rgba(23, 33, 31, 0.14);
+    }
+
+    .window-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--ink-soft);
+    }
+
+    .window-subtitle {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.74);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+    }
+
+    .eyebrow.signal {
+      color: #8b4d1d;
+      background: var(--signal-soft);
+      border-color: rgba(191, 109, 47, 0.12);
+    }
+
+    .home-layout,
+    .workspace-layout,
+    .settings-modal {
+      display: grid;
+      gap: 24px;
+    }
+
+    .home-layout {
+      grid-template-columns: minmax(300px, 0.78fr) minmax(0, 1.22fr);
+      padding: 24px;
+    }
+
+    .side-stack,
+    .home-main,
+    .modal-side,
+    .modal-body,
+    .sidebar,
+    .doc-shell,
+    .stage-shell {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel,
+    .hero-card,
+    .quick-card,
+    .summary-card,
+    .surface-card,
+    .sidebar-card,
+    .status-card,
+    .doc-topbar,
+    .ghost-surface,
+    .progress-card,
+    .resume-card,
+    .provider-choice,
+    .style-choice,
+    .step-tab,
+    .field-card,
+    .section-note {
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .panel,
+    .quick-card,
+    .summary-card,
+    .surface-card,
+    .sidebar-card,
+    .status-card,
+    .ghost-surface,
+    .resume-card,
+    .field-card,
+    .section-note {
+      padding: 18px;
+    }
+
+    .panel strong,
+    .quick-card strong,
+    .summary-card strong,
+    .surface-card strong,
+    .resume-card strong,
+    .provider-choice strong,
+    .style-choice strong,
+    .step-tab strong,
+    .doc-item strong,
+    .revision-card strong,
+    .message strong,
+    .doc-sheet strong {
+      font-size: 21px;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    .panel p,
+    .panel span,
+    .quick-card p,
+    .summary-card span,
+    .surface-card p,
+    .surface-card span,
+    .resume-card span,
+    .message p,
+    .hero-copy p,
+    .modal-head p,
+    .doc-sheet p,
+    .section-note span,
+    .sidebar-head p,
+    .status-card span,
+    .progress-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.75;
+    }
+
+    .panel.accent,
+    .quick-card.highlight,
+    .surface-card.emphasis,
+    .progress-card {
+      background: linear-gradient(180deg, rgba(14, 118, 108, 0.12), rgba(255, 255, 255, 0.76));
+    }
+
+    .panel .inline-actions,
+    .summary-card,
+    .resume-card,
+    .progress-card,
+    .quick-card,
+    .surface-card,
+    .status-card,
+    .section-note {
+      align-content: start;
+      gap: 12px;
+    }
+
+    .doc-item {
+      padding: 15px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid rgba(19, 23, 20, 0.07);
+      display: grid;
+      gap: 8px;
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+
+    .doc-item.active {
+      border-color: rgba(14, 118, 108, 0.22);
+      background: rgba(14, 118, 108, 0.08);
+    }
+
+    .doc-item strong {
+      font-size: 18px;
+    }
+
+    .hero-card {
+      padding: 24px;
+      display: grid;
+      gap: 22px;
+      background:
+        radial-gradient(circle at 80% 18%, rgba(191, 109, 47, 0.12), transparent 18%),
+        radial-gradient(circle at 10% 0%, rgba(14, 118, 108, 0.10), transparent 22%),
+        rgba(255, 255, 255, 0.74);
+    }
+
+    .hero-copy {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .hero-copy h2,
+    .modal-head h2,
+    .doc-header h2,
+    .sidebar-head h3 {
+      margin: 0;
+      font-size: clamp(34px, 4vw, 54px);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+      max-width: 15ch;
+    }
+
+    .hero-copy p,
+    .modal-head p,
+    .sidebar-head p {
+      max-width: 64ch;
+      font-size: 17px;
+    }
+
+    .composer,
+    .composer-card,
+    .key-card {
+      display: grid;
+      gap: 14px;
+      background: rgba(255, 252, 247, 0.84);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+    }
+
+    .field-label {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--ink-soft);
+    }
+
+    textarea,
+    input,
+    select {
+      width: 100%;
+      border-radius: 18px;
+      border: 1px solid rgba(19, 23, 20, 0.11);
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ink);
+      padding: 16px 18px;
+      resize: vertical;
+      outline: none;
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+    }
+
+    textarea:focus,
+    input:focus,
+    select:focus {
+      border-color: rgba(14, 118, 108, 0.28);
+      box-shadow: 0 0 0 4px rgba(14, 118, 108, 0.10);
+    }
+
+    .composer textarea {
+      min-height: 150px;
+      line-height: 1.8;
+      font-size: 17px;
+    }
+
+    .composer-footer,
+    .modal-footer,
+    .doc-toolbar,
+    .status-line,
+    .message-head,
+    .drawer-row,
+    .doc-head-row,
+    .progress-line,
+    .shell-toolbar,
+    .shell-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .quick-grid,
+    .panel-grid,
+    .provider-grid,
+    .style-grid,
+    .ghost-grid,
+    .revision-grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .quick-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .quick-card {
+      min-height: 154px;
+      transition: transform 180ms ease, box-shadow 180ms ease;
+    }
+
+    .quick-card p {
+      font-size: 14px;
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .section-note {
+      display: grid;
+      gap: 8px;
+      min-height: 112px;
+    }
+
+    .section-note strong {
+      font-size: 18px;
+    }
+
+    .modal-stage {
+      position: relative;
+      min-height: 860px;
+      margin: 24px;
+      border-radius: calc(var(--radius-xl) - 6px);
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.1)),
+        rgba(236, 227, 214, 0.72);
+      border: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .stage-shell {
+      position: absolute;
+      inset: 0;
+      padding: 28px;
+      filter: blur(1.4px);
+      transform: scale(1.01);
+    }
+
+    .shell-toolbar {
+      padding: 18px 20px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid rgba(19, 23, 20, 0.07);
+    }
+
+    .ghost-grid {
+      grid-template-columns: minmax(0, 1.08fr) minmax(280px, 0.72fr);
+      align-items: start;
+    }
+
+    .ghost-surface {
+      min-height: 250px;
+      background: rgba(255, 255, 255, 0.5);
+    }
+
+    .ghost-surface.hero-shell {
+      min-height: 330px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      padding: 24px;
+    }
+
+    .ghost-lines {
+      display: grid;
+      gap: 10px;
+    }
+
+    .ghost-line {
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(19, 23, 20, 0.08);
+    }
+
+    .ghost-line.long { width: 92%; }
+    .ghost-line.mid { width: 64%; }
+    .ghost-line.short { width: 38%; }
+
+    .stage-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(27, 34, 30, 0.18);
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
+    }
+
+    .settings-modal {
+      position: relative;
+      z-index: 2;
+      grid-template-columns: minmax(260px, 0.34fr) minmax(0, 0.66fr);
+      gap: 0;
+      max-width: 1180px;
+      margin: 54px auto;
+      background: rgba(255, 251, 245, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.84);
+      border-radius: 30px;
+      overflow: hidden;
+      box-shadow: 0 40px 90px rgba(26, 20, 13, 0.22);
+    }
+
+    .modal-side {
+      padding: 24px;
+      background:
+        linear-gradient(180deg, rgba(14, 118, 108, 0.10), rgba(255, 255, 255, 0.3)),
+        rgba(244, 236, 223, 0.92);
+      border-left: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .modal-side h3 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.03em;
+    }
+
+    .modal-side > span,
+    .modal-head span,
+    .window-subtitle {
+      color: var(--muted);
+    }
+
+    .modal-body {
+      padding: 24px;
+      align-content: start;
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 12px;
+    }
+
+    .modal-head h2 {
+      font-size: clamp(28px, 3.5vw, 40px);
+      max-width: 16ch;
+    }
+
+    .step-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .step-tab,
+    .provider-choice,
+    .style-choice {
+      display: grid;
+      gap: 8px;
+      text-align: right;
+      padding: 16px 18px;
+    }
+
+    .step-tab.active,
+    .summary-card.active,
+    .provider-choice.active,
+    .style-choice.active {
+      border-color: rgba(14, 118, 108, 0.22);
+      background: rgba(14, 118, 108, 0.09);
+      box-shadow: 0 22px 36px rgba(14, 118, 108, 0.14);
+    }
+
+    .step-tab strong,
+    .provider-choice strong,
+    .style-choice strong,
+    .summary-card strong {
+      font-size: 18px;
+    }
+
+    .step-tab span,
+    .provider-choice span,
+    .style-choice span,
+    .summary-card span,
+    .field-card span {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .summary-card {
+      transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(19, 23, 20, 0.08);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 33.33%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--signal));
+      transition: width 220ms ease;
+    }
+
+    .step-panel {
+      display: none;
+      gap: 18px;
+    }
+
+    .step-panel.active {
+      display: grid;
+      animation: fadeIn 240ms ease;
+    }
+
+    .panel-grid.two,
+    .provider-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .provider-grid .key-card {
+      grid-column: 1 / -1;
+    }
+
+    .surface-card ul,
+    .doc-sheet ul,
+    .checklist {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 10px;
+    }
+
+    .checklist li,
+    .doc-sheet li {
+      position: relative;
+      padding-right: 22px;
+      line-height: 1.8;
+      color: var(--ink-soft);
+    }
+
+    .checklist li::before,
+    .doc-sheet li::before {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 12px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(14, 118, 108, 0.10);
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .field-card {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .setting-inline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .setting-inline:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .setting-inline strong {
+      font-size: 16px;
+      font-family: inherit;
+      letter-spacing: normal;
+    }
+
+    .settings-preview {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(14, 118, 108, 0.08);
+      border: 1px solid rgba(14, 118, 108, 0.12);
+      display: grid;
+      gap: 10px;
+    }
+
+    .settings-preview strong {
+      font-size: 18px;
+    }
+
+    .modal-footer {
+      padding-top: 8px;
+      border-top: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .workspace-layout {
+      grid-template-columns: minmax(0, 1.14fr) minmax(350px, 0.86fr);
+      padding: 24px;
+      align-items: start;
+    }
+
+    .doc-topbar {
+      padding: 16px 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .doc-sheet {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 253, 248, 0.98));
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      border-radius: 28px;
+      box-shadow: 0 24px 46px rgba(70, 48, 25, 0.10);
+      padding: clamp(28px, 4vw, 48px);
+      display: grid;
+      gap: 24px;
+    }
+
+    .doc-header {
+      display: grid;
+      gap: 12px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .doc-header h2 {
+      font-size: clamp(30px, 4vw, 46px);
+      max-width: none;
+    }
+
+    .doc-sheet p,
+    .doc-sheet li {
+      font-size: 18px;
+      color: var(--ink-soft);
+    }
+
+    .doc-sheet h3 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.03em;
+    }
+
+    .doc-note,
+    .revision-card,
+    .message,
+    .advanced-drawer {
+      border-radius: 20px;
+      border: 1px solid rgba(19, 23, 20, 0.08);
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .doc-note {
+      padding: 16px 18px;
+      display: grid;
+      gap: 10px;
+      background: linear-gradient(180deg, rgba(191, 109, 47, 0.11), rgba(255, 255, 255, 0.76));
+    }
+
+    .doc-note strong,
+    .revision-card strong {
+      font-size: 18px;
+    }
+
+    .revision-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .revision-card {
+      padding: 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .sidebar {
+      align-content: start;
+    }
+
+    .sidebar-card,
+    .status-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    .sidebar-head h3 {
+      font-size: clamp(28px, 3vw, 36px);
+      max-width: 12ch;
+    }
+
+    .thread {
+      display: grid;
+      gap: 14px;
+    }
+
+    .message {
+      padding: 16px 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .message.assistant {
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .message.user {
+      background: rgba(14, 118, 108, 0.08);
+      border-color: rgba(14, 118, 108, 0.12);
+    }
+
+    .message-head strong {
+      font-size: 17px;
+      font-family: inherit;
+      letter-spacing: normal;
+    }
+
+    .message-head span,
+    .drawer-row span,
+    .status-line span,
+    .shell-toolbar span,
+    .ghost-surface span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .advanced-drawer {
+      padding: 0 18px;
+      display: grid;
+      gap: 0;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 240ms ease, padding 240ms ease;
+    }
+
+    .advanced-drawer.open {
+      max-height: 260px;
+      padding: 10px 18px;
+    }
+
+    .drawer-row {
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(19, 23, 20, 0.08);
+    }
+
+    .drawer-row:last-child {
+      border-bottom: 0;
+    }
+
+    .drawer-row strong {
+      font-size: 16px;
+      font-family: inherit;
+      letter-spacing: normal;
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .pulse {
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+
+    @keyframes revealUp {
+      from {
+        opacity: 0;
+        transform: translateY(22px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        box-shadow: 0 18px 30px rgba(14, 118, 108, 0.22);
+      }
+
+      50% {
+        box-shadow: 0 24px 36px rgba(14, 118, 108, 0.30);
+      }
+    }
+
+    @media (max-width: 1220px) {
+      .home-layout,
+      .workspace-layout,
+      .ghost-grid,
+      .panel-grid.two,
+      .provider-grid,
+      .quick-grid,
+      .summary-strip,
+      .revision-grid,
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .masthead {
+        position: static;
+      }
+
+      .settings-modal {
+        grid-template-columns: 1fr;
+      }
+
+      .modal-side {
+        border-left: 0;
+        border-bottom: 1px solid rgba(19, 23, 20, 0.08);
+      }
+    }
+
+    @media (max-width: 900px) {
+      body {
+        padding: 18px;
+      }
+
+      .masthead {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .masthead-actions,
+      .nav-pills {
+        justify-content: flex-start;
+      }
+
+      .window-bar,
+      .modal-head,
+      .composer-footer,
+      .modal-footer,
+      .doc-toolbar,
+      .doc-head-row,
+      .status-line,
+      .message-head,
+      .drawer-row,
+      .shell-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .modal-stage {
+        margin: 18px;
+      }
+
+      .stage-shell {
+        padding: 18px;
+      }
+
+      .settings-modal {
+        margin: 20px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        gap: 18px;
+      }
+
+      .screen,
+      .masthead {
+        border-radius: 26px;
+      }
+
+      .window-bar,
+      .home-layout,
+      .workspace-layout,
+      .modal-body,
+      .modal-side {
+        padding: 16px;
+      }
+
+      .hero-copy h2,
+      .modal-head h2,
+      .doc-header h2,
+      .sidebar-head h3 {
+        font-size: 30px;
+      }
+
+      .composer textarea,
+      .doc-sheet p,
+      .doc-sheet li {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <div class="brand">
+        <div class="brand-mark">W</div>
+        <div class="brand-copy">
+          <strong>WordAI</strong>
+          <span>מסמכים, טיוטות וגרסאות מייל במקום אחד.</span>
+        </div>
+      </div>
+
+      <nav class="nav-pills" aria-label="ניווט בין המסכים">
+        <button class="nav-pill active" type="button" data-jump="home">בית</button>
+        <button class="nav-pill" type="button" data-jump="settings">הגדרות</button>
+        <button class="nav-pill" type="button" data-jump="workspace">מסמך</button>
+      </nav>
+
+      <div class="masthead-actions">
+        <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+        <button class="ghost-button" type="button" data-jump="settings">הגדרות</button>
+        <button class="primary-button pulse" type="button" data-jump="workspace">פתח דוגמה</button>
+      </div>
+    </header>
+
+    <section class="screen" id="home">
+      <div class="window-bar">
+        <div class="window-left">
+          <div class="window-dots">
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+          </div>
+          <div>
+            <div class="window-title">WordAI</div>
+            <div class="window-subtitle">דף הבית</div>
+          </div>
+        </div>
+
+        <div class="window-right">
+          <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+          <button class="ghost-button" type="button" data-jump="settings">הגדרות</button>
+          <button class="secondary-button" type="button">טען מסמך</button>
+        </div>
+      </div>
+
+      <div class="home-layout">
+        <aside class="side-stack">
+          <div class="panel">
+            <span class="eyebrow">טיוטות אחרונות</span>
+            <div class="doc-item active">
+              <strong>הצעת שיתוף פעולה לעירייה</strong>
+              <span>נערך לפני 18 דקות · 72% הושלם · 3 מקורות מצורפים</span>
+            </div>
+            <div class="doc-item">
+              <strong>סיכום מקורות למחקר פנימי</strong>
+              <span>נשמר אוטומטית · 11 עמודים · סגנון תמציתי</span>
+            </div>
+            <div class="inline-actions">
+              <button class="secondary-button" type="button">המשך טיוטה אחרונה</button>
+              <button class="flat-button" type="button">פתח הכול</button>
+            </div>
+          </div>
+
+          <div class="panel accent">
+            <span class="eyebrow">ספק פעיל</span>
+            <strong data-provider-label>OpenAI מחובר</strong>
+            <p data-provider-caption>מאומת מול סביבת Production ומוכן לכתיבה חדשה.</p>
+            <div class="inline-actions">
+              <button class="ghost-button" type="button" data-jump="settings">שנה חיבור</button>
+              <button class="flat-button" type="button">בדיקה אחרונה לפני דקה</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <span class="eyebrow">סביבת עבודה</span>
+            <strong>מכרזים ותוכן מוסדי</strong>
+            <p>4 פרויקטים פתוחים, 3 חומרי רקע מחוברים ושמירה אוטומטית פעילה בכל מסמך חדש.</p>
+            <div class="summary-tags">
+              <span class="mini-pill">עברית</span>
+              <span class="mini-pill">טון בטוח</span>
+              <span class="mini-pill">שליחה ל־Word</span>
+            </div>
+          </div>
+        </aside>
+
+        <main class="home-main">
+          <div class="hero-card">
+            <div class="hero-copy">
+              <span class="eyebrow signal">מתחילים מהר</span>
+              <h2>המסמך הבא שלך יכול להתחיל ממשפט אחד טוב.</h2>
+              <p>תארו מה צריך לצאת, הוסיפו טיוטה קיימת או חומרי רקע אם צריך, וקבלו גרסה ראשונה שאפשר לערוך מיד.</p>
+            </div>
+
+            <div class="composer">
+              <label class="field-label" for="homePrompt">מה תרצו לנסח עכשיו?</label>
+              <textarea id="homePrompt" title="בקשת כתיבה ראשית">אני צריך טיוטה להצעה לשיתוף פעולה עם שני מסלולי תקציב, פתיחה רשמית וגרסת מייל קצרה להמשך.</textarea>
+              <div class="composer-footer">
+                <div class="chip-row">
+                  <span class="choice-chip">הצעה רשמית</span>
+                  <span class="choice-chip">טון בטוח</span>
+                  <span class="choice-chip">גרסת מייל</span>
+                </div>
+                <div class="inline-actions">
+                  <button class="secondary-button" type="button">המשך טיוטה</button>
+                  <button class="primary-button" type="button" data-jump="workspace">התחל לנסח</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="quick-grid">
+              <div class="quick-card highlight">
+                <span class="eyebrow">מסמך חדש</span>
+                <strong>פתח דף עבודה ריק</strong>
+                <p>התחל לכתוב, בקש ניסוח מחדש, והתקדם מתוך המסמך.</p>
+              </div>
+              <div class="quick-card">
+                <span class="eyebrow">חומרי רקע</span>
+                <strong>העלה רק אם צריך</strong>
+                <p>צרף קבצים, PDF או קטעים מ־Word בכל שלב של העבודה.</p>
+              </div>
+              <div class="quick-card">
+                <span class="eyebrow">טיוטה קיימת</span>
+                <strong>פתח מסמך פעיל</strong>
+                <p>חזור לטיוטה האחרונה, המשך מאותה פסקה או צור ממנה גרסת מייל.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="summary-strip">
+            <div class="section-note">
+              <strong>מוכן לכתיבה</strong>
+              <span>כתיבה חדשה, המשך טיוטה וטעינת מסמכים זמינים מהמסך הזה.</span>
+            </div>
+            <div class="section-note">
+              <strong>סטטוס פרויקט</strong>
+              <span>OpenAI מחובר · שפה: עברית · סגנון: רשמי וממוקד · שמירה אוטומטית פעילה.</span>
+            </div>
+            <div class="section-note">
+              <strong>חזרה לטיוטות</strong>
+              <span>הטיוטה האחרונה, חומרי הרקע והעדפות הפרויקט נשמרים לפעם הבאה.</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <section class="screen" id="settings">
+      <div class="window-bar">
+        <div class="window-left">
+          <div class="window-dots">
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+          </div>
+          <div>
+            <div class="window-title">WordAI</div>
+            <div class="window-subtitle">הגדרות התחלה</div>
+          </div>
+        </div>
+
+        <div class="window-right">
+          <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+          <button class="secondary-button" type="button">שמור</button>
+        </div>
+      </div>
+
+      <div class="modal-stage">
+        <div class="stage-shell" aria-hidden="true">
+          <div class="shell-toolbar">
+            <div>
+              <strong>פרויקט פעיל: שיתוף פעולה עירוני</strong>
+              <span>טיוטה אחרונה נשמרה לפני 4 דקות</span>
+            </div>
+            <div class="shell-pills">
+              <span class="mini-pill">3 מסמכים פתוחים</span>
+              <span class="mini-pill">שפה: עברית</span>
+              <span class="mini-pill" data-style-label>רשמי וממוקד</span>
+            </div>
+          </div>
+
+          <div class="ghost-grid">
+            <div class="ghost-surface hero-shell">
+              <span class="eyebrow">טיוטה חדשה</span>
+              <div class="ghost-lines">
+                <div class="ghost-line long"></div>
+                <div class="ghost-line long"></div>
+                <div class="ghost-line mid"></div>
+              </div>
+              <div class="ghost-lines">
+                <div class="ghost-line long"></div>
+                <div class="ghost-line short"></div>
+              </div>
+            </div>
+
+            <div class="side-stack">
+              <div class="ghost-surface">
+                <span>מסמכים אחרונים</span>
+                <div class="ghost-lines">
+                  <div class="ghost-line long"></div>
+                  <div class="ghost-line mid"></div>
+                  <div class="ghost-line short"></div>
+                </div>
+              </div>
+              <div class="ghost-surface">
+                <span>סטטוס חיבור</span>
+                <div class="ghost-lines">
+                  <div class="ghost-line long"></div>
+                  <div class="ghost-line mid"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-overlay"></div>
+
+        <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+          <aside class="modal-side">
+            <span class="eyebrow">המשך מהיר</span>
+            <h3>בחר איך להמשיך.</h3>
+            <span>בחר מה מתאים לך עכשיו, ותמיד אפשר לשנות אחר כך.</span>
+
+            <div class="summary-card active" data-summary-card="0">
+              <strong>חזרה לעבודה</strong>
+              <span>המשך לטיוטה האחרונה או פתח מסמך חדש.</span>
+            </div>
+            <div class="summary-card" data-summary-card="1">
+              <strong>חיבור ספק</strong>
+              <span>בחר ספק, בדוק חיבור ושמור.</span>
+            </div>
+            <div class="summary-card" data-summary-card="2">
+              <strong>סגנון כתיבה</strong>
+              <span>בחר את סגנון הכתיבה למסמך הזה.</span>
+            </div>
+
+            <div class="progress-card">
+              <div class="progress-line">
+                <strong>התקדמות</strong>
+                <span data-progress-text>1/3</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" data-progress-fill></div>
+              </div>
+              <p>אפשר לשמור עכשיו או להמשיך לשלב הבא.</p>
+            </div>
+
+            <div class="resume-card">
+              <strong>טיוטה שזוהתה: “הצעת רכש לרשות המקומית”</strong>
+              <span>נערך לאחרונה היום, 09:42 · OpenAI פעיל בפרויקט הזה.</span>
+              <button class="secondary-button" type="button" data-jump="workspace">פתח מיד אחרי הסיום</button>
+            </div>
+          </aside>
+
+          <div class="modal-body">
+            <div class="modal-head">
+              <div>
+                <span class="eyebrow signal">הגדרות מסמך</span>
+                <h2 id="settingsTitle">הגדרות הפרויקט</h2>
+                <p>בחר טיוטה, ספק וסגנון כתיבה למסמך הזה.</p>
+              </div>
+
+              <div class="footer-actions">
+                <button class="ghost-button" type="button" data-jump="home">חזרה לבית</button>
+                <button class="primary-button" type="button" data-jump="workspace">דלג למסמך</button>
+              </div>
+            </div>
+
+            <div class="step-tabs" aria-label="שלבי הגדרות">
+              <button class="step-tab active" type="button" data-step="0">
+                <strong>חזרה</strong>
+                <span>המשך מאותה נקודה</span>
+              </button>
+              <button class="step-tab" type="button" data-step="1">
+                <strong>חיבור</strong>
+                <span>OpenAI, Anthropic או Gemini</span>
+              </button>
+              <button class="step-tab" type="button" data-step="2">
+                <strong>סגנון</strong>
+                <span>כך יישמע המסמך שלך</span>
+              </button>
+            </div>
+
+            <section class="step-panel active" data-step-panel="0">
+              <div class="panel-grid two">
+                <div class="surface-card emphasis">
+                  <span class="eyebrow">המשך מוצע</span>
+                  <strong>המשך עם הטיוטה האחרונה</strong>
+                  <span>פרויקט: שיתוף פעולה אזורי · 2 מסלולי תקציב כבר זוהו · שורת סיכום עדיין פתוחה.</span>
+                  <ul class="checklist">
+                    <li>המסמך ייפתח עם המבנה שכבר בנית.</li>
+                    <li>החיבור הפעיל והטון הנוכחי יישמרו.</li>
+                    <li>תוכל להתחיל לערוך מיד מתוך העורך.</li>
+                  </ul>
+                  <div class="inline-actions">
+                    <button class="secondary-button" type="button">פתח את הטיוטה הזאת</button>
+                    <button class="flat-button" type="button">התחל מסמך חדש</button>
+                  </div>
+                </div>
+
+                <div class="surface-card">
+                  <span class="eyebrow">הקשר שזוהה</span>
+                  <strong>פרטי הפרויקט הנוכחי</strong>
+                  <ul class="checklist">
+                    <li>3 חומרי רקע חוברו לפרויקט הנוכחי.</li>
+                    <li data-provider-caption>מאומת מול סביבת Production ומוכן לכתיבה חדשה.</li>
+                    <li>שפת הפלט הראשית: עברית.</li>
+                  </ul>
+                </div>
+              </div>
+            </section>
+
+            <section class="step-panel" data-step-panel="1">
+              <div class="provider-grid">
+                <button class="provider-choice active" type="button" data-provider="OpenAI">
+                  <strong>OpenAI</strong>
+                  <span>מהיר, יציב ומתאים למסמכים כלליים, סיכומים והצעות עבודה.</span>
+                </button>
+                <button class="provider-choice" type="button" data-provider="Anthropic">
+                  <strong>Anthropic</strong>
+                  <span>נוח לניתוח מסמכים ארוכים ולעבודה עם רפרנסים צפופים.</span>
+                </button>
+                <button class="provider-choice" type="button" data-provider="Gemini">
+                  <strong>Gemini</strong>
+                  <span>טוב לטיוטות מהירות ולחלופות ניסוח מול אותו מסמך.</span>
+                </button>
+
+                <div class="key-card">
+                  <div class="field-grid">
+                    <label class="field-card" for="apiKey">
+                      <span class="field-label">API key</span>
+                      <input id="apiKey" type="text" value="sk-live-preview-...-wordai" />
+                    </label>
+
+                    <label class="field-card" for="environmentSelect">
+                      <span class="field-label">סביבת חיבור</span>
+                      <select id="environmentSelect">
+                        <option selected>Production</option>
+                        <option>Staging</option>
+                        <option>Workspace default</option>
+                      </select>
+                    </label>
+
+                    <div class="field-card">
+                      <span class="field-label">סטטוס נוכחי</span>
+                      <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+                      <span data-provider-caption>מאומת מול סביבת Production ומוכן לכתיבה חדשה.</span>
+                    </div>
+
+                    <div class="field-card">
+                      <span class="field-label">תצורת שליחה</span>
+                      <div class="filter-row">
+                        <span class="mini-pill">שמירה אוטומטית</span>
+                        <span class="mini-pill">מעקב שינויים</span>
+                        <span class="mini-pill">בדיקת טון</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="inline-actions">
+                    <button class="flat-button" type="button">בדוק חיבור</button>
+                    <button class="primary-button" type="button">שמור והפעל</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="step-panel" data-step-panel="2">
+              <div class="style-grid">
+                <button class="style-choice active" type="button" data-style="רשמי וממוקד">
+                  <strong>רשמי וממוקד</strong>
+                  <span>פתיחה מדויקת, שפה בטוחה והמלצות ברורות לפעולה.</span>
+                </button>
+                <button class="style-choice" type="button" data-style="חם ומשכנע">
+                  <strong>חם ומשכנע</strong>
+                  <span>ניסוח רך יותר, קרבה גבוהה יותר לקורא ותנועה חלקה בין פסקאות.</span>
+                </button>
+                <button class="style-choice" type="button" data-style="תמציתי וניהולי">
+                  <strong>תמציתי וניהולי</strong>
+                  <span>שורות קצרות, החלטיות, וסיכום מהיר לקריאה הנהלתית.</span>
+                </button>
+              </div>
+
+              <div class="panel-grid two">
+                <div class="field-card">
+                  <span class="field-label">אפשרויות ברירת מחדל</span>
+                  <div class="setting-inline">
+                    <strong>פסקאות קצרות</strong>
+                    <span>פעיל</span>
+                  </div>
+                  <div class="setting-inline">
+                    <strong>הצע כותרות משנה</strong>
+                    <span>רק כשצריך</span>
+                  </div>
+                  <div class="setting-inline">
+                    <strong>סיים בכל טיוטה בצעד הבא</strong>
+                    <span>פעיל</span>
+                  </div>
+                </div>
+
+                <div class="field-card">
+                  <span class="field-label">תצוגה מקדימה</span>
+                  <div class="settings-preview">
+                    <strong data-style-label>רשמי וממוקד</strong>
+                    <span data-style-description>פתיחה רשמית, משפטים יציבים והמלצות חדות לסיום.</span>
+                    <div class="status-tags">
+                      <span class="tone-chip">פתיחה חזקה</span>
+                      <span class="tone-chip">שורת סיכום</span>
+                      <span class="tone-chip">טון בטוח</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div class="modal-footer">
+              <button class="flat-button" type="button" data-prev-step>חזור</button>
+              <div class="footer-actions">
+                <button class="secondary-button" type="button" data-jump="workspace">דלג לעכשיו</button>
+                <button class="primary-button" type="button" data-next-step>המשך</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="workspace">
+      <div class="window-bar">
+        <div class="window-left">
+          <div class="window-dots">
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+          </div>
+          <div>
+            <div class="window-title">WordAI</div>
+            <div class="window-subtitle">עורך מסמך ושיחה חיה</div>
+          </div>
+        </div>
+
+        <div class="window-right">
+          <span class="provider-pill"><span class="dot"></span><span data-provider-label>OpenAI מחובר</span></span>
+          <button class="ghost-button" type="button">ייצא ל־Word</button>
+          <button class="secondary-button" type="button">שתף</button>
+        </div>
+      </div>
+
+      <div class="workspace-layout">
+        <main class="doc-shell">
+          <div class="doc-topbar">
+            <div class="doc-toolbar">
+              <div class="chip-row">
+                <span class="mini-pill">מסמך פעיל</span>
+                <span class="mini-pill">שמירה אוטומטית</span>
+                <span class="mini-pill">3 חומרי רקע</span>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost-button" type="button">הערות</button>
+                <button class="ghost-button" type="button">גרסאות</button>
+              </div>
+            </div>
+          </div>
+
+          <article class="doc-sheet">
+            <header class="doc-header">
+              <span class="eyebrow">טיוטה לעבודה</span>
+              <h2>הצעת שיתוף פעולה אסטרטגית עם שני מסלולי תקציב</h2>
+              <div class="doc-meta">
+                <span class="tone-chip">סגנון: <span data-style-label>רשמי וממוקד</span></span>
+                <span class="tone-chip">חיבור: <span data-provider-label>OpenAI מחובר</span></span>
+                <span class="tone-chip">גרסת מייל תיווצר בסוף</span>
+              </div>
+            </header>
+
+            <p>לכבוד הנהלת הרשות,</p>
+
+            <p>
+              בהמשך לשיחתנו האחרונה, אנו מציעים מהלך שיתוף פעולה ממוקד שמטרתו להאיץ את תהליכי העבודה, לצמצם זמני תגובה ולשפר את איכות התוצרים מול הצוותים הפנימיים והגורמים החיצוניים.
+              ההצעה נבנתה כך שתאפשר התחלה מהירה כבר בשלב הראשון, לצד מסלול מורחב המוסיף אוטומציות, בקרה ותיעוד מתקדם בהמשך.
+            </p>
+
+            <div class="doc-note">
+              <div class="message-head">
+                <strong>עדכון שנוסף למסמך</strong>
+                <span>לפני רגע</span>
+              </div>
+              <span>הודגשה תועלת הלקוח בפסקה הראשונה ונוספה חלוקה ברורה בין המסלול הבסיסי למסלול המורחב.</span>
+              <div class="inline-actions">
+                <button class="flat-button" type="button">החל על כל הפתיח</button>
+                <button class="ghost-button" type="button">השווה לגרסה קודמת</button>
+              </div>
+            </div>
+
+            <h3>עיקרי ההצעה</h3>
+            <ul>
+              <li>מסלול בסיסי המאפשר להעלות חומרים, לנסח טיוטות ולשתף גרסאות באופן עקבי מול הצוות.</li>
+              <li>מסלול מורחב המוסיף אוטומציית סיכומים, בדיקת טון, גרסאות מייל והצעות שיפור בזמן אמת.</li>
+              <li>הטמעה מדורגת שאינה דורשת שינוי חד בתהליכי העבודה הקיימים.</li>
+            </ul>
+
+            <p>
+              בשני המסלולים יוגדרו מראש רמת פורמליות, קיצורי דרך לסוגי מסמכים נפוצים ותבנית סיכום אופרטיבית, כך שכל משתמש חדש יוכל להגיע לגרסה שימושית ראשונה בתוך דקות ולאחר מכן להעמיק לפי הצורך.
+            </p>
+
+            <div class="revision-grid">
+              <div class="revision-card">
+                <strong>מה עוד נשאר לסגור</strong>
+                <span>בחירת מסלול מועדף, תמחור סופי ותאריך התחלה מוצע.</span>
+              </div>
+              <div class="revision-card">
+                <strong>מה WordAI כבר הכין</strong>
+                <span>פתיחה, פירוט שני המסלולים, ניסוח שורת סיכום וטיוטת מייל נלווית.</span>
+              </div>
+            </div>
+          </article>
+        </main>
+
+        <aside class="sidebar">
+          <div class="sidebar-card sidebar-head">
+            <div>
+              <span class="eyebrow">WordAI</span>
+              <h3>שיחה על המסמך</h3>
+              <p>בקש תיקון, קיצור, הדגשה או גרסת מייל למסמך הפעיל.</p>
+            </div>
+            <button class="ghost-button" id="advancedToggle" type="button">בקרות</button>
+          </div>
+
+          <div class="status-card">
+            <div class="status-line">
+              <strong>פעיל עכשיו</strong>
+              <span data-provider-label>OpenAI מחובר</span>
+            </div>
+            <div class="status-tags">
+              <span class="mini-pill">סגנון: <span data-style-label>רשמי וממוקד</span></span>
+              <span class="mini-pill">מסמך אחד בעריכה</span>
+              <span class="mini-pill">תשובה אחרונה נשמרה</span>
+            </div>
+          </div>
+
+          <div class="thread">
+            <div class="message assistant">
+              <div class="message-head">
+                <strong>WordAI</strong>
+                <span>לפני רגע</span>
+              </div>
+              <p>חידדתי את הפתיחה, הבלטתי את שני מסלולי התקציב והוספתי שורת סיכום אופרטיבית בסוף ההצעה.</p>
+              <div class="message-actions">
+                <span class="choice-chip">החל על המסמך</span>
+                <span class="choice-chip">צור גרסת מייל</span>
+              </div>
+            </div>
+
+            <div class="message user">
+              <div class="message-head">
+                <strong>אתה</strong>
+                <span>לפני 2 דק׳</span>
+              </div>
+              <p>שמור על טון בטוח, תן פתיחה רשמית יותר, וודא שהסיכום מוביל לצעד הבא.</p>
+            </div>
+
+            <div class="message assistant">
+              <div class="message-head">
+                <strong>WordAI</strong>
+                <span>נשמר בטיוטה</span>
+              </div>
+              <p data-style-description>פתיחה רשמית, משפטים יציבים והמלצות חדות לסיום.</p>
+            </div>
+          </div>
+
+          <div class="composer-card">
+            <div class="chip-row">
+              <span class="choice-chip">שפר פתיחה</span>
+              <span class="choice-chip">קצר לפסקה אחת</span>
+              <span class="choice-chip">גרסת מייל</span>
+            </div>
+            <label class="field-label" for="chatComposer">הודעה חדשה</label>
+            <textarea id="chatComposer" title="שדה כתיבה ל־chat">שפר את הפסקה השנייה כך שתישמע החלטית יותר אבל לא אגרסיבית, ושמור על התאמה לסגנון שנבחר.</textarea>
+            <div class="composer-footer">
+              <span>Enter לשליחה · Shift+Enter לשורה חדשה</span>
+              <button class="primary-button" type="button">שלח</button>
+            </div>
+          </div>
+
+          <div class="advanced-drawer" id="advancedDrawer">
+            <div class="drawer-row">
+              <strong>חיבור פעיל</strong>
+              <span data-provider-label>OpenAI מחובר</span>
+            </div>
+            <div class="drawer-row">
+              <strong>טון נוכחי</strong>
+              <span data-style-label>רשמי וממוקד</span>
+            </div>
+            <div class="drawer-row">
+              <strong>מצב עריכה</strong>
+              <span>ליטוש טיוטה קיימת</span>
+            </div>
+            <div class="drawer-row">
+              <strong>שליחה למסמך</strong>
+              <span>עם מעקב שינויים</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      const providerCopy = {
+        OpenAI: "מאומת מול סביבת Production ומוכן לכתיבה חדשה.",
+        Anthropic: "מחובר לניתוח מסמכים ארוכים ולקריאה מדויקת של חומרים צפופים.",
+        Gemini: "מחובר כחלופה מהירה לטיוטות קצרות ולסבבי ניסוח נוספים."
+      };
+
+      const styleCopy = {
+        "רשמי וממוקד": "פתיחה רשמית, משפטים יציבים והמלצות חדות לסיום.",
+        "חם ומשכנע": "פתיחה קרובה יותר, מעבר רך בין פסקאות וסיכום שמזמין המשך שיחה.",
+        "תמציתי וניהולי": "שורות קצרות, תועלת מיידית וסיכום חד לקריאה הנהלתית."
+      };
+
+      const state = {
+        provider: "OpenAI",
+        style: "רשמי וממוקד",
+        step: 0
+      };
+
+      const providerButtons = Array.from(document.querySelectorAll("[data-provider]"));
+      const providerLabels = Array.from(document.querySelectorAll("[data-provider-label]"));
+      const providerCaptions = Array.from(document.querySelectorAll("[data-provider-caption]"));
+      const styleButtons = Array.from(document.querySelectorAll("[data-style]"));
+      const styleLabels = Array.from(document.querySelectorAll("[data-style-label]"));
+      const styleDescriptions = Array.from(document.querySelectorAll("[data-style-description]"));
+      const stepButtons = Array.from(document.querySelectorAll("[data-step]"));
+      const stepPanels = Array.from(document.querySelectorAll("[data-step-panel]"));
+      const summaryCards = Array.from(document.querySelectorAll("[data-summary-card]"));
+      const progressFill = document.querySelector("[data-progress-fill]");
+      const progressText = document.querySelector("[data-progress-text]");
+      const nextStepButton = document.querySelector("[data-next-step]");
+      const prevStepButton = document.querySelector("[data-prev-step]");
+      const advancedToggle = document.getElementById("advancedToggle");
+      const advancedDrawer = document.getElementById("advancedDrawer");
+      const jumpButtons = Array.from(document.querySelectorAll("[data-jump]"));
+      const navButtons = Array.from(document.querySelectorAll(".nav-pill[data-jump]"));
+      const observedSections = ["home", "settings", "workspace"]
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+
+      function setProvider(provider) {
+        state.provider = provider;
+        providerButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.provider === provider);
+        });
+        providerLabels.forEach((label) => {
+          label.textContent = `${provider} מחובר`;
+        });
+        providerCaptions.forEach((caption) => {
+          caption.textContent = providerCopy[provider] || providerCopy.OpenAI;
+        });
+      }
+
+      function setStyle(style) {
+        state.style = style;
+        styleButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.style === style);
+        });
+        styleLabels.forEach((label) => {
+          label.textContent = style;
+        });
+        styleDescriptions.forEach((description) => {
+          description.textContent = styleCopy[style] || styleCopy["רשמי וממוקד"];
+        });
+      }
+
+      function setStep(step) {
+        const boundedStep = Math.max(0, Math.min(step, stepPanels.length - 1));
+        state.step = boundedStep;
+
+        stepButtons.forEach((button, index) => {
+          button.classList.toggle("active", index === boundedStep);
+        });
+
+        stepPanels.forEach((panel, index) => {
+          panel.classList.toggle("active", index === boundedStep);
+        });
+
+        summaryCards.forEach((card, index) => {
+          card.classList.toggle("active", index === boundedStep);
+        });
+
+        if (progressFill) {
+          progressFill.style.width = `${((boundedStep + 1) / stepPanels.length) * 100}%`;
+        }
+
+        if (progressText) {
+          progressText.textContent = `${boundedStep + 1}/${stepPanels.length}`;
+        }
+
+        if (nextStepButton) {
+          nextStepButton.textContent = boundedStep === stepPanels.length - 1 ? "שמור ופתח מסמך" : "המשך";
+        }
+
+        if (prevStepButton) {
+          prevStepButton.style.visibility = boundedStep === 0 ? "hidden" : "visible";
+        }
+      }
+
+      function activateNav(targetId) {
+        navButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.jump === targetId);
+        });
+      }
+
+      function jumpTo(targetId) {
+        const target = document.getElementById(targetId);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          activateNav(targetId);
+        }
+      }
+
+      providerButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          setProvider(button.dataset.provider || "OpenAI");
+        });
+      });
+
+      styleButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          setStyle(button.dataset.style || "רשמי וממוקד");
+        });
+      });
+
+      stepButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          setStep(Number(button.dataset.step || 0));
+        });
+      });
+
+      if (nextStepButton) {
+        nextStepButton.addEventListener("click", () => {
+          if (state.step === stepPanels.length - 1) {
+            jumpTo("workspace");
+            return;
+          }
+          setStep(state.step + 1);
+        });
+      }
+
+      if (prevStepButton) {
+        prevStepButton.addEventListener("click", () => {
+          setStep(state.step - 1);
+        });
+      }
+
+      if (advancedToggle && advancedDrawer) {
+        advancedToggle.addEventListener("click", () => {
+          advancedDrawer.classList.toggle("open");
+          advancedToggle.textContent = advancedDrawer.classList.contains("open") ? "סגור בקרות" : "בקרות";
+        });
+      }
+
+      jumpButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          jumpTo(button.dataset.jump || "home");
+        });
+      });
+
+      if ("IntersectionObserver" in window && observedSections.length) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              activateNav(entry.target.id);
+            }
+          });
+        }, { threshold: 0.45 });
+
+        observedSections.forEach((section) => observer.observe(section));
+      }
+
+      setProvider(state.provider);
+      setStyle(state.style);
+      setStep(state.step);
+    }());
+  </script>
+</body>
+</html>

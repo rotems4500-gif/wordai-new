@@ -2,7 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import {
   DEFAULT_PERSONAL_STYLE,
+  buildExternalStyleAnalysisPrompt,
+  getExternalAnalysisProviderHint,
   getProviderConfig,
+  getExternalAnalysisAvailability,
+  hasMeaningfulPersonalProfileData,
+  mergeExternalStyleExtractionIntoProfile,
   saveProviderConfig,
   getShortcutsConfig,
   saveShortcutsConfig,
@@ -35,19 +40,13 @@ import {
   clearAppMemory,
   clearSidebarChatHistory,
   buildPortablePrompt,
+  processExternalStyleAnalysis,
   testProviderConnection,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
 const POPULAR_CUSTOM = [
-  { name: 'Groq (מהיר ובחינם)',    url: 'https://api.groq.com/openai/v1',         note: 'מפתח חינמי ב-console.groq.com',           model: 'llama-3.3-70b-versatile',              keyNote: 'מתחיל ב-gsk_' },
-  { name: 'Mistral AI',             url: 'https://api.mistral.ai/v1',               note: 'מפתח ב-console.mistral.ai',               model: 'mistral-large-latest',                 keyNote: 'מפתח אלפאנומרי' },
-  { name: 'Perplexity',             url: 'https://api.perplexity.ai',               note: 'מפתח ב-perplexity.ai/settings/api',       model: 'sonar-pro',    keyNote: 'מתחיל ב-pplx-' },
-  { name: 'Together.ai',            url: 'https://api.together.xyz/v1',             note: 'מפתח ב-api.together.ai',                   model: 'meta-llama/Llama-3-70b-chat-hf',       keyNote: 'מפתח ארוך' },
-  { name: 'DeepSeek',               url: 'https://api.deepseek.com/v1',             note: 'מפתח ב-platform.deepseek.com',             model: 'deepseek-chat',                        keyNote: 'מתחיל ב-sk-' },
-  { name: 'OpenRouter',             url: 'https://openrouter.ai/api/v1',            note: 'מפתח ב-openrouter.ai/keys',               model: 'openrouter/auto',                      keyNote: 'מתחיל ב-sk-or-v1-' },
-  { name: 'xAI (Grok)',             url: 'https://api.x.ai/v1',                     note: 'מפתח ב-console.x.ai',                      model: 'grok-3-mini-beta',                     keyNote: 'מפתח בחשבון xAI' },
   { name: 'Ollama (מקומי - חינם)', url: 'http://localhost:11434/v1',              note: 'הורד מ-ollama.com — ✅ לא דורש מפתח',    model: 'llama3.2',                             keyNote: 'ריק (לא נדרש)' },
   { name: 'LM Studio (מקומי)',      url: 'http://localhost:1234/v1',               note: 'הורד מ-lmstudio.ai — ✅ לא דורש מפתח',  model: 'loaded-model',                         keyNote: 'ריק (לא נדרש)' },
 ];
@@ -340,23 +339,89 @@ const isLocalOpenAICompatibleBaseUrl = (baseUrl = '') => {
   }
 };
 const normalizeProviderIdentity = (value = '') => String(value || '').trim().toLowerCase().replace(/\/+$/, '');
+const matchesMappedCustomPreset = (cfg = {}, preset = {}) => {
+  if (!preset) return false;
+  const customBaseUrl = normalizeProviderIdentity(cfg?.custom?.baseUrl || '');
+  const presetBaseUrl = normalizeProviderIdentity(preset.baseUrl || '');
+  if (customBaseUrl && presetBaseUrl) return customBaseUrl === presetBaseUrl;
+
+  const customName = normalizeProviderIdentity(cfg?.custom?.name || '');
+  const presetName = normalizeProviderIdentity(preset.name || '');
+  return Boolean(customName) && Boolean(presetName) && customName === presetName;
+};
+
+const deriveMappedCustomProviderId = (config = {}) => {
+  const match = PROVIDER_SETUP_CATALOG.find((provider) => {
+    if (!provider.customConfig) return false;
+    return matchesMappedCustomPreset(config, provider.customConfig);
+  });
+
+  return match?.id || '';
+};
 
 const deriveProviderGuideId = (config = {}) => {
   if (config?.active && config.active !== 'custom' && PROVIDER_SETUP_INDEX[config.active]) return config.active;
 
-  const customName = normalizeProviderIdentity(config?.custom?.name || '');
-  const customBaseUrl = normalizeProviderIdentity(config?.custom?.baseUrl || '');
-  const match = PROVIDER_SETUP_CATALOG.find((provider) => {
-    if (!provider.customConfig) return false;
-    if (config?.active === 'custom' && provider.setupMode !== 'custom') return false;
-    const providerName = normalizeProviderIdentity(provider.customConfig.name || '');
-    const providerBaseUrl = normalizeProviderIdentity(provider.customConfig.baseUrl || '');
-    return (providerName && customName === providerName) || (providerBaseUrl && customBaseUrl === providerBaseUrl);
-  });
+  const mappedCustomProviderId = deriveMappedCustomProviderId(config);
+  if (mappedCustomProviderId) return mappedCustomProviderId;
 
-  if (match) return match.id;
   if (config?.active === 'custom') return 'custom';
   return 'gemini';
+};
+
+const deriveExternalAnalysisProviderId = (config = {}) => {
+  if (config?.active === 'custom') {
+    const mappedCustomProviderId = deriveMappedCustomProviderId(config);
+    return mappedCustomProviderId || 'custom';
+  }
+  if (config?.active && PROVIDER_SETUP_INDEX[config.active]) return config.active;
+  return 'gemini';
+};
+
+const EXTERNAL_ANALYSIS_RUNTIME_CUSTOM_PRESETS = {
+  deepseek: { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  mistral: { name: 'Mistral AI', baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
+  together: { name: 'Together.ai', baseUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3-70b-chat-hf' },
+  openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto' },
+  xai: { name: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1', model: 'grok-3-mini-beta' },
+  lmstudio: { name: 'LM Studio (מקומי)', baseUrl: 'http://localhost:1234/v1', model: 'loaded-model' },
+};
+
+const isExternalAnalysisRuntimeModelCompatible = (providerId = '', modelValue = '') => {
+  const cleanModel = String(modelValue || '').trim().toLowerCase();
+  if (!cleanModel) return false;
+  switch (providerId) {
+    case 'deepseek':
+      return cleanModel.startsWith('deepseek');
+    case 'mistral':
+      return cleanModel.includes('mistral');
+    case 'together':
+      return /(llama|qwen|mixtral|mistral|gemma|deepseek|dbrx|wizardlm|nous)/.test(cleanModel);
+    case 'openrouter':
+    case 'lmstudio':
+      return true;
+    case 'xai':
+      return cleanModel.startsWith('grok');
+    default:
+      return false;
+  }
+};
+
+const normalizeExternalAnalysisRuntimeConfig = (providerId = '', cfg = {}) => {
+  const preset = EXTERNAL_ANALYSIS_RUNTIME_CUSTOM_PRESETS[providerId];
+  if (!preset) return cfg;
+  const currentModel = String(cfg?.custom?.model || '').trim();
+  const shouldReuseExistingPresetConfig = matchesMappedCustomPreset(cfg, preset);
+  return {
+    ...cfg,
+    custom: {
+      ...(cfg?.custom || {}),
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      model: shouldReuseExistingPresetConfig && isExternalAnalysisRuntimeModelCompatible(providerId, currentModel) ? currentModel : preset.model,
+      key: shouldReuseExistingPresetConfig && providerId !== 'lmstudio' ? String(cfg?.custom?.key || '') : '',
+    },
+  };
 };
 
 const PROVIDER_MODEL_OPTIONS = {
@@ -416,7 +481,7 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'כתיבה והתאמה אישית',
-    tabs: [['onboarding', '🎯 פרופיל אישי'], ['writing', '✍️ כתיבה'], ['personal', '📝 סגנון אישי'], ['appearance', '🎨 מראה']],
+    tabs: [['onboarding', '👤 פרופיל והגשה'], ['writing', '✍️ כתיבה'], ['appearance', '🎨 מראה']],
   },
   {
     title: 'תחזוקה ולוגים',
@@ -1228,18 +1293,7 @@ const finalizePersonalProfile = (profile = {}) => {
     normalizedFavoriteStyles.some((item) => item && item !== 'academic')
   );
 
-  const hasProfileDetails = Boolean(
-    String(profile.displayName || '').trim() ||
-    String(profile.institutionName || '').trim() ||
-    String(profile.studyTrack || '').trim() ||
-    String(profile.userRole || '').trim() ||
-    String(profile.userBackground || '').trim() ||
-    String(profile.writingGoals || '').trim() ||
-    String(profile.defaultAudience || '').trim() ||
-    String(profile.additionalContext || '').trim() ||
-    (Array.isArray(profile.currentCourses) && profile.currentCourses.length) ||
-    hasMeaningfulStyleCustomization
-  );
+  const hasProfileDetails = hasMeaningfulPersonalProfileData(profile) || hasMeaningfulStyleCustomization;
 
   const currentFavoriteStyles = Array.isArray(profile.preferredHomeStyleIds) && profile.preferredHomeStyleIds.length
     ? profile.preferredHomeStyleIds
@@ -1632,15 +1686,18 @@ function GuideSettings() {
   );
 }
 
-function OnboardingTabContainer({ profile, setProfile, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {} }) {
+function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onDismiss = () => {}, onSubmitExternalAnalysis = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
+  const persistProfileState = persistProfile || setProfile;
   const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
   const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
-  const markOnboardingComplete = () => setProfile((prev) => (
+  const markOnboardingComplete = () => persistProfileState((prev) => (
     prev.onboardingCompletedAt
       ? prev
       : {
           ...prev,
           onboardingCompletedAt: new Date().toISOString(),
+          onboardingDismissedAt: '',
+          onboardingSnoozedUntil: '',
           onboardingVersion: prev.onboardingVersion || 1,
         }
   ));
@@ -1653,6 +1710,212 @@ function OnboardingTabContainer({ profile, setProfile, onOpenAiSettings = () => 
   });
 
   const trainingAnswers = profile.learningGameAnswers || {};
+  const inferredExternalProviderId = deriveExternalAnalysisProviderId(providerConfig);
+  const selectedExternalProviderId = String(profile.externalStyleAnalysisProvider || inferredExternalProviderId || providerConfig?.active || 'gemini').trim() || 'gemini';
+  const [quickSetupProviderId, setQuickSetupProviderId] = useState(selectedExternalProviderId);
+  const resolvedQuickSetupProviderId = String(quickSetupProviderId || selectedExternalProviderId || 'gemini').trim() || 'gemini';
+  const externalAnalysisAvailability = getExternalAnalysisAvailability('', providerConfig);
+  const externalAnalysisPreparationHint = getExternalAnalysisProviderHint(selectedExternalProviderId);
+  const externalAnalysisPrompt = buildExternalStyleAnalysisPrompt({ providerId: selectedExternalProviderId, profile });
+  const openRouterBaseUrl = normalizeProviderIdentity('https://openrouter.ai/api/v1');
+  const CUSTOM_PROVIDER_PRESETS = {
+    deepseek: {
+      label: 'DeepSeek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      placeholder: 'sk-...',
+      helpText: 'הדבקה כאן תגדיר אוטומטית את DeepSeek בתוך Custom עם ה-endpoint והמודל הראשוני.',
+      acceptsKey: true,
+    },
+    mistral: {
+      label: 'Mistral',
+      name: 'Mistral AI',
+      baseUrl: 'https://api.mistral.ai/v1',
+      model: 'mistral-large-latest',
+      placeholder: 'API key',
+      helpText: 'הדבקה כאן תגדיר אוטומטית את Mistral בתוך Custom עם ה-endpoint והמודל הראשוני.',
+      acceptsKey: true,
+    },
+    together: {
+      label: 'Together.ai',
+      name: 'Together.ai',
+      baseUrl: 'https://api.together.xyz/v1',
+      model: 'meta-llama/Llama-3-70b-chat-hf',
+      placeholder: 'API key',
+      helpText: 'הדבקה כאן תגדיר אוטומטית את Together.ai בתוך Custom עם ה-endpoint והמודל הראשוני.',
+      acceptsKey: true,
+    },
+    openrouter: {
+      label: 'OpenRouter',
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openrouter/auto',
+      placeholder: 'sk-or-v1-...',
+      helpText: 'הדבקה כאן תגדיר אוטומטית את OpenRouter בתוך Custom עם ה-endpoint והמודל הראשוני.',
+      acceptsKey: true,
+    },
+    xai: {
+      label: 'xAI (Grok)',
+      name: 'xAI (Grok)',
+      baseUrl: 'https://api.x.ai/v1',
+      model: 'grok-3-mini-beta',
+      placeholder: 'API key',
+      helpText: 'הדבקה כאן תגדיר אוטומטית את xAI בתוך Custom עם ה-endpoint והמודל הראשוני.',
+      acceptsKey: true,
+    },
+    lmstudio: {
+      label: 'LM Studio',
+      name: 'LM Studio (מקומי)',
+      baseUrl: 'http://localhost:1234/v1',
+      model: 'loaded-model',
+      placeholder: 'לא נדרש מפתח',
+      helpText: 'ל-LM Studio לא נדרש מפתח. הבחירה כאן לא דורסת custom קיים; כדי להגדיר חיבור חדש פתח את מסך ה-AI ושמור שם את הכתובת והמודל.',
+      acceptsKey: false,
+    },
+  };
+  const customProviderMatchesPreset = (cfg, preset) => matchesMappedCustomPreset(cfg, preset);
+  const isModelCompatibleWithCustomPreset = (presetId, modelValue = '') => {
+    const cleanModel = String(modelValue || '').trim().toLowerCase();
+    if (!cleanModel) return false;
+    switch (presetId) {
+      case 'deepseek':
+        return cleanModel.startsWith('deepseek');
+      case 'mistral':
+        return cleanModel.includes('mistral');
+      case 'together':
+          return /(llama|qwen|mixtral|mistral|gemma|deepseek|dbrx|wizardlm|nous)/.test(cleanModel);
+      case 'openrouter':
+      case 'lmstudio':
+        return true;
+      case 'xai':
+        return cleanModel.startsWith('grok');
+      default:
+        return false;
+    }
+  };
+  const prioritizeQuickSetupRuntimeProvider = (cfg, providerId) => {
+    const normalizedProviderId = String(providerId || '').trim();
+    if (!normalizedProviderId) return cfg;
+
+    const runtimeProviderId = CUSTOM_PROVIDER_PRESETS[normalizedProviderId] || normalizedProviderId === 'custom'
+      ? 'custom'
+      : normalizedProviderId;
+    const currentProviders = Array.isArray(cfg?.activeProviders) && cfg.activeProviders.length
+      ? cfg.activeProviders
+      : [cfg?.active];
+
+    return {
+      ...cfg,
+      active: runtimeProviderId,
+      activeProviders: [
+        runtimeProviderId,
+        ...Array.from(new Set(currentProviders.filter(Boolean))).filter((providerItemId) => providerItemId !== runtimeProviderId),
+      ],
+    };
+  };
+  const syncQuickSetupRuntimeProvider = (providerId, configUpdater = null) => {
+    const normalizedProviderId = String(providerId || '').trim();
+    if (!normalizedProviderId) return;
+
+    setProviderConfig((prev) => {
+      const nextConfig = typeof configUpdater === 'function' ? configUpdater(prev) : prev;
+      return prioritizeQuickSetupRuntimeProvider(nextConfig, normalizedProviderId);
+    });
+    setProfile((prev) => {
+      if (String(prev.externalStyleAnalysisProvider || '').trim() === normalizedProviderId) return prev;
+      return {
+        ...prev,
+        externalStyleAnalysisProvider: normalizedProviderId,
+      };
+    });
+  };
+  const customPreset = CUSTOM_PROVIDER_PRESETS[resolvedQuickSetupProviderId] || null;
+  const customLooksLikeSelectedPreset = customProviderMatchesPreset(providerConfig, customPreset);
+  const quickProviderSetup = (() => {
+    switch (resolvedQuickSetupProviderId) {
+      case 'gemini':
+        return { label: 'Gemini', keyValue: providerConfig?.gemini?.key || '', placeholder: 'AIza...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Gemini.', acceptsKey: true };
+      case 'openai':
+        return { label: 'OpenAI', keyValue: providerConfig?.openai?.key || '', placeholder: 'sk-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-OpenAI.', acceptsKey: true };
+      case 'claude':
+        return { label: 'Claude', keyValue: providerConfig?.claude?.key || '', placeholder: 'sk-ant-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Claude.', acceptsKey: true };
+      case 'groq':
+        return { label: 'Groq', keyValue: providerConfig?.groq?.key || '', placeholder: 'gsk_...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Groq.', acceptsKey: true };
+      case 'perplexity':
+        return { label: 'Perplexity', keyValue: providerConfig?.perplexity?.key || '', placeholder: 'pplx-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Perplexity.', acceptsKey: true };
+      case 'deepseek':
+      case 'mistral':
+      case 'together':
+      case 'openrouter':
+      case 'xai':
+      case 'lmstudio':
+        return { ...customPreset, keyValue: customLooksLikeSelectedPreset ? (providerConfig?.custom?.key || '') : '' };
+      case 'ollama':
+        return { label: 'Ollama', keyValue: '', placeholder: 'לא נדרש מפתח', helpText: 'ל-Ollama מקומי לא נדרש מפתח. מספיק להפעיל את השרת המקומי ולוודא שהמודל טעון.', acceptsKey: false };
+      case 'custom':
+        return { label: 'ספק מותאם', keyValue: providerConfig?.custom?.key || '', placeholder: 'API key', helpText: 'אפשר להדביק כאן את המפתח. אם צריך גם Base URL או מודל, פתח אחר כך את הגדרות ה-AI.', acceptsKey: true };
+      default:
+        return { label: 'ספק חיצוני', keyValue: '', placeholder: 'API key', helpText: 'לספק הזה אין שדה הדבקה מהיר כאן. אפשר לעבור להגדרות ה-AI המלאות.', acceptsKey: false };
+    }
+  })();
+
+  const updateQuickProviderKey = (value) => {
+    const nextValue = String(value || '');
+    if (customPreset?.acceptsKey) {
+      const applyCustomPresetConfig = (prev) => ({
+        ...prev,
+        custom: {
+          ...prev.custom,
+          name: customPreset.name,
+          baseUrl: customPreset.baseUrl,
+          model: customProviderMatchesPreset(prev, customPreset) && isModelCompatibleWithCustomPreset(resolvedQuickSetupProviderId, prev.custom?.model)
+            ? (prev.custom?.model || customPreset.model)
+            : customPreset.model,
+          key: nextValue,
+        },
+      });
+
+      if (nextValue.trim()) {
+        syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyCustomPresetConfig);
+      } else {
+        setProviderConfig(applyCustomPresetConfig);
+      }
+      return;
+    }
+
+    if (resolvedQuickSetupProviderId === 'custom') {
+      const applyCustomKey = (prev) => ({
+        ...prev,
+        custom: {
+          ...prev.custom,
+          key: nextValue,
+        },
+      });
+
+      if (nextValue.trim()) {
+        syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyCustomKey);
+      } else {
+        setProviderConfig(applyCustomKey);
+      }
+      return;
+    }
+
+    if (!['gemini', 'openai', 'claude', 'groq', 'perplexity'].includes(resolvedQuickSetupProviderId)) return;
+    const applyBuiltinProviderKey = (prev) => ({
+      ...prev,
+      [resolvedQuickSetupProviderId]: {
+        ...prev[resolvedQuickSetupProviderId],
+        key: nextValue,
+      },
+    });
+
+    if (nextValue.trim()) {
+      syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyBuiltinProviderKey);
+    } else {
+      setProviderConfig(applyBuiltinProviderKey);
+    }
+  };
 
   const selectLearningOption = (questionId, optionId) => {
     setProfile((prev) => ({
@@ -1675,11 +1938,56 @@ function OnboardingTabContainer({ profile, setProfile, onOpenAiSettings = () => 
     }
   };
 
+  const updateExternalAnalysisRaw = (value) => setProfile((prev) => {
+    const nextRaw = String(value || '');
+    const rawChanged = String(prev.externalStyleAnalysisRaw || '').trim() !== nextRaw.trim();
+    return {
+      ...prev,
+      externalStyleAnalysisRaw: nextRaw,
+      externalStyleAnalysisStatus: rawChanged ? '' : prev.externalStyleAnalysisStatus,
+      externalStyleAnalysisProcessedAt: rawChanged ? '' : prev.externalStyleAnalysisProcessedAt,
+      externalStyleAnalysisLastError: rawChanged ? '' : prev.externalStyleAnalysisLastError,
+      externalStyleAnalysisPendingAt: rawChanged ? '' : (nextRaw.trim() ? prev.externalStyleAnalysisPendingAt : ''),
+    };
+  });
+
   return (
     <ProfileOnboarding
       profile={profile}
       updateField={updateField}
       updateList={updateList}
+      externalAnalysis={{
+        selectedProviderId: selectedExternalProviderId,
+        quickSetupProviderId: resolvedQuickSetupProviderId,
+        preparationHint: externalAnalysisPreparationHint,
+        promptText: externalAnalysisPrompt,
+        hasLocalProvider: externalAnalysisAvailability.hasLocalProvider,
+        processingProviderLabel: externalAnalysisAvailability.processingProviderLabel,
+        status: String(profile.externalStyleAnalysisStatus || '').trim(),
+        error: String(profile.externalStyleAnalysisLastError || '').trim(),
+        isBusy: externalAnalysisBusy,
+        quickProviderSetup,
+      }}
+      onExternalProviderChange={(value) => updateField('externalStyleAnalysisProvider', value)}
+      onQuickProviderChange={(value) => {
+        setQuickSetupProviderId(value);
+
+        if (value === 'ollama') {
+          syncQuickSetupRuntimeProvider(value);
+          return;
+        }
+
+        if (value === 'lmstudio') {
+          const lmStudioPreset = CUSTOM_PROVIDER_PRESETS.lmstudio;
+          if (customProviderMatchesPreset(providerConfig, lmStudioPreset)) {
+            syncQuickSetupRuntimeProvider(value);
+          }
+          return;
+        }
+      }}
+      onExternalAnalysisRawChange={updateExternalAnalysisRaw}
+      onQuickProviderKeyChange={updateQuickProviderKey}
+      onSubmitExternalAnalysis={onSubmitExternalAnalysis}
       STYLE_TRAINING_QUESTIONS={STYLE_TRAINING_QUESTIONS}
       STYLE_PRESET_OPTIONS={STYLE_PRESET_OPTIONS}
       trainingAnswers={trainingAnswers}
@@ -1689,6 +1997,7 @@ function OnboardingTabContainer({ profile, setProfile, onOpenAiSettings = () => 
       onOpenAiSettings={onOpenAiSettings}
       onOpenPersonalStyle={onOpenPersonalStyle}
       onComplete={markOnboardingComplete}
+      onDismiss={onDismiss}
     />
   );
 }
@@ -1711,7 +2020,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const fileInputRef = useRef(null);
 
   const handleResetProfile = () => {
-    if (!confirm('לאפס את העדפות הפרופיל והמידע השמור? חומרי מקור מקומיים לא יימחקו.')) return;
+    if (!confirm('לאפס רק את העדפות הפרופיל, נתוני ההיכרות והלמידה השמורה בפרופיל? חומרי מקור מקומיים, עבודות עבר והיסטוריית הלמידה המקומית לא יימחקו.')) return;
     savePersonalStyleProfile(DEFAULT_PERSONAL_STYLE);
     setProfile(getPersonalStyleProfile());
   };
@@ -1783,9 +2092,9 @@ function PersonalStyleSettings({ profile, setProfile }) {
               onClick={handleResetProfile}
               style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
             >
-              אפס העדפות פרופיל
+              אפס פרופיל בלבד
             </button>
-            <div style={{ fontSize: 11, color: '#64748B' }}>מאפס העדפות ומידע שמור בלבד.</div>
+            <div style={{ fontSize: 11, color: '#64748B' }}>מאפס העדפות, onboarding ולמידה שמורה בפרופיל בלבד. חומרי מקור והיסטוריית למידה מקומית נשארים כפי שהם.</div>
           </div>
         </div>
       </div>
@@ -3379,27 +3688,133 @@ function AppearanceSettings() {
 export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0 }) {
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
+  const onboardingSessionActiveRef = useRef(initialSettingsTab === 'onboarding');
   const [config, setConfig] = useState(getProviderConfig);
   const [shortcutsState, setShortcutsState] = useState(shortcuts || getShortcutsConfig());
   const [assistantBehaviorState, setAssistantBehaviorState] = useState(assistantBehavior || getAssistantBehavior());
   const [wordPrefsState, setWordPrefsState] = useState(wordPreferences || getWordPreferences());
   const [personalStyleState, setPersonalStyleState] = useState(getPersonalStyleProfile());
+  const personalStyleStateRef = useRef(getPersonalStyleProfile());
   const [sharedInstructionsState, setSharedInstructionsState] = useState(getSharedAgentInstructions());
   const [skillsState, setSkillsState] = useState(getSkillsConfig());
   const [roleAgents, setRoleAgents] = useState(getRoleAgents());
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
   const didHydrate = useRef(false);
+  const externalAnalysisAutoRef = useRef('');
   const [inlineUpdateState, setInlineUpdateState] = useState({ status: 'idle', message: '' });
+  const [externalAnalysisBusy, setExternalAnalysisBusy] = useState(false);
   const [consumedUpdateCheckToken, setConsumedUpdateCheckToken] = useState(0);
   const pendingUpdateCheckToken = updateCheckToken > consumedUpdateCheckToken ? updateCheckToken : 0;
+  const inferredExternalProviderId = deriveExternalAnalysisProviderId(config);
+
+  useEffect(() => {
+    personalStyleStateRef.current = personalStyleState;
+  }, [personalStyleState]);
+
+  const setPersonalStyleDraftState = (updater) => {
+    const currentProfile = personalStyleStateRef.current || getPersonalStyleProfile();
+    const nextProfile = typeof updater === 'function' ? updater(currentProfile) : updater;
+    personalStyleStateRef.current = nextProfile;
+    setPersonalStyleState(nextProfile);
+    return nextProfile;
+  };
+
+  const persistPersonalStyleDraft = (updater) => {
+    const currentProfile = mergePersonalStyleForSave(personalStyleStateRef.current || getPersonalStyleProfile());
+    const nextProfile = mergePersonalStyleForSave(typeof updater === 'function' ? updater(currentProfile) : updater);
+    personalStyleStateRef.current = nextProfile;
+    setPersonalStyleState(nextProfile);
+    savePersonalStyleProfile(nextProfile);
+    return nextProfile;
+  };
+
+  const postponeIncompleteOnboarding = () => {
+    persistPersonalStyleDraft((prev) => {
+      if (String(prev?.onboardingCompletedAt || '').trim()) return prev;
+      return {
+        ...prev,
+        onboardingDismissedAt: '',
+        onboardingSnoozedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      };
+    });
+  };
+
+  const applyExternalAnalysisResult = (result, persistedProviderId = '') => {
+    const metaPatch = {
+      externalStyleAnalysisProvider: persistedProviderId,
+      externalStyleAnalysisRaw: result?.profilePatch?.externalStyleAnalysisRaw || '',
+      externalStyleAnalysisPendingAt: result?.profilePatch?.externalStyleAnalysisPendingAt || '',
+      externalStyleAnalysisProcessedAt: result?.profilePatch?.externalStyleAnalysisProcessedAt || '',
+      externalStyleAnalysisStatus: result?.profilePatch?.externalStyleAnalysisStatus || '',
+      externalStyleAnalysisLastError: result?.profilePatch?.externalStyleAnalysisLastError || '',
+    };
+    persistPersonalStyleDraft((prev) => ({
+      ...prev,
+      ...(result?.extracted && typeof result.extracted === 'object' ? mergeExternalStyleExtractionIntoProfile(result.extracted, prev) : {}),
+      ...metaPatch,
+    }));
+  };
+
+  const runExternalAnalysisProcessing = async ({ source = 'manual' } = {}) => {
+    const profileSnapshot = mergePersonalStyleForSave(personalStyleState);
+    const rawText = String(profileSnapshot.externalStyleAnalysisRaw || '').trim();
+    if (!rawText || externalAnalysisBusy) return;
+
+    const explicitProviderId = String(profileSnapshot.externalStyleAnalysisProvider || '').trim();
+    const selectedProviderId = explicitProviderId || String(inferredExternalProviderId || config?.active || 'gemini').trim() || 'gemini';
+    const availability = getExternalAnalysisAvailability('', config);
+    const attemptKey = `${availability.processingProviderId || 'pending'}::${rawText}`;
+    if (source === 'auto') externalAnalysisAutoRef.current = attemptKey;
+
+    setExternalAnalysisBusy(true);
+    persistPersonalStyleDraft((prev) => ({
+      ...prev,
+      externalStyleAnalysisProvider: explicitProviderId,
+      externalStyleAnalysisRaw: rawText,
+      externalStyleAnalysisStatus: availability.hasLocalProvider ? 'processing' : 'pending-provider',
+      externalStyleAnalysisPendingAt: prev.externalStyleAnalysisPendingAt || new Date().toISOString(),
+      externalStyleAnalysisProcessedAt: '',
+      externalStyleAnalysisLastError: '',
+    }));
+    try {
+      const result = await processExternalStyleAnalysis({
+        rawText,
+        profile: {
+          ...profileSnapshot,
+          externalStyleAnalysisProvider: explicitProviderId,
+        },
+        preferredProviderId: selectedProviderId,
+        processingProviderId: availability.processingProviderId,
+        providerConfig: config,
+      });
+      applyExternalAnalysisResult(result, explicitProviderId);
+    } catch (error) {
+      persistPersonalStyleDraft((prev) => ({
+        ...prev,
+        externalStyleAnalysisProvider: explicitProviderId,
+        externalStyleAnalysisRaw: rawText,
+        externalStyleAnalysisStatus: availability.hasLocalProvider ? 'error' : 'pending-provider',
+        externalStyleAnalysisPendingAt: prev.externalStyleAnalysisPendingAt || new Date().toISOString(),
+        externalStyleAnalysisProcessedAt: '',
+        externalStyleAnalysisLastError: error?.message || 'שגיאה בעיבוד התוצאה החיצונית.',
+      }));
+    } finally {
+      setExternalAnalysisBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (initialSettingsTab) {
       setActivePanel('settings');
       setSettingsTab(initialSettingsTab);
+      if (initialSettingsTab === 'onboarding') onboardingSessionActiveRef.current = true;
     }
   }, [initialSettingsTab]);
+
+  useEffect(() => {
+    if (settingsTab === 'onboarding') onboardingSessionActiveRef.current = true;
+  }, [settingsTab]);
 
   useEffect(() => {
     const syncWorkspaceState = () => {
@@ -3425,6 +3840,19 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     window.addEventListener('wordai-personal-style-updated', syncProfile);
     return () => window.removeEventListener('wordai-personal-style-updated', syncProfile);
   }, []);
+
+  useEffect(() => {
+    const rawText = String(personalStyleState.externalStyleAnalysisRaw || '').trim();
+    if (!rawText || externalAnalysisBusy) return;
+    if (String(personalStyleState.externalStyleAnalysisStatus || '').trim() !== 'pending-provider') return;
+
+    const availability = getExternalAnalysisAvailability('', config);
+    if (!availability.hasLocalProvider) return;
+
+    const attemptKey = `${availability.processingProviderId || 'pending'}::${rawText}`;
+    if (externalAnalysisAutoRef.current === attemptKey) return;
+    runExternalAnalysisProcessing({ source: 'auto' });
+  }, [personalStyleState.externalStyleAnalysisRaw, personalStyleState.externalStyleAnalysisStatus, personalStyleState.externalStyleAnalysisProvider, config, externalAnalysisBusy]);
 
   useEffect(() => {
     if (!didHydrate.current) {
@@ -3470,6 +3898,38 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   const handleItem = (id) => { onCommand(id); if (id !== 'print') onClose(); };
 
+  const maybePostponeOnboardingSession = () => {
+    const currentProfile = personalStyleStateRef.current || getPersonalStyleProfile();
+    const shouldPostpone = onboardingSessionActiveRef.current && !String(currentProfile?.onboardingCompletedAt || '').trim();
+    onboardingSessionActiveRef.current = false;
+    if (shouldPostpone) postponeIncompleteOnboarding();
+  };
+
+  const closeFileMenu = () => {
+    maybePostponeOnboardingSession();
+    onClose();
+  };
+
+  const closeSettingsPanel = () => {
+    maybePostponeOnboardingSession();
+    setActivePanel('main');
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      if (activePanel === 'settings') {
+        closeSettingsPanel();
+        return;
+      }
+      closeFileMenu();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [activePanel, closeFileMenu, closeSettingsPanel]);
+
   const handleSave = () => {
     const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
 
@@ -3511,7 +3971,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   return (
     <div className="fixed inset-0 z-[999] bg-slate-900/30 backdrop-blur-sm transition-opacity duration-300" dir="rtl"
-      onClick={e => { if (e.target === e.currentTarget && activePanel !== 'settings') onClose(); }}>
+      onClick={e => { if (e.target === e.currentTarget && activePanel !== 'settings') closeFileMenu(); }}>
 
       {/* ─── Sliding Sidebar Drawer ─── */}
       <div className={`absolute top-0 right-0 bottom-0 w-[240px] sm:w-[280px] bg-gradient-to-b from-slate-950 via-slate-900 to-indigo-950 border-x-0 transition-transform duration-300 shadow-2xl flex flex-col ${activePanel === 'settings' ? 'pointer-events-none translate-x-full' : 'translate-x-0'}`}>
@@ -3595,7 +4055,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </div>
         
         <div className="px-4 pb-4 pt-2">
-            <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-slate-400 bg-black/20 hover:text-white hover:bg-black/40 transition-colors w-full outline-none focus:ring-1 focus:ring-indigo-400/50" onClick={onClose}>
+            <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-slate-400 bg-black/20 hover:text-white hover:bg-black/40 transition-colors w-full outline-none focus:ring-1 focus:ring-indigo-400/50" onClick={closeFileMenu}>
               <i className="ph ph-x text-sm" />
               <span className="font-semibold text-xs">חזור לעריכה</span>
             </button>
@@ -3608,7 +4068,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
       {/* ─── Settings Popup Modal ─── */}
       {activePanel === 'settings' && (
-        <div className="absolute inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md transition-opacity duration-200" onClick={() => setActivePanel('main')}>
+        <div className="absolute inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md transition-opacity duration-200" onClick={closeSettingsPanel}>
           <div className={`${settingsTab === 'onboarding' ? 'bg-transparent w-full max-w-[1400px] h-[95vh] border-none shadow-none' : 'bg-slate-50 w-full max-w-[1280px] h-[90vh] sm:h-[85vh] rounded-[24px] shadow-2xl border border-slate-200/60'} flex flex-col overflow-hidden`} onClick={e => e.stopPropagation()}>
              {/* POPUP HEADER */}
              <div className="bg-white px-6 sm:px-8 py-5 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
@@ -3621,7 +4081,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                         <div className="text-[12px] sm:text-[13px] text-slate-500 font-semibold mt-0.5" dir="rtl">WordFlow OS &mdash; Advanced Configuration</div>
                     </div>
                 </div>
-                <button onClick={() => setActivePanel('main')} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
+                <button onClick={closeSettingsPanel} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
                     <i className="ph ph-x text-lg font-bold" />
                 </button>
              </div>
@@ -3676,9 +4136,15 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   {settingsTab === 'onboarding'  && (
                     <OnboardingTabContainer
                       profile={personalStyleState}
-                      setProfile={setPersonalStyleState}
+                      setProfile={setPersonalStyleDraftState}
+                      persistProfile={persistPersonalStyleDraft}
+                      setProviderConfig={setConfig}
+                      externalAnalysisBusy={externalAnalysisBusy}
+                      providerConfig={config}
                       onOpenAiSettings={() => setSettingsTab('ai')}
                       onOpenPersonalStyle={() => setSettingsTab('personal')}
+                      onDismiss={closeSettingsPanel}
+                      onSubmitExternalAnalysis={() => runExternalAnalysisProcessing({ source: 'manual' })}
                     />
                   )}
                   {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
@@ -3691,7 +4157,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2">
                      * שינויים מוחלים מיד בלחיצה על שמירה.
                   </div>
-                  <button onClick={() => setActivePanel('main')}
+                  <button onClick={closeSettingsPanel}
                     className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none">
                     בטל וחזור לתפריט
                   </button>
@@ -3707,6 +4173,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     </div>
   );
 }
+
+
 
 
 

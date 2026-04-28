@@ -66,10 +66,10 @@ function topMapKeys(map = {}, limit = 8) {
     .map(([key]) => key);
 }
 
-function getDocumentRunLabel({ automation = {}, selectedModel = '', structureLock = false } = {}) {
+function getDocumentRunLabel({ automation = {}, selectedModel = '', directStructureLock = false } = {}) {
   const providerLabel = DOCUMENT_RUN_PROVIDER_LABELS[String(selectedModel || '').trim().toLowerCase()] || String(selectedModel || '').trim();
   if (providerLabel) return providerLabel;
-  if (structureLock) return 'יצירה ישירה';
+  if (directStructureLock) return 'יצירה ישירה';
   if (automation?.workflowMode === 'manager-auto' && automation?.autopilotEnabled !== false) return 'AUTOPILOT';
   return String(automation?.workspaceName || '').trim() || 'צוות העבודה';
 }
@@ -802,11 +802,12 @@ function resolveGenerationRequestContext({ prompt = '', instructions = '', templ
 function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
   const structurePolicy = detectDocumentStructurePolicy({ prompt, instructions });
   const { title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
-  const noStructureRequested = structurePolicy.structureLock;
+  const preferPlainFallback = structurePolicy.noStructure || structurePolicy.flowingText || structurePolicy.followAssignmentSections;
   const promptContext = escapeHtml(
     String(prompt || '')
       .replace(LOCAL_STRUCTURE_DIRECTIVE_PATTERN, ' ')
       .replace(LOCAL_NO_INTRO_PATTERN, ' ')
+      .replace(LOCAL_NO_SUMMARY_PATTERN, ' ')
       .replace(LOCAL_NO_HEADINGS_PATTERN, ' ')
       .replace(LOCAL_FLOWING_WRITING_PATTERN, ' ')
       .replace(LOCAL_ASSIGNMENT_SECTION_PATTERN, ' ')
@@ -828,10 +829,12 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
   const refs = selectedMaterials.length
       ? `<h2>חומרי עזר שנבחרו</h2>${refsList}`
     : '';
+  const renderedRefs = structurePolicy.noHeadings ? refsList : refs;
+  const fallbackShell = repairGeneratedHtmlForStructurePolicy(buildFallbackTemplateShell(templateId, title), structurePolicy);
 
-  return noStructureRequested
+  return preferPlainFallback
     ? `${statusBlock}${fallbackContext ? `<p>${fallbackContext}</p>` : ''}${blankLine(4)}${refsList}`
-    : `${statusBlock}${buildFallbackTemplateShell(templateId, title)}${refs}`;
+    : `${statusBlock}${fallbackShell}${renderedRefs}`;
 }
 
 function normalizeGeneratedHtmlResponse(response = '') {
@@ -842,36 +845,53 @@ function normalizeGeneratedHtmlResponse(response = '') {
     .trim();
 }
 
-const LOCAL_STRUCTURE_DIRECTIVE_PATTERN = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+שלד\s+אקדמי|ללא\s+שלד\s+אקדמי|בלי\s+outline(?:\s+בכלל)?|ללא\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|בלי\s+ראשי\s+פרקים|ללא\s+ראשי\s+פרקים|no\s+structure(?:\s+at\s+all)?|without\s+structure|no\s+outline|without\s+outline|without\s+an?\s+outline|no\s+headings\s+at\s+all|without\s+headings(?:\s+entirely)?|no\s+sections\s+at\s+all|without\s+sections(?:\s+entirely)?)/i;
+const LOCAL_STRUCTURE_DIRECTIVE_PATTERN = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+שלד\s+אקדמי|ללא\s+שלד\s+אקדמי|בלי\s+outline(?:\s+בכלל)?|ללא\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure(?:\s+at\s+all)?|without\s+structure|no\s+outline|without\s+outline|without\s+an?\s+outline|no\s+headings\s+at\s+all|without\s+headings(?:\s+entirely)?|no\s+sections\s+at\s+all|without\s+sections(?:\s+entirely)?)/i;
 const LOCAL_NO_INTRO_PATTERN = /(?:בלי|ללא)\s+מבוא|(?:בלי|ללא)\s+פתיח|לא\s+צריך\s+מבוא|ללא\s+פתיחה|בלי\s+פתיחה|no\s+intro(?:duction)?|without\s+an?\s+intro(?:duction)?/i;
+const LOCAL_NO_SUMMARY_PATTERN = /(?:בלי|ללא)\s+סיכום|(?:בלי|ללא)\s+מסקנות|לא\s+צריך\s+סיכום|לא\s+צריך\s+מסקנות|no\s+summary|without\s+summary|no\s+conclusion|without\s+conclusion/i;
 const LOCAL_NO_HEADINGS_PATTERN = /(?:בלי|ללא)\s+כותר(?:ת|ות)|(?:בלי|ללא)\s+ראשי\s+פרקים|(?:בלי|ללא)\s+כותרות\s+ביניים|no\s+headings|without\s+headings/i;
 const LOCAL_FLOWING_WRITING_PATTERN = /(?:כתיבה|ניסוח|טקסט)\s+זור(?:ם|מת)|(?:בלי|ללא)\s+ראשי\s+פרקים\s+אלא\s+כתיבה\s+זורמת|flowing\s+writing|continuous\s+prose|running\s+text/i;
 const LOCAL_ASSIGNMENT_SECTION_PATTERN = /לפי\s+סעיפי\s+המטלה|לפי\s+סעיפי\s+המשימה|רק\s+לפי\s+סעיפי\s+המטלה|סעיפי\s+המטלה\s+בלבד|follow\s+the\s+assignment\s+sections|according\s+to\s+the\s+assignment\s+sections/i;
 const LEADING_GENERIC_INTRO_HEADING_PATTERN = /^(?:מבוא|פתיחה|פתח\s+דבר|רקע(?:\s+כללי)?)$/i;
+const TRAILING_GENERIC_SUMMARY_HEADING_PATTERN = /^(?:סיכום(?:\s+כללי)?(?:\s+ומסקנות)?|סיכום\s+והמלצות|סיכום\s+דברים|דברי\s+סיכום|מסקנ(?:ה|ות)(?:\s+כלליות)?(?:\s+והמלצות)?|סיום|דברי\s+סיום|summary(?:\s+and\s+(?:conclusions?|recommendations?))?|conclusion(?:s)?(?:\s+and\s+recommendations?)?|concluding\s+remarks|closing\s+remarks|final\s+remarks|final\s+thoughts)$/i;
+const TRAILING_SUMMARY_LIKE_BLOCK_PATTERN = /^(?:לסיכום|בסיכומו\s+של\s+דבר|בסופו\s+של\s+דבר|מן\s+האמור(?:\s+לעיל)?|לאור\s+האמור(?:\s+לעיל)?|ניתן\s+לסכם|נוכל\s+לסכם|סיכום(?:\s+והמלצות)?(?:\s*:)?|מסקנ(?:ה|ות)(?:\s+(?:כלליות|והמלצות))?(?:\s*:)?|המסקנ(?:ה|ות)(?:\s+העיקרי(?:ת|ות))?(?:\s+ה(?:יא|ן))?|in\s+summary|to\s+summari[sz]e|to\s+sum\s+up|summary(?:\s+and\s+recommendations?)?\b|in\s+conclusion|conclusion(?:s)?(?:\s+and\s+recommendations?)?\b|concluding\s+remarks|closing\s+remarks|final\s+remarks|final\s+thoughts)/i;
+const TRAILING_AMBIGUOUS_SUMMARY_CUE_PATTERN = /^(?:לסיום(?:(?=\s*$)|(?=\s*[:;,.!?-])|(?:\s+(?:נציין|נאמר|נסכם|נדגיש|יודגש|נזכיר|ראוי\s+לציין|חשוב\s+לציין)\b))|to\s+conclude(?:(?=\s*$)|(?=\s*[:;,.!?-])|(?:\s+(?:we\s+(?:note|can\s+say|see|emphasize|recap)|it\s+is\s+clear|the\s+(?:main\s+point|conclusion)\s+is)\b)))/i;
+const TRAILING_OPERATIONAL_AMBIGUOUS_SUMMARY_CONTINUATION_PATTERN = /^(?:לסיום|to\s+conclude)\s*[:;,.!?-]?\s*(?:(?:יש|על(?:יך|יכם|ינו|יהם|יהן)?|נדרש(?:ת|ים|ות)?|נא|אנא)\s+(?:לצרף|להגיש|לשלוח|להעביר|למלא|להשלים|לוודא|לעדכן|להוסיף|לכלול|לבצע|לפנות|להמציא)(?=$|[\s,;:.!?-])|please\s+(?:attach|include|submit|send|provide|complete|fill|ensure|update)\b|you\s+(?:should|must|need\s+to)\s+(?:attach|include|submit|send|provide|complete|fill|ensure|update)\b)/i;
+const TRAILING_EXPLICIT_NON_SUMMARY_BLOCK_PATTERN = /^(?:בברכה|בכבוד(?:\s+רב)?|בברכת\s+הצלחה|לשאלות(?:\s+נוספות)?|לפרטים(?:\s+נוספים)?|למידע(?:\s+נוסף)?|ליצירת\s+קשר|מוזמנים\s+לפנות|ניתן\s+לפנות|צרו\s+קשר|נשמח\s+(?:לסייע|לעמוד\s+לרשותכם)|for\s+(?:more\s+information|questions)|feel\s+free\s+to\s+contact|contact\s+us|reach\s+out)/i;
+const TRAILING_OPERATIONAL_FOLLOW_UP_BLOCK_PATTERN = /^(?:next\s+steps?|action\s+items?|implementation\s+steps?|follow-?up\s+steps?|צעדים\s+הבאים|צעדי\s+המשך|שלבי\s+המשך|פעולות\s+המשך)\b/i;
+const TRAILING_CONTACT_DETAILS_PATTERN = /(?:@|https?:\/\/|www\.|(?:טלפון|טל:|נייד|דוא"ל|אימייל|email|e-mail|phone|mobile|contact))/i;
+const TRAILING_SUFFIX_FOLLOW_UP_PATTERN = /(?:^|\s)(?:מנהל(?:ת)?|רכז(?:ת)?|אגף|מחלקה|יחידה|חוג|משרד|פקולטה|תוכנית|התוכנית|המחלקה|director|manager|coordinator|department|office|program|programme|faculty|team)\b/i;
+const SUMMARY_OWNED_RECOMMENDATIONS_HEADING_PATTERN = /^(?:המלצות(?:\s+(?:מעשיות|להמשך|לביצוע))?|צעדים\s+הבאים|צעדי\s+המשך|שלבי\s+המשך|recommendations?|recommended\s+actions?|next\s+steps?|action\s+items?)$/i;
+const TRAILING_REPAIR_TOKEN_PATTERN = /<!--[\s\S]*?-->|<h([1-6])\b[^>]*>[\s\S]*?<\/h\1>|<p\b[^>]*>[\s\S]*?<\/p>|<ul\b[^>]*>[\s\S]*?<\/ul>|<ol\b[^>]*>[\s\S]*?<\/ol>|<blockquote\b[^>]*>[\s\S]*?<\/blockquote>|<div\b[^>]*>[\s\S]*?<\/div>/gi;
 const FIXED_SCAFFOLD_HEADING_PATTERN = /^(?:מבוא|פתיחה|פתח\s+דבר|רקע(?:\s+כללי)?|רקע\s+תיאורטי|דיון|גוף\s+העבודה|סיכום(?:\s+ומסקנות)?|מסקנות)$/i;
 
 function detectDocumentStructurePolicy({ prompt = '', instructions = '' } = {}) {
   const combinedText = [String(prompt || '').trim(), String(instructions || '').trim()].filter(Boolean).join('\n');
   const noStructure = LOCAL_STRUCTURE_DIRECTIVE_PATTERN.test(combinedText);
   const noIntro = noStructure || LOCAL_NO_INTRO_PATTERN.test(combinedText);
-  const noHeadings = noStructure || LOCAL_NO_HEADINGS_PATTERN.test(combinedText);
   const flowingText = LOCAL_FLOWING_WRITING_PATTERN.test(combinedText);
+  const noSummary = LOCAL_NO_SUMMARY_PATTERN.test(combinedText);
+  const noHeadings = noStructure || flowingText || LOCAL_NO_HEADINGS_PATTERN.test(combinedText);
   const followAssignmentSections = LOCAL_ASSIGNMENT_SECTION_PATTERN.test(combinedText);
+  const hasExplicitConstraints = noStructure || noIntro || noSummary || noHeadings || flowingText || followAssignmentSections;
+  const directStructureLock = noStructure || noHeadings || flowingText || followAssignmentSections;
   return {
     combinedText,
     noStructure,
     noIntro,
+    noSummary,
     noHeadings,
     flowingText,
     followAssignmentSections,
-    structureLock: noStructure || noIntro || noHeadings || flowingText || followAssignmentSections,
+    hasExplicitConstraints,
+    directStructureLock,
+    structureLock: directStructureLock,
   };
 }
 
 function buildStructureLockInstructions(policy = null) {
-  if (!policy?.structureLock) return '';
+  if (!policy?.hasExplicitConstraints) return '';
   const lines = [
-    'נעילת מבנה מחייבת: הוראות המבנה המפורשות של המשתמש גוברות על כל סקיל, workflow, template, personal style או ברירת מחדל אחרת.',
+    'הוראות המבנה המפורשות של המשתמש גוברות על כל סקיל, workflow, template, personal style או ברירת מחדל אחרת.',
   ];
   if (policy.followAssignmentSections) {
     lines.push('ארגן את התוכן רק לפי סעיפי המטלה שסופקו. אל תוסיף מבוא, סיכום או שלד אקדמי קבוע על דעת עצמך.');
@@ -882,6 +902,9 @@ function buildStructureLockInstructions(policy = null) {
   if (policy.noIntro) {
     lines.push('אל תוסיף מבוא, פתיח, פתיחה, פתח דבר או רקע כללי אלא אם הם נדרשו מפורשות.');
   }
+  if (policy.noSummary) {
+    lines.push('אל תוסיף סיכום, מסקנות או פסקת סיום מסכמת אלא אם הן נדרשו מפורשות.');
+  }
   if (policy.noStructure && !policy.followAssignmentSections) {
     lines.push('אל תוסיף שלד קשיח, חלוקה אקדמית קבועה או כותרות ברירת מחדל שלא הופיעו בבקשת המשתמש.');
   }
@@ -889,7 +912,240 @@ function buildStructureLockInstructions(policy = null) {
 }
 
 function stripHtmlTags(value = '') {
-  return String(value || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return String(value || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isIgnorableStructuralTailFragment(fragmentHtml = '', visibleText = '') {
+  const fragment = String(fragmentHtml || '').trim();
+  if (!fragment) return true;
+  if (/^<!--[\s\S]*?-->$/i.test(fragment)) return true;
+  if (!/^<div\b/i.test(fragment)) return false;
+  if (/\bdata-type\s*=\s*["']page-break["']/i.test(fragment)) return true;
+  return !visibleText;
+}
+
+function tokenizeTrailingRepairFragments(html = '') {
+  const source = String(html || '');
+  return Array.from(source.matchAll(TRAILING_REPAIR_TOKEN_PATTERN)).map((match) => {
+    const raw = match[0] || '';
+    const start = match.index || 0;
+    const end = start + raw.length;
+    const headingLevelMatch = raw.match(/^<h([1-6])\b/i);
+    const tagMatch = raw.match(/^<([a-z0-9-]+)/i);
+    const tagName = headingLevelMatch
+      ? `h${headingLevelMatch[1]}`
+      : (tagMatch ? String(tagMatch[1] || '').toLowerCase() : (raw.trim().startsWith('<!--') ? 'comment' : ''));
+    const visibleText = stripHtmlTags(raw);
+    return {
+      raw,
+      start,
+      end,
+      tagName,
+      headingLevel: headingLevelMatch ? Number(headingLevelMatch[1]) : null,
+      visibleText,
+      isStructural: isIgnorableStructuralTailFragment(raw, visibleText),
+    };
+  });
+}
+
+function isTrailingRepairContentToken(token = null) {
+  return Boolean(token && !token.isStructural && token.raw);
+}
+
+function hasMeaningfulVisibleText(visibleText = '') {
+  const normalizedText = String(visibleText || '').trim();
+  if (!normalizedText) return false;
+  const substantiveText = normalizedText.replace(/[^\u0590-\u05FFA-Za-z0-9]+/g, '');
+  const wordCount = (normalizedText.match(/[\u0590-\u05FFA-Za-z0-9][\u0590-\u05FFA-Za-z0-9'"׳״.-]*/g) || []).length;
+  return substantiveText.length >= 4 || wordCount >= 2;
+}
+
+function isMeaningfulTrailingRepairToken(token = null) {
+  if (!isTrailingRepairContentToken(token)) return false;
+  return hasMeaningfulVisibleText(token.visibleText);
+}
+
+function findLastNonStructuralTokenIndex(tokens = [], endIndex = tokens.length) {
+  const limit = Math.max(0, Math.min(typeof endIndex === 'number' ? endIndex : tokens.length, tokens.length));
+  for (let index = limit - 1; index >= 0; index -= 1) {
+    if (!tokens[index]?.isStructural) return index;
+  }
+  return -1;
+}
+
+function extractTokenRangeHtml(source = '', tokens = [], startIndex = -1, endIndex = -1) {
+  if (startIndex < 0 || endIndex <= startIndex || !tokens[startIndex] || !tokens[endIndex - 1]) return '';
+  return String(source || '').slice(tokens[startIndex].start, tokens[endIndex - 1].end).trim();
+}
+
+function normalizeJoinedHtmlFragments(fragments = []) {
+  return fragments.filter(Boolean).join('\n').replace(/(?:\s*\n){3,}/g, '\n\n').trim();
+}
+
+function isSummaryHeadingToken(token = null) {
+  return Boolean(token?.headingLevel) && TRAILING_GENERIC_SUMMARY_HEADING_PATTERN.test(String(token.visibleText || '').trim());
+}
+
+function isSummaryAnchorToken(token = null) {
+  return isTrailingRepairContentToken(token)
+    && !token.headingLevel
+    && isClearlySummaryLikeTrailingBlock(token.raw);
+}
+
+function isSummaryClusterAnchorToken(token = null) {
+  return isSummaryHeadingToken(token) || isSummaryAnchorToken(token);
+}
+
+function isOperationalAmbiguousSummaryContinuation(visibleText = '') {
+  const normalizedText = String(visibleText || '').trim();
+  return Boolean(normalizedText) && TRAILING_OPERATIONAL_AMBIGUOUS_SUMMARY_CONTINUATION_PATTERN.test(normalizedText);
+}
+
+function isSummaryOwnedRecommendationsHeadingToken(token = null) {
+  return Boolean(token?.headingLevel)
+    && SUMMARY_OWNED_RECOMMENDATIONS_HEADING_PATTERN.test(String(token.visibleText || '').trim());
+}
+
+function isClearlySummaryLikeTrailingBlock(blockHtml = '', headingText = '') {
+  const visibleText = stripHtmlTags(blockHtml);
+  if (!visibleText) return false;
+  if (TRAILING_SUMMARY_LIKE_BLOCK_PATTERN.test(visibleText)) return true;
+  if (isOperationalAmbiguousSummaryContinuation(visibleText)) return false;
+  if (TRAILING_AMBIGUOUS_SUMMARY_CUE_PATTERN.test(visibleText)) return true;
+  return /<(?:ul|ol)\b/i.test(String(blockHtml || ''))
+    && /(?:סיכום|מסקנות|המלצות|סיום)/i.test(String(headingText || '').trim());
+}
+
+function isExplicitNonSummaryTrailingBlock(blockHtml = '', headingText = '') {
+  const visibleText = stripHtmlTags(blockHtml);
+  if (!visibleText) return false;
+  if (isOperationalAmbiguousSummaryContinuation(visibleText)) return true;
+  if (isClearlySummaryLikeTrailingBlock(blockHtml, headingText)) return false;
+  return TRAILING_EXPLICIT_NON_SUMMARY_BLOCK_PATTERN.test(visibleText)
+    || TRAILING_OPERATIONAL_FOLLOW_UP_BLOCK_PATTERN.test(visibleText)
+    || TRAILING_CONTACT_DETAILS_PATTERN.test(visibleText);
+}
+
+function findSummaryLikeClusterAfterHeading(tokens = [], headingIndex = -1, endIndex = tokens.length) {
+  if (headingIndex < 0 || !tokens[headingIndex]?.headingLevel) return null;
+
+  const limit = Math.max(headingIndex + 1, Math.min(typeof endIndex === 'number' ? endIndex : tokens.length, tokens.length));
+  const headingText = String(tokens[headingIndex].visibleText || '').trim();
+  let clusterStart = -1;
+  let clusterEnd = -1;
+  let usedHeadingOwnedFallback = false;
+  let adoptedRecommendationsSubheading = false;
+
+  for (let index = headingIndex + 1; index < limit; index += 1) {
+    const token = tokens[index];
+    if (!token) break;
+    if (token.isStructural) continue;
+    if (token.headingLevel) {
+      if (clusterStart === -1 && isSummaryOwnedRecommendationsHeadingToken(token)) {
+        clusterStart = index;
+        clusterEnd = index + 1;
+        usedHeadingOwnedFallback = true;
+        adoptedRecommendationsSubheading = true;
+        continue;
+      }
+      break;
+    }
+    if (adoptedRecommendationsSubheading) {
+      clusterEnd = index + 1;
+      continue;
+    }
+    if (isExplicitNonSummaryTrailingBlock(token.raw, headingText)) break;
+
+    const clearlySummaryLike = isClearlySummaryLikeTrailingBlock(token.raw, headingText);
+    const canUseHeadingOwnedFallback = !usedHeadingOwnedFallback && clusterStart === -1 && isMeaningfulTrailingRepairToken(token);
+    if (!clearlySummaryLike && !canUseHeadingOwnedFallback) break;
+
+    if (clusterStart === -1) clusterStart = index;
+    clusterEnd = index + 1;
+    if (!clearlySummaryLike) usedHeadingOwnedFallback = true;
+  }
+
+  return clusterStart === -1
+    ? null
+    : { startIndex: clusterStart, endIndex: clusterEnd };
+}
+
+function hasMeaningfulRepairedContent(html = '') {
+  const source = String(html || '').trim();
+  if (!source) return false;
+  const tokens = tokenizeTrailingRepairFragments(source);
+  const suffixRange = tokens.length ? findTrailingExplicitNonSummarySuffixRange(tokens) : null;
+  const preSuffixVisibleText = stripHtmlTags(suffixRange ? source.slice(0, tokens[suffixRange.startIndex].start) : source);
+  if (hasMeaningfulVisibleText(preSuffixVisibleText)) return true;
+  return hasMeaningfulVisibleText(stripHtmlTags(source));
+}
+
+function isTrailingExplicitNonSummaryFollowUpToken(token = null) {
+  if (!isTrailingRepairContentToken(token)) return false;
+  if (!/^(?:p|div|blockquote)$/i.test(String(token.tagName || ''))) return false;
+  const visibleText = String(token.visibleText || '').trim();
+  if (!visibleText || isClearlySummaryLikeTrailingBlock(token.raw)) return false;
+  const wordCount = visibleText.split(/\s+/).filter(Boolean).length;
+  return TRAILING_CONTACT_DETAILS_PATTERN.test(visibleText)
+    || TRAILING_SUFFIX_FOLLOW_UP_PATTERN.test(visibleText)
+    || (wordCount <= 6 && visibleText.length <= 80 && !/[.!?](?:\s|$)/.test(visibleText));
+}
+
+function findTrailingExplicitNonSummarySuffixRange(tokens = [], endIndex = tokens.length) {
+  const limit = Math.max(0, Math.min(typeof endIndex === 'number' ? endIndex : tokens.length, tokens.length));
+  const lastContentIndex = findLastNonStructuralTokenIndex(tokens, limit);
+  if (lastContentIndex === -1) return null;
+
+  let anchorIndex = -1;
+  for (let index = lastContentIndex; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (!token) break;
+    if (token.isStructural) continue;
+    if (isExplicitNonSummaryTrailingBlock(token.raw)) {
+      anchorIndex = index;
+      continue;
+    }
+    if (!isTrailingExplicitNonSummaryFollowUpToken(token)) break;
+  }
+
+  return anchorIndex === -1
+    ? null
+    : { startIndex: anchorIndex, endIndex: lastContentIndex + 1 };
+}
+
+function findTrailingSummaryLikeClusterRange(tokens = [], endIndex = tokens.length, stopIndex = -1) {
+  const limit = Math.max(0, Math.min(typeof endIndex === 'number' ? endIndex : tokens.length, tokens.length));
+  const lastContentIndex = findLastNonStructuralTokenIndex(tokens, limit);
+  if (lastContentIndex === -1) return null;
+
+  let anchorIndex = -1;
+  for (let index = lastContentIndex; index > stopIndex; index -= 1) {
+    const token = tokens[index];
+    if (!token) break;
+    if (token.isStructural) continue;
+    if (isSummaryClusterAnchorToken(token)) {
+      anchorIndex = index;
+      continue;
+    }
+    if (token.headingLevel) break;
+    if (anchorIndex !== -1 && isMeaningfulTrailingRepairToken(token)) break;
+  }
+
+  return anchorIndex === -1
+    ? null
+    : { startIndex: anchorIndex, endIndex: lastContentIndex + 1 };
+}
+
+function findSummaryLikeClusterImmediatelyBeforeBoundary(tokens = [], boundaryIndex = -1, stopIndex = -1) {
+  if (boundaryIndex <= 0 || !tokens[boundaryIndex]?.raw) return null;
+  const range = findTrailingSummaryLikeClusterRange(tokens, boundaryIndex, stopIndex);
+  return range ? { startIndex: range.startIndex, endIndex: boundaryIndex } : null;
 }
 
 function stripLeadingGenericIntroSection(html = '') {
@@ -930,8 +1186,149 @@ function stripLeadingHeadingOnly(html = '', pattern = null) {
   return `${source.slice(0, matchStart)}${source.slice(matchEnd)}`.trim();
 }
 
+function unwrapSimpleTrailingRepairContainer(html = '') {
+  const source = String(html || '').trim();
+  if (!source || !/^<div\b/i.test(source) || !/<\/div>\s*$/i.test(source)) return null;
+
+  const openTagMatch = source.match(/^<div\b[^>]*>/i);
+  const closeTagMatch = source.match(/<\/div>\s*$/i);
+  if (!openTagMatch || !closeTagMatch) return null;
+
+  const openTag = openTagMatch[0];
+  const closeTag = closeTagMatch[0].trim();
+  const innerHtml = source.slice(openTag.length, source.length - closeTagMatch[0].length).trim();
+  if (!innerHtml) return null;
+
+  const innerTokenPattern = new RegExp(TRAILING_REPAIR_TOKEN_PATTERN.source, TRAILING_REPAIR_TOKEN_PATTERN.flags);
+  const remainder = innerHtml.replace(innerTokenPattern, '').trim();
+  if (remainder) return null;
+
+  return { openTag, closeTag, innerHtml };
+}
+
+function rewrapSimpleTrailingRepairContainer(wrapper = null, innerHtml = '') {
+  const body = String(innerHtml || '').trim();
+  if (!wrapper?.openTag || !wrapper?.closeTag) return body;
+  return body ? `${wrapper.openTag}${body}${wrapper.closeTag}`.trim() : '';
+}
+
+function stripTrailingGenericSummarySection(html = '') {
+  const source = String(html || '').trim();
+  if (!source) return source;
+
+  const wrapper = unwrapSimpleTrailingRepairContainer(source);
+  if (wrapper) {
+    return rewrapSimpleTrailingRepairContainer(wrapper, stripTrailingGenericSummarySection(wrapper.innerHtml));
+  }
+
+  const tokens = tokenizeTrailingRepairFragments(source);
+  if (!tokens.length) return source;
+
+  const suffixRange = findTrailingExplicitNonSummarySuffixRange(tokens);
+  const suffixStartSource = suffixRange ? tokens[suffixRange.startIndex].start : source.length;
+  const contentLimit = suffixRange ? suffixRange.startIndex : tokens.length;
+
+  let targetIndex = -1;
+  for (let index = contentLimit - 1; index >= 0; index -= 1) {
+    if (isSummaryHeadingToken(tokens[index])) {
+      targetIndex = index;
+      break;
+    }
+  }
+  if (targetIndex === -1) return source;
+
+  const targetToken = tokens[targetIndex];
+  let immediateFollowerIndex = -1;
+  for (let index = targetIndex + 1; index < contentLimit; index += 1) {
+    if (!tokens[index] || tokens[index].isStructural) continue;
+    immediateFollowerIndex = index;
+    break;
+  }
+  const hasImmediateSummaryOwnedRecommendationsSubheading = immediateFollowerIndex !== -1
+    && isSummaryOwnedRecommendationsHeadingToken(tokens[immediateFollowerIndex]);
+  let nextHeadingIndex = -1;
+  for (let index = targetIndex + 1; index < contentLimit; index += 1) {
+    const token = tokens[index];
+    if (!token?.headingLevel) continue;
+    if (hasImmediateSummaryOwnedRecommendationsSubheading && index === immediateFollowerIndex) continue;
+    if (!isSummaryHeadingToken(token)) {
+      nextHeadingIndex = index;
+      break;
+    }
+  }
+
+  const localSummaryRange = (nextHeadingIndex === -1 || hasImmediateSummaryOwnedRecommendationsSubheading)
+    ? findSummaryLikeClusterAfterHeading(tokens, targetIndex, contentLimit)
+    : null;
+  const middleStartSource = nextHeadingIndex === -1
+    ? (localSummaryRange ? tokens[localSummaryRange.endIndex - 1].end : targetToken.end)
+    : tokens[nextHeadingIndex].start;
+  const preservedMiddle = source.slice(middleStartSource, suffixStartSource).trim();
+  const preservedSuffix = suffixRange ? extractTokenRangeHtml(source, tokens, suffixRange.startIndex, suffixRange.endIndex) : '';
+
+  return normalizeJoinedHtmlFragments([
+    source.slice(0, targetToken.start).trimEnd(),
+    preservedMiddle,
+    preservedSuffix,
+  ]);
+}
+
+function stripTrailingSummaryLikeBlocksWithoutHeading(html = '') {
+  const source = String(html || '').trim();
+  if (!source) return source;
+
+  const wrapper = unwrapSimpleTrailingRepairContainer(source);
+  if (wrapper) {
+    return rewrapSimpleTrailingRepairContainer(wrapper, stripTrailingSummaryLikeBlocksWithoutHeading(wrapper.innerHtml));
+  }
+
+  const tokens = tokenizeTrailingRepairFragments(source);
+  if (!tokens.length) return source;
+
+  const suffixRange = findTrailingExplicitNonSummarySuffixRange(tokens);
+  const contentLimit = suffixRange ? suffixRange.startIndex : tokens.length;
+  const lastContentIndex = findLastNonStructuralTokenIndex(tokens, contentLimit);
+  if (lastContentIndex === -1) return source;
+
+  let lastHeadingIndex = -1;
+  for (let index = lastContentIndex; index >= 0; index -= 1) {
+    if (tokens[index]?.headingLevel) {
+      lastHeadingIndex = index;
+      break;
+    }
+  }
+
+  const removalRanges = [];
+  if (lastHeadingIndex !== -1 && lastHeadingIndex < lastContentIndex && !isSummaryHeadingToken(tokens[lastHeadingIndex])) {
+    const preTailHeadingRange = findSummaryLikeClusterImmediatelyBeforeBoundary(tokens, lastHeadingIndex);
+    if (preTailHeadingRange) removalRanges.push(preTailHeadingRange);
+  }
+
+  const trailingSummaryRange = findTrailingSummaryLikeClusterRange(tokens, contentLimit, lastHeadingIndex);
+  if (trailingSummaryRange) removalRanges.push(trailingSummaryRange);
+  if (!removalRanges.length) return source;
+
+  removalRanges.sort((left, right) => left.startIndex - right.startIndex);
+  const suffixStartSource = suffixRange ? tokens[suffixRange.startIndex].start : source.length;
+  const preservedSuffix = suffixRange ? extractTokenRangeHtml(source, tokens, suffixRange.startIndex, suffixRange.endIndex) : '';
+  const fragments = [];
+  let cursor = 0;
+
+  removalRanges.forEach((range) => {
+    const startToken = tokens[range.startIndex];
+    const endToken = tokens[range.endIndex - 1];
+    if (!startToken || !endToken) return;
+    fragments.push(source.slice(cursor, startToken.start).trimEnd());
+    cursor = endToken.end;
+  });
+
+  fragments.push(source.slice(cursor, suffixStartSource).trimEnd());
+  fragments.push(preservedSuffix);
+  return normalizeJoinedHtmlFragments(fragments);
+}
+
 function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
-  if (!policy?.structureLock) return String(html || '').trim();
+  if (!policy?.hasExplicitConstraints) return String(html || '').trim();
 
   let next = String(html || '').trim();
   if (!next) return next;
@@ -939,6 +1336,11 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   if (policy.noIntro) {
     next = stripLeadingGenericIntroSection(next);
     next = stripLeadingHeadingOnly(next, LEADING_GENERIC_INTRO_HEADING_PATTERN);
+  }
+
+  if (policy.noSummary) {
+    next = stripTrailingGenericSummarySection(next);
+    next = stripTrailingSummaryLikeBlocksWithoutHeading(next);
   }
 
   if (!policy.noHeadings) {
@@ -962,7 +1364,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
   const automation = getWorkspaceAutomation();
-  const documentRunLabel = getDocumentRunLabel({ automation, selectedModel, structureLock: structurePolicy.structureLock });
+  const documentRunLabel = getDocumentRunLabel({ automation, selectedModel, directStructureLock: structurePolicy.directStructureLock });
   const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
   const requestWorkspaceName = String(automation?.workspaceName || '').trim();
   const requestLogContext = {
@@ -1015,6 +1417,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
+    const suppressVisibleAgentNotes = structurePolicy.noSummary || structurePolicy.directStructureLock;
     const requestOptions = {
       runId,
       agentLabel: documentRunLabel,
@@ -1022,12 +1425,12 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       workspaceName: requestWorkspaceName,
       structureConstraintText: [cleanInstructions, cleanPrompt].filter(Boolean).join('\n').trim(),
       expectDocumentOutput: true,
-      appendAgentNotesToOutput: structurePolicy.structureLock ? false : automation?.appendAgentNotesToOutput === true,
-      agentNotesInstruction: !structurePolicy.structureLock && automation?.appendAgentNotesToOutput === true
+      appendAgentNotesToOutput: suppressVisibleAgentNotes ? false : automation?.appendAgentNotesToOutput === true,
+      agentNotesInstruction: !suppressVisibleAgentNotes && automation?.appendAgentNotesToOutput === true
         ? String(automation?.agentNotesInstruction || '').trim()
         : '',
     };
-    if (structurePolicy.structureLock) {
+    if (structurePolicy.directStructureLock) {
       requestOptions.strictFormatting = true;
       requestOptions.skipAutomation = true;
       requestOptions.skipAutomationPrompt = true;
@@ -1057,14 +1460,16 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
     const repairedResponse = repairGeneratedHtmlForStructurePolicy(cleanedResponse, structurePolicy);
-    const finalResponse = (structurePolicy.noIntro || structurePolicy.noHeadings) && repairedResponse !== cleanedResponse
+    const usedStructurePolicyRepair = (structurePolicy.noIntro || structurePolicy.noSummary || structurePolicy.noHeadings) && repairedResponse !== cleanedResponse;
+    const repairedResponseHasMeaningfulContent = hasMeaningfulRepairedContent(repairedResponse);
+    const finalResponse = usedStructurePolicyRepair
       ? repairedResponse
       : repairedResponse.replace(/<[^>]+>/g, '').trim().length >= 10
         ? repairedResponse
         : cleanedResponse;
-    const visibleText = finalResponse.replace(/<[^>]+>/g, '').trim();
+    const visibleText = stripHtmlTags(finalResponse);
 
-    if (!finalResponse || visibleText.length < 10) {
+    if (!finalResponse || (usedStructurePolicyRepair ? !repairedResponseHasMeaningfulContent : visibleText.length < 10)) {
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
     }
 

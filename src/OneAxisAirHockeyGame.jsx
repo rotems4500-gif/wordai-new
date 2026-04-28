@@ -104,6 +104,22 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
   }, [popupOpen, allowPopup]);
 
   useEffect(() => {
+    if (!allowPopup || !popupOpen) return undefined;
+    const onPopupEscape = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+      setPopupOpen(false);
+    };
+
+    window.addEventListener('keydown', onPopupEscape, true);
+    return () => window.removeEventListener('keydown', onPopupEscape, true);
+  }, [popupOpen, allowPopup]);
+
+  useEffect(() => {
     const onKeyDown = (event) => handleGameKeyDown(event);
     const onKeyUp = (event) => handleGameKeyUp(event);
     window.addEventListener('keydown', onKeyDown);

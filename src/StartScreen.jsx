@@ -153,11 +153,10 @@ const applyStartScreenCustomizations = (items = [], kind = 'templates') => {
   }));
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, documentStyle = 'academic', hasDraft = false, lastSavedAt = '' }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '' }) {
   const [prompt, setPrompt] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [showChefDialog, setShowChefDialog] = useState(false);
@@ -208,6 +207,30 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
     setEditingCard(null);
   };
+
+  useEffect(() => {
+    if (!editingCard?.id || escapeBlocked) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setEditingCard(null);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [editingCard?.id, escapeBlocked]);
+
+  useEffect(() => {
+    if (editingCard?.id || showChefDialog || escapeBlocked) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose?.();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [editingCard?.id, showChefDialog, escapeBlocked, onClose]);
 
   const buildLoadedWorkspaceState = (automation) => {
     if (!automation?.enabled) return null;
@@ -415,11 +438,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
   };
 
-  const handleQuickPrompt = (quickPrompt) => {
-    setPrompt(quickPrompt);
-    setShowQuickPrompts(false);
-  };
-
   const handleTemplateSelect = (template) => {
     setSelectedTemplate(template.id);
     if (template.id === 'blank') {
@@ -578,7 +596,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
 
             {/* Advance Options Area */}
-            <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6 mb-6">
+            <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6">
                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
                  <div className="text-white/80 font-medium whitespace-nowrap">✨ סביבת עבודה ומצב הפעלה</div>
                  <div className="flex flex-wrap items-center gap-2 justify-end w-full">
@@ -727,18 +745,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                )}
             </div>
             
-            {/* Quick Actions */}
-            <div className="flex flex-wrap justify-center gap-3">
-              {['🎯 הצעת פרויקט', '📝 דוח מקצועי', '🎨 כתיבה יצירתית', '📊 ניתוח נתונים'].map((action, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleQuickPrompt(action)}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded-xl text-white/90 text-sm transition-all duration-300 transform hover:scale-105"
-                >
-                  {action}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
 
@@ -877,6 +883,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           <ChefModeDialog
             onStart={handleChefStart}
             onClose={handleChefClose}
+            escapeBlocked={escapeBlocked}
             onModelChange={setSelectedModel}
             onGoToEditor={() => {
               setSelectedModel(undefined);

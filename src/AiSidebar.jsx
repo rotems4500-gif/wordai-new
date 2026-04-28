@@ -221,6 +221,19 @@ const findMentionedSkill = (skills = [], token = '') => {
   });
 };
 
+const EMPTY_MENTION_MENU = { open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 };
+const EMPTY_PENDING_MENTION_SELECTION = { agentId: '', skillId: '' };
+const IDLE_AGENT_STATUS = {
+  agentLabel: '',
+  progress: 0,
+  message: 'מוכן',
+  state: 'idle',
+  attempt: 1,
+  provider: '',
+  model: '',
+  runId: '',
+};
+
 export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {} }) {
   const [tab, setTab] = useState('chat');
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
@@ -229,7 +242,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [input, setInput] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [activeAgentStatus, setActiveAgentStatus] = useState({ agentLabel: '', progress: 0, message: 'מוכן', state: 'idle' });
+  const [activeAgentStatus, setActiveAgentStatus] = useState(() => ({ ...IDLE_AGENT_STATUS }));
   const [agentProgressMap, setAgentProgressMap] = useState({});
   const [showLogs, setShowLogs] = useState(false);
   const [debugLogs, setDebugLogs] = useState(() => {
@@ -240,11 +253,15 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
-  const [mentionMenu, setMentionMenu] = useState({ open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 });
+  const [requestSnapshot, setRequestSnapshot] = useState(null);
+  const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
   const activeWorkspaceIdRef = useRef(String(getWorkspaceAutomation().activeWorkspaceId || ''));
+  const pendingMentionSelectionRef = useRef({ ...EMPTY_PENDING_MENTION_SELECTION });
+  const preservePendingMentionRef = useRef(false);
+  const requestCycleRef = useRef(0);
 
   const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
   const localContext = selectedText || currentBlockText;
@@ -257,8 +274,106 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const configuredProviderChoices = getConfiguredProviderChoices();
   const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === selectedProviderId) || null;
   const activeProviderLabel = activeProviderChoice?.label || getActiveProviderName();
+  const activeProviderSummary = activeProviderChoice ? activeProviderLabel : `${activeProviderLabel} · ברירת מחדל`;
   const activeAgent = roleAgents.find((agent) => agent.id === selectedAgentId) || null;
-  const shouldShowProgress = workspaceAutomation.showProgress !== false && (!compactMode || tab === 'agents' || ['running', 'retrying', 'error'].includes(activeAgentStatus.state));
+  const activeSkill = selectedSkillId !== 'none'
+    ? skillCatalog.find((skill) => skill.id === selectedSkillId) || null
+    : null;
+  const contextScopeLabel = selectedText ? 'טקסט נבחר' : currentBlockText ? 'הפסקה הנוכחית' : 'המסמך כולו';
+  const contextSourceText = localContext || '';
+  const contextPreview = contextSourceText
+    ? `${contextSourceText.replace(/\s+/g, ' ').slice(0, 96)}${contextSourceText.length > 96 ? '…' : ''}`
+    : '';
+  const effectiveProviderSummary = loading && requestSnapshot?.providerLabel ? requestSnapshot.providerLabel : activeProviderSummary;
+  const effectiveAgentSummary = loading && requestSnapshot?.agentLabel ? requestSnapshot.agentLabel : (activeAgent ? activeAgent.name : 'צ׳אט ישיר');
+  const effectiveSkillSummary = loading && requestSnapshot?.skillLabel ? requestSnapshot.skillLabel : (activeSkill ? activeSkill.label : 'אוטומטי');
+  const effectiveScopeSummary = loading && requestSnapshot?.scopeLabel ? requestSnapshot.scopeLabel : contextScopeLabel;
+  const effectiveContextPreview = loading && requestSnapshot?.contextPreview ? requestSnapshot.contextPreview : contextPreview;
+  const isSettingsLocked = loading;
+  const progressPercent = Math.min(100, Math.max(Math.round(activeAgentStatus.progress || 0), loading ? 8 : 0));
+  const progressTone = activeAgentStatus.state === 'error'
+    ? {
+        background: 'rgba(239, 68, 68, 0.2)',
+        border: 'rgba(252, 165, 165, 0.34)',
+        color: '#FECACA',
+        rail: 'linear-gradient(180deg, #F97316 0%, #EF4444 100%)',
+        glow: 'rgba(248, 113, 113, 0.45)',
+      }
+    : activeAgentStatus.state === 'success'
+      ? {
+          background: 'rgba(16, 185, 129, 0.2)',
+          border: 'rgba(110, 231, 183, 0.34)',
+          color: '#D1FAE5',
+          rail: 'linear-gradient(180deg, #34D399 0%, #059669 100%)',
+          glow: 'rgba(52, 211, 153, 0.42)',
+        }
+      : {
+          background: 'rgba(96, 165, 250, 0.2)',
+          border: 'rgba(147, 197, 253, 0.34)',
+          color: '#DBEAFE',
+          rail: 'linear-gradient(180deg, #60A5FA 0%, #8B5CF6 100%)',
+          glow: 'rgba(129, 140, 248, 0.42)',
+        };
+  const progressStatusLabel = loading
+    ? activeAgentStatus.message || 'הבקשה הנוכחית רצה'
+    : activeAgentStatus.state === 'error'
+      ? activeAgentStatus.message || 'הבקשה האחרונה הסתיימה עם שגיאה'
+      : activeAgentStatus.state === 'success'
+        ? 'הבקשה האחרונה הושלמה'
+        : 'מוכן לכתיבה';
+  const chatStatusPills = [
+    {
+      id: 'provider',
+      label: 'ספק',
+      value: effectiveProviderSummary,
+      background: 'rgba(59, 130, 246, 0.16)',
+      border: 'rgba(96, 165, 250, 0.3)',
+      color: '#BFDBFE',
+    },
+    {
+      id: 'agent',
+      label: 'סוכן',
+      value: effectiveAgentSummary,
+      background: 'rgba(129, 140, 248, 0.16)',
+      border: 'rgba(165, 180, 252, 0.3)',
+      color: '#C7D2FE',
+    },
+    {
+      id: 'skill',
+      label: 'סקיל',
+      value: effectiveSkillSummary,
+      background: 'rgba(16, 185, 129, 0.16)',
+      border: 'rgba(52, 211, 153, 0.3)',
+      color: '#A7F3D0',
+    },
+    {
+      id: 'scope',
+      label: 'הקשר',
+      value: effectiveScopeSummary,
+      background: 'rgba(251, 191, 36, 0.16)',
+      border: 'rgba(253, 224, 71, 0.3)',
+      color: '#FDE68A',
+    },
+  ];
+  const shouldShowProgress = workspaceAutomation.showProgress !== false && (loading || ['running', 'retrying', 'error', 'success'].includes(activeAgentStatus.state));
+  const lockedControlStyle = isSettingsLocked ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {};
+
+  const clearPendingMentionSelection = useCallback(() => {
+    preservePendingMentionRef.current = false;
+    pendingMentionSelectionRef.current = { ...EMPTY_PENDING_MENTION_SELECTION };
+  }, []);
+
+  const setDraftInput = useCallback((nextValue, { preservePendingMention = false } = {}) => {
+    if (!preservePendingMention && !preservePendingMentionRef.current) clearPendingMentionSelection();
+    setInput(nextValue);
+  }, [clearPendingMentionSelection]);
+
+  const beginRequestCycle = useCallback(() => {
+    requestCycleRef.current += 1;
+    return requestCycleRef.current;
+  }, []);
+
+  const isCurrentRequestCycle = useCallback((cycleId) => requestCycleRef.current === cycleId, []);
 
   const closeMentionMenu = () => setMentionMenu((prev) => (prev.open ? { ...prev, open: false, items: [], activeIndex: 0 } : prev));
 
@@ -306,14 +421,24 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     const currentValue = textarea?.value ?? input;
     const before = currentValue.slice(0, mentionMenu.start);
     const after = currentValue.slice(mentionMenu.end);
-    const nextValue = `${before}${item.insertText}${after}`;
-    setInput(nextValue);
-    if (item.type === 'skill') setSelectedSkillId(item.id);
-    if (item.type === 'agent') setSelectedAgentId(item.id);
+    const nextValue = `${before}${after}`;
+    if (item.type === 'agent') {
+      pendingMentionSelectionRef.current = {
+        ...pendingMentionSelectionRef.current,
+        agentId: item.id,
+      };
+    } else if (item.type === 'skill') {
+      pendingMentionSelectionRef.current = {
+        ...pendingMentionSelectionRef.current,
+        skillId: item.id,
+      };
+    }
+    preservePendingMentionRef.current = true;
+    setDraftInput(nextValue, { preservePendingMention: true });
     closeMentionMenu();
     requestAnimationFrame(() => {
       textarea?.focus();
-      const nextCursor = before.length + item.insertText.length;
+      const nextCursor = before.length;
       textarea?.setSelectionRange(nextCursor, nextCursor);
     });
   };
@@ -328,21 +453,30 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     const syncWorkspace = (event) => {
       const nextAutomation = getWorkspaceAutomation();
       const nextWorkspaceId = String(nextAutomation.activeWorkspaceId || '');
-      const shouldResetAgentSelection = activeWorkspaceIdRef.current !== nextWorkspaceId
+      const shouldResetWorkspaceState = activeWorkspaceIdRef.current !== nextWorkspaceId
         || event?.detail?.reason === 'workspace-switched';
       activeWorkspaceIdRef.current = nextWorkspaceId;
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
       setMessages(getSavedMessages(nextAutomation.activeWorkspaceId));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
-      if (shouldResetAgentSelection) setSelectedAgentId('');
+      if (shouldResetWorkspaceState) {
+        beginRequestCycle();
+        setLoading(false);
+        setRequestSnapshot(null);
+        setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
+        setAgentProgressMap({});
+        setSelectedAgentId('');
+        clearPendingMentionSelection();
+        setMentionMenu({ ...EMPTY_MENTION_MENU });
+      }
     };
 
     syncWorkspace();
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', syncWorkspace);
     return () => window.removeEventListener('wordai-workspace-changed', syncWorkspace);
-  }, []);
+  }, [beginRequestCycle, clearPendingMentionSelection]);
 
   useEffect(() => {
     setAgentProgressMap((prev) => {
@@ -465,24 +599,21 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   };
 
   const clearConversation = useCallback(() => {
+    beginRequestCycle();
     try {
       localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId));
-      localStorage.removeItem(LEGACY_CHAT_MEMORY_STORAGE_KEY);
-      saveAppMemory({
-        recentChats: [],
-        memoryNotes: [],
-        lastSelectedAgentId: '',
-        lastSelectedSkillId: 'none',
-        lastResolvedSkillLabel: '',
-      });
     } catch {}
+    clearPendingMentionSelection();
     setMessages(getDefaultMessages());
     setInput('');
-    setSelectedProviderId('default');
-    setSelectedAgentId('');
-    setSelectedSkillId('none');
+    setAgentTaskInput('');
+    setLoading(false);
     setResolvedSkillLabel('');
-  }, [workspaceAutomation.activeWorkspaceId]);
+    setRequestSnapshot(null);
+    setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
+    setAgentProgressMap({});
+    setMentionMenu({ ...EMPTY_MENTION_MENU });
+  }, [beginRequestCycle, clearPendingMentionSelection, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -507,35 +638,58 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
   const executeRoleAgentTask = async (agent, task, runtimeOptions = {}) => {
     if (!agent?.prompt || loading) return;
+    const requestCycle = beginRequestCycle();
     const ctx = buildContext();
+    const requestedSkill = runtimeOptions.skillId
+      ? skillCatalog.find((skill) => skill.id === runtimeOptions.skillId) || null
+      : null;
+    const runtimeSkillLabel = runtimeOptions.skillLabel || (requestedSkill ? requestedSkill.label : runtimeOptions.autoUseDefaultSkill === false ? 'ללא סקיל' : 'אוטומטי');
+    const safeAgentLabel = typeof agent.name === 'string' ? agent.name : (agent.name?.label || agent.name?.he || agent.id || 'סוכן');
     setTab('chat');
-    setSelectedAgentId(agent.id);
+    if (runtimeOptions.persistSelection !== false) setSelectedAgentId(agent.id);
+    setRequestSnapshot({
+      providerLabel: runtimeOptions.providerLabel || activeProviderSummary,
+      agentLabel: safeAgentLabel,
+      skillLabel: runtimeSkillLabel,
+      scopeLabel: runtimeOptions.scopeLabel || contextScopeLabel,
+      contextPreview: runtimeOptions.contextPreview || contextPreview,
+    });
     setMessages((prev) => [...prev, { role: 'user', content: `🧩 ${agent.name}: ${task}` }]);
     setLoading(true);
-    const safeAgentLabel = typeof agent.name === 'string' ? agent.name : (agent.name?.label || agent.name?.he || agent.id || 'סוכן');
     updateAgentStatus(agent.id, safeAgentLabel, { state: 'running', progress: 10, message: 'הסוכן התחיל לעבוד' });
     try {
       const reply = await chatWithRoleAgent(agent, task, ctx, {
-         onStatus: (payload) => updateAgentStatus(agent.id, safeAgentLabel, payload),
+        onStatus: (payload) => {
+          if (!isCurrentRequestCycle(requestCycle)) return;
+          updateAgentStatus(agent.id, safeAgentLabel, payload);
+        },
         skillId: runtimeOptions.skillId || '',
         autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
+        providerOverride: runtimeOptions.providerOverride || '',
+        strictProviderOverride: runtimeOptions.strictProviderOverride === true,
       });
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
-      setInput('');
+      setDraftInput('');
       setAgentTaskInput('');
-       updateAgentStatus(agent.id, safeAgentLabel, { state: 'success', progress: 100, message: 'סיים בהצלחה' });
+      updateAgentStatus(agent.id, safeAgentLabel, { state: 'success', progress: 100, message: 'סיים בהצלחה' });
     } catch (err) {
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
-       updateAgentStatus(agent.id, safeAgentLabel, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
+      updateAgentStatus(agent.id, safeAgentLabel, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setLoading(false);
+      setRequestSnapshot(null);
       inputRef.current?.focus();
     }
   };
 
   const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'צ׳אט ישיר' }) => {
+    const pendingMentionSelection = pendingMentionSelectionRef.current;
+    const hasPendingMentionSelection = Boolean(pendingMentionSelection.agentId || pendingMentionSelection.skillId);
     const originalText = (customPrompt || input).trim();
-    if (!originalText || loading) return;
+    if ((!originalText && !hasPendingMentionSelection) || loading) return;
     if (!customPrompt) setInput('');
     closeMentionMenu();
 
@@ -543,6 +697,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
     let forcedAgent = activeAgent;
     let disabledSkillRequested = false;
+    let usedDraftAgentMention = false;
+    let usedDraftSkillMention = false;
+    let usedQueuedAgentMention = false;
+    let usedQueuedSkillMention = false;
 
     while (txt.startsWith('@') || txt.startsWith('/')) {
       const agentStartMatch = txt.match(/^@([^\s@/]+)\s*/);
@@ -550,7 +708,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         const matchedAgent = findMentionedAgent(roleAgents, agentStartMatch[1]);
         if (!matchedAgent) break;
         forcedAgent = matchedAgent;
-        setSelectedAgentId(matchedAgent.id);
+        usedDraftAgentMention = true;
         txt = txt.slice(agentStartMatch[0].length).trimStart();
         continue;
       }
@@ -566,7 +724,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           manualSkillId = '';
         } else {
           manualSkillId = matchedSkill.id;
-          setSelectedSkillId(matchedSkill.id);
+          usedDraftSkillMention = true;
         }
         continue;
       }
@@ -574,11 +732,51 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       break;
     }
 
+    if (!usedDraftAgentMention && pendingMentionSelection.agentId) {
+      const queuedAgent = roleAgents.find((agent) => agent.id === pendingMentionSelection.agentId) || null;
+      if (queuedAgent) {
+        forcedAgent = queuedAgent;
+        usedQueuedAgentMention = true;
+      }
+    }
+
+    if (!usedDraftSkillMention && pendingMentionSelection.skillId) {
+      const queuedSkill = findMentionedSkill(skillCatalog, pendingMentionSelection.skillId);
+      if (queuedSkill) {
+        const mode = skillsConfig.skills?.[queuedSkill.id]?.mode || 'manual';
+        if (mode === 'off') {
+          disabledSkillRequested = true;
+          manualSkillId = '';
+        } else {
+          manualSkillId = queuedSkill.id;
+          usedQueuedSkillMention = true;
+        }
+      }
+    }
+
+    const requestedSkill = manualSkillId
+      ? skillCatalog.find((skill) => skill.id === manualSkillId) || null
+      : null;
+    const runtimeSkillLabel = requestedSkill
+      ? requestedSkill.label
+      : disabledSkillRequested
+        ? 'ללא סקיל'
+        : 'אוטומטי';
+
     if (disabledSkillRequested) {
       setMessages((prev) => [...prev, { role: 'assistant', content: 'הסקיל שביקשת כבוי כרגע בהגדרות, לכן דילגתי עליו.' }]);
     }
 
     if (!txt) {
+      if (!customPrompt) {
+        pendingMentionSelectionRef.current = {
+          agentId: usedDraftAgentMention && forcedAgent ? forcedAgent.id : (pendingMentionSelection.agentId || ''),
+          skillId: usedDraftSkillMention && manualSkillId ? manualSkillId : (pendingMentionSelection.skillId || ''),
+        };
+        preservePendingMentionRef.current = Boolean(
+          pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId
+        );
+      }
       const helperText = forcedAgent
         ? `הסוכן ${forcedAgent.name} נבחר. עכשיו כתוב מה לבצע.`
         : manualSkillId
@@ -589,19 +787,37 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       return;
     }
 
+    const directProviderId = activeProviderChoice?.id || '';
+    const hasExplicitProviderSelection = Boolean(directProviderId);
+    const explicitProviderLabel = hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary;
+    clearPendingMentionSelection();
+
     if (forcedAgent) {
       await executeRoleAgentTask(forcedAgent, txt, {
         skillId: manualSkillId,
+        skillLabel: runtimeSkillLabel,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        persistSelection: !usedDraftAgentMention && !usedQueuedAgentMention,
+        providerLabel: explicitProviderLabel,
+        providerOverride: directProviderId,
+        strictProviderOverride: hasExplicitProviderSelection,
+        scopeLabel: contextScopeLabel,
+        contextPreview,
       });
       return;
     }
 
     const ctx = buildContext();
-    const directProviderId = activeProviderChoice?.id || '';
-    const hasExplicitProviderSelection = Boolean(directProviderId);
     const directAgentName = hasExplicitProviderSelection ? `${agentMeta.name} · ${activeProviderLabel}` : agentMeta.name;
     setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
+    setRequestSnapshot({
+      providerLabel: hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary,
+      agentLabel: directAgentName,
+      skillLabel: runtimeSkillLabel,
+      scopeLabel: contextScopeLabel,
+      contextPreview,
+    });
+    const requestCycle = beginRequestCycle();
     setLoading(true);
     updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     try {
@@ -615,19 +831,34 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         skipAutomationPrompt: true,
         skipMultiModel: hasExplicitProviderSelection,
         onSkillResolved: (payload) => {
+          if (!isCurrentRequestCycle(requestCycle)) return;
           const skill = payload?.skill;
           const reasonLabel = payload?.reason === 'auto' ? 'אוטומטי' : payload?.reason === 'default' ? 'ברירת מחדל' : 'ידני';
           setResolvedSkillLabel(skill?.label ? `${skill.label} · ${reasonLabel}` : 'ללא סקיל פעיל');
+          setRequestSnapshot((prev) => (prev
+            ? {
+                ...prev,
+                skillLabel: skill?.label || runtimeSkillLabel,
+              }
+            : prev
+          ));
         },
-        onStatus: (payload) => updateAgentStatus(agentMeta.id, directAgentName, payload),
+        onStatus: (payload) => {
+          if (!isCurrentRequestCycle(requestCycle)) return;
+          updateAgentStatus(agentMeta.id, directAgentName, payload);
+        },
       });
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
+      if (!isCurrentRequestCycle(requestCycle)) return;
       setLoading(false);
+      setRequestSnapshot(null);
       inputRef.current?.focus();
     }
   };
@@ -641,9 +872,16 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         : currentBlockText
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
+      const directProviderId = activeProviderChoice?.id || '';
+      const hasExplicitProviderSelection = Boolean(directProviderId);
     await executeRoleAgentTask(agent, task, {
       skillId: selectedSkillId === 'none' ? '' : selectedSkillId,
       autoUseDefaultSkill: selectedSkillId === 'none',
+        providerLabel: hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary,
+        providerOverride: directProviderId,
+        strictProviderOverride: hasExplicitProviderSelection,
+        scopeLabel: contextScopeLabel,
+        contextPreview,
     });
   };
 
@@ -719,6 +957,41 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     boxShadow: '0 4px 15px rgba(0, 0, 0, 0.05)',
     transform: 'scale(1)',
   });
+
+  const controlCardStyle = {
+    background: 'rgba(255, 255, 255, 0.08)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: 20,
+    padding: '14px 16px',
+    backdropFilter: 'blur(18px)',
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+  };
+
+  const controlLabelStyle = {
+    fontSize: 13,
+    fontWeight: 700,
+    color: 'white',
+    marginBottom: 6,
+  };
+
+  const controlHelperStyle = {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.68)',
+    lineHeight: 1.6,
+    marginBottom: 10,
+  };
+
+  const controlSelectStyle = {
+    width: '100%',
+    padding: '10px 12px',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+    borderRadius: 14,
+    fontSize: 12,
+    background: 'rgba(15, 23, 42, 0.18)',
+    backdropFilter: 'blur(10px)',
+    color: 'white',
+    outline: 'none',
+  };
 
   return (
     <>
@@ -818,6 +1091,26 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
             box-shadow: 0 0 20px rgba(139, 92, 246, 0.8);
           }
         }
+
+        @keyframes railSweep {
+          0% {
+            transform: translateY(120%);
+          }
+          100% {
+            transform: translateY(-120%);
+          }
+        }
+
+        @keyframes railPulse {
+          0%, 100% {
+            opacity: 0.85;
+            filter: saturate(1);
+          }
+          50% {
+            opacity: 1;
+            filter: saturate(1.25);
+          }
+        }
       `}</style>
       
       <div 
@@ -872,68 +1165,91 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           />
         ))}
 
-        {/* Enhanced Header with Improved Design */}
+        {/* Header קומפקטי עם מצב שיחה פעיל */}
         <div style={{
           background: 'rgba(255, 255, 255, 0.12)',
           backdropFilter: 'blur(25px)',
-          padding: '12px 16px',
+          padding: '10px 14px 9px',
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
+          gap: 12,
           borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
           position: 'relative',
           zIndex: 10,
           boxShadow: '0 4px 15px rgba(0, 0, 0, 0.1)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0, flex: 1 }}>
             <div style={{
-              width: 32,
-              height: 32,
+              width: 30,
+              height: 30,
               borderRadius: '50%',
               background: 'linear-gradient(135deg, #FF6B6B, #4ECDC4)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 16,
+              fontSize: 15,
               animation: 'pulse 2s ease-in-out infinite',
-              boxShadow: '0 4px 15px rgba(255, 107, 107, 0.3)',
+              boxShadow: '0 4px 15px rgba(255, 107, 107, 0.28)',
+              flexShrink: 0,
             }}>
               🤖
             </div>
-            <div>
-              <div style={{ 
-                color: 'white', 
-                fontWeight: 800, 
-                fontSize: 16,
-                textShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                background: 'linear-gradient(45deg, #ffffff, #f0f0f0)',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-              }}>
-                WordFlow AI ✨
-              </div>
-              <div style={{ 
-                color: 'rgba(255,255,255,0.85)', 
-                fontSize: 11, 
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}>
+            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{
-                  width: 6,
-                  height: 6,
-                  background: '#22C55E',
-                  borderRadius: '50%',
-                  animation: 'pulse 2s ease-in-out infinite',
-                }} />
-                {activeProviderLabel}
+                  color: 'white',
+                  fontWeight: 800,
+                  fontSize: 15,
+                  textShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                  background: 'linear-gradient(45deg, #ffffff, #f0f0f0)',
+                  WebkitBackgroundClip: 'text',
+                  backgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}>
+                  WordFlow AI ✨
+                </div>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: progressTone.background,
+                  border: `1px solid ${progressTone.border}`,
+                  color: progressTone.color,
+                  whiteSpace: 'nowrap',
+                }}>
+                  {progressStatusLabel}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {chatStatusPills.map((pill) => (
+                  <span
+                    key={pill.id}
+                    style={{
+                      fontSize: 10,
+                      background: pill.background,
+                      color: pill.color,
+                      padding: '4px 9px',
+                      borderRadius: 999,
+                      fontWeight: 700,
+                      border: `1px solid ${pill.border}`,
+                      whiteSpace: 'nowrap',
+                      maxWidth: compactMode ? '46%' : 'unset',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                    title={`${pill.label}: ${pill.value}`}
+                  >
+                    {pill.label} · {pill.value}
+                  </span>
+                ))}
               </div>
             </div>
           </div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             {mode === 'sidebar' && (
               <button
                 style={{
@@ -1009,6 +1325,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       }}>
         {[
           ['chat', "💬 צ'אט"],
+          ['settings', '⚙️ הגדרות'],
           ['actions', '⚡ פעולות'],
           ['agents', '🧩 סוכנים'],
           ['logs', '📋 לוגים']
@@ -1037,63 +1354,65 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
       {shouldShowProgress && (
         <div style={{
-          padding: '6px 12px',
-          background: 'rgba(255, 255, 255, 0.08)',
-          backdropFilter: 'blur(15px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-          position: 'relative',
-          zIndex: 5,
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: 18,
+          zIndex: 9,
+          pointerEvents: 'none',
+          display: 'flex',
+          justifyContent: 'center',
         }}>
           <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 4,
-            color: 'white',
-            fontSize: 12,
-            fontWeight: 600,
-          }}>
-            <span>
-              {activeAgentStatus.agentLabel ? `🚀 ${activeAgentStatus.agentLabel}` : '⭐ מוכן לעבודה'}
-            </span>
-            <span style={{
-              background: 'rgba(255, 255, 255, 0.2)',
-              padding: '2px 8px',
-              borderRadius: 12,
-              fontSize: 11,
-            }}>
-              {Math.round(activeAgentStatus.progress || 0)}%
-            </span>
-          </div>
-          
-          <div style={{
-            height: 6,
-            background: 'rgba(255, 255, 255, 0.2)',
-            borderRadius: 20,
+            width: 4,
+            margin: '10px 0',
+            borderRadius: 999,
+            background: 'rgba(255, 255, 255, 0.15)',
             overflow: 'hidden',
             position: 'relative',
+            boxShadow: '0 0 0 1px rgba(255,255,255,0.08)',
           }}>
             <div style={{
-              width: `${activeAgentStatus.progress || 0}%`,
-              height: '100%',
-              background: activeAgentStatus.state === 'error' 
-                ? 'linear-gradient(90deg, #FF6B6B, #FF8E8E)' 
-                : activeAgentStatus.state === 'success' 
-                ? 'linear-gradient(90deg, #4ECDC4, #44A08D)' 
-                : 'linear-gradient(90deg, #667eea, #764ba2)',
-              borderRadius: 20,
-              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-              boxShadow: '0 0 10px rgba(255, 255, 255, 0.3)',
-            }} />
+              position: 'absolute',
+              insetInlineStart: 0,
+              insetInlineEnd: 0,
+              bottom: 0,
+              minHeight: activeAgentStatus.state === 'idle' ? 0 : 12,
+              height: `${progressPercent}%`,
+              borderRadius: 999,
+              background: progressTone.rail,
+              transition: 'height 0.45s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease',
+              boxShadow: `0 0 18px ${progressTone.glow}`,
+              animation: loading || activeAgentStatus.state === 'retrying' ? 'railPulse 1.4s ease-in-out infinite' : 'none',
+              overflow: 'hidden',
+            }}>
+              {(loading || activeAgentStatus.state === 'retrying') && (
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.72) 50%, rgba(255,255,255,0) 100%)',
+                  animation: 'railSweep 1.2s linear infinite',
+                }} />
+              )}
+            </div>
           </div>
-          
+
           <div style={{
-            fontSize: 11,
-            color: 'rgba(255, 255, 255, 0.9)',
-            marginTop: 6,
-            textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+            position: 'absolute',
+            top: 14,
+            left: 8,
+            background: 'rgba(15, 23, 42, 0.5)',
+            border: `1px solid ${progressTone.border}`,
+            color: 'white',
+            borderRadius: 999,
+            padding: '2px 7px',
+            fontSize: 10,
+            fontWeight: 700,
+            backdropFilter: 'blur(10px)',
+            boxShadow: '0 8px 20px rgba(15,23,42,0.14)',
           }}>
-            {activeAgentStatus.message || 'מוכן'}
+            {activeAgentStatus.state === 'error' ? '!' : activeAgentStatus.state === 'success' ? '100%' : `${progressPercent}%`}
           </div>
         </div>
       )}
@@ -1113,150 +1432,69 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           overflow: 'hidden',
         }}>
           
-          {/* Context Header */}
           <div style={{
             padding: '6px 12px',
-            background: 'rgba(255, 255, 255, 0.08)',
-            backdropFilter: 'blur(15px)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            background: 'rgba(255, 255, 255, 0.04)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 8,
+            justifyContent: 'space-between',
+            gap: 10,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 600 }}>
-                📄 פועל על:
-              </span>
-              <span style={{
-                fontSize: 11,
-                background: 'rgba(59, 130, 246, 0.2)',
-                color: '#93C5FD',
-                padding: '4px 12px',
-                borderRadius: 20,
-                fontWeight: 500,
-                border: '1px solid rgba(59, 130, 246, 0.3)',
-              }}>
-                המסמך כולו
-              </span>
-              
-              {currentBlockText && (
+            <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {(loading || localContext) && (
                 <span style={{
-                  fontSize: 11,
-                  background: 'rgba(14, 165, 233, 0.2)',
-                  color: '#7DD3FC',
-                  padding: '4px 12px',
-                  borderRadius: 20,
-                  fontWeight: 500,
-                  border: '1px solid rgba(14, 165, 233, 0.3)',
+                  fontSize: 10,
+                  color: 'rgba(255,255,255,0.78)',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  whiteSpace: 'nowrap',
+                  maxWidth: compactMode ? '58%' : 'unset',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                 }}>
-                  הפסקה הנוכחית
-                </span>
-              )}
-              
-              {selectedText && (
-                <span style={{
-                  fontSize: 11,
-                  background: 'rgba(34, 197, 94, 0.2)',
-                  color: '#86EFAC',
-                  padding: '4px 12px',
-                  borderRadius: 20,
-                  fontWeight: 500,
-                  border: '1px solid rgba(34, 197, 94, 0.3)',
-                }}>
-                  הטקסט הנבחר
+                  {loading ? (activeAgentStatus.message || progressStatusLabel) : `${effectiveScopeSummary} פעיל`}
                 </span>
               )}
             </div>
-            
-            <button 
-              onClick={clearConversation}
-              style={{
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                borderRadius: 20,
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: 11,
-                color: '#FCA5A5',
-                fontWeight: 500,
-                transition: 'all 0.3s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.25)';
-                e.currentTarget.style.transform = 'scale(1.05)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)';
-                e.currentTarget.style.transform = 'scale(1)';
-              }}
-            >
-              🗑️ נקה שיחה
-            </button>
-          </div>
 
-          {/* Quick Prompts Bar */}
-          <div style={{
-            padding: '6px 8px',
-            background: 'rgba(255, 255, 255, 0.03)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-            display: 'flex',
-            gap: 6,
-            overflowX: 'auto',
-            scrollbarWidth: 'none',
-            msOverflowStyle: 'none',
-          }}>
-            <button
-              onClick={() => setShowQuickPrompts(!showQuickPrompts)}
-              style={{
-                background: showQuickPrompts 
-                  ? 'rgba(139, 92, 246, 0.2)' 
-                  : 'rgba(255, 255, 255, 0.1)',
-                border: showQuickPrompts 
-                  ? '1px solid rgba(139, 92, 246, 0.4)'
-                  : '1px solid rgba(255, 255, 255, 0.2)',
-                borderRadius: 20,
-                padding: '8px 16px',
-                cursor: 'pointer',
-                fontSize: 12,
-                color: showQuickPrompts ? '#C4B5FD' : 'rgba(255,255,255,0.8)',
-                fontWeight: 600,
-                transition: 'all 0.3s ease',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              ✨ הצעות חכמות
-            </button>
-            
-            {showQuickPrompts && quickPromptList.map((prompt, index) => (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               <button
-                key={index}
-                onClick={() => setInput(prompt)}
+                onClick={() => setTab('settings')}
                 style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                  borderRadius: 20,
-                  padding: '8px 14px',
+                  background: 'rgba(139, 92, 246, 0.16)',
+                  border: '1px solid rgba(167, 139, 250, 0.3)',
+                  borderRadius: 999,
+                  padding: '6px 11px',
                   cursor: 'pointer',
                   fontSize: 11,
-                  color: 'rgba(255,255,255,0.9)',
-                  fontWeight: 500,
-                  transition: 'all 0.3s ease',
-                  whiteSpace: 'nowrap',
-                  animation: `slideIn 0.3s ease ${index * 0.1}s both`,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-                  e.currentTarget.style.transform = 'translateY(0)';
+                  color: '#DDD6FE',
+                  fontWeight: 700,
                 }}
               >
-                {prompt}
+                ⚙️ הגדרות
               </button>
-            ))}
+              <button
+                onClick={clearConversation}
+                disabled={loading}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: 999,
+                  padding: '6px 11px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: 11,
+                  color: '#FCA5A5',
+                  fontWeight: 700,
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                נקה
+              </button>
+            </div>
           </div>
 
           {/* Messages Area */}
@@ -1410,154 +1648,19 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
             zIndex: 10,
           }}>
             
-            {/* Agent & Skill Selection */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 8,
-              flexWrap: 'wrap'
-            }}>
-              {activeAgent && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  background: 'rgba(99, 102, 241, 0.15)',
-                  border: '1px solid rgba(99, 102, 241, 0.3)',
-                  borderRadius: 20,
-                  padding: '6px 12px',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: '#C4B5FD',
-                }}>
-                  🤖 @{activeAgent.id}
-                  <button 
-                    onClick={() => setSelectedAgentId('')}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#C4B5FD',
-                      cursor: 'pointer',
-                      fontSize: 14,
-                      padding: 0,
-                      marginLeft: 4,
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-              
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}>
-                <span style={{ 
-                  fontSize: 11, 
-                  color: 'rgba(255,255,255,0.8)', 
-                  fontWeight: 600 
-                }}>
-                  🛰️ ספק:
-                </span>
-                <select
-                  value={activeProviderChoice?.id || 'default'}
-                  onChange={(e) => {
-                    setSelectedProviderId(e.target.value);
-                    setSelectedAgentId('');
-                  }}
-                  style={{
-                    minWidth: 170,
-                    padding: '8px 12px',
-                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                    borderRadius: 12,
-                    fontSize: 12,
-                    background: 'rgba(255, 255, 255, 0.1)',
-                    backdropFilter: 'blur(10px)',
-                    color: 'white',
-                    outline: 'none',
-                  }}
-                >
-                  <option value="default" style={{ color: '#1F2937' }}>
-                    ברירת המחדל מההגדרות
-                  </option>
-                  {configuredProviderChoices.map((provider) => (
-                    <option key={provider.id} value={provider.id} style={{ color: '#1F2937' }}>
-                      {provider.label}{provider.isDefault ? ' · ברירת מחדל' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}>
-                <span style={{ 
-                  fontSize: 11, 
-                  color: 'rgba(255,255,255,0.8)', 
-                  fontWeight: 600 
-                }}>
-                  ⚙️ סקיל פעיל:
-                </span>
-                <select
-                  value={selectedSkillId}
-                  onChange={(e) => setSelectedSkillId(e.target.value)}
-                  style={{
-                    minWidth: 180,
-                    padding: '8px 12px',
-                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                    borderRadius: 12,
-                    fontSize: 12,
-                    background: 'rgba(255, 255, 255, 0.1)',
-                    backdropFilter: 'blur(10px)',
-                    color: 'white',
-                    outline: 'none',
-                  }}
-                >
-                  <option value="none" style={{ color: '#1F2937' }}>
-                    בחירה אוטומטית לפי ההגדרות
-                  </option>
-                  {skillCatalog.map((skill) => {
-                    const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
-                    return (
-                      <option key={skill.id} value={skill.id} disabled={mode === 'off'} style={{ color: '#1F2937' }}>
-                        {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              
-              {resolvedSkillLabel && (
-                <span style={{ 
-                  fontSize: 10, 
-                  color: 'rgba(255,255,255,0.6)',
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  padding: '4px 8px',
-                  borderRadius: 12,
-                }}>
-                  אחרון: {resolvedSkillLabel}
-                </span>
-              )}
-            </div>
-
-            {/* Context Indicator */}
+            {/* חיווי הקשר */}
             {localContext && (
               <div style={{
                 fontSize: 11,
-                color: 'rgba(255,255,255,0.9)',
-                marginBottom: 12,
-                padding: '10px 14px',
-                background: 'rgba(59, 130, 246, 0.15)',
-                border: '1px solid rgba(59, 130, 246, 0.3)',
+                color: 'rgba(255,255,255,0.86)',
+                marginBottom: 10,
+                padding: '8px 12px',
+                background: 'rgba(59, 130, 246, 0.12)',
+                border: '1px solid rgba(59, 130, 246, 0.24)',
                 borderRadius: 12,
                 backdropFilter: 'blur(10px)',
-                borderRight: '4px solid #3B82F6',
               }}>
-                📌 הקשר פעיל: "{(selectedText || currentBlockText).slice(0, 80)}{(selectedText || currentBlockText).length > 80 ? '…' : ''}"
+                📌 {contextScopeLabel}: "{contextPreview}"
               </div>
             )}
 
@@ -1572,7 +1675,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 ref={inputRef}
                 value={input}
                 onChange={(e) => {
-                  setInput(e.target.value);
+                  setDraftInput(e.target.value);
                   updateMentionMenu(e.target.value, e.target.selectionStart ?? e.target.value.length);
                 }}
                 onClick={(e) => updateMentionMenu(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
@@ -1714,36 +1817,36 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               {/* Send Button */}
               <button 
                 onClick={() => send()} 
-                disabled={loading || !input.trim()}
+                disabled={loading || (!input.trim() && !pendingMentionSelectionRef.current.agentId && !pendingMentionSelectionRef.current.skillId)}
                 style={{
                   width: 56,
                   height: 56,
                   flexShrink: 0,
-                  background: !loading && input.trim() 
+                  background: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
                     ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
                     : 'rgba(255, 255, 255, 0.1)',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   borderRadius: 16,
-                  cursor: !loading && input.trim() ? 'pointer' : 'default',
+                  cursor: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId) ? 'pointer' : 'default',
                   fontSize: 20,
                   color: 'white',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  boxShadow: !loading && input.trim() 
+                  boxShadow: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
                     ? '0 8px 25px rgba(102, 126, 234, 0.3)'
                     : 'none',
                 }}
                 onMouseEnter={(e) => {
-                  if (!loading && input.trim()) {
+                  if (!loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)) {
                     e.currentTarget.style.transform = 'scale(1.05) translateY(-2px)';
                     e.currentTarget.style.boxShadow = '0 12px 35px rgba(102, 126, 234, 0.4)';
                   }
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'scale(1) translateY(0)';
-                  e.currentTarget.style.boxShadow = !loading && input.trim() 
+                  e.currentTarget.style.boxShadow = !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
                     ? '0 8px 25px rgba(102, 126, 234, 0.3)'
                     : 'none';
                 }}
@@ -1761,6 +1864,232 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                   '🚀'
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* לשונית הגדרות לשיחה */}
+      {tab === 'settings' && (
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          background: `
+            radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.08) 0%, transparent 45%),
+            radial-gradient(circle at 85% 10%, rgba(16, 185, 129, 0.07) 0%, transparent 40%),
+            rgba(255, 255, 255, 0.02)
+          `,
+          backdropFilter: 'blur(20px)',
+        }}>
+          <div style={controlCardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+                  ⚙️ הגדרות שיחה
+                </div>
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6 }}>
+                  כל בחירות ההפעלה מרוכזות כאן כדי שהצ׳אט עצמו יישאר כמו כלי כתיבה: קל, שקט, ועם פחות כרום מעל הטקסט.
+                </div>
+                <div style={{ fontSize: 11, color: isSettingsLocked ? '#FDE68A' : 'rgba(255,255,255,0.58)', lineHeight: 1.6, marginTop: 8 }}>
+                  {isSettingsLocked ? 'ההגדרות נעולות בזמן שהבקשה רצה כדי למנוע drift בין הבחירה שעל המסך לבקשה הפעילה.' : 'הבחירות כאן נשמרות בין שליחות. @agent ו-/skill נשארים זמניים רק לטיוטה או לשליחה הנוכחית.'}
+                </div>
+              </div>
+              <button
+                onClick={() => setTab('chat')}
+                style={{
+                  background: 'rgba(139, 92, 246, 0.16)',
+                  border: '1px solid rgba(167, 139, 250, 0.3)',
+                  borderRadius: 999,
+                  padding: '8px 14px',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: '#E9D5FF',
+                  fontWeight: 600,
+                }}
+              >
+                💬 חזרה לצ׳אט
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+              {chatStatusPills.map((pill) => (
+                <span
+                  key={pill.id}
+                  style={{
+                    fontSize: 11,
+                    background: pill.background,
+                    color: pill.color,
+                    padding: '5px 10px',
+                    borderRadius: 999,
+                    fontWeight: 600,
+                    border: `1px solid ${pill.border}`,
+                  }}
+                >
+                  {pill.label} · {pill.value}
+                </span>
+              ))}
+            </div>
+
+            {resolvedSkillLabel && (
+              <div style={{ marginTop: 10, fontSize: 11, color: 'rgba(255,255,255,0.62)', lineHeight: 1.5 }}>
+                סקיל אחרון שנפתר בזמן ריצה: {resolvedSkillLabel}
+              </div>
+            )}
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={controlLabelStyle}>🛰️ ספק לשיחה</div>
+            <div style={controlHelperStyle}>
+              כאן מגדירים override מקומי לצ׳אט. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
+            </div>
+            <select
+              value={selectedProviderId || 'default'}
+              onChange={(e) => {
+                clearPendingMentionSelection();
+                setSelectedProviderId(e.target.value);
+                setSelectedAgentId('');
+              }}
+              disabled={isSettingsLocked}
+              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+            >
+              <option value="default" style={{ color: '#1F2937' }}>
+                ברירת המחדל מההגדרות
+              </option>
+              {configuredProviderChoices.map((provider) => (
+                <option key={provider.id} value={provider.id} style={{ color: '#1F2937' }}>
+                  {provider.label}{provider.isDefault ? ' · ברירת מחדל' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={controlLabelStyle}>⚙️ סקיל פעיל</div>
+            <div style={controlHelperStyle}>
+              אפשר להשאיר בחירה אוטומטית, לקבע סקיל ידני, או לזמן זמנית מתוך הקלט עם `/skill`.
+            </div>
+            <select
+              value={selectedSkillId}
+              onChange={(e) => {
+                clearPendingMentionSelection();
+                setSelectedSkillId(e.target.value);
+              }}
+              disabled={isSettingsLocked}
+              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+            >
+              <option value="none" style={{ color: '#1F2937' }}>
+                בחירה אוטומטית לפי ההגדרות
+              </option>
+              {skillCatalog.map((skill) => {
+                const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
+                return (
+                  <option key={skill.id} value={skill.id} disabled={mode === 'off'} style={{ color: '#1F2937' }}>
+                    {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={controlLabelStyle}>🤖 סוכן נבחר</div>
+            <div style={controlHelperStyle}>
+              בחירה כאן מפנה את ההודעות הבאות לסוכן עד שמחליפים אותו. `@agent` מתוך הצ׳אט נשאר חד־פעמי לשליחה הנוכחית בלבד.
+            </div>
+            <select
+              value={selectedAgentId}
+              onChange={(e) => {
+                clearPendingMentionSelection();
+                setSelectedAgentId(e.target.value);
+              }}
+              disabled={isSettingsLocked}
+              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+            >
+              <option value="" style={{ color: '#1F2937' }}>
+                ללא סוכן קבוע · צ׳אט ישיר
+              </option>
+              {roleAgents.map((agent) => (
+                <option key={agent.id} value={agent.id} style={{ color: '#1F2937' }}>
+                  @{agent.id} · {agent.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: showQuickPrompts ? 10 : 0 }}>
+              <div>
+                <div style={controlLabelStyle}>✨ הצעות מהירות</div>
+                <div style={{ ...controlHelperStyle, marginBottom: 0 }}>
+                  נשארות מחוץ לשדה ההקלדה עד שצריך אותן, כדי לשמור על זרימת כתיבה נקייה.
+                </div>
+              </div>
+              <button
+                onClick={() => setShowQuickPrompts((prev) => !prev)}
+                disabled={isSettingsLocked}
+                style={{
+                  background: showQuickPrompts ? 'rgba(139, 92, 246, 0.18)' : 'rgba(255, 255, 255, 0.08)',
+                  border: showQuickPrompts ? '1px solid rgba(167, 139, 250, 0.32)' : '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: 999,
+                  padding: '8px 14px',
+                  cursor: isSettingsLocked ? 'not-allowed' : 'pointer',
+                  fontSize: 12,
+                  color: showQuickPrompts ? '#E9D5FF' : 'rgba(255,255,255,0.86)',
+                  fontWeight: 600,
+                  opacity: isSettingsLocked ? 0.56 : 1,
+                }}
+              >
+                {showQuickPrompts ? 'הסתר הצעות' : 'הצג הצעות'}
+              </button>
+            </div>
+
+            {showQuickPrompts && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                {quickPromptList.map((prompt, index) => (
+                  <button
+                    key={prompt}
+                    onClick={() => {
+                      setDraftInput(prompt);
+                      setTab('chat');
+                      requestAnimationFrame(() => inputRef.current?.focus());
+                    }}
+                    disabled={isSettingsLocked}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.08)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: 16,
+                      padding: '9px 12px',
+                      cursor: isSettingsLocked ? 'not-allowed' : 'pointer',
+                      fontSize: 11,
+                      color: 'rgba(255,255,255,0.9)',
+                      fontWeight: 500,
+                      transition: 'all 0.3s ease',
+                      animation: `slideIn 0.25s ease ${index * 0.05}s both`,
+                      opacity: isSettingsLocked ? 0.56 : 1,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (isSettingsLocked) return;
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.14)';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (isSettingsLocked) return;
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.56)', lineHeight: 1.6 }}>
+              Enter לשליחה, Shift+Enter לשורה חדשה, @ לסוכנים ו-/ לסקילים בלי לפגוע בזיכרון השיחה או ב-persistence.
             </div>
           </div>
         </div>
@@ -2049,7 +2378,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 {QUICK_PROMPTS.map((prompt, index) => (
                   <button 
                     key={index}
-                    onClick={() => setInput(prompt.text)}
+                    onClick={() => setDraftInput(prompt.text)}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',

@@ -6,13 +6,39 @@ const PROVIDER_QUICK_LINKS = [
   { id: 'claude', label: 'Claude', keyUrl: 'https://console.anthropic.com/settings/keys', keyHint: 'Anthropic Console' },
   { id: 'groq', label: 'Groq', keyUrl: 'https://console.groq.com/keys', keyHint: 'Groq Console' },
   { id: 'perplexity', label: 'Perplexity', keyUrl: 'https://www.perplexity.ai/settings/api', keyHint: 'Perplexity Settings' },
+  { id: 'deepseek', label: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', keyHint: 'DeepSeek Platform' },
+  { id: 'mistral', label: 'Mistral', keyUrl: 'https://console.mistral.ai/api-keys', keyHint: 'Mistral Console' },
+  { id: 'together', label: 'Together.ai', keyUrl: 'https://api.together.ai/settings/api-keys', keyHint: 'Together API' },
   { id: 'openrouter', label: 'OpenRouter', keyUrl: 'https://openrouter.ai/keys', keyHint: 'OpenRouter Keys' },
+  { id: 'xai', label: 'xAI (Grok)', keyUrl: 'https://console.x.ai', keyHint: 'xAI Console' },
+];
+
+const EXTERNAL_PROVIDER_OPTIONS = [
+  { id: 'gemini', label: 'Gemini' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'groq', label: 'Groq' },
+  { id: 'perplexity', label: 'Perplexity' },
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'mistral', label: 'Mistral' },
+  { id: 'together', label: 'Together.ai' },
+  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'xai', label: 'xAI (Grok)' },
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'lmstudio', label: 'LM Studio' },
+  { id: 'custom', label: 'ספק אחר / מותאם' },
 ];
 
 export default function ProfileOnboarding({
   profile,
   updateField,
   updateList,
+  externalAnalysis = {},
+  onExternalProviderChange = () => {},
+  onQuickProviderChange = () => {},
+  onExternalAnalysisRawChange = () => {},
+  onQuickProviderKeyChange = () => {},
+  onSubmitExternalAnalysis = () => {},
   STYLE_TRAINING_QUESTIONS,
   STYLE_PRESET_OPTIONS,
   trainingAnswers,
@@ -21,15 +47,23 @@ export default function ProfileOnboarding({
   resetLearningGame,
   onOpenAiSettings = () => {},
   onOpenPersonalStyle = () => {},
-  onComplete = () => {}
+  onComplete = () => {},
+  onDismiss = () => {}
 }) {
   const [step, setStep] = useState(1);
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [copyPromptState, setCopyPromptState] = useState('');
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!copyPromptState) return undefined;
+    const timer = setTimeout(() => setCopyPromptState(''), 2000);
+    return () => clearTimeout(timer);
+  }, [copyPromptState]);
 
   const nextStep = () => {
     if (step < 7) {
@@ -52,6 +86,40 @@ export default function ProfileOnboarding({
   };
 
   const currentCoursesStr = (profile.currentCourses || []).join(', ');
+  const externalProviderOptions = EXTERNAL_PROVIDER_OPTIONS;
+  const externalStatusText = externalAnalysis.status === 'processed'
+    ? 'הניתוח החיצוני עובד בהצלחה ונשמר בפרופיל.'
+    : externalAnalysis.status === 'processing'
+      ? 'מעבד כרגע את התוצאה החיצונית לפרופיל מובנה...'
+      : externalAnalysis.status === 'pending-provider'
+        ? 'התוצאה נשמרה מקומית וממתינה לחיבור ספק AI מקומי כדי להשלים מיפוי אוטומטי.'
+        : externalAnalysis.status === 'error'
+          ? (externalAnalysis.error || 'העיבוד נכשל. אפשר לשמור ולנסות שוב אחרי חיבור ספק.')
+          : 'הדבק כאן תשובת AI חיצונית כדי לחסוך קריאות פנימיות יקרות.';
+
+  const handleCopyExternalPrompt = async () => {
+    const promptText = String(externalAnalysis.promptText || '').trim();
+    if (!promptText) {
+      setCopyPromptState('אין prompt להעתקה');
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(promptText);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = promptText;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopyPromptState('הועתק ללוח');
+    } catch {
+      setCopyPromptState('ההעתקה נכשלה');
+    }
+  };
 
   const stepIcons = {
     1: '👋',
@@ -65,11 +133,11 @@ export default function ProfileOnboarding({
 
   const stepTitles = {
     1: 'הכירות',
-    2: 'סביבה',
+    2: 'הגשה',
     3: 'קהל יעד',
     4: 'חוקים',
     5: 'משחק',
-    6: 'דוגמה',
+    6: 'ניתוח',
     7: 'סיום'
   };
 
@@ -162,7 +230,7 @@ export default function ProfileOnboarding({
                 <div className="space-y-2">
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      איך תרצה שאקרא לך? ✨
+                      שם הסטודנט/ית או שם התצוגה ✨
                     </label>
                     <input
                       value={profile.displayName || ''}
@@ -174,7 +242,7 @@ export default function ProfileOnboarding({
                   
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-blue-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      מוסד לימודים או מקום עבודה 🏢
+                      מוסד / מרכז אקדמי 🏢
                     </label>
                     <input
                       value={profile.institutionName || ''}
@@ -186,7 +254,7 @@ export default function ProfileOnboarding({
                   
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-green-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      מה התחום שלך? 🎓
+                      פקולטה / חוג / מסלול 🎓
                     </label>
                     <input
                       value={profile.studyTrack || ''}
@@ -198,7 +266,7 @@ export default function ProfileOnboarding({
                   
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      מה התפקיד שלך? 👤
+                      תפקיד או סטטוס נוכחי 👤
                     </label>
                     <input
                       value={profile.userRole || ''}
@@ -210,7 +278,7 @@ export default function ProfileOnboarding({
                   
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      קורסים או פרויקטים פעילים 📚
+                      שם קורס / קורסים פעילים 📚
                     </label>
                     <textarea
                       value={currentCoursesStr}
@@ -218,6 +286,18 @@ export default function ProfileOnboarding({
                       placeholder="פרט על הקורסים, הנושאים או הפרויקטים שאתה עובד עליהם..."
                       rows={2}
                       className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-rose-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      תעודת זהות / מזהה סטודנט 🪪
+                    </label>
+                    <input
+                      value={profile.studentId || ''}
+                      onChange={(e) => updateField('studentId', e.target.value)}
+                      placeholder="מספר מזהה להגשה..."
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 transition-all duration-300 hover:bg-slate-800/80"
                     />
                   </div>
                 </div>
@@ -231,11 +311,60 @@ export default function ProfileOnboarding({
                     💼 סביבת העבודה שלך
                   </h2>
                   <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
-                    איך אתה כותב ובשביל מי? המידע הזה יעזור לי לדייק את הניסוחים
+                    כאן מגדירים גם פרטי הגשה קבועים וגם את הקונטקסט שבו אתה כותב
                   </p>
                 </div>
                 
                 <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-amber-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        מרצה / מנחה 👩‍🏫
+                      </label>
+                      <input
+                        value={profile.lecturerName || ''}
+                        onChange={(e) => updateField('lecturerName', e.target.value)}
+                        placeholder="שם המרצה"
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-emerald-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        סוג מטלה / מסמך 📄
+                      </label>
+                      <input
+                        value={profile.assignmentType || ''}
+                        onChange={(e) => updateField('assignmentType', e.target.value)}
+                        placeholder="למשל: עבודה מסכמת"
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        תאריך הגשה 📅
+                      </label>
+                      <input
+                        type="date"
+                        value={profile.submissionDate || ''}
+                        onChange={(e) => updateField('submissionDate', e.target.value)}
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-purple-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      הצהרת שימוש ב-AI להגשה 🤖
+                    </label>
+                    <textarea
+                      value={profile.aiAssistanceDeclaration || ''}
+                      onChange={(e) => updateField('aiAssistanceDeclaration', e.target.value)}
+                      placeholder="אם למוסד יש נוסח קבוע, הדבק אותו כאן לשימוש עתידי בעמודי שער והצהרות."
+                      rows={2}
+                      className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 transition-all duration-300 hover:bg-slate-800/80"
+                    />
+                  </div>
+
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-green-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                       הרקע שלך ככותב ✍️
@@ -540,6 +669,89 @@ export default function ProfileOnboarding({
                       className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
                     />
                   </div>
+
+                  <div className="bg-slate-900/40 border border-slate-700/70 rounded-2xl p-4 space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-bold text-white mb-1">🧠 ניתוח סגנון חיצוני מוזל</div>
+                        <div className="text-xs text-white/80 leading-relaxed max-w-2xl">
+                          אפשר לשלוח prompt מוכן לספק חיצוני, לצרף עבודות עבר, ואז להדביק כאן את התוצאה. אם אין כרגע ספק מקומי פעיל, אשמור את הטקסט ואעבד אותו אוטומטית כשתחבר ספק בהגדרות ה-AI.
+                        </div>
+                      </div>
+                      <div className={`px-3 py-1 rounded-full text-[11px] font-semibold ${externalAnalysis.hasLocalProvider ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-300/30' : 'bg-amber-500/20 text-amber-100 border border-amber-300/30'}`}>
+                        {externalAnalysis.hasLocalProvider
+                          ? `עיבוד מקומי זמין: ${externalAnalysis.processingProviderLabel || 'AI'}`
+                          : 'אין כרגע ספק מקומי זמין'}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-1">בחר לאיזה ספק חיצוני תשלח את ה-prompt</label>
+                        <select
+                          value={externalAnalysis.selectedProviderId || 'gemini'}
+                          onChange={(e) => onExternalProviderChange(e.target.value)}
+                          className="w-full px-4 py-2 bg-slate-800/60 border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400"
+                        >
+                          {externalProviderOptions.map((provider) => (
+                            <option key={provider.id} value={provider.id} className="bg-slate-800 text-white">{provider.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={handleCopyExternalPrompt}
+                          className="w-full px-4 py-2 rounded-xl bg-cyan-500/70 hover:bg-cyan-500 text-white text-sm font-semibold transition-colors"
+                        >
+                          העתק prompt לניתוח חיצוני
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-cyan-950/35 border border-cyan-400/20 rounded-xl p-3">
+                      <div className="text-xs font-semibold text-cyan-100 mb-1">לפני ההעתקה</div>
+                      <div className="text-xs text-cyan-50/90 leading-relaxed">
+                        {externalAnalysis.preparationHint || 'צרף את הקבצים והחומרים בממשק החיצוני לפני שליחת ה-prompt.'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-1">ה-prompt להעתקה</label>
+                      <textarea
+                        readOnly
+                        value={externalAnalysis.promptText || ''}
+                        rows={7}
+                        className="w-full px-4 py-2 bg-slate-950/70 border border-slate-700 rounded-xl text-white/90 text-xs leading-relaxed resize-none outline-none"
+                      />
+                      <div className="text-[11px] text-cyan-100 mt-2 min-h-[18px]">{copyPromptState || 'ההעתקה מכילה רק את ה-prompt עצמו; הוראות ההכנה נשארות מחוץ לטקסט כדי להקל על ההדבקה.'}</div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-1">הדבק כאן את תשובת ה-AI החיצוני</label>
+                      <textarea
+                        value={profile.externalStyleAnalysisRaw || ''}
+                        onChange={(e) => onExternalAnalysisRawChange(e.target.value)}
+                        placeholder="הדבק כאן את כל התשובה שקיבלת מהספק החיצוני. עדיף JSON מלא, אבל גם טקסט חופשי יתקבל."
+                        rows={6}
+                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs text-white/80 leading-relaxed max-w-2xl">
+                        {externalStatusText}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={onSubmitExternalAnalysis}
+                        disabled={!String(profile.externalStyleAnalysisRaw || '').trim() || externalAnalysis.isBusy}
+                        className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${!String(profile.externalStyleAnalysisRaw || '').trim() || externalAnalysis.isBusy ? 'bg-slate-700/60 text-white/50 cursor-not-allowed' : 'bg-emerald-500/80 hover:bg-emerald-500 text-white'}`}
+                      >
+                        {externalAnalysis.isBusy ? 'מעבד...' : externalAnalysis.hasLocalProvider ? 'שמור ונתח עכשיו' : 'שמור להמשך'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -659,7 +871,19 @@ export default function ProfileOnboarding({
                     <div className="bg-slate-800/40 border border-slate-600/70 rounded-xl p-4 space-y-3">
                       <div className="text-sm font-semibold text-white">🔐 חיבור ספק AI + קישורים ישירים להוצאת API key</div>
                       <div className="text-xs text-white/80 leading-relaxed">
-                        אחרי יצירת המפתח, פתח את הגדרות ה-AI, הדבק את המפתח ולחץ "בדוק חיבור".
+                        אחרי יצירת המפתח אפשר להדביק אותו כאן מיד, בלי לצאת מה-onboarding. אם צריך אחר כך endpoint או מודל, אפשר לעבור להגדרות ה-AI המלאות.
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-white/90 mb-1">ספק נבחר להדבקה מהירה</label>
+                        <select
+                          value={externalAnalysis.quickSetupProviderId || 'gemini'}
+                          onChange={(e) => onQuickProviderChange(e.target.value)}
+                          className="w-full px-4 py-2 bg-slate-800/60 border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400"
+                        >
+                          {externalProviderOptions.map((provider) => (
+                            <option key={provider.id} value={provider.id} className="bg-slate-800 text-white">{provider.label}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {PROVIDER_QUICK_LINKS.map((provider) => (
@@ -674,20 +898,38 @@ export default function ProfileOnboarding({
                           </a>
                         ))}
                       </div>
-                      <div className="flex flex-wrap gap-2 pt-1">
+                      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+                        <div>
+                          <label className="block text-xs font-semibold text-white/90 mb-1">
+                            הדבק מפתח עבור {externalAnalysis.quickProviderSetup?.label || 'הספק הנבחר'}
+                          </label>
+                          <input
+                            type="password"
+                            value={externalAnalysis.quickProviderSetup?.keyValue || ''}
+                            onChange={(e) => onQuickProviderKeyChange(e.target.value)}
+                            placeholder={externalAnalysis.quickProviderSetup?.placeholder || 'API key'}
+                            disabled={externalAnalysis.quickProviderSetup?.acceptsKey === false}
+                            className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
+                          />
+                          <div className="text-[11px] text-white/70 mt-2 min-h-[18px]">
+                            {externalAnalysis.quickProviderSetup?.helpText || 'אפשר להדביק כאן את המפתח ולשמור אותו ישירות מתוך ה-onboarding.'}
+                          </div>
+                        </div>
                         <button
                           type="button"
                           onClick={onOpenAiSettings}
-                          className="px-3 py-1.5 rounded-lg bg-indigo-500/70 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                          className="px-3 py-2 rounded-lg bg-indigo-500/70 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
                         >
-                          פתח הגדרות AI
+                          הגדרות AI מתקדמות
                         </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <button
                           type="button"
                           onClick={onOpenPersonalStyle}
                           className="px-3 py-1.5 rounded-lg bg-emerald-500/70 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
                         >
-                          פתח העלאת חומרים ללמידה
+                          פתח חומרים ולמידה
                         </button>
                       </div>
                     </div>
@@ -712,6 +954,14 @@ export default function ProfileOnboarding({
             <span className="flex items-center gap-2">
               ← חזור
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="px-4 py-3 rounded-2xl text-sm font-semibold bg-white/10 text-white/85 border border-white/20 hover:bg-white/20 transition-all duration-300"
+          >
+            אמשיך אחר כך
           </button>
           
           <div className="text-center">

@@ -87,6 +87,8 @@ export const DEFAULT_PERSONAL_STYLE = {
   manualPhrases: [],
   preferredSentenceStructures: [],
   paragraphPreferences: '',
+  tonePreference: '',
+  lengthPreference: '',
   tonePreferences: [],
   learnedVocabulary: [],
   learnedPhrases: [],
@@ -99,6 +101,11 @@ export const DEFAULT_PERSONAL_STYLE = {
   displayName: '',
   institutionName: '',
   studyTrack: '',
+  lecturerName: '',
+  assignmentType: '',
+  studentId: '',
+  aiAssistanceDeclaration: '',
+  submissionDate: '',
   currentCourses: [],
   userRole: '',
   additionalContext: '',
@@ -126,6 +133,12 @@ export const DEFAULT_PERSONAL_STYLE = {
   onboardingDismissedAt: '',
   onboardingSnoozedUntil: '',
   onboardingVersion: 1,
+  externalStyleAnalysisProvider: '',
+  externalStyleAnalysisRaw: '',
+  externalStyleAnalysisPendingAt: '',
+  externalStyleAnalysisProcessedAt: '',
+  externalStyleAnalysisStatus: '',
+  externalStyleAnalysisLastError: '',
   learnedNotes: [],
   learnedSentencePatterns: [],
   preferredConnectors: [],
@@ -133,6 +146,14 @@ export const DEFAULT_PERSONAL_STYLE = {
   toneDescriptors: [],
   sentenceLengthPreference: '',
   paragraphLengthPreference: '',
+  greetingStyle: '',
+  signOffStyle: '',
+  goldenExample: '',
+  avoidRules: '',
+  alwaysRules: '',
+  favoritePhrases: '',
+  emojiPreference: '',
+  listPreference: '',
   styleFingerprint: {},
   scannedSourceIds: [],
   scanStats: {
@@ -190,7 +211,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       appendAgentNotesToOutput: false,
       agentNotesInstruction: '',
     },
-    agents: DEFAULT_ROLE_AGENTS,
+    agents: getDefaultRoleAgents(),
     lastModified: new Date().toISOString(),
   },
 };
@@ -272,48 +293,52 @@ export const DEFAULT_SKILLS_CONFIG = {
   }])),
 };
 
-export const DEFAULT_ROLE_AGENTS = [
-  {
-    id: 'manager',
-    name: 'מנהל עבודה',
-    prompt: 'נהל את המשימה כמו ראש צוות. פרק את הבקשה לשלבים, קבע סדר עבודה בין הסוכנים, שמור על מטרה ברורה, ובסוף החזר למשתמש תוצאה מרוכזת וישימה בעברית.',
-    provider: '',
-    model: '',
-    enabled: true,
-  },
-  {
-    id: 'designer',
-    name: 'מעצב מבנה',
-    prompt: 'הבהר ושפר את מבנה המסמך רק לפי מה שהתבקש במפורש או כבר קיים בטיוטה. אם המשתמש לא ביקש מבוא, כותרות, פרקים או סיכום - אל תוסיף אותם על דעת עצמך. חשוב על חוויית קריאה ובהירות, אך בלי לכפות שלד קשיח. ענה בעברית.',
-    provider: '',
-    model: '',
-    enabled: true,
-  },
-  {
-    id: 'writer',
-    name: 'כותב תוכן',
-    prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. תן עדיפות עליונה למה שהמשתמש ביקש ולחומרי העזר שסיפק — ההגדרות המובנות (תבנית, קהל, מסלול) משמשות כרקע בלבד ולא מחליפות את המטלה. אם התוצר מיועד למסמך מוכן או להדבקה ישירה, החזר HTML מעוצב עם תגיות כמו <h1>, <h2>, <h3>, <p>, <ul>, <ol>, <strong> לפי הצורך. אם לא התבקש מסמך מובנה, אל תכפה כותרות, מבוא, סיכום או חלוקת פרקים על דעת עצמך.',
-    provider: '',
-    model: '',
-    enabled: true,
-  },
-  {
-    id: 'researcher',
-    name: 'חוקר מקורות',
-    prompt: 'עזור באיסוף כיווני מחקר, שאלות, מילות חיפוש ומקורות רלוונטיים. כשאין ודאות אל תמציא. ענה בעברית מסודרת.',
-    provider: '',
-    model: '',
-    enabled: true,
-  },
-  {
-    id: 'proofreader',
-    name: 'מגיה סופי',
-    prompt: 'בצע ליטוש סופי: כתיב, פיסוק, בהירות, אחידות סגנונית ודיוק. שמור על כוונת הכותב והחזר נוסח מתוקן בעברית.',
-    provider: '',
-    model: '',
-    enabled: true,
-  },
-];
+function getDefaultRoleAgents() {
+  return [
+    {
+      id: 'manager',
+      name: 'מנהל עבודה',
+      prompt: 'נהל את המשימה כמו ראש צוות. פרק את הבקשה לשלבים, קבע סדר עבודה בין הסוכנים, שמור על מטרה ברורה, ובסוף החזר למשתמש תוצאה מרוכזת וישימה בעברית.',
+      provider: '',
+      model: '',
+      enabled: true,
+    },
+    {
+      id: 'designer',
+      name: 'מעצב מבנה',
+      prompt: 'הבהר ושפר את מבנה המסמך רק לפי מה שהתבקש במפורש או כבר קיים בטיוטה. אם המשתמש לא ביקש מבוא, כותרות, פרקים או סיכום - אל תוסיף אותם על דעת עצמך. חשוב על חוויית קריאה ובהירות, אך בלי לכפות שלד קשיח. ענה בעברית.',
+      provider: '',
+      model: '',
+      enabled: true,
+    },
+    {
+      id: 'writer',
+      name: 'כותב תוכן',
+      prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. תן עדיפות עליונה למה שהמשתמש ביקש ולחומרי העזר שסיפק — ההגדרות המובנות (תבנית, קהל, מסלול) משמשות כרקע בלבד ולא מחליפות את המטלה. אם התוצר מיועד למסמך מוכן או להדבקה ישירה, החזר HTML מעוצב עם תגיות כמו <h1>, <h2>, <h3>, <p>, <ul>, <ol>, <strong> לפי הצורך. אם לא התבקש מסמך מובנה, אל תכפה כותרות, מבוא, סיכום או חלוקת פרקים על דעת עצמך.',
+      provider: '',
+      model: '',
+      enabled: true,
+    },
+    {
+      id: 'researcher',
+      name: 'חוקר מקורות',
+      prompt: 'עזור באיסוף כיווני מחקר, שאלות, מילות חיפוש ומקורות רלוונטיים. כשאין ודאות אל תמציא. ענה בעברית מסודרת.',
+      provider: '',
+      model: '',
+      enabled: true,
+    },
+    {
+      id: 'proofreader',
+      name: 'מגיה סופי',
+      prompt: 'בצע ליטוש סופי: כתיב, פיסוק, בהירות, אחידות סגנונית ודיוק. שמור על כוונת הכותב והחזר נוסח מתוקן בעברית.',
+      provider: '',
+      model: '',
+      enabled: true,
+    },
+  ];
+}
+
+export const DEFAULT_ROLE_AGENTS = getDefaultRoleAgents();
 
 const KNOWN_PROVIDER_IDS = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
 const KNOWN_SKILL_IDS = SKILL_LIBRARY.map((skill) => skill.id);
@@ -691,6 +716,86 @@ export const savePersonalStyleProfile = (profile) => {
     last_updated: new Date().toISOString(),
   }));
   syncPersistedAppSettings();
+};
+
+const normalizeMeaningfulProfileText = (value = '') => String(value || '').trim();
+const normalizeMeaningfulProfileList = (value = []) => (
+  Array.isArray(value)
+    ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].sort()
+    : []
+);
+
+const hasMeaningfulPersonalProfileField = (field, value) => {
+  if (Array.isArray(value)) {
+    const currentValues = normalizeMeaningfulProfileList(value);
+    if (!currentValues.length) return false;
+    const defaultValues = normalizeMeaningfulProfileList(DEFAULT_PERSONAL_STYLE[field]);
+    if (currentValues.length !== defaultValues.length) return true;
+    return currentValues.some((item, index) => item !== defaultValues[index]);
+  }
+
+  const currentValue = normalizeMeaningfulProfileText(value);
+  if (!currentValue) return false;
+  return currentValue !== normalizeMeaningfulProfileText(DEFAULT_PERSONAL_STYLE[field]);
+};
+
+export const hasMeaningfulPersonalProfileData = (profile = {}) => {
+  const textFields = [
+    'displayName',
+    'institutionName',
+    'studyTrack',
+    'lecturerName',
+    'assignmentType',
+    'studentId',
+    'aiAssistanceDeclaration',
+    'submissionDate',
+    'userRole',
+    'additionalContext',
+    'paragraphPreferences',
+    'notes',
+    'customStyleGuidance',
+    'styleTrainingSummary',
+    'userBackground',
+    'writingGoals',
+    'defaultAudience',
+    'formatPreferences',
+    'sentenceLengthPreference',
+    'paragraphLengthPreference',
+    'linguisticRegisterPreference',
+    'greetingStyle',
+    'signOffStyle',
+    'goldenExample',
+    'avoidRules',
+    'alwaysRules',
+    'favoritePhrases',
+    'externalStyleAnalysisProcessedAt',
+  ];
+  const listFields = [
+    'currentCourses',
+    'manualVocabulary',
+    'manualPhrases',
+    'preferredSentenceStructures',
+    'tonePreferences',
+    'preferredHomeStyleIds',
+    'learningGameInsights',
+    'preferredTrainingExamples',
+    'dislikedStylePatterns',
+    'learnedNotes',
+    'learnedSentencePatterns',
+    'preferredConnectors',
+    'preferredSentenceOpeners',
+    'toneDescriptors',
+    'preferredDocumentTypes',
+    'examples',
+  ];
+
+  if (textFields.some((field) => hasMeaningfulPersonalProfileField(field, profile?.[field]))) return true;
+  if (listFields.some((field) => hasMeaningfulPersonalProfileField(field, profile?.[field]))) return true;
+  if (String(profile?.externalStyleAnalysisStatus || '').trim() === 'processed') return true;
+  if (profile?.learningGameAnswers && Object.keys(profile.learningGameAnswers).length > 0) return true;
+  if (profile?.styleFingerprint && Object.keys(profile.styleFingerprint).length > 0) return true;
+  if (profile?.scanStats && Object.values(profile.scanStats).some((value) => (typeof value === 'number' ? value > 0 : String(value || '').trim()))) return true;
+  return false;
 };
 
 const DEFAULT_WORKSPACE_ID = 'default-content-studio';
@@ -2230,8 +2335,39 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     doctoral: 'דוקטורט',
     professional: 'מקצועי',
   };
+  const toneLabels = {
+    very_formal: 'רשמי לחלוטין',
+    formal: 'מכובד ומקצועי',
+    balanced: 'מאוזן ונגיש',
+    casual: 'חצי-רשמי וחברי',
+    very_casual: 'שיחתי וזורם מאוד',
+  };
+  const lengthLabels = {
+    short: 'קצר ולעניין',
+    default: 'מאוזן עם מעט רקע והסבר',
+    detailed: 'מפורט עם הסברים ודוגמאות',
+  };
+  const emojiLabels = {
+    none: 'להימנע מאימוג\'י לחלוטין',
+    rare: 'להשתמש באימוג\'י לעתים נדירות בלבד',
+    moderate: 'אפשר לשלב אימוג\'י במידה לפי ההקשר',
+    lots: 'אפשר לשלב אימוג\'י בחופשיות כשזה מתאים',
+  };
+  const listLabels = {
+    bullets: 'להעדיף רשימות bullets',
+    numbers: 'להעדיף רשימות ממוספרות',
+    hyphens: 'להעדיף רשימות עם מקפים',
+  };
 
   const fingerprint = profile.styleFingerprint || {};
+  const normalizedGoldenExample = String(profile.goldenExample || '').trim().replace(/\s+/g, ' ');
+  const submissionDefaults = [
+    profile.assignmentType ? `סוג מטלה: ${String(profile.assignmentType).trim()}` : '',
+    profile.lecturerName ? `מרצה או מנחה: ${String(profile.lecturerName).trim()}` : '',
+    profile.submissionDate ? `תאריך הגשה: ${String(profile.submissionDate).trim()}` : '',
+    profile.studentId ? `מזהה מגיש: ${String(profile.studentId).trim()}` : '',
+    profile.aiAssistanceDeclaration ? `הצהרת AI: ${String(profile.aiAssistanceDeclaration).trim()}` : '',
+  ].filter(Boolean);
   const parts = [];
   if (profile.academic_level) parts.push(`רמת הכתיבה המועדפת: ${labels[profile.academic_level] || profile.academic_level}`);
   if (profile.displayName) parts.push(`שם המשתמש: ${String(profile.displayName).trim()}`);
@@ -2239,6 +2375,7 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.institutionName) parts.push(`מוסד לימודים או ארגון מרכזי: ${String(profile.institutionName).trim()}`);
   if (profile.studyTrack) parts.push(`מסלול, חוג או תחום עיקרי: ${String(profile.studyTrack).trim()}`);
   if (profile.currentCourses?.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${profile.currentCourses.join(', ')}`);
+  if (!omitStructuralHints && submissionDefaults.length) parts.push(`פרטי הגשה ברירת מחדל לשימוש כשמתבקשים עמוד שער או פרטי מסירה: ${submissionDefaults.join(' | ')}`);
   if (!omitStructuralHints && profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
   if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
@@ -2255,14 +2392,24 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.additionalContext) parts.push(`הקשר אישי נוסף שחשוב לזכור: ${String(profile.additionalContext).trim()}`);
   if (profile.preferredDocumentTypes?.length) parts.push(`סוגי מסמכים נפוצים למשתמש: ${profile.preferredDocumentTypes.join(', ')}`);
   if (profile.defaultAudience) parts.push(`קהל יעד מועדף: ${String(profile.defaultAudience).trim()}`);
+  if (profile.tonePreference) parts.push(`רמת רשמיות כללית מועדפת: ${toneLabels[profile.tonePreference] || profile.tonePreference}`);
+  if (profile.lengthPreference) parts.push(`רמת פירוט כללית מועדפת: ${lengthLabels[profile.lengthPreference] || profile.lengthPreference}`);
   if (!omitStructuralHints && profile.formatPreferences) parts.push(`העדפות מבנה ותצורה: ${String(profile.formatPreferences).trim()}`);
   if (profile.manualVocabulary?.length) parts.push(`העדף את המונחים: ${profile.manualVocabulary.join(', ')}`);
   if (profile.manualPhrases?.length) parts.push(`ביטויים שמועדפים על המשתמש: ${profile.manualPhrases.join(', ')}`);
+  if (profile.favoritePhrases) parts.push(`ביטויים אהובים שכדאי לשלב כשזה מתאים: ${String(profile.favoritePhrases).trim()}`);
   if (profile.preferredSentenceStructures?.length) parts.push(`מבני משפטים מועדפים: ${profile.preferredSentenceStructures.join(', ')}`);
   if (!omitStructuralHints && profile.paragraphPreferences) parts.push(`העדפות לגבי אורך ומבנה פסקאות: ${String(profile.paragraphPreferences).trim()}`);
   if (profile.tonePreferences?.length) parts.push(`טון כתיבה מועדף: ${profile.tonePreferences.join(', ')}`);
   if (profile.sentenceLengthPreference) parts.push(`אורך משפטים מועדף: ${profile.sentenceLengthPreference}`);
   if (profile.paragraphLengthPreference) parts.push(`אורך פסקאות מועדף: ${profile.paragraphLengthPreference}`);
+  if (profile.alwaysRules) parts.push(`כללים שחייבים להישמר בכל תוצר: ${String(profile.alwaysRules).trim()}`);
+  if (profile.avoidRules) parts.push(`יש להימנע במיוחד מהדברים הבאים: ${String(profile.avoidRules).trim()}`);
+  if (profile.greetingStyle) parts.push(`אם מתאים לפתוח את הטקסט בברכה, העדף את הסגנון: ${String(profile.greetingStyle).trim()}`);
+  if (profile.signOffStyle) parts.push(`אם מתאים לסיים בחתימה או סגירה, העדף: ${String(profile.signOffStyle).trim()}`);
+  if (profile.emojiPreference) parts.push(`שימוש באימוג'י: ${emojiLabels[profile.emojiPreference] || profile.emojiPreference}`);
+  if (profile.listPreference) parts.push(`פורמט רשימות מועדף: ${listLabels[profile.listPreference] || profile.listPreference}`);
+  if (normalizedGoldenExample) parts.push(`דוגמת כתיבה אישית לחיקוי: ${normalizedGoldenExample.slice(0, 500)}${normalizedGoldenExample.length > 500 ? '...' : ''}`);
   if (profile.protectedVocabulary?.length) parts.push(`אין לשנות את המונחים: ${profile.protectedVocabulary.join(', ')}`);
   if (profile.protectedPhrases?.length) parts.push(`אין לשנות את הביטויים: ${profile.protectedPhrases.join(', ')}`);
   if (profile.learningConsent === false) {
@@ -2298,6 +2445,328 @@ export const buildPortablePrompt = (options = {}) => {
   ].filter(Boolean);
 
   return sections.join('\n\n').trim();
+};
+
+const EXTERNAL_ANALYSIS_PROVIDER_LABELS = {
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  claude: 'Claude',
+  groq: 'Groq',
+  perplexity: 'Perplexity',
+  deepseek: 'DeepSeek',
+  mistral: 'Mistral',
+  together: 'Together.ai',
+  openrouter: 'OpenRouter',
+  xai: 'xAI (Grok)',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  custom: 'מותאם / OpenAI-Compatible',
+};
+
+const EXTERNAL_ANALYSIS_PROVIDER_HINTS = {
+  gemini: 'העלה את קבצי העבודות ועמוד השער ישירות ל-Gemini לפני שליחת הפרומפט.',
+  openai: 'העלה את קבצי העבודות ועמוד השער לצ\'אט של ChatGPT לפני שליחת הפרומפט.',
+  claude: 'צרף את הקבצים לשיחת Claude לפני שליחת הפרומפט.',
+  groq: 'אם אין העלאת קבצים ב-Groq, הדבק 2-3 קטעים מייצגים ועמוד שער במקום קבצים.',
+  perplexity: 'אם אין העלאת קבצים ב-Perplexity, הדבק קטעים מייצגים ועמוד שער ידנית.',
+  deepseek: 'ב-DeepSeek צרף קבצים אם יש תמיכה; אחרת הדבק 2-3 קטעים מייצגים ועמוד שער לפני שליחת הפרומפט.',
+  mistral: 'ב-Mistral צרף קבצים אם אפשר; אחרת הדבק קטעים מייצגים ועמוד שער ידנית.',
+  together: 'ב-Together.ai צרף קבצים אם יש תמיכה בממשק; אחרת הדבק קטעים מייצגים ועמוד שער.',
+  openrouter: 'בממשק OpenRouter או הספק החיצוני שלך, צרף קבצים אם אפשר; אחרת הדבק קטעים מייצגים.',
+  xai: 'ב-Grok/xAI צרף קבצים אם הממשק תומך בכך; אחרת הדבק קטעים מייצגים ועמוד שער.',
+  ollama: 'בממשק המקומי שלך צרף קבצים אם יש תמיכה; אחרת הדבק קטעים מייצגים ועמוד שער.',
+  lmstudio: 'ב-LM Studio אפשר להדביק קטעים מייצגים ועמוד שער, או לצרף קבצים אם Local Server שלך תומך בכך.',
+  custom: 'בממשק החיצוני שלך צרף קבצים או הדבק קטעים מייצגים ועמוד שער לפני שליחת הפרומפט.',
+};
+
+const normalizeExternalAnalysisProviderKey = (value = '') => String(value || '').trim().toLowerCase();
+const getExternalAnalysisRuntimeProviderId = (providerId = '') => {
+  const normalizedProviderId = normalizeExternalAnalysisProviderKey(providerId);
+  if (['deepseek', 'mistral', 'together', 'openrouter', 'xai', 'lmstudio'].includes(normalizedProviderId)) return 'custom';
+  return normalizedProviderId;
+};
+
+export const getExternalAnalysisProviderHint = (providerId = '') => {
+  const providerKey = normalizeExternalAnalysisProviderKey(providerId) || 'gemini';
+  return EXTERNAL_ANALYSIS_PROVIDER_HINTS[providerKey] || EXTERNAL_ANALYSIS_PROVIDER_HINTS.custom;
+};
+
+const uniqueExternalStrings = (values = [], limit = 12) => {
+  const source = Array.isArray(values) ? values : [values];
+  return [...new Set(source
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .flatMap((item) => (typeof item === 'string' ? item.split(/[\n,|]/) : [item]))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean))].slice(0, limit);
+};
+
+const pickExternalText = (...values) => values
+  .map((value) => String(value || '').trim())
+  .find(Boolean) || '';
+
+const mergeExternalSentenceText = (...values) => [...new Set(values
+  .map((value) => String(value || '').trim())
+  .filter(Boolean))].join(' ').trim();
+
+const mergeExternalBlockText = (...values) => [...new Set(values
+  .map((value) => String(value || '').trim())
+  .filter(Boolean))].join('\n').trim();
+
+const normalizeExternalSubmissionDate = (value = '') => {
+  const clean = String(value || '').trim();
+  if (!clean) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+
+  const match = clean.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (match) {
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    let year = Number(match[3]);
+    if (year < 100) year += 2000;
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  const parsed = new Date(clean);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return '';
+};
+
+const normalizeExternalDocumentStyle = (value = '') => {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  if (/legal|משפט/.test(clean)) return 'legal';
+  if (/present|slide|מצג/.test(clean)) return 'presentation';
+  if (/business|עסק|report|דוח/.test(clean)) return 'business';
+  if (/acad|אקד/.test(clean)) return 'academic';
+  return '';
+};
+
+const normalizeExternalSentenceLength = (value = '') => {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  if (/short|concise|קצר|תמצית/.test(clean)) return 'קצר';
+  if (/long|detailed|deep|מעמיק|ארו/.test(clean)) return 'מעמיק';
+  if (/balanced|medium|מאוז/.test(clean)) return 'מאוזן';
+  return String(value || '').trim();
+};
+
+const normalizeExternalParagraphLength = (value = '') => {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  if (/short|concise|brief|תמצית|קצר/.test(clean)) return 'תמציתי';
+  if (/long|detailed|expanded|מפורט|ארו/.test(clean)) return 'מפורט';
+  if (/balanced|medium|מאוז|בינונ/.test(clean)) return 'בינוני';
+  return String(value || '').trim();
+};
+
+const normalizeExternalStyleExtraction = (parsed = {}, currentProfile = {}) => {
+  const style = parsed?.style && typeof parsed.style === 'object' ? parsed.style : {};
+  const cover = parsed?.coverPageDefaults && typeof parsed.coverPageDefaults === 'object' ? parsed.coverPageDefaults : {};
+  const assignmentType = pickExternalText(cover.assignmentType, parsed.assignmentType, style.assignmentType);
+  const extractedDefaultStyle = normalizeExternalDocumentStyle(
+    pickExternalText(style.defaultDocumentStyle, parsed.defaultDocumentStyle, style.documentStyle, parsed.documentStyle)
+  );
+  const currentCourses = uniqueExternalStrings([
+    currentProfile.currentCourses || [],
+    cover.courseName,
+    parsed.courseName,
+    cover.currentCourses,
+    parsed.currentCourses,
+  ], 6);
+  const preferredHomeStyleIds = uniqueExternalStrings([
+    currentProfile.preferredHomeStyleIds || [],
+    extractedDefaultStyle,
+  ], 4);
+
+  return {
+    institutionName: String(currentProfile.institutionName || '').trim() || pickExternalText(cover.institutionName, parsed.institutionName, cover.academicCenter, parsed.academicCenter),
+    studyTrack: String(currentProfile.studyTrack || '').trim() || pickExternalText(cover.studyTrack, parsed.studyTrack, cover.department, parsed.department, cover.faculty, parsed.faculty, cover.major, parsed.major),
+    currentCourses,
+    lecturerName: String(currentProfile.lecturerName || '').trim() || pickExternalText(cover.lecturerName, parsed.lecturerName),
+    assignmentType: String(currentProfile.assignmentType || '').trim() || assignmentType,
+    displayName: String(currentProfile.displayName || '').trim() || pickExternalText(cover.displayName, parsed.displayName, cover.studentName, parsed.studentName),
+    studentId: String(currentProfile.studentId || '').trim() || pickExternalText(cover.studentId, parsed.studentId),
+    aiAssistanceDeclaration: String(currentProfile.aiAssistanceDeclaration || '').trim() || pickExternalText(cover.aiAssistanceDeclaration, parsed.aiAssistanceDeclaration),
+    submissionDate: String(currentProfile.submissionDate || '').trim() || normalizeExternalSubmissionDate(pickExternalText(cover.submissionDate, parsed.submissionDate)),
+    userBackground: String(currentProfile.userBackground || '').trim() || pickExternalText(style.userBackground, parsed.userBackground, style.writerIdentity, parsed.writerIdentity),
+    writingGoals: String(currentProfile.writingGoals || '').trim() || pickExternalText(style.writingGoals, parsed.writingGoals, style.primaryGoal, parsed.primaryGoal),
+    defaultAudience: String(currentProfile.defaultAudience || '').trim() || pickExternalText(style.defaultAudience, parsed.defaultAudience, style.audience, parsed.audience),
+    formatPreferences: String(currentProfile.formatPreferences || '').trim() || pickExternalText(style.formatPreferences, parsed.formatPreferences),
+    paragraphPreferences: String(currentProfile.paragraphPreferences || '').trim() || pickExternalText(style.paragraphPreferences, parsed.paragraphPreferences),
+    customStyleGuidance: mergeExternalBlockText(currentProfile.customStyleGuidance, style.customStyleGuidance, parsed.customStyleGuidance, style.recommendedInstructions, parsed.recommendedInstructions),
+    notes: mergeExternalBlockText(currentProfile.notes, style.notes, parsed.notes, parsed.keyFindings, style.keyFindings),
+    styleTrainingSummary: mergeExternalSentenceText(currentProfile.styleTrainingSummary, parsed.profileSummary, parsed.summary, style.profileSummary, style.summary),
+    manualVocabulary: uniqueExternalStrings([currentProfile.manualVocabulary || [], style.manualVocabulary, parsed.manualVocabulary, style.keyTerms, parsed.keyTerms], 24),
+    manualPhrases: uniqueExternalStrings([currentProfile.manualPhrases || [], style.manualPhrases, parsed.manualPhrases, style.signaturePhrases, parsed.signaturePhrases], 18),
+    preferredSentenceStructures: uniqueExternalStrings([currentProfile.preferredSentenceStructures || [], style.preferredSentenceStructures, parsed.preferredSentenceStructures], 12),
+    preferredConnectors: uniqueExternalStrings([currentProfile.preferredConnectors || [], style.preferredConnectors, parsed.preferredConnectors], 12),
+    preferredSentenceOpeners: uniqueExternalStrings([currentProfile.preferredSentenceOpeners || [], style.preferredSentenceOpeners, parsed.preferredSentenceOpeners], 12),
+    toneDescriptors: uniqueExternalStrings([currentProfile.toneDescriptors || [], style.toneDescriptors, parsed.toneDescriptors], 12),
+    tonePreferences: uniqueExternalStrings([currentProfile.tonePreferences || [], style.tonePreferences, parsed.tonePreferences, style.tone, parsed.tone], 6),
+    sentenceLengthPreference: String(currentProfile.sentenceLengthPreference || '').trim() || normalizeExternalSentenceLength(pickExternalText(style.sentenceLengthPreference, parsed.sentenceLengthPreference)),
+    paragraphLengthPreference: String(currentProfile.paragraphLengthPreference || '').trim() || normalizeExternalParagraphLength(pickExternalText(style.paragraphLengthPreference, parsed.paragraphLengthPreference)),
+    defaultDocumentStyle: extractedDefaultStyle || String(currentProfile.defaultDocumentStyle || '').trim() || 'academic',
+    preferredHomeStyleIds: preferredHomeStyleIds.length ? preferredHomeStyleIds : (Array.isArray(currentProfile.preferredHomeStyleIds) ? currentProfile.preferredHomeStyleIds : ['academic']),
+    preferredDocumentTypes: uniqueExternalStrings([currentProfile.preferredDocumentTypes || [], assignmentType], 6),
+  };
+};
+
+export const mergeExternalStyleExtractionIntoProfile = (parsed = {}, currentProfile = {}) => (
+  normalizeExternalStyleExtraction(parsed, currentProfile)
+);
+
+export const getExternalAnalysisAvailability = (preferredProviderId = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const names = getProviderLabelMap(safeCfg);
+  const uiProviderId = normalizeExternalAnalysisProviderKey(preferredProviderId);
+  const runtimePreferredProviderId = getExternalAnalysisRuntimeProviderId(preferredProviderId);
+  const preferredPool = getConfiguredProviderPool(safeCfg, runtimePreferredProviderId ? [runtimePreferredProviderId] : []);
+  const fallbackPool = preferredPool.length ? preferredPool : getConfiguredProviderPool(safeCfg);
+  const processingProviderId = fallbackPool[0] || '';
+  const processingProviderLabel = uiProviderId && runtimePreferredProviderId === 'custom' && processingProviderId === 'custom'
+    ? (EXTERNAL_ANALYSIS_PROVIDER_LABELS[uiProviderId] || names.custom || 'custom')
+    : (processingProviderId ? (names[processingProviderId] || processingProviderId) : '');
+  return {
+    hasLocalProvider: Boolean(processingProviderId),
+    processingProviderId,
+    processingProviderLabel,
+    configuredChoices: getConfiguredProviderChoices(safeCfg),
+  };
+};
+
+export const buildExternalStyleAnalysisPrompt = ({ providerId = '', profile = {} } = {}) => {
+  const knownContext = [
+    profile.displayName ? `- שם משתמש ידוע: ${String(profile.displayName).trim()}` : '',
+    profile.institutionName ? `- מוסד/מרכז אקדמי ידוע: ${String(profile.institutionName).trim()}` : '',
+    profile.studyTrack ? `- חוג/מסלול ידוע: ${String(profile.studyTrack).trim()}` : '',
+    Array.isArray(profile.currentCourses) && profile.currentCourses.length ? `- קורס/ים שכבר ידועים: ${profile.currentCourses.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+
+  return [
+    'מטרה: נתח את סגנון הכתיבה הקבוע שלי ואת ברירות המחדל שאני נוהג לשים בעמוד שער אקדמי.',
+    'החזר JSON בלבד, ללא הסברים מסביב, במבנה הבא:',
+    '{"profileSummary":"","style":{"defaultAudience":"","writingGoals":"","formatPreferences":"","paragraphPreferences":"","customStyleGuidance":"","manualVocabulary":[],"manualPhrases":[],"preferredSentenceStructures":[],"preferredConnectors":[],"preferredSentenceOpeners":[],"toneDescriptors":[],"tonePreferences":[],"sentenceLengthPreference":"","paragraphLengthPreference":"","defaultDocumentStyle":"","notes":""},"coverPageDefaults":{"institutionName":"","studyTrack":"","courseName":"","lecturerName":"","assignmentType":"","displayName":"","studentId":"","aiAssistanceDeclaration":"","submissionDate":""}}',
+    'כללים:',
+    '- אל תמציא מידע שלא מופיע בקבצים או בקטעים.',
+    '- אם שדה לא ידוע, החזר "" או [].',
+    '- manualVocabulary/manualPhrases רק אם הם באמת חוזרים בעבודות.',
+    '- submissionDate החזר ב-YYYY-MM-DD כשאפשר, אחרת "".',
+    '- aiAssistanceDeclaration צריך להיות הטקסט המדויק אם הוא מופיע, או תקציר נאמן מאוד אם יש וריאציות דומות.',
+    knownContext ? `הקשר שכבר ידוע:\n${knownContext}` : '',
+    'אחרי ההחזרה אין צורך בטקסט נוסף. רק JSON.',
+  ].filter(Boolean).join('\n');
+};
+
+export const processExternalStyleAnalysis = async ({ rawText = '', profile = {}, preferredProviderId = '', processingProviderId = '', providerConfig = null } = {}) => {
+  const trimmedRawText = String(rawText || '').trim();
+  const selectedExternalProvider = String(profile.externalStyleAnalysisProvider || preferredProviderId || '').trim();
+  const requestedProcessingProviderId = String(processingProviderId || preferredProviderId || '').trim();
+  const availability = getExternalAnalysisAvailability(requestedProcessingProviderId, providerConfig);
+  const basePatch = {
+    externalStyleAnalysisProvider: selectedExternalProvider,
+    externalStyleAnalysisRaw: trimmedRawText,
+    externalStyleAnalysisPendingAt: trimmedRawText ? (profile.externalStyleAnalysisPendingAt || new Date().toISOString()) : '',
+    externalStyleAnalysisProcessedAt: '',
+    externalStyleAnalysisStatus: trimmedRawText ? 'pending-provider' : '',
+    externalStyleAnalysisLastError: '',
+  };
+
+  if (!trimmedRawText) {
+    return {
+      ok: false,
+      status: 'empty',
+      providerId: '',
+      error: 'לא הודבק טקסט לניתוח.',
+      profilePatch: basePatch,
+    };
+  }
+
+  const parsedRawJson = safeJsonParse(trimmedRawText, null);
+  if (parsedRawJson && typeof parsedRawJson === 'object') {
+    return {
+      ok: true,
+      status: 'processed',
+      providerId: availability.processingProviderId,
+      error: '',
+      extracted: parsedRawJson,
+      profilePatch: {
+        ...basePatch,
+        ...normalizeExternalStyleExtraction(parsedRawJson, profile),
+        externalStyleAnalysisPendingAt: '',
+        externalStyleAnalysisProcessedAt: new Date().toISOString(),
+        externalStyleAnalysisStatus: 'processed',
+        externalStyleAnalysisLastError: '',
+      },
+    };
+  }
+
+  if (!availability.hasLocalProvider) {
+    return {
+      ok: false,
+      status: 'pending-provider',
+      providerId: '',
+      error: '',
+      profilePatch: basePatch,
+    };
+  }
+
+  const extractionPrompt = [
+    'אתה ממפה ניתוח סגנון חיצוני לפרופיל כתיבה פנימי.',
+    'החזר JSON בלבד במבנה הבא:',
+    '{"profileSummary":"","style":{"defaultAudience":"","writingGoals":"","formatPreferences":"","paragraphPreferences":"","customStyleGuidance":"","manualVocabulary":[],"manualPhrases":[],"preferredSentenceStructures":[],"preferredConnectors":[],"preferredSentenceOpeners":[],"toneDescriptors":[],"tonePreferences":[],"sentenceLengthPreference":"","paragraphLengthPreference":"","defaultDocumentStyle":"","notes":""},"coverPageDefaults":{"institutionName":"","studyTrack":"","courseName":"","lecturerName":"","assignmentType":"","displayName":"","studentId":"","aiAssistanceDeclaration":"","submissionDate":""}}',
+    'כללים:',
+    '- אל תמציא. אם אין בסיס, השאר "" או [].',
+    '- אם הטקסט המודבק כבר דומה ל-JSON, חלץ ממנו את הערכים בלי שכתוב מיותר.',
+    '- courseName צריך להכיל שם קורס אחד מרכזי אם יש כזה.',
+    '- submissionDate החזר כ-YYYY-MM-DD כשאפשר, אחרת "".',
+    '',
+    `טקסט ניתוח חיצוני מודבק:\n${trimmedRawText.slice(0, 16000)}`,
+  ].join('\n');
+
+  try {
+    const raw = await chatWithActiveProvider(extractionPrompt, '', '', {
+      providerOverride: availability.processingProviderId,
+      providerConfigOverride: providerConfig,
+      strictProviderOverride: true,
+      strictFormatting: true,
+      skipAutomation: true,
+      skipMultiModel: true,
+      agentLabel: 'External Style Extractor',
+      runId: `external-style-${Date.now()}`,
+    });
+    const parsed = safeJsonParse(raw, null);
+    if (!parsed || typeof parsed !== 'object') throw new Error('לא התקבל JSON תקין מהעיבוד המקומי.');
+    return {
+      ok: true,
+      status: 'processed',
+      providerId: availability.processingProviderId,
+      error: '',
+      extracted: parsed,
+      profilePatch: {
+        ...basePatch,
+        ...normalizeExternalStyleExtraction(parsed, profile),
+        externalStyleAnalysisPendingAt: '',
+        externalStyleAnalysisProcessedAt: new Date().toISOString(),
+        externalStyleAnalysisStatus: 'processed',
+        externalStyleAnalysisLastError: '',
+      },
+    };
+  } catch (error) {
+    const message = error?.message || 'שגיאה בעיבוד התוצאה החיצונית.';
+    return {
+      ok: false,
+      status: 'error',
+      providerId: availability.processingProviderId,
+      error: message,
+      profilePatch: {
+        ...basePatch,
+        externalStyleAnalysisStatus: 'error',
+        externalStyleAnalysisLastError: message,
+      },
+    };
+  }
 };
 
 // ═══════════════════════════════════════
@@ -2831,7 +3300,9 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
 // Universal Chat — routes by active provider
 // ═══════════════════════════════════════
 export const chatWithActiveProvider = async (userPrompt, documentContext = '', extraSystemPrompt = '', options = {}) => {
-  const cfg = getProviderConfig();
+  const cfg = options.providerConfigOverride && typeof options.providerConfigOverride === 'object'
+    ? normalizeProviderConfig(options.providerConfigOverride)
+    : getProviderConfig();
   const taggedRouting = extractTaggedModelRouting(userPrompt);
   const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
   const structureConstraintText = String(options.structureConstraintText || cleanUserPrompt).trim() || cleanUserPrompt;
@@ -3956,9 +4427,14 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
   if (!agent?.prompt) throw new Error('לסוכן התפקידי אין הנחיה שמורה');
   const cfg = getProviderConfig();
   const selectedProviders = getSelectedProviderIds(cfg);
-  const providerOverride = chooseProviderForAgent(agent, cfg, selectedProviders);
+  const explicitProviderOverride = String(runtimeOptions.providerOverride || '').trim();
+  const strictProviderOverride = runtimeOptions.strictProviderOverride === true && Boolean(explicitProviderOverride);
+  const providerOverride = strictProviderOverride
+    ? explicitProviderOverride
+    : chooseProviderForAgent(agent, cfg, selectedProviders);
   return chatWithActiveProvider(userPrompt, documentContext, agent.prompt, {
     providerOverride,
+    strictProviderOverride,
     preferredProviders: selectedProviders,
     modelOverride: agent.model,
     agentLabel: agent.name || 'סוכן תפקידי',

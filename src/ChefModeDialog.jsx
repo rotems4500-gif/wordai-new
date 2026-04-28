@@ -29,7 +29,7 @@ const toSafeQuestionCard = (step = 1, payload = {}) => ({
   placeholder: String(payload?.placeholder || '').trim() || 'אפשר גם לכתוב תשובה חופשית כאן...',
 });
 
-export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModelChange, selectedModel = 'gemini', chefContext = {} }) {
+export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModelChange, selectedModel = 'gemini', chefContext = {}, escapeBlocked = false }) {
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [questionFlow, setQuestionFlow] = useState([]);
   const [responses, setResponses] = useState([]);
@@ -284,6 +284,18 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       onClose?.();
     }
   };
+
+  useEffect(() => {
+    if (escapeBlocked) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose?.();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [escapeBlocked, onClose]);
 
   const handleGoToEditor = () => {
     if (window.confirm('המשך לעורך? ההיסטוריה של הבישול תישמר.')) {

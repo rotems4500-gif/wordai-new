@@ -1,6 +1,62 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { chatWithActiveProvider, matchShortcut } from './services/aiService';
 
+const MAX_WAND_CONTEXT = 1200;
+
+const toPlainText = (value = '') => String(value || '').trim();
+
+const normalizeSelectionContext = (selectionContext = null, fallbackSelection = '') => {
+  const selection = toPlainText(selectionContext?.selection || fallbackSelection);
+  if (!selection) return null;
+
+  return {
+    before: toPlainText(selectionContext?.before),
+    selection,
+    after: toPlainText(selectionContext?.after),
+  };
+};
+
+const buildFocusedContext = (documentText, selectedText = '', selectionContext = null) => {
+  const doc = toPlainText(documentText);
+  const focusedSelection = normalizeSelectionContext(selectionContext, selectedText);
+
+  if (!focusedSelection) {
+    return doc ? `הקשר מסמך קצר:\n${doc.slice(0, MAX_WAND_CONTEXT)}` : '';
+  }
+
+  const { before, selection, after } = focusedSelection;
+
+  return [
+    before ? `הקשר לפני:\n${before}` : '',
+    `טקסט נבחר לעריכה:\n${selection}`,
+    after ? `הקשר אחרי:\n${after}` : '',
+  ].filter(Boolean).join('\n\n');
+};
+
+const buildWandRequest = (actionPrompt, selectedText, documentText, selectionContext = null) => {
+  const selection = toPlainText(selectedText || selectionContext?.selection);
+
+  if (selection) {
+    return {
+      prompt: [
+        actionPrompt,
+        'ערוך רק את הטקסט הנבחר בהתאם לבקשה.',
+        'החזר רק את הטקסט החלופי לקטע הנבחר, בלי הסברים, בלי Markdown, בלי כותרות ובלי מרכאות.',
+      ].join('\n'),
+      context: buildFocusedContext(documentText, selection, selectionContext),
+    };
+  }
+
+  return {
+    prompt: [
+      actionPrompt,
+      'אם אין טקסט נבחר, פעל רק על ההקשר הקצר שסופק.',
+      'החזר רק את הטקסט הסופי המבוקש, בלי הסברים, בלי Markdown ובלי כותרות.',
+    ].join('\n'),
+    context: buildFocusedContext(documentText),
+  };
+};
+
 const WAND_ACTIONS = [
   { icon: '✏️', label: 'שפר',      prompt: 'שפר את הטקסט הנבחר מבחינה סגנונית ולשונית' },
   { icon: '📝', label: 'סכם',      prompt: 'סכם את הטקסט הנבחר בנקודות קצרות' },
@@ -10,7 +66,7 @@ const WAND_ACTIONS = [
   { icon: '✂️', label: 'קצר',      prompt: 'קצר את הטקסט ב-40% בלי לאבד את המשמעות העיקרית' },
 ];
 
-export default function MagicWand({ sidebarOpen, documentContext, selectedText, onInsert, shortcuts = {} }) {
+export default function MagicWand({ sidebarOpen, documentContext, selectedText, selectionContext = null, onInsert, shortcuts = {}, escapeBlocked = false }) {
   const [open, setOpen] = useState(false);
   const isOpenRef = useRef(false);
   const activeRequestId = useRef(0);
@@ -39,6 +95,13 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
   // קיצור מקשים מותאם אישית
   useEffect(() => {
     const handler = (e) => {
+      if (e.defaultPrevented) return;
+      if (e.key === 'Escape' && isOpenRef.current) {
+        if (escapeBlocked) return;
+        e.preventDefault();
+        setOpen(false);
+        return;
+      }
       if (matchShortcut(e, shortcuts.magicWand || 'Ctrl+Space')) {
         e.preventDefault();
         setOpen(v => !v);
@@ -46,7 +109,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [shortcuts]);
+  }, [shortcuts, escapeBlocked]);
 
   // פוקוס על input בפתיחה + ניקוי timeout תקין
   useEffect(() => {
@@ -62,13 +125,22 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
 
   const run = async (prompt) => {
     const reqId = ++activeRequestId.current;
-    const ctx = selectedText
-      ? `טקסט נבחר: "${selectedText}"\n\n${typeof documentContext === 'function' ? documentContext() : documentContext}`
-      : (typeof documentContext === 'function' ? documentContext() : documentContext);
+    const sourceContext = typeof documentContext === 'function' ? documentContext() : documentContext;
+    const request = buildWandRequest(prompt, selectedText, sourceContext, selectionContext);
     setLoading(true);
     setResult('');
     try {
-      const res = await chatWithActiveProvider(prompt, ctx);
+      const res = await chatWithActiveProvider(request.prompt, request.context, '', {
+        skipAutomation: true,
+        skipMultiModel: true,
+        skipSkillSelection: true,
+        skipAutomationPrompt: true,
+        strictFormatting: true,
+        autoUseDefaultSkill: false,
+        shouldPersistMemory: false,
+        includeAppMemory: false,
+        omitPersonalStyleStructureHints: true,
+      });
       if (isOpenRef.current && activeRequestId.current === reqId) {
         setResult(res);
       }
