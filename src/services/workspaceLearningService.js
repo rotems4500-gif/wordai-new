@@ -209,13 +209,13 @@ export function learnFromDocumentDraft({ html = '', title = 'מסמך פעיל',
 
 const TEMPLATE_GUIDES = {
   blank: 'צור מסמך חופשי, ברור ונקי.',
-  academic: 'צור מסמך אקדמי מסודר, לפי המבנה שמקובל בעבודות קודמות של המשתמש.',
-  legal: 'צור מסמך משפטי או פורמלי לפי המבנה הסביר ביותר, בלי להמציא פרטים חסרים.',
-  report: 'צור דוח מסודר עם כותרות בלבד כשאין מידע, ופרטים מלאים רק אם קיימת להם אחיזה.',
-  summary: 'צור סיכום נושאי חד ומסודר עם נקודות מפתח בלבד, ואל תמציא תוכן חסר.',
-  office: 'צור מסמך מקצועי למשרד או לארגון, ענייני וברור, והשאר חלקים חסרים ריקים.',
-  letter: 'צור מכתב רשמי עם פתיחה, גוף וסיום, בלי להשלים נתונים שלא נמסרו.',
-  proposal: 'צור הצעה מסודרת עם רקע, מטרות ושלבים, והשאר סעיפים חסרים ריקים.',
+  academic: 'ענה על המטלה האקדמית בדיוק לפי הוראות המטלה והנחיות המשתמש, בלי לכפות מבנה קבוע שלא התבקש.',
+  legal: 'ענה על המטלה המשפטית או הפורמלית לפי הוראות המטלה והחומר הקיים, בלי להמציא פרטים חסרים.',
+  report: 'ענה על המטלה בפורמט של דוח רק לפי המטרה וההוראות שהתבקשו, עם כותרות רק כשיש להן הצדקה ברורה, ואל תוסיף מבוא, סיכום או פרקים קבועים שלא התבקשו.',
+  summary: 'ענה על המטלה בפורמט של סיכום רק לפי ההיקף והמבנה שהתבקשו, ואל תמציא תוכן חסר.',
+  office: 'ענה על המטלה כמסמך מקצועי למשרד או לארגון, ענייני וברור, ורק לפי המבנה שהתבקש.',
+  letter: 'צור מכתב רשמי לפי פרטי הבקשה, בלי להשלים נתונים שלא נמסרו ובלי להוסיף חלקים שלא התבקשו.',
+  proposal: 'ענה על המטלה בפורמט של הצעה רק לפי מטרת המשתמש וההוראות שניתנו, בלי לכפות סעיפים קבועים אם לא התבקשו.',
 };
 
 const WORKSPACE_TEMPLATE_LIBRARY = [
@@ -489,10 +489,10 @@ export async function syncLearnedStyleFromWorkspace() {
   ].filter(Boolean)));
 
   const notes = [];
-  if (dominantCategory === 'academic') notes.push('רוב המסמכים הקודמים הם אקדמיים ולכן יש להעדיף מבנה פורמלי, טיעון מסודר ושפה מדויקת.');
+  if (dominantCategory === 'academic') notes.push('רוב המסמכים הקודמים הם אקדמיים: השתמש בשפה מדויקת ובטיעון מסודר, אך אל תוסיף מבנה פרקים קבוע אלא אם התבקשת.');
   if (combined.some((item) => item.category === 'legal')) notes.push('נמצאו גם מסמכים משפטיים או פורמליים, ולכן בפניות רשמיות יש להעדיף ניסוח זהיר, מדויק ומאופק.');
   if (combined.some((item) => item.category === 'office')) notes.push('נמצאו גם מסמכים משרדיים, לכן כשנושא העבודה מקצועי יש להעדיף תכליתיות, סעיפים קצרים והמלצות מעשיות.');
-  if (combined.some((item) => item.category === 'summary')) notes.push('נמצאו מסמכי סיכום, ולכן כדאי להשתמש לעיתים גם במבנה של נקודות מפתח וסיכומי ביניים.');
+  if (combined.some((item) => item.category === 'summary')) notes.push('נמצאו מסמכי סיכום, ולכן אפשר להעדיף ניסוח תמציתי ומדויק כשזה מתאים לבקשה, בלי לכפות נקודות מפתח או סיכומי ביניים אם לא התבקשו.');
   if (topMapKeys(overallStats.connectorCounts, 4).length) notes.push(`מילות קישור בולטות: ${topMapKeys(overallStats.connectorCounts, 4).join(', ')}.`);
   if (topMapKeys(overallStats.openerCounts, 4).length) notes.push(`פתיחות משפט אופייניות: ${topMapKeys(overallStats.openerCounts, 4).join(', ')}.`);
   if (newlyDiscoveredSources.length) notes.push(`נסרקו ${newlyDiscoveredSources.length} מקורות חדשים ונוספו מאפייני סגנון.`);
@@ -659,36 +659,104 @@ function blankLine(count = 1) {
   return Array.from({ length: count }, () => '<p>&nbsp;</p>').join('');
 }
 
+function buildTemplateHeader({ label = '', heading = '', detailLines = [] } = {}) {
+  return [
+    label ? `<p>${label}</p>` : '',
+    `<h1>${heading}</h1>`,
+    ...detailLines.filter(Boolean).map((line) => `<p>${line}</p>`),
+    '<hr />',
+  ].join('');
+}
+
 export function buildTemplateSkeleton(templateId = 'blank', title = '', examples = []) {
   const safeTitle = escapeHtml(title || '');
-  const heading = safeTitle ? safeTitle : 'כותרת המסמך';
-  const exampleText = examples.join(' ');
+  const defaultHeadings = {
+    blank: 'מסמך חדש',
+    academic: 'כותרת העבודה',
+    legal: 'כותרת המסמך המשפטי',
+    report: 'כותרת הדוח',
+    summary: 'כותרת הסיכום',
+    office: 'כותרת המסמך המשרדי',
+    proposal: 'כותרת ההצעה',
+    letter: 'נושא המכתב',
+  };
+  const heading = safeTitle || defaultHeadings[templateId] || defaultHeadings.blank;
 
-  const academicSections = /(תקשורת|שיווקית|פוליטית)/i.test(exampleText)
-    ? ['מבוא', 'רקע תיאורטי', 'ניתוח מקרה', 'דיון ומסקנות']
-    : /(הונגריה|קוסובו)/i.test(exampleText)
-      ? ['רקע היסטורי', 'הצגת המקרה', 'דיון', 'סיכום']
-      : ['מבוא', 'רקע תיאורטי', 'דיון', 'סיכום'];
-
-  const cover = (label, subtitle = 'כותרת משנה', metaLine = '________________') =>
-    `<p>${label}</p><h1>${heading}</h1><h2>${subtitle}</h2><hr /><p>${metaLine}</p><p>${new Date().toLocaleDateString('he-IL')}</p><div data-type="page-break"></div>`;
+  void examples;
 
   const templates = {
-    blank: `<h1>${heading}</h1>${blankLine(4)}`,
-    academic: `${cover('עבודה אקדמית', 'נושא העבודה', 'מגיש/ה: ________________')}${academicSections.map((section) => `<h2>${section}</h2>${blankLine(2)}`).join('')}`,
-    legal: `${cover('מסמך משפטי', 'הנדון', 'עבור: ________________')}<h2>רקע עובדתי</h2>${blankLine(2)}<h2>טענות</h2>${blankLine(2)}<h2>סעד מבוקש</h2>${blankLine(1)}<p>בברכה,</p>${blankLine(2)}`,
-    report: `${cover('דוח מסודר', 'ממצאים והמלצות', 'מוכן לעריכה')}<h2>מטרה</h2>${blankLine(1)}<h2>ממצאים</h2>${blankLine(2)}<h2>המלצות</h2>${blankLine(2)}`,
-    summary: `${cover('סיכום נושא', 'נקודות עיקריות', ' ')}<h2>נקודות עיקריות</h2><ul><li>&nbsp;</li><li>&nbsp;</li><li>&nbsp;</li></ul><h2>סיכום</h2>${blankLine(1)}`,
-    office: `${cover('מסמך משרדי', 'ניסוח מקצועי', 'לטיפול: ________________')}<h2>רקע</h2>${blankLine(1)}<h2>פרטי הבקשה</h2>${blankLine(2)}<h2>המשך טיפול</h2>${blankLine(1)}`,
-    proposal: `${cover('הצעה', 'רקע, מטרות ושלבים', 'מוגש ל: ________________')}<h2>רקע</h2>${blankLine(1)}<h2>מטרות</h2>${blankLine(1)}<h2>שלבים</h2>${blankLine(2)}`,
-    letter: `${cover('מכתב רשמי', 'הנדון', 'לכבוד: ________________')}<p>שלום רב,</p>${blankLine(2)}<p>בברכה,</p>${blankLine(2)}`,
+    blank: `<h1>${heading}</h1><p>נושא / מטרה: ____________</p>${blankLine(3)}`,
+    academic: `${buildTemplateHeader({
+      label: 'עבודה אקדמית',
+      heading,
+      detailLines: ['מסלול / קורס: ____________', 'מגיש/ה: ____________', 'תאריך: ____________'],
+    })}<h2>מסגרת העבודה</h2>${blankLine(1)}<h2>גוף הטקסט</h2>${blankLine(3)}`,
+    legal: `${buildTemplateHeader({
+      label: 'מסמך משפטי',
+      heading,
+      detailLines: ['לכבוד: ____________', 'הנדון: ____________', 'תאריך: ____________'],
+    })}<h2>נוסח המסמך</h2>${blankLine(3)}<p>בכבוד רב,</p>${blankLine(2)}`,
+    report: `${buildTemplateHeader({
+      label: 'דוח מסודר',
+      heading,
+      detailLines: ['נערך עבור: ____________', 'תאריך: ____________'],
+    })}<h2>מטרת הדוח</h2>${blankLine(1)}<h2>ממצאים</h2>${blankLine(2)}<h2>המשך טיפול</h2>${blankLine(1)}`,
+    summary: `${buildTemplateHeader({
+      label: 'סיכום נושא',
+      heading,
+      detailLines: ['נושא: ____________'],
+    })}<h2>עיקרי הדברים</h2><ul><li>&nbsp;</li><li>&nbsp;</li><li>&nbsp;</li></ul><h2>השלמות</h2>${blankLine(1)}`,
+    office: `${buildTemplateHeader({
+      label: 'מסמך משרדי',
+      heading,
+      detailLines: ['אל: ____________', 'מאת: ____________', 'תאריך: ____________'],
+    })}<h2>פרטי המסמך</h2>${blankLine(1)}<h2>לביצוע / טיפול</h2>${blankLine(2)}`,
+    proposal: `${buildTemplateHeader({
+      label: 'הצעה',
+      heading,
+      detailLines: ['מוגש ל: ____________', 'תאריך: ____________'],
+    })}<h2>מה מוצע</h2>${blankLine(1)}<h2>פירוט</h2>${blankLine(2)}<h2>תיאום והשלמות</h2>${blankLine(1)}`,
+    letter: `${buildTemplateHeader({
+      label: 'מכתב רשמי',
+      heading,
+      detailLines: ['לכבוד: ____________', 'הנדון: ____________', 'תאריך: ____________'],
+    })}<p>שלום רב,</p>${blankLine(2)}<p>בברכה,</p>${blankLine(2)}`,
   };
 
   return templates[templateId] || templates.blank;
 }
 
+function buildFallbackTemplateShell(templateId = 'blank', title = '') {
+  const safeTitle = escapeHtml(title || '');
+  const heading = safeTitle ? safeTitle : 'כותרת המסמך';
+  const fallbackLabel = {
+    academic: 'עבודה אקדמית',
+    legal: 'מסמך משפטי',
+    report: 'דוח מסודר',
+    summary: 'סיכום נושא',
+    office: 'מסמך משרדי',
+    proposal: 'הצעה',
+    letter: 'מכתב רשמי',
+  };
+
+  if (templateId === 'blank') {
+    return `<h1>${heading}</h1>${blankLine(4)}`;
+  }
+
+  const label = fallbackLabel[templateId] || 'מסמך';
+
+  return `<p>${label}</p><h1>${heading}</h1>${blankLine(4)}`;
+}
+
 function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
-  const cleanPrompt = escapeHtml(prompt);
+  const noStructureRequested = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure\s+at\s+all|no\s+structure|without\s+structure|no\s+outline|without\s+outline|no\s+headings\s+at\s+all|without\s+headings\s+entirely|no\s+sections\s+at\s+all|without\s+sections\s+entirely)/i.test(`${prompt || ''}\n${instructions || ''}`);
+  const promptContext = escapeHtml(
+    String(prompt || '')
+      .replace(/(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure\s+at\s+all|no\s+structure|without\s+structure|no\s+outline|without\s+outline|no\s+headings\s+at\s+all|without\s+headings\s+entirely|no\s+sections\s+at\s+all|without\s+sections\s+entirely)/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,;:!?-]+|[\s,;:!?-]+$/g, '')
+      .trim()
+  );
   const statusBlock = `
     <div style="border:1px solid #fecaca;background:#fff7f7;padding:12px 14px;border-radius:10px;margin:10px 0;">
       <p><strong>שים לב:</strong> ה-AI לא החזיר מסמך מלא בהרצה הזאת.</p>
@@ -696,11 +764,16 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
       ${instructions ? '<p>הנחיות המשתמש נשמרו למערכת, אך אינן מודבקות למסמך עצמו.</p>' : ''}
     </div>
   `;
+    const refsList = selectedMaterials.length
+      ? `<ul>${selectedMaterials.map((item) => `<li>${escapeHtml(item.title)}</li>`).join('')}</ul>`
+      : '';
   const refs = selectedMaterials.length
-    ? `<h2>חומרי עזר שנבחרו</h2><ul>${selectedMaterials.map((item) => `<li>${escapeHtml(item.title)}</li>`).join('')}</ul>`
+      ? `<h2>חומרי עזר שנבחרו</h2>${refsList}`
     : '';
 
-  return `${statusBlock}${buildTemplateSkeleton(templateId, cleanPrompt)}${refs}`;
+  return noStructureRequested
+    ? `${statusBlock}${promptContext ? `<p>${promptContext}</p>` : ''}${blankLine(4)}${refsList}`
+    : `${statusBlock}${buildFallbackTemplateShell(templateId, prompt)}${refs}`;
 }
 
 function normalizeGeneratedHtmlResponse(response = '') {
@@ -773,6 +846,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: 'AUTOPILOT',
       activeWorkspaceId: requestWorkspaceId,
       workspaceName: requestWorkspaceName,
+      structureConstraintText: [cleanPrompt, String(instructions || '').trim()].filter(Boolean).join('\n').trim(),
       expectDocumentOutput: true,
       appendAgentNotesToOutput: automation?.appendAgentNotesToOutput === true,
       agentNotesInstruction: automation?.appendAgentNotesToOutput === true
@@ -784,13 +858,14 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     const response = await chatWithActiveProvider(
       `צור עבורי מסמך מלא בנושא: ${cleanPrompt}`,
       materialsText,
-      `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\n${notes}` : ''}`,
+      `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${instructions ? `\nהנחיות מחייבות של המשתמש:\n${instructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`,
       requestOptions,
     );
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
+    const visibleText = cleanedResponse.replace(/<[^>]+>/g, '').trim();
 
-    if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 20) {
+    if (!cleanedResponse || visibleText.length < 10) {
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
     }
 
@@ -865,12 +940,18 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     const response = await chatWithActiveProvider(
       'שפר את המסמך הקיים בהתאם למשוב המשתמש',
       `נושא המסמך: ${originalPrompt || 'לא צוין'}\n\nמשוב המשתמש:\n${cleanFeedback}\n\nהמסמך הקיים ב-HTML:\n${cleanHtml}`,
-      `פעל כמנהל צוות התוכן של WordFlow AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}`,
-      { runId, agentLabel: 'מנהל הצוות', activeWorkspaceId: requestWorkspaceId, workspaceName: requestWorkspaceName },
+      `פעל כמנהל צוות התוכן של WordFlow AI. קרא את המשוב, תאם את התיקונים עם הצוות, ושפר את המסמך הקיים בהתאם. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. סוג תבנית מועדף: ${templateGuide}.${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`,
+      {
+        runId,
+        agentLabel: 'מנהל הצוות',
+        activeWorkspaceId: requestWorkspaceId,
+        workspaceName: requestWorkspaceName,
+        structureConstraintText: cleanFeedback,
+      },
     );
 
     const cleanedResponse = normalizeGeneratedHtmlResponse(response);
-    if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 20) {
+    if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 10) {
       throw new Error('התקבלה תשובת תיקון ריקה או לא שמישה');
     }
 

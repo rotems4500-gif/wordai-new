@@ -217,7 +217,7 @@ export const SKILL_LIBRARY = [
     label: 'בונה שלד אקדמי',
     description: 'מייצר מבנה ברור לעבודות, מאמרים, סיכומים והצעות מחקר.',
     usageHint: 'עבודות אקדמיות, מאמרים וסיכומים',
-    prompt: 'פעל כבונה שלד אקדמי. סדר את התוכן למבוא, גוף, כותרות משנה, מעבר לוגי ומסקנה. אם חסר מידע, הצע שלד ברור במקום להמציא תוכן.',
+    prompt: 'פעל כבונה שלד אקדמי. בנה את מבנה המסמך בדיוק לפי הוראות המשתמש והמטלה. אם המשתמש ביקש מבוא או פרקים מסוימים - כלול אותם; אם לא ביקש, אל תוסיף מבנה קבוע על דעת עצמך. אם חסר מידע, הצע שלד זהיר במקום להמציא תוכן.',
     keywords: ['עבודה', 'אקדמי', 'מאמר', 'סמינר', 'סיכום', 'הצעת מחקר', 'שלד'],
   },
   {
@@ -284,7 +284,7 @@ export const DEFAULT_ROLE_AGENTS = [
   {
     id: 'designer',
     name: 'מעצב מבנה',
-    prompt: 'בנה שלד, זרימה, כותרות, היררכיה וסדר פסקאות למסמך. חשוב על חוויית קריאה, בהירות ומבנה משכנע. ענה בעברית.',
+    prompt: 'הבהר ושפר את מבנה המסמך רק לפי מה שהתבקש במפורש או כבר קיים בטיוטה. אם המשתמש לא ביקש מבוא, כותרות, פרקים או סיכום - אל תוסיף אותם על דעת עצמך. חשוב על חוויית קריאה ובהירות, אך בלי לכפות שלד קשיח. ענה בעברית.',
     provider: '',
     model: '',
     enabled: true,
@@ -292,7 +292,7 @@ export const DEFAULT_ROLE_AGENTS = [
   {
     id: 'writer',
     name: 'כותב תוכן',
-    prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. תן עדיפות עליונה למה שהמשתמש ביקש ולחומרי העזר שסיפק — ההגדרות המובנות (תבנית, קהל, מסלול) משמשות כרקע בלבד ולא מחליפות את המטלה. החזר תמיד HTML מעוצב עם תגיות <h1>, <h2>, <h3>, <p>, <ul>, <ol>, <strong> לפי הצורך — אל תחזיר גוש טקסט רציף ללא מבנה.',
+    prompt: 'כתוב ושכתב טקסטים בעברית מקצועית, בהירה ומשכנעת. תן עדיפות עליונה למה שהמשתמש ביקש ולחומרי העזר שסיפק — ההגדרות המובנות (תבנית, קהל, מסלול) משמשות כרקע בלבד ולא מחליפות את המטלה. אם התוצר מיועד למסמך מוכן או להדבקה ישירה, החזר HTML מעוצב עם תגיות כמו <h1>, <h2>, <h3>, <p>, <ul>, <ol>, <strong> לפי הצורך. אם לא התבקש מסמך מובנה, אל תכפה כותרות, מבוא, סיכום או חלוקת פרקים על דעת עצמך.',
     provider: '',
     model: '',
     enabled: true,
@@ -1155,7 +1155,7 @@ const WORKSPACE_AGENT_PRESETS = {
     agents: [
       { id: 'manager', name: 'מנהל עבודה אקדמי', prompt: 'פרק את המשימה האקדמית לשלבים ברורים: חקר, מבנה, כתיבה וליטוש. שמור על דיוק והחזר תכנית קצרה ותוצר ישים.', provider: '', model: '', enabled: true },
       { id: 'researcher', name: 'חוקר ספרות', prompt: 'אתר כיווני חיפוש, מילות מפתח, סוגי מקורות והקשרים מחקריים רלוונטיים. אל תמציא פרטים.', provider: '', model: '', enabled: true },
-      { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי עם מבוא, גוף, דיון וסיכום. הקפד על רצף טיעוני והיררכיית כותרות.', provider: '', model: '', enabled: true },
+      { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי מדויק לפי הוראות המשתמש והמטלה. אם התבקשו מבוא, פרקים, שאלות או היקף מסוים - שמור עליהם; אם לא, אל תוסיף מבנה קבוע כמו מבוא/דיון/סיכום על דעת עצמך. הקפד על רצף טיעוני והיררכיית כותרות רק כשנדרש.', provider: '', model: '', enabled: true },
       { id: 'writer', name: 'כותב אקדמי', prompt: 'כתוב בעברית אקדמית, פורמלית ומדויקת, בהתאם לסגנון המשתמש. הימנע מהמצאות.', provider: '', model: '', enabled: true },
       { id: 'proofreader', name: 'מגיה אקדמי', prompt: 'בצע ליטוש סופי של ניסוח, בהירות, פיסוק ואחידות אקדמית.', provider: '', model: '', enabled: true },
     ],
@@ -1213,8 +1213,8 @@ const WORKSPACE_AGENT_PRESETS = {
     automation: { enabled: true, preset: 'product-desk', workflowMode: 'design-first', autoDispatch: true },
     agents: [
       { id: 'manager', name: 'מנהל מוצר', prompt: 'הגדר מטרה, קהל יעד, תוצרים וסדר עבודה. החזר תוכנית קצרה ותעדוף ברור.', provider: '', model: '', enabled: true },
-      { id: 'designer', name: 'מעצב חוויה', prompt: 'בנה מבנה מסמך חד וברור, כותרות נכונות וזרימת קריאה ידידותית.', provider: '', model: '', enabled: true },
-      { id: 'writer', name: 'קופירייטר', prompt: 'כתוב תוכן ברור, משכנע וקריא, עם פתיחות חזקות ומעברים טובים.', provider: '', model: '', enabled: true },
+      { id: 'designer', name: 'מעצב חוויה', prompt: 'בנה מבנה מסמך חד וברור, כותרות נכונות וזרימת קריאה ידידותית. אל תוסיף מבוא, סיכום או פרקים קבועים אם המשתמש לא ביקש אותם במפורש.', provider: '', model: '', enabled: true },
+      { id: 'writer', name: 'קופירייטר', prompt: 'כתוב תוכן ברור, משכנע וקריא, עם פתיחה רק אם היא נדרשת לפי בקשת המשתמש או סוג המסמך, ועם מעברים טובים בלי לכפות מבוא או hook על דעת עצמך.', provider: '', model: '', enabled: true },
       { id: 'researcher', name: 'אנליסט שוק', prompt: 'הצע זוויות מחקר, השוואות, שאלות ותובנות מבוססות עבור מסמכי מוצר.', provider: '', model: '', enabled: true },
       { id: 'proofreader', name: 'עורך סופי', prompt: 'לטש את המסר, קצב הקריאה, הבהירות והעברית.', provider: '', model: '', enabled: true },
     ],
@@ -1538,7 +1538,7 @@ const buildWorkspaceAutomationInstructions = () => {
     'manager-auto': 'עבוד במצב AUTOPILOT מלא: קודם תכנן, אחר כך קבע לבד אילו תפקידים נדרשים, איזה מודל מתאים לכל שלב, ובאיזה סדר להפעיל אותם. החזר תהליך מתואם וסופי.',
     'circular-team': 'עבוד כצוות מעגלי: הסוכנים לא חייבים לרוץ רק בקו ישר. אם מתגלים פערים, אפשר להחזיר את הכתיבה, המבנה או הליטוש לסבב נוסף עד שהתוצר מתייצב.',
     'manager-pipeline': 'עבוד כצוות אוטומטי: קודם מנהל העבודה מפרק את הבקשה, אחר כך החוקר מאתר מקורות, לאחר מכן מעצב המבנה מארגן את השלד, הכותב מנסח, ולבסוף המגיה מלטש. החזר למשתמש תוצאה סופית מגובשת.',
-    'design-first': 'עבוד בסדר הבא: מבנה וארגון, אחר כך ניסוח תוכן, אחר כך ליטוש. כשהנושא מעורפל, התחל תמיד משלד ברור.',
+    'design-first': 'עבוד בסדר הבא: מבנה וארגון, אחר כך ניסוח תוכן, אחר כך ליטוש. אם המשתמש ביקש מבנה מפורש או שכבר קיים שלד במסמך, התחל ממנו; אחרת אל תכפה שלד ברור על דעת עצמך.',
     'research-first': 'עבוד בסדר הבא: חקר שאלות ומקורות, בניית שלד, כתיבה, ולבסוף ליטוש. אל תמציא עובדות שלא נתמכות בהקשר.',
     'custom-order': customOrderedFlow,
   };
@@ -1709,16 +1709,21 @@ const resolveStageAgent = (token, enabledAgents = []) => {
 
 const resolvePlanningManagerAgent = (enabledAgents = []) => enabledAgents.find((agent) => isPlanningManagerAgent(agent)) || null;
 const resolveFinalManagerReviewAgent = (enabledAgents = []) => enabledAgents.find((agent) => isManagerReviewAgent(agent)) || resolvePlanningManagerAgent(enabledAgents);
+const GLOBAL_STRUCTURE_OPT_OUT_PATTERN = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure\s+at\s+all|no\s+structure|without\s+structure|no\s+outline|without\s+outline|no\s+headings\s+at\s+all|without\s+headings\s+entirely|no\s+sections\s+at\s+all|without\s+sections\s+entirely)/i;
+const hasExplicitStructureOptOut = (text = '') => GLOBAL_STRUCTURE_OPT_OUT_PATTERN.test(String(text || ''));
 
-const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = [], activeSkill = null) => {
+const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = [], activeSkill = null, structureConstraintText = '') => {
   const combined = `${userPrompt}\n${documentContext}`;
+  const resolvedStructureConstraintText = String(structureConstraintText || userPrompt).trim();
   const skillId = String(activeSkill?.id || '').trim().toLowerCase();
   const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combined);
+  const disablesResearch = /(בלי מקורות|ללא מקורות|לא נדרשים מקורות|בלי מקור|ללא מקור|no sources|without sources)/i.test(combined);
   const skillPrefersResearch = ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId);
   const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
   const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
-  const needsResearch = skillPrefersResearch || isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined);
-  const needsStructure = skillPrefersStructure || /(שלד|מבנה|outline|כותרות|פרקים|טיוטה)/i.test(combined) || String(documentContext || '').trim().length < 1600;
+  const needsResearch = !disablesResearch && (skillPrefersResearch || isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined));
+  const disablesStructure = hasExplicitStructureOptOut(resolvedStructureConstraintText);
+  const needsStructure = !disablesStructure && (skillPrefersStructure || /(שלד|מבנה|outline|כותרות|פרקים)/i.test(combined));
 
   const candidateOrder = [
     'manager',
@@ -1762,8 +1767,8 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
       ? 'התמקד באיתור פערי ידע, כיווני חיפוש, מקורות ומונחי חיפוש. אין להמציא ציטוטים.'
       : 'חלץ מהחומרים והטיוטה מקורות, כיווני חיפוש, נקודות עובדתיות וטענות שניתן לבסס. אין להמציא ציטוטים.';
     else if (roleKey === 'designer') stageGoals[agent.id] = skillPrefersStructure
-      ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי על בסיס הבקשה.'
-      : 'ארגן שלד טיעוני ברור, סדר פרקים ותתי-כותרות לפי מטרת העבודה.';
+      ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי רק לפי מה שהתבקש במפורש בבקשה או כבר קיים במסמך.'
+      : 'הבהר ושפר את המבנה שהתבקש או שכבר קיים, בלי להוסיף פרקים, תתי-כותרות או מבוא על דעת עצמך.';
     else if (roleKey === 'writer') stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים.';
     else if (roleKey === 'proofreader') stageGoals[agent.id] = skillPrefersPolish
       ? 'בצע מעבר ליטוש קפדני: אחידות, בהירות, תיקון בעיות וטון עקבי לפני החזרה למשתמש.'
@@ -1840,7 +1845,7 @@ const inferGapTags = (packet = {}) => {
 
   const tags = [];
   if (/(מקור|מקורות|ציטוט|citation|source|sources|מחקר|research|google scholar)/i.test(text)) tags.push('research');
-  if (/(מבנה|שלד|outline|כותרת|כותרות|פרקים|סדר|ארגון)/i.test(text)) tags.push('structure');
+  if (!hasExplicitStructureOptOut(text) && /(מבנה|שלד|outline|כותרת|כותרות|פרקים|סדר|ארגון)/i.test(text)) tags.push('structure');
   if (/(להרחיב|פירוט|דוגמא|דוגמה|ניסוח|שכתוב|rewrite|טיעון|כתיבה)/i.test(text)) tags.push('writing');
   if (/(דיוק|אימות|בדיקת עובדות|טעות|חסר דיוק|לא מדויק)/i.test(text)) tags.push('accuracy');
   if (/(ליטוש|פיסוק|דקדוק|בהירות|עקביות|אחידות|tone|style)/i.test(text)) tags.push('quality');
@@ -2043,6 +2048,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     collectAgentNotes && agentNotesInstruction ? `הנחיה מחייבת לנספח הערות סוכנים בסוף המסמך:\n${agentNotesInstruction}\nבסוף השלב, הוסף ב-CHECKLIST נקודות קצרות שמסבירות מה בוצע ומה נשאר.` : '',
     `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
+    'אל תוסיף מבוא, סיכום, כותרות קבועות או פרקים חדשים אלא אם בקשת המשתמש או המסמך הקיים דורשים זאת במפורש.',
     decisionGuidance,
     revisitTargetsHelp,
     allowCircular ? 'אם לדעתך צריך להחזיר סוכן קודם לעוד סבב, ציין זאת ב-DECISION או ב-HANDOFF עם REVISIT לאחד מה-agent ids הזמינים.' : '',
@@ -2057,8 +2063,9 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
   ].filter(Boolean).join('\n\n');
 };
 
-const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null }) => {
-  const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill);
+const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null }) => {
+  const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText);
+  const structureOptOut = hasExplicitStructureOptOut(structureConstraintText || cleanUserPrompt);
   if (!['manager-auto', 'circular-team'].includes(automation.workflowMode) || automation?.autopilotEnabled === false || !enabledAgents.length) return fallbackPlan;
 
   const managerAgent = resolvePlanningManagerAgent(enabledAgents);
@@ -2109,6 +2116,7 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabl
 
     const orderedAgents = parsedPlan.order
       .map((token) => resolveStageAgent(token, enabledAgents))
+      .filter((agent) => !(structureOptOut && getAgentRoleKey(agent) === 'designer'))
       .filter(Boolean)
       .filter((agent, index, arr) => arr.findIndex((item) => item.id === agent.id) === index);
 
@@ -2137,7 +2145,9 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, enabl
         || parsedPlan?.goals?.[String(agent.id || '').toLowerCase()]
         || parsedPlan?.goals?.[roleKey]
         || '';
-      if (resolvedGoal) dynamicStageGoals[agent.id] = resolvedGoal;
+      if (resolvedGoal) dynamicStageGoals[agent.id] = structureOptOut && roleKey === 'designer'
+        ? 'אל תוסיף מבנה חדש. אם כבר יש במסמך כותרות או פרקים, רק שמור על עקביות ובהירות בלי להרחיב אותם.'
+        : resolvedGoal;
     });
 
     return {
@@ -2750,6 +2760,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const cfg = getProviderConfig();
   const taggedRouting = extractTaggedModelRouting(userPrompt);
   const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
+  const structureConstraintText = String(options.structureConstraintText || cleanUserPrompt).trim() || cleanUserPrompt;
   const taggedProviders = normalizeProviderIds(taggedRouting.taggedProviders, '');
   const preferredProviders = normalizeProviderIds(options.preferredProviders, '');
   const constrainedProviders = preferredProviders.length
@@ -2805,9 +2816,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const workspaceName = String(options.workspaceName || automation.workspaceName || '').trim();
   const disableFallback = options.disableFallback === true;
   const expectDocumentOutput = options.expectDocumentOutput === true;
-  const appendAgentNotesToOutput = expectDocumentOutput && (options.appendAgentNotesToOutput === true || automation.appendAgentNotesToOutput === true);
+  const appendAgentNotesToOutput = expectDocumentOutput && (
+    Object.prototype.hasOwnProperty.call(options, 'appendAgentNotesToOutput')
+      ? options.appendAgentNotesToOutput === true
+      : automation.appendAgentNotesToOutput === true
+  );
   const agentNotesInstruction = expectDocumentOutput
-    ? String(options.agentNotesInstruction || automation.agentNotesInstruction || '').trim()
+    ? String(
+      Object.prototype.hasOwnProperty.call(options, 'agentNotesInstruction')
+        ? (options.agentNotesInstruction ?? '')
+        : (automation.agentNotesInstruction || '')
+    ).trim()
     : '';
   const resolvedModel = getModelNameForProvider(activeProvider, cfg, modelOverride);
   const logEvent = (type, message, extra = {}) => pushAgentDebugLog({
@@ -2843,7 +2862,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
-כשמחזירים מסמך או תוכן ארוך שמיועד להדבקה במסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר — אל תחזיר גוש טקסט רציף ללא היררכיה ומבנה.
+כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
 כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
@@ -2870,6 +2889,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       const executionPlan = await planWithManagerIfNeeded({
         cleanUserPrompt,
         documentContext,
+        structureConstraintText,
         enabledAgents,
         automation,
         cfg,
@@ -3313,24 +3333,29 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               decision: parsedManagerReply.decision || '',
               missing: parsedManagerReply.missing || '',
             });
-            if (!expectDocumentOutput) {
-              throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל ה-workflow כבר הגיע למגבלת הסבבים.');
-            }
-            const recoveryAppendix = buildAgentNotesAppendix({
-              stageNotes,
-              notesInstruction: agentNotesInstruction,
-              managerPacket: parsedManagerReply,
-              managerLabel: managerAgent.name || 'מנהל העבודה',
-              preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
-            });
-            stagedOutput = appendNotesToOutput({
-              output: managerArtifact || stagedOutput || cleanUserPrompt,
-              appendix: recoveryAppendix,
-            });
-            notesAlreadyAppended = true;
+              const recoveryOutput = String(managerArtifact || stagedOutput || cleanUserPrompt).trim();
+              if (appendAgentNotesToOutput) {
+                const recoveryAppendix = buildAgentNotesAppendix({
+                  stageNotes,
+                  notesInstruction: agentNotesInstruction,
+                  managerPacket: parsedManagerReply,
+                  managerLabel: managerAgent.name || 'מנהל העבודה',
+                  preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
+                });
+                stagedOutput = appendNotesToOutput({
+                  output: recoveryOutput,
+                  appendix: recoveryAppendix,
+                });
+                notesAlreadyAppended = true;
+              } else {
+                stagedOutput = recoveryOutput;
+                notesAlreadyAppended = false;
+              }
             pendingFinalManagerReview = false;
             executionQueue.length = 0;
-            logEvent('workflow-recovered', 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות מנהל/מרצה', {
+            logEvent('workflow-recovered', expectDocumentOutput
+              ? 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות מנהל/מרצה'
+              : 'ה-workflow הגיע למגבלת סבבים, והוחזרה התשובה הטובה ביותר שנצברה עד כה', {
               state: 'success',
               agentId: managerAgent.id,
               agentLabel: managerAgent.name || 'מנהל העבודה',
@@ -3364,24 +3389,29 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               decision: parsedManagerReply.decision || '',
               missing: parsedManagerReply.missing || '',
             });
-            if (!expectDocumentOutput) {
-              throw new Error('סקירת manager סופית דרשה סבב נוסף, אבל לא נמצא שלב המשך תקף לביצוע.');
+            const recoveryOutput = String(managerArtifact || stagedOutput || cleanUserPrompt).trim();
+            if (appendAgentNotesToOutput) {
+              const recoveryAppendix = buildAgentNotesAppendix({
+                stageNotes,
+                notesInstruction: agentNotesInstruction,
+                managerPacket: parsedManagerReply,
+                managerLabel: managerAgent.name || 'מנהל העבודה',
+                preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
+              });
+              stagedOutput = appendNotesToOutput({
+                output: recoveryOutput,
+                appendix: recoveryAppendix,
+              });
+              notesAlreadyAppended = true;
+            } else {
+              stagedOutput = recoveryOutput;
+              notesAlreadyAppended = false;
             }
-            const recoveryAppendix = buildAgentNotesAppendix({
-              stageNotes,
-              notesInstruction: agentNotesInstruction,
-              managerPacket: parsedManagerReply,
-              managerLabel: managerAgent.name || 'מנהל העבודה',
-              preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
-            });
-            stagedOutput = appendNotesToOutput({
-              output: managerArtifact || stagedOutput || cleanUserPrompt,
-              appendix: recoveryAppendix,
-            });
-            notesAlreadyAppended = true;
             pendingFinalManagerReview = false;
             executionQueue.length = 0;
-            logEvent('workflow-recovered', 'לא נמצא שלב המשך תקף; הוחזר מסמך מסכם במקום כשלון', {
+            logEvent('workflow-recovered', expectDocumentOutput
+              ? 'לא נמצא שלב המשך תקף; הוחזר מסמך מסכם במקום כשלון'
+              : 'לא נמצא שלב המשך תקף; הוחזרה התשובה הטובה ביותר במקום כשלון', {
               state: 'success',
               agentId: managerAgent.id,
               agentLabel: managerAgent.name || 'מנהל העבודה',

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import {
+  DEFAULT_PERSONAL_STYLE,
   getProviderConfig,
   saveProviderConfig,
   getShortcutsConfig,
@@ -1639,6 +1640,12 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
 
+  const handleResetProfile = () => {
+    if (!confirm('לאפס את העדפות הפרופיל והמידע השמור? חומרי מקור מקומיים לא יימחקו.')) return;
+    savePersonalStyleProfile(DEFAULT_PERSONAL_STYLE);
+    setProfile(getPersonalStyleProfile());
+  };
+
   useEffect(() => {
     loadProjectMaterials().then((items) => setRecentMaterials(items.slice(0, 4))).catch(() => {});
   }, []);
@@ -1687,17 +1694,29 @@ function PersonalStyleSettings({ profile, setProfile }) {
             ? 'ההיכרות הושלמה. הסוכן מתאים את עצמו אליך ויכול להמשיך ללמוד מהחומרים המקומיים שלך לאורך הזמן.'
             : 'עדיין לא בוצעה היכרות מלאה. אפשר למלא כאן את המידע הידני, או לפתוח את מסך הבית ולבצע היכרות מהירה.'}
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-          {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
-          {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
-          {profile.userBackground ? <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>{profile.userBackground}</span> : null}
-          {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
-          {(profile.tonePreferences || []).slice(0, 4).map((tone) => (
-            <span key={tone} style={{ fontSize: 10, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999 }}>{tone}</span>
-          ))}
-          <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
-            {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
+            {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
+            {profile.userBackground ? <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>{profile.userBackground}</span> : null}
+            {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
+            {(profile.tonePreferences || []).slice(0, 4).map((tone) => (
+              <span key={tone} style={{ fontSize: 10, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999 }}>{tone}</span>
+            ))}
+            <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
+              {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <button
+              type="button"
+              onClick={handleResetProfile}
+              style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+            >
+              אפס העדפות פרופיל
+            </button>
+            <div style={{ fontSize: 11, color: '#64748B' }}>מאפס העדפות ומידע שמור בלבד.</div>
+          </div>
         </div>
       </div>
 
