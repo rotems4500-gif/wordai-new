@@ -161,7 +161,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [showChefDialog, setShowChefDialog] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('gemini');
+  const [selectedModel, setSelectedModel] = useState();
   
   const profile = getPersonalStyleProfile();
   const onboardingDone = Boolean(profile?.onboardingCompletedAt);
@@ -395,8 +395,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     return () => clearInterval(interval);
   }, []);
 
+      const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim());
+      const canGenerate = hasGenerationInput && !isGenerating;
+
   const handleGenerate = async () => {
-    if (!prompt.trim() || isGenerating) return;
+        if (!hasGenerationInput || isGenerating) return;
 
     setIsGenerating(true);
     try {
@@ -406,7 +409,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
         selectedMaterials,
-        selectedModel,
       });
     } finally {
       setIsGenerating(false);
@@ -440,6 +442,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedMaterials,
         selectedModel: model,
       });
+      setSelectedModel(undefined);
       setShowChefDialog(false);
     } catch (error) {
       console.error('שגיאה בשלב הבישול:', error);
@@ -450,6 +453,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   };
 
   const handleChefClose = () => {
+    setSelectedModel(undefined);
     setShowChefDialog(false);
   };
 
@@ -527,7 +531,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-                  placeholder="מה תרצה ליצור היום? תכתוב כאן ואני אעזור לך..."
+                  placeholder="נושא קצר או הקשר אופציונלי למסמך. אפשר להשאיר ריק אם ההנחיות למטה כבר מגדירות הכול"
                   className="w-full px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
                 />
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
@@ -537,14 +541,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               
               <button
                 onClick={handleGenerate}
-                disabled={!prompt.trim() || isGenerating}
+                disabled={!canGenerate}
                 className={`px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 ${
-                  !prompt.trim() || isGenerating
+                  !canGenerate
                     ? 'bg-gray-500/50 text-gray-300 cursor-not-allowed'
                     : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg hover:shadow-2xl'
                 }`}
                 style={{
-                  boxShadow: !prompt.trim() || isGenerating ? 'none' : '0 10px 30px rgba(8, 145, 178, 0.45)'
+                  boxShadow: !canGenerate ? 'none' : '0 10px 30px rgba(8, 145, 178, 0.45)'
                 }}
               >
                 {isGenerating ? (
@@ -567,6 +571,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               >
                 👨‍🍳 בוא נבשל
               </button>
+            </div>
+
+            <div className="text-right text-xs text-white/72 mb-6">
+              שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך.
             </div>
 
             {/* Advance Options Area */}
@@ -683,7 +691,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                        if (!nextInstructions.trim()) setInstructionFileName('');
                        if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
                      }}
-                     placeholder="הנחיות קצרות למסמך המסוים הזה... (למשל: סגנון אקדמי, פסקאות קצרות)"
+                     placeholder="הנחיות מחייבות למסמך הזה... (למשל: מבנה, סגנון, דרישות, היקף)"
                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-1 focus:ring-pink-400 focus:border-transparent resize-y min-h-[90px] h-full"
                    />
                  </div>
@@ -871,6 +879,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             onClose={handleChefClose}
             onModelChange={setSelectedModel}
             onGoToEditor={() => {
+              setSelectedModel(undefined);
               setShowChefDialog(false);
             }}
             selectedModel={selectedModel}

@@ -19,12 +19,41 @@ const DOCUMENT_STYLE_PRESETS = {
   presentation: { label: 'מצגת', fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '15pt', lineHeight: '1.5', padding: '1.8cm', maxWidth: '25cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', textAlign: 'center' },
 };
 
-const buildLiveGenerationShell = (promptText = '') => `
+const GENERATION_LABEL_FALLBACKS = {
+  blank: 'מסמך חדש',
+  academic: 'עבודה אקדמית',
+  legal: 'מסמך משפטי',
+  report: 'דוח מסודר',
+  summary: 'סיכום נושא',
+  office: 'מסמך משרדי',
+  proposal: 'הצעה',
+  letter: 'מכתב רשמי',
+};
+
+const buildGenerationLabel = ({ promptText = '', instructionsText = '', templateId = 'blank' } = {}) => {
+  const cleanPrompt = String(promptText || '').trim();
+  if (cleanPrompt) return cleanPrompt;
+
+  const lines = String(instructionsText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preferredLine = lines.find((line, index) => index > 0 || !/^קובץ\s+הנחיות\s*:/i.test(line)) || lines[0] || '';
+  const normalizedLine = preferredLine
+    .replace(/^(?:[-*]+|\d+[.)])\s+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:!?-]+|[\s,;:!?-]+$/g, '')
+    .trim();
+
+  return normalizedLine || GENERATION_LABEL_FALLBACKS[templateId] || GENERATION_LABEL_FALLBACKS.blank;
+};
+
+const buildLiveGenerationShell = (titleText = 'מסמך חדש') => `
   <div style="border:1px solid #BFDBFE;background:#EFF6FF;padding:16px 18px;border-radius:14px;margin-bottom:18px;">
     <p><strong>מכין את המסמך בלייב...</strong></p>
     <p>אפשר כבר לראות את שלבי העבודה בזמן אמת. התוכן המלא יופיע כאן אוטומטית בעוד רגע.</p>
   </div>
-  <h1>${String(promptText || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
+  <h1>${String(titleText || 'מסמך חדש').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
   <p>טוען מבנה, מקורות וניסוח...</p>
 `;
 
@@ -130,6 +159,7 @@ function App() {
   const [viewMode, setViewMode] = React.useState('print');
   const [fileMenuOpen, setFileMenuOpen] = React.useState(false);
   const [fileMenuTargetTab, setFileMenuTargetTab] = React.useState(null);
+  const [updateCheckToken, setUpdateCheckToken] = React.useState(0);
   const [formatPainterActive, setFormatPainterActive] = React.useState(false);
   const [selectedText, setSelectedText] = React.useState('');
   const [currentBlockText, setCurrentBlockText] = React.useState('');
@@ -351,14 +381,14 @@ function App() {
     ].filter(Boolean).join('\n\n');
 
     setFeedbackSurvey((prev) => ({ ...prev, submitting: true }));
-    setAssistantTrigger('autopilot');
+    setAssistantTrigger('manual');
     setSidebarOpen(true);
     const generationRequest = beginGenerationRequest('doc-feedback');
     const originWorkspaceId = generationRequest.workspaceId;
     setLiveGeneration({
       active: true,
       state: 'running',
-      prompt: 'מנהל הצוות מתקן את המסמך לפי המשוב שלך',
+      prompt: 'עדכון ישיר של המסמך לפי המשוב שלך',
       summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
       logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
       runId: generationRequest.runId,
@@ -538,6 +568,7 @@ function App() {
   const openUpdatesPanel = React.useCallback(() => {
     setFileMenuTargetTab('updates');
     setFileMenuOpen(true);
+    setUpdateCheckToken((prev) => prev + 1);
   }, []);
 
   const handleEditorReady = React.useCallback((ed, helpers) => {
@@ -1744,7 +1775,7 @@ function App() {
                   </div>
 
                   {liveGeneration.state === 'running' && (
-                    <OneAxisAirHockeyGame title="הוקי בזמן שהצוות עובד" compact startInPopup />
+                    <OneAxisAirHockeyGame title="הוקי בזמן שהצוות עובד" compact allowPopup />
                   )}
 
                   <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
@@ -1909,7 +1940,7 @@ function App() {
                     <h3 className="text-xl font-bold text-slate-800">{feedbackSurvey.phase === 'question' ? 'איך יצא המסמך?' : 'מה לתקן במסמך?'}</h3>
                     <p className="text-sm text-slate-500 mt-1">
                       {feedbackSurvey.phase === 'question'
-                        ? 'אפשר לאשר שהכול מצוין, או לבקש תיקון ממנהל הצוות.'
+                        ? 'אפשר לאשר שהכול מצוין, או לבקש תיקון ישיר של המסמך.'
                         : 'בחר את הנקודות החשובות לך, או כתוב חופשי מה לשפר.'}
                     </p>
                   </div>
@@ -1926,7 +1957,7 @@ function App() {
 
                 {feedbackSurvey.usedFallback && (
                   <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    נוצרה כרגע טיוטה בטוחה. אפשר לאשר אותה או לשלוח עכשיו הערות כדי שמנהל הצוות ישפר אותה.
+                    נוצרה כרגע טיוטה בטוחה. אפשר לאשר אותה או לשלוח עכשיו הערות לעדכון ישיר של המסמך.
                   </div>
                 )}
 
@@ -1997,7 +2028,7 @@ function App() {
                         onClick={submitDocumentFeedback}
                         disabled={feedbackSurvey.submitting}
                       >
-                        {feedbackSurvey.submitting ? 'מעדכן...' : 'שלח למנהל הצוות'}
+                        {feedbackSurvey.submitting ? 'מעדכן...' : 'שלח לעדכון ישיר'}
                       </button>
                     </div>
                   </div>
@@ -2079,7 +2110,7 @@ function App() {
                 setFileMenuTargetTab(targetTab || 'guide');
                 setFileMenuOpen(true);
               }}
-              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
+              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, selectedModel, documentStyle: requestedStyle }) => {
                 if (!editor) {
                   window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
                   return;
@@ -2097,31 +2128,33 @@ function App() {
                 setShowStartScreen(false);
                 const generationRequest = beginGenerationRequest('doc');
                 const originWorkspaceId = generationRequest.workspaceId;
+                const generationLabel = buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId: templateId || 'blank' });
                 setLiveGeneration({
                   active: true,
                   state: 'running',
-                  prompt,
+                  prompt: generationLabel,
                   summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
                   logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
                   runId: generationRequest.runId,
                   workspaceId: originWorkspaceId,
                 });
-                editor.commands.setContent(buildLiveGenerationShell(prompt));
+                editor.commands.setContent(buildLiveGenerationShell(generationLabel));
                 focusEditorSoon('start');
                 try {
-                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, runId: generationRequest.runId, returnMeta: true });
-                  const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
+                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, runId: generationRequest.runId, returnMeta: true });
+                  const resolvedTitle = String(result?.title || generationLabel || 'מסמך חדש').trim();
+                  const generated = result?.html || `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`;
                   const usedFallback = Boolean(result?.usedFallback);
                   if (!isGenerationRequestCurrent(generationRequest)) return;
                   editor.commands.setContent(generated);
-                  saveDocumentHistory({ title: prompt, content: generated, templateId, source: 'start-screen' });
+                  saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
                   persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
-                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt, templateId: templateId || 'blank', usedFallback });
+                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt: resolvedTitle, templateId: templateId || 'blank', usedFallback });
                 } catch (error) {
                   if (!isGenerationRequestCurrent(generationRequest)) return;
                   setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
-                  if (editor) editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+                  if (editor) editor.commands.setContent(`<h1>${escHtml(generationLabel)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
                 }
               }}
             />
@@ -2156,9 +2189,11 @@ function App() {
       {fileMenuOpen && (
         <FileMenu
           initialSettingsTab={fileMenuTargetTab}
+          updateCheckToken={updateCheckToken}
           onClose={() => {
             setFileMenuOpen(false);
             setFileMenuTargetTab(null);
+            setUpdateCheckToken(0);
           }}
           onCommand={(cmd, value) => handleCommand(cmd, value)}
           shortcuts={shortcuts}

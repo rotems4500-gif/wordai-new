@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', compact = false, startInPopup = false }) {
+export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', compact = false, allowPopup = false }) {
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [running, setRunning] = useState(false);
   const [missed, setMissed] = useState(false);
   const [paddleX, setPaddleX] = useState(50);
   const [puck, setPuck] = useState({ x: 50, y: 12 });
-  const [popupOpen, setPopupOpen] = useState(Boolean(startInPopup));
+  const [popupOpen, setPopupOpen] = useState(false);
 
   const velocityRef = useRef({ x: 0.35, y: 0.6 });
   const lastTsRef = useRef(0);
@@ -16,7 +16,7 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
   const paddleXRef = useRef(50);
   const puckRef = useRef({ x: 50, y: 12 });
   const keyStateRef = useRef({ left: false, right: false });
-  const canHandleKeyboard = () => (!startInPopup || popupOpen);
+  const canHandleKeyboard = () => (!allowPopup || popupOpen);
 
   const isTypingTarget = (target) => {
     if (!target || typeof target !== 'object') return false;
@@ -97,15 +97,11 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
   }, [score, best]);
 
   useEffect(() => {
-    if (startInPopup) setPopupOpen(true);
-  }, [startInPopup]);
-
-  useEffect(() => {
-    if (startInPopup && !popupOpen) {
+    if (allowPopup && !popupOpen) {
       keyStateRef.current = { left: false, right: false };
       setRunningSafe(false);
     }
-  }, [popupOpen, startInPopup]);
+  }, [popupOpen, allowPopup]);
 
   useEffect(() => {
     const onKeyDown = (event) => handleGameKeyDown(event);
@@ -116,7 +112,7 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [popupOpen, startInPopup]);
+  }, [popupOpen, allowPopup]);
 
   useEffect(() => {
     let rafId = 0;
@@ -126,7 +122,7 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
       const dt = Math.min(40, timestamp - last);
       lastTsRef.current = timestamp;
 
-      if (runningRef.current && !missedRef.current && (!startInPopup || popupOpen)) {
+      if (runningRef.current && !missedRef.current && (!allowPopup || popupOpen)) {
         const paddleSpeed = 70;
         const leftPressed = keyStateRef.current.left;
         const rightPressed = keyStateRef.current.right;
@@ -258,7 +254,7 @@ export default function OneAxisAirHockeyGame({ title = 'הוקי בהמתנה', 
         <span style={{ fontSize: 10, color: '#334155' }}>Score {score} | Best {best}</span>
       </div>
 
-      {startInPopup ? (
+      {allowPopup ? (
         <>
           <button
             type="button"

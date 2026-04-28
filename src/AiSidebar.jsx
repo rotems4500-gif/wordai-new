@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getActiveProviderName, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName } from "./services/aiService";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
 const CONTEXT_PROMPTS = [
@@ -132,7 +132,7 @@ const getChatMemoryStorageKey = (workspaceId = '') => {
 const getDefaultMessages = () => ([
   { 
     role: 'assistant', 
-    content: `שלום! אני ${getActiveProviderName()} 🤖\n\nאני כאן לעזור לך עם הכתיבה. אני רואה את ההקשר של המסמך, אז אפשר לשאול גם בקצרה:\n• "נראה ארוך אה?" 🤔\n• "יש מקור לזה?" 📚\n• "תחדד לי את זה" 💡\n\nמה נכתוב היום?`,
+    content: `שלום! אני כאן בצ'אט ישיר עם ספק ה-AI שלך 🤖\n\nאני רואה את ההקשר של המסמך, אז אפשר לשאול גם בקצרה:\n• "נראה ארוך אה?" 🤔\n• "יש מקור לזה?" 📚\n• "תחדד לי את זה" 💡\n\nמה נכתוב היום?`,
     timestamp: Date.now()
   }
 ]);
@@ -236,6 +236,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     const initialAutomation = getWorkspaceAutomation();
     return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse();
   });
+  const [selectedProviderId, setSelectedProviderId] = useState(() => getAppMemory().sidebarProviderId || 'default');
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
@@ -243,6 +244,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
+  const activeWorkspaceIdRef = useRef(String(getWorkspaceAutomation().activeWorkspaceId || ''));
 
   const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
   const localContext = selectedText || currentBlockText;
@@ -252,6 +254,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const generationActions = visibleActions.filter((action) => !action.sel);
   const skillCatalog = getSkillCatalog();
   const skillsConfig = getSkillsConfig();
+  const configuredProviderChoices = getConfiguredProviderChoices();
+  const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === selectedProviderId) || null;
+  const activeProviderLabel = activeProviderChoice?.label || getActiveProviderName();
   const activeAgent = roleAgents.find((agent) => agent.id === selectedAgentId) || null;
   const shouldShowProgress = workspaceAutomation.showProgress !== false && (!compactMode || tab === 'agents' || ['running', 'retrying', 'error'].includes(activeAgentStatus.state));
 
@@ -320,12 +325,17 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   }, [messages, loading]);
 
   useEffect(() => {
-    const syncWorkspace = () => {
+    const syncWorkspace = (event) => {
       const nextAutomation = getWorkspaceAutomation();
+      const nextWorkspaceId = String(nextAutomation.activeWorkspaceId || '');
+      const shouldResetAgentSelection = activeWorkspaceIdRef.current !== nextWorkspaceId
+        || event?.detail?.reason === 'workspace-switched';
+      activeWorkspaceIdRef.current = nextWorkspaceId;
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
       setMessages(getSavedMessages(nextAutomation.activeWorkspaceId));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
+      if (shouldResetAgentSelection) setSelectedAgentId('');
     };
 
     syncWorkspace();
@@ -369,19 +379,23 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     if (selectedAgentId && !roleAgents.some((agent) => agent.id === selectedAgentId)) {
       setSelectedAgentId('');
     }
-  }, [selectedSkillId, selectedAgentId, skillsConfig, roleAgents]);
+    if (selectedProviderId !== 'default' && !configuredProviderChoices.some((choice) => choice.id === selectedProviderId)) {
+      setSelectedProviderId('default');
+    }
+  }, [selectedSkillId, selectedAgentId, selectedProviderId, skillsConfig, roleAgents, configuredProviderChoices]);
 
   useEffect(() => {
     try {
       localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(messages.slice(-60)));
       saveAppMemory({
         ...getAppMemory(),
+        sidebarProviderId: selectedProviderId || 'default',
         lastSelectedAgentId: selectedAgentId || '',
         lastSelectedSkillId: selectedSkillId || 'none',
         lastResolvedSkillLabel: resolvedSkillLabel || '',
       });
     } catch {}
-  }, [messages, selectedAgentId, selectedSkillId, resolvedSkillLabel]);
+  }, [messages, selectedProviderId, selectedAgentId, selectedSkillId, resolvedSkillLabel]);
 
   useEffect(() => {
     if (tab !== 'agents' && showLogs) setShowLogs(false);
@@ -464,6 +478,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     } catch {}
     setMessages(getDefaultMessages());
     setInput('');
+    setSelectedProviderId('default');
     setSelectedAgentId('');
     setSelectedSkillId('none');
     setResolvedSkillLabel('');
@@ -518,7 +533,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     }
   };
 
-  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'עוזר ראשי' }) => {
+  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'צ׳אט ישיר' }) => {
     const originalText = (customPrompt || input).trim();
     if (!originalText || loading) return;
     if (!customPrompt) setInput('');
@@ -583,26 +598,34 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     }
 
     const ctx = buildContext();
+    const directProviderId = activeProviderChoice?.id || '';
+    const hasExplicitProviderSelection = Boolean(directProviderId);
+    const directAgentName = hasExplicitProviderSelection ? `${agentMeta.name} · ${activeProviderLabel}` : agentMeta.name;
     setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
     setLoading(true);
-    updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
+    updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     try {
       const reply = await chatWithActiveProvider(txt, ctx, extraSystemPrompt, {
-        agentLabel: agentMeta.name,
+        agentLabel: directAgentName,
         skillId: manualSkillId,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        providerOverride: directProviderId,
+        strictProviderOverride: hasExplicitProviderSelection,
+        skipAutomation: true,
+        skipAutomationPrompt: true,
+        skipMultiModel: hasExplicitProviderSelection,
         onSkillResolved: (payload) => {
           const skill = payload?.skill;
           const reasonLabel = payload?.reason === 'auto' ? 'אוטומטי' : payload?.reason === 'default' ? 'ברירת מחדל' : 'ידני';
           setResolvedSkillLabel(skill?.label ? `${skill.label} · ${reasonLabel}` : 'ללא סקיל פעיל');
         },
-        onStatus: (payload) => updateAgentStatus(agentMeta.id, agentMeta.name, payload),
+        onStatus: (payload) => updateAgentStatus(agentMeta.id, directAgentName, payload),
       });
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
-      updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'success', progress: 100, message: 'הושלם' });
+      updateAgentStatus(agentMeta.id, directAgentName, { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
       setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
-      updateAgentStatus(agentMeta.id, agentMeta.name, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
+      updateAgentStatus(agentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
       setLoading(false);
       inputRef.current?.focus();
@@ -905,7 +928,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                   borderRadius: '50%',
                   animation: 'pulse 2s ease-in-out infinite',
                 }} />
-                {getActiveProviderName()}
+                {activeProviderLabel}
               </div>
             </div>
           </div>
@@ -1076,7 +1099,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       )}
 
       {/* Modern Chat Interface */}
-        {loading && <OneAxisAirHockeyGame title="הוקי בזמן המתנה" compact startInPopup />}
+        {loading && <OneAxisAirHockeyGame title="הוקי בזמן המתנה" compact allowPopup />}
 
         {/* Modern Chat Interface */}
       {tab === 'chat' && (
@@ -1426,6 +1449,47 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 </div>
               )}
               
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <span style={{ 
+                  fontSize: 11, 
+                  color: 'rgba(255,255,255,0.8)', 
+                  fontWeight: 600 
+                }}>
+                  🛰️ ספק:
+                </span>
+                <select
+                  value={activeProviderChoice?.id || 'default'}
+                  onChange={(e) => {
+                    setSelectedProviderId(e.target.value);
+                    setSelectedAgentId('');
+                  }}
+                  style={{
+                    minWidth: 170,
+                    padding: '8px 12px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    borderRadius: 12,
+                    fontSize: 12,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                    color: 'white',
+                    outline: 'none',
+                  }}
+                >
+                  <option value="default" style={{ color: '#1F2937' }}>
+                    ברירת המחדל מההגדרות
+                  </option>
+                  {configuredProviderChoices.map((provider) => (
+                    <option key={provider.id} value={provider.id} style={{ color: '#1F2937' }}>
+                      {provider.label}{provider.isDefault ? ' · ברירת מחדל' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div style={{
                 display: 'flex',
                 alignItems: 'center',

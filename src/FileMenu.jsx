@@ -14,6 +14,8 @@ import {
   saveWordPreferences,
   getPersonalStyleProfile,
   savePersonalStyleProfile,
+  getSharedAgentInstructions,
+  saveSharedAgentInstructions,
   getWorkspaceAutomation,
   saveWorkspaceAutomation,
   getWorkspaceAgentPresets,
@@ -22,6 +24,7 @@ import {
   createNewWorkspace,
   switchToWorkspace,
   deleteWorkspace,
+  updateWorkspaceById,
   getAgentDebugLogs,
   clearAgentDebugLogs,
   getLatestAgentRunSummary,
@@ -31,6 +34,7 @@ import {
   getAppMemory,
   clearAppMemory,
   clearSidebarChatHistory,
+  buildPortablePrompt,
   testProviderConnection,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
@@ -408,7 +412,7 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'AI וצוות עבודה',
-    tabs: [['ai', '🤖 מנועי AI'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
+    tabs: [['ai', '🤖 מנועי AI'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
   },
   {
     title: 'כתיבה והתאמה אישית',
@@ -1133,6 +1137,72 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
           style={{ width: 110, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
         />
         <span style={{ marginRight: 8, fontSize: 12, color: '#605E5C' }}>שניות</span>
+      </div>
+    </div>
+  );
+}
+
+function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle }) {
+  const [copyState, setCopyState] = useState('');
+  const portablePrompt = buildPortablePrompt({
+    sharedInstructions,
+    profile: personalStyle,
+  });
+
+  const copyPortablePrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(portablePrompt || '');
+      setCopyState('הועתק ללוח');
+    } catch {
+      setCopyState('ההעתקה נכשלה');
+    } finally {
+      setTimeout(() => setCopyState(''), 1800);
+    }
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16, lineHeight: 1.7 }}>
+        כאן מגדירים prompt קבוע ונייד שאפשר להעתיק לכל ספק AI. ה-preview משלב אוטומטית את ההנחיות המשותפות עם הפרופיל והסגנון האישי הקיימים.
+      </p>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הנחיות משותפות לכל ספקי AI</div>
+        <textarea
+          value={sharedInstructions}
+          onChange={(e) => setSharedInstructions(e.target.value)}
+          rows={7}
+          placeholder="למשל: כתוב בעברית תקנית, אל תמציא מקורות, שמור על טון ענייני, אל תוסיף מבוא אם לא ביקשו"
+          style={{ width: '100%', padding: '10px 12px', border: '1px solid #C8C6C4', borderRadius: 10, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+          הפרופיל האישי, העדפות הסגנון והלמידה הקיימת מצטרפים אוטומטית ל-preview שמתחת, בלי להעמיס על StartScreen.
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>Portable Prompt מוכן להעתקה</div>
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>אותו prompt יעבוד גם ב-Claude, Gemini, ChatGPT או כל ספק אחר.</div>
+          </div>
+          <button
+            type="button"
+            onClick={copyPortablePrompt}
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+          >
+            העתק Prompt
+          </button>
+        </div>
+
+        <textarea
+          readOnly
+          value={portablePrompt}
+          rows={14}
+          style={{ width: '100%', padding: '10px 12px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: '#0F172A' }}
+        />
+
+        {copyState ? <div style={{ fontSize: 11, color: copyState === 'הועתק ללוח' ? '#166534' : '#991B1B', marginTop: 8 }}>{copyState}</div> : null}
       </div>
     </div>
   );
@@ -2006,14 +2076,28 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   const [lastSavedWorkspaceName, setLastSavedWorkspaceName] = useState('');
   const [quickAgentName, setQuickAgentName] = useState('');
   const [quickAgentStatus, setQuickAgentStatus] = useState('');
+  const [previewWorkspaceId, setPreviewWorkspaceId] = useState('');
+  const [editWorkspaceState, setEditWorkspaceState] = useState({ id: '', name: '', sharedGoal: '' });
+
+  const refreshWorkspaceState = () => {
+    const nextAutomation = getWorkspaceAutomation();
+    const nextLibrary = getWorkspacesLibrary();
+    setWorkspacesLib(nextLibrary);
+    setAutomation((prev) => (JSON.stringify(prev) === JSON.stringify(nextAutomation) ? prev : nextAutomation));
+    onWorkspaceChange?.();
+    return nextLibrary;
+  };
+
+  const formatWorkflowLabel = (workflowMode = '') => {
+    if (workflowMode === 'manager-auto') return 'AUTOPILOT דינמי';
+    if (workflowMode === 'circular-team') return 'צוות מעגלי';
+    if (workflowMode === 'custom-order') return 'סדר מותאם';
+    if (workflowMode === 'manager-pipeline') return 'Pipeline מנוהל';
+    return workflowMode || 'ברירת מחדל';
+  };
 
   useEffect(() => {
-    const syncLibrary = () => {
-      const nextAutomation = getWorkspaceAutomation();
-      setWorkspacesLib(getWorkspacesLibrary());
-      setAutomation((prev) => (JSON.stringify(prev) === JSON.stringify(nextAutomation) ? prev : nextAutomation));
-      onWorkspaceChange?.();
-    };
+    const syncLibrary = () => refreshWorkspaceState();
 
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', syncLibrary);
@@ -2066,15 +2150,68 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       window.alert('לא הצלחתי למחוק את סביבת העבודה.');
       return;
     }
-    const nextLibrary = getWorkspacesLibrary();
-    setWorkspacesLib(nextLibrary);
-    setAutomation(getWorkspaceAutomation());
-    onWorkspaceChange?.();
+    refreshWorkspaceState();
   };
 
   const savedWorkspaces = Object.values(workspacesLib || {})
     .filter((ws) => ws && typeof ws === 'object')
     .sort((a, b) => String(b?.lastModified || '').localeCompare(String(a?.lastModified || '')));
+
+  const previewWorkspace = previewWorkspaceId ? workspacesLib?.[previewWorkspaceId] : null;
+  const editingWorkspace = editWorkspaceState.id ? workspacesLib?.[editWorkspaceState.id] : null;
+
+  const openPreviewWorkspace = (workspace) => {
+    setPreviewWorkspaceId(String(workspace?.id || ''));
+  };
+
+  const openEditWorkspace = (workspace) => {
+    setEditWorkspaceState({
+      id: String(workspace?.id || ''),
+      name: String(workspace?.name || workspace?.automation?.workspaceName || '').trim(),
+      sharedGoal: String(workspace?.automation?.sharedGoal || '').trim(),
+    });
+  };
+
+  const closeEditWorkspace = () => setEditWorkspaceState({ id: '', name: '', sharedGoal: '' });
+
+  const openDeepWorkspaceEdit = (workspaceId) => {
+    const switched = switchToWorkspace(workspaceId);
+    if (!switched) {
+      window.alert('לא הצלחתי לעבור לסביבת העבודה שנבחרה.');
+      return;
+    }
+    refreshWorkspaceState();
+    setPreviewWorkspaceId('');
+    closeEditWorkspace();
+    setAgents(getRoleAgents());
+    if (typeof document !== 'undefined') {
+      const target = document.getElementById('role-agents-settings');
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const saveWorkspaceDetails = () => {
+    const targetId = String(editWorkspaceState.id || '').trim();
+    if (!targetId) return;
+    const nextName = String(editWorkspaceState.name || '').trim();
+    if (!nextName) {
+      window.alert('צריך לתת שם לסביבת העבודה.');
+      return;
+    }
+    const updated = updateWorkspaceById(targetId, {
+      name: nextName,
+      workspaceName: nextName,
+      automation: {
+        sharedGoal: String(editWorkspaceState.sharedGoal || '').trim(),
+      },
+    });
+    if (!updated) {
+      window.alert('לא הצלחתי לשמור את פרטי סביבת העבודה.');
+      return;
+    }
+    refreshWorkspaceState();
+    closeEditWorkspace();
+  };
 
   const handleAddQuickAgent = () => {
     const agentName = String(quickAgentName || '').trim() || 'סוכן חדש';
@@ -2215,26 +2352,141 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
         </div>
         <div style={{ display: 'grid', gap: 6, maxHeight: 170, overflow: 'auto' }}>
           {savedWorkspaces.map((ws) => (
-            <div key={ws.id} style={{ fontSize: 11, color: '#4B5563', border: '1px solid #E5E7EB', borderRadius: 6, padding: '8px', background: '#F9FAFB' }}>
+              <div key={ws.id} style={{ fontSize: 11, color: '#4B5563', border: '1px solid #E5E7EB', borderRadius: 8, padding: '10px', background: '#F9FAFB' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <strong style={{ color: '#111827' }}>{ws.name || ws.id}</strong>
-                {String(ws.id) !== 'default-content-studio' ? (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteWorkspace(ws.id, ws.name)}
-                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
-                  >
-                    מחק
-                  </button>
-                ) : null}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <strong style={{ color: '#111827', display: 'block' }}>{ws.name || ws.id}</strong>
+                    <div style={{ color: '#6B7280', marginTop: 4 }}>
+                      {formatWorkflowLabel(ws?.automation?.workflowMode)} · {(Array.isArray(ws?.agents) ? ws.agents.length : 0)} סוכנים
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button
+                      type="button"
+                      title="צפייה מהירה"
+                      onClick={() => openPreviewWorkspace(ws)}
+                      style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
+                    >
+                      👁
+                    </button>
+                    <button
+                      type="button"
+                      title="עריכה בסיסית"
+                      onClick={() => openEditWorkspace(ws)}
+                      style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid #DDD6FE', background: '#F5F3FF', color: '#6D28D9', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
+                    >
+                      ✏️
+                    </button>
+                    {String(ws.id) !== 'default-content-studio' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteWorkspace(ws.id, ws.name)}
+                        style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                      >
+                        מחק
+                      </button>
+                    ) : null}
+                  </div>
               </div>
               <div style={{ color: '#6B7280', marginTop: 4 }}>
                 עודכנה: {new Date(ws.lastModified || Date.now()).toLocaleDateString('he-IL')}
               </div>
+                {ws?.automation?.sharedGoal ? (
+                  <div style={{ color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                    מטרה: {String(ws.automation.sharedGoal).slice(0, 80)}{String(ws.automation.sharedGoal).length > 80 ? '…' : ''}
+                  </div>
+                ) : null}
             </div>
           ))}
         </div>
       </div>
+
+        {previewWorkspace ? (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 1700, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div style={{ width: 'min(680px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid #CBD5E1', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{previewWorkspace.name || previewWorkspace.id}</div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{formatWorkflowLabel(previewWorkspace?.automation?.workflowMode)}</div>
+                </div>
+                <button type="button" onClick={() => setPreviewWorkspaceId('')} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+              </div>
+
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
+                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>שם</div>
+                  <div style={{ fontSize: 13, color: '#111827', fontWeight: 700 }}>{previewWorkspace.name || previewWorkspace.id}</div>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
+                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>מטרה משותפת</div>
+                  <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.7 }}>{previewWorkspace?.automation?.sharedGoal || 'לא הוגדרה מטרה משותפת.'}</div>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
+                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 8 }}>סוכנים בסביבה</div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {(Array.isArray(previewWorkspace?.agents) ? previewWorkspace.agents : []).length ? (previewWorkspace.agents || []).map((agent) => (
+                      <div key={`${previewWorkspace.id}-${agent.id}`} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '8px 10px', background: 'white' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{agent.name || agent.id}</div>
+                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{agent.provider || 'ברירת מחדל'}{agent.model ? ` · ${agent.model}` : ''}</div>
+                      </div>
+                    )) : <div style={{ fontSize: 12, color: '#64748B' }}>אין סוכנים שמורים בסביבה זו.</div>}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => openEditWorkspace(previewWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #DDD6FE', background: '#F5F3FF', color: '#6D28D9', cursor: 'pointer', fontWeight: 700 }}>עריכה בסיסית</button>
+                <button type="button" onClick={() => openDeepWorkspaceEdit(previewWorkspace.id)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>עבור לעריכה עמוקה</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {editingWorkspace ? (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 1700, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div style={{ width: 'min(620px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid #CBD5E1', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>עריכה בסיסית של סביבת עבודה</div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{editingWorkspace.name || editingWorkspace.id}</div>
+                </div>
+                <button type="button" onClick={closeEditWorkspace} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+              </div>
+
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>שם הסביבה</div>
+                  <input
+                    value={editWorkspaceState.name}
+                    onChange={(e) => setEditWorkspaceState((prev) => ({ ...prev, name: e.target.value }))}
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12 }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מטרה משותפת</div>
+                  <textarea
+                    value={editWorkspaceState.sharedGoal}
+                    onChange={(e) => setEditWorkspaceState((prev) => ({ ...prev, sharedGoal: e.target.value }))}
+                    rows={5}
+                    placeholder="למשל: לבנות טיוטות אקדמיות קצרות עם דגש על מקורות ומבנה ברור"
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => openDeepWorkspaceEdit(editingWorkspace.id)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>עבור לעריכה עמוקה</button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" onClick={closeEditWorkspace} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #CBD5E1', background: 'white', color: '#334155', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
+                  <button type="button" onClick={saveWorkspaceDetails} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: 'pointer', fontWeight: 700 }}>שמור שינויים</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
       <div style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
         💡 <strong>טיפ:</strong> אחרי יצירת סביבה חדשה, אפשר להוסיף לה סוכן מיד מהאזור למטה.
@@ -2587,7 +2839,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               checked={automation?.appendAgentNotesToOutput === true}
               onChange={(e) => setAutomation(prev => ({ ...prev, appendAgentNotesToOutput: e.target.checked }))}
             />
-            צרף בסוף המסמך נספח הערות סוכנים (כולל סיכום מנהל והערכת מרצה)
+            צרף בסוף המסמך נספח הערות סוכנים (כולל סיכום מנהל ואינדיקציה פנימית להגשה)
           </label>
           <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.7, marginBottom: 8 }}>
             כשפעיל, המסמך יקבל בסוף נספח שמרכז הערות לפי סוכן, המלצות מנהל עבודה והערכת היצמדות להנחיות.
@@ -2809,7 +3061,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   );
 }
 
-function UpdateSettings() {
+function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
   const [updateInfo, setUpdateInfo] = useState({
     status: 'idle',
     message: 'מוכן לבדיקת עדכונים',
@@ -2856,6 +3108,12 @@ function UpdateSettings() {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!checkToken) return;
+    onCheckTokenConsumed(checkToken);
+    checkNow();
+  }, [checkToken, onCheckTokenConsumed]);
 
   const installNow = async () => {
     if (!window.desktopApp?.installAppUpdate) return;
@@ -3118,7 +3376,7 @@ function AppearanceSettings() {
 }
 
 // ─── FileMenu ראשי ───
-export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null }) {
+export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0 }) {
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
   const [config, setConfig] = useState(getProviderConfig);
@@ -3126,12 +3384,15 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [assistantBehaviorState, setAssistantBehaviorState] = useState(assistantBehavior || getAssistantBehavior());
   const [wordPrefsState, setWordPrefsState] = useState(wordPreferences || getWordPreferences());
   const [personalStyleState, setPersonalStyleState] = useState(getPersonalStyleProfile());
+  const [sharedInstructionsState, setSharedInstructionsState] = useState(getSharedAgentInstructions());
   const [skillsState, setSkillsState] = useState(getSkillsConfig());
   const [roleAgents, setRoleAgents] = useState(getRoleAgents());
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
   const didHydrate = useRef(false);
   const [inlineUpdateState, setInlineUpdateState] = useState({ status: 'idle', message: '' });
+  const [consumedUpdateCheckToken, setConsumedUpdateCheckToken] = useState(0);
+  const pendingUpdateCheckToken = updateCheckToken > consumedUpdateCheckToken ? updateCheckToken : 0;
 
   useEffect(() => {
     if (initialSettingsTab) {
@@ -3181,6 +3442,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
+    saveSharedAgentInstructions(sharedInstructionsState);
     saveSkillsConfig(skillsState);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
@@ -3195,7 +3457,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     setSaved(true);
     const timer = setTimeout(() => setSaved(false), 1200);
     return () => clearTimeout(timer);
-  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
+  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, sharedInstructionsState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
 
   const menuItems = [
     { id: 'openFile',   icon: 'ph-fill ph-folder-open',   label: 'פתח מהמחשב',         desc: 'פותח מסמך מקומי' },
@@ -3219,6 +3481,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
     savePersonalStyleProfile(normalizedPersonalStyle);
+    saveSharedAgentInstructions(sharedInstructionsState);
     saveSkillsConfig(skillsState);
     saveRoleAgents(roleAgents);
     saveWorkspaceAutomation(workspaceAutomationState);
@@ -3384,6 +3647,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
                   {settingsTab === 'guide'       && <GuideSettings />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+                  {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                   {settingsTab === 'agents'      && (
                     <div>
@@ -3401,7 +3665,12 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       </div>
                     </div>
                   )}
-                  {settingsTab === 'updates'     && <UpdateSettings />}
+                  {settingsTab === 'updates'     && (
+                    <UpdateSettings
+                      checkToken={pendingUpdateCheckToken}
+                      onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
+                    />
+                  )}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
                   {settingsTab === 'onboarding'  && (

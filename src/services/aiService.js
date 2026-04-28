@@ -1037,6 +1037,45 @@ export const updateCurrentWorkspace = (updates = {}) => {
   return true;
 };
 
+export const updateWorkspaceById = (workspaceId, updates = {}) => {
+  const targetId = String(workspaceId || '').trim();
+  if (!targetId) return false;
+
+  const activeWorkspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  if (targetId === activeWorkspaceId) {
+    return updateCurrentWorkspace(updates);
+  }
+
+  const library = getWorkspacesLibrary();
+  const existingWorkspace = library[targetId];
+  if (!existingWorkspace) return false;
+
+  const workspace = normalizeWorkspaceRecord(targetId, existingWorkspace, existingWorkspace?.name || 'סביבה חדשה');
+  const nextName = sanitizeWorkspaceName(
+    updates?.name || updates?.workspaceName || workspace?.name,
+    workspace?.name || 'סביבה חדשה'
+  );
+  const nextAutomation = normalizeWorkspaceAutomationRecord({
+    ...workspace.automation,
+    ...(updates?.automation && typeof updates.automation === 'object' ? updates.automation : {}),
+    workspaceName: nextName,
+  }, targetId, nextName);
+  const nextAgents = updates?.agents ? cloneAgentRecords(updates.agents) : cloneAgentRecords(workspace.agents || []);
+
+  library[targetId] = normalizeWorkspaceRecord(targetId, {
+    ...workspace,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    name: nextName,
+    automation: nextAutomation,
+    agents: nextAgents,
+    lastModified: new Date().toISOString(),
+  }, nextName);
+
+  saveWorkspacesLibrary(library);
+  emitWorkspaceChangedEvent('workspace-updated', targetId);
+  return true;
+};
+
 // פונקציית עזר לדיבוג - מציגה מידע על הסביבה הפעילה
 export const debugWorkspaceInfo = () => {
   const automation = getWorkspaceAutomation();
@@ -1430,6 +1469,16 @@ export const getActiveProviderName = () => {
   return names[cfg.active] || 'AI';
 };
 
+export const getConfiguredProviderChoices = (cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const names = getProviderLabelMap(safeCfg);
+  return getConfiguredProviderPool(safeCfg).map((providerId) => ({
+    id: providerId,
+    label: names[providerId] || providerId,
+    isDefault: providerId === safeCfg.active,
+  }));
+};
+
 const getSkillMatchScore = (skill = {}, text = '', skillConfig = {}) => {
   const haystack = String(text || '').toLowerCase();
   const keywords = [...new Set([
@@ -1516,9 +1565,9 @@ const buildResponseModePrompt = ({ strictFormatting = false } = {}) => {
   ].join('\n');
 };
 
-const buildWorkspaceAutomationInstructions = () => {
+const buildWorkspaceAutomationInstructions = ({ disabled = false } = {}) => {
   const automation = getWorkspaceAutomation();
-  if (!automation.enabled) return '';
+  if (disabled || !automation.enabled) return '';
 
   const enabledAgents = getOrderedRoleAgents(automation.workflowMode);
   const decisionMode = getDecisionMode(automation, enabledAgents);
@@ -2172,7 +2221,8 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
   }
 };
 
-const buildPersonalStyleInstructions = (profile = {}) => {
+const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
+  const omitStructuralHints = options.omitStructuralHints === true;
   const labels = {
     school: 'בית ספר',
     undergraduate: 'תואר ראשון',
@@ -2189,8 +2239,8 @@ const buildPersonalStyleInstructions = (profile = {}) => {
   if (profile.institutionName) parts.push(`מוסד לימודים או ארגון מרכזי: ${String(profile.institutionName).trim()}`);
   if (profile.studyTrack) parts.push(`מסלול, חוג או תחום עיקרי: ${String(profile.studyTrack).trim()}`);
   if (profile.currentCourses?.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${profile.currentCourses.join(', ')}`);
-  if (profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
-  if (profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
+  if (!omitStructuralHints && profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
+  if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
   if (profile.learningGameInsights?.length) parts.push(`תובנות שנלמדו ממשחקי ההיכרות: ${profile.learningGameInsights.join(' | ')}`);
   if (profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
@@ -2205,11 +2255,11 @@ const buildPersonalStyleInstructions = (profile = {}) => {
   if (profile.additionalContext) parts.push(`הקשר אישי נוסף שחשוב לזכור: ${String(profile.additionalContext).trim()}`);
   if (profile.preferredDocumentTypes?.length) parts.push(`סוגי מסמכים נפוצים למשתמש: ${profile.preferredDocumentTypes.join(', ')}`);
   if (profile.defaultAudience) parts.push(`קהל יעד מועדף: ${String(profile.defaultAudience).trim()}`);
-  if (profile.formatPreferences) parts.push(`העדפות מבנה ותצורה: ${String(profile.formatPreferences).trim()}`);
+  if (!omitStructuralHints && profile.formatPreferences) parts.push(`העדפות מבנה ותצורה: ${String(profile.formatPreferences).trim()}`);
   if (profile.manualVocabulary?.length) parts.push(`העדף את המונחים: ${profile.manualVocabulary.join(', ')}`);
   if (profile.manualPhrases?.length) parts.push(`ביטויים שמועדפים על המשתמש: ${profile.manualPhrases.join(', ')}`);
   if (profile.preferredSentenceStructures?.length) parts.push(`מבני משפטים מועדפים: ${profile.preferredSentenceStructures.join(', ')}`);
-  if (profile.paragraphPreferences) parts.push(`העדפות לגבי אורך ומבנה פסקאות: ${String(profile.paragraphPreferences).trim()}`);
+  if (!omitStructuralHints && profile.paragraphPreferences) parts.push(`העדפות לגבי אורך ומבנה פסקאות: ${String(profile.paragraphPreferences).trim()}`);
   if (profile.tonePreferences?.length) parts.push(`טון כתיבה מועדף: ${profile.tonePreferences.join(', ')}`);
   if (profile.sentenceLengthPreference) parts.push(`אורך משפטים מועדף: ${profile.sentenceLengthPreference}`);
   if (profile.paragraphLengthPreference) parts.push(`אורך פסקאות מועדף: ${profile.paragraphLengthPreference}`);
@@ -2230,6 +2280,24 @@ const buildPersonalStyleInstructions = (profile = {}) => {
   }
   if (profile.notes) parts.push(`הערות סגנון אישיות: ${String(profile.notes).trim()}`);
   return parts.filter(Boolean).join('\n');
+};
+
+export const buildPortablePrompt = (options = {}) => {
+  const sharedInstructions = typeof options.sharedInstructions === 'string'
+    ? String(options.sharedInstructions || '').trim()
+    : getSharedAgentInstructions();
+  const personalStylePrompt = buildPersonalStyleInstructions(options.profile || getPersonalStyleProfile(), {
+    omitStructuralHints: options.omitStructuralHints === true,
+  });
+  const sections = [
+    'אתה עוזר כתיבה כללי שנועד לעבוד היטב מול כל ספק AI.',
+    'ענה בעברית, ברור ומעשי, אלא אם המשתמש ביקש אחרת.',
+    'אם המשתמש מבקש טקסט מוכן למסמך, החזר ישירות את התוכן בלי פתיחים ומטא מיותר.',
+    sharedInstructions ? `הנחיות משותפות קבועות:\n${sharedInstructions}` : '',
+    personalStylePrompt ? `פרופיל והעדפות סגנון של המשתמש:\n${personalStylePrompt}` : '',
+  ].filter(Boolean);
+
+  return sections.join('\n\n').trim();
 };
 
 // ═══════════════════════════════════════
@@ -2312,14 +2380,18 @@ const looksLikeHtmlDocument = (value = '') => /<(h[1-6]|p|div|ul|ol|li|table|sec
 
 const normalizeStageNote = (value = '') => String(value || '').replace(/\n{2,}/g, '\n').trim();
 
-const buildLecturerAssessment = (managerMissing = '', managerDecision = '') => {
+const buildSubmissionReadinessSignal = (managerMissing = '', managerDecision = '') => {
   const signal = `${String(managerMissing || '')}\n${String(managerDecision || '')}`.trim();
   const hasGaps = hasMeaningfulMissingItems(signal);
-  const grade = hasGaps ? 86 : 95;
+  const score = hasGaps ? 86 : 95;
   const adherence = hasGaps
     ? 'היצמדות להנחיות טובה, אך נדרש חידוד לפני הגשה סופית.'
     : 'היצמדות גבוהה להנחיות, מבנה ברור ותוצר מוכן להגשה.';
-  return { grade, adherence };
+  return {
+    score,
+    adherence,
+    disclaimer: 'זו אינדיקציה חישובית פנימית, לא ביקורת של סוכן או איש צוות אמיתי.',
+  };
 };
 
 const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', managerPacket = null, managerLabel = 'מנהל העבודה', preferHtml = false }) => {
@@ -2335,7 +2407,7 @@ const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', manag
   const managerDecision = String(managerPacket?.decision || '').trim();
   const managerHandoff = String(managerPacket?.handoff || '').trim();
   const managerSummary = [managerHandoff, managerMissing, managerDecision].filter(Boolean).join('\n');
-  const lecturer = buildLecturerAssessment(managerMissing, managerDecision);
+  const readinessSignal = buildSubmissionReadinessSignal(managerMissing, managerDecision);
 
   if (preferHtml) {
     const notesList = normalizedNotes.length
@@ -2348,9 +2420,10 @@ const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', manag
   ${notesInstruction ? `<p><strong>הנחיית משתמש לנספח:</strong> ${escapeHtmlForOutput(notesInstruction)}</p>` : ''}
   <h3>סיכום מנהל העבודה</h3>
   <p>${escapeHtmlForOutput(managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`)}</p>
-  <h3>הערכת מרצה: ציון והיצמדות להנחיות</h3>
-  <p><strong>ציון משוער:</strong> ${lecturer.grade}/100</p>
-  <p>${escapeHtmlForOutput(lecturer.adherence)}</p>
+  <h3>אינדיקציה פנימית להגשה</h3>
+  <p><strong>מדד פנימי:</strong> ${readinessSignal.score}/100</p>
+  <p><em>${escapeHtmlForOutput(readinessSignal.disclaimer)}</em></p>
+  <p>${escapeHtmlForOutput(readinessSignal.adherence)}</p>
   <h3>הערות לפי סוכן</h3>
   ${notesList}
 </div>`.trim();
@@ -2368,9 +2441,10 @@ const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', manag
     'סיכום מנהל העבודה:',
     managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`,
     '',
-    'הערכת מרצה: ציון והיצמדות להנחיות',
-    `ציון משוער: ${lecturer.grade}/100`,
-    lecturer.adherence,
+    'אינדיקציה פנימית להגשה',
+    `מדד פנימי: ${readinessSignal.score}/100`,
+    readinessSignal.disclaimer,
+    readinessSignal.adherence,
     '',
     'הערות לפי סוכן:',
     noteLines,
@@ -2761,14 +2835,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const taggedRouting = extractTaggedModelRouting(userPrompt);
   const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
   const structureConstraintText = String(options.structureConstraintText || cleanUserPrompt).trim() || cleanUserPrompt;
-  const taggedProviders = normalizeProviderIds(taggedRouting.taggedProviders, '');
-  const preferredProviders = normalizeProviderIds(options.preferredProviders, '');
-  const constrainedProviders = preferredProviders.length
-    ? preferredProviders
-    : taggedProviders;
+  const strictProviderOverride = options.strictProviderOverride === true && Boolean(options.providerOverride);
+  const taggedProviders = strictProviderOverride ? [] : normalizeProviderIds(taggedRouting.taggedProviders, '');
+  const preferredProviders = strictProviderOverride ? [] : normalizeProviderIds(options.preferredProviders, '');
+  const constrainedProviders = strictProviderOverride
+    ? [options.providerOverride]
+    : preferredProviders.length
+      ? preferredProviders
+      : taggedProviders;
   const selectedProviders = constrainedProviders.length
     ? constrainedProviders
-    : options.providerOverride && options.strictProviderOverride === true
+    : strictProviderOverride
       ? [options.providerOverride]
       : getSelectedProviderIds(cfg, options.skipMultiModel === true);
   const automationPreferredProviders = constrainedProviders.length || selectedProviders.length > 1
@@ -2780,26 +2857,37 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     throw new Error('אין ספק AI זמין בתוך ה-pool שנבחר.');
   }
   const taggedProviderInPool = taggedProviders.find((providerId) => configuredSelectedProviders.includes(providerId));
-  const activeProvider = options.providerOverride
+  const activeProvider = strictProviderOverride
+    ? options.providerOverride
+    : options.providerOverride
     || (preferredProviders.length
       ? taggedProviderInPool
       : (taggedProviders.length ? taggedProviderInPool : ''))
     || configuredSelectedProviders[0]
     || selectedProviders[0]
     || cfg.active;
-  const taggedModelOverride = taggedRouting.providerModels?.[activeProvider]
+  const taggedModelOverride = strictProviderOverride
+    ? ''
+    : taggedRouting.providerModels?.[activeProvider]
     || (preferredProviders.length ? '' : taggedRouting.taggedModel);
   const modelOverride = options.modelOverride || taggedModelOverride || '';
-  const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile());
-  const sharedInstructions = getSharedAgentInstructions();
-  const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions();
-  const skillsConfig = getSkillsConfig();
-  const skillResolution = resolveSkillForRequest({
-    userPrompt: cleanUserPrompt,
-    documentContext,
-    skillId: options.skillId || '',
-    autoUseDefault: options.autoUseDefaultSkill !== false,
+  const skipSkillSelection = options.skipSkillSelection === true;
+  const skipAutomationPrompt = options.skipAutomationPrompt === true;
+  const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
+  const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
+    omitStructuralHints: omitPersonalStyleStructureHints,
   });
+  const sharedInstructions = getSharedAgentInstructions();
+  const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt });
+  const skillsConfig = getSkillsConfig();
+  const skillResolution = skipSkillSelection
+    ? { skill: null, reason: 'skipped' }
+    : resolveSkillForRequest({
+      userPrompt: cleanUserPrompt,
+      documentContext,
+      skillId: options.skillId || '',
+      autoUseDefault: options.autoUseDefaultSkill !== false,
+    });
   const activeSkill = skillResolution.skill;
   const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason, activeSkill ? skillsConfig.skills?.[activeSkill.id] : null);
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
@@ -2881,6 +2969,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     skillId: activeSkill?.id || '',
     skillLabel: activeSkill?.label || '',
     skillReason: skillResolution.reason,
+    skillSelectionSkipped: skipSkillSelection,
+    automationPromptSkipped: skipAutomationPrompt,
+    personalStyleStructureHintsSkipped: omitPersonalStyleStructureHints,
   });
 
   if (automation.enabled && automation.autoDispatch !== false && !options.providerOverride && !options.skipAutomation) {
@@ -2912,10 +3003,15 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       const agentRunCounts = {};
       const executionQueue = orderedAgents.map((agent) => ({ agent, revisitReason: '' }));
 
-      logEvent('workflow-start', `הופעלה סביבת עבודה${allowCircularWorkflow ? ' מעגלית' : decisionMode === 'manager' ? ' דינמית' : ''} עם ${orderedAgents.length} סוכנים`, {
+      const workflowAgentSummary = orderedAgents.length < enabledAgents.length
+        ? ` עם ${orderedAgents.length} סוכנים נבחרים מתוך ${enabledAgents.length} המוגדרים למשימה זו`
+        : ` עם ${orderedAgents.length} סוכנים`;
+
+      logEvent('workflow-start', `הופעלה סביבת עבודה${allowCircularWorkflow ? ' מעגלית' : decisionMode === 'manager' ? ' דינמית' : ''}${workflowAgentSummary}`, {
         state: 'running',
         orderedAgents: orderedAgents.map((agent) => agent.name),
         orderedAgentIds: orderedAgents.map((agent) => agent.id),
+        configuredAgentCount: enabledAgents.length,
         planSummary: executionPlan?.summary || '',
         circularEnabled: allowCircularWorkflow,
         maxRoundsPerAgent,
@@ -3354,7 +3450,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             pendingFinalManagerReview = false;
             executionQueue.length = 0;
             logEvent('workflow-recovered', expectDocumentOutput
-              ? 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות מנהל/מרצה'
+              ? 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות צוות ההרצה'
               : 'ה-workflow הגיע למגבלת סבבים, והוחזרה התשובה הטובה ביותר שנצברה עד כה', {
               state: 'success',
               agentId: managerAgent.id,
