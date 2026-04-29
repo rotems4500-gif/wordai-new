@@ -188,6 +188,7 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   sharedGoal: '',
   retryEnabled: true,
   maxRetries: 2,
+  timeoutEnabled: false,
   requestTimeoutMs: 45,
   showProgress: true,
   appendAgentNotesToOutput: false,
@@ -212,6 +213,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       sharedGoal: '',
       retryEnabled: true,
       maxRetries: 2,
+      timeoutEnabled: false,
       requestTimeoutMs: 45,
       showProgress: true,
       appendAgentNotesToOutput: false,
@@ -3440,15 +3442,23 @@ export const setApiKey = (key) => {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const withTimeout = async (promise, timeoutMs, onTimeout) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      window.setTimeout(() => {
-        try { onTimeout?.(); } catch {}
-        reject(new Error(`הבקשה ארכה יותר מדי זמן (${Math.round(timeoutMs / 1000)} שניות)`));
-      }, timeoutMs);
-    }),
-  ]);
+  const safeTimeoutMs = Number(timeoutMs);
+  if (!Number.isFinite(safeTimeoutMs) || safeTimeoutMs <= 0) return promise;
+
+  let timerId = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timerId = window.setTimeout(() => {
+          try { onTimeout?.(); } catch {}
+          reject(new Error(`הבקשה ארכה יותר מדי זמן (${Math.round(safeTimeoutMs / 1000)} שניות)`));
+        }, safeTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timerId !== null) window.clearTimeout(timerId);
+  }
 };
 
 const emitStatus = (callback, payload) => {
@@ -4030,7 +4040,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const onStatus = options.onStatus;
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
   const agentName = options.agentName || agentLabel;
-  const timeoutMs = Math.max(10000, Number(automation.requestTimeoutMs || 45) * 1000);
+  const requestTimeoutSeconds = Number(automation.requestTimeoutMs);
+  const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutSeconds) && requestTimeoutSeconds > 0
+    ? Math.max(10000, requestTimeoutSeconds * 1000)
+    : 0;
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
   const runId = options.runId || createRunId();

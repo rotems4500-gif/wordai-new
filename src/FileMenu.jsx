@@ -475,6 +475,32 @@ const ACTION_VISIBILITY_OPTIONS = [
   { id: 'translate', label: 'תרגום לאנגלית', hint: 'המרת הקטע לאנגלית' },
 ];
 
+const normalizeSettingsSearchValue = (value = '') => String(value || '')
+  .toLowerCase()
+  .replace(/[_/-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const mergeSettingsSearchTerms = (values = []) => [...new Set((Array.isArray(values) ? values : [values])
+  .flatMap((item) => (Array.isArray(item) ? item : [item]))
+  .map((item) => normalizeSettingsSearchValue(item))
+  .filter(Boolean))];
+
+const SETTINGS_TAB_SEARCH_KEYWORDS = {
+  guide: ['guide', 'help', 'manual', 'docs', 'מדריך', 'עזרה'],
+  assistant: ['assistant', 'helper', 'behavior', 'tone', 'assistant behavior', 'עוזר'],
+  updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
+  ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'ספק', 'מודל', 'מפתח'],
+  prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
+  skills: ['skills', 'skill', 'capabilities', 'סקילים'],
+  agents: ['agents', 'agent', 'timeout', 'workflow', 'autopilot', 'workspace', 'automation', 'manager', 'retry', 'סוכנים', 'אוטומציה', 'סביבת עבודה'],
+  onboarding: ['onboarding', 'profile', 'style', 'learning', 'materials', 'submission', 'פרופיל', 'הגשה'],
+  writing: ['writing', 'document', 'word', 'defaults', 'כתיבה'],
+  appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
+  debug: ['debug', 'logs', 'log', 'console', 'לוגים', 'ניפוי'],
+  personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי'],
+};
+
 const SETTINGS_TAB_GROUPS = [
   {
     title: 'התחלה ועזרה',
@@ -491,6 +517,26 @@ const SETTINGS_TAB_GROUPS = [
   {
     title: 'תחזוקה ולוגים',
     tabs: [['debug', '🪵 לוגים']],
+  },
+];
+
+const SETTINGS_TAB_SEARCH_INDEX = [
+  ...SETTINGS_TAB_GROUPS.flatMap((group) => group.tabs.map(([id, label]) => ({
+    id,
+    label,
+    groupTitle: group.title,
+    searchText: mergeSettingsSearchTerms([id, label, group.title, SETTINGS_TAB_SEARCH_KEYWORDS[id] || []]).join(' '),
+  }))),
+  {
+    id: 'personal',
+    label: '🧬 סגנון אישי',
+    groupTitle: 'כתיבה והתאמה אישית',
+    searchText: mergeSettingsSearchTerms([
+      'personal',
+      'סגנון אישי',
+      'פרופיל אישי',
+      SETTINGS_TAB_SEARCH_KEYWORDS.personal || [],
+    ]).join(' '),
   },
 ];
 
@@ -3284,17 +3330,42 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             />
             הצג חיווי התקדמות וסטטוס חי
           </label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
-            <span>Timeout</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
             <input
-              type="number"
-              min="10"
-              max="180"
-              value={automation?.requestTimeoutMs ?? 45}
-              onChange={(e) => setAutomation(prev => ({ ...prev, requestTimeoutMs: Math.max(10, Number(e.target.value) || 45) }))}
-              style={{ width: 70, padding: '6px 8px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
+              type="checkbox"
+              checked={automation?.timeoutEnabled === true}
+              onChange={(e) => setAutomation(prev => ({ ...prev, timeoutEnabled: e.target.checked }))}
             />
-            <span>שניות</span>
+            הפעל timeout לסוכנים
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: automation?.timeoutEnabled === true ? '#323130' : '#94A3B8' }}>
+              <span>Timeout</span>
+              <input
+                type="number"
+                min="10"
+                max="180"
+                disabled={automation?.timeoutEnabled !== true}
+                value={automation?.requestTimeoutMs ?? 45}
+                onChange={(e) => setAutomation(prev => ({ ...prev, requestTimeoutMs: Math.max(10, Number(e.target.value) || 45) }))}
+                style={{
+                  width: 70,
+                  padding: '6px 8px',
+                  border: '1px solid #C8C6C4',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  background: automation?.timeoutEnabled === true ? 'white' : '#F8FAFC',
+                  color: automation?.timeoutEnabled === true ? '#323130' : '#94A3B8',
+                  opacity: automation?.timeoutEnabled === true ? 1 : 0.75,
+                }}
+              />
+              <span>שניות</span>
+            </div>
+            <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? '#475569' : '#0F766E', lineHeight: 1.6 }}>
+              {automation?.timeoutEnabled === true
+                ? 'המערכת תעצור ריצת סוכנים ארוכה במיוחד לפי הערך שהוגדר.'
+                : 'כבוי כברירת מחדל. ריצות סוכנים ימשיכו ללא timeout אוטומטי.'}
+            </div>
           </div>
         </div>
 
@@ -3792,6 +3863,7 @@ function AppearanceSettings() {
 export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0 }) {
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
+  const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
   const onboardingSessionActiveRef = useRef(initialSettingsTab === 'onboarding');
   const [config, setConfig] = useState(getProviderConfig);
   const [shortcutsState, setShortcutsState] = useState(shortcuts || getShortcutsConfig());
@@ -3811,6 +3883,21 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [consumedUpdateCheckToken, setConsumedUpdateCheckToken] = useState(0);
   const pendingUpdateCheckToken = updateCheckToken > consumedUpdateCheckToken ? updateCheckToken : 0;
   const inferredExternalProviderId = deriveExternalAnalysisProviderId(config);
+  const normalizedSettingsSearch = normalizeSettingsSearchValue(settingsSearchQuery);
+  const settingsSearchTokens = normalizedSettingsSearch ? normalizedSettingsSearch.split(' ').filter(Boolean) : [];
+  const settingsSearchResults = settingsSearchTokens.length
+    ? SETTINGS_TAB_SEARCH_INDEX.filter((entry) => settingsSearchTokens.every((token) => entry.searchText.includes(token)))
+    : [];
+  const settingsSearchResultIds = new Set(settingsSearchResults.map((entry) => entry.id));
+  const visibleSettingsGroups = settingsSearchTokens.length
+    ? SETTINGS_TAB_GROUPS
+      .map((group) => ({
+        ...group,
+        tabs: group.tabs.filter(([id]) => settingsSearchResultIds.has(id)),
+      }))
+      .filter((group) => group.tabs.length)
+    : SETTINGS_TAB_GROUPS;
+  const settingsSearchHasNoResults = settingsSearchTokens.length > 0 && settingsSearchResults.length === 0;
 
   useEffect(() => {
     personalStyleStateRef.current = personalStyleState;
@@ -4016,6 +4103,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   const closeSettingsPanel = () => {
     maybePostponeOnboardingSession();
+    setSettingsSearchQuery('');
     setActivePanel('main');
   };
 
@@ -4192,21 +4280,76 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
              
              {/* POPUP CONTENT (TABS + SCREENS) */}
              <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-slate-50/50 custom-scrollbar-slim">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 md:mb-8">
-                  {SETTINGS_TAB_GROUPS.map((group) => (
-                    <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition-colors">
-                      <div className="text-[11px] font-bold text-slate-400 mb-3 tracking-widest">{group.title}</div>
-                      <div className="flex flex-col gap-1.5">
-                        {group.tabs.map(([id, label]) => (
-                          <button key={id} onClick={() => setSettingsTab(id)}
-                            className={`w-full text-right px-3 py-2 rounded-xl text-[12px] sm:text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm focus:ring-indigo-100' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900 focus:ring-slate-100 focus:bg-slate-50'}`}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
+                <div className="bg-white border border-slate-200/70 rounded-2xl p-4 sm:p-5 shadow-sm mb-6 md:mb-8">
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <div className="text-[12px] font-bold text-slate-700">חיפוש מהיר בהגדרות</div>
+                      <div className="text-[11px] text-slate-500 mt-1">אפשר לחפש לפי טאב או מילות מפתח כמו API, timeout, logs, workspace או updates.</div>
                     </div>
-                  ))}
+                    <div className="relative">
+                      <i className="ph ph-magnifying-glass absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
+                      <input
+                        type="text"
+                        dir="auto"
+                        value={settingsSearchQuery}
+                        onChange={(e) => setSettingsSearchQuery(e.target.value)}
+                        placeholder="חפש טאב, ספק, timeout, logs, updates או profile"
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pr-11 pl-10 text-[13px] font-medium text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-100/70"
+                      />
+                      {settingsSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setSettingsSearchQuery('')}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-slate-200"
+                        >
+                          <i className="ph ph-x text-sm" />
+                        </button>
+                      )}
+                    </div>
+
+                    {settingsSearchTokens.length > 0 && (
+                      settingsSearchHasNoResults ? (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-700">
+                          לא נמצאו הגדרות תואמות
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="text-[11px] font-bold text-slate-400 mb-2 tracking-widest">קפיצה ישירה</div>
+                          <div className="flex flex-wrap gap-2">
+                            {settingsSearchResults.map((entry) => (
+                              <button
+                                key={entry.id}
+                                type="button"
+                                onClick={() => setSettingsTab(entry.id)}
+                                className={`px-3 py-2 rounded-xl text-[12px] font-semibold border transition-all outline-none focus:ring-2 ${settingsTab === entry.id ? 'bg-indigo-600 text-white border-indigo-600 focus:ring-indigo-200' : 'bg-indigo-50 text-indigo-700 border-indigo-100 hover:bg-indigo-100 focus:ring-indigo-100'}`}
+                              >
+                                {entry.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </div>
                 </div>
+
+                {visibleSettingsGroups.length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 md:mb-8">
+                    {visibleSettingsGroups.map((group) => (
+                      <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition-colors">
+                        <div className="text-[11px] font-bold text-slate-400 mb-3 tracking-widest">{group.title}</div>
+                        <div className="flex flex-col gap-1.5">
+                          {group.tabs.map(([id, label]) => (
+                            <button key={id} onClick={() => setSettingsTab(id)}
+                              className={`w-full text-right px-3 py-2 rounded-xl text-[12px] sm:text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm focus:ring-indigo-100' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900 focus:ring-slate-100 focus:bg-slate-50'}`}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
                   {settingsTab === 'guide'       && <GuideSettings />}

@@ -440,7 +440,7 @@ function LaneDodgerGame({ title = 'נתיב חמקנות' }) {
         onKeyDown={handleKeyDown}
         style={createSurfaceStyle({ focused, height: 240, background: 'linear-gradient(180deg, #FFF7ED 0%, #FFEDD5 100%)', borderColor: '#FDBA74' })}
       >
-        <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))`, gap: 6, padding: 12 }}>
+        <div style={{ position: 'absolute', inset: 0, display: 'grid', direction: 'ltr', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))`, gap: 6, padding: 12 }}>
           {Array.from({ length: rowCount * laneCount }).map((_, index) => {
             const lane = index % laneCount;
             const row = Math.floor(index / laneCount);
@@ -613,7 +613,7 @@ function GridCollectorGame({ title = 'צייד ניצוצות' }) {
         onKeyDown={handleKeyDown}
         style={createSurfaceStyle({ focused, height: 240, background: 'linear-gradient(180deg, #ECFDF5 0%, #D1FAE5 100%)', borderColor: '#6EE7B7' })}
       >
-        <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridSize}, minmax(0, 1fr))`, gap: 8, padding: 16 }}>
+        <div style={{ position: 'absolute', inset: 0, display: 'grid', direction: 'ltr', gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridSize}, minmax(0, 1fr))`, gap: 8, padding: 16 }}>
           {Array.from({ length: gridSize * gridSize }).map((_, index) => {
             const x = index % gridSize;
             const y = Math.floor(index / gridSize);
