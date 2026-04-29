@@ -668,7 +668,9 @@ function createMainWindow() {
     minHeight: 720,
     show: false,
     backgroundColor: '#f3f2f1',
-    icon: path.join(__dirname, '..', 'dist', 'app-icon.png'),
+    icon: process.platform === 'win32'
+      ? path.join(__dirname, '..', 'assets', 'app-icon.ico')
+      : path.join(__dirname, '..', app.isPackaged ? 'dist' : 'public', 'app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

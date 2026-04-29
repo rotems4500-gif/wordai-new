@@ -1,6 +1,6 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.52",
+  "version": "1.0.53",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
@@ -69,6 +69,7 @@
     "electron-builder": "^26.0.12",
     "office-addin-dev-certs": "^1.11.8",
     "postcss": "^8.5.9",
+    "rcedit": "^4.0.1",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.8",
     "wait-on": "^8.0.5"
@@ -90,10 +91,13 @@
     },
     "files": [
       "dist/**/*",
+      "!dist/PAST-DOC/**/*",
+      "dist/PAST-DOC/index.json",
       "electron/**/*",
       "assets/**/*",
       "package.json"
     ],
+    "afterPack": "scripts/after-pack.cjs",
     "win": {
       "target": [
         "nsis"

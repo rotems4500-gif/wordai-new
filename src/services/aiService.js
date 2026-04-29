@@ -102,11 +102,17 @@ export const DEFAULT_PERSONAL_STYLE = {
   institutionName: '',
   studyTrack: '',
   lecturerName: '',
+  lecturerNames: [],
   assignmentType: '',
   studentId: '',
   aiAssistanceDeclaration: '',
   submissionDate: '',
+  syllabusImportProvenance: {
+    assignmentType: '',
+    submissionDate: '',
+  },
   currentCourses: [],
+  syllabusTopics: [],
   userRole: '',
   additionalContext: '',
   defaultDocumentStyle: 'academic',
@@ -704,26 +710,96 @@ export const saveWordPreferences = (config) => {
   syncPersistedAppSettings();
 };
 
-export const getPersonalStyleProfile = () => ({
-  ...DEFAULT_PERSONAL_STYLE,
-  ...readJsonFromStorage('wordai_personal_style', {}),
-});
+const normalizeProfileTextValue = (value = '') => String(value || '').trim();
+const normalizeProfileListValue = (value = []) => {
+  const items = Array.isArray(value)
+    ? value
+    : (typeof value === 'string' ? String(value || '').split(/[\n,]/) : []);
+
+  return [...new Set(items.map((item) => normalizeProfileTextValue(item)).filter(Boolean))];
+};
+
+const getNormalizedLecturerNames = (profile = {}) => {
+  const lecturerNames = normalizeProfileListValue(profile?.lecturerNames);
+  if (lecturerNames.length) return lecturerNames;
+  const fallback = normalizeProfileTextValue(profile?.lecturerName);
+  return fallback ? [fallback] : [];
+};
+
+const SYLLABUS_IMPORT_SCALAR_PROVENANCE_FIELDS = ['assignmentType', 'submissionDate'];
+
+const normalizeSyllabusImportScalarProvenance = (value = {}) => {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    assignmentType: source.assignmentType === 'manual' || source.assignmentType === 'syllabus' ? source.assignmentType : '',
+    submissionDate: source.submissionDate === 'manual' || source.submissionDate === 'syllabus' ? source.submissionDate : '',
+  };
+};
+
+const getSyllabusImportScalarProvenance = (profile = {}, field = '') => (
+  SYLLABUS_IMPORT_SCALAR_PROVENANCE_FIELDS.includes(field)
+    ? normalizeSyllabusImportScalarProvenance(profile?.syllabusImportProvenance)[field] || ''
+    : ''
+);
+
+const withSyllabusImportScalarProvenance = (profile = {}, field = '', source = '') => {
+  const base = profile && typeof profile === 'object' ? profile : {};
+  if (!SYLLABUS_IMPORT_SCALAR_PROVENANCE_FIELDS.includes(field)) return { ...base };
+  const normalizedSource = source === 'manual' || source === 'syllabus' ? source : '';
+
+  return {
+    ...base,
+    syllabusImportProvenance: {
+      ...normalizeSyllabusImportScalarProvenance(base.syllabusImportProvenance),
+      [field]: normalizedSource,
+    },
+  };
+};
+
+export const applyManualProfileScalarFieldUpdate = (profile = {}, field = '', value = '') => {
+  const nextProfile = {
+    ...(profile && typeof profile === 'object' ? profile : {}),
+    [field]: value,
+  };
+
+  return SYLLABUS_IMPORT_SCALAR_PROVENANCE_FIELDS.includes(field)
+    ? withSyllabusImportScalarProvenance(nextProfile, field, normalizeProfileTextValue(value) ? 'manual' : '')
+    : nextProfile;
+};
+
+export const normalizePersonalStyleProfile = (profile = {}) => {
+  const base = {
+    ...DEFAULT_PERSONAL_STYLE,
+    ...(profile && typeof profile === 'object' ? profile : {}),
+  };
+  const lecturerNames = getNormalizedLecturerNames(base);
+
+  return {
+    ...base,
+    syllabusImportProvenance: normalizeSyllabusImportScalarProvenance(base.syllabusImportProvenance),
+    lecturerNames,
+    lecturerName: lecturerNames[0] || normalizeProfileTextValue(base.lecturerName),
+    currentCourses: normalizeProfileListValue(base.currentCourses),
+    syllabusTopics: normalizeProfileListValue(base.syllabusTopics),
+  };
+};
+
+export const getPersonalStyleProfile = () => normalizePersonalStyleProfile(
+  readJsonFromStorage('wordai_personal_style', {})
+);
 
 export const savePersonalStyleProfile = (profile) => {
+  const normalizedProfile = normalizePersonalStyleProfile(profile);
   localStorage.setItem('wordai_personal_style', JSON.stringify({
     ...DEFAULT_PERSONAL_STYLE,
-    ...profile,
+    ...normalizedProfile,
     last_updated: new Date().toISOString(),
   }));
   syncPersistedAppSettings();
 };
 
-const normalizeMeaningfulProfileText = (value = '') => String(value || '').trim();
-const normalizeMeaningfulProfileList = (value = []) => (
-  Array.isArray(value)
-    ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].sort()
-    : []
-);
+const normalizeMeaningfulProfileText = normalizeProfileTextValue;
+const normalizeMeaningfulProfileList = (value = []) => [...normalizeProfileListValue(value)].sort();
 
 const hasMeaningfulPersonalProfileField = (field, value) => {
   if (Array.isArray(value)) {
@@ -771,7 +847,9 @@ export const hasMeaningfulPersonalProfileData = (profile = {}) => {
     'externalStyleAnalysisProcessedAt',
   ];
   const listFields = [
+    'lecturerNames',
     'currentCourses',
+    'syllabusTopics',
     'manualVocabulary',
     'manualPhrases',
     'preferredSentenceStructures',
@@ -898,6 +976,10 @@ export const getWorkspaceAutomation = () => {
     ...(activeWorkspace?.automation || {}),
   }, activeWorkspaceId, activeWorkspace?.name || 'סביבת עבודה מותאמת');
 };
+
+export const shouldUseWorkspaceAutomation = (automation = getWorkspaceAutomation()) => (
+  automation?.enabled === true && automation?.autoDispatch !== false
+);
 
 export const saveWorkspaceAutomation = (config) => {
   const currentAutomation = getWorkspaceAutomation();
@@ -2360,10 +2442,12 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   };
 
   const fingerprint = profile.styleFingerprint || {};
+  const lecturerNames = getNormalizedLecturerNames(profile);
+  const currentCourses = normalizeProfileListValue(profile.currentCourses);
+  const syllabusTopics = normalizeProfileListValue(profile.syllabusTopics);
   const normalizedGoldenExample = String(profile.goldenExample || '').trim().replace(/\s+/g, ' ');
   const submissionDefaults = [
     profile.assignmentType ? `סוג מטלה: ${String(profile.assignmentType).trim()}` : '',
-    profile.lecturerName ? `מרצה או מנחה: ${String(profile.lecturerName).trim()}` : '',
     profile.submissionDate ? `תאריך הגשה: ${String(profile.submissionDate).trim()}` : '',
     profile.studentId ? `מזהה מגיש: ${String(profile.studentId).trim()}` : '',
     profile.aiAssistanceDeclaration ? `הצהרת AI: ${String(profile.aiAssistanceDeclaration).trim()}` : '',
@@ -2374,7 +2458,9 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.userRole) parts.push(`תפקיד או סטטוס נוכחי: ${String(profile.userRole).trim()}`);
   if (profile.institutionName) parts.push(`מוסד לימודים או ארגון מרכזי: ${String(profile.institutionName).trim()}`);
   if (profile.studyTrack) parts.push(`מסלול, חוג או תחום עיקרי: ${String(profile.studyTrack).trim()}`);
-  if (profile.currentCourses?.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${profile.currentCourses.join(', ')}`);
+  if (lecturerNames.length) parts.push(`מרצים או מנחים רלוונטיים: ${lecturerNames.join(', ')}`);
+  if (currentCourses.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${currentCourses.join(', ')}`);
+  if (syllabusTopics.length) parts.push(`נושאי סילבוס, יחידות לימוד או דגשים מרכזיים: ${syllabusTopics.join(', ')}`);
   if (!omitStructuralHints && submissionDefaults.length) parts.push(`פרטי הגשה ברירת מחדל לשימוש כשמתבקשים עמוד שער או פרטי מסירה: ${submissionDefaults.join(' | ')}`);
   if (!omitStructuralHints && profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
   if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
@@ -2500,6 +2586,20 @@ const uniqueExternalStrings = (values = [], limit = 12) => {
     .filter(Boolean))].slice(0, limit);
 };
 
+const mergeImportedListIntoProfileList = (currentValues = [], importedValues = []) => {
+  const merged = [];
+  const seen = new Set();
+
+  [...currentValues, ...importedValues].forEach((item) => {
+    const value = normalizeProfileTextValue(item);
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    merged.push(value);
+  });
+
+  return merged;
+};
+
 const pickExternalText = (...values) => values
   .map((value) => String(value || '').trim())
   .find(Boolean) || '';
@@ -2511,6 +2611,47 @@ const mergeExternalSentenceText = (...values) => [...new Set(values
 const mergeExternalBlockText = (...values) => [...new Set(values
   .map((value) => String(value || '').trim())
   .filter(Boolean))].join('\n').trim();
+
+const HEBREW_MONTH_NUMBERS = {
+  ינואר: 1,
+  פברואר: 2,
+  מרץ: 3,
+  אפריל: 4,
+  מאי: 5,
+  יוני: 6,
+  יולי: 7,
+  אוגוסט: 8,
+  ספטמבר: 9,
+  אוקטובר: 10,
+  נובמבר: 11,
+  דצמבר: 12,
+};
+
+const normalizeHebrewMonthToken = (value = '') => String(value || '')
+  .trim()
+  .replace(/^ב/u, '')
+  .replace(/["'׳״.,]+/gu, '');
+
+const isPureSubmissionDateCandidate = (value = '') => {
+  const clean = cleanSyllabusImportValue(value);
+  if (!clean) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return true;
+  if (/^\d{1,2}[\/.\-]\d{1,2}(?:[\/.\-]\d{2,4})?$/.test(clean)) return true;
+
+  const textualMatch = clean.match(/^(\d{1,2})\s+([^\s,]+)\s*,?\s*(\d{4})$/u);
+  if (!textualMatch) return false;
+
+  const month = HEBREW_MONTH_NUMBERS[normalizeHebrewMonthToken(textualMatch[2])];
+  return Number(textualMatch[1]) >= 1 && Number(textualMatch[1]) <= 31 && Number(textualMatch[3]) >= 1900 && Boolean(month);
+};
+
+const isDeadlineLikeSyllabusTopicCandidate = (value = '') => {
+  const clean = cleanSyllabusImportValue(value);
+  if (!clean) return false;
+  if (/\b(?:deadline|due(?:\s+date)?|submission(?:\s+date)?)\b/iu.test(clean)) return true;
+  if (/^(?:מועד\s+הגשה|תאריך\s+הגשה|הגשה)\b/iu.test(clean)) return true;
+  return isPureSubmissionDateCandidate(clean);
+};
 
 const normalizeExternalSubmissionDate = (value = '') => {
   const clean = String(value || '').trim();
@@ -2524,6 +2665,16 @@ const normalizeExternalSubmissionDate = (value = '') => {
     let year = Number(match[3]);
     if (year < 100) year += 2000;
     if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  const textualMatch = clean.match(/^(\d{1,2})\s+([^\s,]+)\s*,?\s*(\d{4})$/u);
+  if (textualMatch) {
+    const day = Number(textualMatch[1]);
+    const month = HEBREW_MONTH_NUMBERS[normalizeHebrewMonthToken(textualMatch[2])];
+    const year = Number(textualMatch[3]);
+    if (day >= 1 && day <= 31 && month && year >= 1900) {
       return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
   }
@@ -2559,6 +2710,381 @@ const normalizeExternalParagraphLength = (value = '') => {
   if (/long|detailed|expanded|מפורט|ארו/.test(clean)) return 'מפורט';
   if (/balanced|medium|מאוז|בינונ/.test(clean)) return 'בינוני';
   return String(value || '').trim();
+};
+
+const areStringListsEqual = (left = [], right = []) => (
+  left.length === right.length && left.every((item, index) => item === right[index])
+);
+
+const cleanSyllabusImportValue = (value = '') => String(value || '')
+  .replace(/^[\s:–—-]+/, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const cleanSyllabusTopicValue = (value = '') => cleanSyllabusImportValue(value)
+  .replace(/^[•▪●◦*-]\s*/, '')
+  .replace(/^\d+\s*[.)-]\s*/, '')
+  .replace(/^(?:week|שבוע|שיעור|מפגש|unit|module)\s*\d+\s*[:.)-]?\s*/iu, '')
+  .replace(/^\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\s*[-–:]?\s*/, '')
+  .trim();
+
+const normalizeSyllabusImportList = (values = [], limit = 12, normalizer = cleanSyllabusImportValue) => {
+  const source = Array.isArray(values) ? values : [values];
+  return [...new Set(source
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .flatMap((item) => (typeof item === 'string' ? item.split(/[\n,|;]/) : [item]))
+    .map((item) => normalizer(item))
+    .filter((item) => item.length >= 2 && /[\u0590-\u05FFa-zA-Z]/.test(item)))].slice(0, limit);
+};
+
+const getSyllabusImportLines = (rawText = '') => String(rawText || '')
+  .replace(/\r\n/g, '\n')
+  .split('\n')
+  .map((line) => cleanSyllabusImportValue(line))
+  .filter(Boolean);
+
+const sampleSyllabusImportText = (rawText = '', maxLength = 16000) => {
+  const source = String(rawText || '').trim();
+  const resolvedMaxLength = Number.isFinite(maxLength) ? Math.max(0, Math.floor(maxLength)) : 16000;
+  if (!source || !resolvedMaxLength || source.length <= resolvedMaxLength) return source;
+
+  const separator = '\n\n...\n\n';
+  const availableLength = resolvedMaxLength - (separator.length * 2);
+  if (availableLength <= 300) return source.slice(0, resolvedMaxLength);
+
+  const headLength = Math.floor(availableLength * 0.4);
+  const middleLength = Math.floor(availableLength * 0.2);
+  const tailLength = availableLength - headLength - middleLength;
+  const middleStart = Math.max(
+    headLength,
+    Math.min(
+      source.length - tailLength - middleLength,
+      Math.floor((source.length - middleLength) / 2),
+    ),
+  );
+
+  return [
+    source.slice(0, headLength).trimEnd(),
+    source.slice(middleStart, middleStart + middleLength).trim(),
+    source.slice(-tailLength).trimStart(),
+  ].filter(Boolean).join(separator);
+};
+
+const findSyllabusTextMatch = (rawText = '', patterns = []) => {
+  const source = String(rawText || '');
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    const value = cleanSyllabusImportValue(match?.[1] || '');
+    if (value) return value;
+  }
+  return '';
+};
+
+const collectSyllabusTextMatches = (rawText = '', pattern = null) => {
+  if (!(pattern instanceof RegExp)) return [];
+  const source = String(rawText || '');
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  return Array.from(source.matchAll(globalPattern))
+    .map((match) => cleanSyllabusImportValue(match?.[1] || ''))
+    .filter(Boolean);
+};
+
+const splitPotentialLecturerNames = (value = '') => normalizeSyllabusImportList(
+  String(value || '')
+    .replace(/\s+(?:and|&)\s+/gi, ', ')
+    .replace(/\//g, ', ')
+    .replace(/\s+ו\s+/gu, ', '),
+  12,
+);
+
+const deriveCourseNameFromFileName = (fileName = '') => {
+  const normalized = cleanSyllabusImportValue(
+    String(fileName || '')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b(?:syllabus|outline|teaching\s+plan|course\s+outline|סילבוס|מערך|תכנית)\b/giu, ' ')
+  );
+  return normalized.length >= 4 ? normalized : '';
+};
+
+const inferSyllabusAssignmentType = (rawText = '') => {
+  const explicitValue = findSyllabusTextMatch(rawText, [
+    /(?:סוג\s*מטלה|מטלה(?:\s+מרכזית)?|מטלת\s+סיום|assignment\s+type|final\s+assignment|deliverable)\s*[:\-–]?\s*([^\n]{2,120})/iu,
+  ]);
+  if (explicitValue) return explicitValue;
+
+  const mappings = [
+    { pattern: /עבודה\s+מסכמת|final\s+paper|term\s+paper/iu, value: 'עבודה מסכמת' },
+    { pattern: /סמינריון|seminar\s+paper/iu, value: 'סמינריון' },
+    { pattern: /פרויקט|project/iu, value: 'פרויקט' },
+    { pattern: /מצגת|presentation/iu, value: 'מצגת' },
+    { pattern: /מאמר|essay|paper/iu, value: 'מאמר' },
+    { pattern: /דוח|report/iu, value: 'דוח' },
+    { pattern: /מבחן|exam/iu, value: 'מבחן' },
+    { pattern: /בוחן|quiz/iu, value: 'בוחן' },
+    { pattern: /תרגיל|exercise/iu, value: 'תרגיל' },
+  ];
+
+  return mappings.find((item) => item.pattern.test(rawText))?.value || '';
+};
+
+const normalizeSyllabusImportExtraction = (parsed = {}) => {
+  const institutionName = cleanSyllabusImportValue(pickExternalText(parsed.institutionName, parsed.academicCenter, parsed.organization, parsed.school));
+  const studyTrack = cleanSyllabusImportValue(pickExternalText(parsed.studyTrack, parsed.department, parsed.faculty, parsed.major, parsed.program));
+  const currentCourses = normalizeSyllabusImportList([
+    parsed.currentCourses,
+    parsed.courseName,
+    parsed.courseTitle,
+    parsed.course,
+    parsed.courses,
+  ], 6);
+  const lecturerNames = normalizeSyllabusImportList([
+    parsed.lecturerNames,
+    parsed.lecturerName,
+    parsed.instructorNames,
+    parsed.instructorName,
+    parsed.professorNames,
+  ], 12);
+  const syllabusTopics = normalizeSyllabusImportList([
+    parsed.syllabusTopics,
+    parsed.topics,
+    parsed.modules,
+    parsed.units,
+    parsed.keyTopics,
+  ], 10, cleanSyllabusTopicValue);
+
+  return {
+    institutionName,
+    studyTrack,
+    currentCourses,
+    lecturerNames,
+    lecturerName: lecturerNames[0] || cleanSyllabusImportValue(pickExternalText(parsed.lecturerName, parsed.instructorName)),
+    syllabusTopics,
+    assignmentType: cleanSyllabusImportValue(pickExternalText(parsed.assignmentType, parsed.assignmentKind, parsed.documentType)),
+    submissionDate: normalizeExternalSubmissionDate(pickExternalText(parsed.submissionDate, parsed.dueDate, parsed.deadline)),
+  };
+};
+
+const canReplaceSyllabusImportedScalar = (field = '', currentProfile = {}, originalProfile = currentProfile) => {
+  const currentSource = getSyllabusImportScalarProvenance(currentProfile, field);
+  const originalSource = getSyllabusImportScalarProvenance(originalProfile, field);
+  if (currentSource === 'manual' || originalSource === 'manual') return false;
+
+  return !normalizeProfileTextValue(currentProfile?.[field])
+    || currentSource === 'syllabus'
+    || originalSource === 'syllabus';
+};
+
+const buildSyllabusImportProfilePatch = (extracted = {}, currentProfile = {}, options = {}) => {
+  const current = normalizePersonalStyleProfile(currentProfile);
+  const original = normalizePersonalStyleProfile(options.originalProfile || currentProfile);
+  const patch = {};
+
+  const importedInstitutionName = cleanSyllabusImportValue(extracted.institutionName);
+  if (!normalizeProfileTextValue(original.institutionName) && importedInstitutionName && importedInstitutionName !== normalizeProfileTextValue(current.institutionName)) {
+    patch.institutionName = importedInstitutionName;
+  }
+
+  const importedStudyTrack = cleanSyllabusImportValue(extracted.studyTrack);
+  if (!normalizeProfileTextValue(original.studyTrack) && importedStudyTrack && importedStudyTrack !== normalizeProfileTextValue(current.studyTrack)) {
+    patch.studyTrack = importedStudyTrack;
+  }
+
+  const currentCourses = normalizeProfileListValue(current.currentCourses);
+  const importedCourses = normalizeSyllabusImportList(extracted.currentCourses, 6);
+  const mergedCourses = mergeImportedListIntoProfileList(currentCourses, importedCourses);
+  if (importedCourses.length && !areStringListsEqual(mergedCourses, currentCourses)) {
+    patch.currentCourses = mergedCourses;
+  }
+
+  const currentLecturerNames = getNormalizedLecturerNames(current);
+  const importedLecturerNames = normalizeSyllabusImportList([extracted.lecturerNames, extracted.lecturerName], 12);
+  const mergedLecturerNames = mergeImportedListIntoProfileList(currentLecturerNames, importedLecturerNames);
+  if (importedLecturerNames.length && !areStringListsEqual(mergedLecturerNames, currentLecturerNames)) {
+    patch.lecturerNames = mergedLecturerNames;
+  }
+  if (!normalizeProfileTextValue(original.lecturerName) && mergedLecturerNames[0] && mergedLecturerNames[0] !== normalizeProfileTextValue(current.lecturerName)) {
+    patch.lecturerName = mergedLecturerNames[0];
+  }
+
+  const currentSyllabusTopics = normalizeProfileListValue(current.syllabusTopics);
+  const importedSyllabusTopics = normalizeSyllabusImportList(extracted.syllabusTopics, 10, cleanSyllabusTopicValue);
+  const mergedSyllabusTopics = mergeImportedListIntoProfileList(currentSyllabusTopics, importedSyllabusTopics);
+  if (importedSyllabusTopics.length && !areStringListsEqual(mergedSyllabusTopics, currentSyllabusTopics)) {
+    patch.syllabusTopics = mergedSyllabusTopics;
+  }
+
+  const importedAssignmentType = cleanSyllabusImportValue(extracted.assignmentType);
+  if (canReplaceSyllabusImportedScalar('assignmentType', current, original) && importedAssignmentType && importedAssignmentType !== normalizeProfileTextValue(current.assignmentType)) {
+    patch.assignmentType = importedAssignmentType;
+  }
+
+  const importedSubmissionDate = normalizeExternalSubmissionDate(extracted.submissionDate);
+  if (canReplaceSyllabusImportedScalar('submissionDate', current, original) && importedSubmissionDate && importedSubmissionDate !== normalizeProfileTextValue(current.submissionDate)) {
+    patch.submissionDate = importedSubmissionDate;
+  }
+
+  return patch;
+};
+
+const SYLLABUS_IMPORT_LIST_FIELDS = ['currentCourses', 'lecturerNames', 'syllabusTopics'];
+
+const mergeProcessedSyllabusImportPatch = (heuristicPatch = {}, processedPatch = {}) => {
+  const safeHeuristicPatch = heuristicPatch && typeof heuristicPatch === 'object' ? heuristicPatch : {};
+  const safeProcessedPatch = processedPatch && typeof processedPatch === 'object' ? processedPatch : {};
+  const mergedPatch = {
+    ...safeHeuristicPatch,
+    ...safeProcessedPatch,
+  };
+
+  for (const field of SYLLABUS_IMPORT_LIST_FIELDS) {
+    const processedList = normalizeProfileListValue(safeProcessedPatch[field]);
+    if (processedList.length) {
+      mergedPatch[field] = processedList;
+      continue;
+    }
+
+    const heuristicList = normalizeProfileListValue(safeHeuristicPatch[field]);
+    if (heuristicList.length) {
+      mergedPatch[field] = heuristicList;
+      continue;
+    }
+
+    delete mergedPatch[field];
+  }
+
+  return mergedPatch;
+};
+
+export const mergeSyllabusImportPatchIntoProfile = (currentProfile = {}, importedPatch = {}) => {
+  const current = normalizePersonalStyleProfile(currentProfile);
+  const safePatch = importedPatch && typeof importedPatch === 'object' ? importedPatch : {};
+  let mergedProfile = { ...current };
+
+  const importedInstitutionName = cleanSyllabusImportValue(safePatch.institutionName);
+  if (!normalizeProfileTextValue(current.institutionName) && importedInstitutionName) {
+    mergedProfile.institutionName = importedInstitutionName;
+  }
+
+  const importedStudyTrack = cleanSyllabusImportValue(safePatch.studyTrack);
+  if (!normalizeProfileTextValue(current.studyTrack) && importedStudyTrack) {
+    mergedProfile.studyTrack = importedStudyTrack;
+  }
+
+  const importedCurrentCourses = normalizeSyllabusImportList(safePatch.currentCourses, 6);
+  if (importedCurrentCourses.length) {
+    mergedProfile.currentCourses = mergeImportedListIntoProfileList(
+      normalizeProfileListValue(current.currentCourses),
+      importedCurrentCourses,
+    );
+  }
+
+  const importedLecturerNames = normalizeSyllabusImportList([safePatch.lecturerNames, safePatch.lecturerName], 12);
+  if (importedLecturerNames.length) {
+    const mergedLecturerNames = mergeImportedListIntoProfileList(getNormalizedLecturerNames(current), importedLecturerNames);
+    mergedProfile.lecturerNames = mergedLecturerNames;
+    mergedProfile.lecturerName = mergedLecturerNames[0] || '';
+  }
+
+  const importedSyllabusTopics = normalizeSyllabusImportList(safePatch.syllabusTopics, 10, cleanSyllabusTopicValue);
+  if (importedSyllabusTopics.length) {
+    mergedProfile.syllabusTopics = mergeImportedListIntoProfileList(
+      normalizeProfileListValue(current.syllabusTopics),
+      importedSyllabusTopics,
+    );
+  }
+
+  const importedAssignmentType = cleanSyllabusImportValue(safePatch.assignmentType);
+  if (
+    importedAssignmentType
+    && importedAssignmentType !== normalizeProfileTextValue(current.assignmentType)
+    && canReplaceSyllabusImportedScalar('assignmentType', current, current)
+  ) {
+    mergedProfile.assignmentType = importedAssignmentType;
+    mergedProfile = withSyllabusImportScalarProvenance(mergedProfile, 'assignmentType', 'syllabus');
+  }
+
+  const importedSubmissionDate = normalizeExternalSubmissionDate(safePatch.submissionDate);
+  if (
+    importedSubmissionDate
+    && importedSubmissionDate !== normalizeProfileTextValue(current.submissionDate)
+    && canReplaceSyllabusImportedScalar('submissionDate', current, current)
+  ) {
+    mergedProfile.submissionDate = importedSubmissionDate;
+    mergedProfile = withSyllabusImportScalarProvenance(mergedProfile, 'submissionDate', 'syllabus');
+  }
+
+  return normalizePersonalStyleProfile(mergedProfile);
+};
+
+const buildSyllabusImportSummary = (profilePatch = {}) => {
+  const parts = [
+    Array.isArray(profilePatch.currentCourses) && profilePatch.currentCourses.length ? `קורסים: ${profilePatch.currentCourses.slice(0, 2).join(', ')}` : '',
+    Array.isArray(profilePatch.lecturerNames) && profilePatch.lecturerNames.length ? `מרצים: ${profilePatch.lecturerNames.slice(0, 2).join(', ')}` : '',
+    Array.isArray(profilePatch.syllabusTopics) && profilePatch.syllabusTopics.length ? `נושאים: ${profilePatch.syllabusTopics.slice(0, 3).join(', ')}` : '',
+    profilePatch.assignmentType ? `מטלה: ${profilePatch.assignmentType}` : '',
+    profilePatch.submissionDate ? `הגשה: ${profilePatch.submissionDate}` : '',
+    profilePatch.institutionName ? `מוסד: ${profilePatch.institutionName}` : '',
+    profilePatch.studyTrack ? `מסלול: ${profilePatch.studyTrack}` : '',
+  ].filter(Boolean);
+
+  return parts.slice(0, 3).join(' · ');
+};
+
+const extractSyllabusProfileHeuristically = ({ rawText = '', fileName = '' } = {}) => {
+  const sourceText = String(rawText || '').trim();
+  const lines = getSyllabusImportLines(sourceText);
+
+  const institutionName = pickExternalText(
+    findSyllabusTextMatch(sourceText, [
+      /(?:מוסד(?:\s+לימודים)?|אוניברסיטה|מכללה|academic\s+institution|institution|college|university)\s*[:\-–]?\s*([^\n]{2,140})/iu,
+    ]),
+    lines.find((line) => /(?:אוניברסיט|מכלל|טכניון|המרכז\s+האקדמי|מכון|university|college|institute)/iu.test(line) && line.length <= 120),
+  );
+
+  const studyTrack = pickExternalText(
+    findSyllabusTextMatch(sourceText, [
+      /(?:חוג|מסלול|פקולטה|התמחות|department|faculty|major|program)\s*[:\-–]?\s*([^\n]{2,140})/iu,
+    ]),
+    lines.find((line) => /(?:חוג|מסלול|פקולטה|התמחות|department|faculty|major|program)/iu.test(line) && line.length <= 120),
+  );
+
+  const currentCourses = normalizeSyllabusImportList([
+    findSyllabusTextMatch(sourceText, [
+      /(?:שם\s*הקורס|שם\s+קורס|course\s+title|course\s+name)\s*[:\-–]?\s*([^\n]{2,140})/iu,
+      /(?:קורס|course)\s*[:\-–]\s*([^\n]{2,140})/iu,
+    ]),
+    deriveCourseNameFromFileName(fileName),
+  ], 6);
+
+  const lecturerNames = normalizeSyllabusImportList(
+    collectSyllabusTextMatches(sourceText, /(?:מרצה(?:\s+אחראי)?|מרצים|מנחה(?:ים)?|Instructor(?:s)?|Lecturer(?:s)?|Professor(?:s)?)\s*[:\-–]?\s*([^\n]{2,180})/giu)
+      .flatMap((value) => splitPotentialLecturerNames(value)),
+    12,
+  );
+
+  const rawTopicCandidates = [
+    ...collectSyllabusTextMatches(sourceText, /(?:נושאי(?:\s+הקורס)?|יחידות(?:\s+הלימוד)?|topics?|modules?|units?)\s*[:\-–]?\s*([^\n]{4,180})/giu),
+    ...lines.filter((line) => /^([•▪●◦*-]|\d{1,2}[.)]|(?:week|שבוע|שיעור|מפגש|unit|module)\s*\d+)/iu.test(line) && !isDeadlineLikeSyllabusTopicCandidate(line)),
+  ];
+  const syllabusTopics = normalizeSyllabusImportList(rawTopicCandidates, 10, cleanSyllabusTopicValue)
+    .filter((item) => item.length >= 4 && item.length <= 100 && !isDeadlineLikeSyllabusTopicCandidate(item));
+
+  const explicitDueValue = findSyllabusTextMatch(sourceText, [
+    /(?:מועד\s+הגשה|תאריך\s+הגשה|הגשה|deadline|due\s+date|submission\s+date)\s*[:\-–]?\s*([^\n]{2,80})/iu,
+  ]);
+  const dueToken = String(explicitDueValue || '').match(/\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}/)?.[0] || explicitDueValue;
+
+  return normalizeSyllabusImportExtraction({
+    institutionName,
+    studyTrack,
+    currentCourses,
+    lecturerNames,
+    syllabusTopics,
+    assignmentType: inferSyllabusAssignmentType(sourceText),
+    submissionDate: dueToken,
+  });
 };
 
 const normalizeExternalStyleExtraction = (parsed = {}, currentProfile = {}) => {
@@ -2637,11 +3163,16 @@ export const getExternalAnalysisAvailability = (preferredProviderId = '', cfg = 
 };
 
 export const buildExternalStyleAnalysisPrompt = ({ providerId = '', profile = {} } = {}) => {
+  const lecturerNames = getNormalizedLecturerNames(profile);
+  const currentCourses = normalizeProfileListValue(profile.currentCourses);
+  const syllabusTopics = normalizeProfileListValue(profile.syllabusTopics);
   const knownContext = [
     profile.displayName ? `- שם משתמש ידוע: ${String(profile.displayName).trim()}` : '',
     profile.institutionName ? `- מוסד/מרכז אקדמי ידוע: ${String(profile.institutionName).trim()}` : '',
     profile.studyTrack ? `- חוג/מסלול ידוע: ${String(profile.studyTrack).trim()}` : '',
-    Array.isArray(profile.currentCourses) && profile.currentCourses.length ? `- קורס/ים שכבר ידועים: ${profile.currentCourses.join(', ')}` : '',
+    lecturerNames.length ? `- מרצים/מנחים שכבר ידועים: ${lecturerNames.join(', ')}` : '',
+    currentCourses.length ? `- קורס/ים שכבר ידועים: ${currentCourses.join(', ')}` : '',
+    syllabusTopics.length ? `- נושאי סילבוס/דגשים שכבר ידועים: ${syllabusTopics.join(', ')}` : '',
   ].filter(Boolean).join('\n');
 
   return [
@@ -2657,6 +3188,133 @@ export const buildExternalStyleAnalysisPrompt = ({ providerId = '', profile = {}
     knownContext ? `הקשר שכבר ידוע:\n${knownContext}` : '',
     'אחרי ההחזרה אין צורך בטקסט נוסף. רק JSON.',
   ].filter(Boolean).join('\n');
+};
+
+export const processSyllabusProfileImport = async ({ rawText = '', fileName = '', profile = {}, providerConfig = null } = {}) => {
+  const trimmedRawText = String(rawText || '').trim();
+  const cleanFileName = String(fileName || '').trim();
+  const syllabusAnalysisText = sampleSyllabusImportText(trimmedRawText, 28000);
+
+  if (!trimmedRawText && !cleanFileName) {
+    return {
+      ok: false,
+      status: 'empty',
+      error: 'לא נמצא תוכן קריא לייבוא.',
+      profilePatch: {},
+      extractedSummary: '',
+    };
+  }
+
+  const currentProfile = normalizePersonalStyleProfile(profile);
+  const heuristicExtraction = extractSyllabusProfileHeuristically({ rawText: trimmedRawText, fileName: cleanFileName });
+  const heuristicPatch = buildSyllabusImportProfilePatch(heuristicExtraction, currentProfile);
+  const heuristicSummary = buildSyllabusImportSummary(heuristicPatch);
+  const profileWithHeuristics = mergeSyllabusImportPatchIntoProfile(currentProfile, heuristicPatch);
+  const availability = getExternalAnalysisAvailability('', providerConfig);
+
+  if (!availability.hasLocalProvider) {
+    return Object.keys(heuristicPatch).length
+      ? {
+          ok: true,
+          status: 'heuristic',
+          error: '',
+          profilePatch: heuristicPatch,
+          extractedSummary: heuristicSummary,
+        }
+      : {
+          ok: false,
+          status: 'no-change',
+          error: 'לא הצלחתי לזהות פרטים חדשים מתוך הסילבוס.',
+          profilePatch: {},
+          extractedSummary: '',
+        };
+  }
+
+  const knownCurrentCourses = normalizeProfileListValue(profileWithHeuristics.currentCourses);
+  const knownLecturerNames = getNormalizedLecturerNames(profileWithHeuristics);
+  const knownContext = [
+    profileWithHeuristics.institutionName ? `- מוסד ידוע: ${profileWithHeuristics.institutionName}` : '',
+    profileWithHeuristics.studyTrack ? `- מסלול ידוע: ${profileWithHeuristics.studyTrack}` : '',
+    knownCurrentCourses.length ? `- קורסים ידועים: ${knownCurrentCourses.join(', ')}` : '',
+    knownLecturerNames.length ? `- מרצים ידועים: ${knownLecturerNames.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+  const extractionPrompt = [
+    'נתח קובץ סילבוס או דף קורס והחזר JSON בלבד.',
+    'החזר בדיוק במבנה הבא:',
+    '{"institutionName":"","studyTrack":"","currentCourses":[],"lecturerNames":[],"syllabusTopics":[],"assignmentType":"","submissionDate":""}',
+    'כללים:',
+    '- חלץ רק מידע שמופיע בטקסט או בשם הקובץ.',
+    '- currentCourses צריכה להכיל עד 6 קורסים או שמות קורס קצרים.',
+    '- lecturerNames צריכה להכיל רק שמות מרצים או מנחים.',
+    '- syllabusTopics צריכה להכיל עד 8 נושאים קצרים, לא משפטים ארוכים.',
+    '- submissionDate צריך להיות YYYY-MM-DD כשאפשר, אחרת "".',
+    '- אם שדה לא ידוע, החזר "" או [].',
+    knownContext ? `הקשר שכבר ידוע בפרופיל:\n${knownContext}` : '',
+    `שם הקובץ: ${cleanFileName || 'לא צוין'}`,
+    `טקסט הסילבוס:\n${syllabusAnalysisText}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await chatWithActiveProvider(extractionPrompt, '', '', {
+      providerOverride: availability.processingProviderId,
+      providerConfigOverride: providerConfig,
+      strictProviderOverride: true,
+      strictFormatting: true,
+      skipAutomation: true,
+      skipMultiModel: true,
+      agentLabel: 'Syllabus Profile Import',
+      runId: `syllabus-profile-${Date.now()}`,
+    });
+    const parsed = safeJsonParse(raw, null);
+    if (!parsed || typeof parsed !== 'object') throw new Error('לא התקבל JSON תקין מהעיבוד המקומי.');
+
+    const extracted = normalizeSyllabusImportExtraction(parsed);
+    const profilePatch = buildSyllabusImportProfilePatch(extracted, currentProfile, { originalProfile: currentProfile });
+    if (Object.keys(profilePatch).length) {
+      const mergedProfilePatch = mergeProcessedSyllabusImportPatch(heuristicPatch, profilePatch);
+      return {
+        ok: true,
+        status: 'processed',
+        error: '',
+        profilePatch: mergedProfilePatch,
+        extractedSummary: buildSyllabusImportSummary(mergedProfilePatch),
+      };
+    }
+
+    return Object.keys(heuristicPatch).length
+      ? {
+          ok: true,
+          status: 'heuristic',
+          error: '',
+          profilePatch: heuristicPatch,
+          extractedSummary: heuristicSummary,
+        }
+      : {
+          ok: false,
+          status: 'no-change',
+          error: 'לא נמצאו שדות חדשים למילוי מתוך הסילבוס.',
+          profilePatch: {},
+          extractedSummary: '',
+        };
+  } catch (error) {
+    if (Object.keys(heuristicPatch).length) {
+      return {
+        ok: true,
+        status: 'heuristic',
+        error: '',
+        profilePatch: heuristicPatch,
+        extractedSummary: heuristicSummary,
+      };
+    }
+
+    return {
+      ok: false,
+      status: 'error',
+      error: error?.message || 'לא הצלחתי למפות את הסילבוס לפרופיל.',
+      profilePatch: {},
+      extractedSummary: '',
+    };
+  }
 };
 
 export const processExternalStyleAnalysis = async ({ rawText = '', profile = {}, preferredProviderId = '', processingProviderId = '', providerConfig = null } = {}) => {
@@ -4398,7 +5056,11 @@ export const callAiAgent = async (agentId, selectedText, context = "") => {
   if (!agentConf) throw new Error("Invalid agent ID");
   const fullPrompt = buildPrompt(agentConf, selectedText, context);
   // משתמש במנוע הפעיל הנבחר (לא תמיד Gemini)
-  return chatWithActiveProvider(fullPrompt, context, '', { skipAutomation: true, skipMultiModel: true, strictFormatting: true });
+  return chatWithActiveProvider(fullPrompt, context, '', {
+    skipAutomation: true,
+    skipMultiModel: true,
+    strictFormatting: true,
+  });
 };
 
 export const applyInlineAi = async (editor, agentId) => {

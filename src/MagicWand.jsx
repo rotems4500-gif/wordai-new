@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { chatWithActiveProvider, matchShortcut } from './services/aiService';
+import { chatWithActiveProvider, matchShortcut, shouldUseWorkspaceAutomation } from './services/aiService';
 
 const MAX_WAND_CONTEXT = 1200;
 

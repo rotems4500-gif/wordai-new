@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
+import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
 import {
   DEFAULT_PERSONAL_STYLE,
   buildExternalStyleAnalysisPrompt,
@@ -18,6 +19,7 @@ import {
   getWordPreferences,
   saveWordPreferences,
   getPersonalStyleProfile,
+  normalizePersonalStyleProfile,
   savePersonalStyleProfile,
   getSharedAgentInstructions,
   saveSharedAgentInstructions,
@@ -40,10 +42,13 @@ import {
   clearAppMemory,
   clearSidebarChatHistory,
   buildPortablePrompt,
+  applyManualProfileScalarFieldUpdate,
+  mergeSyllabusImportPatchIntoProfile,
   processExternalStyleAnalysis,
+  processSyllabusProfileImport,
   testProviderConnection,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
 const POPULAR_CUSTOM = [
@@ -494,9 +499,27 @@ const mergeUniqueStrings = (values = []) => [...new Set((Array.isArray(values) ?
   .map((item) => String(item || '').trim())
   .filter(Boolean))];
 
+const getLecturerNamesFromProfile = (profile = {}) => {
+  const lecturerNames = [...new Set(normalizeDelimitedList(profile.lecturerNames))];
+  if (lecturerNames.length) return lecturerNames;
+  const fallback = String(profile.lecturerName || '').trim();
+  return fallback ? [fallback] : [];
+};
+
+const applyProfileListFieldUpdate = (profile = {}, field = '', value = []) => {
+  const normalizedValue = normalizeDelimitedList(value);
+  if (field !== 'lecturerNames') return { ...profile, [field]: normalizedValue };
+
+  return {
+    ...profile,
+    lecturerNames: normalizedValue,
+    lecturerName: normalizedValue[0] || '',
+  };
+};
+
 const mergePersonalStyleForSave = (draft = {}) => {
   const live = getPersonalStyleProfile();
-  return finalizePersonalProfile({
+  return finalizePersonalProfile(normalizePersonalStyleProfile({
     ...live,
     ...draft,
     learnedVocabularyCounts: live.learnedVocabularyCounts || {},
@@ -515,7 +538,7 @@ const mergePersonalStyleForSave = (draft = {}) => {
     lastAutoLearnedSignature: live.lastAutoLearnedSignature || '',
     autoLearnedVocabularyCounts: live.autoLearnedVocabularyCounts || {},
     autoLearnedPhraseCounts: live.autoLearnedPhraseCounts || {},
-  });
+  }));
 };
 
 const STYLE_TRAINING_QUESTIONS = [
@@ -1273,7 +1296,6 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
   );
 }
 
-const splitList = (value) => String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 const STYLE_PRESET_OPTIONS = [
   { id: 'academic', label: 'אקדמי' },
   { id: 'legal', label: 'משפטי' },
@@ -1688,8 +1710,9 @@ function GuideSettings() {
 
 function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onDismiss = () => {}, onSubmitExternalAnalysis = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
   const persistProfileState = persistProfile || setProfile;
-  const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
-  const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
+  const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
+  const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
+  const [syllabusImport, setSyllabusImport] = useState({ status: 'idle', fileName: '', message: '', summary: '' });
   const markOnboardingComplete = () => persistProfileState((prev) => (
     prev.onboardingCompletedAt
       ? prev
@@ -1951,6 +1974,69 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
     };
   });
 
+  const formatSyllabusImportError = (error) => {
+    const code = String(error?.message || '').trim();
+    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך. אפשר להעלות כרגע txt, md, html או pdf.';
+    if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
+    if (code === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך הקובץ שנבחר.';
+    return 'לא הצלחתי לקרוא את קובץ הסילבוס.';
+  };
+
+  const handleSyllabusImport = async (file) => {
+    if (!file) return;
+
+    setSyllabusImport({
+      status: 'reading',
+      fileName: String(file.name || '').trim(),
+      message: 'קורא את קובץ הסילבוס...',
+      summary: '',
+    });
+
+    try {
+      const extractedText = await readInstructionFile(file, 48000);
+      if (!String(extractedText || '').trim()) throw new Error('empty-file-text');
+
+      setSyllabusImport((prev) => ({
+        ...prev,
+        status: 'processing',
+        message: externalAnalysisAvailability.hasLocalProvider
+          ? `ממפה פרטי קורס בעזרת ${externalAnalysisAvailability.processingProviderLabel || 'AI'}...`
+          : 'מזהה פרטים מרכזיים מתוך הסילבוס...',
+      }));
+
+      const result = await processSyllabusProfileImport({
+        rawText: extractedText,
+        fileName: file.name,
+        profile,
+        providerConfig,
+      });
+      const profilePatch = result?.profilePatch && typeof result.profilePatch === 'object' ? result.profilePatch : {};
+      const hasPatch = Object.keys(profilePatch).length > 0;
+
+      if (hasPatch) {
+        persistProfileState((prev) => mergeSyllabusImportPatchIntoProfile(prev, profilePatch));
+      }
+
+      setSyllabusImport({
+        status: String(result?.status || (hasPatch ? 'processed' : 'no-change')).trim() || 'no-change',
+        fileName: String(file.name || '').trim(),
+        message: hasPatch
+          ? (result?.status === 'processed'
+            ? 'הסילבוס נותח והפרופיל עודכן אוטומטית.'
+            : 'זוהו פרטים מרכזיים מהסילבוס והם נוספו לפרופיל.')
+          : (result?.error || 'לא נמצאו שדות חדשים למילוי מתוך הסילבוס.'),
+        summary: String(result?.extractedSummary || '').trim(),
+      });
+    } catch (error) {
+      setSyllabusImport({
+        status: 'error',
+        fileName: String(file.name || '').trim(),
+        message: formatSyllabusImportError(error),
+        summary: '',
+      });
+    }
+  };
+
   return (
     <ProfileOnboarding
       profile={profile}
@@ -1996,6 +2082,8 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       resetLearningGame={resetLearningGame}
       onOpenAiSettings={onOpenAiSettings}
       onOpenPersonalStyle={onOpenPersonalStyle}
+      syllabusImport={syllabusImport}
+      onImportSyllabusFile={handleSyllabusImport}
       onComplete={markOnboardingComplete}
       onDismiss={onDismiss}
     />
@@ -2003,8 +2091,8 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
 }
 
 function PersonalStyleSettings({ profile, setProfile }) {
-  const updateField = (field, value) => setProfile(prev => ({ ...prev, [field]: value }));
-  const updateList = (field, value) => setProfile(prev => ({ ...prev, [field]: splitList(value) }));
+  const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
+  const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
   const toggleStyle = (styleId) => setProfile((prev) => {
     const current = Array.isArray(prev.preferredHomeStyleIds) ? prev.preferredHomeStyleIds : [];
     const next = current.includes(styleId)
@@ -2018,6 +2106,14 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
+  const currentCoursesInput = useDelimitedListInput(profile.currentCourses, (value) => updateList('currentCourses', value));
+  const lecturerNamesInput = useDelimitedListInput(getLecturerNamesFromProfile(profile), (value) => updateList('lecturerNames', value));
+  const syllabusTopicsInput = useDelimitedListInput(profile.syllabusTopics, (value) => updateList('syllabusTopics', value));
+  const manualVocabularyInput = useDelimitedListInput(profile.manualVocabulary, (value) => updateList('manualVocabulary', value));
+  const protectedVocabularyInput = useDelimitedListInput(profile.protectedVocabulary, (value) => updateList('protectedVocabulary', value));
+  const manualPhrasesInput = useDelimitedListInput(profile.manualPhrases, (value) => updateList('manualPhrases', value));
+  const preferredSentenceStructuresInput = useDelimitedListInput(profile.preferredSentenceStructures, (value) => updateList('preferredSentenceStructures', value));
+  const tonePreferencesInput = useDelimitedListInput(profile.tonePreferences, (value) => updateList('tonePreferences', value));
 
   const handleResetProfile = () => {
     if (!confirm('לאפס רק את העדפות הפרופיל, נתוני ההיכרות והלמידה השמורה בפרופיל? חומרי מקור מקומיים, עבודות עבר והיסטוריית הלמידה המקומית לא יימחקו.')) return;
@@ -2131,9 +2227,22 @@ function PersonalStyleSettings({ profile, setProfile }) {
         />
 
         <textarea
-          value={(profile.currentCourses || []).join(', ')}
-          onChange={(e) => updateList('currentCourses', e.target.value)}
+          {...currentCoursesInput}
           placeholder="קורסים, שיעורים או נושאים פעילים כרגע"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          {...lecturerNamesInput}
+          placeholder="מרצים או מנחים קבועים. אפשר להפריד בפסיק או שורה חדשה"
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+        />
+
+        <textarea
+          {...syllabusTopicsInput}
+          placeholder="נושאי סילבוס, יחידות לימוד או דגשים חוזרים. אפשר להפריד בפסיק או שורה חדשה"
           rows={2}
           style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
         />
@@ -2307,40 +2416,35 @@ function PersonalStyleSettings({ profile, setProfile }) {
       </div>
 
       <textarea
-        value={(profile.manualVocabulary || []).join(', ')}
-        onChange={(e) => updateList('manualVocabulary', e.target.value)}
+        {...manualVocabularyInput}
         placeholder="מונחים שהעוזר יעדיף להשתמש בהם"
         rows={3}
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
       />
 
       <textarea
-        value={(profile.protectedVocabulary || []).join(', ')}
-        onChange={(e) => updateList('protectedVocabulary', e.target.value)}
+        {...protectedVocabularyInput}
         placeholder="מונחים שלא תרצה לשנות לעולם"
         rows={3}
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
       />
 
       <textarea
-        value={(profile.manualPhrases || []).join(', ')}
-        onChange={(e) => updateList('manualPhrases', e.target.value)}
+        {...manualPhrasesInput}
         placeholder="ביטויים אופייניים שתרצה לשלב"
         rows={3}
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
       />
 
       <textarea
-        value={(profile.preferredSentenceStructures || []).join(', ')}
-        onChange={(e) => updateList('preferredSentenceStructures', e.target.value)}
+        {...preferredSentenceStructuresInput}
         placeholder="מבני משפט מועדפים, למשל: מצד אחד... מצד שני, יתרה מזו, ניתן לראות כי"
         rows={3}
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
       />
 
       <textarea
-        value={(profile.tonePreferences || []).join(', ')}
-        onChange={(e) => updateList('tonePreferences', e.target.value)}
+        {...tonePreferencesInput}
         placeholder="טון כתיבה מועדף, למשל: ענייני, אקדמי, רהוט, ישיר"
         rows={2}
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}

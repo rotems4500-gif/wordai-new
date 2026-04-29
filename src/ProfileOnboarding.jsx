@@ -1,17 +1,5 @@
-import React, { useState, useEffect } from 'react';
-
-const PROVIDER_QUICK_LINKS = [
-  { id: 'gemini', label: 'Gemini', keyUrl: 'https://aistudio.google.com/app/apikey', keyHint: 'Google AI Studio' },
-  { id: 'openai', label: 'OpenAI', keyUrl: 'https://platform.openai.com/api-keys', keyHint: 'OpenAI Platform' },
-  { id: 'claude', label: 'Claude', keyUrl: 'https://console.anthropic.com/settings/keys', keyHint: 'Anthropic Console' },
-  { id: 'groq', label: 'Groq', keyUrl: 'https://console.groq.com/keys', keyHint: 'Groq Console' },
-  { id: 'perplexity', label: 'Perplexity', keyUrl: 'https://www.perplexity.ai/settings/api', keyHint: 'Perplexity Settings' },
-  { id: 'deepseek', label: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', keyHint: 'DeepSeek Platform' },
-  { id: 'mistral', label: 'Mistral', keyUrl: 'https://console.mistral.ai/api-keys', keyHint: 'Mistral Console' },
-  { id: 'together', label: 'Together.ai', keyUrl: 'https://api.together.ai/settings/api-keys', keyHint: 'Together API' },
-  { id: 'openrouter', label: 'OpenRouter', keyUrl: 'https://openrouter.ai/keys', keyHint: 'OpenRouter Keys' },
-  { id: 'xai', label: 'xAI (Grok)', keyUrl: 'https://console.x.ai', keyHint: 'xAI Console' },
-];
+import React, { useState, useEffect, useRef } from 'react';
+import { useDelimitedListInput } from './delimitedListInput';
 
 const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'gemini', label: 'Gemini' },
@@ -29,24 +17,41 @@ const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'custom', label: 'ספק אחר / מותאם' },
 ];
 
+function SyllabusListTextarea({ value, onCommit, commitLockRef, onUnlock = () => {}, disabled = false, ...props }) {
+  const input = useDelimitedListInput(value, (nextValue) => {
+    if (commitLockRef?.current) return;
+    onCommit(nextValue);
+  });
+
+  return (
+    <textarea
+      {...props}
+      {...input}
+      disabled={disabled}
+      onFocus={(event) => {
+        if (!disabled) onUnlock();
+        input.onFocus?.(event);
+      }}
+    />
+  );
+}
+
 export default function ProfileOnboarding({
   profile,
   updateField,
   updateList,
   externalAnalysis = {},
   onExternalProviderChange = () => {},
-  onQuickProviderChange = () => {},
   onExternalAnalysisRawChange = () => {},
-  onQuickProviderKeyChange = () => {},
   onSubmitExternalAnalysis = () => {},
   STYLE_TRAINING_QUESTIONS,
-  STYLE_PRESET_OPTIONS,
   trainingAnswers,
   selectLearningOption,
-  toggleStyle,
   resetLearningGame,
   onOpenAiSettings = () => {},
   onOpenPersonalStyle = () => {},
+  syllabusImport = {},
+  onImportSyllabusFile = () => {},
   onComplete = () => {},
   onDismiss = () => {}
 }) {
@@ -54,6 +59,9 @@ export default function ProfileOnboarding({
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [copyPromptState, setCopyPromptState] = useState('');
+  const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
+  const syllabusFileInputRef = useRef(null);
+  const previousSyllabusImportBusyRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -85,7 +93,9 @@ export default function ProfileOnboarding({
     }
   };
 
-  const currentCoursesStr = (profile.currentCourses || []).join(', ');
+  const lecturerNamesValue = Array.isArray(profile.lecturerNames) && profile.lecturerNames.length
+    ? profile.lecturerNames
+    : (String(profile.lecturerName || '').trim() ? [String(profile.lecturerName || '').trim()] : []);
   const externalProviderOptions = EXTERNAL_PROVIDER_OPTIONS;
   const externalStatusText = externalAnalysis.status === 'processed'
     ? 'הניתוח החיצוני עובד בהצלחה ונשמר בפרופיל.'
@@ -96,6 +106,77 @@ export default function ProfileOnboarding({
         : externalAnalysis.status === 'error'
           ? (externalAnalysis.error || 'העיבוד נכשל. אפשר לשמור ולנסות שוב אחרי חיבור ספק.')
           : 'הדבק כאן תשובת AI חיצונית כדי לחסוך קריאות פנימיות יקרות.';
+  const tonePreferenceLabel = {
+    very_formal: 'רשמי לחלוטין',
+    formal: 'מכובד ומקצועי',
+    balanced: 'מאוזן ונגיש',
+    casual: 'חצי-רשמי וחברי',
+    very_casual: 'קליל וזורם',
+  }[profile.tonePreference || 'balanced'];
+  const lengthPreferenceLabel = {
+    short: 'קצר ולעניין',
+    default: 'מאוזן עם הסבר',
+    detailed: 'מפורט עם דוגמאות',
+  }[profile.lengthPreference || 'default'];
+  const profileSummary = [profile.displayName, profile.institutionName, profile.studyTrack || profile.userRole]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' · ');
+  const styleSummary = String(profile.styleTrainingSummary || '').trim() || 'העדפות הכתיבה האישיות שלך נשמרו וימשיכו לחדד את התוצאות.';
+  const providerSummary = externalAnalysis.hasLocalProvider
+    ? `מחובר ל-${externalAnalysis.processingProviderLabel || 'AI'}`
+    : 'אפשר להשלים חיבור ספק AI בכל רגע';
+  const analysisSummary = externalAnalysis.status && externalAnalysis.status !== 'idle'
+    ? externalStatusText
+    : 'ניתוח חיצוני והגדרות מתקדמות נשארים זמינים מחוץ למסך הסיום.';
+  const syllabusImportStatus = String(syllabusImport.status || 'idle').trim() || 'idle';
+  const syllabusImportBusy = syllabusImportStatus === 'reading' || syllabusImportStatus === 'processing';
+  const syllabusImportSignature = `${syllabusImportCycle}:${String(syllabusImport.fileName || '').trim()}::${syllabusImportStatus}`;
+  const [unlockedSyllabusImportSignature, setUnlockedSyllabusImportSignature] = useState('');
+  const syllabusListCommitLocked = syllabusImportBusy || (
+    (syllabusImportStatus === 'processed' || syllabusImportStatus === 'heuristic')
+    && unlockedSyllabusImportSignature !== syllabusImportSignature
+  );
+  const syllabusListCommitLockRef = useRef(false);
+  syllabusListCommitLockRef.current = syllabusListCommitLocked;
+
+  useEffect(() => {
+    if (syllabusImportBusy && !previousSyllabusImportBusyRef.current) {
+      setSyllabusImportCycle((value) => value + 1);
+    }
+    previousSyllabusImportBusyRef.current = syllabusImportBusy;
+  }, [syllabusImportBusy]);
+
+  const syllabusImportToneClass = syllabusImportStatus === 'error'
+    ? 'border-rose-400/35 bg-rose-500/10 text-rose-50'
+    : (syllabusImportStatus === 'processed' || syllabusImportStatus === 'heuristic')
+      ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-50'
+      : syllabusImportBusy
+        ? 'border-cyan-400/35 bg-cyan-500/10 text-cyan-50'
+        : 'border-white/15 bg-white/5 text-white/75';
+  const syllabusImportBadge = syllabusImportStatus === 'processed'
+    ? 'עודכן אוטומטית'
+    : syllabusImportStatus === 'heuristic'
+      ? 'זוהה חלקית'
+      : syllabusImportStatus === 'error'
+        ? 'נדרש תיקון'
+        : syllabusImportBusy
+          ? 'בתהליך'
+          : 'מומלץ';
+  const syllabusImportHint = externalAnalysis.hasLocalProvider
+    ? 'העלה סילבוס כדי למלא אוטומטית קורסים, מרצים, נושאי לימוד ותאריך הגשה.'
+    : 'גם בלי ספק AI מחובר ננסה לחלץ מהסילבוס פרטים בסיסיים לפרופיל.';
+
+  const unlockSyllabusListEditing = () => {
+    if (syllabusImportBusy) return;
+    setUnlockedSyllabusImportSignature(syllabusImportSignature);
+  };
+
+  const handleSyllabusFileSelection = (event) => {
+    const file = event.target.files?.[0];
+    if (file) onImportSyllabusFile(file);
+    event.target.value = '';
+  };
 
   const handleCopyExternalPrompt = async () => {
     const promptText = String(externalAnalysis.promptText || '').trim();
@@ -280,9 +361,13 @@ export default function ProfileOnboarding({
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                       שם קורס / קורסים פעילים 📚
                     </label>
-                    <textarea
-                      value={currentCoursesStr}
-                      onChange={(e) => updateList('currentCourses', e.target.value)}
+                    <SyllabusListTextarea
+                      key={`currentCourses:${syllabusImportSignature}`}
+                      value={profile.currentCourses}
+                      onCommit={(value) => updateList('currentCourses', value)}
+                      commitLockRef={syllabusListCommitLockRef}
+                      onUnlock={unlockSyllabusListEditing}
+                      disabled={syllabusImportBusy}
                       placeholder="פרט על הקורסים, הנושאים או הפרויקטים שאתה עובד עליהם..."
                       rows={2}
                       className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 resize-none outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 transition-all duration-300 hover:bg-slate-800/80"
@@ -315,19 +400,120 @@ export default function ProfileOnboarding({
                   </p>
                 </div>
                 
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-3xl border border-cyan-300/25 bg-gradient-to-br from-cyan-500/18 via-sky-500/10 to-slate-900/70 p-5 shadow-2xl shadow-cyan-950/35">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div className="max-w-2xl">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-cyan-200/25 bg-white/10 text-[11px] font-semibold text-cyan-100 mb-3">
+                        <span>📄</span>
+                        <span>ייבוא סילבוס מהיר</span>
+                      </div>
+                      <h3 className="text-lg font-bold text-white mb-2" style={{ textShadow: '1px 1px 5px rgba(0,0,0,0.7)' }}>
+                        אפשר להתחיל מקובץ סילבוס במקום למלא הכל ידנית
+                      </h3>
+                      <p className="text-sm text-cyan-50/90 leading-relaxed">
+                        {syllabusImportHint}
+                      </p>
+                      <p className="text-xs text-white/70 mt-2 leading-relaxed">
+                        לאחר הייבוא אפשר לעבור על הפרטים ולעדכן ידנית רק מה שחסר.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:items-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => syllabusFileInputRef.current?.click()}
+                        disabled={syllabusImportBusy}
+                        className="px-5 py-3 rounded-2xl bg-cyan-400/85 hover:bg-cyan-300 text-slate-950 text-sm font-bold shadow-lg shadow-cyan-900/30 transition-all duration-300 disabled:opacity-70 disabled:cursor-wait"
+                      >
+                        {syllabusImportBusy ? 'מייבא סילבוס...' : 'העלה סילבוס'}
+                      </button>
+                      <div className="text-[11px] text-white/65">
+                        תומך ב־txt, md, html ו־pdf
+                      </div>
+                    </div>
+                  </div>
+
+                  <input
+                    ref={syllabusFileInputRef}
+                    type="file"
+                    accept=".txt,.md,.markdown,.html,.htm,.pdf"
+                    className="hidden"
+                    onChange={handleSyllabusFileSelection}
+                  />
+
+                  {(syllabusImport.fileName || syllabusImport.message) && (
+                    <div className={`mt-4 rounded-2xl border px-4 py-3 ${syllabusImportToneClass}`}>
+                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                        <div className="min-w-0">
+                          {syllabusImport.fileName ? (
+                            <div className="text-sm font-semibold truncate" title={syllabusImport.fileName}>
+                              {syllabusImport.fileName}
+                            </div>
+                          ) : null}
+                          <div className="text-sm leading-relaxed mt-1">
+                            {syllabusImport.message || 'בחר קובץ כדי להתחיל ייבוא.'}
+                          </div>
+                          {syllabusImport.summary ? (
+                            <div className="text-xs mt-2 text-white/80 leading-relaxed">
+                              {syllabusImport.summary}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="shrink-0">
+                          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold text-white/90">
+                            {syllabusImportBadge}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="text-xs font-semibold text-white/85">מילוי ידני משלים</div>
+                  <div className="text-[11px] text-white/65 mt-1 leading-relaxed">
+                    אם חלק מהפרטים לא זוהו מהסילבוס, אפשר להשלים או לתקן אותם ידנית כאן למטה.
+                  </div>
+                </div>
+
+                <div className="space-y-3 opacity-95">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="group">
                       <label className="block text-sm font-medium text-white mb-1 group-hover:text-amber-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        מרצה / מנחה 👩‍🏫
+                        מרצים / מנחים 👩‍🏫
                       </label>
-                      <input
-                        value={profile.lecturerName || ''}
-                        onChange={(e) => updateField('lecturerName', e.target.value)}
-                        placeholder="שם המרצה"
+                      <SyllabusListTextarea
+                        key={`lecturerNames:${syllabusImportSignature}`}
+                        value={lecturerNamesValue}
+                        onCommit={(value) => updateList('lecturerNames', value)}
+                        commitLockRef={syllabusListCommitLockRef}
+                        onUnlock={unlockSyllabusListEditing}
+                        disabled={syllabusImportBusy}
+                        rows={3}
+                        placeholder="אפשר להפריד בין שמות בפסיקים או בשורות חדשות"
                         className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-slate-800/80"
                       />
                     </div>
+                    <div className="group">
+                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-violet-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                        נושאי סילבוס / דגשים 📚
+                      </label>
+                      <SyllabusListTextarea
+                        key={`syllabusTopics:${syllabusImportSignature}`}
+                        value={profile.syllabusTopics}
+                        onCommit={(value) => updateList('syllabusTopics', value)}
+                        commitLockRef={syllabusListCommitLockRef}
+                        onUnlock={unlockSyllabusListEditing}
+                        disabled={syllabusImportBusy}
+                        rows={3}
+                        placeholder="נושאים, יחידות לימוד או דגשים שחוזרים לאורך הקורס"
+                        className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 transition-all duration-300 hover:bg-slate-800/80"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="group">
                       <label className="block text-sm font-medium text-white mb-1 group-hover:text-emerald-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                         סוג מטלה / מסמך 📄
@@ -335,6 +521,7 @@ export default function ProfileOnboarding({
                       <input
                         value={profile.assignmentType || ''}
                         onChange={(e) => updateField('assignmentType', e.target.value)}
+                        disabled={syllabusImportBusy}
                         placeholder="למשל: עבודה מסכמת"
                         className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all duration-300 hover:bg-slate-800/80"
                       />
@@ -347,6 +534,7 @@ export default function ProfileOnboarding({
                         type="date"
                         value={profile.submissionDate || ''}
                         onChange={(e) => updateField('submissionDate', e.target.value)}
+                        disabled={syllabusImportBusy}
                         className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-all duration-300 hover:bg-slate-800/80"
                       />
                     </div>
@@ -757,181 +945,77 @@ export default function ProfileOnboarding({
             )}
 
             {step === 7 && (
-              <div className="space-y-3 animate-in slide-in-from-top-5 duration-700">
+              <div className="space-y-4 animate-in slide-in-from-top-5 duration-700">
                 <div className="text-center mb-4">
                   <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 text-white rounded-full flex items-center justify-center text-5xl mb-4 mx-auto animate-bounce shadow-2xl shadow-green-400/50">
                     ✨
                   </div>
                   <h2 className="text-4xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
-                    הפרופיל מוכן! 🎉
+                    הכל מוכן להתחלה! 🎉
                   </h2>
                   <p className="text-white text-sm leading-relaxed max-w-md mx-auto" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
-                    הסוכן יעבד את ההעדפות ויאמץ את סגנון הכתיבה שקבעת. עכשיו כל תוכן חדש יותאם אישית עבורך.
+                    שמרנו את ההעדפות המרכזיות שלך, כך שאפשר להיכנס לעבודה מיד. את כל ההגדרות המתקדמות אפשר לפתוח אחר כך מהמסכים הייעודיים.
                   </p>
                 </div>
 
-                <div className="bg-slate-900/50 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 shadow-xl">
-                  <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                    ⚙️ הגדרות אחרונות
+                <div className="bg-slate-900/50 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 shadow-xl space-y-4">
+                  <h3 className="text-xl font-bold text-white flex items-center gap-2" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                    ✅ מה כבר הוגדר
                   </h3>
-                  
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-sm font-medium text-white mb-3" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        סגנונות מועדפים במסך הבית:
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        {STYLE_PRESET_OPTIONS.map((style) => {
-                          const active = (profile.preferredHomeStyleIds || []).includes(style.id);
-                          return (
-                            <button
-                              key={style.id}
-                              type="button"
-                              onClick={() => toggleStyle(style.id)}
-                              className={`px-4 py-2 rounded-full border-2 text-sm font-medium transition-all duration-300 ${
-                                active 
-                                  ? 'border-yellow-300 bg-yellow-400/20 text-white shadow-lg shadow-yellow-400/25' 
-                                  : 'border-slate-500 bg-slate-800/40 text-white hover:border-slate-400 hover:bg-slate-800/60'
-                              }`}
-                            >
-                              {style.label}
-                            </button>
-                          );
-                        })}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/10 p-4">
+                      <div className="text-xs font-semibold text-cyan-100/90 mb-2">פרופיל</div>
+                      <div className="text-sm font-semibold text-white leading-relaxed">
+                        {profileSummary || 'פרטי הבסיס נשמרו ויהיו זמינים לעדכון בכל שלב.'}
+                      </div>
+                      <div className="text-xs text-white/70 mt-2 leading-relaxed">
+                        {profile.defaultAudience
+                          ? `קהל היעד שהוגדר: ${profile.defaultAudience}`
+                          : 'אפשר להרחיב הקשר, קהל יעד ומטרות גם אחרי הכניסה לעורך.'}
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-white mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                          אורך משפטים:
-                        </label>
-                        <select
-                          value={profile.sentenceLengthPreference || 'מאוזן'}
-                          onChange={(e) => updateField('sentenceLengthPreference', e.target.value)}
-                          className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400"
-                        >
-                          <option value="קצר" className="bg-slate-800">משפטים קצרים</option>
-                          <option value="מאוזן" className="bg-slate-800">משפטים מאוזנים</option>
-                          <option value="מעמיק" className="bg-slate-800">משפטים מעמיקים</option>
-                        </select>
+                    <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/10 p-4">
+                      <div className="text-xs font-semibold text-fuchsia-100/90 mb-2">כתיבה וסגנון</div>
+                      <div className="text-sm font-semibold text-white leading-relaxed">
+                        {tonePreferenceLabel} · {lengthPreferenceLabel}
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-white mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                          אורך פסקאות:
-                        </label>
-                        <select
-                          value={profile.paragraphLengthPreference || 'בינוני'}
-                          onChange={(e) => updateField('paragraphLengthPreference', e.target.value)}
-                          className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-purple-400"
-                        >
-                          <option value="תמציתי" className="bg-slate-800">פסקאות קצרות</option>
-                          <option value="בינוני" className="bg-slate-800">פסקאות בינוניות</option>
-                          <option value="מפורט" className="bg-slate-800">פסקאות מפורטות</option>
-                        </select>
+                      <div className="text-xs text-white/70 mt-2 leading-relaxed">
+                        {styleSummary}
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-white/90 mb-1">
-                        חוקים אישיים לסגנון הכתיבה (אופציונלי):
-                      </label>
-                      <textarea
-                        value={profile.customStyleGuidance || ''}
-                        onChange={(e) => updateField('customStyleGuidance', e.target.value)}
-                        placeholder="לדוגמה: תמיד להשתמש בגוף ראשון רבים, לא להשתמש במילה 'מאוד'"
-                        rows={2}
-                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-indigo-400"
-                      />
+                    <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+                      <div className="text-xs font-semibold text-emerald-100/90 mb-2">AI והמשך הגדרה</div>
+                      <div className="text-sm font-semibold text-white leading-relaxed">
+                        {providerSummary}
+                      </div>
+                      <div className="text-xs text-white/70 mt-2 leading-relaxed">
+                        {analysisSummary}
+                      </div>
                     </div>
+                  </div>
 
-                    <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4">
-                      <div className="text-sm text-white/90 mb-3">
-                        💡 סקיל הסגנון משתמש בלמידה אוטומטית. כשהאפשרות למטה פעילה, האפליקציה תלמד מקומית מהמסמך הפעיל ומהתיקונים שלך.
-                      </div>
-                      {profile.autoLearnedFromEditorAt && (
-                        <div className="text-xs text-white/70">
-                          עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}
-                        </div>
-                      )}
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+                    <div className="text-sm font-semibold text-white">הגדרות מתקדמות עדיין זמינות</div>
+                    <div className="text-xs text-white/75 leading-relaxed">
+                      אם תרצה לדייק ספקים, חומרים אישיים או העדפות נוספות, אפשר לפתוח את המשטחים הייעודיים בלי להעמיס על מסך הסיום.
                     </div>
-
-                    <label className="flex items-center gap-3 text-white cursor-pointer group">
-                      <input
-                        type="checkbox"
-                        checked={profile.learningConsent === true}
-                        onChange={(e) => updateField('learningConsent', e.target.checked)}
-                        className="w-5 h-5 rounded bg-white/20 border-white/40 text-green-500 focus:ring-2 focus:ring-green-400"
-                      />
-                      <span className="text-sm group-hover:text-white/100 transition-colors">
-                        🤖 אפשר לסוכן להמשיך ללמוד ולדייק איתי אוטומטית עם הזמן
-                      </span>
-                    </label>
-
-                    <div className="bg-slate-800/40 border border-slate-600/70 rounded-xl p-4 space-y-3">
-                      <div className="text-sm font-semibold text-white">🔐 חיבור ספק AI + קישורים ישירים להוצאת API key</div>
-                      <div className="text-xs text-white/80 leading-relaxed">
-                        אחרי יצירת המפתח אפשר להדביק אותו כאן מיד, בלי לצאת מה-onboarding. אם צריך אחר כך endpoint או מודל, אפשר לעבור להגדרות ה-AI המלאות.
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-white/90 mb-1">ספק נבחר להדבקה מהירה</label>
-                        <select
-                          value={externalAnalysis.quickSetupProviderId || 'gemini'}
-                          onChange={(e) => onQuickProviderChange(e.target.value)}
-                          className="w-full px-4 py-2 bg-slate-800/60 border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-cyan-400"
-                        >
-                          {externalProviderOptions.map((provider) => (
-                            <option key={provider.id} value={provider.id} className="bg-slate-800 text-white">{provider.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {PROVIDER_QUICK_LINKS.map((provider) => (
-                          <a
-                            key={provider.id}
-                            href={provider.keyUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-3 py-1.5 rounded-full border border-slate-400/70 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors"
-                          >
-                            {provider.label} · {provider.keyHint}
-                          </a>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
-                        <div>
-                          <label className="block text-xs font-semibold text-white/90 mb-1">
-                            הדבק מפתח עבור {externalAnalysis.quickProviderSetup?.label || 'הספק הנבחר'}
-                          </label>
-                          <input
-                            type="password"
-                            value={externalAnalysis.quickProviderSetup?.keyValue || ''}
-                            onChange={(e) => onQuickProviderKeyChange(e.target.value)}
-                            placeholder={externalAnalysis.quickProviderSetup?.placeholder || 'API key'}
-                            disabled={externalAnalysis.quickProviderSetup?.acceptsKey === false}
-                            className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
-                          />
-                          <div className="text-[11px] text-white/70 mt-2 min-h-[18px]">
-                            {externalAnalysis.quickProviderSetup?.helpText || 'אפשר להדביק כאן את המפתח ולשמור אותו ישירות מתוך ה-onboarding.'}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={onOpenAiSettings}
-                          className="px-3 py-2 rounded-lg bg-indigo-500/70 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
-                        >
-                          הגדרות AI מתקדמות
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={onOpenPersonalStyle}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-500/70 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
-                        >
-                          פתח חומרים ולמידה
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={onOpenAiSettings}
+                        className="px-4 py-2 rounded-xl bg-indigo-500/75 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors"
+                      >
+                        פתח הגדרות AI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onOpenPersonalStyle}
+                        className="px-4 py-2 rounded-xl bg-emerald-500/75 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors"
+                      >
+                        פתח סגנון אישי וחומרים
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -65,6 +65,8 @@ const MODERN_TEMPLATES = [
   },
 ];
 
+const PRIMARY_TEMPLATE_CARD_LIMIT = 3;
+
 const QUICK_PROMPTS = [
   '✍️ כתוב לי מכתב פורמלי למעסיק',
   '📝 צור הצעת מחקר על בינה מלאכותית',
@@ -153,6 +155,23 @@ const applyStartScreenCustomizations = (items = [], kind = 'templates') => {
   }));
 };
 
+const escapeHtml = (value = '') => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+const plainTextToHtml = (text = '') => {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) return '<p></p>';
+  return normalized
+    .split(/\n{2,}/)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, '<br />')}</p>`)
+    .join('');
+};
+
+const getDraftTitleFromFileName = (name = '') => String(name || '').replace(/\.[^.]+$/, '').trim() || 'טיוטת בסיס';
+
 export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '' }) {
   const [prompt, setPrompt] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
@@ -166,12 +185,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const onboardingDone = Boolean(profile?.onboardingCompletedAt);
 
   const fileInputRef = useRef(null);
+  const baseDraftInputRef = useRef(null);
   const instructionFileInputRef = useRef(null);
   const [instructions, setInstructions] = useState(() => (typeof getHomeInstructions === 'function' ? getHomeInstructions() : ''));
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [instructionFileName, setInstructionFileName] = useState('');
+  const [baseDraft, setBaseDraft] = useState(null);
   const [loadedWorkspace, setLoadedWorkspace] = useState(null);
   const [uploadKind, setUploadKind] = useState('general');
   const [workspacesList, setWorkspacesList] = useState([]);
@@ -184,6 +205,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
+  const [showExtraTemplates, setShowExtraTemplates] = useState(false);
+  const primaryTemplateCards = templateCards.slice(0, PRIMARY_TEMPLATE_CARD_LIMIT);
+  const extraTemplateCards = templateCards.slice(PRIMARY_TEMPLATE_CARD_LIMIT);
+  const hasSelectedHiddenTemplate = extraTemplateCards.some((template) => template.id === selectedTemplate);
+  const shouldShowExtraTemplates = showExtraTemplates || hasSelectedHiddenTemplate;
 
   const saveCardCustomization = () => {
     if (!editingCard?.id) return;
@@ -333,6 +359,83 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
   };
 
+  const normalizeBaseDraft = (payload = {}) => {
+    const resolvedName = String(
+      payload.name
+      || String(payload.filePath || '').split(/[\\/]/).pop()
+      || payload.title
+      || 'טיוטת בסיס'
+    ).trim() || 'טיוטת בסיס';
+
+    return {
+      name: resolvedName,
+      title: String(payload.title || getDraftTitleFromFileName(resolvedName)).trim() || 'טיוטת בסיס',
+      html: String(payload.html || '').trim() || '<p></p>',
+      text: String(payload.text || '').trim(),
+      filePath: String(payload.filePath || '').trim(),
+      source: String(payload.source || 'upload').trim() || 'upload',
+    };
+  };
+
+  const clearBaseDraft = () => {
+    setBaseDraft(null);
+    if (baseDraftInputRef.current) baseDraftInputRef.current.value = '';
+  };
+
+  const handleSelectBaseDraft = async () => {
+    try {
+      if (window.desktopApp?.openDocumentDialog) {
+        const result = await window.desktopApp.openDocumentDialog();
+        if (result?.canceled) return;
+        if (result?.ok === false || result?.error) {
+          window.alert(result?.error || 'לא הצלחתי לטעון את הטיוטה שנבחרה.');
+          return;
+        }
+        setBaseDraft(normalizeBaseDraft({
+          ...result,
+          source: 'desktop',
+        }));
+        return;
+      }
+
+      baseDraftInputRef.current?.click();
+    } catch (error) {
+      console.error(error);
+      window.alert('לא הצלחתי לבחור טיוטת בסיס.');
+    }
+  };
+
+  const handleBaseDraftUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const ext = String(file.name || '').toLowerCase().split('.').pop();
+      if (!['txt', 'md', 'markdown', 'html', 'htm'].includes(ext)) {
+        window.alert('בדפדפן אפשר לבחור כעת רק קובצי txt, md או html כטיוטת בסיס.');
+        return;
+      }
+
+      const rawText = await file.text();
+      const html = /<(html|body|p|h1|h2|div|span|br|ul|ol|li)\b/i.test(rawText)
+        ? rawText
+        : plainTextToHtml(rawText);
+
+      setBaseDraft(normalizeBaseDraft({
+        name: file.name,
+        title: getDraftTitleFromFileName(file.name),
+        html,
+        text: rawText,
+        source: 'browser',
+      }));
+    } catch (error) {
+      console.error(error);
+      window.alert('לא הצלחתי לקרוא את הטיוטה שנבחרה.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
   const handleLoadWorkspace = () => {
     if (typeof getWorkspaceAutomation !== 'function' || typeof getOrderedRoleAgents !== 'function') return;
     const automation = getWorkspaceAutomation();
@@ -418,11 +521,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     return () => clearInterval(interval);
   }, []);
 
-      const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim());
-      const canGenerate = hasGenerationInput && !isGenerating;
+  const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
+  const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim() || hasBaseDraft);
+  const canGenerate = hasGenerationInput && !isGenerating;
 
   const handleGenerate = async () => {
-        if (!hasGenerationInput || isGenerating) return;
+    if (!hasGenerationInput || isGenerating) return;
 
     setIsGenerating(true);
     try {
@@ -432,6 +536,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
         selectedMaterials,
+        baseDraft,
       });
     } finally {
       setIsGenerating(false);
@@ -459,6 +564,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         instructions: String(instructions || '').trim(),
         selectedMaterials,
         selectedModel: model,
+        baseDraft,
       });
       setSelectedModel(undefined);
       setShowChefDialog(false);
@@ -474,6 +580,64 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setSelectedModel(undefined);
     setShowChefDialog(false);
   };
+
+  const handleExtraTemplatesToggle = () => {
+    if (hasSelectedHiddenTemplate) return;
+    setShowExtraTemplates((prev) => !prev);
+  };
+
+  const extraTemplatesToggleLabel = hasSelectedHiddenTemplate
+    ? 'עוד תבניות פתוחות עבור הבחירה הנוכחית'
+    : shouldShowExtraTemplates
+      ? 'הסתר תבניות נוספות'
+      : 'עוד תבניות';
+
+  const renderTemplateCards = (cards, indexOffset = 0) => cards.map((template, i) => (
+    <div
+      key={template.id}
+      className={`group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 transform hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl ${
+        selectedTemplate === template.id ? 'ring-2 ring-pink-400 bg-white/20' : ''
+      }`}
+      onClick={() => handleTemplateSelect(template)}
+      style={{
+        animationDelay: `${(indexOffset + i) * 0.1}s`
+      }}
+    >
+      <span
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setEditingCard({
+            kind: 'template',
+            id: template.id,
+            title: template.title,
+            subtitle: template.subtitle || '',
+            customPrompt: template.customPrompt || '',
+          });
+        }}
+        className="absolute left-4 top-4 z-10 inline-flex items-center justify-center w-8 h-8 rounded-full border border-white/30 bg-white/10 text-white/50 hover:text-white hover:bg-white/30 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+        title="ערוך תבנית"
+      >
+        ✎
+      </span>
+      <div className="text-center mb-4">
+        <div className={`w-16 h-16 mx-auto bg-gradient-to-br ${template.gradient} rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg`}>
+          {template.icon}
+        </div>
+        <h3 className="text-xl font-bold text-white mb-2" style={{ textShadow: '1px 1px 5px rgba(0,0,0,0.5)' }}>
+          {template.title}
+        </h3>
+        <p className="text-white/70 text-sm mb-3">{template.subtitle}</p>
+        <p className="text-white/50 text-xs">{template.description}</p>
+      </div>
+
+      <div className="mt-6 opacity-0 group-hover:opacity-100 transition-all duration-300">
+        <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
+          <div className={`h-full bg-gradient-to-r ${template.gradient} transform translate-x-full group-hover:translate-x-0 transition-transform duration-500`}></div>
+        </div>
+      </div>
+    </div>
+  ));
 
   return (
     <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
@@ -575,7 +739,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     יוצר...
                   </div>
                 ) : (
-                  <>✨ בואו נתחיל</>
+                  <>{hasBaseDraft ? '✨ עדכן מהטיוטה' : '✨ בואו נתחיל'}</>
                 )}
               </button>
 
@@ -592,7 +756,58 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
 
             <div className="text-right text-xs text-white/72 mb-6">
-              שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך.
+              שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך. אם בחרת טיוטת בסיס, אפשר גם להשאיר את שני השדות ריקים כדי לבצע ליטוש ראשוני.
+            </div>
+
+            <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <div className="text-white font-semibold text-sm">📄 טיוטת בסיס אופציונלית</div>
+                  <div className="text-white/70 text-xs mt-1">בחר מסמך קיים כדי לעדכן או ללטש אותו במקום להתחיל מסמך חדש.</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={handleSelectBaseDraft}
+                    className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                  >
+                    {baseDraft ? 'החלף טיוטה' : 'בחר טיוטת בסיס'}
+                  </button>
+                  {baseDraft ? (
+                    <button
+                      type="button"
+                      onClick={clearBaseDraft}
+                      className="px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/25 rounded-xl text-white text-xs transition-all shadow-sm"
+                    >
+                      הסר
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              {baseDraft ? (
+                <div className="mt-4 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white/8 border border-cyan-200/25 rounded-xl px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="text-white text-sm font-semibold truncate" title={baseDraft.name}>{baseDraft.name}</div>
+                    <div className="text-white/60 text-[11px] mt-1 truncate" title={baseDraft.filePath || ''}>
+                      {baseDraft.filePath || (baseDraft.source === 'desktop' ? 'נטען דרך בחירת קובץ במחשב' : 'נטען דרך דפדפן')}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-cyan-100 bg-cyan-500/15 border border-cyan-200/30 px-3 py-1 rounded-full whitespace-nowrap">
+                    הדור הבא יעדכן את הטיוטה הזאת
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 text-white/45 text-[11px]">לא נבחרה טיוטת בסיס. במצב הזה תיווצר טיוטה חדשה כרגיל.</div>
+              )}
+
+              <input
+                ref={baseDraftInputRef}
+                type="file"
+                accept=".txt,.md,.markdown,.html,.htm"
+                className="hidden"
+                onChange={handleBaseDraftUpload}
+              />
             </div>
 
             {/* Advance Options Area */}
@@ -754,54 +969,34 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             תבניות חכמות להתחלה מהירה
           </h2>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
-            {templateCards.map((template, i) => (
-              <div
-                key={template.id}
-                className={`group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 transform hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl ${
-                  selectedTemplate === template.id ? 'ring-2 ring-pink-400 bg-white/20' : ''
-                }`}
-                onClick={() => handleTemplateSelect(template)}
-                style={{
-                  animationDelay: `${i * 0.1}s`
-                }}
-              >
-                <span
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setEditingCard({
-                      kind: 'template',
-                      id: template.id,
-                      title: template.title,
-                      subtitle: template.subtitle || '',
-                      customPrompt: template.customPrompt || '',
-                    });
-                  }}
-                  className="absolute left-4 top-4 z-10 inline-flex items-center justify-center w-8 h-8 rounded-full border border-white/30 bg-white/10 text-white/50 hover:text-white hover:bg-white/30 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
-                  title="ערוך תבנית"
-                >
-                  ✎
-                </span>
-                <div className="text-center mb-4">
-                  <div className={`w-16 h-16 mx-auto bg-gradient-to-br ${template.gradient} rounded-full flex items-center justify-center text-2xl mb-4 shadow-lg`}>
-                    {template.icon}
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2" style={{ textShadow: '1px 1px 5px rgba(0,0,0,0.5)' }}>
-                    {template.title}
-                  </h3>
-                  <p className="text-white/70 text-sm mb-3">{template.subtitle}</p>
-                  <p className="text-white/50 text-xs">{template.description}</p>
-                </div>
-                
-                <div className="mt-6 opacity-0 group-hover:opacity-100 transition-all duration-300">
-                  <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
-                    <div className={`h-full bg-gradient-to-r ${template.gradient} transform translate-x-full group-hover:translate-x-0 transition-transform duration-500`}></div>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+            {renderTemplateCards(primaryTemplateCards)}
           </div>
+
+          {extraTemplateCards.length > 0 ? (
+            <>
+              <div className={`flex justify-center ${shouldShowExtraTemplates ? 'mb-6' : 'mb-16'}`}>
+                <button
+                  type="button"
+                  onClick={handleExtraTemplatesToggle}
+                  disabled={hasSelectedHiddenTemplate}
+                  aria-expanded={shouldShowExtraTemplates}
+                  aria-controls="start-screen-extra-templates"
+                  className="px-5 py-2.5 bg-white/10 hover:bg-white/15 disabled:hover:bg-white/10 border border-white/20 rounded-full text-white/85 text-sm font-medium transition-all duration-300 shadow-lg disabled:opacity-80 disabled:cursor-default"
+                >
+                  {extraTemplatesToggleLabel}
+                </button>
+              </div>
+
+              {shouldShowExtraTemplates ? (
+                <div id="start-screen-extra-templates" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
+                  {renderTemplateCards(extraTemplateCards, primaryTemplateCards.length)}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="mb-16"></div>
+          )}
         </div>
 
         {/* Quick Access Bar */}

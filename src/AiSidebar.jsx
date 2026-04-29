@@ -2378,7 +2378,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 {QUICK_PROMPTS.map((prompt, index) => (
                   <button 
                     key={index}
-                    onClick={() => setDraftInput(prompt.text)}
+                    onClick={() => {
+                      setTab('chat');
+                      send(prompt.text);
+                    }}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
