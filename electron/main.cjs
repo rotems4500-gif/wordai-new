@@ -510,7 +510,7 @@ function setupAutoUpdater() {
   let manualDownloadShown = false;
   const handleUpdaterFailure = async (err, fallbackMessage = 'שגיאה בבדיקת העדכונים') => {
     const rawMessage = String(err?.message || fallbackMessage);
-    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*406/i.test(rawMessage);
+    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*(?:404|406)|404 Not Found|authentication token|access token|personal access token|GH_TOKEN|requires authentication|Bad credentials|private repo|private repository/i.test(rawMessage);
 
     if (isReleaseFeedIssue) {
       sendUpdateStatus({

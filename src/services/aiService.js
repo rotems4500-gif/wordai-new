@@ -3776,7 +3776,9 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), 
         { key: 'manager', label: 'המנהל שלט בצוות', state: 'idle', details: 'אין הרצה עדיין' },
         { key: 'api', label: 'נעשה שימוש ב-API', state: 'idle', details: 'אין הרצה עדיין' },
       ],
-      stages: orderedAgents.map((agent) => ({ id: agent.id, label: agent.name, state: 'idle', details: 'לא הופעל' })),
+      stages: requestedRunId
+        ? []
+        : orderedAgents.map((agent) => ({ id: agent.id, label: agent.name, state: 'idle', details: 'לא הופעל' })),
       logs: [],
       lastError: '',
     };
@@ -3791,9 +3793,12 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), 
     : (runId ? logs.filter((log) => log.runId === runId) : logs.slice(-80));
   const summaryWorkspaceId = String(lastRunLog?.activeWorkspaceId || activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const summaryWorkspaceName = String(lastRunLog?.workspaceName || automation?.workspaceName || '').trim();
+  const initialRequestLog = runLogs.find((log) => log.type === 'request-start') || null;
+  const runSkippedAutomation = initialRequestLog?.automationSkipped === true
+    || ['skipAutomation', 'providerOverride', 'noActiveAgents'].includes(String(initialRequestLog?.automationSkipReason || '').trim());
   const hasApiAttempt = runLogs.some((log) => ['request-start', 'provider-start', 'attempt-start', 'multi-model-start'].includes(log.type));
   const hasApiSuccess = runLogs.some((log) => ['attempt-success', 'multi-model-success', 'workflow-success'].includes(log.type));
-  const managerRequired = automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(runWorkflowMode) && automation?.autopilotEnabled !== false;
+  const managerRequired = !runSkippedAutomation && automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(runWorkflowMode) && automation?.autopilotEnabled !== false;
   const managerSuccess = runLogs.some((log) => log.type === 'manager-plan-success');
   const managerFailure = runLogs.some((log) => log.type === 'manager-plan-fallback' || (log.type === 'stage-error' && /מנהל|manager/i.test(`${log.agentLabel || ''} ${log.agentId || ''}`)));
   const lastError = [...runLogs].reverse().find((log) => log.state === 'error')?.errorMessage || '';
@@ -3811,7 +3816,7 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), 
   });
 
   const stageKeys = Array.from(new Set([
-    ...orderedAgents.map((agent) => agent.id),
+    ...(runSkippedAutomation ? [] : orderedAgents.map((agent) => agent.id)),
     ...Array.from(stageStartByAgent.keys()),
     ...Array.from(stageSuccessByAgent.keys()),
     ...Array.from(stageErrorByAgent.keys()),
@@ -3848,7 +3853,7 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), 
         key: 'manager',
         label: 'המנהל שלט בצוות',
         state: managerRequired ? (managerSuccess ? 'success' : managerFailure ? 'error' : 'idle') : 'idle',
-        details: managerRequired ? (managerSuccess ? 'המנהל בנה מסלול עבודה והקצה שלבים' : managerFailure ? 'המנהל לא הצליח לנהל את ההרצה' : 'המנהל טרם הופעל בהרצה האחרונה') : 'לא נדרש במצב הנוכחי',
+        details: managerRequired ? (managerSuccess ? 'המנהל בנה מסלול עבודה והקצה שלבים' : managerFailure ? 'המנהל לא הצליח לנהל את ההרצה' : 'המנהל טרם הופעל בהרצה האחרונה') : runSkippedAutomation ? 'לא נדרש במסלול זה' : 'לא נדרש במצב הנוכחי',
       },
       {
         key: 'api',
@@ -4084,6 +4089,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
+  const shouldAttemptAutomation = automation.enabled && automation.autoDispatch !== false && !options.providerOverride && !options.skipAutomation;
+  const enabledAgents = shouldAttemptAutomation ? getOrderedRoleAgents(automation.workflowMode) : [];
+  const explicitAutomationSkipReason = String(options.automationSkipReason || '').trim();
+  const automationSkipReason = explicitAutomationSkipReason || (options.skipAutomation === true
+    ? 'skipAutomation'
+    : (options.providerOverride ? 'providerOverride' : (shouldAttemptAutomation && !enabledAgents.length ? 'noActiveAgents' : '')));
+
   logEvent('request-start', 'התחלת בקשת AI', {
     state: 'running',
     promptPreview: trimLogText(cleanUserPrompt),
@@ -4100,11 +4112,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     skillReason: skillResolution.reason,
     skillSelectionSkipped: skipSkillSelection,
     automationPromptSkipped: skipAutomationPrompt,
+    automationSkipped: Boolean(automationSkipReason),
+    automationSkipReason,
     personalStyleStructureHintsSkipped: omitPersonalStyleStructureHints,
   });
 
-  if (automation.enabled && automation.autoDispatch !== false && !options.providerOverride && !options.skipAutomation) {
-    const enabledAgents = getOrderedRoleAgents(automation.workflowMode);
+  if (shouldAttemptAutomation) {
     if (enabledAgents.length) {
       const executionPlan = await planWithManagerIfNeeded({
         cleanUserPrompt,

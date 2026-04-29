@@ -3,6 +3,7 @@ import {
   getPersonalStyleProfile,
   savePersonalStyleProfile,
   logAgentDebugEvent,
+  getOrderedRoleAgents,
   getWorkspaceAutomation,
   syncPersistedAppSettings,
 } from './aiService';
@@ -68,10 +69,21 @@ function topMapKeys(map = {}, limit = 8) {
     .map(([key]) => key);
 }
 
-function getDocumentRunLabel({ automation = {}, selectedModel = '', directStructureLock = false } = {}) {
+function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureLock = false } = {}) {
+  if (directStructureLock) return false;
+  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
+  return automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && hasActiveWorkflowAgents;
+}
+
+function getDocumentRunLabel({ automation = {}, selectedModel = '', directStructureLock = false, shouldUseWorkflowAutomation = null } = {}) {
   const providerLabel = DOCUMENT_RUN_PROVIDER_LABELS[String(selectedModel || '').trim().toLowerCase()] || String(selectedModel || '').trim();
-  if (providerLabel) return providerLabel;
-  if (directStructureLock) return 'יצירה ישירה';
+  const useWorkflowAutomation = typeof shouldUseWorkflowAutomation === 'boolean'
+    ? shouldUseWorkflowAutomation
+    : shouldUseDocumentWorkflowAutomation({ automation, directStructureLock });
+  if (!useWorkflowAutomation) return providerLabel || 'יצירה ישירה';
   if (automation?.workflowMode === 'manager-auto' && automation?.autopilotEnabled !== false) return 'AUTOPILOT';
   return String(automation?.workspaceName || '').trim() || 'צוות העבודה';
 }
@@ -1584,7 +1596,21 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
   const automation = getWorkspaceAutomation();
-  const documentRunLabel = getDocumentRunLabel({ automation, selectedModel, directStructureLock: structurePolicy.directStructureLock });
+  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
+  const noActiveWorkflowAutomation = automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && !hasActiveWorkflowAgents;
+  const shouldUseWorkflowAutomation = shouldUseDocumentWorkflowAutomation({
+    automation,
+    directStructureLock: structurePolicy.directStructureLock,
+  });
+  const documentRunLabel = getDocumentRunLabel({
+    automation,
+    selectedModel,
+    directStructureLock: structurePolicy.directStructureLock,
+    shouldUseWorkflowAutomation,
+  });
   const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
   const requestWorkspaceName = String(automation?.workspaceName || '').trim();
   const requestLogContext = {
@@ -1655,7 +1681,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       requestOptions.skipMultiModel = true;
       requestOptions.omitPersonalStyleStructureHints = true;
     }
-    if (selectedModel) {
+    if (noActiveWorkflowAutomation) {
+      requestOptions.automationSkipReason = 'noActiveAgents';
+    }
+    if (selectedModel && shouldUseWorkflowAutomation === false) {
       requestOptions.providerOverride = selectedModel;
       requestOptions.strictProviderOverride = true;
     }
@@ -1757,7 +1786,15 @@ async function prepareFeedbackDrivenDocumentContext({
   preparationErrorMessage = 'שגיאה מפורשת בשלב הכנת עדכון המסמך לפני קריאת API',
 }) {
   const automation = getWorkspaceAutomation();
-  const shouldUseWorkflowAutomation = !forceDirectMode && automation?.enabled === true && automation?.autoDispatch !== false;
+  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
+  const noActiveWorkflowAutomation = automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && !hasActiveWorkflowAgents;
+  const shouldUseWorkflowAutomation = !forceDirectMode
+    && automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && hasActiveWorkflowAgents;
   const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
   const requestWorkspaceName = String(automation?.workspaceName || '').trim();
   const requestLogContext = {
@@ -1793,6 +1830,7 @@ async function prepareFeedbackDrivenDocumentContext({
 
     return {
       shouldUseWorkflowAutomation,
+      noActiveWorkflowAutomation,
       requestWorkspaceId,
       requestWorkspaceName,
       requestLogContext,
@@ -1807,6 +1845,7 @@ async function prepareFeedbackDrivenDocumentContext({
 
   return {
     shouldUseWorkflowAutomation,
+    noActiveWorkflowAutomation,
     requestWorkspaceId,
     requestWorkspaceName,
     requestLogContext,
@@ -1819,7 +1858,7 @@ async function prepareFeedbackDrivenDocumentContext({
   };
 }
 
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', runId: providedRunId = '', returnMeta = false }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
@@ -1827,6 +1866,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
 
   const {
     shouldUseWorkflowAutomation,
+    noActiveWorkflowAutomation,
     requestWorkspaceId,
     requestWorkspaceName,
     requestLogContext,
@@ -1842,7 +1882,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     templateId,
     selectedMaterials,
     allowAutoSelectedMaterials: false,
-    forceDirectMode: true,
+    forceDirectMode,
     providedRunId,
     runIdPrefix: 'doc-feedback',
     automatedLabel: 'עדכון מסמך ב-workflow',
@@ -1886,7 +1926,10 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       requestOptions.skipSkillSelection = true;
       requestOptions.skipMultiModel = true;
     }
-    if (selectedModel) {
+    if (noActiveWorkflowAutomation) {
+      requestOptions.automationSkipReason = 'noActiveAgents';
+    }
+    if (selectedModel && !shouldUseWorkflowAutomation) {
       requestOptions.providerOverride = selectedModel;
       requestOptions.strictProviderOverride = true;
     }

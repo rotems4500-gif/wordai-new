@@ -2815,6 +2815,7 @@ function App() {
                         feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
                         selectedMaterials,
                         selectedModel,
+                        forceDirectMode: false,
                         runId: generationRequest.runId,
                         returnMeta: true,
                       })
