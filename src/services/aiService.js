@@ -222,6 +222,56 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
     agents: getDefaultRoleAgents(),
     lastModified: new Date().toISOString(),
   },
+  'default-system-research-heavy': {
+    id: 'default-system-research-heavy',
+    name: 'מחקר מערכת כבד',
+    automation: {
+      enabled: true,
+      preset: 'system-research-heavy',
+      workflowMode: 'manager-auto',
+      autoDispatch: true,
+      autopilotEnabled: true,
+      workspaceName: 'מחקר מערכת כבד',
+      circularWorkflowEnabled: false,
+      circularMinRounds: 1,
+      circularMaxRounds: 2,
+      sharedGoal: 'להפיק עבודה מלאה ומבוססת מקורות עם הפרדה בין מחקר אקדמי למחקר משלים, כתיבה מגובשת, התאמת סגנון אישי וביקורת מסכמת לפני החזרה למשתמש.',
+      retryEnabled: true,
+      maxRetries: 2,
+      timeoutEnabled: false,
+      requestTimeoutMs: 45,
+      showProgress: true,
+      appendAgentNotesToOutput: true,
+      agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
+    },
+    agents: getHeavySystemResearchAgents(),
+    lastModified: new Date().toISOString(),
+  },
+  'default-system-research-light': {
+    id: 'default-system-research-light',
+    name: 'מחקר מערכת קל',
+    automation: {
+      enabled: true,
+      preset: 'system-research-light',
+      workflowMode: 'manager-auto',
+      autoDispatch: true,
+      autopilotEnabled: true,
+      workspaceName: 'מחקר מערכת קל',
+      circularWorkflowEnabled: false,
+      circularMinRounds: 1,
+      circularMaxRounds: 2,
+      sharedGoal: 'להפיק עבודה קלה ומהירה יותר עם מחקר אקדמי חסכוני, מחקר משלים, כתיבה, התאמת סגנון אישי וביקורת מסכמת לפני החזרה למשתמש.',
+      retryEnabled: true,
+      maxRetries: 2,
+      timeoutEnabled: false,
+      requestTimeoutMs: 45,
+      showProgress: true,
+      appendAgentNotesToOutput: true,
+      agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
+    },
+    agents: getLightSystemResearchAgents(),
+    lastModified: new Date().toISOString(),
+  },
 };
 
 export const SKILL_LIBRARY = [
@@ -254,8 +304,8 @@ export const SKILL_LIBRARY = [
     label: 'צייד מקורות אקדמיים',
     description: 'מכוון לאיתור מקורות, מילות חיפוש וחוקרים רלוונטיים.',
     usageHint: 'Google Scholar, חיפוש מקורות ומחקר',
-    prompt: 'פעל כחוקר מקורות אקדמיים. התמקד בהצעת כיווני מחקר, מילות חיפוש, חוקרים, ומסלולי חיפוש אמינים. אל תמציא ציטוטים או מאמרים שלא קיימים.',
-    keywords: ['מקור', 'מקורות', 'גוגל סקולר', 'google scholar', 'מחקר', 'מאמרים', 'חוקרים'],
+    prompt: 'פעל כחוקר מקורות אקדמיים. החזר חבילת מחקר usable ולא רק כיווני חיפוש כלליים: כשאפשר, ספק לפחות 3 מקורות או מאמרים קונקרטיים. לכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי למשימה. אם לא נמצאו מספיק מקורות, כתוב במפורש כמה נמצאו ומה בדיוק חסר, ואל תסתפק רק במילות חיפוש או במסלולי חיפוש כלליים. אפשר להוסיף כיווני חיפוש כהשלמה בלבד. אל תמציא ציטוטים, מאמרים, DOI או פרטים שלא אומתו. אם המשתמש ביקש במפורש גם חומר חזותי, ציין גם אילו מקורות חזותיים צריך להשלים דרך סוכן מחקר חזותי ייעודי.',
+    keywords: ['מקור', 'מקורות', 'גוגל סקולר', 'google scholar', 'מחקר', 'מאמרים', 'חוקרים', 'youtube', 'וידאו', 'visual', 'ויזואלי', 'צילום מסך', 'screenshot', 'diagram'],
   },
   {
     id: 'citation-weaver',
@@ -330,7 +380,7 @@ function getDefaultRoleAgents() {
     {
       id: 'researcher',
       name: 'חוקר מקורות',
-      prompt: 'עזור באיסוף כיווני מחקר, שאלות, מילות חיפוש ומקורות רלוונטיים. כשאין ודאות אל תמציא. ענה בעברית מסודרת.',
+      prompt: 'אסוף חבילת מחקר usable להעברה לכותב או למנהל: תובנות, נתונים, דוגמאות ומקורות זמינים. אם מדובר בבקשה אקדמית או מבוססת מקורות, העדף מקורות קונקרטיים עם כותרת, מחבר או גוף מפרסם, שנה, וקישור או DOI אם זמין. אם אין מספיק מקורות קונקרטיים, כתוב במפורש מה נמצא ומה עדיין חסר, ורק אז הוסף כיווני חיפוש משלימים. אל תמציא עובדות, ציטוטים, DOI או פרטים שלא אומתו. אם המשתמש ביקש גם חומר חזותי, ציין זאת כהשלמת מחקר שנדרשת דרך סוכן חזותי ייעודי. ענה בעברית מסודרת.',
       provider: '',
       model: '',
       enabled: true,
@@ -344,6 +394,91 @@ function getDefaultRoleAgents() {
       enabled: true,
     },
   ];
+}
+
+function getResearchWorkspaceNotesInstruction() {
+  return 'כל סוכן חייב להשאיר ב-CHECKLIST 2-4 נקודות קצרות ומעשיות: מה הושלם, מה עדיין חסר, והמלצה אופרטיבית להמשך. אם נמצאו מקורות חזותיים כמו וידאו, screenshots, מצגות או diagrams, ציין גם לינקים ישירים אליהם ומה לומדים מהם. אם יש פער מהותי או שחסר חומר חזותי אמין, ציין זאת גם ב-MISSING בצורה קצרה וברורה.';
+}
+
+function getHeavySystemResearchAgents() {
+  return [
+    {
+      id: 'manager',
+      name: 'מנהל עבודה',
+      prompt: 'אתה מנהל העבודה הראשי. הבן את המטלה, חלק אותה לשלבים ברורים, ותאם בין כלל הסוכנים. אם AUTOPILOT פעיל מותר לך לשנות סדר, לקצר את המסלול או לדלג על סוכן שאינו נדרש. אם AUTOPILOT כבוי, שמור על הסדר שהוגדר וודא שכל הסוכנים משתתפים. הכוון כל שלב כך שהתוצר הסופי יעמוד בהנחיות המטלה בפועל. אם המשתמש ביקש חקר חזותי או שיש פער בחומרים חזותיים, נצל את הסוכן הייעודי researcher-visual במקום להעמיס את המשימה על שאר החוקרים.',
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      enabled: true,
+    },
+    {
+      id: 'researcher-academic',
+      name: 'חוקר אקדמי',
+      prompt: 'חפש מקורות אקדמיים בלבד: מחקרים, כתבי עת שפיטים, מאמרים אקדמיים ומקורות scholarly רלוונטיים למשימה. כשאפשר, הבא לפחות 3 מקורות קונקרטיים עם כותרת, מחבר או גוף מפרסם, שנה, וקישור או DOI אם זמין. בגלל שמדובר במודל reasoning, במידת הצורך מותר לך גם לנסח הסבר קצר על כל מקור ומה המסקנה שאפשר להסיק ממנו. אל תמציא מקורות או פרטים. אם חסר מקור, אמור זאת במפורש.',
+      provider: 'perplexity',
+      model: 'sonar-reasoning-pro',
+      enabled: true,
+    },
+    {
+      id: 'researcher-general',
+      name: 'חוקר לא אקדמי',
+      prompt: 'חקור את הרשת והבא כתבות, דוחות, חומרים מקצועיים ודוגמאות רלוונטיות שאינם אקדמיים. אסור להשתמש ב-Wikipedia. ציין תמיד מה המקור, מה הערך המוסף שלו לעבודה, ומה מידת האמינות או המגבלה שלו. אם ברור שחסר גם חקר חזותי, ציין למנהל העבודה שכדאי להפעיל את researcher-visual.',
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      enabled: true,
+    },
+    {
+      id: 'researcher-visual',
+      name: 'חוקר חזותי',
+      prompt: 'חפש ברשת חבילת מחקר חזותית usable על המערכת, המוצר או התהליך: סרטוני YouTube/Vimeo, demos, tutorials, screenshots, דוקומנטציה רשמית עם תמונות, diagrams, slide decks, walkthroughs, case studies ותיעוד חזותי אחר. לכל פריט ציין כותרת, סוג מקור, פלטפורמה או גוף מפרסם, קישור ישיר, ומה רואים בו או מה אפשר ללמוד ממנו. תן עדיפות למקורות רשמיים, אמינים ועדכניים. אל תמציא תוכן שלא נצפה בפועל; אם לא נמצא חומר חזותי אמין מספיק, כתוב במפורש מה חסר.',
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      enabled: true,
+    },
+    {
+      id: 'writer',
+      name: 'כותב תוכן',
+      prompt: 'רכז את כל החומרים שנאספו בשלבים הקודמים וכתוב מהם עבודה מלאה, קוהרנטית ובהירה. כתוב רק על בסיס החומרים שנמסרו. אם חסר לך חומר או שיש פער עובדתי או מבני, הרם דגל אדום ברור למנהל העבודה ב-HANDOFF או ב-MISSING במקום להמציא.',
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
+      enabled: true,
+    },
+    {
+      id: 'document-designer',
+      name: 'מעצב מסמך',
+      prompt: 'התפקיד היחיד שלך הוא להתאים את המסמך לסגנון האישי של המשתמש ולהפחית סימנים כתובים של AI. מצא היכן צריך לקצר, להרחיב, להחליף ניסוחים, או לשנות קצב וזרימה כדי שהטקסט יישמע אישי, טבעי ומשכנע יותר. אל תמציא עובדות חדשות ואל תשנה את הטיעון עצמו.',
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
+      enabled: true,
+    },
+    {
+      id: 'lecturer-review',
+      name: 'מרצה',
+      prompt: 'בדוק את העבודה מול הנחיות המטלה כאילו אתה המרצה או הבודק: האם המבנה עונה לדרישות, האם המקורות שהובאו נראים נכונים וקיימים, האם יש פערים לוגיים או ניסוחיים, ומה הציון המשוער. תן הערות לשיפור בצורה ברורה וישימה, אך השאר את DELIVERABLE כמסמך המלא בלבד.',
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      enabled: true,
+    },
+    {
+      id: 'manager-review',
+      name: 'מנהל עבודה מסכם',
+      prompt: 'קרא את ההערות של כלל הסוכנים והכרע אם נדרש עוד סבב. אם צריך סבב נוסף, ציין זאת ב-DECISION או ב-HANDOFF עם REVISIT לסוכן הרלוונטי. אם לא, אשר את הגרסה הנוכחית. DELIVERABLE חייב להישאר המסמך המלא והמעודכן בלבד.',
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      enabled: true,
+    },
+  ];
+}
+
+function getLightSystemResearchAgents() {
+  return getHeavySystemResearchAgents().map((agent) => (
+    agent.id === 'researcher-academic'
+      ? {
+          ...agent,
+          model: 'sonar-pro',
+          prompt: 'חפש מקורות אקדמיים בלבד: מחקרים, כתבי עת שפיטים, מאמרים אקדמיים ומקורות scholarly רלוונטיים למשימה. כשאפשר, הבא לפחות 3 מקורות קונקרטיים עם כותרת, מחבר או גוף מפרסם, שנה, וקישור או DOI אם זמין. אפשר להוסיף הסבר קצר למה כל מקור חשוב, אבל שמור על מסלול יעיל וחסכוני יותר. אל תמציא מקורות או פרטים. אם חסר מקור, אמור זאת במפורש.',
+        }
+      : agent
+  ));
 }
 
 export const DEFAULT_ROLE_AGENTS = getDefaultRoleAgents();
@@ -459,6 +594,15 @@ const normalizeProviderModelName = (providerId = '', modelName = '') => {
   if (!clean) return '';
 
   const aliasMap = {
+    gemini: {
+      'gemini-2.0-flash': 'gemini-2.5-flash',
+      'gemini-2.0-flash-001': 'gemini-2.5-flash',
+      'gemini-2.0-flash-exp': 'gemini-2.5-flash',
+      'gemini-2.0-flash-lite': 'gemini-2.5-flash',
+      'gemini-2.0-flash-thinking': 'gemini-2.5-flash',
+      'gemini-2.0-flash-thinking-exp': 'gemini-2.5-flash',
+      'gemini-2.0-flash-thinking-exp-01-21': 'gemini-2.5-flash',
+    },
     claude: {
       'claude-3-5-sonnet': 'claude-sonnet-4-6',
       'claude-3.5-sonnet': 'claude-sonnet-4-6',
@@ -932,6 +1076,23 @@ const normalizeWorkspaceRecord = (workspaceId = '', workspace = {}, fallbackName
   };
 };
 
+const ensureDefaultWorkspaceEntries = (library = {}) => {
+  const nextLibrary = { ...(library || {}) };
+  let wasUpdated = false;
+
+  Object.entries(DEFAULT_WORKSPACES_LIBRARY).forEach(([workspaceId, workspace]) => {
+    if (nextLibrary[workspaceId]) return;
+    nextLibrary[workspaceId] = normalizeWorkspaceRecord(
+      workspaceId,
+      workspace,
+      workspace?.name || (workspaceId === DEFAULT_WORKSPACE_ID ? 'סטודיו תוכן (ברירת מחדל)' : 'סביבה חדשה')
+    );
+    wasUpdated = true;
+  });
+
+  return { library: nextLibrary, wasUpdated };
+};
+
 const persistWorkspacePointer = (partial = {}) => {
   const current = readJsonFromStorage('wordai_workspace_automation', {});
   const next = {
@@ -1044,30 +1205,18 @@ export const getWorkspacesLibrary = () => {
       }
     });
 
-    if (!cleaned[DEFAULT_WORKSPACE_ID]) {
-      cleaned[DEFAULT_WORKSPACE_ID] = normalizeWorkspaceRecord(
-        DEFAULT_WORKSPACE_ID,
-        DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
-        'סטודיו תוכן (ברירת מחדל)'
-      );
-      needsRepair = true;
-    }
+    const seededDefaults = ensureDefaultWorkspaceEntries(cleaned);
+    if (seededDefaults.wasUpdated) needsRepair = true;
 
     if (needsRepair) {
-      localStorage.setItem('wordai_workspaces_library', JSON.stringify(cleaned));
+      localStorage.setItem('wordai_workspaces_library', JSON.stringify(seededDefaults.library));
       syncPersistedAppSettings();
     }
 
-    return cleaned;
+    return seededDefaults.library;
   } catch (error) {
     console.error('❌ שגיאה בטעינת ספריית סביבות:', error);
-    return {
-      [DEFAULT_WORKSPACE_ID]: normalizeWorkspaceRecord(
-        DEFAULT_WORKSPACE_ID,
-        DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
-        'סטודיו תוכן (ברירת מחדל)'
-      ),
-    };
+    return ensureDefaultWorkspaceEntries({}).library;
   }
 };
 
@@ -1082,24 +1231,18 @@ export const saveWorkspacesLibrary = (library = {}) => {
     };
   });
 
-  if (!cleaned[DEFAULT_WORKSPACE_ID]) {
-    cleaned[DEFAULT_WORKSPACE_ID] = normalizeWorkspaceRecord(
-      DEFAULT_WORKSPACE_ID,
-      DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
-      'סטודיו תוכן (ברירת מחדל)'
-    );
-  }
+  const seededDefaults = ensureDefaultWorkspaceEntries(cleaned);
 
-  localStorage.setItem('wordai_workspaces_library', JSON.stringify(cleaned));
+  localStorage.setItem('wordai_workspaces_library', JSON.stringify(seededDefaults.library));
 
   const pointer = readJsonFromStorage('wordai_workspace_automation', {});
   const activeWorkspaceId = String(pointer.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
-  if (!cleaned[activeWorkspaceId]) {
+  if (!seededDefaults.library[activeWorkspaceId]) {
     persistWorkspacePointer({ activeWorkspaceId: DEFAULT_WORKSPACE_ID });
   }
 
   syncPersistedAppSettings();
-  return cleaned;
+  return seededDefaults.library;
 };
 
 export const createNewWorkspace = (name = '', basePresetId = 'content-studio') => {
@@ -1135,7 +1278,7 @@ export const createNewWorkspace = (name = '', basePresetId = 'content-studio') =
 
 export const deleteWorkspace = (workspaceId) => {
   const targetId = String(workspaceId || '').trim();
-  if (!targetId || targetId === DEFAULT_WORKSPACE_ID) return false;
+  if (!targetId || Object.prototype.hasOwnProperty.call(DEFAULT_WORKSPACES_LIBRARY, targetId)) return false;
 
   const library = getWorkspacesLibrary();
   if (!library[targetId]) return false;
@@ -1346,8 +1489,19 @@ export const listAllWorkspaces = () => {
 
 // יצוא הפונקציות החדשות לחלונית
 export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().workflowMode) => {
+  const automation = getWorkspaceAutomation();
   const agents = getRoleAgents().filter((agent) => agent.enabled !== false);
   if (workflowMode === 'custom-order') return agents;
+
+  const configuredOrder = [
+    ...agents.filter((agent) => isPlanningManagerAgent(agent)),
+    ...agents.filter((agent) => !isPlanningManagerAgent(agent) && !isManagerReviewAgent(agent)),
+    ...agents.filter((agent) => isManagerReviewAgent(agent)),
+  ];
+
+  if (['manager-auto', 'circular-team'].includes(workflowMode) && automation?.autopilotEnabled === false) {
+    return configuredOrder;
+  }
 
   const desiredOrders = {
     'manager-auto': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
@@ -1358,15 +1512,18 @@ export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().wor
   };
 
   const order = desiredOrders[workflowMode];
-  if (!order) return agents;
+  if (!order) return configuredOrder;
 
   const getRank = (agent) => {
-    const id = String(agent.id || '').toLowerCase();
-    const index = order.findIndex((item) => id.includes(item));
+    if (isManagerReviewAgent(agent)) return 999;
+    if (isPlanningManagerAgent(agent)) return -1;
+    if (isDocumentDesignerAgent(agent)) return 3.5;
+    const roleKey = getAgentRoleKey(agent);
+    const index = order.findIndex((item) => roleKey === item);
     return index === -1 ? 999 : index;
   };
 
-  return [...agents].sort((a, b) => getRank(a) - getRank(b));
+  return [...configuredOrder].sort((a, b) => getRank(a) - getRank(b));
 };
 
 const WORKSPACE_AGENT_PRESETS = {
@@ -1382,7 +1539,7 @@ const WORKSPACE_AGENT_PRESETS = {
     automation: { enabled: true, preset: 'academic-lab', workflowMode: 'manager-auto', autoDispatch: true },
     agents: [
       { id: 'manager', name: 'מנהל עבודה אקדמי', prompt: 'פרק את המשימה האקדמית לשלבים ברורים: חקר, מבנה, כתיבה וליטוש. שמור על דיוק והחזר תכנית קצרה ותוצר ישים.', provider: '', model: '', enabled: true },
-      { id: 'researcher', name: 'חוקר ספרות', prompt: 'אתר כיווני חיפוש, מילות מפתח, סוגי מקורות והקשרים מחקריים רלוונטיים. אל תמציא פרטים.', provider: '', model: '', enabled: true },
+      { id: 'researcher', name: 'חוקר ספרות', prompt: 'אתר תוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים רלוונטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא חשוב לעבודה. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר להשלמת הסקירה, ואל תסתפק רק בכיווני חיפוש או במילות מפתח. אפשר להוסיף מונחי חיפוש כהשלמה בלבד. אל תמציא פרטים. אם נדרש גם חקר חזותי, ציין זאת כהשלמה למנהל העבודה.', provider: '', model: '', enabled: true },
       { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי מדויק לפי הוראות המשתמש והמטלה. אם התבקשו מבוא, פרקים, שאלות או היקף מסוים - שמור עליהם; אם לא, אל תוסיף מבנה קבוע כמו מבוא/דיון/סיכום על דעת עצמך. הקפד על רצף טיעוני והיררכיית כותרות רק כשנדרש.', provider: '', model: '', enabled: true },
       { id: 'writer', name: 'כותב אקדמי', prompt: 'כתוב בעברית אקדמית, פורמלית ומדויקת, בהתאם לסגנון המשתמש. הימנע מהמצאות.', provider: '', model: '', enabled: true },
       { id: 'proofreader', name: 'מגיה אקדמי', prompt: 'בצע ליטוש סופי של ניסוח, בהירות, פיסוק ואחידות אקדמית.', provider: '', model: '', enabled: true },
@@ -1404,7 +1561,7 @@ const WORKSPACE_AGENT_PRESETS = {
       {
         id: 'researcher-academic',
         name: 'אוסף מחקר אקדמי - Perplexity',
-        prompt: 'אסוף חומרים מחקריים ואקדמיים בלבד: מושגי יסוד, כיווני חיפוש, מקורות אמינים, ציטוטים רלוונטיים וקישורים. אל תמציא מקורות. ציין תמיד מאיפה הגיע כל ממצא.',
+        prompt: 'אסוף חומרים מחקריים ואקדמיים בלבד כתוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים קונקרטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר, ואל תסתפק רק בכיווני חיפוש או ברעיונות כלליים. אפשר להוסיף מושגי יסוד ומונחי חיפוש כהשלמה בלבד. אל תמציא מקורות, DOI, ציטוטים או פרטים. ציין תמיד מאיפה הגיע כל ממצא.',
         provider: 'perplexity',
         model: '',
         enabled: true,
@@ -1412,7 +1569,7 @@ const WORKSPACE_AGENT_PRESETS = {
       {
         id: 'researcher-general',
         name: 'אוסף משלים - Gemini',
-        prompt: 'אסוף מידע משלים שאינו אקדמי גרידא: הקשרים, דוגמאות, ניסוחים, וסיכום תובנות. אל תמציא עובדות או מקורות, וסמן בבירור מה מקור כל טענה.',
+        prompt: 'אסוף מידע משלים שאינו אקדמי גרידא: הקשרים, דוגמאות, ניסוחים, וסיכום תובנות. אל תמציא עובדות או מקורות, וסמן בבירור מה מקור כל טענה. אם חסר גם רובד חזותי, ציין למנהל העבודה שכדאי להפעיל סוכן מחקר חזותי ייעודי.',
         provider: 'gemini',
         model: '',
         enabled: true,
@@ -1428,12 +1585,42 @@ const WORKSPACE_AGENT_PRESETS = {
       {
         id: 'manager-review',
         name: 'בקרת התאמה - Claude',
-        prompt: 'בצע ביקורת סופית כמנהל עבודה: בדוק שהעבודה עומדת בהנחיות, שהמבנה נכון, שאין טענות לא מבוססות, ושיש הפניות מספקות למקורות. החזר הערות ותיקוני חובה אם צריך.',
+        prompt: 'בצע ביקורת סופית כמנהל עבודה: בדוק שהעבודה עומדת בהנחיות, שהמבנה נכון, שאין טענות לא מבוססות, ושיש הפניות מספקות למקורות. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש סבב נוסף, אל תחזיר פסקת מטא במקום המסמך המלא.',
         provider: 'claude',
         model: '',
         enabled: true,
       },
     ],
+  },
+  'system-research-heavy': {
+    label: 'מחקר מערכת כבד',
+    description: 'Gemini מנהל, Perplexity reasoning למחקר אקדמי, Gemini למחקר משלים, Claude לכתיבה ולעיצוב, מרצה בודק ומנהל מסכם.',
+    automation: {
+      enabled: true,
+      preset: 'system-research-heavy',
+      workflowMode: 'manager-auto',
+      autoDispatch: true,
+      autopilotEnabled: true,
+      appendAgentNotesToOutput: true,
+      agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
+      sharedGoal: 'להפיק עבודה מלאה ומבוססת מקורות עם הפרדה בין מחקר אקדמי למחקר משלים, התאמת סגנון אישי וביקורת מסכמת.',
+    },
+    agents: getHeavySystemResearchAgents(),
+  },
+  'system-research-light': {
+    label: 'מחקר מערכת קל',
+    description: 'זהה למסלול הכבד, אבל החוקר האקדמי עובר ל-Sonar Pro הרגיל למסלול חסכוני יותר.',
+    automation: {
+      enabled: true,
+      preset: 'system-research-light',
+      workflowMode: 'manager-auto',
+      autoDispatch: true,
+      autopilotEnabled: true,
+      appendAgentNotesToOutput: true,
+      agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
+      sharedGoal: 'להפיק עבודה קלה ומהירה יותר עם מסלול מחקר אקדמי חסכוני, כתיבה, התאמת סגנון אישי וביקורת מסכמת.',
+    },
+    agents: getLightSystemResearchAgents(),
   },
   'product-desk': {
     label: 'צוות מוצר',
@@ -1840,6 +2027,7 @@ const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
 };
 
 const isManagerReviewAgent = (agent = {}) => /manager.*review|review.*manager|מנהל.*בדיק|בדיק.*מנהל/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
+const isDocumentDesignerAgent = (agent = {}) => /(document-designer|מעצב מסמך|סגנון אישי|human)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 
 const getAgentRoleKey = (agent = {}) => {
   const value = `${String(agent?.id || '')} ${String(agent?.name || '')}`.toLowerCase();
@@ -1906,6 +2094,8 @@ const resolveStageAgent = (token, enabledAgents = []) => {
   if (!needle) return null;
 
   const aliases = {
+    'researcher-visual': ['researcher-visual', 'visual-research', 'visual research', 'חוקר חזותי', 'חקר חזותי'],
+    'document-designer': ['document-designer', 'document designer', 'מעצב מסמך', 'סגנון אישי'],
     'manager-review': ['manager-review', 'manager_review', 'manager review', 'managerreview', 'בקרת התאמה'],
     manager: ['manager', 'מנהל'],
     researcher: ['researcher', 'research', 'sources', 'source', 'חוקר', 'מקורות'],
@@ -1922,6 +2112,12 @@ const resolveStageAgent = (token, enabledAgents = []) => {
     }
     if (canonical === 'manager') {
       return enabledAgents.find((agent) => isPlanningManagerAgent(agent)) || null;
+    }
+    if (canonical === 'researcher-visual') {
+      return enabledAgents.find((agent) => isVisualResearchAgent(agent)) || null;
+    }
+    if (canonical === 'document-designer') {
+      return enabledAgents.find((agent) => isDocumentDesignerAgent(agent)) || null;
     }
     const roleMatch = enabledAgents.find((agent) => getAgentRoleKey(agent) === canonical);
     if (roleMatch) return roleMatch;
@@ -1949,25 +2145,146 @@ const resolvePlanningManagerAgent = (enabledAgents = []) => enabledAgents.find((
 const resolveFinalManagerReviewAgent = (enabledAgents = []) => enabledAgents.find((agent) => isManagerReviewAgent(agent)) || resolvePlanningManagerAgent(enabledAgents);
 const GLOBAL_STRUCTURE_OPT_OUT_PATTERN = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure\s+at\s+all|no\s+structure|without\s+structure|no\s+outline|without\s+outline|no\s+headings\s+at\s+all|without\s+headings\s+entirely|no\s+sections\s+at\s+all|without\s+sections\s+entirely)/i;
 const hasExplicitStructureOptOut = (text = '') => GLOBAL_STRUCTURE_OPT_OUT_PATTERN.test(String(text || ''));
+const ACADEMIC_SOURCE_SIGNAL_PATTERN = /(אקדמ|סמינר|ביבליוגרפ|ציטוט|citation|references?|journal|literature|doi|scholar|peer[-\s]?reviewed|google scholar|מאמר|ספרות)/i;
+const isVisualResearchAgent = (agent = {}) => /(researcher-visual|visual-research|visual research|חוקר חזותי|חקר חזותי)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
+const VISUAL_RESEARCH_DIRECT_PATTERN = /(חקר\s+חזותי|מחקר\s+חזותי|חיפוש\s+חזותי|מקורות\s+חזותיים|חומר(?:י|ים)?\s+עזר\s+חזותי(?:ים)?|חומר(?:י|ים)?\s+חזותי(?:ים)?|visual\s+research|visual\s+sources?|visual\s+materials?)/i;
+const VISUAL_RESEARCH_STRONG_SIGNAL_PATTERN = /(youtube|vimeo|video|videos|וידאו|סרטון|סרטונים|סרטוני|screenshot|screen\s?shot|צילום\s+מסך|diagram|diagrams|תרשים|תרשימים|walkthrough|walkthroughs)/i;
+const VISUAL_RESEARCH_WEAK_SIGNAL_PATTERN = /(demos|prototypes|wireframes|presentations|מצגות)/i;
+const VISUAL_RESEARCH_REQUEST_SIGNAL_PATTERN = /(חפש|חיפוש|מצא|תאתר|אתר|אסוף|סקור|בדוק|תן|תביא|הבא|צריך|צריכה|צריכים|מחפש|מחפשת|מבקש|מבקשת|research|search|source|sources|references|examples|tutorial|tutorials|videos?|screenshots?)/i;
+const VISUAL_RESEARCH_WEAK_REQUEST_SIGNAL_PATTERN = /(חפש|חיפוש|מצא|תאתר|אתר|אסוף|סקור|בדוק|תן|תביא|הבא|צריך|צריכה|צריכים|מחפש|מחפשת|מבקש|מבקשת|research|search|source|sources|references|examples|benchmark|tutorial|tutorials)/i;
+const hasExplicitVisualResearchNeed = (text = '') => {
+  const value = String(text || '');
+  return VISUAL_RESEARCH_DIRECT_PATTERN.test(value)
+    || (VISUAL_RESEARCH_STRONG_SIGNAL_PATTERN.test(value) && VISUAL_RESEARCH_REQUEST_SIGNAL_PATTERN.test(value))
+    || (VISUAL_RESEARCH_WEAK_SIGNAL_PATTERN.test(value) && VISUAL_RESEARCH_WEAK_REQUEST_SIGNAL_PATTERN.test(value));
+};
+const hasVisualResearchGapInContext = (text = '') => /(פער(?:ים)?\s+חזותי(?:ים)?|חסר(?:ים)?\s+(?:חומר(?:י|ים)?\s+חזותי(?:ים)?|מקור(?:ות)?\s+חזותי(?:ים)?|צילום(?:י)?\s+מסך|screenshots?|סרטו(?:ן|נים)|וידאו|diagram|diagrams|תרשים|תרשימים)|missing\s+visual|need\s+visual|need\s+screenshots?|need\s+video)/i.test(String(text || ''));
+const shouldEnforceConcreteAcademicResearch = (agent = {}, { academicResearchRequested = false, isAcademicTask = false } = {}) => {
+  const stableAgentId = String(agent?.id || '').trim().toLowerCase();
+  if (academicResearchRequested && /^(researcher|researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId)) return true;
+  if (/^(researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId)) return true;
+  return isAcademicTask && /^(researcher|researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId);
+};
+
+const buildHeuristicStageGoals = ({ orderedAgents = [], activeSkill = null, isAcademic = false, structureOptOut = false } = {}) => {
+  const skillId = String(activeSkill?.id || '').trim().toLowerCase();
+  const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
+  const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
+  const skillRequiresAcademicResearch = ['source-hunter', 'citation-weaver'].includes(skillId);
+  const stageGoals = {};
+
+  orderedAgents.forEach((agent) => {
+    const marker = `${String(agent?.id || '')} ${String(agent?.name || '')}`;
+    const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+    const isAcademicResearcher = roleKey === 'researcher' && /(researcher-academic|חוקר אקדמי|חוקר ספרות|scholar|peer)/i.test(marker);
+    const isGeneralResearcher = roleKey === 'researcher' && /(researcher-general|חוקר לא אקדמי|חוקר רשת|web)/i.test(marker);
+    const isDocumentDesigner = roleKey === 'designer' && /(document-designer|מעצב מסמך|סגנון אישי|human)/i.test(marker);
+    const isLecturerReviewer = roleKey === 'proofreader' && /(lecturer|מרצה)/i.test(marker);
+
+    if (roleKey === 'manager-review') {
+      stageGoals[agent.id] = 'קרא את ההערות של כלל הסוכנים והכרע אם דרוש עוד סבב. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; כל הערה, ציון, חוסר או כיוון להמשך שייכים ל-HANDOFF / MISSING / DECISION / CHECKLIST.';
+      return;
+    }
+
+    if (roleKey === 'manager') {
+      stageGoals[agent.id] = 'בנה תוכנית קצרה, קבע אילו שלבים נדרשים, ומה בדיוק כל סוכן צריך למסור לשלב הבא.';
+      return;
+    }
+
+    if (isAcademicResearcher) {
+      stageGoals[agent.id] = 'אסוף חבילת מחקר אקדמית usable: כשאפשר, הבא לפחות 3 מקורות קונקרטיים עם כותרת, מחבר או גוף מפרסם, שנה, קישור או DOI אם זמין, ומה אפשר להסיק מכל מקור. אם אין מספיק מקורות, כתוב במפורש מה חסר.';
+      return;
+    }
+
+    if (isGeneralResearcher) {
+      stageGoals[agent.id] = 'אסוף חומרים משלימים שאינם אקדמיים: כתבות, דוחות, דוגמאות והקשרים מהשטח. אסור להשתמש ב-Wikipedia. ציין מה מקור כל ממצא ומה תרומתו לכתיבה.';
+      return;
+    }
+
+    if (isVisualResearchAgent(agent)) {
+      stageGoals[agent.id] = 'אסוף חבילת מחקר חזותית usable: סרטוני וידאו, demos, screenshots, diagrams, walkthroughs, דוקומנטציה חזותית ומצגות. לכל פריט ציין קישור ישיר, מה רואים בו, ומה אפשר ללמוד ממנו. אם חסר חומר חזותי אמין, כתוב זאת במפורש.';
+      return;
+    }
+
+    if (roleKey === 'researcher') {
+      const requiresConcreteSources = shouldEnforceConcreteAcademicResearch(agent, {
+        academicResearchRequested: skillRequiresAcademicResearch,
+        isAcademicTask: isAcademic,
+      });
+      stageGoals[agent.id] = requiresConcreteSources
+        ? 'אסוף חבילת מחקר usable להעברה לכותב: כשאפשר, הבא לפחות 3 מקורות או מאמרים קונקרטיים. לכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר, ואל תסתפק רק בכיווני חיפוש כלליים. אפשר להוסיף מונחי חיפוש כהשלמה בלבד. אין להמציא ציטוטים, DOI או פרטים שלא אומתו.'
+        : 'אסוף תובנות, נתונים, דוגמאות ומקורות זמינים להעברה לכותב. אם קיימים מקורות קונקרטיים, ציין אותם עם פרטים שימושיים; אם לא, כתוב מה נמצא, מה עדיין חסר, ואילו כיווני חיפוש משלימים כדאי לבדוק. אין להמציא עובדות, ציטוטים, DOI או פרטים שלא אומתו.';
+      return;
+    }
+
+    if (isDocumentDesigner) {
+      stageGoals[agent.id] = 'התאם את המסמך לסגנון האישי של המשתמש והפחת סימנים כתובים של AI. מותר לקצר, להרחיב, לשנות קצב וניסוחים, אבל לא להמציא מידע חדש.';
+      return;
+    }
+
+    if (roleKey === 'designer') {
+      stageGoals[agent.id] = structureOptOut
+        ? 'אל תוסיף מבנה חדש. אם כבר יש במסמך כותרות או פרקים, רק שמור על עקביות ובהירות בלי להרחיב אותם.'
+        : (skillPrefersStructure
+          ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי רק לפי מה שהתבקש במפורש בבקשה או כבר קיים במסמך.'
+          : 'הבהר ושפר את המבנה שהתבקש או שכבר קיים, בלי להוסיף פרקים, תתי-כותרות או מבוא על דעת עצמך.');
+      return;
+    }
+
+    if (roleKey === 'writer') {
+      stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים. אם חסר חומר, הרם דגל אדום במקום להשלים מהראש.';
+      return;
+    }
+
+    if (isLecturerReviewer) {
+      stageGoals[agent.id] = 'בדוק את העבודה מול הנחיות המטלה והמקורות שסופקו: האם המקורות נראים נכונים וקיימים, מה הציון המשוער, ואילו שיפורים עדיין נדרשים. השאר את המסמך המלא ב-DELIVERABLE, ואת הביקורת ב-HANDOFF / MISSING / CHECKLIST.';
+      return;
+    }
+
+    if (roleKey === 'proofreader') {
+      stageGoals[agent.id] = skillPrefersPolish
+        ? 'בצע מעבר ליטוש קפדני: אחידות, בהירות, תיקון בעיות וטון עקבי לפני החזרה למשתמש.'
+        : 'בצע בקרת איכות סופית: דיוק, אחידות, בהירות, ועמידה בדרישות אקדמיות.';
+      return;
+    }
+
+    stageGoals[agent.id] = 'קדם את המסמך לשלב הבא בצורה זהירה, ברורה וללא המצאת מידע חדש.';
+  });
+
+  return stageGoals;
+};
+
+const shouldAllowDocumentDesigner = (userPrompt = '', structureConstraintText = '') => {
+  const requestText = `${userPrompt}\n${String(structureConstraintText || userPrompt).trim()}`;
+  return /(rewrite|שכתוב|סגנון\s+אישי|tone|voice|human|humanize|ליטוש|ניסוח|פחות\s+ai|טבעי\s+יותר|להישמע\s+אישי|שפר|ערוך|polish|edit)/i.test(requestText);
+};
 
 const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledAgents = [], activeSkill = null, structureConstraintText = '') => {
   const combined = `${userPrompt}\n${documentContext}`;
   const resolvedStructureConstraintText = String(structureConstraintText || userPrompt).trim();
   const skillId = String(activeSkill?.id || '').trim().toLowerCase();
   const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combined);
+  const needsVisualResearch = hasExplicitVisualResearchNeed(`${userPrompt}\n${resolvedStructureConstraintText}`)
+    || hasExplicitVisualResearchNeed(documentContext)
+    || hasVisualResearchGapInContext(documentContext);
   const disablesResearch = /(בלי מקורות|ללא מקורות|לא נדרשים מקורות|בלי מקור|ללא מקור|no sources|without sources)/i.test(combined);
   const skillPrefersResearch = ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId);
   const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
   const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
   const needsResearch = !disablesResearch && (skillPrefersResearch || isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined));
   const disablesStructure = hasExplicitStructureOptOut(resolvedStructureConstraintText);
+  const hasStructuralDesigner = enabledAgents.some((agent) => getAgentRoleKey(agent) === 'designer' && !isDocumentDesignerAgent(agent));
+  const hasDocumentDesigner = enabledAgents.some((agent) => isDocumentDesignerAgent(agent));
+  const needsDocumentHumanization = hasDocumentDesigner && shouldAllowDocumentDesigner(userPrompt, resolvedStructureConstraintText);
   const needsStructure = !disablesStructure && (skillPrefersStructure || /(שלד|מבנה|outline|כותרות|פרקים)/i.test(combined));
 
   const candidateOrder = [
     'manager',
     needsResearch ? 'researcher' : '',
-    needsStructure ? 'designer' : '',
+    needsVisualResearch ? 'researcher-visual' : '',
+    needsStructure && hasStructuralDesigner ? 'designer' : '',
     'writer',
+    needsDocumentHumanization ? 'document-designer' : '',
     (skillPrefersPolish || needsResearch || needsStructure) ? 'proofreader' : '',
   ].filter(Boolean);
 
@@ -1975,7 +2292,11 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
   candidateOrder.forEach((token) => {
     const roleMatches = token === 'manager'
       ? enabledAgents.filter((agent) => isPlanningManagerAgent(agent))
-      : enabledAgents.filter((agent) => getAgentRoleKey(agent) === token && !isManagerReviewAgent(agent));
+      : token === 'researcher-visual'
+        ? enabledAgents.filter((agent) => isVisualResearchAgent(agent) && !isManagerReviewAgent(agent))
+        : token === 'document-designer'
+          ? enabledAgents.filter((agent) => isDocumentDesignerAgent(agent) && !isManagerReviewAgent(agent))
+          : enabledAgents.filter((agent) => getAgentRoleKey(agent) === token && !isManagerReviewAgent(agent) && !isVisualResearchAgent(agent) && !isDocumentDesignerAgent(agent));
     if (roleMatches.length) {
       roleMatches.forEach((match) => {
         if (!orderedAgents.some((agent) => agent.id === match.id)) orderedAgents.push(match);
@@ -1996,21 +2317,11 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
 
   if (!orderedAgents.length) orderedAgents.push(...enabledAgents);
 
-  const stageGoals = {};
-  orderedAgents.forEach((agent) => {
-    const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
-    if (roleKey === 'manager-review') stageGoals[agent.id] = DEFAULT_MANAGER_REVIEW_GOAL;
-    else if (roleKey === 'manager') stageGoals[agent.id] = 'בנה תוכנית קצרה, בחר שלבים נדרשים, והכן הוראות מסירה ממוקדות לסוכן הבא.';
-    else if (roleKey === 'researcher') stageGoals[agent.id] = skillPrefersResearch
-      ? 'התמקד באיתור פערי ידע, כיווני חיפוש, מקורות ומונחי חיפוש. אין להמציא ציטוטים.'
-      : 'חלץ מהחומרים והטיוטה מקורות, כיווני חיפוש, נקודות עובדתיות וטענות שניתן לבסס. אין להמציא ציטוטים.';
-    else if (roleKey === 'designer') stageGoals[agent.id] = skillPrefersStructure
-      ? 'בנה שלד ברור, היררכיית כותרות וסדר כתיבה פרקטי רק לפי מה שהתבקש במפורש בבקשה או כבר קיים במסמך.'
-      : 'הבהר ושפר את המבנה שהתבקש או שכבר קיים, בלי להוסיף פרקים, תתי-כותרות או מבוא על דעת עצמך.';
-    else if (roleKey === 'writer') stageGoals[agent.id] = 'כתוב את הטקסט המלא רק על בסיס ההנחיות, הטיוטה, והמידע שכבר נאסף בשלבים הקודמים.';
-    else if (roleKey === 'proofreader') stageGoals[agent.id] = skillPrefersPolish
-      ? 'בצע מעבר ליטוש קפדני: אחידות, בהירות, תיקון בעיות וטון עקבי לפני החזרה למשתמש.'
-      : 'בצע בקרת איכות סופית: דיוק, אחידות, בהירות, ועמידה בדרישות אקדמיות.';
+  const stageGoals = buildHeuristicStageGoals({
+    orderedAgents,
+    activeSkill,
+    isAcademic,
+    structureOptOut: disablesStructure,
   });
 
   const summaryParts = [
@@ -2083,10 +2394,12 @@ const inferGapTags = (packet = {}) => {
 
   const tags = [];
   if (/(מקור|מקורות|ציטוט|citation|source|sources|מחקר|research|google scholar)/i.test(text)) tags.push('research');
+  if (/(וידאו|סרטון|סרטונים|youtube|vimeo|screenshot|screen\s?shot|צילום\s+מסך|diagram|diagrams|תרשים|תרשימים|walkthrough|חומר\s+חזותי|מקורות\s+חזותיים)/i.test(text)) tags.push('visual');
   if (!hasExplicitStructureOptOut(text) && /(מבנה|שלד|outline|כותרת|כותרות|פרקים|סדר|ארגון)/i.test(text)) tags.push('structure');
   if (/(להרחיב|פירוט|דוגמא|דוגמה|ניסוח|שכתוב|rewrite|טיעון|כתיבה)/i.test(text)) tags.push('writing');
   if (/(דיוק|אימות|בדיקת עובדות|טעות|חסר דיוק|לא מדויק)/i.test(text)) tags.push('accuracy');
   if (/(ליטוש|פיסוק|דקדוק|בהירות|עקביות|אחידות|tone|style)/i.test(text)) tags.push('quality');
+  if (/(אנושי|humanize|human|סגנון\s+אישי|טבעי\s+יותר|פחות\s+ai|סימני\s+ai|נשמע\s+אישי)/i.test(text)) tags.push('style-humanize');
   return [...new Set(tags)];
 };
 
@@ -2183,9 +2496,11 @@ const getRuleDrivenRevisitAgents = ({ stageAgent, packet, enabledAgents, agentRu
 
   const requestedTokens = [];
   if (gapTags.includes('research')) requestedTokens.push('researcher');
+  if (gapTags.includes('visual')) requestedTokens.push('researcher-visual');
   if (gapTags.includes('structure')) requestedTokens.push('designer');
   if (gapTags.includes('writing') || gapTags.includes('accuracy')) requestedTokens.push('writer');
   if (gapTags.includes('quality')) requestedTokens.push('proofreader');
+  if (gapTags.includes('style-humanize')) requestedTokens.push('document-designer');
 
   if (getAgentRoleKey(stageAgent) === 'proofreader' && (gapTags.includes('writing') || gapTags.includes('structure') || gapTags.includes('accuracy'))) {
     requestedTokens.unshift('writer');
@@ -2237,7 +2552,7 @@ const enqueueWorkflowRevisits = ({
   return scheduledAgents.reverse();
 };
 
-const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש.';
+const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או להחזיר סבב, DELIVERABLE נשאר הטיוטה המלאה האחרונה או גרסה מלאה מתוקנת.';
 
 const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
@@ -2275,6 +2590,12 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     : (isManagerReviewStage
       ? `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`
       : `DECISION:\nאחת מהאפשרויות: STOP / REVISIT: ${revisitTargetList} / SKILL: skill-id`);
+  const managerReviewContract = (finalReview || isManagerReviewStage)
+    ? 'בשלב ביקורת ניהולית, DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. כל הערה, פער, תיקון חובה, עצירה או בקשת REVISIT שייכים ל-HANDOFF / MISSING / DECISION / CHECKLIST. גם אם עוצרים, DELIVERABLE נשאר הטיוטה המלאה האחרונה או גרסה מלאה מתוקנת.'
+    : '';
+  const deliverableSection = (finalReview || isManagerReviewStage)
+    ? 'DELIVERABLE:\nהמסמך המלא והמעודכן בלבד. לא הערות, לא סיכום, לא ביקורת. גם אם צריך לעצור או להחזיר סבב, החזר כאן את הטיוטה המלאה האחרונה או גרסה מלאה מתוקנת.'
+    : 'DELIVERABLE:\nהתוצר המלא שעובר לשלב הבא או חוזר למשתמש';
 
   return [
     `בקשת המשתמש המקורית:\n${cleanUserPrompt}`,
@@ -2288,10 +2609,11 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
     'אל תוסיף מבוא, סיכום, כותרות קבועות או פרקים חדשים אלא אם בקשת המשתמש או המסמך הקיים דורשים זאת במפורש.',
     decisionGuidance,
+    managerReviewContract,
     revisitTargetsHelp,
     allowCircular ? 'אם לדעתך צריך להחזיר סוכן קודם לעוד סבב, ציין זאת ב-DECISION או ב-HANDOFF עם REVISIT לאחד מה-agent ids הזמינים.' : '',
     'החזר את התשובה במבנה הבא בלבד:',
-    'DELIVERABLE:\nהתוצר המלא שעובר לשלב הבא או חוזר למשתמש',
+    deliverableSection,
     'HANDOFF:\n2-5 נקודות קצרות לסוכן הבא: מה כבר נסגר, מה עוד חסר, ועל מה חשוב לשמור',
     'MISSING:\nרשימת פערים קצרה. אם הכול מוכן כתוב: אין פערים מהותיים',
     decisionOptions,
@@ -2304,14 +2626,50 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
 const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null }) => {
   const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText);
   const structureOptOut = hasExplicitStructureOptOut(structureConstraintText || cleanUserPrompt);
-  if (!['manager-auto', 'circular-team'].includes(automation.workflowMode) || automation?.autopilotEnabled === false || !enabledAgents.length) return fallbackPlan;
+  const combinedContext = `${cleanUserPrompt}\n${documentContext}`;
+  const isAcademicTask = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combinedContext);
+  if (!enabledAgents.length) return fallbackPlan;
+
+  if (['manager-auto', 'circular-team'].includes(automation.workflowMode) && automation?.autopilotEnabled === false) {
+    const preservedOrderedAgents = [
+      ...enabledAgents.filter((agent) => isPlanningManagerAgent(agent)),
+      ...enabledAgents.filter((agent) => !isPlanningManagerAgent(agent) && !isManagerReviewAgent(agent)),
+      ...enabledAgents.filter((agent) => isManagerReviewAgent(agent)),
+    ];
+    const finalReviewer = resolveFinalManagerReviewAgent(enabledAgents);
+    const lastPreservedAgent = preservedOrderedAgents[preservedOrderedAgents.length - 1] || null;
+    const alreadyEndsWithManagerReview = Boolean(finalReviewer) && Boolean(lastPreservedAgent) && finalReviewer.id === lastPreservedAgent.id;
+
+    return {
+      ...fallbackPlan,
+      summary: ['AUTOPILOT כבוי; נשמר הסדר שהוגדר וכל הסוכנים הפעילים משתתפים.', fallbackPlan.summary].filter(Boolean).join(' '),
+      orderedAgents: preservedOrderedAgents,
+      stageGoals: buildHeuristicStageGoals({
+        orderedAgents: preservedOrderedAgents,
+        activeSkill,
+        isAcademic: isAcademicTask,
+        structureOptOut,
+      }),
+      needsFinalManagerReview: !alreadyEndsWithManagerReview && fallbackPlan.needsFinalManagerReview,
+    };
+  }
+
+  if (!['manager-auto', 'circular-team'].includes(automation.workflowMode)) return fallbackPlan;
 
   const managerAgent = resolvePlanningManagerAgent(enabledAgents);
   if (!managerAgent) return fallbackPlan;
-  const managerProvider = chooseProviderForAgent(managerAgent, cfg, selectedProviders);
-  const availableProviders = normalizeProviderIds(selectedProviders, '')
-    .filter((providerId) => isProviderConfiguredForUse(providerId, cfg))
+  const allowDocumentDesigner = shouldAllowDocumentDesigner(cleanUserPrompt, structureConstraintText);
+  const planningProviderPool = getConfiguredProviderPool(cfg, preferredProviders);
+  const managerProvider = chooseProviderForAgent(managerAgent, cfg, preferredProviders);
+  const availableProviders = planningProviderPool
     .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, '')}`)
+    .join('\n');
+  const availableAgents = enabledAgents
+    .map((agent) => {
+      const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+      const providerLabel = agent.provider ? ` · ${agent.provider}${agent.model ? `/${agent.model}` : ''}` : '';
+      return `- ${agent.id}: ${agent.name} (${roleKey}${providerLabel})`;
+    })
     .join('\n');
 
   try {
@@ -2324,8 +2682,8 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
 
     const managerPlanText = await chatWithActiveProvider(
       `בקשת המשתמש:\n${cleanUserPrompt}`,
-      String(documentContext || '').slice(0, 6000),
-      `${managerAgent?.prompt || ''}\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher","designer","writer","proofreader","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher":"בודק מקורות","writer":"מנסח סופי","manager-review":"בקרת התאמה"},"providers":{"researcher":"perplexity","manager-review":"claude"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nמודלים זמינים כרגע:\n${availableProviders}`,
+      String(documentContext || '').slice(0, 8000),
+      `${managerAgent?.prompt || ''}\nלפני שאתה מחלק שלבים והוראות, קרא קודם את בקשת המשתמש במלואה. אם קיים בהקשר המסמך תוכן קיים, טיוטה, מסמך חלקי או חומר שכבר נכתב, קרא גם את הטיוטה או המסמך כפי שסופקו לך בהקשר ורק אחר כך החלט איך לחלק את העבודה. כשיש טיוטה, goals לכל סוכן חייבים להתייחס גם לדרישות המשתמש וגם למה שכבר קיים בטיוטה, כדי לשפר, להשלים או לבדוק אותה במקום לעבוד כאילו מתחילים מאפס. אם המשתמש ביקש חקר חזותי, סרטונים, screenshots, diagrams, demos, walkthroughs או חומר חזותי אחר מהרשת, תן עדיפות לסוכן researcher-visual או לשלב מפורש של מחקר חזותי ייעודי.\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"gemini","manager-review":"gemini"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. מותר להשתמש ב-order, goals, roleLabels ו-providers גם ב-agent ids המדויקים מהרשימה למטה, ולא רק ב-role aliases כלליים. אם יש יותר מסוכן אחד מאותו סוג, השתמש ב-id המדויק כדי לבחור את שניהם או רק אחד מהם. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם מדובר בחקר חזותי או בפער חזותי מפורש, מותר ואף רצוי לבחור researcher-visual כשלב ייעודי. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nסוכנים זמינים כרגע:\n${availableAgents}\nמודלים זמינים כרגע:\n${availableProviders}`,
       {
         providerOverride: managerProvider,
         preferredProviders: managerProvider ? [managerProvider] : preferredProviders,
@@ -2354,7 +2712,8 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
 
     const orderedAgents = parsedPlan.order
       .map((token) => resolveStageAgent(token, enabledAgents))
-      .filter((agent) => !(structureOptOut && getAgentRoleKey(agent) === 'designer'))
+      .filter((agent) => !(structureOptOut && getAgentRoleKey(agent) === 'designer' && !isDocumentDesignerAgent(agent)))
+      .filter((agent) => !isDocumentDesignerAgent(agent) || allowDocumentDesigner)
       .filter(Boolean)
       .filter((agent, index, arr) => arr.findIndex((item) => item.id === agent.id) === index);
 
@@ -2376,14 +2735,49 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
     const lastPlannedAgent = normalizedOrderedAgents[normalizedOrderedAgents.length - 1] || null;
     const alreadyEndsWithManagerReview = Boolean(lastPlannedAgent) && Boolean(resolvedFinalReviewer) && lastPlannedAgent.id === resolvedFinalReviewer.id;
     const dynamicStageGoals = { ...(parsedPlan.goals || {}) };
+    const normalizedStageLabels = {};
+    const normalizedStageProviders = {};
     normalizedOrderedAgents.forEach((agent) => {
       const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+      const specializedRoleKey = isVisualResearchAgent(agent)
+        ? 'researcher-visual'
+        : isDocumentDesignerAgent(agent)
+          ? 'document-designer'
+          : roleKey;
+      const resolvedStageLabel = parsedPlan?.roleLabels?.[agent.id]
+        || parsedPlan?.roleLabels?.[agent.name]
+        || parsedPlan?.roleLabels?.[String(agent.id || '').toLowerCase()]
+        || parsedPlan?.roleLabels?.[specializedRoleKey]
+        || (specializedRoleKey === roleKey ? parsedPlan?.roleLabels?.[roleKey] : '')
+        || parsedPlan?.stageLabels?.[agent.id]
+        || parsedPlan?.stageLabels?.[agent.name]
+        || parsedPlan?.stageLabels?.[String(agent.id || '').toLowerCase()]
+        || parsedPlan?.stageLabels?.[specializedRoleKey]
+        || (specializedRoleKey === roleKey ? parsedPlan?.stageLabels?.[roleKey] : '')
+        || '';
+      if (resolvedStageLabel) normalizedStageLabels[agent.id] = resolvedStageLabel;
+
+      const resolvedStageProvider = parsedPlan?.providers?.[agent.id]
+        || parsedPlan?.providers?.[agent.name]
+        || parsedPlan?.providers?.[String(agent.id || '').toLowerCase()]
+        || parsedPlan?.providers?.[specializedRoleKey]
+        || (specializedRoleKey === roleKey ? parsedPlan?.providers?.[roleKey] : '')
+        || parsedPlan?.stageProviders?.[agent.id]
+        || parsedPlan?.stageProviders?.[agent.name]
+        || parsedPlan?.stageProviders?.[String(agent.id || '').toLowerCase()]
+        || parsedPlan?.stageProviders?.[specializedRoleKey]
+        || (specializedRoleKey === roleKey ? parsedPlan?.stageProviders?.[roleKey] : '')
+        || '';
+      if (resolvedStageProvider) normalizedStageProviders[agent.id] = resolvedStageProvider;
+
       const resolvedGoal = parsedPlan?.goals?.[agent.id]
         || parsedPlan?.goals?.[agent.name]
         || parsedPlan?.goals?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.goals?.[roleKey]
+        || parsedPlan?.goals?.[specializedRoleKey]
+        || (specializedRoleKey === roleKey ? parsedPlan?.goals?.[roleKey] : '')
         || '';
       if (resolvedGoal) dynamicStageGoals[agent.id] = structureOptOut && roleKey === 'designer'
+        && !isDocumentDesignerAgent(agent)
         ? 'אל תוסיף מבנה חדש. אם כבר יש במסמך כותרות או פרקים, רק שמור על עקביות ובהירות בלי להרחיב אותם.'
         : resolvedGoal;
     });
@@ -2393,8 +2787,8 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
       summary: String(parsedPlan.summary || fallbackPlan.summary || '').trim(),
       orderedAgents: normalizedOrderedAgents,
       stageGoals: { ...fallbackPlan.stageGoals, ...dynamicStageGoals },
-      stageLabels: parsedPlan.roleLabels || parsedPlan.stageLabels || {},
-      stageProviders: parsedPlan.providers || {},
+      stageLabels: normalizedStageLabels,
+      stageProviders: normalizedStageProviders,
       needsFinalManagerReview: !alreadyEndsWithManagerReview && (typeof parsedPlan.needsFinalManagerReview === 'boolean'
         ? parsedPlan.needsFinalManagerReview
         : fallbackPlan.needsFinalManagerReview),
@@ -3506,6 +3900,15 @@ const hasMeaningfulArtifact = (value = '', fallbackPrompt = '') => {
   return true;
 };
 
+const shouldPreservePriorDocumentFromManagerReview = (deliverable = '', previousDocument = '') => {
+  const normalizedDeliverable = normalizeArtifactText(deliverable);
+  const normalizedPrevious = normalizeArtifactText(previousDocument);
+  if (!normalizedPrevious) return false;
+  if (!normalizedDeliverable) return true;
+
+  return /(?:^|\n)(?:MISSING|DECISION|CHECKLIST)\s*:/i.test(normalizedDeliverable);
+};
+
 const escapeHtmlForOutput = (value = '') => String(value || '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -3516,6 +3919,23 @@ const escapeHtmlForOutput = (value = '') => String(value || '')
 const looksLikeHtmlDocument = (value = '') => /<(h[1-6]|p|div|ul|ol|li|table|section|article|strong|em|blockquote|br)\b/i.test(String(value || ''));
 
 const normalizeStageNote = (value = '') => String(value || '').replace(/\n{2,}/g, '\n').trim();
+const splitStageNoteLines = (value = '') => normalizeStageNote(value)
+  .split(/\n+/)
+  .map((line) => line.replace(/^[\s\-•*]+/, '').trim())
+  .filter(Boolean);
+
+const renderStageNoteHtml = (value = '', emptyHtml = '<p>אין פרטים נוספים.</p>') => {
+  const lines = splitStageNoteLines(value);
+  if (!lines.length) return emptyHtml;
+  if (lines.length === 1) return `<p>${escapeHtmlForOutput(lines[0])}</p>`;
+  return `<ul>${lines.map((line) => `<li>${escapeHtmlForOutput(line)}</li>`).join('')}</ul>`;
+};
+
+const renderStageNoteText = (value = '', emptyText = 'אין פרטים נוספים.') => {
+  const lines = splitStageNoteLines(value);
+  if (!lines.length) return emptyText;
+  return lines.map((line) => `- ${line}`).join('\n');
+};
 
 const buildSubmissionReadinessSignal = (managerMissing = '', managerDecision = '') => {
   const signal = `${String(managerMissing || '')}\n${String(managerDecision || '')}`.trim();
@@ -3545,18 +3965,33 @@ const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', manag
   const managerHandoff = String(managerPacket?.handoff || '').trim();
   const managerSummary = [managerHandoff, managerMissing, managerDecision].filter(Boolean).join('\n');
   const readinessSignal = buildSubmissionReadinessSignal(managerMissing, managerDecision);
+  const hasOpenGaps = hasMeaningfulMissingItems(managerMissing);
 
   if (preferHtml) {
     const notesList = normalizedNotes.length
-      ? `<ul>${normalizedNotes.map((item) => `<li><strong>${escapeHtmlForOutput(item.agentLabel)}</strong>${item.roundIndex > 1 ? ` (סבב ${item.roundIndex})` : ''}: ${escapeHtmlForOutput(item.note)}</li>`).join('')}</ul>`
+      ? `<div style="display:grid;gap:12px;">${normalizedNotes.map((item) => `
+        <div style="border:1px solid #E2E8F0;border-radius:14px;padding:12px 14px;background:#FFFFFF;">
+          <div style="font-weight:700;color:#0F172A;margin-bottom:6px;">${escapeHtmlForOutput(item.agentLabel)}${item.roundIndex > 1 ? ` <span style="font-weight:600;color:#64748B;">(סבב ${item.roundIndex})</span>` : ''}</div>
+          <div style="color:#334155;line-height:1.7;">${renderStageNoteHtml(item.note)}</div>
+        </div>`).join('')}</div>`
       : '<p>לא נאספו הערות סוכנים לסבב זה.</p>';
+    const openGapsBlock = hasOpenGaps
+      ? `
+  <div data-open-gaps="true" style="margin:18px 0;border:1px solid #FCA5A5;background:#FEF2F2;border-radius:16px;padding:14px 16px;color:#991B1B;">
+    <h3 style="margin:0 0 8px;color:#B91C1C;">חלקים חסרים שדורשים השלמה</h3>
+    ${renderStageNoteHtml(managerMissing)}
+    ${managerDecision ? `<div style="margin-top:10px;"><strong>החלטת מנהל:</strong>${renderStageNoteHtml(managerDecision, '<p>אין החלטת מנהל נוספת.</p>')}</div>` : ''}
+    <p style="margin-top:10px;"><strong>המסמך הוחזר במצב חלקי.</strong> לא אושר או לא התאפשר סבב נוסף, ולכן הפערים נשארו מסומנים באדום.</p>
+  </div>`.trim()
+      : '';
 
     return `
 <div data-agent-notes="true" style="margin-top:28px;border-top:1px solid #D1D5DB;padding-top:18px;">
   <h2>נספח הערות סוכנים</h2>
   ${notesInstruction ? `<p><strong>הנחיית משתמש לנספח:</strong> ${escapeHtmlForOutput(notesInstruction)}</p>` : ''}
+  ${openGapsBlock}
   <h3>סיכום מנהל העבודה</h3>
-  <p>${escapeHtmlForOutput(managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`)}</p>
+  ${renderStageNoteHtml(managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`)}
   <h3>אינדיקציה פנימית להגשה</h3>
   <p><strong>מדד פנימי:</strong> ${readinessSignal.score}/100</p>
   <p><em>${escapeHtmlForOutput(readinessSignal.disclaimer)}</em></p>
@@ -3570,11 +4005,23 @@ const buildAgentNotesAppendix = ({ stageNotes = [], notesInstruction = '', manag
     ? normalizedNotes.map((item) => `- ${item.agentLabel}${item.roundIndex > 1 ? ` (סבב ${item.roundIndex})` : ''}: ${item.note}`).join('\n')
     : '- לא נאספו הערות סוכנים לסבב זה.';
   const plainNotesInstructionText = String(notesInstruction || '').trim();
+  const openGapsBlock = hasOpenGaps
+    ? [
+        'חלקים חסרים שדורשים השלמה:',
+        renderStageNoteText(managerMissing),
+        managerDecision ? '' : '',
+        managerDecision ? 'החלטת מנהל:' : '',
+        managerDecision ? renderStageNoteText(managerDecision) : '',
+        'המסמך הוחזר במצב חלקי כי לא אושר או לא התאפשר סבב נוסף, ולכן הפערים נשארו מסומנים באדום.',
+        '',
+      ].filter(Boolean).join('\n')
+    : '';
 
   return [
     'נספח הערות סוכנים',
     plainNotesInstructionText ? `הנחיית משתמש לנספח: ${plainNotesInstructionText}` : '',
     '',
+    openGapsBlock,
     'סיכום מנהל העבודה:',
     managerSummary || `${managerLabel} לא הוסיף הערות מפורטות לסיום.`,
     '',
@@ -3913,6 +4360,66 @@ const pushAgentDebugLog = (entry = {}) => {
 // ═══════════════════════════════════════
 // OpenAI-Compatible Fetch (Groq, Mistral, Ollama, LM Studio, Together, Perplexity, etc.)
 // ═══════════════════════════════════════
+const createProxyAbortError = () => {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  }
+  const error = new Error('The operation was aborted.');
+  error.name = 'AbortError';
+  return error;
+};
+
+const createProxyRequestId = () => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const proxyDesktopHttpRequest = async ({ url, method = 'POST', headers = {}, body, timeoutMs = 0 } = {}, signal) => {
+  if (!(typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest)) return null;
+
+  if (signal?.aborted) throw createProxyAbortError();
+
+  const requestId = createProxyRequestId();
+  let abortHandler = null;
+
+  try {
+    if (signal && window.desktopApp?.abortProxyHttpRequest) {
+      abortHandler = () => {
+        Promise.resolve(window.desktopApp.abortProxyHttpRequest(requestId)).catch(() => {});
+      };
+      signal.addEventListener('abort', abortHandler, { once: true });
+      if (signal.aborted) {
+        abortHandler();
+        throw createProxyAbortError();
+      }
+    }
+
+    const requestPromise = window.desktopApp.proxyHttpRequest({ url, method, headers, body, requestId, timeoutMs });
+    if (!signal || !window.desktopApp?.abortProxyHttpRequest) return await requestPromise;
+    if (signal.aborted) {
+      abortHandler?.();
+      throw createProxyAbortError();
+    }
+
+    const abortPromise = new Promise((_, reject) => {
+      const rejectOnAbort = () => reject(createProxyAbortError());
+      signal.addEventListener('abort', rejectOnAbort, { once: true });
+      requestPromise.then(
+        () => signal.removeEventListener('abort', rejectOnAbort),
+        () => signal.removeEventListener('abort', rejectOnAbort),
+      );
+    });
+
+    return await Promise.race([requestPromise, abortPromise]);
+  } finally {
+    if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+  }
+};
+
 export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, signal) => {
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
@@ -3920,8 +4427,9 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
   const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: false });
 
   // ב-Electron: נשלח דרך main process כדי לעקוף CORS
-  if (typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest) {
-    const result = await window.desktopApp.proxyHttpRequest({ url, method: 'POST', headers, body: bodyStr });
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
+  if (desktopResult) {
+    const result = desktopResult;
     if (!result.ok) {
       throw new Error(`שגיאת API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
     }
@@ -3947,19 +4455,33 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
 // Claude (Anthropic)
 // ═══════════════════════════════════════
 export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, signal) => {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = 'https://api.anthropic.com/v1/messages';
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
+  const bodyStr = JSON.stringify({
+    model, max_tokens: 4096,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  });
+
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
+  if (desktopResult) {
+    const result = desktopResult;
+    if (!result.ok) {
+      throw new Error(`Claude API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
+    }
+    const data = JSON.parse(result.body);
+    return data.content?.[0]?.text || '';
+  }
+
+  const res = await fetch(url, {
     method: 'POST',
     signal,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model, max_tokens: 4096,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-    }),
+    headers,
+    body: bodyStr,
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
@@ -4094,7 +4616,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 ענה תמיד בעברית, קצר, ברור ומעשי.
 הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
 אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
-אם מבקשים מקור אקדמי — תן כיוון מחקר, מילות חיפוש, סוגי מקורות, ואם אפשר גם שמות חוקרים/נושאים רלוונטיים. אם אין ודאות, אל תמציא ציטוטים.
+אם מבקשים מקור אקדמי — נסה קודם להחזיר מקורות קונקרטיים עם metadata usable: כותרת, מחבר או גוף מפרסם, שנה, וקישור או DOI אם זמין. אם לא נמצאו מספיק מקורות, כתוב במפורש מה נמצא ומה עדיין חסר, ורק אז הוסף כיווני חיפוש, מילות חיפוש או חוקרים/נושאים רלוונטיים כהשלמה. אם אין ודאות, אל תמציא ציטוטים או פרטים.
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
@@ -4207,15 +4729,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           || executionPlan?.stageLabels?.[String(stageAgent.id || '').toLowerCase()]
           || executionPlan?.stageLabels?.[stageRoutingKey]
           || stageAgent.name;
-          const allowedStageProviders = normalizeProviderIds(selectedProviders, '')
-          .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+          const allowedStageProviders = getConfiguredProviderPool(cfg, automationPreferredProviders);
           const normalizedRequestedProvider = resolveExplicitProviderCandidate([
             executionPlan?.stageProviders?.[stageAgent.id],
             executionPlan?.stageProviders?.[stageAgent.name],
             executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
             executionPlan?.stageProviders?.[stageRoutingKey],
           ], allowedStageProviders, cfg);
-          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, selectedProviders);
+          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders);
           const stagePrompt = buildStagePrompt({
           cleanUserPrompt,
           stageGoal,
@@ -4249,7 +4770,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         });
 
           try {
-          const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
+          const stageSystemPrompt = isManagerReviewAgent(stageAgent)
+            ? `${stageAgent.prompt}\nבשלב ביקורת ניהולית DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, פערים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא.\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`
+            : `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`;
+          const previousStageOutput = stagedOutput;
+          const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, stageSystemPrompt, {
             providerOverride: stageProvider,
             preferredProviders: stageProvider ? [stageProvider] : automationPreferredProviders,
             strictProviderOverride: true,
@@ -4278,7 +4803,27 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           });
 
           const parsedReply = parseStagePacket(stageReply);
-          const stageArtifact = String(parsedReply.deliverable || '').trim();
+          const rawStageArtifact = String(parsedReply.deliverable || '').trim();
+          const stageArtifact = isManagerReviewAgent(stageAgent) && shouldPreservePriorDocumentFromManagerReview(rawStageArtifact, previousStageOutput)
+            ? String(previousStageOutput || '').trim()
+            : rawStageArtifact;
+          const effectiveParsedReply = stageArtifact === rawStageArtifact
+            ? parsedReply
+            : { ...parsedReply, deliverable: stageArtifact };
+          if (stageArtifact !== rawStageArtifact) {
+            logEvent('stage-artifact-fallback', 'ביקורת ניהולית החזירה פלט מטא; נשמר המסמך המלא האחרון כ-DELIVERABLE', {
+              state: 'success',
+              agentId: stageAgent.id,
+              agentLabel: stageLabel,
+              agentName: stageAgent.name || stageLabel,
+              provider: stageProvider,
+              model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+              stageIndex: processedStages + 1,
+              stageTotal: maxStageCount,
+              roundIndex: runCount,
+              outputPreview: trimLogText(rawStageArtifact || stageReply || ''),
+            });
+          }
           if (!hasMeaningfulArtifact(stageArtifact, cleanUserPrompt)) {
             logEvent('stage-noop', `השלב ${processedStages + 1} לא החזיר תוצר שימושי`, {
               state: 'error',
@@ -4304,15 +4849,15 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             preview: trimLogText(stageArtifact, 180),
           });
 
-          if (parsedReply.handoff) {
-            batonNotes.push(`${stageAgent.name}: ${parsedReply.handoff.replace(/\n+/g, ' ; ')}`);
+          if (effectiveParsedReply.handoff) {
+            batonNotes.push(`${stageAgent.name}: ${effectiveParsedReply.handoff.replace(/\n+/g, ' ; ')}`);
           }
 
-          if (parsedReply.missing) {
-            batonNotes.push(`${stageAgent.name} זיהה פערים: ${parsedReply.missing.replace(/\n+/g, ' ; ')}`);
+          if (effectiveParsedReply.missing) {
+            batonNotes.push(`${stageAgent.name} זיהה פערים: ${effectiveParsedReply.missing.replace(/\n+/g, ' ; ')}`);
           }
 
-          const stageNoteText = [parsedReply.handoff, parsedReply.checklist, hasMeaningfulMissingItems(parsedReply.missing) ? parsedReply.missing : '']
+          const stageNoteText = [effectiveParsedReply.handoff, effectiveParsedReply.checklist, hasMeaningfulMissingItems(effectiveParsedReply.missing) ? effectiveParsedReply.missing : '']
             .filter(Boolean)
             .join('\n');
           if (stageNoteText.trim()) {
@@ -4324,7 +4869,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             });
           }
 
-          const suggestedSkillIds = extractRequestedSkills(parsedReply, skillsConfig);
+          const suggestedSkillIds = extractRequestedSkills(effectiveParsedReply, skillsConfig);
           if (suggestedSkillIds.length) {
             const suggestedSkillLabels = suggestedSkillIds.map((skillId) => SKILL_LIBRARY.find((item) => item.id === skillId)?.label || skillId);
             batonNotes.push(`כללים/סקילים ממליצים להמשך על: ${suggestedSkillLabels.join(', ')}`);
@@ -4347,7 +4892,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             }
           }
 
-          const directives = getDecisionDirectives(parsedReply);
+          const directives = getDecisionDirectives(effectiveParsedReply);
           const hasPendingMinRounds = allowCircularWorkflow && orderedAgents.some((agent) => (agentRunCounts[agent.id] || 0) < minRoundsPerAgent);
           if (directives.stop && !hasPendingMinRounds) {
             executionQueue.length = 0;
@@ -4356,7 +4901,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               agentId: stageAgent.id,
               agentLabel: stageLabel,
               agentName: stageAgent.name || stageLabel,
-              decisionPreview: trimLogText(parsedReply.decision || ''),
+              decisionPreview: trimLogText(effectiveParsedReply.decision || ''),
             });
           } else if (directives.stop && hasPendingMinRounds) {
             logEvent('stage-stop-deferred', 'בקשת עצירה נדחתה עד השלמת מינימום סבבים', {
@@ -4368,30 +4913,31 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             });
           } else if (allowDecisionRevisits) {
             const priorityManager = directives.managerDecide
-              ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent, forceManagerDecide: true })
+              ? getManagerReviewRevisitAgents({ stageAgent, packet: effectiveParsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent, forceManagerDecide: true })
               : [];
             const requestedRevisits = [
               ...priorityManager,
-              ...extractRevisitAgents(parsedReply, enabledAgents),
+              ...extractRevisitAgents(effectiveParsedReply, enabledAgents),
               ...(decisionMode === 'manager'
-                ? getManagerReviewRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
-                : getRuleDrivenRevisitAgents({ stageAgent, packet: parsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })),
+                ? getManagerReviewRevisitAgents({ stageAgent, packet: effectiveParsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })
+                : getRuleDrivenRevisitAgents({ stageAgent, packet: effectiveParsedReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent })),
             ].filter((agent, index, list) => list.findIndex((item) => item.id === agent.id) === index);
             const fallbackPlanningManager = isManagerReviewAgent(stageAgent)
               ? resolvePlanningManagerAgent(enabledAgents)
               : null;
             const fallbackWorkerAgent = isManagerReviewAgent(stageAgent)
               ? ['writer', 'proofreader', 'designer', 'researcher']
-                .map((roleKey) => enabledAgents.find((agent) => agent?.id && agent.id !== stageAgent.id && getAgentRoleKey(agent) === roleKey))
+                .map((token) => resolveStageAgent(token, enabledAgents))
+                .filter((agent) => agent?.id && agent.id !== stageAgent.id)
                 .find(Boolean)
                 || enabledAgents.find((agent) => agent?.id && agent.id !== stageAgent.id)
                 || null
               : null;
             const revisitTargets = requestedRevisits.length
               ? requestedRevisits
-              : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(parsedReply.missing) && fallbackPlanningManager && fallbackPlanningManager.id !== stageAgent.id
+              : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(effectiveParsedReply.missing) && fallbackPlanningManager && fallbackPlanningManager.id !== stageAgent.id
                 ? [fallbackPlanningManager]
-                : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(parsedReply.missing) && fallbackWorkerAgent
+                : (isManagerReviewAgent(stageAgent) && hasMeaningfulMissingItems(effectiveParsedReply.missing) && fallbackWorkerAgent
                   ? [fallbackWorkerAgent]
                   : []))
                 ;
@@ -4407,8 +4953,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               requestedByAgent: stageAgent,
               requestedByLabel: stageLabel,
               decisionMode,
-              decisionPreview: trimLogText(parsedReply.decision || ''),
-              missingPreview: trimLogText(parsedReply.missing || ''),
+              decisionPreview: trimLogText(effectiveParsedReply.decision || ''),
+              missingPreview: trimLogText(effectiveParsedReply.missing || ''),
               revisitReason: directives.managerDecide ? `${stageLabel} ביקש הכרעת מנהל` : `${stageLabel} זיהה שעדיין חסר משהו`,
             });
             if (isManagerReviewAgent(stageAgent) && filteredRequestedRevisits.length) {
@@ -4428,9 +4974,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             roundIndex: runCount,
             outputChars: stagedOutput.length,
             outputPreview: trimLogText(stagedOutput),
-            handoffPreview: trimLogText(parsedReply.handoff || ''),
-            missingPreview: trimLogText(parsedReply.missing || ''),
-            decisionPreview: trimLogText(parsedReply.decision || ''),
+            handoffPreview: trimLogText(effectiveParsedReply.handoff || ''),
+            missingPreview: trimLogText(effectiveParsedReply.missing || ''),
+            decisionPreview: trimLogText(effectiveParsedReply.decision || ''),
             suggestedSkillIds,
           });
           processedStages += 1;
@@ -4473,8 +5019,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         }
         finalManagerReviewPasses = nextFinalManagerReviewPass;
         const managerRoleKey = isManagerReviewAgent(managerAgent) ? 'manager-review' : getAgentRoleKey(managerAgent);
-        const allowedReviewProviders = normalizeProviderIds(selectedProviders, '')
-          .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+        const allowedReviewProviders = getConfiguredProviderPool(cfg, automationPreferredProviders);
         const normalizedReviewProvider = resolveExplicitProviderCandidate([
           executionPlan?.stageProviders?.['manager-review'],
           executionPlan?.stageProviders?.[managerAgent.id],
@@ -4482,10 +5027,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
           executionPlan?.stageProviders?.[managerRoleKey],
         ], allowedReviewProviders, cfg);
-        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, selectedProviders);
+        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders);
         const reviewPrompt = buildStagePrompt({
           cleanUserPrompt,
-          stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. החזר נוסח סופי בלבד.',
+          stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST.',
           stageAgent: managerAgent,
           stagedOutput,
           batonNotes,
@@ -4498,7 +5043,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           collectAgentNotes: appendAgentNotesToOutput,
         });
 
-        const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
+        const previousManagerOutput = stagedOutput;
+        const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
           providerOverride: reviewProvider,
           preferredProviders: reviewProvider ? [reviewProvider] : automationPreferredProviders,
           strictProviderOverride: true,
@@ -4522,9 +5068,27 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         });
 
         const parsedManagerReply = parseStagePacket(managerReply);
-        lastManagerReviewPacket = parsedManagerReply;
-        const managerDirectives = getDecisionDirectives(parsedManagerReply);
-        const managerNoteText = [parsedManagerReply.handoff, parsedManagerReply.checklist, hasMeaningfulMissingItems(parsedManagerReply.missing) ? parsedManagerReply.missing : '']
+        const rawManagerArtifact = String(parsedManagerReply.deliverable || '').trim();
+        const managerArtifact = shouldPreservePriorDocumentFromManagerReview(rawManagerArtifact, previousManagerOutput)
+          ? String(previousManagerOutput || '').trim()
+          : rawManagerArtifact;
+        const effectiveManagerReply = managerArtifact === rawManagerArtifact
+          ? parsedManagerReply
+          : { ...parsedManagerReply, deliverable: managerArtifact };
+        if (managerArtifact !== rawManagerArtifact) {
+          logEvent('stage-artifact-fallback', 'סקירת המנהל החזירה פלט מטא; נשמר המסמך המלא האחרון כ-DELIVERABLE', {
+            state: 'success',
+            agentId: managerAgent.id,
+            agentLabel: managerAgent.name,
+            agentName: managerAgent.name,
+            provider: reviewProvider,
+            model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+            outputPreview: trimLogText(rawManagerArtifact || managerReply || ''),
+          });
+        }
+        lastManagerReviewPacket = effectiveManagerReply;
+        const managerDirectives = getDecisionDirectives(effectiveManagerReply);
+        const managerNoteText = [effectiveManagerReply.handoff, effectiveManagerReply.checklist, hasMeaningfulMissingItems(effectiveManagerReply.missing) ? effectiveManagerReply.missing : '']
           .filter(Boolean)
           .join('\n');
         if (managerNoteText.trim()) {
@@ -4540,12 +5104,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           : [];
         const managerRevisitAgents = [
           ...revisitAllAgents,
-          ...extractRevisitAgents(parsedManagerReply, enabledAgents),
-          ...getRuleDrivenRevisitAgents({ stageAgent: managerAgent, packet: parsedManagerReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent }),
+          ...extractRevisitAgents(effectiveManagerReply, enabledAgents),
+          ...getRuleDrivenRevisitAgents({ stageAgent: managerAgent, packet: effectiveManagerReply, enabledAgents, agentRunCounts, maxRounds: maxRoundsPerAgent }),
         ]
           .filter((agent, index, list) => agent?.id ? list.findIndex((item) => item.id === agent.id) === index : false)
           .filter((agent) => agent.id !== managerAgent.id);
-        const managerArtifact = String(parsedManagerReply.deliverable || '').trim();
         if (!hasMeaningfulArtifact(managerArtifact, cleanUserPrompt)) {
           logEvent('stage-noop', 'סקירת המנהל לא החזירה תוצר סופי שימושי', {
             state: 'error',
@@ -4560,11 +5123,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           throw new Error('סקירת המנהל הסתיימה ללא deliverable תקין. עצרתי כדי למנוע תוצאה ריקה.');
         }
 
-        const managerNeedsRevisit = managerDirectives.managerDecide || managerDirectives.revisitAll || managerRevisitAgents.length || hasMeaningfulMissingItems(parsedManagerReply.missing);
+        const managerNeedsRevisit = managerDirectives.managerDecide || managerDirectives.revisitAll || managerRevisitAgents.length || hasMeaningfulMissingItems(effectiveManagerReply.missing);
         if (managerNeedsRevisit) {
           const fallbackPlanningManager = resolvePlanningManagerAgent(enabledAgents);
           const fallbackWorkerAgent = ['writer', 'proofreader', 'designer', 'researcher']
-            .map((roleKey) => enabledAgents.find((agent) => agent?.id && agent.id !== managerAgent.id && getAgentRoleKey(agent) === roleKey))
+            .map((token) => resolveStageAgent(token, enabledAgents))
+            .filter((agent) => agent?.id && agent.id !== managerAgent.id)
             .find(Boolean)
             || enabledAgents.find((agent) => agent?.id && agent.id !== managerAgent.id)
             || null;
@@ -4581,31 +5145,34 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               agentName: managerAgent.name,
               provider: reviewProvider,
               model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-              decision: parsedManagerReply.decision || '',
-              missing: parsedManagerReply.missing || '',
+              decision: effectiveManagerReply.decision || '',
+              missing: effectiveManagerReply.missing || '',
             });
-              const recoveryOutput = String(managerArtifact || stagedOutput || cleanUserPrompt).trim();
-              if (appendAgentNotesToOutput) {
-                const recoveryAppendix = buildAgentNotesAppendix({
-                  stageNotes,
-                  notesInstruction: agentNotesInstruction,
-                  managerPacket: parsedManagerReply,
-                  managerLabel: managerAgent.name || 'מנהל העבודה',
-                  preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
-                });
-                stagedOutput = appendNotesToOutput({
-                  output: recoveryOutput,
-                  appendix: recoveryAppendix,
-                });
-                notesAlreadyAppended = true;
-              } else {
-                stagedOutput = recoveryOutput;
-                notesAlreadyAppended = false;
-              }
+            const recoverySource = expectDocumentOutput
+              ? (stagedOutput || managerArtifact || cleanUserPrompt)
+              : (managerArtifact || stagedOutput || cleanUserPrompt);
+            const recoveryOutput = String(recoverySource).trim();
+            if (appendAgentNotesToOutput) {
+              const recoveryAppendix = buildAgentNotesAppendix({
+                stageNotes,
+                notesInstruction: agentNotesInstruction,
+                managerPacket: effectiveManagerReply,
+                managerLabel: managerAgent.name || 'מנהל העבודה',
+                preferHtml: looksLikeHtmlDocument(recoveryOutput),
+              });
+              stagedOutput = appendNotesToOutput({
+                output: recoveryOutput,
+                appendix: recoveryAppendix,
+              });
+              notesAlreadyAppended = true;
+            } else {
+              stagedOutput = recoveryOutput;
+              notesAlreadyAppended = false;
+            }
             pendingFinalManagerReview = false;
             executionQueue.length = 0;
             logEvent('workflow-recovered', expectDocumentOutput
-              ? 'ה-workflow הגיע למגבלת סבבים, והוחזר מסמך מסכם עם הערות צוות ההרצה'
+              ? 'ה-workflow הגיע למגבלת סבבים, והוחזרה הטיוטה המלאה האחרונה במקום תוצר ביקורת חלקי'
               : 'ה-workflow הגיע למגבלת סבבים, והוחזרה התשובה הטובה ביותר שנצברה עד כה', {
               state: 'success',
               agentId: managerAgent.id,
@@ -4624,8 +5191,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             requestedByAgent: managerAgent,
             requestedByLabel: managerAgent.name,
             decisionMode,
-            decisionPreview: trimLogText(parsedManagerReply.decision || ''),
-            missingPreview: trimLogText(parsedManagerReply.missing || ''),
+            decisionPreview: trimLogText(effectiveManagerReply.decision || ''),
+            missingPreview: trimLogText(effectiveManagerReply.missing || ''),
             revisitReason: 'סקירת manager סופית דרשה סבב נוסף',
           });
 
@@ -4637,17 +5204,20 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               agentName: managerAgent.name,
               provider: reviewProvider,
               model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-              decision: parsedManagerReply.decision || '',
-              missing: parsedManagerReply.missing || '',
+              decision: effectiveManagerReply.decision || '',
+              missing: effectiveManagerReply.missing || '',
             });
-            const recoveryOutput = String(managerArtifact || stagedOutput || cleanUserPrompt).trim();
+            const recoverySource = expectDocumentOutput
+              ? (stagedOutput || managerArtifact || cleanUserPrompt)
+              : (managerArtifact || stagedOutput || cleanUserPrompt);
+            const recoveryOutput = String(recoverySource).trim();
             if (appendAgentNotesToOutput) {
               const recoveryAppendix = buildAgentNotesAppendix({
                 stageNotes,
                 notesInstruction: agentNotesInstruction,
-                managerPacket: parsedManagerReply,
+                managerPacket: effectiveManagerReply,
                 managerLabel: managerAgent.name || 'מנהל העבודה',
-                preferHtml: looksLikeHtmlDocument(managerArtifact || stagedOutput),
+                preferHtml: looksLikeHtmlDocument(recoveryOutput),
               });
               stagedOutput = appendNotesToOutput({
                 output: recoveryOutput,
@@ -4661,7 +5231,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             pendingFinalManagerReview = false;
             executionQueue.length = 0;
             logEvent('workflow-recovered', expectDocumentOutput
-              ? 'לא נמצא שלב המשך תקף; הוחזר מסמך מסכם במקום כשלון'
+              ? 'לא נמצא שלב המשך תקף; הוחזרה הטיוטה המלאה האחרונה במקום תוצר ביקורת חלקי'
               : 'לא נמצא שלב המשך תקף; הוחזרה התשובה הטובה ביותר במקום כשלון', {
               state: 'success',
               agentId: managerAgent.id,
@@ -4678,18 +5248,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             agentName: managerAgent.name,
             provider: reviewProvider,
             model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-            decision: parsedManagerReply.decision || '',
-            missing: parsedManagerReply.missing || '',
+            decision: effectiveManagerReply.decision || '',
+            missing: effectiveManagerReply.missing || '',
             requestedAgents: scheduledRevisits.map((agent) => agent.id),
           });
-          if (parsedManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${parsedManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
+          if (effectiveManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${effectiveManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
           while (batonNotes.length > 10) batonNotes.shift();
           continue;
         }
 
         stagedOutput = managerArtifact;
         pendingFinalManagerReview = false;
-        if (parsedManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${parsedManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
+        if (effectiveManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${effectiveManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
         while (batonNotes.length > 10) batonNotes.shift();
       }
 
@@ -5391,6 +5961,22 @@ const PROVIDER_MODEL_FALLBACKS = {
   custom: [],
 };
 
+export const getProviderModelChoices = (providerId = '', cfg = null, extraModels = []) => {
+  const safeProvider = String(providerId || '').trim();
+  if (!safeProvider || !KNOWN_PROVIDER_IDS.includes(safeProvider)) return [];
+
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const configuredModel = normalizeProviderModelName(safeProvider, String(safeCfg?.[safeProvider]?.model || '').trim());
+  const extra = (Array.isArray(extraModels) ? extraModels : [extraModels])
+    .map((model) => normalizeProviderModelName(safeProvider, String(model || '').trim()))
+    .filter(Boolean);
+  const fallbacks = (PROVIDER_MODEL_FALLBACKS[safeProvider] || [])
+    .map((model) => normalizeProviderModelName(safeProvider, model))
+    .filter(Boolean);
+
+  return [...new Set([configuredModel, ...extra, ...fallbacks].filter(Boolean))];
+};
+
 const TEST_PROMPT = [{ role: 'user', content: 'אמור "אוקי" בלבד.' }];
 const GEMINI_TEST_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -5411,11 +5997,25 @@ const pingGemini = async (key, model, signal) => {
 };
 
 const pingClaude = async (key, model, signal) => {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = 'https://api.anthropic.com/v1/messages';
+  const headers = { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const bodyStr = JSON.stringify({ model, max_tokens: 16, messages: [{ role: 'user', content: 'אמור "אוקי" בלבד.' }] });
+
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr, timeoutMs: 12000 }, signal);
+  if (desktopResult) {
+    const result = desktopResult;
+    if (!result.ok) {
+      throw new Error(`${result.status}: ${String(result.body || '').slice(0, 200)}`);
+    }
+    const data = JSON.parse(result.body);
+    return data.content?.[0]?.text || 'ok';
+  }
+
+  const res = await fetch(url, {
     method: 'POST',
     signal,
-    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: 'user', content: 'אמור "אוקי" בלבד.' }] }),
+    headers,
+    body: bodyStr,
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
@@ -5429,11 +6029,23 @@ const pingOpenAICompatible = async (baseUrl, key, model, signal) => {
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (key) headers['Authorization'] = `Bearer ${key}`;
+  const bodyStr = JSON.stringify({ model, messages: TEST_PROMPT, max_tokens: 16, stream: false });
+
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr, timeoutMs: 12000 }, signal);
+  if (desktopResult) {
+    const result = desktopResult;
+    if (!result.ok) {
+      throw new Error(`${result.status}: ${String(result.body || '').slice(0, 200)}`);
+    }
+    const data = JSON.parse(result.body);
+    return data.choices?.[0]?.message?.content || 'ok';
+  }
+
   const res = await fetch(url, {
     method: 'POST',
     signal,
     headers,
-    body: JSON.stringify({ model, messages: TEST_PROMPT, max_tokens: 16, stream: false }),
+    body: bodyStr,
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);

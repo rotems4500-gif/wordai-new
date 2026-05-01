@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
 import {
+  DEFAULT_WORKSPACES_LIBRARY,
   DEFAULT_PERSONAL_STYLE,
   buildExternalStyleAnalysisPrompt,
   getExternalAnalysisProviderHint,
@@ -430,7 +431,7 @@ const normalizeExternalAnalysisRuntimeConfig = (providerId = '', cfg = {}) => {
 };
 
 const PROVIDER_MODEL_OPTIONS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
   openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
   claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
@@ -2528,7 +2529,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
   );
 }
 
-function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAgents }) {
+function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAgents, config }) {
   const [workspacesLib, setWorkspacesLib] = useState(getWorkspacesLibrary());
   const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
@@ -2537,6 +2538,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   const [quickAgentStatus, setQuickAgentStatus] = useState('');
   const [previewWorkspaceId, setPreviewWorkspaceId] = useState('');
   const [editWorkspaceState, setEditWorkspaceState] = useState({ id: '', name: '', sharedGoal: '' });
+  const [deepEditWorkspaceState, setDeepEditWorkspaceState] = useState({ id: '', automation: null, agents: [] });
 
   const refreshWorkspaceState = () => {
     const nextAutomation = getWorkspaceAutomation();
@@ -2602,7 +2604,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
   const handleDeleteWorkspace = (workspaceId, workspaceName) => {
     const targetId = String(workspaceId || '').trim();
-    if (!targetId || targetId === 'default-content-studio') return;
+    if (!targetId || Object.prototype.hasOwnProperty.call(DEFAULT_WORKSPACES_LIBRARY, targetId)) return;
     if (!window.confirm(`למחוק את סביבת העבודה "${workspaceName || targetId}"?`)) return;
     const deleted = deleteWorkspace(targetId);
     if (!deleted) {
@@ -2618,6 +2620,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
   const previewWorkspace = previewWorkspaceId ? workspacesLib?.[previewWorkspaceId] : null;
   const editingWorkspace = editWorkspaceState.id ? workspacesLib?.[editWorkspaceState.id] : null;
+  const deepEditingWorkspace = deepEditWorkspaceState.id ? workspacesLib?.[deepEditWorkspaceState.id] : null;
 
   const openPreviewWorkspace = (workspace) => {
     setPreviewWorkspaceId(String(workspace?.id || ''));
@@ -2633,20 +2636,87 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
   const closeEditWorkspace = () => setEditWorkspaceState({ id: '', name: '', sharedGoal: '' });
 
-  const openDeepWorkspaceEdit = (workspaceId) => {
-    const switched = switchToWorkspace(workspaceId);
-    if (!switched) {
-      window.alert('לא הצלחתי לעבור לסביבת העבודה שנבחרה.');
+  const closeDeepWorkspaceEdit = () => setDeepEditWorkspaceState({ id: '', automation: null, agents: [] });
+
+  const setDeepEditAutomation = (updater) => {
+    setDeepEditWorkspaceState((prev) => {
+      const currentAutomation = prev.automation && typeof prev.automation === 'object' ? prev.automation : {};
+      const nextAutomation = typeof updater === 'function' ? updater(currentAutomation) : updater;
+      return {
+        ...prev,
+        automation: nextAutomation && typeof nextAutomation === 'object' ? nextAutomation : currentAutomation,
+      };
+    });
+  };
+
+  const setDeepEditAgents = (updater) => {
+    setDeepEditWorkspaceState((prev) => {
+      const currentAgents = Array.isArray(prev.agents) ? prev.agents : [];
+      const nextAgents = typeof updater === 'function' ? updater(currentAgents) : updater;
+      return {
+        ...prev,
+        agents: Array.isArray(nextAgents) ? nextAgents : currentAgents,
+      };
+    });
+  };
+
+  const openDeepWorkspaceEdit = (workspaceInput) => {
+    const resolvedWorkspace = typeof workspaceInput === 'string'
+      ? workspacesLib?.[String(workspaceInput || '').trim()]
+      : workspaceInput;
+    const targetId = String(resolvedWorkspace?.id || '').trim();
+    if (!targetId || !resolvedWorkspace) {
+      window.alert('לא הצלחתי לפתוח את סביבת העבודה לעריכה.');
       return;
     }
-    refreshWorkspaceState();
+
+    const workspaceName = String(resolvedWorkspace?.name || resolvedWorkspace?.automation?.workspaceName || targetId).trim() || targetId;
+    setDeepEditWorkspaceState({
+      id: targetId,
+      automation: {
+        ...(resolvedWorkspace?.automation || {}),
+        activeWorkspaceId: targetId,
+        workspaceName,
+      },
+      agents: Array.isArray(resolvedWorkspace?.agents) ? resolvedWorkspace.agents.map((agent) => ({ ...agent })) : [],
+    });
     setPreviewWorkspaceId('');
     closeEditWorkspace();
-    setAgents(getRoleAgents());
-    if (typeof document !== 'undefined') {
-      const target = document.getElementById('role-agents-settings');
-      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const saveDeepWorkspaceEdit = () => {
+    const targetId = String(deepEditWorkspaceState.id || '').trim();
+    if (!targetId) return;
+
+    const automationDraft = deepEditWorkspaceState.automation && typeof deepEditWorkspaceState.automation === 'object'
+      ? deepEditWorkspaceState.automation
+      : {};
+    const nextName = String(automationDraft.workspaceName || deepEditingWorkspace?.name || '').trim();
+    if (!nextName) {
+      window.alert('צריך לתת שם לסביבת העבודה.');
+      return;
     }
+
+    const updated = updateWorkspaceById(targetId, {
+      name: nextName,
+      workspaceName: nextName,
+      automation: {
+        ...automationDraft,
+        workspaceName: nextName,
+      },
+      agents: Array.isArray(deepEditWorkspaceState.agents) ? deepEditWorkspaceState.agents : [],
+    });
+    if (!updated) {
+      window.alert('לא הצלחתי לשמור את העריכה המלאה של סביבת העבודה.');
+      return;
+    }
+
+    refreshWorkspaceState();
+    if (String(getWorkspaceAutomation().activeWorkspaceId || '').trim() === targetId) {
+      setAgents(getRoleAgents());
+      setAutomation(getWorkspaceAutomation());
+    }
+    closeDeepWorkspaceEdit();
   };
 
   const saveWorkspaceDetails = () => {
@@ -2836,7 +2906,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                     >
                       ✏️
                     </button>
-                    {String(ws.id) !== 'default-content-studio' ? (
+                    {!Object.prototype.hasOwnProperty.call(DEFAULT_WORKSPACES_LIBRARY, String(ws.id || '')) ? (
                       <button
                         type="button"
                         onClick={() => handleDeleteWorkspace(ws.id, ws.name)}
@@ -2897,7 +2967,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => openEditWorkspace(previewWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #DDD6FE', background: '#F5F3FF', color: '#6D28D9', cursor: 'pointer', fontWeight: 700 }}>עריכה בסיסית</button>
-                <button type="button" onClick={() => openDeepWorkspaceEdit(previewWorkspace.id)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>עבור לעריכה עמוקה</button>
+                <button type="button" onClick={() => openDeepWorkspaceEdit(previewWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>פתח עריכה מלאה</button>
               </div>
             </div>
           </div>
@@ -2937,10 +3007,48 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
-                <button type="button" onClick={() => openDeepWorkspaceEdit(editingWorkspace.id)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>עבור לעריכה עמוקה</button>
+                <button type="button" onClick={() => openDeepWorkspaceEdit(editingWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>פתח עריכה מלאה</button>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" onClick={closeEditWorkspace} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #CBD5E1', background: 'white', color: '#334155', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
                   <button type="button" onClick={saveWorkspaceDetails} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: 'pointer', fontWeight: 700 }}>שמור שינויים</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {deepEditingWorkspace ? (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 1710, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div style={{ width: 'min(1040px, 96vw)', maxHeight: '92vh', background: 'white', borderRadius: 20, border: '1px solid #CBD5E1', boxShadow: '0 28px 72px rgba(15,23,42,0.32)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#0F172A' }}>עריכה מלאה של סביבת עבודה</div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{deepEditWorkspaceState.automation?.workspaceName || deepEditingWorkspace.name || deepEditingWorkspace.id}</div>
+                </div>
+                <button type="button" onClick={closeDeepWorkspaceEdit} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+              </div>
+
+              <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.7 }}>
+                העריכה כאן נפתחת בפופאפ ייעודי ונשמרת רק בלחיצה על "שמור סביבת עבודה".
+              </div>
+
+              <div style={{ overflow: 'auto', paddingRight: 4 }}>
+                <RoleAgentsSettings
+                  agents={Array.isArray(deepEditWorkspaceState.agents) ? deepEditWorkspaceState.agents : []}
+                  setAgents={setDeepEditAgents}
+                  automation={deepEditWorkspaceState.automation || {}}
+                  setAutomation={setDeepEditAutomation}
+                  config={config}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 11, color: '#64748B' }}>
+                  השינויים בפופאפ הזה לא מחליפים את סביבת העבודה הפעילה עד לשמירה.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" onClick={closeDeepWorkspaceEdit} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #CBD5E1', background: 'white', color: '#334155', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
+                  <button type="button" onClick={saveDeepWorkspaceEdit} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: 'pointer', fontWeight: 700 }}>שמור סביבת עבודה</button>
                 </div>
               </div>
             </div>
@@ -4362,6 +4470,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                         automation={workspaceAutomationState} 
                         setAutomation={setWorkspaceAutomationState}
                         setAgents={setRoleAgents}
+                        config={config}
                         onWorkspaceChange={() => {
                           const nextAgents = getRoleAgents();
                           setRoleAgents((prev) => (JSON.stringify(prev) === JSON.stringify(nextAgents) ? prev : nextAgents));

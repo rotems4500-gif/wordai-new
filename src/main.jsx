@@ -9,8 +9,9 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData } from './services/aiService';
-import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
+import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
+import { downloadBrowserDocx } from './services/browserDocxExport';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
@@ -425,6 +426,7 @@ function App() {
     if (isLegacyHomeEnabled()) return true;
     return getWordPreferences().showStartExperience !== false;
   });
+  const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
@@ -436,6 +438,15 @@ function App() {
     logs: getRecentAgentLogs(),
     runId: '',
     workspaceId: getWorkspaceAutomation().activeWorkspaceId || '',
+  });
+  const [lastGenerationAction, setLastGenerationAction] = React.useState(null);
+  const [generationRecovery, setGenerationRecovery] = React.useState({
+    runId: '',
+    agentId: '',
+    provider: '',
+    model: '',
+    pending: false,
+    error: '',
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
@@ -687,120 +698,20 @@ function App() {
       includeIntro: true,
     });
 
-    const generationRequest = beginGenerationRequest('doc-feedback');
-    const originWorkspaceId = generationRequest.workspaceId;
-    setFeedbackSurvey((prev) => ({
-      ...prev,
-      open: false,
-      phase: 'details',
-      submitting: true,
-      submissionRequestId: generationRequest.requestId,
-    }));
-    setAssistantTrigger('manual');
-    setSidebarOpen(true);
-    setLiveGeneration({
-      active: true,
-      state: 'running',
-        prompt: 'מעדכן את המסמך לפי המשוב שלך',
-      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
-      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
-      runId: generationRequest.runId,
-      workspaceId: originWorkspaceId,
-    });
-
-    const clearHiddenFeedbackSubmittingAfterStale = () => {
-      setFeedbackSurvey((prev) => {
-        if (prev.submissionRequestId !== generationRequest.requestId || prev.open || !prev.submitting) {
-          return prev;
-        }
-
-        return {
-          ...prev,
-          submitting: false,
-          submissionRequestId: null,
-        };
-      });
-    };
-
-    try {
-      const result = await reviseDocumentWithFeedback({
+    await runDocumentFeedbackRevision({
+      kind: 'feedback-revision',
+      workspaceId: getActiveWorkspaceId(),
+      payload: {
         existingHtml: editor?.getHTML?.() || '',
         originalPrompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
         feedback: feedbackText,
-        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials : [],
+        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
-        runId: generationRequest.runId,
-        returnMeta: true,
-      });
-
-      const revisedHtml = result?.html || editor?.getHTML?.() || '';
-      const usedFallback = Boolean(result?.usedFallback);
-      if (!isGenerationRequestCurrent(generationRequest)) {
-        clearHiddenFeedbackSubmittingAfterStale();
-        return;
-      }
-
-      if (editor && revisedHtml) {
-        lastLiveGenerationShellRef.current = { runId: '', html: '' };
-        editor.commands.setContent(revisedHtml);
-      }
-
-      persistLocalCache(revisedHtml);
-      saveDocumentHistory({
-        title: `${feedbackSurvey.prompt || 'מסמך'} · תיקון לפי משוב`,
-        content: revisedHtml,
-        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
-        source: 'feedback-revision',
-      });
-
-      setLiveGeneration({
-        active: true,
-        state: usedFallback ? 'warning' : 'success',
-        prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
-        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
-        runId: generationRequest.runId,
-        workspaceId: originWorkspaceId,
-      });
-
-      setFeedbackSurvey({
-        ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
-          prompt: feedbackSurvey.prompt,
-          templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
-          usedFallback,
-        }),
-        open: false,
-        phase: 'details',
-        usedFallback,
-      });
-
-      if (usedFallback && result?.errorMessage) {
-        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
-      }
-    } catch (error) {
-      if (!isGenerationRequestCurrent(generationRequest)) {
-        clearHiddenFeedbackSubmittingAfterStale();
-        return;
-      }
-      setFeedbackSurvey({
-        ...surveySnapshot,
-        open: true,
-        phase: 'details',
-        submitting: false,
-      });
-      setLiveGeneration({
-        active: true,
-        state: 'error',
-        prompt: 'עדכון המסמך נכשל',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
-        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
-        runId: generationRequest.runId,
-        workspaceId: originWorkspaceId,
-      });
-      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
-    }
-  }, [feedbackSurvey, editor, activeTemplateId]);
+        surveySnapshot,
+      },
+    });
+  }, [activeTemplateId, editor, feedbackSurvey]);
 
   const requestDocumentRecommendations = React.useCallback(async () => {
     const selectedOptions = feedbackSurvey.selectedOptions || [];
@@ -820,84 +731,20 @@ function App() {
       reviewErrorMessage: '',
     };
 
-    const generationRequest = beginGenerationRequest('doc-review');
-    setFeedbackSurvey((prev) => ({
-      ...prev,
-      open: true,
-      phase: 'review',
-      submitting: true,
-      submissionRequestId: generationRequest.requestId,
-      reviewResult: null,
-      reviewFocus,
-      reviewErrorMessage: '',
-    }));
-
-    const clearHiddenReviewSubmittingAfterStale = () => {
-      setFeedbackSurvey((prev) => {
-        if (prev.submissionRequestId !== generationRequest.requestId || !prev.submitting) {
-          return prev;
-        }
-
-        return {
-          ...prev,
-          submitting: false,
-          submissionRequestId: null,
-        };
-      });
-    };
-
-    try {
-      const result = await reviewDocumentRecommendations({
+    await runDocumentRecommendationsReview({
+      kind: 'review-recommendations',
+      workspaceId: getActiveWorkspaceId(),
+      payload: {
         existingHtml: editor?.getHTML?.() || '',
         originalPrompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
-        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials : [],
+        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
         focus: reviewFocus,
-        runId: generationRequest.runId,
-        returnMeta: true,
-      });
-
-      if (!isGenerationRequestCurrent(generationRequest)) {
-        clearHiddenReviewSubmittingAfterStale();
-        return;
-      }
-
-      setFeedbackSurvey((prev) => {
-        if (prev.submissionRequestId !== generationRequest.requestId) return prev;
-
-        return {
-          ...prev,
-          phase: 'review',
-          submitting: false,
-          submissionRequestId: null,
-          reviewFocus,
-          reviewErrorMessage: String(result?.errorMessage || '').trim(),
-          reviewResult: {
-            summary: String(result?.summary || '').trim(),
-            suggestions: Array.isArray(result?.suggestions) ? result.suggestions : [],
-            usedFallback: Boolean(result?.usedFallback),
-          },
-        };
-      });
-    } catch (error) {
-      if (!isGenerationRequestCurrent(generationRequest)) {
-        clearHiddenReviewSubmittingAfterStale();
-        return;
-      }
-
-      setFeedbackSurvey({
-        ...surveySnapshot,
-        open: true,
-        phase: 'details',
-        submitting: false,
-        submissionRequestId: null,
-        reviewResult: null,
-        reviewErrorMessage: '',
-      });
-      alert(error?.message || 'לא הצלחתי להכין המלצות עריכה למסמך.');
-    }
-  }, [feedbackSurvey, editor, activeTemplateId]);
+        surveySnapshot,
+      },
+    });
+  }, [activeTemplateId, editor, feedbackSurvey]);
 
   const closeFeedbackSurvey = React.useCallback(() => {
     setFeedbackSurvey((prev) => {
@@ -921,6 +768,137 @@ function App() {
     }));
     setLiveGeneration((prev) => ({ ...prev, active: false }));
   }, []);
+
+  const currentWorkspaceId = getActiveWorkspaceId();
+  const currentProviderConfig = getProviderConfig();
+  const configuredProviderChoices = getConfiguredProviderChoices(currentProviderConfig);
+  const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
+  const failedGenerationStage = liveGeneration.state === 'error'
+    ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
+    : null;
+  const activeWorkspaceAgents = lastGenerationAction?.workspaceId === currentWorkspaceId && liveGeneration.workspaceId === currentWorkspaceId
+    ? getRoleAgents()
+    : [];
+  const failedStageAgentRecord = failedGenerationStage
+    ? activeWorkspaceAgents.find((agent) => agent.id === failedGenerationStage.id) || null
+    : null;
+  const failedStageCurrentProvider = failedStageAgentRecord?.provider || failedGenerationStage?.provider || '';
+  const failedStageCurrentModel = failedStageAgentRecord?.model || failedGenerationStage?.model || '';
+  const recoveryModelChoices = getProviderModelChoices(
+    generationRecovery.provider || failedStageCurrentProvider,
+    currentProviderConfig,
+    [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean),
+  );
+  const canRetryFailedGeneration = Boolean(
+    liveGeneration.state === 'error'
+    && failedGenerationStage?.id
+    && failedStageAgentRecord
+    && lastGenerationAction?.payload
+    && lastGenerationAction.workspaceId === currentWorkspaceId
+    && liveGeneration.workspaceId === currentWorkspaceId
+    && configuredProviderChoices.length
+  );
+  const failedStageProviderLabel = configuredProviderChoices.find((item) => item.id === failedStageCurrentProvider)?.label || failedStageCurrentProvider || 'לא הוגדר';
+  const failedStageModelLabel = failedStageCurrentModel || 'לא הוגדר';
+
+  React.useEffect(() => {
+    if (!canRetryFailedGeneration) {
+      setGenerationRecovery((prev) => (
+        prev.runId || prev.agentId || prev.provider || prev.model || prev.error || prev.pending
+          ? { runId: '', agentId: '', provider: '', model: '', pending: false, error: '' }
+          : prev
+      ));
+      return;
+    }
+
+    const initialProvider = configuredProviderChoices.some((item) => item.id === failedStageCurrentProvider)
+      ? failedStageCurrentProvider
+      : (configuredProviderChoices[0]?.id || '');
+    const initialModels = getProviderModelChoices(initialProvider, currentProviderConfig, [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean));
+    const preferredModel = failedStageCurrentModel && initialModels.includes(failedStageCurrentModel)
+      ? failedStageCurrentModel
+      : (initialModels[0] || '');
+
+    setGenerationRecovery((prev) => {
+      if (prev.runId === liveGeneration.runId && prev.agentId === failedGenerationStage.id) {
+        return prev;
+      }
+      return {
+        runId: liveGeneration.runId,
+        agentId: failedGenerationStage.id,
+        provider: initialProvider,
+        model: preferredModel,
+        pending: false,
+        error: '',
+      };
+    });
+  }, [canRetryFailedGeneration, configuredProviderChoices, currentProviderConfig, failedGenerationStage, failedStageAgentRecord, failedStageCurrentModel, failedStageCurrentProvider, liveGeneration.runId]);
+
+  const handleRecoveryProviderChange = React.useCallback((event) => {
+    const nextProvider = String(event.target.value || '').trim();
+    const nextModels = getProviderModelChoices(nextProvider, getProviderConfig(), [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean));
+    setGenerationRecovery((prev) => ({
+      ...prev,
+      provider: nextProvider,
+      model: nextModels[0] || '',
+      error: '',
+    }));
+  }, [failedGenerationStage, failedStageAgentRecord]);
+
+  const handleRecoveryModelChange = React.useCallback((event) => {
+    const nextModel = String(event.target.value || '').trim();
+    setGenerationRecovery((prev) => ({
+      ...prev,
+      model: nextModel,
+      error: '',
+    }));
+  }, []);
+
+  const retryFailedGenerationWithUpdatedAgent = React.useCallback(async () => {
+    if (!canRetryFailedGeneration || generationRecovery.pending) return;
+
+    const nextProvider = String(generationRecovery.provider || '').trim();
+    const nextModel = String(generationRecovery.model || '').trim();
+    if (!nextProvider || !nextModel) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'בחר provider ומודל תקפים לפני ההרצה מחדש.' }));
+      return;
+    }
+
+    const latestEditorHtml = editor?.getHTML?.() || '';
+    const agents = getRoleAgents();
+    const targetAgent = agents.find((agent) => agent.id === failedGenerationStage.id);
+    if (!targetAgent) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'לא מצאתי את הסוכן שנכשל בסביבת העבודה הפעילה.' }));
+      return;
+    }
+
+    const updated = updateCurrentWorkspace({
+      agents: agents.map((agent) => (agent.id === targetAgent.id ? { ...agent, provider: nextProvider, model: nextModel } : agent)),
+    });
+    if (!updated) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'לא הצלחתי לעדכן את הסוכן בסביבת העבודה הפעילה.' }));
+      return;
+    }
+
+    setGenerationRecovery((prev) => ({ ...prev, pending: true, error: '' }));
+    try {
+      const started = await runStoredGenerationAction({
+        ...lastGenerationAction,
+        workspaceId: currentWorkspaceId,
+        payload: {
+          ...(lastGenerationAction?.payload || {}),
+          ...((lastGenerationAction?.kind === 'feedback-revision' || lastGenerationAction?.kind === 'review-recommendations')
+            ? { existingHtml: latestEditorHtml }
+            : {}),
+        },
+      }, { skipConfirmReplace: true });
+      if (!started) {
+        setGenerationRecovery((prev) => ({ ...prev, error: 'לא הצלחתי להפעיל מחדש את הפעולה האחרונה.' }));
+      }
+    } finally {
+      setGenerationRecovery((prev) => ({ ...prev, pending: false }));
+    }
+  }, [canRetryFailedGeneration, currentWorkspaceId, editor, failedGenerationStage, generationRecovery.model, generationRecovery.pending, generationRecovery.provider, lastGenerationAction]);
 
   const updateActiveFormats = React.useCallback((currentEditor) => {
     if (!currentEditor) return;
@@ -1307,6 +1285,402 @@ function App() {
     }
   }, []);
 
+  const executeStartScreenGeneration = React.useCallback(async (action, options = {}) => {
+    const payload = action?.payload || {};
+    if (!editor) {
+      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      return false;
+    }
+    if (!options.skipConfirmReplace && !confirmReplaceCurrentDocument()) return false;
+
+    const resolvedAction = {
+      ...action,
+      kind: 'start-screen-generate',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const prompt = String(payload.prompt || '').trim();
+    const templateId = String(payload.templateId || 'blank').trim() || 'blank';
+    const instructions = String(payload.instructions || '').trim();
+    const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+    const selectedModel = String(payload.selectedModel || '').trim();
+    const requestedStyle = String(payload.documentStyle || '').trim();
+    const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
+
+    setCurrentFilePath('');
+    localStorage.setItem('wordai_active_template', templateId);
+    syncPersistedAppSettings();
+    setActiveTemplateId(templateId);
+    setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+    changeDocumentStyle(requestedStyle || documentStyle);
+    setAssistantTrigger('autopilot');
+    setSidebarCompact(false);
+    setSidebarOpen(true);
+    setShowStartScreen(false);
+
+    const generationRequest = beginGenerationRequest('doc');
+    const originWorkspaceId = generationRequest.workspaceId;
+    const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
+    const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
+    const revisionRequest = hasBaseDraft
+      ? buildBaseDraftRevisionRequest({
+          promptText: prompt,
+          instructionsText: instructions,
+          baseDraftTitle,
+          templateId,
+        })
+      : null;
+    const generationLabel = hasBaseDraft
+      ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
+      : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId });
+    const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+    const initialLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: generationLabel,
+      summary: initialSummary,
+      logs: initialLogs,
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const initialShell = buildLiveGenerationShell({
+      titleText: generationLabel,
+      state: 'running',
+      stages: initialSummary?.stages || [],
+      logs: initialLogs,
+      runId: generationRequest.runId,
+    });
+    editor.commands.setContent(initialShell);
+    lastLiveGenerationShellRef.current = {
+      runId: generationRequest.runId,
+      html: String(editor.getHTML?.() || initialShell),
+    };
+    focusEditorSoon('start');
+
+    try {
+      const result = hasBaseDraft
+        ? await reviseDocumentWithFeedback({
+            existingHtml: baseDraft.html,
+            originalPrompt: revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס',
+            templateId,
+            feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
+            selectedMaterials,
+            selectedModel,
+            forceDirectMode: false,
+            runId: generationRequest.runId,
+            returnMeta: true,
+          })
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, runId: generationRequest.runId, returnMeta: true });
+      const resolvedTitle = hasBaseDraft
+        ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
+        : String(result?.title || generationLabel || 'מסמך חדש').trim();
+      const generated = result?.html || (hasBaseDraft
+        ? String(baseDraft?.html || '').trim() || `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`
+        : `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`);
+      const usedFallback = Boolean(result?.usedFallback);
+      if (!isGenerationRequestCurrent(generationRequest)) return true;
+
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      editor.commands.setContent(generated);
+      saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
+      persistLocalCache(generated);
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setFeedbackSurvey({
+        ...buildFeedbackSurveyStateWithGenerationContext({}, {
+          prompt: resolvedTitle,
+          templateId,
+          usedFallback,
+          selectedMaterials,
+          selectedModel,
+        }),
+        open: false,
+        phase: 'details',
+      });
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) return true;
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      editor.commands.setContent(`<h1>${escHtml(generationLabel)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+    }
+
+    return true;
+  }, [beginGenerationRequest, changeDocumentStyle, confirmReplaceCurrentDocument, documentStyle, editor, focusEditorSoon, isGenerationRequestCurrent, persistLocalCache]);
+
+  const runDocumentFeedbackRevision = React.useCallback(async (action) => {
+    const payload = action?.payload || {};
+    const resolvedAction = {
+      ...action,
+      kind: 'feedback-revision',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
+      ? { ...payload.surveySnapshot }
+      : { ...DEFAULT_FEEDBACK_SURVEY };
+    const generationRequest = beginGenerationRequest('doc-feedback');
+    const originWorkspaceId = generationRequest.workspaceId;
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      open: false,
+      phase: 'details',
+      submitting: true,
+      submissionRequestId: generationRequest.requestId,
+    }));
+    setAssistantTrigger('manual');
+    setSidebarOpen(true);
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: 'מעדכן את המסמך לפי המשוב שלך',
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const clearHiddenFeedbackSubmittingAfterStale = () => {
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId || prev.open || !prev.submitting) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          submitting: false,
+          submissionRequestId: null,
+        };
+      });
+    };
+
+    try {
+      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+      const selectedModel = String(payload.selectedModel || '').trim();
+      const result = await reviseDocumentWithFeedback({
+        existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
+        originalPrompt: payload.originalPrompt,
+        templateId,
+        feedback: payload.feedback || '',
+        selectedMaterials,
+        selectedModel,
+        runId: generationRequest.runId,
+        returnMeta: true,
+      });
+
+      const revisedHtml = result?.html || payload.existingHtml || editor?.getHTML?.() || '';
+      const usedFallback = Boolean(result?.usedFallback);
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return true;
+      }
+
+      if (editor && revisedHtml) {
+        lastLiveGenerationShellRef.current = { runId: '', html: '' };
+        editor.commands.setContent(revisedHtml);
+      }
+
+      persistLocalCache(revisedHtml);
+      saveDocumentHistory({
+        title: `${payload.originalPrompt || 'מסמך'} · תיקון לפי משוב`,
+        content: revisedHtml,
+        templateId,
+        source: 'feedback-revision',
+      });
+
+      setLiveGeneration({
+        active: true,
+        state: usedFallback ? 'warning' : 'success',
+        prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+
+      setFeedbackSurvey({
+        ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
+          prompt: payload.originalPrompt,
+          templateId,
+          usedFallback,
+          selectedMaterials,
+          selectedModel,
+        }),
+        open: false,
+        phase: 'details',
+        usedFallback,
+      });
+
+      if (usedFallback && result?.errorMessage) {
+        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
+      }
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return true;
+      }
+      setFeedbackSurvey({
+        ...surveySnapshot,
+        open: true,
+        phase: 'details',
+        submitting: false,
+      });
+      setLiveGeneration({
+        active: true,
+        state: 'error',
+        prompt: 'עדכון המסמך נכשל',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
+    }
+
+    return true;
+  }, [activeTemplateId, beginGenerationRequest, editor, isGenerationRequestCurrent, persistLocalCache]);
+
+  const runDocumentRecommendationsReview = React.useCallback(async (action) => {
+    const payload = action?.payload || {};
+    const resolvedAction = {
+      ...action,
+      kind: 'review-recommendations',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
+      ? { ...payload.surveySnapshot }
+      : { ...DEFAULT_FEEDBACK_SURVEY };
+    const generationRequest = beginGenerationRequest('doc-review');
+    const originWorkspaceId = generationRequest.workspaceId;
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      open: true,
+      phase: 'review',
+      submitting: true,
+      submissionRequestId: generationRequest.requestId,
+      reviewResult: null,
+      reviewFocus: String(payload.focus || '').trim(),
+      reviewErrorMessage: '',
+    }));
+    setAssistantTrigger('manual');
+    setSidebarOpen(true);
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: 'מכין המלצות עריכה למסמך',
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const clearHiddenReviewSubmittingAfterStale = () => {
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId || !prev.submitting) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          submitting: false,
+          submissionRequestId: null,
+        };
+      });
+    };
+
+    try {
+      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+      const selectedModel = String(payload.selectedModel || '').trim();
+      const reviewFocus = String(payload.focus || '').trim();
+      const result = await reviewDocumentRecommendations({
+        existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
+        originalPrompt: payload.originalPrompt,
+        templateId,
+        selectedMaterials,
+        selectedModel,
+        focus: reviewFocus,
+        runId: generationRequest.runId,
+        returnMeta: true,
+      });
+
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenReviewSubmittingAfterStale();
+        return true;
+      }
+
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId) return prev;
+
+        return {
+          ...prev,
+          phase: 'review',
+          submitting: false,
+          submissionRequestId: null,
+          reviewFocus,
+          reviewErrorMessage: String(result?.errorMessage || '').trim(),
+          reviewResult: {
+            summary: String(result?.summary || '').trim(),
+            suggestions: Array.isArray(result?.suggestions) ? result.suggestions : [],
+            usedFallback: Boolean(result?.usedFallback),
+          },
+        };
+      });
+
+      setLiveGeneration((prev) => (prev.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        active: false,
+        state: 'idle',
+        prompt: '',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: '',
+        workspaceId: originWorkspaceId,
+      }));
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenReviewSubmittingAfterStale();
+        return true;
+      }
+
+      setFeedbackSurvey({
+        ...surveySnapshot,
+        open: true,
+        phase: 'details',
+        submitting: false,
+        submissionRequestId: null,
+        reviewResult: null,
+        reviewErrorMessage: '',
+      });
+      setLiveGeneration({
+        active: true,
+        state: 'error',
+        prompt: 'הכנת המלצות העריכה נכשלה',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+      alert(error?.message || 'לא הצלחתי להכין המלצות עריכה למסמך.');
+    }
+
+    return true;
+  }, [activeTemplateId, beginGenerationRequest, editor, isGenerationRequestCurrent]);
+
+  const runStoredGenerationAction = React.useCallback(async (action, options = {}) => {
+    if (!action?.kind) return false;
+    if (action.kind === 'start-screen-generate') return executeStartScreenGeneration(action, options);
+    if (action.kind === 'feedback-revision') return runDocumentFeedbackRevision(action);
+    if (action.kind === 'review-recommendations') return runDocumentRecommendationsReview(action);
+    return false;
+  }, [executeStartScreenGeneration, runDocumentFeedbackRevision, runDocumentRecommendationsReview]);
+
   const clearPersistedDraftCache = React.useCallback(() => {
     localStorage.removeItem('wordai_document');
     localStorage.removeItem('wordai_document_autosave');
@@ -1386,6 +1760,50 @@ function App() {
 
     applyPending();
   }, [editor, applyImportedDocument]);
+
+  const buildDesktopSavePayload = React.useCallback((preferredExtension = 'docx') => {
+    const currentPreset = DOCUMENT_STYLE_PRESETS[documentStyle] || DOCUMENT_STYLE_PRESETS.academic;
+    const html = editor?.getHTML?.() || '';
+    const text = editor?.getText?.() || '';
+    const fontStack = String(
+      wordPreferences.defaultFontStack
+      || localStorage.getItem('default-font-stack')
+      || wordPreferences.defaultFontFamily
+      || localStorage.getItem('default-font')
+      || currentPreset.fontFamily
+      || ''
+    ).trim();
+    const fontSize = String(
+      wordPreferences.defaultFontSize
+      || localStorage.getItem('default-size')
+      || currentPreset.fontSize
+      || '12pt'
+    ).trim();
+
+    return {
+      title: text.trim().slice(0, 60) || 'מסמך',
+      html,
+      text,
+      preferredExtension,
+      exportOptions: {
+        documentStyle,
+        fontStack,
+        fontSize,
+        language: 'he-IL',
+        disableProofing: false,
+      },
+    };
+  }, [documentStyle, editor, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
+
+  const downloadBrowserDocxOrAlert = React.useCallback(async (preferredExtension = 'docx') => {
+    try {
+      return await downloadBrowserDocx(buildDesktopSavePayload(preferredExtension));
+    } catch (error) {
+      console.error('Browser DOCX export failed:', error);
+      window.alert(error?.message || 'לא הצלחתי לשמור את קובץ ה-Word בדפדפן.');
+      return { handled: false, canceled: false, error };
+    }
+  }, [buildDesktopSavePayload]);
 
 
 
@@ -1723,16 +2141,19 @@ function App() {
       // --- פקודות File Menu ---
       case 'newDoc': {
         if (window.confirm('האם למחוק את תוכן המסמך הנוכחי ולפתוח מסמך חדש?')) {
+          const shouldShowStartExperience = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
           clearDraftReviewState();
           editor.chain().focus().clearContent().run();
           localStorage.removeItem('wordai_document_autosave');
           localStorage.removeItem('wordai_document_autosave_at');
           localStorage.removeItem('wordai_document');
+          saveHomeInstructions('');
+          setStartScreenInstructionsResetToken((prev) => prev + 1);
           setCurrentFilePath('');
           localStorage.setItem('wordai_active_template', 'blank');
           syncPersistedAppSettings();
           setActiveTemplateId('blank');
-          setShowStartScreen(wordPreferences.showStartExperience !== false);
+          setShowStartScreen(shouldShowStartExperience);
         }
         break;
       }
@@ -1745,11 +2166,8 @@ function App() {
           const ext = String(currentFilePath || '').toLowerCase().split('.').pop();
           const canSaveDirectly = Boolean(currentFilePath) && ['txt', 'html', 'htm', 'docx'].includes(ext);
           const result = await window.desktopApp.saveDocumentDialog({
+            ...buildDesktopSavePayload(ext === 'txt' ? 'txt' : 'docx'),
             filePath: canSaveDirectly ? currentFilePath : '',
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: ext === 'txt' ? 'txt' : 'docx',
           });
 
           if (!result?.canceled && result?.filePath) {
@@ -1765,13 +2183,15 @@ function App() {
           break;
         }
 
-        saveDocumentHistory({
-          title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
-          content: html,
-          templateId: activeTemplateId || 'blank',
-          source: 'save-local',
-        });
-        downloadFile(html, 'document.doc', 'application/msword');
+        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
+          saveDocumentHistory({
+            title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+            content: html,
+            templateId: activeTemplateId || 'blank',
+            source: 'save-local',
+          });
+        }
         break;
       }
       case 'openFile': {
@@ -1798,21 +2218,16 @@ function App() {
       }
       case 'saveAs': {
         const html = editor.getHTML();
-        const text = editor.getText();
+        const title = editor.getText().trim().slice(0, 60) || 'מסמך שמור';
 
         if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog({
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: 'docx',
-          });
+          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
 
           if (!result?.canceled) {
             setCurrentFilePath(String(result.filePath || ''));
             persistLocalCache(html);
             saveDocumentHistory({
-              title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+              title,
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-as',
@@ -1822,24 +2237,25 @@ function App() {
           break;
         }
 
-        downloadFile(html, 'document.doc', 'application/msword');
+        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
+          persistLocalCache(html);
+          saveDocumentHistory({
+            title,
+            content: html,
+            templateId: activeTemplateId || 'blank',
+            source: 'save-as',
+          });
+        }
         break;
       }
       case 'exportDocx': {
-        const html = editor.getHTML();
-        const text = editor.getText();
         if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog({
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: 'docx',
-          });
+          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
           if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
           break;
         }
-        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body dir="rtl">${html}</body></html>`;
-        downloadFile(htmlContent, 'document.doc', 'application/msword');
+        await downloadBrowserDocxOrAlert('docx');
         break;
       }
       case 'print': {
@@ -2262,19 +2678,17 @@ function App() {
     ? feedbackSurvey.reviewResult.suggestions
     : [];
   const feedbackReviewSummary = String(feedbackSurvey.reviewResult?.summary || '').trim();
-  const feedbackReviewUsedFallback = Boolean(feedbackSurvey.reviewResult?.usedFallback);
   const canOpenDraftRecommendations = !feedbackSurvey.submitting
     && liveGeneration.state !== 'running'
     && hasMeaningfulEditorContent(editor);
-
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       <TopBar
         onOpenUpdates={openUpdatesPanel}
         onOpen={() => handleCommand('openFile')}
+        onNew={() => handleCommand('newDoc')}
         onSave={() => handleCommand('saveLocal')}
         onSaveAs={() => handleCommand('saveAs')}
-        onNew={() => handleCommand('newDoc')}
         onUndo={() => editor?.chain().focus().undo().run()}
         onRedo={() => editor?.chain().focus().redo().run()}
         onHome={() => setShowStartScreen(true)}
@@ -2362,6 +2776,57 @@ function App() {
                       )}
                     </div>
                   </div>
+
+                  {canRetryFailedGeneration && (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50/80 p-3">
+                      <div className="text-[11px] font-bold text-red-700">הסוכן שנכשל: {failedGenerationStage?.label || failedStageAgentRecord?.name || 'לא זוהה'}</div>
+                      <div className="mt-1 text-[11px] leading-4 text-slate-700">
+                        ההרצה נעצרה ב־{failedStageProviderLabel} / {failedStageModelLabel}. אפשר לעדכן רק את הסוכן הזה ולהפעיל מחדש את אותה פעולה מההתחלה.
+                      </div>
+
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <label className="block text-[11px] text-slate-700">
+                          <span className="mb-1 block font-semibold">Provider חלופי</span>
+                          <select
+                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                            value={generationRecovery.provider}
+                            onChange={handleRecoveryProviderChange}
+                            disabled={generationRecovery.pending}
+                          >
+                            {configuredProviderChoices.map((provider) => (
+                              <option key={provider.id} value={provider.id}>{provider.label}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="block text-[11px] text-slate-700">
+                          <span className="mb-1 block font-semibold">מודל חלופי</span>
+                          <select
+                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                            value={generationRecovery.model}
+                            onChange={handleRecoveryModelChange}
+                            disabled={generationRecovery.pending || !recoveryModelChoices.length}
+                          >
+                            {recoveryModelChoices.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      {generationRecovery.error && (
+                        <div className="mt-2 text-[11px] font-medium text-red-700">{generationRecovery.error}</div>
+                      )}
+
+                      <button
+                        className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
+                        onClick={retryFailedGenerationWithUpdatedAgent}
+                        disabled={generationRecovery.pending || !generationRecovery.provider || !generationRecovery.model}
+                      >
+                        {generationRecovery.pending ? 'מעדכן סוכן ומריץ מחדש...' : 'החלף מודל והרץ מחדש'}
+                      </button>
+                    </div>
+                  )}
 
                   {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
                     <div className="mt-3 flex gap-2">
@@ -2528,7 +2993,7 @@ function App() {
                       className="btn btn-primary flex-1"
                       onClick={approveFeedbackSurvey}
                     >
-                      כן, המסמך טוב
+                      כן, המסמך מוכן
                     </button>
                     <button
                       className="btn btn-outline flex-1"
@@ -2544,24 +3009,24 @@ function App() {
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="text-sm font-bold text-slate-800">
-                        {feedbackSurvey.submitting ? 'מכין עכשיו המלצות עריכה למסמך...' : (feedbackReviewSummary || 'לא חזרו עדיין המלצות קונקרטיות לטיוטה.')}
+                        {feedbackSurvey.submitting ? 'בודק ומכין המלצות לעריכת המסמך...' : (feedbackReviewSummary || 'אלו כמה המלצות לעריכה ממוקדת בטיוטה.')}
                       </div>
                       <div className="mt-2 text-xs leading-6 text-slate-500 whitespace-pre-wrap">
-                        {feedbackSurvey.reviewFocus || 'סקירה כללית של הטיוטה הנוכחית ללא מיקוד נוסף.'}
+                        {feedbackSurvey.reviewFocus || 'המיקוד לבדיקה לא הוגדר ולכן נבדקה הטיוטה בכללותה.'}
                       </div>
                     </div>
 
                     {feedbackSurvey.reviewErrorMessage && (
                       <div className={`rounded-2xl px-4 py-3 text-sm ${feedbackReviewUsedFallback ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'border border-rose-200 bg-rose-50 text-rose-700'}`}>
                         {feedbackReviewUsedFallback
-                          ? `הוצג מצב בטוח כי יצירת ההמלצות לא הושלמה במלואה${feedbackSurvey.reviewErrorMessage ? `: ${feedbackSurvey.reviewErrorMessage}` : '.'}`
+                          ? `חלק מההמלצות לא הושלמו במלואן${feedbackSurvey.reviewErrorMessage ? `: ${feedbackSurvey.reviewErrorMessage}` : '.'}`
                           : feedbackSurvey.reviewErrorMessage}
                       </div>
                     )}
 
                     {feedbackSurvey.submitting ? (
                       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
-                        המערכת סוקרת את הטיוטה ומחזירה הצעות קצרות לשיפור, בלי לשנות את המסמך עצמו.
+                        ההמלצות נבנות עכשיו לפי המיקוד שביקשת, בלי לשנות עדיין את המסמך עצמו.
                       </div>
                     ) : feedbackReviewSuggestions.length ? (
                       <div className="space-y-3 max-h-[48vh] overflow-y-auto pr-1">
@@ -2570,7 +3035,7 @@ function App() {
                             <div className="text-base font-bold text-slate-800">{suggestion.title || `המלצה ${index + 1}`}</div>
                             <div className="mt-2 text-sm leading-6 text-slate-600">{suggestion.reason}</div>
                             <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-3">
-                              <div className="text-[11px] font-bold tracking-[0.16em] text-slate-400">שינוי מוצע</div>
+                              <div className="text-[11px] font-bold tracking-[0.16em] text-slate-400">ניסוח מוצע</div>
                               <div className="mt-1 text-sm leading-6 text-slate-700">{suggestion.suggestedChange}</div>
                             </div>
                           </div>
@@ -2578,7 +3043,7 @@ function App() {
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
-                        לא חזרו כרגע המלצות קונקרטיות. אפשר לנסות שוב, או לחזור ולשלוח עדכון ישיר לפי המשוב שלך.
+                        לא נוצרו המלצות ממוקדות. אפשר לנסות שוב, או לשלוח הערות מדויקות כדי שנבצע תיקון ישיר.
                       </div>
                     )}
 
@@ -2588,7 +3053,7 @@ function App() {
                         onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'details', submitting: false, submissionRequestId: null }))}
                         disabled={feedbackSurvey.submitting}
                       >
-                        חזרה למשוב
+                        שנה מיקוד
                       </button>
                       <button
                         className={`btn btn-outline ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
@@ -2630,10 +3095,10 @@ function App() {
                     </div>
 
                     <div>
-                      <div className="font-bold text-slate-800 mb-2">כתיבה חופשית</div>
+                      <div className="font-bold text-slate-800 mb-2">הערה חופשית</div>
                       <textarea
                         className="textarea textarea-bordered w-full min-h-[120px]"
-                        placeholder="לדוגמה: תוסיף יותר מקורות, תחדד את המסקנה, תקצר את הפתיחה, או תשנה את הסגנון..."
+                        placeholder="למשל: חזקי יותר את הטיעון המרכזי, הוסיפי מקור עדכני, קצרי את הפתיחה, או בדקי שוב את ניסוח הסיכום..."
                         value={feedbackSurvey.freeText}
                         onChange={(e) => setFeedbackSurvey((prev) => ({ ...prev, freeText: e.target.value }))}
                       />
@@ -2645,7 +3110,7 @@ function App() {
                         onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'question' }))}
                         disabled={feedbackSurvey.submitting}
                       >
-                        חזרה
+                        חזור
                       </button>
                       <button
                         className={`btn btn-outline ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
@@ -2689,6 +3154,8 @@ function App() {
         {showStartScreen && (
           <div className="flex-1 overflow-y-auto">
             <StartScreen
+              instructionsResetToken={startScreenInstructionsResetToken}
+              onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
               documentStyle={documentStyle}
               onDocumentStyleChange={changeDocumentStyle}
               escapeBlocked={fileMenuOpen || inputDialog.open || feedbackSurvey.open}
@@ -2751,108 +3218,11 @@ function App() {
                 setFileMenuTargetTab(targetTab || 'guide');
                 setFileMenuOpen(true);
               }}
-              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, selectedModel, documentStyle: requestedStyle, baseDraft }) => {
-                if (!editor) {
-                  window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
-                  return;
-                }
-                if (!confirmReplaceCurrentDocument()) return;
-                setCurrentFilePath('');
-                localStorage.setItem('wordai_active_template', templateId || 'blank');
-                syncPersistedAppSettings();
-                setActiveTemplateId(templateId || 'blank');
-                setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                changeDocumentStyle(requestedStyle || documentStyle);
-                setAssistantTrigger('autopilot');
-                setSidebarCompact(false);
-                setSidebarOpen(true);
-                setShowStartScreen(false);
-                const generationRequest = beginGenerationRequest('doc');
-                const originWorkspaceId = generationRequest.workspaceId;
-                const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
-                const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
-                const revisionRequest = hasBaseDraft
-                  ? buildBaseDraftRevisionRequest({
-                      promptText: prompt,
-                      instructionsText: instructions,
-                      baseDraftTitle,
-                      templateId: templateId || 'blank',
-                    })
-                  : null;
-                const generationLabel = hasBaseDraft
-                  ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
-                  : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId: templateId || 'blank' });
-                const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
-                const initialLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
-                setLiveGeneration({
-                  active: true,
-                  state: 'running',
-                  prompt: generationLabel,
-                  summary: initialSummary,
-                  logs: initialLogs,
-                  runId: generationRequest.runId,
-                  workspaceId: originWorkspaceId,
-                });
-                const initialShell = buildLiveGenerationShell({
-                  titleText: generationLabel,
-                  state: 'running',
-                  stages: initialSummary?.stages || [],
-                  logs: initialLogs,
-                  runId: generationRequest.runId,
-                });
-                editor.commands.setContent(initialShell);
-                lastLiveGenerationShellRef.current = {
-                  runId: generationRequest.runId,
-                  html: String(editor.getHTML?.() || initialShell),
-                };
-                focusEditorSoon('start');
-                try {
-                  const result = hasBaseDraft
-                    ? await reviseDocumentWithFeedback({
-                        existingHtml: baseDraft.html,
-                        originalPrompt: revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס',
-                        templateId,
-                        feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
-                        selectedMaterials,
-                        selectedModel,
-                        forceDirectMode: false,
-                        runId: generationRequest.runId,
-                        returnMeta: true,
-                      })
-                    : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, runId: generationRequest.runId, returnMeta: true });
-                  const resolvedTitle = hasBaseDraft
-                    ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
-                    : String(result?.title || generationLabel || 'מסמך חדש').trim();
-                  const generated = result?.html || (hasBaseDraft
-                    ? String(baseDraft?.html || '').trim() || `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`
-                    : `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`);
-                  const usedFallback = Boolean(result?.usedFallback);
-                  if (!isGenerationRequestCurrent(generationRequest)) return;
-                  lastLiveGenerationShellRef.current = { runId: '', html: '' };
-                  editor.commands.setContent(generated);
-                  saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
-                  persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
-                  setFeedbackSurvey({
-                    ...buildFeedbackSurveyStateWithGenerationContext({}, {
-                      prompt: resolvedTitle,
-                      templateId: templateId || 'blank',
-                      usedFallback,
-                      selectedMaterials,
-                      selectedModel,
-                    }),
-                    open: false,
-                    phase: 'details',
-                  });
-                } catch (error) {
-                  if (!isGenerationRequestCurrent(generationRequest)) return;
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
-                  if (editor) {
-                    lastLiveGenerationShellRef.current = { runId: '', html: '' };
-                    editor.commands.setContent(`<h1>${escHtml(generationLabel)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
-                  }
-                }
-              }}
+              onGenerateFromPrompt={(payload) => executeStartScreenGeneration({
+                kind: 'start-screen-generate',
+                workspaceId: getActiveWorkspaceId(),
+                payload,
+              })}
             />
           </div>
         )}
@@ -2920,7 +3290,9 @@ if (rootElement) {
       return this.props.children;
     }
   }
-  ReactDOM.createRoot(rootElement).render(
+  const appRoot = rootElement.__wordflowReactRoot || ReactDOM.createRoot(rootElement);
+  rootElement.__wordflowReactRoot = appRoot;
+  appRoot.render(
     <ErrorBoundary><App /></ErrorBoundary>
   );
 }

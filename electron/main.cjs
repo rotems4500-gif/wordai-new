@@ -75,6 +75,8 @@ const MANUAL_RELEASES_URL = 'https://github.com/rotems4500-gif/wordai-new/releas
 let mainWindow;
 let pendingFilePayload = null;
 let loadRendererInProgress = false;
+const activeProxyRequests = new Map();
+const abortedProxyRequests = new Set();
 let latestUpdateState = {
   status: 'idle',
   message: 'מוכן לבדיקת עדכונים',
@@ -130,7 +132,114 @@ function decodeHtmlEntities(value = '') {
     .replace(/&#39;/g, "'");
 }
 
-async function createDocxImageParagraph(block = '') {
+const DOCX_DEFAULT_FONT = 'Arial';
+const DOCX_DEFAULT_LANGUAGE = { value: 'he-IL', eastAsia: 'he-IL', bidirectional: 'he-IL' };
+const DOCX_WORD_SAFE_FONTS = new Set(['Arial', 'Calibri', 'David', 'Georgia', 'Miriam Libre', 'Segoe UI', 'Tahoma', 'Times New Roman']);
+
+function splitFontCandidates(fontValue = '') {
+  return String(fontValue || '')
+    .split(',')
+    .map((part) => part.replace(/["']/g, '').trim())
+    .filter((part) => part && !/^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-sans-serif|ui-serif|inherit|initial|unset)$/i.test(part));
+}
+
+function pickWordSafeFontName(fontValue = '', fallbackFont = DOCX_DEFAULT_FONT) {
+  const candidates = splitFontCandidates(fontValue);
+  return candidates.find((candidate) => DOCX_WORD_SAFE_FONTS.has(candidate)) || fallbackFont || DOCX_DEFAULT_FONT;
+}
+
+function normalizeDocxFontSize(rawValue = '', fallbackSize = 24) {
+  const raw = String(rawValue || '').trim().toLowerCase();
+  if (!raw) return fallbackSize;
+
+  const numeric = Number.parseFloat(raw);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallbackSize;
+
+  const points = raw.endsWith('px')
+    ? numeric * 0.75
+    : raw.endsWith('rem') || raw.endsWith('em')
+      ? numeric * 12
+      : numeric;
+
+  return Math.max(16, Math.round(points * 2));
+}
+
+function normalizeDocxLanguage(language = '') {
+  const resolved = String(language || '').trim() || DOCX_DEFAULT_LANGUAGE.value;
+  return {
+    value: resolved,
+    eastAsia: resolved,
+    bidirectional: resolved,
+  };
+}
+
+function resolveDocxParagraphAlignment(documentStyle = '') {
+  const normalizedStyle = String(documentStyle || '').trim().toLowerCase();
+  if (normalizedStyle === 'legal') return AlignmentType.JUSTIFIED;
+  if (normalizedStyle === 'presentation') return AlignmentType.CENTER;
+  return AlignmentType.RIGHT;
+}
+
+function resolveDocxExportOptions({ html = '', exportOptions = {} } = {}) {
+  const safeOptions = exportOptions && typeof exportOptions === 'object' ? exportOptions : {};
+  const htmlFontMatch = String(html || '').match(/font-family\s*:\s*([^;]+)/i);
+  const htmlFontStack = String(htmlFontMatch?.[1] || '').trim();
+  const fallbackFont = pickWordSafeFontName(htmlFontStack, DOCX_DEFAULT_FONT);
+  const fontName = pickWordSafeFontName(safeOptions.fontStack || safeOptions.fontFamily || '', fallbackFont);
+
+  return {
+    fontName,
+    fontSpec: {
+      ascii: fontName,
+      hAnsi: fontName,
+      cs: fontName,
+      eastAsia: fontName,
+    },
+    fontSize: normalizeDocxFontSize(safeOptions.fontSize, 24),
+    language: normalizeDocxLanguage(safeOptions.language),
+    noProof: safeOptions.disableProofing === true,
+    alignment: resolveDocxParagraphAlignment(safeOptions.documentStyle),
+  };
+}
+
+function buildDocxRunStyle(typography = {}, overrides = {}) {
+  const baseFontSpec = typography.fontSpec || {
+    ascii: typography.fontName || DOCX_DEFAULT_FONT,
+    hAnsi: typography.fontName || DOCX_DEFAULT_FONT,
+    cs: typography.fontName || DOCX_DEFAULT_FONT,
+    eastAsia: typography.fontName || DOCX_DEFAULT_FONT,
+  };
+  const merged = {
+    font: baseFontSpec,
+    size: typography.fontSize || 24,
+    sizeComplexScript: typography.fontSize || 24,
+    rightToLeft: true,
+    language: typography.language || DOCX_DEFAULT_LANGUAGE,
+    ...(typography.noProof === true ? { noProof: true } : {}),
+    ...(overrides || {}),
+  };
+
+  if (Object.prototype.hasOwnProperty.call(overrides || {}, 'size') && !Object.prototype.hasOwnProperty.call(overrides || {}, 'sizeComplexScript')) {
+    merged.sizeComplexScript = overrides.size;
+  }
+  if (merged.bold === true && !Object.prototype.hasOwnProperty.call(overrides || {}, 'boldComplexScript')) {
+    merged.boldComplexScript = true;
+  }
+  if (merged.italics === true && !Object.prototype.hasOwnProperty.call(overrides || {}, 'italicsComplexScript')) {
+    merged.italicsComplexScript = true;
+  }
+
+  return merged;
+}
+
+function createDocxTextRun(text = '', options = {}, typography = {}) {
+  return new TextRun({
+    text: String(text || ''),
+    ...buildDocxRunStyle(typography, options),
+  });
+}
+
+async function createDocxImageParagraph(block = '', typography = {}) {
   const srcMatch = String(block || '').match(/src=["']([^"']+)["']/i);
   const altMatch = String(block || '').match(/alt=["']([^"']*)["']/i);
   const src = decodeHtmlEntities(srcMatch?.[1] || '');
@@ -139,8 +248,9 @@ async function createDocxImageParagraph(block = '') {
   if (!src) {
     return new Paragraph({
       alignment: AlignmentType.RIGHT,
+      bidirectional: true,
       spacing: { after: 160 },
-      children: [new TextRun({ text: `[${alt}]`, italics: true, color: '475569' })],
+      children: [createDocxTextRun(`[${alt}]`, { italics: true, color: '475569' }, typography)],
     });
   }
 
@@ -165,6 +275,7 @@ async function createDocxImageParagraph(block = '') {
 
     return new Paragraph({
       alignment: AlignmentType.CENTER,
+      bidirectional: true,
       spacing: { after: 160 },
       children: [
         new ImageRun({
@@ -177,13 +288,14 @@ async function createDocxImageParagraph(block = '') {
   } catch {
     return new Paragraph({
       alignment: AlignmentType.RIGHT,
+      bidirectional: true,
       spacing: { after: 160 },
-      children: [new TextRun({ text: `[תמונה] ${alt || src}`, italics: true, color: '475569' })],
+      children: [createDocxTextRun(`[תמונה] ${alt || src}`, { italics: true, color: '475569' }, typography)],
     });
   }
 }
 
-function buildDocxTable(block = '') {
+function buildDocxTable(block = '', typography = {}) {
   const rows = (String(block || '').match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || []).map((rowHtml) => {
     const cells = rowHtml.match(/<(th|td)[^>]*>[\s\S]*?<\/\1>/gi) || [];
     return new TableRow({
@@ -194,8 +306,10 @@ function buildDocxTable(block = '') {
           width: { size: 100, type: WidthType.AUTO },
           children: [
             new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text, bold: isHeader })],
+              style: 'Normal',
+              alignment: typography.alignment || AlignmentType.RIGHT,
+              bidirectional: true,
+              children: [createDocxTextRun(text, { bold: isHeader }, typography)],
             }),
           ],
         });
@@ -204,34 +318,59 @@ function buildDocxTable(block = '') {
   });
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: rows.length ? rows : [new TableRow({ children: [new TableCell({ children: [new Paragraph(' ')] })] })],
+    width: { size: '100%', type: WidthType.PERCENTAGE },
+    visuallyRightToLeft: true,
+    rows: rows.length ? rows : [new TableRow({
+      children: [new TableCell({
+        children: [new Paragraph({
+          style: 'Normal',
+          text: ' ',
+          alignment: typography.alignment || AlignmentType.RIGHT,
+          bidirectional: true,
+        })],
+      })],
+    })],
   });
 }
 
-async function htmlToDocxParagraphs(html = '', fallbackText = '') {
+async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) {
   const source = String(html || '')
     .replace(/\r\n/g, '\n')
-    .replace(/<div data-type="page-break"><\/div>/gi, '\n[[PAGE_BREAK]]\n');
+    .replace(/<(div|p)[^>]*(?:data-type=["']page-break["']|data-page-break=["']true["']|class=["'][^"']*page-break(?:-node)?[^"']*["']|style=["'][^"']*(?:page-break-after\s*:\s*always|break-after\s*:\s*page)[^"']*["'])[^>]*>(?:\s|&nbsp;|&#160;|<br\s*\/?>)*<\/\1>/gi, '\n[[PAGE_BREAK]]\n');
 
   const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>/gi;
   const children = [];
   const blocks = source.match(blockRegex) || [];
 
   const pushTextParagraph = (text, options = {}) => {
-    const cleanText = decodeHtmlEntities(String(text || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const cleanText = decodeHtmlEntities(
+      String(text || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim(),
+    );
     if (!cleanText) return;
     const runOptions = {
-      text: cleanText,
       ...(options.bold ? { bold: true } : {}),
       ...(options.italics ? { italics: true } : {}),
       ...(options.color ? { color: options.color } : {}),
       ...(options.size ? { size: options.size } : {}),
     };
+    const textRuns = cleanText.split('\n').flatMap((line, index) => (
+      index === 0
+        ? [createDocxTextRun(line, runOptions, typography)]
+        : [createDocxTextRun(line, { ...runOptions, break: 1 }, typography)]
+    ));
     children.push(new Paragraph({
-      alignment: AlignmentType.RIGHT,
+      ...(options.heading ? {} : { style: 'Normal' }),
+      alignment: options.alignment || typography.alignment || AlignmentType.RIGHT,
+      bidirectional: true,
       spacing: { after: 160, line: 360 },
-      children: [new TextRun(runOptions)],
+      children: textRuns,
       ...('bullet' in options ? { bullet: options.bullet } : {}),
       ...(options.heading ? { heading: options.heading } : {}),
     }));
@@ -248,15 +387,15 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '') {
 
   for (const block of blocks) {
     if (block === '[[PAGE_BREAK]]') {
-      children.push(new Paragraph({ text: '', pageBreakBefore: true }));
+      children.push(new Paragraph({ style: 'Normal', text: '', pageBreakBefore: true, bidirectional: true }));
       continue;
     }
     if (/^<table/i.test(block)) {
-      children.push(buildDocxTable(block));
+      children.push(buildDocxTable(block, typography));
       continue;
     }
     if (/^<img/i.test(block)) {
-      children.push(await createDocxImageParagraph(block));
+      children.push(await createDocxImageParagraph(block, typography));
       continue;
     }
     if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }); continue; }
@@ -270,21 +409,109 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '') {
   return children.length ? children : [new Paragraph({ text: '' })];
 }
 
-async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Document' } = {}) {
-  const children = await htmlToDocxParagraphs(html, text);
+async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Document', exportOptions = {} } = {}) {
+  const typography = resolveDocxExportOptions({ html, exportOptions });
+  const headingOneSize = Math.max(typography.fontSize + 10, 34);
+  const headingTwoSize = Math.max(typography.fontSize + 4, 28);
+  const headingThreeSize = Math.max(typography.fontSize + 2, 24);
+  const children = await htmlToDocxParagraphs(html, text, typography);
   const doc = new Document({
+    styles: {
+      default: {
+        document: {
+          run: {
+            ...buildDocxRunStyle(typography),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 160, line: 360 },
+          },
+        },
+        title: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingOneSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 220 },
+          },
+        },
+        heading1: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingOneSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 240, after: 160 },
+          },
+        },
+        heading2: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingTwoSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 220, after: 160 },
+          },
+        },
+        heading3: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingThreeSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 200, after: 140 },
+          },
+        },
+        listParagraph: {
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+          },
+        },
+      },
+      paragraphStyles: [
+        {
+          id: 'Normal',
+          name: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 160, line: 360 },
+          },
+          run: {
+            ...buildDocxRunStyle(typography),
+          },
+        },
+      ],
+    },
     sections: [
       {
         properties: {},
-        children: [
-          new Paragraph({
-            alignment: AlignmentType.RIGHT,
-            heading: HeadingLevel.HEADING_1,
-            spacing: { after: 220 },
-            children: [new TextRun({ text: title, bold: true, size: 36 })],
-          }),
-          ...children,
-        ],
+        children,
       },
     ],
   });
@@ -292,8 +519,15 @@ async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Docu
   return Packer.toBuffer(doc);
 }
 
-function wrapHtmlDocument(html = '', title = 'WordFlow AI Document') {
-  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{direction:rtl;font-family:Arial,sans-serif;padding:40px;line-height:1.7}[data-type="page-break"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
+function wrapHtmlDocument(html = '', title = 'WordFlow AI Document', exportOptions = {}) {
+  const typography = resolveDocxExportOptions({ html, exportOptions });
+  const textAlign = typography.alignment === AlignmentType.CENTER
+    ? 'center'
+    : typography.alignment === AlignmentType.JUSTIFIED
+      ? 'justify'
+      : 'right';
+  const fontSizePt = Math.max(8, (typography.fontSize || 24) / 2);
+  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{direction:rtl;text-align:${textAlign};font-family:"${escapeHtml(typography.fontName)}",Arial,sans-serif;font-size:${fontSizePt}pt;padding:40px;line-height:1.7}[data-type="page-break"],[data-page-break="true"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
 }
 
 async function readDocumentPayload(filePath) {
@@ -801,10 +1035,11 @@ ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
       html: String(payload?.html || ''),
       text: String(payload?.text || ''),
       title: baseName,
+      exportOptions: payload?.exportOptions,
     });
     fs.writeFileSync(targetPath, buffer);
   } else {
-    fs.writeFileSync(targetPath, wrapHtmlDocument(String(payload?.html || ''), baseName), 'utf8');
+    fs.writeFileSync(targetPath, wrapHtmlDocument(String(payload?.html || ''), baseName, payload?.exportOptions), 'utf8');
   }
 
   return { ok: true, canceled: false, filePath: targetPath };
@@ -947,16 +1182,39 @@ async function triggerUpdateCheck() {
 ipcMain.handle('check-for-app-updates', async () => triggerUpdateCheck());
 
 // ─── Proxy HTTP: מאפשר ל-renderer לשלוח בקשות HTTP דרך main process (עוקף CORS) ───
-ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', headers = {}, body } = {}) => {
+ipcMain.handle('abort-proxy-http-request', async (_event, requestId = '') => {
+  const normalizedRequestId = String(requestId || '').trim();
+  if (!normalizedRequestId) return { ok: false, aborted: false };
+
+  const req = activeProxyRequests.get(normalizedRequestId);
+  if (!req) {
+    abortedProxyRequests.add(normalizedRequestId);
+    return { ok: true, aborted: true };
+  }
+
+  activeProxyRequests.delete(normalizedRequestId);
+  abortedProxyRequests.add(normalizedRequestId);
+  try {
+    req.destroy(new Error('Request aborted'));
+  } catch {}
+  return { ok: true, aborted: true };
+});
+
+ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', headers = {}, body, requestId = '', timeoutMs = 0 } = {}) => {
   try {
     const https = require('https');
     const http = require('http');
     const { URL: NodeURL } = require('url');
 
     const parsed = new NodeURL(url);
+    const normalizedRequestId = String(requestId || '').trim();
     const normalizedHost = normalizeProxyHost(parsed.hostname || '');
     const normalizedMethod = String(method || 'POST').toUpperCase();
     const resolvedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    const numericTimeoutMs = Number(timeoutMs);
+    const effectiveTimeoutMs = Number.isFinite(numericTimeoutMs) && numericTimeoutMs > 0
+      ? Math.max(1000, Math.min(300000, Math.round(numericTimeoutMs)))
+      : 120000;
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       return { ok: false, status: 0, body: 'פרוטוקול לא מורשה' };
     }
@@ -994,6 +1252,10 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
     if (!isAllowedLocalDevTarget && !isAllowedPersistedCustomTarget && !ALLOWED_HTTPS_HOSTS.has(normalizedHost)) {
       return { ok: false, status: 0, body: `Host לא מורשה: ${normalizedHost}` };
     }
+    if (normalizedRequestId && abortedProxyRequests.has(normalizedRequestId)) {
+      abortedProxyRequests.delete(normalizedRequestId);
+      return { ok: false, status: 0, body: 'Request aborted' };
+    }
 
     const result = await new Promise((resolve, reject) => {
       const lib = parsed.protocol === 'https:' ? https : http;
@@ -1004,15 +1266,53 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
         ),
         ...(bodyBuffer ? { 'Content-Length': String(bodyBuffer.length) } : {}),
       };
+      let settled = false;
+      let timeoutHandle = null;
+      const finishResolve = (value) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (normalizedRequestId) activeProxyRequests.delete(normalizedRequestId);
+        if (normalizedRequestId) abortedProxyRequests.delete(normalizedRequestId);
+        resolve(value);
+      };
+      const finishReject = (error) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (normalizedRequestId) activeProxyRequests.delete(normalizedRequestId);
+        if (normalizedRequestId) abortedProxyRequests.delete(normalizedRequestId);
+        reject(error);
+      };
       const req = lib.request(
         { hostname: parsed.hostname, port: resolvedPort, path: parsed.pathname + (parsed.search || ''), method: normalizedMethod, headers: reqHeaders },
         (res) => {
           const chunks = [];
           res.on('data', (chunk) => chunks.push(chunk));
-          res.on('end', () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+          res.on('error', finishReject);
+          res.on('aborted', () => finishReject(new Error('Response aborted')));
+          res.on('close', () => {
+            if (!settled && !res.complete) finishReject(new Error('Response closed before completion'));
+          });
+          res.on('end', () => finishResolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
         }
       );
-      req.on('error', reject);
+      req.on('error', finishReject);
+      req.on('close', () => {
+        if (!settled && req.destroyed) finishReject(new Error('Request closed before completion'));
+      });
+      if (normalizedRequestId) activeProxyRequests.set(normalizedRequestId, req);
+      if (normalizedRequestId && abortedProxyRequests.has(normalizedRequestId)) {
+        abortedProxyRequests.delete(normalizedRequestId);
+        finishReject(new Error('Request aborted'));
+        req.destroy();
+        return;
+      }
+      timeoutHandle = setTimeout(() => {
+        const timeoutError = new Error('Proxy request timed out');
+        timeoutError.code = 'PROXY_TIMEOUT';
+        req.destroy(timeoutError);
+      }, effectiveTimeoutMs);
       if (bodyBuffer) req.write(bodyBuffer);
       req.end();
     });

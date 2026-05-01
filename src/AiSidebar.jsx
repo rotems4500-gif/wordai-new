@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, saveWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName } from "./services/aiService";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
 const CONTEXT_PROMPTS = [
@@ -272,10 +272,13 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const skillCatalog = getSkillCatalog();
   const skillsConfig = getSkillsConfig();
   const configuredProviderChoices = getConfiguredProviderChoices();
+  const workspaceAutomationEnabled = workspaceAutomation?.enabled === true;
   const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === selectedProviderId) || null;
   const activeProviderLabel = activeProviderChoice?.label || getActiveProviderName();
   const activeProviderSummary = activeProviderChoice ? activeProviderLabel : `${activeProviderLabel} · ברירת מחדל`;
-  const activeAgent = roleAgents.find((agent) => agent.id === selectedAgentId) || null;
+  const activeAgent = workspaceAutomationEnabled
+    ? roleAgents.find((agent) => agent.id === selectedAgentId) || null
+    : null;
   const activeSkill = selectedSkillId !== 'none'
     ? skillCatalog.find((skill) => skill.id === selectedSkillId) || null
     : null;
@@ -386,13 +389,15 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     const query = normalizeLookup(match.query);
     const items = (match.trigger === '@'
-      ? roleAgents.map((agent) => ({
-          id: agent.id,
-          label: agent.name,
-          description: 'הפעלת סוכן ייעודי למשימה הזו',
-          insertText: `@${agent.id} `,
-          type: 'agent',
-        }))
+      ? (workspaceAutomationEnabled
+          ? roleAgents.map((agent) => ({
+              id: agent.id,
+              label: agent.name,
+              description: 'הפעלת סוכן ייעודי למשימה הזו',
+              insertText: `@${agent.id} `,
+              type: 'agent',
+            }))
+          : [])
       : skillCatalog
           .filter((skill) => (skillsConfig.skills?.[skill.id]?.mode || 'manual') !== 'off')
           .map((skill) => ({
@@ -510,13 +515,14 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     if (selectedSkillId !== 'none' && (skillsConfig.skills?.[selectedSkillId]?.mode || 'manual') === 'off') {
       setSelectedSkillId('none');
     }
-    if (selectedAgentId && !roleAgents.some((agent) => agent.id === selectedAgentId)) {
+    if ((!workspaceAutomationEnabled && selectedAgentId) || (selectedAgentId && !roleAgents.some((agent) => agent.id === selectedAgentId))) {
       setSelectedAgentId('');
+      clearPendingMentionSelection();
     }
     if (selectedProviderId !== 'default' && !configuredProviderChoices.some((choice) => choice.id === selectedProviderId)) {
       setSelectedProviderId('default');
     }
-  }, [selectedSkillId, selectedAgentId, selectedProviderId, skillsConfig, roleAgents, configuredProviderChoices]);
+  }, [selectedSkillId, selectedAgentId, selectedProviderId, skillsConfig, roleAgents, configuredProviderChoices, workspaceAutomationEnabled, clearPendingMentionSelection]);
 
   useEffect(() => {
     try {
@@ -695,8 +701,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     let txt = originalText;
     let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
-    let forcedAgent = activeAgent;
+    let forcedAgent = workspaceAutomationEnabled ? activeAgent : null;
     let disabledSkillRequested = false;
+    let ignoredAgentRouting = false;
     let usedDraftAgentMention = false;
     let usedDraftSkillMention = false;
     let usedQueuedAgentMention = false;
@@ -707,9 +714,13 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       if (agentStartMatch) {
         const matchedAgent = findMentionedAgent(roleAgents, agentStartMatch[1]);
         if (!matchedAgent) break;
+        txt = txt.slice(agentStartMatch[0].length).trimStart();
+        if (!workspaceAutomationEnabled) {
+          ignoredAgentRouting = true;
+          continue;
+        }
         forcedAgent = matchedAgent;
         usedDraftAgentMention = true;
-        txt = txt.slice(agentStartMatch[0].length).trimStart();
         continue;
       }
 
@@ -732,7 +743,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       break;
     }
 
-    if (!usedDraftAgentMention && pendingMentionSelection.agentId) {
+    if (workspaceAutomationEnabled && !usedDraftAgentMention && pendingMentionSelection.agentId) {
       const queuedAgent = roleAgents.find((agent) => agent.id === pendingMentionSelection.agentId) || null;
       if (queuedAgent) {
         forcedAgent = queuedAgent;
@@ -765,6 +776,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     if (disabledSkillRequested) {
       setMessages((prev) => [...prev, { role: 'assistant', content: 'הסקיל שביקשת כבוי כרגע בהגדרות, לכן דילגתי עליו.' }]);
+    }
+    if (ignoredAgentRouting) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: 'סביבת העבודה כבויה כרגע, לכן דילגתי על זימון הסוכן והרצתי את הבקשה בצ׳אט ישיר.' }]);
     }
 
     if (!txt) {
@@ -864,6 +878,11 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   };
 
   const runRoleAgent = async (agent) => {
+    if (!workspaceAutomationEnabled) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: 'סביבת העבודה כבויה כרגע. כדי להריץ סוכן ייעודי, הפעל אותה מחדש מהצ׳קבוקס למעלה.' }]);
+      setTab('chat');
+      return;
+    }
     const customTask = String(agentTaskInput || '').trim();
     const task = customTask
       ? `${customTask}${selectedText ? `\n\nטקסט רלוונטי:\n"${selectedText}"` : ''}${currentBlockText && !selectedText ? `\n\nפסקה רלוונטית:\n"${currentBlockText}"` : ''}`
@@ -1942,9 +1961,52 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           </div>
 
           <div style={controlCardStyle}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                marginBottom: 12,
+                padding: '10px 12px',
+                borderRadius: 14,
+                border: '1px solid rgba(148, 163, 184, 0.22)',
+                background: workspaceAutomationEnabled ? 'rgba(59, 130, 246, 0.08)' : 'rgba(15, 23, 42, 0.12)',
+                cursor: isSettingsLocked ? 'not-allowed' : 'pointer',
+                opacity: isSettingsLocked ? 0.7 : 1,
+              }}
+            >
+              <span style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#E2E8F0' }}>🏢 סביבת עבודה</span>
+                <span style={{ fontSize: 11, color: 'rgba(226, 232, 240, 0.72)', lineHeight: 1.5 }}>
+                  כשמכבים, הצ׳אט חוזר למסלול ישיר עם מנוע ברירת המחדל.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={workspaceAutomationEnabled}
+                disabled={isSettingsLocked}
+                onChange={(e) => {
+                  clearPendingMentionSelection();
+                  const enabled = e.target.checked;
+                  const nextAutomation = saveWorkspaceAutomation({
+                    ...workspaceAutomation,
+                    enabled,
+                  });
+                  setWorkspaceAutomation(nextAutomation);
+                  if (!enabled) {
+                    setSelectedProviderId('default');
+                    setSelectedAgentId('');
+                  }
+                }}
+                style={{ width: 16, height: 16, accentColor: '#60A5FA', cursor: isSettingsLocked ? 'not-allowed' : 'pointer' }}
+              />
+            </label>
+
             <div style={controlLabelStyle}>🛰️ ספק לשיחה</div>
             <div style={controlHelperStyle}>
               כאן מגדירים override מקומי לצ׳אט. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
+              {!workspaceAutomationEnabled ? ' סביבת העבודה כבויה כרגע, ולכן הצ׳אט ירוץ ישירות דרך ברירת המחדל.' : ''}
             </div>
             <select
               value={selectedProviderId || 'default'}
@@ -1999,6 +2061,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
             <div style={controlLabelStyle}>🤖 סוכן נבחר</div>
             <div style={controlHelperStyle}>
               בחירה כאן מפנה את ההודעות הבאות לסוכן עד שמחליפים אותו. `@agent` מתוך הצ׳אט נשאר חד־פעמי לשליחה הנוכחית בלבד.
+              {!workspaceAutomationEnabled ? ' כרגע סביבת העבודה כבויה, לכן הבחירה הזו נעולה והודעות נשלחות ישירות.' : ''}
             </div>
             <select
               value={selectedAgentId}
@@ -2006,7 +2069,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 clearPendingMentionSelection();
                 setSelectedAgentId(e.target.value);
               }}
-              disabled={isSettingsLocked}
+              disabled={isSettingsLocked || !workspaceAutomationEnabled}
               style={{ ...controlSelectStyle, ...lockedControlStyle }}
             >
               <option value="" style={{ color: '#1F2937' }}>
@@ -2490,12 +2553,15 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               marginBottom: 12,
               lineHeight: 1.5,
             }}>
-              כתוב משימה חופשית, ואז לחץ על אחד הסוכנים למטה כדי שיבצע אותה בהקשר של המסמך.
+              {workspaceAutomationEnabled
+                ? 'כתוב משימה חופשית, ואז לחץ על אחד הסוכנים למטה כדי שיבצע אותה בהקשר של המסמך.'
+                : 'סביבת העבודה כבויה כרגע. כדי להריץ סוכן ייעודי, הפעל אותה מחדש מהצ׳קבוקס במסך הצ׳אט.'}
             </div>
             <textarea
               value={agentTaskInput}
               onChange={(e) => setAgentTaskInput(e.target.value)}
               placeholder="💬 למשל: תעבור על הטקסט ותבנה לי גרסה מקצועית וקצרה יותר..."
+              disabled={!workspaceAutomationEnabled}
               style={{
                 width: '100%',
                 minHeight: 80,
@@ -2534,6 +2600,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
               <button
                 key={agent.id}
                 onClick={() => runRoleAgent(agent)}
+                disabled={!workspaceAutomationEnabled}
                 style={{
                   textAlign: 'right',
                   border: '1px solid rgba(255, 255, 255, 0.15)',
@@ -2547,14 +2614,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                   animation: `slideIn 0.4s ease ${index * 0.1}s both`,
                   position: 'relative',
                   overflow: 'hidden',
+                  opacity: workspaceAutomationEnabled ? 1 : 0.55,
+                  cursor: workspaceAutomationEnabled ? 'pointer' : 'not-allowed',
                 }}
                 onMouseEnter={(e) => {
+                  if (!workspaceAutomationEnabled) return;
                   e.currentTarget.style.transform = 'scale(1.02) translateY(-4px)';
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
                   e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
                   e.currentTarget.style.boxShadow = '0 15px 35px rgba(0, 0, 0, 0.2)';
                 }}
                 onMouseLeave={(e) => {
+                  if (!workspaceAutomationEnabled) return;
                   e.currentTarget.style.transform = 'scale(1) translateY(0)';
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
                   e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';

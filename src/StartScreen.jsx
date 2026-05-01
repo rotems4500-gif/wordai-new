@@ -172,7 +172,7 @@ const plainTextToHtml = (text = '') => {
 
 const getDraftTitleFromFileName = (name = '') => String(name || '').replace(/\.[^.]+$/, '').trim() || 'טיוטת בסיס';
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '' }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -187,7 +187,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const fileInputRef = useRef(null);
   const baseDraftInputRef = useRef(null);
   const instructionFileInputRef = useRef(null);
-  const [instructions, setInstructions] = useState(() => (typeof getHomeInstructions === 'function' ? getHomeInstructions() : ''));
+  const [instructions, setInstructions] = useState(() => (instructionsResetToken > 0 ? '' : (typeof getHomeInstructions === 'function' ? getHomeInstructions() : '')));
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -202,6 +202,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [quickWorkflowMode, setQuickWorkflowMode] = useState('circular-team');
   const [circularWorkflowEnabled, setCircularWorkflowEnabled] = useState(true);
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
+
+  useEffect(() => {
+    if (instructionsResetToken <= 0) return;
+    setInstructions('');
+    setInstructionFileName('');
+    if (typeof saveHomeInstructions === 'function') saveHomeInstructions('');
+    onInstructionsResetConsumed?.();
+  }, [instructionsResetToken, onInstructionsResetConsumed]);
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
