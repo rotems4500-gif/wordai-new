@@ -71,6 +71,12 @@ if (!app.isPackaged) {
 }
 
 const MANUAL_RELEASES_URL = 'https://github.com/rotems4500-gif/wordai-new/releases';
+const DEFAULT_AUTO_UPDATE_FEED_URL = `${MANUAL_RELEASES_URL}/latest/download`;
+
+function resolveAutoUpdateFeedUrl() {
+  const customFeedUrl = String(process.env.WORDFLOW_UPDATE_FEED_URL || '').trim();
+  return customFeedUrl || DEFAULT_AUTO_UPDATE_FEED_URL;
+}
 
 let mainWindow;
 let pendingFilePayload = null;
@@ -202,6 +208,42 @@ function resolveDocxExportOptions({ html = '', exportOptions = {} } = {}) {
   };
 }
 
+function readHtmlAttributeValue(block = '', attrName = '') {
+  if (!attrName) return '';
+  const match = String(block || '').match(new RegExp(`${attrName}\\s*=\\s*["']([^"']+)["']`, 'i'));
+  return String(match?.[1] || '').trim();
+}
+
+function readInlineCssValue(block = '', propertyName = '') {
+  if (!propertyName) return '';
+  const styleMatch = String(block || '').match(/style=["']([^"']+)["']/i);
+  if (!styleMatch) return '';
+  const valueMatch = String(styleMatch[1] || '').match(new RegExp(`${propertyName}\\s*:\\s*([^;]+)`, 'i'));
+  return String(valueMatch?.[1] || '').trim();
+}
+
+function resolveDocxAlignmentValue(value = '', fallback = AlignmentType.RIGHT, isRtl = true) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === 'center' || normalized === 'centre') return AlignmentType.CENTER;
+  if (normalized === 'left') return AlignmentType.LEFT;
+  if (normalized === 'right') return AlignmentType.RIGHT;
+  if (normalized === 'start') return isRtl ? AlignmentType.RIGHT : AlignmentType.LEFT;
+  if (normalized === 'end') return isRtl ? AlignmentType.LEFT : AlignmentType.RIGHT;
+  if (normalized.startsWith('justify')) return AlignmentType.JUSTIFIED;
+  return fallback;
+}
+
+function resolveBlockDocxFormatting(block = '', typography = {}) {
+  const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
+  const bidirectional = explicitDirection ? !/^ltr$/i.test(explicitDirection) : true;
+  const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
+  return {
+    alignment: resolveDocxAlignmentValue(alignmentValue, typography.alignment || AlignmentType.RIGHT, bidirectional),
+    bidirectional,
+  };
+}
+
 function buildDocxRunStyle(typography = {}, overrides = {}) {
   const baseFontSpec = typography.fontSpec || {
     ascii: typography.fontName || DOCX_DEFAULT_FONT,
@@ -296,20 +338,22 @@ async function createDocxImageParagraph(block = '', typography = {}) {
 }
 
 function buildDocxTable(block = '', typography = {}) {
+  const tableFormatting = resolveBlockDocxFormatting(block, typography);
   const rows = (String(block || '').match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || []).map((rowHtml) => {
     const cells = rowHtml.match(/<(th|td)[^>]*>[\s\S]*?<\/\1>/gi) || [];
     return new TableRow({
       children: (cells.length ? cells : ['<td></td>']).map((cellHtml) => {
         const isHeader = /^<th/i.test(cellHtml);
+        const cellFormatting = resolveBlockDocxFormatting(cellHtml, typography);
         const text = decodeHtmlEntities(String(cellHtml).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) || ' ';
         return new TableCell({
           width: { size: 100, type: WidthType.AUTO },
           children: [
             new Paragraph({
               style: 'Normal',
-              alignment: typography.alignment || AlignmentType.RIGHT,
-              bidirectional: true,
-              children: [createDocxTextRun(text, { bold: isHeader }, typography)],
+              alignment: cellFormatting.alignment,
+              bidirectional: cellFormatting.bidirectional,
+              children: [createDocxTextRun(text, { bold: isHeader, rightToLeft: cellFormatting.bidirectional }, typography)],
             }),
           ],
         });
@@ -319,14 +363,14 @@ function buildDocxTable(block = '', typography = {}) {
 
   return new Table({
     width: { size: '100%', type: WidthType.PERCENTAGE },
-    visuallyRightToLeft: true,
+    visuallyRightToLeft: tableFormatting.bidirectional,
     rows: rows.length ? rows : [new TableRow({
       children: [new TableCell({
         children: [new Paragraph({
           style: 'Normal',
           text: ' ',
-          alignment: typography.alignment || AlignmentType.RIGHT,
-          bidirectional: true,
+          alignment: tableFormatting.alignment,
+          bidirectional: tableFormatting.bidirectional,
         })],
       })],
     })],
@@ -338,11 +382,11 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = r
     .replace(/\r\n/g, '\n')
     .replace(/<(div|p)[^>]*(?:data-type=["']page-break["']|data-page-break=["']true["']|class=["'][^"']*page-break(?:-node)?[^"']*["']|style=["'][^"']*(?:page-break-after\s*:\s*always|break-after\s*:\s*page)[^"']*["'])[^>]*>(?:\s|&nbsp;|&#160;|<br\s*\/?>)*<\/\1>/gi, '\n[[PAGE_BREAK]]\n');
 
-  const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>/gi;
+  const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>|<div[^>]*>[\s\S]*?<\/div>/gi;
   const children = [];
   const blocks = source.match(blockRegex) || [];
 
-  const pushTextParagraph = (text, options = {}) => {
+  const pushTextParagraph = (text, options = {}, blockHtml = '') => {
     const cleanText = decodeHtmlEntities(
       String(text || '')
         .replace(/<br\s*\/?>/gi, '\n')
@@ -354,11 +398,13 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = r
         .trim(),
     );
     if (!cleanText) return;
+      const blockFormatting = resolveBlockDocxFormatting(blockHtml, typography);
     const runOptions = {
       ...(options.bold ? { bold: true } : {}),
       ...(options.italics ? { italics: true } : {}),
       ...(options.color ? { color: options.color } : {}),
       ...(options.size ? { size: options.size } : {}),
+        rightToLeft: typeof options.bidirectional === 'boolean' ? options.bidirectional : blockFormatting.bidirectional,
     };
     const textRuns = cleanText.split('\n').flatMap((line, index) => (
       index === 0
@@ -367,8 +413,8 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = r
     ));
     children.push(new Paragraph({
       ...(options.heading ? {} : { style: 'Normal' }),
-      alignment: options.alignment || typography.alignment || AlignmentType.RIGHT,
-      bidirectional: true,
+      alignment: options.alignment || blockFormatting.alignment || typography.alignment || AlignmentType.RIGHT,
+      bidirectional: typeof options.bidirectional === 'boolean' ? options.bidirectional : blockFormatting.bidirectional,
       spacing: { after: 160, line: 360 },
       children: textRuns,
       ...('bullet' in options ? { bullet: options.bullet } : {}),
@@ -381,7 +427,7 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = r
       .split(/\n{2,}/)
       .map((chunk) => chunk.trim())
       .filter(Boolean)
-      .forEach((chunk) => pushTextParagraph(chunk));
+      .forEach((chunk) => pushTextParagraph(chunk, {}, chunk));
     return children.length ? children : [new Paragraph({ text: '' })];
   }
 
@@ -398,12 +444,12 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = r
       children.push(await createDocxImageParagraph(block, typography));
       continue;
     }
-    if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }); continue; }
-    if (/^<h2/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }); continue; }
-    if (/^<h3/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_3, bold: true, size: 24 }); continue; }
-    if (/^<li/i.test(block)) { pushTextParagraph(block, { bullet: { level: 0 } }); continue; }
-    if (/^<blockquote/i.test(block)) { pushTextParagraph(block, { italics: true, color: '475569' }); continue; }
-    pushTextParagraph(block);
+    if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }, block); continue; }
+    if (/^<h2/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }, block); continue; }
+    if (/^<h3/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_3, bold: true, size: 24 }, block); continue; }
+    if (/^<li/i.test(block)) { pushTextParagraph(block, { bullet: { level: 0 } }, block); continue; }
+    if (/^<blockquote/i.test(block)) { pushTextParagraph(block, { italics: true, color: '475569' }, block); continue; }
+    pushTextParagraph(block, {}, block);
   }
 
   return children.length ? children : [new Paragraph({ text: '' })];
@@ -527,7 +573,8 @@ function wrapHtmlDocument(html = '', title = 'WordFlow AI Document', exportOptio
       ? 'justify'
       : 'right';
   const fontSizePt = Math.max(8, (typography.fontSize || 24) / 2);
-  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{direction:rtl;text-align:${textAlign};font-family:"${escapeHtml(typography.fontName)}",Arial,sans-serif;font-size:${fontSizePt}pt;padding:40px;line-height:1.7}[data-type="page-break"],[data-page-break="true"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
+  const blockStyle = `direction:rtl;unicode-bidi:embed;text-align:${textAlign};`;
+  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>html,body{${blockStyle}font-family:"${escapeHtml(typography.fontName)}",Arial,sans-serif;font-size:${fontSizePt}pt}body{padding:40px;line-height:1.7}p,div,section,article,blockquote,li,table,thead,tbody,tr,td,th,h1,h2,h3,h4,h5,h6{${blockStyle}}[dir="ltr"]{direction:ltr;unicode-bidi:embed;text-align:left}[dir="rtl"]{direction:rtl;unicode-bidi:embed;text-align:${textAlign}}[data-type="page-break"],[data-page-break="true"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
 }
 
 async function readDocumentPayload(filePath) {
@@ -741,6 +788,8 @@ function setupAutoUpdater() {
     return;
   }
 
+  const runtimeAutoUpdateFeedUrl = resolveAutoUpdateFeedUrl();
+
   let manualDownloadShown = false;
   const handleUpdaterFailure = async (err, fallbackMessage = 'שגיאה בבדיקת העדכונים') => {
     const rawMessage = String(err?.message || fallbackMessage);
@@ -775,9 +824,21 @@ function setupAutoUpdater() {
   };
 
   const updateConfigPath = path.join(process.resourcesPath || '', 'app-update.yml');
-  if (!fs.existsSync(updateConfigPath)) {
+  if (!fs.existsSync(updateConfigPath) && !runtimeAutoUpdateFeedUrl) {
     console.warn('Skipping auto update: app-update.yml not found');
     sendUpdateStatus({ status: 'unavailable', message: 'קובץ הגדרות העדכון חסר בגרסה הזו' });
+    return;
+  }
+
+  try {
+    if (runtimeAutoUpdateFeedUrl) {
+      autoUpdater.setFeedURL(runtimeAutoUpdateFeedUrl);
+      console.log(`Using generic auto-update feed: ${runtimeAutoUpdateFeedUrl}`);
+    }
+  } catch (error) {
+    handleUpdaterFailure(error, 'הגדרת מסלול העדכונים נכשלה').catch((nestedError) => {
+      console.error('Auto update feed setup error:', nestedError?.message || nestedError);
+    });
     return;
   }
 

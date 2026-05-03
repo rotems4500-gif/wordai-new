@@ -258,6 +258,8 @@ const DEFAULT_FEEDBACK_SURVEY = {
   templateId: 'blank',
   selectedMaterials: [],
   selectedModel: '',
+  selectedProviderId: '',
+  selectedProviderModel: '',
   selectedOptions: [],
   freeText: '',
   usedFallback: false,
@@ -289,13 +291,16 @@ const getFeedbackSurveyGenerationContext = (survey = {}, fallback = {}) => {
   const fallbackTemplateId = String(fallback.templateId || '').trim();
   const surveySelectedMaterials = Array.isArray(survey.selectedMaterials) ? survey.selectedMaterials.filter(Boolean) : [];
   const fallbackSelectedMaterials = Array.isArray(fallback.selectedMaterials) ? fallback.selectedMaterials.filter(Boolean) : [];
-  const surveySelectedModel = String(survey.selectedModel || '').trim();
-  const fallbackSelectedModel = String(fallback.selectedModel || '').trim();
+  const surveySelectedProviderId = String(survey.selectedProviderId || survey.selectedModel || '').trim();
+  const fallbackSelectedProviderId = String(fallback.selectedProviderId || fallback.selectedModel || '').trim();
+  const surveySelectedProviderModel = String(survey.selectedProviderModel || '').trim();
+  const fallbackSelectedProviderModel = String(fallback.selectedProviderModel || '').trim();
   const hasSurveyGenerationContext = Boolean(
     surveyPrompt
     || survey.usedFallback
     || surveySelectedMaterials.length
-    || surveySelectedModel
+    || surveySelectedProviderId
+    || surveySelectedProviderModel
   );
 
   return {
@@ -305,7 +310,9 @@ const getFeedbackSurveyGenerationContext = (survey = {}, fallback = {}) => {
       : (fallbackTemplateId || surveyTemplateId || 'blank')),
     usedFallback: Boolean(survey.usedFallback || fallback.usedFallback),
     selectedMaterials: surveySelectedMaterials.length ? [...surveySelectedMaterials] : [...fallbackSelectedMaterials],
-    selectedModel: surveySelectedModel || fallbackSelectedModel,
+    selectedModel: surveySelectedProviderId || fallbackSelectedProviderId,
+    selectedProviderId: surveySelectedProviderId || fallbackSelectedProviderId,
+    selectedProviderModel: surveySelectedProviderModel || fallbackSelectedProviderModel,
   };
 };
 
@@ -563,8 +570,10 @@ function App() {
         ? feedbackSurvey.selectedMaterials.filter(Boolean)
         : [],
       selectedModel: matchesActiveDraft ? String(feedbackSurvey.selectedModel || '').trim() : '',
+      selectedProviderId: matchesActiveDraft ? String(feedbackSurvey.selectedProviderId || '').trim() : '',
+      selectedProviderModel: matchesActiveDraft ? String(feedbackSurvey.selectedProviderModel || '').trim() : '',
     };
-  }, [editor, currentFilePath, feedbackSurvey.prompt, feedbackSurvey.templateId, feedbackSurvey.selectedMaterials, feedbackSurvey.selectedModel, activeTemplateId]);
+  }, [editor, currentFilePath, feedbackSurvey.prompt, feedbackSurvey.templateId, feedbackSurvey.selectedMaterials, feedbackSurvey.selectedModel, feedbackSurvey.selectedProviderId, feedbackSurvey.selectedProviderModel, activeTemplateId]);
 
   const openDraftRecommendations = React.useCallback(() => {
     if (feedbackSurvey.submitting || liveGeneration.state === 'running' || !hasMeaningfulEditorContent(editor)) {
@@ -708,6 +717,8 @@ function App() {
         feedback: feedbackText,
         selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+        selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+        selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
         surveySnapshot,
       },
     });
@@ -740,6 +751,8 @@ function App() {
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
         selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+        selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+        selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
         focus: reviewFocus,
         surveySnapshot,
       },
@@ -1304,7 +1317,9 @@ function App() {
     const templateId = String(payload.templateId || 'blank').trim() || 'blank';
     const instructions = String(payload.instructions || '').trim();
     const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
-    const selectedModel = String(payload.selectedModel || '').trim();
+    const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+    const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+    const selectedModel = selectedProviderId;
     const requestedStyle = String(payload.documentStyle || '').trim();
     const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
 
@@ -1370,11 +1385,13 @@ function App() {
             feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
             selectedMaterials,
             selectedModel,
+            selectedProviderId,
+            selectedProviderModel,
             forceDirectMode: false,
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = hasBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -1396,6 +1413,8 @@ function App() {
           usedFallback,
           selectedMaterials,
           selectedModel,
+          selectedProviderId,
+          selectedProviderModel,
         }),
         open: false,
         phase: 'details',
@@ -1460,7 +1479,9 @@ function App() {
     try {
       const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
       const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
-      const selectedModel = String(payload.selectedModel || '').trim();
+      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+      const selectedModel = selectedProviderId;
       const result = await reviseDocumentWithFeedback({
         existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
         originalPrompt: payload.originalPrompt,
@@ -1468,6 +1489,8 @@ function App() {
         feedback: payload.feedback || '',
         selectedMaterials,
         selectedModel,
+        selectedProviderId,
+        selectedProviderModel,
         runId: generationRequest.runId,
         returnMeta: true,
       });
@@ -1509,6 +1532,8 @@ function App() {
           usedFallback,
           selectedMaterials,
           selectedModel,
+          selectedProviderId,
+          selectedProviderModel,
         }),
         open: false,
         phase: 'details',
@@ -1597,7 +1622,9 @@ function App() {
     try {
       const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
       const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
-      const selectedModel = String(payload.selectedModel || '').trim();
+      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+      const selectedModel = selectedProviderId;
       const reviewFocus = String(payload.focus || '').trim();
       const result = await reviewDocumentRecommendations({
         existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
@@ -1605,6 +1632,8 @@ function App() {
         templateId,
         selectedMaterials,
         selectedModel,
+        selectedProviderId,
+        selectedProviderModel,
         focus: reviewFocus,
         runId: generationRequest.runId,
         returnMeta: true,
@@ -2725,8 +2754,8 @@ function App() {
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
-              <div className={`${shouldShowProgressOnlyPanel ? 'h-full overflow-hidden p-4' : 'border-b border-slate-200 bg-white px-3 py-3'}`}>
-                <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${shouldShowProgressOnlyPanel ? 'h-full flex flex-col p-4' : 'p-3'}`}>
+              <div className={`${shouldShowProgressOnlyPanel ? 'h-full min-h-0 p-4' : 'border-b border-slate-200 bg-white px-3 py-3'}`}>
+                <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${shouldShowProgressOnlyPanel ? 'h-full min-h-0 flex flex-col overflow-hidden p-4' : 'p-3'}`}>
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="min-w-0">
                       <div className="text-base font-bold text-slate-900">
@@ -2739,111 +2768,113 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    {(liveGeneration.summary?.stages || []).slice(0, 6).map((stage) => (
-                      <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
-                        <span className="font-medium text-slate-700 truncate pr-2">{stage.label}</span>
-                        <span className={`font-bold ${stage.state === 'success' ? 'text-emerald-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
-                          {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '...' : '•'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <div className={`${shouldShowProgressOnlyPanel ? 'flex-1 min-h-0 overflow-y-auto pr-1 pb-1' : ''}`}>
+                    <div className="space-y-2">
+                      {(liveGeneration.summary?.stages || []).slice(0, 6).map((stage) => (
+                        <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
+                          <span className="font-medium text-slate-700 truncate pr-2">{stage.label}</span>
+                          <span className={`font-bold ${stage.state === 'success' ? 'text-emerald-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
+                            {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '...' : '•'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
 
-                  {liveGeneration.state === 'running' && (
-                    <OneAxisAirHockeyGame title="Arcade בזמן שהצוות עובד" compact allowPopup />
-                  )}
+                    {liveGeneration.state === 'running' && (
+                      <OneAxisAirHockeyGame title="Arcade בזמן שהצוות עובד" compact allowPopup />
+                    )}
 
-                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
-                    <div className="text-[11px] font-bold text-slate-700 mb-2">לוג חי של ההרצה</div>
-                    <div className={`${shouldShowProgressOnlyPanel ? 'max-h-[34vh]' : 'max-h-32'} overflow-auto space-y-1.5 pr-1`}>
-                      {progressLogs.length ? progressLogs.map((log, index) => {
-                        const logTimeValue = log?.timestamp || log?.time || log?.ts;
-                        const logTime = logTimeValue ? new Date(logTimeValue).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
-                        const logAgent = String(log?.agentLabel || log?.agentId || 'מערכת');
-                        const logMessage = String(log?.message || log?.type || 'עודכן סטטוס תהליך');
-                        return (
-                          <div key={`${logTime}-${logAgent}-${index}`} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
-                            <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 mb-0.5">
-                              <span className="font-semibold text-slate-600 truncate">{logAgent}</span>
-                              <span>{logTime}</span>
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
+                      <div className="text-[11px] font-bold text-slate-700 mb-2">לוג חי של ההרצה</div>
+                      <div className={`${shouldShowProgressOnlyPanel ? 'max-h-[34vh]' : 'max-h-32'} overflow-auto space-y-1.5 pr-1`}>
+                        {progressLogs.length ? progressLogs.map((log, index) => {
+                          const logTimeValue = log?.timestamp || log?.time || log?.ts;
+                          const logTime = logTimeValue ? new Date(logTimeValue).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+                          const logAgent = String(log?.agentLabel || log?.agentId || 'מערכת');
+                          const logMessage = String(log?.message || log?.type || 'עודכן סטטוס תהליך');
+                          return (
+                            <div key={`${logTime}-${logAgent}-${index}`} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                              <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 mb-0.5">
+                                <span className="font-semibold text-slate-600 truncate">{logAgent}</span>
+                                <span>{logTime}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-700 leading-4">{logMessage}</div>
                             </div>
-                            <div className="text-[11px] text-slate-700 leading-4">{logMessage}</div>
-                          </div>
-                        );
-                      }) : (
-                        <div className="text-[11px] text-slate-500 px-1 py-1">הלוגים יופיעו כאן בזמן אמת...</div>
-                      )}
+                          );
+                        }) : (
+                          <div className="text-[11px] text-slate-500 px-1 py-1">הלוגים יופיעו כאן בזמן אמת...</div>
+                        )}
+                      </div>
                     </div>
+
+                    {canRetryFailedGeneration && (
+                      <div className="mt-3 rounded-xl border border-red-200 bg-red-50/80 p-3">
+                        <div className="text-[11px] font-bold text-red-700">הסוכן שנכשל: {failedGenerationStage?.label || failedStageAgentRecord?.name || 'לא זוהה'}</div>
+                        <div className="mt-1 text-[11px] leading-4 text-slate-700">
+                          ההרצה נעצרה ב־{failedStageProviderLabel} / {failedStageModelLabel}. אפשר לעדכן רק את הסוכן הזה ולהפעיל מחדש את אותה פעולה מההתחלה.
+                        </div>
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <label className="block text-[11px] text-slate-700">
+                            <span className="mb-1 block font-semibold">Provider חלופי</span>
+                            <select
+                              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                              value={generationRecovery.provider}
+                              onChange={handleRecoveryProviderChange}
+                              disabled={generationRecovery.pending}
+                            >
+                              {configuredProviderChoices.map((provider) => (
+                                <option key={provider.id} value={provider.id}>{provider.label}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="block text-[11px] text-slate-700">
+                            <span className="mb-1 block font-semibold">מודל חלופי</span>
+                            <select
+                              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                              value={generationRecovery.model}
+                              onChange={handleRecoveryModelChange}
+                              disabled={generationRecovery.pending || !recoveryModelChoices.length}
+                            >
+                              {recoveryModelChoices.map((model) => (
+                                <option key={model} value={model}>{model}</option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        {generationRecovery.error && (
+                          <div className="mt-2 text-[11px] font-medium text-red-700">{generationRecovery.error}</div>
+                        )}
+
+                        <button
+                          className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
+                          onClick={retryFailedGenerationWithUpdatedAgent}
+                          disabled={generationRecovery.pending || !generationRecovery.provider || !generationRecovery.model}
+                        >
+                          {generationRecovery.pending ? 'מעדכן סוכן ומריץ מחדש...' : 'החלף מודל והרץ מחדש'}
+                        </button>
+                      </div>
+                    )}
+
+                    {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          className="btn btn-sm btn-primary flex-1"
+                          onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
+                        >
+                          בקש תיקונים
+                        </button>
+                        <button
+                          className="btn btn-sm btn-ghost flex-1"
+                          onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
+                        >
+                          אשר והמשך לערוך
+                        </button>
+                      </div>
+                    )}
                   </div>
-
-                  {canRetryFailedGeneration && (
-                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50/80 p-3">
-                      <div className="text-[11px] font-bold text-red-700">הסוכן שנכשל: {failedGenerationStage?.label || failedStageAgentRecord?.name || 'לא זוהה'}</div>
-                      <div className="mt-1 text-[11px] leading-4 text-slate-700">
-                        ההרצה נעצרה ב־{failedStageProviderLabel} / {failedStageModelLabel}. אפשר לעדכן רק את הסוכן הזה ולהפעיל מחדש את אותה פעולה מההתחלה.
-                      </div>
-
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        <label className="block text-[11px] text-slate-700">
-                          <span className="mb-1 block font-semibold">Provider חלופי</span>
-                          <select
-                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
-                            value={generationRecovery.provider}
-                            onChange={handleRecoveryProviderChange}
-                            disabled={generationRecovery.pending}
-                          >
-                            {configuredProviderChoices.map((provider) => (
-                              <option key={provider.id} value={provider.id}>{provider.label}</option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="block text-[11px] text-slate-700">
-                          <span className="mb-1 block font-semibold">מודל חלופי</span>
-                          <select
-                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
-                            value={generationRecovery.model}
-                            onChange={handleRecoveryModelChange}
-                            disabled={generationRecovery.pending || !recoveryModelChoices.length}
-                          >
-                            {recoveryModelChoices.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-
-                      {generationRecovery.error && (
-                        <div className="mt-2 text-[11px] font-medium text-red-700">{generationRecovery.error}</div>
-                      )}
-
-                      <button
-                        className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
-                        onClick={retryFailedGenerationWithUpdatedAgent}
-                        disabled={generationRecovery.pending || !generationRecovery.provider || !generationRecovery.model}
-                      >
-                        {generationRecovery.pending ? 'מעדכן סוכן ומריץ מחדש...' : 'החלף מודל והרץ מחדש'}
-                      </button>
-                    </div>
-                  )}
-
-                  {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        className="btn btn-sm btn-primary flex-1"
-                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
-                      >
-                        בקש תיקונים
-                      </button>
-                      <button
-                        className="btn btn-sm btn-ghost flex-1"
-                        onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
-                      >
-                        אשר והמשך לערוך
-                      </button>
-                    </div>
-                  )}
                 </div>
               </div>
             )}

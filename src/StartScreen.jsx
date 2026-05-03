@@ -12,7 +12,7 @@ import {
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace } from './services/aiService';
+import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -83,6 +83,38 @@ const WORKFLOW_LABELS = {
   'design-first': 'מבנה קודם',
   'research-first': 'חקר קודם',
   'custom-order': 'סדר מותאם אישית',
+};
+
+const NO_WORKSPACE_OPTION_VALUE = '__no-workspace__';
+
+const WORKSPACE_PROVIDER_LABELS = {
+  gemini: 'Gemini',
+  claude: 'Claude',
+  perplexity: 'Perplexity',
+  openai: 'OpenAI',
+  groq: 'Groq',
+  ollama: 'Ollama',
+  custom: 'Custom',
+};
+
+const summarizeWorkspaceProviders = (agents = []) => {
+  const providers = [...new Set((Array.isArray(agents) ? agents : [])
+    .map((agent) => String(agent?.provider || '').trim())
+    .filter(Boolean))];
+  if (!providers.length) return 'ספקים דינמיים לפי הסוכן או ברירת המחדל';
+  return providers.map((providerId) => WORKSPACE_PROVIDER_LABELS[providerId] || providerId).join(' + ');
+};
+
+const getProviderLabelFromChoices = (providerId = '', choices = []) => {
+  const normalizedId = String(providerId || '').trim();
+  if (!normalizedId) return 'AI';
+  return choices.find((choice) => choice.id === normalizedId)?.label || WORKSPACE_PROVIDER_LABELS[normalizedId] || normalizedId;
+};
+
+const buildDirectGenerationSummary = ({ providerId = '', modelId = '', choices = [] } = {}) => {
+  const providerLabel = getProviderLabelFromChoices(providerId, choices);
+  const cleanModel = String(modelId || '').trim();
+  return cleanModel ? `${providerLabel} · ${cleanModel}` : providerLabel;
 };
 
 const ONBOARDING_AREAS = ['אקדמיה ומחקר', 'עסקים וניהול', 'משפט ומסמכים רשמיים', 'שיווק ותוכן', 'עבודה משרדית', 'שימוש כללי'];
@@ -180,6 +212,27 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [mounted, setMounted] = useState(false);
   const [showChefDialog, setShowChefDialog] = useState(false);
   const [selectedModel, setSelectedModel] = useState();
+  const [providerConfigState, setProviderConfigState] = useState(() => getProviderConfig());
+  const [directProviderId, setDirectProviderId] = useState(() => {
+    const initialConfig = getProviderConfig();
+    const memory = getAppMemory();
+    const configuredChoices = getConfiguredProviderChoices(initialConfig);
+    const fallbackProviderId = configuredChoices[0]?.id || String(initialConfig?.active || 'gemini').trim() || 'gemini';
+    const rememberedProviderId = String(memory.homeProviderId || '').trim();
+    return configuredChoices.some((choice) => choice.id === rememberedProviderId)
+      ? rememberedProviderId
+      : (rememberedProviderId || fallbackProviderId);
+  });
+  const [directProviderModel, setDirectProviderModel] = useState(() => {
+    const initialConfig = getProviderConfig();
+    const memory = getAppMemory();
+    const configuredChoices = getConfiguredProviderChoices(initialConfig);
+    const fallbackProviderId = configuredChoices[0]?.id || String(initialConfig?.active || 'gemini').trim() || 'gemini';
+    const rememberedProviderId = String(memory.homeProviderId || '').trim() || fallbackProviderId;
+    const modelChoices = getProviderModelChoices(rememberedProviderId, initialConfig, [memory.homeProviderModel]);
+    const rememberedProviderModel = String(memory.homeProviderModel || '').trim();
+    return modelChoices.includes(rememberedProviderModel) ? rememberedProviderModel : (modelChoices[0] || '');
+  });
   
   const profile = getPersonalStyleProfile();
   const onboardingDone = Boolean(profile?.onboardingCompletedAt);
@@ -202,6 +255,32 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [quickWorkflowMode, setQuickWorkflowMode] = useState('circular-team');
   const [circularWorkflowEnabled, setCircularWorkflowEnabled] = useState(true);
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
+  const workspaceBypassActive = currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE;
+
+  const directProviderChoices = React.useMemo(() => {
+    const configuredChoices = getConfiguredProviderChoices(providerConfigState);
+    if (configuredChoices.length) return configuredChoices;
+    const fallbackProviderId = String(providerConfigState?.active || 'gemini').trim() || 'gemini';
+    return [{ id: fallbackProviderId, label: getProviderLabelFromChoices(fallbackProviderId), isDefault: true }];
+  }, [providerConfigState]);
+
+  const resolvedDirectProviderId = directProviderChoices.some((choice) => choice.id === directProviderId)
+    ? directProviderId
+    : (directProviderChoices[0]?.id || String(providerConfigState?.active || 'gemini').trim() || 'gemini');
+
+  const directProviderModelChoices = React.useMemo(() => (
+    getProviderModelChoices(resolvedDirectProviderId, providerConfigState, [directProviderModel])
+  ), [directProviderModel, providerConfigState, resolvedDirectProviderId]);
+
+  const resolvedDirectProviderModel = directProviderModelChoices.includes(String(directProviderModel || '').trim())
+    ? String(directProviderModel || '').trim()
+    : (directProviderModelChoices[0] || '');
+
+  const directGenerationSummary = buildDirectGenerationSummary({
+    providerId: resolvedDirectProviderId,
+    modelId: resolvedDirectProviderModel,
+    choices: directProviderChoices,
+  });
 
   useEffect(() => {
     if (instructionsResetToken <= 0) return;
@@ -210,6 +289,37 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (typeof saveHomeInstructions === 'function') saveHomeInstructions('');
     onInstructionsResetConsumed?.();
   }, [instructionsResetToken, onInstructionsResetConsumed]);
+
+  useEffect(() => {
+    const refreshProviderConfig = () => setProviderConfigState(getProviderConfig());
+    refreshProviderConfig();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('focus', refreshProviderConfig);
+    window.addEventListener('wordai-settings-hydrated', refreshProviderConfig);
+    return () => {
+      window.removeEventListener('focus', refreshProviderConfig);
+      window.removeEventListener('wordai-settings-hydrated', refreshProviderConfig);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (directProviderId !== resolvedDirectProviderId) {
+      setDirectProviderId(resolvedDirectProviderId);
+    }
+  }, [directProviderId, resolvedDirectProviderId]);
+
+  useEffect(() => {
+    if (directProviderModel !== resolvedDirectProviderModel) {
+      setDirectProviderModel(resolvedDirectProviderModel);
+    }
+  }, [directProviderModel, resolvedDirectProviderModel]);
+
+  useEffect(() => {
+    saveAppMemory({
+      homeProviderId: resolvedDirectProviderId,
+      homeProviderModel: resolvedDirectProviderModel,
+    });
+  }, [resolvedDirectProviderId, resolvedDirectProviderModel]);
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
@@ -267,18 +377,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   }, [editingCard?.id, showChefDialog, escapeBlocked, onClose]);
 
   const buildLoadedWorkspaceState = (automation) => {
-    if (!automation?.enabled) return null;
+    if (!automation?.enabled || automation?.workspaceBypassEnabled) return null;
     const agents = typeof getOrderedRoleAgents === 'function'
       ? getOrderedRoleAgents(automation.workflowMode)
       : [];
-    return { ...automation, agents };
+    return { ...automation, agents, providerSummary: summarizeWorkspaceProviders(agents) };
   };
 
   const applyAutomationSnapshot = (automation) => {
     if (!automation) return;
     const nextWorkflowMode = String(automation?.workflowMode || 'manager-auto');
     setLoadedWorkspace(buildLoadedWorkspaceState(automation));
-    setCurrentWorkspaceId(automation?.activeWorkspaceId || 'default-content-studio');
+    setCurrentWorkspaceId(automation?.workspaceBypassEnabled ? NO_WORKSPACE_OPTION_VALUE : (automation?.activeWorkspaceId || 'default-content-studio'));
     setAutopilotEnabled(automation?.autopilotEnabled !== false);
     setActualWorkflowMode(nextWorkflowMode);
     setQuickWorkflowMode(['circular-team', 'custom-order'].includes(nextWorkflowMode) ? nextWorkflowMode : '__keep-current__');
@@ -288,6 +398,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const persistAutomationUpdates = (updates = {}) => {
     if (typeof saveWorkspaceAutomation !== 'function') return;
+    if (typeof getWorkspaceAutomation === 'function' && getWorkspaceAutomation()?.workspaceBypassEnabled) {
+      applyAutomationSnapshot(getWorkspaceAutomation());
+      return;
+    }
     const nextAutomation = saveWorkspaceAutomation(updates);
     applyAutomationSnapshot(nextAutomation);
   };
@@ -303,6 +417,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const nextWorkspacesList = Object.values(library).map((ws) => ({
           id: ws.id,
           name: ws.name,
+          providerSummary: summarizeWorkspaceProviders(ws.agents),
         }));
         setWorkspacesList(nextWorkspacesList);
       }
@@ -458,6 +573,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const handleWorkspaceChange = async (event) => {
     const selectedWorkspaceId = event.target.value;
     if (!selectedWorkspaceId || selectedWorkspaceId === currentWorkspaceId) return;
+
+    if (selectedWorkspaceId === NO_WORKSPACE_OPTION_VALUE) {
+      try {
+        const nextAutomation = typeof setWorkspaceBypassEnabled === 'function'
+          ? setWorkspaceBypassEnabled(true)
+          : getWorkspaceAutomation();
+        applyAutomationSnapshot(nextAutomation);
+      } catch (error) {
+        console.error('שגיאה במעבר למצב ללא סביבת עבודה:', error);
+        window.alert('לא הצלחתי לעבור למצב ללא סביבת עבודה.');
+      }
+      return;
+    }
     
     try {
       const switched = await switchToWorkspace(selectedWorkspaceId);
@@ -539,11 +667,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setIsGenerating(true);
     try {
       const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
+      const selectedProviderId = workspaceBypassActive ? resolvedDirectProviderId : '';
+      const selectedProviderModel = workspaceBypassActive ? resolvedDirectProviderModel : '';
       await onGenerateFromPrompt?.({
         prompt,
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
         selectedMaterials,
+        selectedModel: selectedProviderId,
+        selectedProviderId,
+        selectedProviderModel,
         baseDraft,
       });
     } finally {
@@ -566,12 +699,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       const result = await chefModeInterview(responses, model);
       const generatedPrompt = String(result?.brief ?? result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
       const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
+      const selectedProviderId = workspaceBypassActive ? String(model || '').trim() : '';
+      const selectedProviderModel = workspaceBypassActive && selectedProviderId === resolvedDirectProviderId
+        ? resolvedDirectProviderModel
+        : '';
       await onGenerateFromPrompt?.({
         prompt: generatedPrompt,
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
         selectedMaterials,
         selectedModel: model,
+        selectedProviderId,
+        selectedProviderModel,
         baseDraft,
       });
       setSelectedModel(undefined);
@@ -828,10 +967,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                      onChange={handleWorkspaceChange} 
                      className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[120px]"
                    >
-                     <option value="" disabled className="bg-gray-800 text-gray-300">בחר סביבת עבודה</option>
+                     <option value={NO_WORKSPACE_OPTION_VALUE} className="bg-gray-800 text-white">
+                       ללא סביבת עבודה · {directGenerationSummary}
+                     </option>
                      {workspacesList.map(workspace => (
                        <option key={workspace.id} value={workspace.id} className="bg-gray-800 text-white">
-                         {workspace.name}
+                         {workspace.name} · {workspace.providerSummary}
                        </option>
                      ))}
                    </select>
@@ -840,6 +981,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                         type="checkbox"
                         checked={autopilotEnabled}
                         onChange={handleAutopilotToggle}
+                        disabled={workspaceBypassActive}
                         className="checkbox checkbox-xs border-violet-200 rounded bg-white/20"
                         aria-label="הפעל אוטופיילוט"
                       />
@@ -878,6 +1020,54 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
                <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+                   <div className="text-white font-semibold text-sm">🧠 ספק ומודל למסלול הישיר</div>
+                   <span className="text-[11px] text-cyan-100 bg-cyan-500/20 border border-cyan-200/30 px-3 py-1 rounded-full">
+                     {workspaceBypassActive ? `פעיל עכשיו: ${directGenerationSummary}` : `ברירת מחדל למסלול הישיר: ${directGenerationSummary}`}
+                   </span>
+                 </div>
+
+                 <div className="grid md:grid-cols-2 gap-3">
+                   <label className="flex flex-col gap-2 text-right">
+                     <span className="text-white/80 text-xs">ספק AI</span>
+                     <select
+                       value={resolvedDirectProviderId}
+                       onChange={(event) => setDirectProviderId(event.target.value)}
+                       className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
+                     >
+                       {directProviderChoices.map((choice) => (
+                         <option key={choice.id} value={choice.id} className="bg-slate-900 text-white">
+                           {choice.label}{choice.isDefault ? ' · ברירת מחדל' : ''}
+                         </option>
+                       ))}
+                     </select>
+                   </label>
+
+                   <label className="flex flex-col gap-2 text-right">
+                     <span className="text-white/80 text-xs">מודל</span>
+                     <select
+                       value={resolvedDirectProviderModel}
+                       onChange={(event) => setDirectProviderModel(event.target.value)}
+                       disabled={!directProviderModelChoices.length}
+                       className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent disabled:opacity-60 disabled:cursor-not-allowed"
+                     >
+                       {directProviderModelChoices.length ? directProviderModelChoices.map((modelId) => (
+                         <option key={modelId} value={modelId} className="bg-slate-900 text-white">
+                           {modelId}
+                         </option>
+                       )) : (
+                         <option value="" className="bg-slate-900 text-white">המודל נקבע בהגדרות הספק</option>
+                       )}
+                     </select>
+                   </label>
+                 </div>
+
+                 <div className="mt-3 text-[11px] text-white/70">
+                   הבורר הזה שולט במסלול הישיר של דף הבית. כשהבחירה למעלה היא "ללא סביבת עבודה" הוא יופעל בפועל; כשנבחר workspace, המנועים נקבעים לפי צוות הסוכנים של אותה סביבה.
+                 </div>
+               </div>
+
+               <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
+                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
                    <div className="text-white font-semibold text-sm">🔁 הגדרות זרימת עבודה מהירה</div>
                    {instructionFileName ? (
                      <span className="text-[11px] text-fuchsia-100 bg-fuchsia-500/20 border border-fuchsia-200/30 px-3 py-1 rounded-full">קובץ הנחיות: {instructionFileName}</span>
@@ -886,6 +1076,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  <select
                    value={quickWorkflowMode}
                    onChange={handleWorkflowModeChange}
+                   disabled={workspaceBypassActive}
                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
                  >
                    <option value="__keep-current__" className="bg-slate-900 text-white" disabled>השאר מצב קיים: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}</option>
@@ -899,6 +1090,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                          type="checkbox"
                          checked={circularWorkflowEnabled}
                          onChange={handleCircularWorkflowToggle}
+                         disabled={workspaceBypassActive}
                          className="checkbox checkbox-xs border-cyan-200 rounded bg-white/20"
                        />
                        אפשר חזרה לסוכן קודם
@@ -911,6 +1103,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                          max="4"
                          value={circularMaxRounds}
                          onChange={handleCircularMaxRoundsChange}
+                         disabled={workspaceBypassActive}
                          className="w-20 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm text-center outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
                        />
                      </div>
@@ -953,13 +1146,26 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  </div>
                </div>
                
-               {loadedWorkspace && (
+               {currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE ? (
+                 <div className="mt-4 p-3 bg-slate-500/20 border border-slate-300/30 rounded-xl text-right">
+                   <div className="text-slate-100 text-sm font-semibold mb-1">ללא סביבת עבודה</div>
+                   <div className="text-slate-200/85 text-xs">
+                     כל הבקשות יישלחו ישירות דרך: {directGenerationSummary}
+                   </div>
+                   <div className="text-slate-200/60 text-[10px] mt-1">
+                     סביבת העבודה האחרונה נשמרת ברקע, ואפשר לחזור אליה מייד דרך הבחירה למעלה.
+                   </div>
+                 </div>
+               ) : loadedWorkspace && (
                  <div className="mt-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
                    <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
                    <div className="text-amber-200/80 text-xs">
                      {loadedWorkspace?.workflowMode === 'custom-order' || loadedWorkspace?.autopilotEnabled === false
                        ? ((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')
                        : (WORKFLOW_LABELS[loadedWorkspace?.workflowMode] || loadedWorkspace?.workflowMode || 'manager-auto')}
+                   </div>
+                   <div className="text-amber-200/60 text-[10px] mt-1">
+                     מנועים: {loadedWorkspace?.providerSummary}
                    </div>
                    <div className="text-amber-200/60 text-[10px] mt-1">
                      {(loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' • ')}
@@ -1092,7 +1298,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               setSelectedModel(undefined);
               setShowChefDialog(false);
             }}
-            selectedModel={selectedModel}
+            selectedModel={selectedModel || resolvedDirectProviderId}
             chefContext={{
               prompt: String(prompt || '').trim(),
               templateId: selectedTemplate,

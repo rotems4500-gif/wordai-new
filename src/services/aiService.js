@@ -194,6 +194,155 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   appendAgentNotesToOutput: false,
   agentNotesInstruction: '',
   activeWorkspaceId: 'default-content-studio',
+  workspaceBypassEnabled: false,
+};
+
+const PROVIDER_WORKSPACE_LABELS = {
+  gemini: 'Gemini',
+  claude: 'Claude',
+  perplexity: 'Perplexity',
+};
+
+const getProviderWorkspaceLabel = (providerId = '') => PROVIDER_WORKSPACE_LABELS[String(providerId || '').trim()] || String(providerId || 'AI').trim() || 'AI';
+
+const buildProviderFocusedWorkspaceGoal = (providerId = '') => {
+  const providerLabel = getProviderWorkspaceLabel(providerId);
+  return `כל צוות הסוכנים רץ דרך ${providerLabel}. המודל בפועל נלקח מברירת המחדל של ${providerLabel} בהגדרות, כך שאפשר להחליף מנוע בלי לערוך את סביבת העבודה.`;
+};
+
+const buildProviderFocusedWorkspaceAgents = (providerId = '') => getDefaultRoleAgents().map((agent) => ({
+  ...agent,
+  provider: providerId,
+  model: '',
+}));
+
+const buildDefaultWorkspaceSeed = ({
+  id = '',
+  name = '',
+  preset = 'content-studio',
+  workflowMode = 'manager-auto',
+  autopilotEnabled = true,
+  sharedGoal = '',
+  appendAgentNotesToOutput = false,
+  agentNotesInstruction = '',
+  agents = [],
+} = {}) => ({
+  id,
+  name,
+  automation: {
+    ...DEFAULT_WORKSPACE_AUTOMATION,
+    enabled: true,
+    preset,
+    workflowMode,
+    autoDispatch: true,
+    autopilotEnabled,
+    workspaceName: name,
+    sharedGoal,
+    appendAgentNotesToOutput,
+    agentNotesInstruction,
+    activeWorkspaceId: id,
+  },
+  agents,
+  lastModified: new Date().toISOString(),
+});
+
+const buildProviderFocusedWorkspaceSeed = ({ id = '', name = '', preset = '', providerId = '' } = {}) => buildDefaultWorkspaceSeed({
+  id,
+  name,
+  preset,
+  workflowMode: 'manager-auto',
+  autopilotEnabled: true,
+  sharedGoal: buildProviderFocusedWorkspaceGoal(providerId),
+  agents: buildProviderFocusedWorkspaceAgents(providerId),
+});
+
+const getAcademicLabWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל עבודה אקדמי', prompt: 'פרק את המשימה האקדמית לשלבים ברורים: חקר, מבנה, כתיבה וליטוש. שמור על דיוק והחזר תכנית קצרה ותוצר ישים.', provider: '', model: '', enabled: true },
+  { id: 'researcher', name: 'חוקר ספרות', prompt: 'אתר תוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים רלוונטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא חשוב לעבודה. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר להשלמת הסקירה, ואל תסתפק רק בכיווני חיפוש או במילות מפתח. אפשר להוסיף מונחי חיפוש כהשלמה בלבד. אל תמציא פרטים. אם נדרש גם חקר חזותי, ציין זאת כהשלמה למנהל העבודה.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי מדויק לפי הוראות המשתמש והמטלה. אם התבקשו מבוא, פרקים, שאלות או היקף מסוים - שמור עליהם; אם לא, אל תוסיף מבנה קבוע כמו מבוא/דיון/סיכום על דעת עצמך. הקפד על רצף טיעוני והיררכיית כותרות רק כשנדרש.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'כותב אקדמי', prompt: 'כתוב בעברית אקדמית, פורמלית ומדויקת, בהתאם לסגנון המשתמש. הימנע מהמצאות.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'מגיה אקדמי', prompt: 'בצע ליטוש סופי של ניסוח, בהירות, פיסוק ואחידות אקדמית.', provider: '', model: '', enabled: true },
+]);
+
+const getAcademicVerifiedWorkspaceAgents = () => ([
+  {
+    id: 'manager',
+    name: 'מנהל עבודה - Claude',
+    prompt: 'פעל כמנהל העבודה הראשי. פרק את המטלה לשלבים ברורים לפי ההנחיות, קבע מה בדיוק צריך לאסוף, ומהם הקריטריונים לעבודה מוצלחת לפני כתיבה.',
+    provider: 'claude',
+    model: '',
+    enabled: true,
+  },
+  {
+    id: 'researcher-academic',
+    name: 'אוסף מחקר אקדמי - Perplexity',
+    prompt: 'אסוף חומרים מחקריים ואקדמיים בלבד כתוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים קונקרטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר, ואל תסתפק רק בכיווני חיפוש או ברעיונות כלליים. אפשר להוסיף מושגי יסוד ומונחי חיפוש כהשלמה בלבד. אל תמציא מקורות, DOI, ציטוטים או פרטים. ציין תמיד מאיפה הגיע כל ממצא.',
+    provider: 'perplexity',
+    model: '',
+    enabled: true,
+  },
+  {
+    id: 'researcher-general',
+    name: 'אוסף משלים - Gemini',
+    prompt: 'אסוף מידע משלים שאינו אקדמי גרידא: הקשרים, דוגמאות, ניסוחים, וסיכום תובנות. אל תמציא עובדות או מקורות, וסמן בבירור מה מקור כל טענה. אם חסר גם רובד חזותי, ציין למנהל העבודה שכדאי להפעיל סוכן מחקר חזותי ייעודי.',
+    provider: 'gemini',
+    model: '',
+    enabled: true,
+  },
+  {
+    id: 'writer',
+    name: 'כותב העבודה - Claude',
+    prompt: 'כתוב את העבודה לפי ההנחיות בלבד ועל בסיס החומרים שנאספו בשלבים הקודמים. שלב הפניות ברורות לכל פסקה משמעותית וציין בסוף רשימת מקורות מסודרת לפי מה שנאסף בפועל.',
+    provider: 'claude',
+    model: '',
+    enabled: true,
+  },
+  {
+    id: 'manager-review',
+    name: 'בקרת התאמה - Claude',
+    prompt: 'בצע ביקורת סופית כמנהל עבודה: בדוק שהעבודה עומדת בהנחיות, שהמבנה נכון, שאין טענות לא מבוססות, ושיש הפניות מספקות למקורות. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש סבב נוסף, אל תחזיר פסקת מטא במקום המסמך המלא.',
+    provider: 'claude',
+    model: '',
+    enabled: true,
+  },
+]);
+
+const getProductDeskWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל מוצר', prompt: 'הגדר מטרה, קהל יעד, תוצרים וסדר עבודה. החזר תוכנית קצרה ותעדוף ברור.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'מעצב חוויה', prompt: 'בנה מבנה מסמך חד וברור, כותרות נכונות וזרימת קריאה ידידותית. אל תוסיף מבוא, סיכום או פרקים קבועים אם המשתמש לא ביקש אותם במפורש.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'קופירייטר', prompt: 'כתוב תוכן ברור, משכנע וקריא, עם פתיחה רק אם היא נדרשת לפי בקשת המשתמש או סוג המסמך, ועם מעברים טובים בלי לכפות מבוא או hook על דעת עצמך.', provider: '', model: '', enabled: true },
+  { id: 'researcher', name: 'אנליסט שוק', prompt: 'הצע זוויות מחקר, השוואות, שאלות ותובנות מבוססות עבור מסמכי מוצר.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'עורך סופי', prompt: 'לטש את המסר, קצב הקריאה, הבהירות והעברית.', provider: '', model: '', enabled: true },
+]);
+
+const getLegalContractsWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל מסמך משפטי', prompt: 'פרק את הבקשה למסמך משפטי, חוזה, נוהל או מכתב רשמי לשלבים ברורים. ודא שהמסמך נשאר מדויק, זהיר, ולא מציג מידע עובדתי או התחייבות שלא הופיעו בבקשת המשתמש.', provider: '', model: '', enabled: true },
+  { id: 'researcher', name: 'בודק הקשר משפטי', prompt: 'אתר מונחים, מבנים מקובלים, סעיפים נפוצים ושאלות בירור שחשוב להעלות לפני ניסוח מסמך משפטי או חוזי. אל תמציא חוק, פסיקה או ייעוץ ספציפי כשאין לכך מקור מפורש בבקשה.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'בונה סעיפים וחוזים', prompt: 'סדר את המסמך במבנה משפטי ברור: כותרת, צדדים, הגדרות, סעיפים, חריגים וחתימות רק כשנדרש. הימנע מהוספת סעיפים מיותרים או ניסוחים עמומים.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'נסח משפטי', prompt: 'כתוב בעברית פורמלית, מדויקת ולא מתלהמת. שמור על ניסוחים ברורים, הגדרות עקביות וסעיפים שלא משתמעים לשתי פנים.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'בקרת סיכון וניסוח', prompt: 'בצע מעבר סופי על בהירות, כפילויות, סתירות פנימיות, סעיפים חסרים וניסוחים שעלולים להישמע מחייבים מדי או לא מדויקים.', provider: '', model: '', enabled: true },
+]);
+
+const getFinalPolishWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל ליטוש', prompt: 'קבע סדר בדיקה קצר ומדויק לפני הגשה: מבנה, בהירות, ניסוח, עקביות ועמידה בהוראות. התעדף את התיקונים שמביאים את המסמך למצב הגשה מהר.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'בודק מבנה והיררכיה', prompt: 'בדוק שכותרות, סעיפים, מעברי עמוד ורצף הטקסט עובדים נכון. אם המבנה מסורבל, הצע תיקון שמרני ולא שכתוב מיותר.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'משייף ניסוח', prompt: 'לטש משפטים מסורבלים, הסר חזרתיות, חזק בהירות ושמור על קול כתיבה טבעי. אל תמציא תוכן חדש אם הבעיה היא רק ברמת הניסוח.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'בודק הגשה סופית', prompt: 'בצע מעבר אחרון של כתיב, פיסוק, אחידות מונחים, קצב קריאה וסימני AI גלויים. התוצאה צריכה להרגיש מוכנה להגשה.', provider: '', model: '', enabled: true },
+  { id: 'manager-review', name: 'שער הגשה', prompt: 'אשר אם המסמך מוכן להגשה או ציין במדויק מה עדיין חוסם. DELIVERABLE חייב להישאר המסמך המלא והמעודכן בלבד.', provider: '', model: '', enabled: true },
+]);
+
+const getSocialContentWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל קמפיין', prompt: 'הגדר את מטרת התוכן, הקהל, הפלטפורמה, הטון וה-CTA. דאג שכל שלב ישרת מטרה שיווקית ברורה ולא רק ניסוח יפה.', provider: '', model: '', enabled: true },
+  { id: 'researcher', name: 'חוקר קהל וטרנדים', prompt: 'אסוף זוויות, כאבים, ניסוחים, התנגדויות ו-hooks שמתאימים לקהל ולפלטפורמה. התמקד בתובנות שימושיות לכתיבת פוסטים, מודעות, קופי קצר או רצף תוכן.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'בונה זווית ותבנית', prompt: 'בחר מבנה קצר וחד לפוסט, קרוסלה, מודעה או רצף סטוריז. תן flow שנוח לקריאה, עם hook, פיתוח קצר ו-CTA רק אם זה משרת את המטרה.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'קופירייטר לרשתות', prompt: 'כתוב תוכן חד, קריא ולא גנרי. התאם אורך, קצב וטון לפלטפורמה, הימנע משפה רובוטית ושמור על ערך ברור כבר בשורות הראשונות.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'עורך מסר והמרה', prompt: 'בדוק שהמסר חד, שאין עודף מילים, שה-CTA ברור, ושיש התאמה טובה בין הבטחה, תוכן והנעה לפעולה.', provider: '', model: '', enabled: true },
+]);
+
+const DEPRECATED_DEFAULT_PROVIDER_WORKSPACES = {
+  'default-gemini-studio': { preset: 'gemini-studio', providerId: 'gemini', name: 'צוות Gemini' },
+  'default-claude-studio': { preset: 'claude-studio', providerId: 'claude', name: 'צוות Claude' },
+  'default-perplexity-studio': { preset: 'perplexity-studio', providerId: 'perplexity', name: 'צוות Perplexity' },
 };
 
 export const DEFAULT_WORKSPACES_LIBRARY = {
@@ -272,6 +421,56 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
     agents: getLightSystemResearchAgents(),
     lastModified: new Date().toISOString(),
   },
+  'default-academic-lab': buildDefaultWorkspaceSeed({
+    id: 'default-academic-lab',
+    name: 'כתיבה אקדמית מהירה',
+    preset: 'academic-lab',
+    workflowMode: 'manager-auto',
+    sharedGoal: 'להפיק עבודה אקדמית מסודרת ומהירה עם מבנה ברור, מקורות רלוונטיים וליטוש פורמלי בלי להכביד במסלול מחקר מלא.',
+    agents: getAcademicLabWorkspaceAgents(),
+  }),
+  'default-academic-verified': buildDefaultWorkspaceSeed({
+    id: 'default-academic-verified',
+    name: 'אקדמי מאומת ומבוסס מקורות',
+    preset: 'academic-dual-research',
+    workflowMode: 'custom-order',
+    autopilotEnabled: false,
+    sharedGoal: 'להפיק מסמך אקדמי מבוסס מקורות עם הפרדה בין מחקר אקדמי למחקר משלים, כתיבה עם הפניות ובקרת התאמה סופית לפני ההחזרה למשתמש.',
+    agents: getAcademicVerifiedWorkspaceAgents(),
+  }),
+  'default-product-desk': buildDefaultWorkspaceSeed({
+    id: 'default-product-desk',
+    name: 'מוצר, אפיון ושיווק',
+    preset: 'product-desk',
+    workflowMode: 'design-first',
+    sharedGoal: 'להפיק מסמכי מוצר, PRD, הצעות ותוכן שיווקי עם מסר חד, מבנה קריא ותיעדוף ברור של הערך העסקי.',
+    agents: getProductDeskWorkspaceAgents(),
+  }),
+  'default-legal-contracts': buildDefaultWorkspaceSeed({
+    id: 'default-legal-contracts',
+    name: 'משפטי וחוזים',
+    preset: 'legal-contracts',
+    workflowMode: 'manager-auto',
+    sharedGoal: 'להפיק מסמכים משפטיים, חוזים, נהלים ומכתבים רשמיים בניסוח מדויק, מבנה ברור ובקרה על ניסוחים מסוכנים או עמומים.',
+    agents: getLegalContractsWorkspaceAgents(),
+  }),
+  'default-final-polish': buildDefaultWorkspaceSeed({
+    id: 'default-final-polish',
+    name: 'ליטוש והגשה סופית',
+    preset: 'final-polish',
+    workflowMode: 'custom-order',
+    autopilotEnabled: false,
+    sharedGoal: 'להעביר טיוטה דרך מסלול קצר של ליטוש, בדיקת מבנה, שיפור ניסוח ובקרת הגשה לפני מסירה או שליחה.',
+    agents: getFinalPolishWorkspaceAgents(),
+  }),
+  'default-social-content': buildDefaultWorkspaceSeed({
+    id: 'default-social-content',
+    name: 'תוכן שיווקי לרשתות',
+    preset: 'social-content',
+    workflowMode: 'design-first',
+    sharedGoal: 'להפיק פוסטים, קופי, קרוסלות ורצפי תוכן קצרים עם hook ברור, התאמה לפלטפורמה ו-CTA מדויק.',
+    agents: getSocialContentWorkspaceAgents(),
+  }),
 };
 
 export const SKILL_LIBRARY = [
@@ -1076,9 +1275,64 @@ const normalizeWorkspaceRecord = (workspaceId = '', workspace = {}, fallbackName
   };
 };
 
-const ensureDefaultWorkspaceEntries = (library = {}) => {
+const serializeWorkspaceForMigrationComparison = (workspaceId = '', workspace = {}, fallbackName = '') => {
+  const normalized = normalizeWorkspaceRecord(workspaceId, workspace, fallbackName);
+  return JSON.stringify({
+    id: normalized.id,
+    name: normalized.name,
+    automation: normalized.automation,
+    agents: normalized.agents,
+  });
+};
+
+const removeDeprecatedDefaultProviderWorkspaces = (library = {}) => {
   const nextLibrary = { ...(library || {}) };
   let wasUpdated = false;
+  const workspacePointer = readJsonFromStorage('wordai_workspace_automation', {});
+  const activeWorkspaceId = String(workspacePointer?.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const workspaceBypassEnabled = workspacePointer?.workspaceBypassEnabled === true;
+  let removedRememberedWorkspace = false;
+
+  Object.entries(DEPRECATED_DEFAULT_PROVIDER_WORKSPACES).forEach(([workspaceId, metadata]) => {
+    const workspace = nextLibrary[workspaceId];
+    if (!workspace || typeof workspace !== 'object') return;
+    if (!workspaceBypassEnabled && activeWorkspaceId === workspaceId) return;
+    if (String(workspace?.automation?.preset || '').trim() !== metadata.preset) return;
+
+    const legacyDefaultWorkspace = buildProviderFocusedWorkspaceSeed({
+      id: workspaceId,
+      name: metadata.name,
+      preset: metadata.preset,
+      providerId: metadata.providerId,
+    });
+    const currentWorkspaceSignature = serializeWorkspaceForMigrationComparison(workspaceId, workspace, metadata.name);
+    const legacyDefaultSignature = serializeWorkspaceForMigrationComparison(workspaceId, legacyDefaultWorkspace, metadata.name);
+    if (currentWorkspaceSignature !== legacyDefaultSignature) return;
+
+    if (workspaceBypassEnabled && activeWorkspaceId === workspaceId) {
+      removedRememberedWorkspace = true;
+    }
+
+    delete nextLibrary[workspaceId];
+    wasUpdated = true;
+  });
+
+  if (removedRememberedWorkspace) {
+    persistWorkspacePointer({
+      activeWorkspaceId: DEFAULT_WORKSPACE_ID,
+      workspaceBypassEnabled: true,
+    });
+  }
+
+  return { library: nextLibrary, wasUpdated };
+};
+
+const ensureDefaultWorkspaceEntries = (library = {}) => {
+  const migrationResult = removeDeprecatedDefaultProviderWorkspaces(library);
+  const nextLibrary = { ...(migrationResult.library || {}) };
+  let wasUpdated = false;
+
+  if (migrationResult.wasUpdated) wasUpdated = true;
 
   Object.entries(DEFAULT_WORKSPACES_LIBRARY).forEach(([workspaceId, workspace]) => {
     if (nextLibrary[workspaceId]) return;
@@ -1125,6 +1379,7 @@ export const getWorkspaceAutomation = () => {
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...readJsonFromStorage('wordai_workspace_automation', {}),
   };
+  const workspaceBypassEnabled = baseAutomation.workspaceBypassEnabled === true;
   const library = getWorkspacesLibrary();
   let activeWorkspaceId = String(baseAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
 
@@ -1134,34 +1389,60 @@ export const getWorkspaceAutomation = () => {
   }
 
   const activeWorkspace = library[activeWorkspaceId] || normalizeWorkspaceRecord(DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {}, 'סטודיו תוכן (ברירת מחדל)');
-  return normalizeWorkspaceAutomationRecord({
+  const resolvedAutomation = normalizeWorkspaceAutomationRecord({
     ...baseAutomation,
     ...(activeWorkspace?.automation || {}),
   }, activeWorkspaceId, activeWorkspace?.name || 'סביבת עבודה מותאמת');
+  resolvedAutomation.workspaceBypassEnabled = workspaceBypassEnabled;
+  if (workspaceBypassEnabled) {
+    resolvedAutomation.enabled = false;
+    resolvedAutomation.autoDispatch = false;
+  }
+  return resolvedAutomation;
 };
 
 export const shouldUseWorkspaceAutomation = (automation = getWorkspaceAutomation()) => (
   automation?.enabled === true && automation?.autoDispatch !== false
 );
 
+const sanitizeWorkspaceAutomationForPersistence = (automation = {}, { preserveWorkspaceToggles = true } = {}) => {
+  const nextAutomation = {
+    ...(automation && typeof automation === 'object' ? automation : {}),
+  };
+  delete nextAutomation.workspaceBypassEnabled;
+  if (!preserveWorkspaceToggles) {
+    delete nextAutomation.enabled;
+    delete nextAutomation.autoDispatch;
+  }
+  return nextAutomation;
+};
+
 export const saveWorkspaceAutomation = (config) => {
   const currentAutomation = getWorkspaceAutomation();
   const activeWorkspaceId = String(currentAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const library = getWorkspacesLibrary();
   const workspace = normalizeWorkspaceRecord(activeWorkspaceId, library[activeWorkspaceId] || {}, currentAutomation.workspaceName || 'סביבת עבודה מותאמת');
+  const bypassActive = currentAutomation.workspaceBypassEnabled === true;
+  const sanitizedConfig = sanitizeWorkspaceAutomationForPersistence(config, {
+    preserveWorkspaceToggles: !bypassActive,
+  });
   const nextWorkspaceName = sanitizeWorkspaceName(
     config?.workspaceName || workspace?.name || workspace?.automation?.workspaceName,
     workspace?.name || 'סביבת עבודה מותאמת'
   );
+  const currentWorkspaceAutomation = normalizeWorkspaceAutomationRecord({
+    ...workspace.automation,
+    workspaceName: nextWorkspaceName,
+  }, activeWorkspaceId, nextWorkspaceName);
   const nextAutomation = normalizeWorkspaceAutomationRecord({
     ...workspace.automation,
-    ...(config && typeof config === 'object' ? config : {}),
+    ...sanitizedConfig,
     workspaceName: nextWorkspaceName,
   }, activeWorkspaceId, nextWorkspaceName);
 
   if (
     String(workspace?.name || '').trim() === nextWorkspaceName
-    && JSON.stringify(currentAutomation) === JSON.stringify(nextAutomation)
+    && JSON.stringify(currentWorkspaceAutomation) === JSON.stringify(nextAutomation)
   ) {
     return currentAutomation;
   }
@@ -1175,10 +1456,25 @@ export const saveWorkspaceAutomation = (config) => {
   }, nextWorkspaceName);
 
   saveWorkspacesLibrary(library);
-  persistWorkspacePointer(nextAutomation);
+  persistWorkspacePointer({
+    ...nextAutomation,
+    workspaceBypassEnabled: bypassActive,
+  });
   syncPersistedAppSettings();
   emitWorkspaceChangedEvent('workspace-automation-saved', activeWorkspaceId);
-  return nextAutomation;
+  return getWorkspaceAutomation();
+};
+
+export const setWorkspaceBypassEnabled = (enabled = true) => {
+  const currentAutomation = getWorkspaceAutomation();
+  const activeWorkspaceId = String(currentAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  persistWorkspacePointer({
+    activeWorkspaceId,
+    workspaceBypassEnabled: Boolean(enabled),
+  });
+  syncPersistedAppSettings();
+  emitWorkspaceChangedEvent(enabled ? 'workspace-bypass-enabled' : 'workspace-bypass-disabled', activeWorkspaceId);
+  return getWorkspaceAutomation();
 };
 
 export const getWorkspacesLibrary = () => {
@@ -1283,13 +1579,30 @@ export const deleteWorkspace = (workspaceId) => {
   const library = getWorkspacesLibrary();
   if (!library[targetId]) return false;
 
-  const wasActive = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() === targetId;
+  const currentAutomation = getWorkspaceAutomation();
+  const wasActive = String(currentAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() === targetId;
+  const bypassActive = currentAutomation.workspaceBypassEnabled === true;
 
   delete library[targetId];
   saveWorkspacesLibrary(library);
 
   if (wasActive) {
-    switchToWorkspace(DEFAULT_WORKSPACE_ID);
+    if (bypassActive) {
+      const fallbackWorkspace = normalizeWorkspaceRecord(
+        DEFAULT_WORKSPACE_ID,
+        library[DEFAULT_WORKSPACE_ID] || DEFAULT_WORKSPACES_LIBRARY[DEFAULT_WORKSPACE_ID] || {},
+        'סטודיו תוכן (ברירת מחדל)'
+      );
+      persistWorkspacePointer({
+        activeWorkspaceId: DEFAULT_WORKSPACE_ID,
+        workspaceBypassEnabled: true,
+      });
+      localStorage.setItem('wordai_role_agents', JSON.stringify(cloneAgentRecords(fallbackWorkspace.agents || [])));
+      syncPersistedAppSettings();
+      emitWorkspaceChangedEvent('workspace-deleted', targetId);
+    } else {
+      switchToWorkspace(DEFAULT_WORKSPACE_ID);
+    }
   } else {
     emitWorkspaceChangedEvent('workspace-deleted', targetId);
   }
@@ -1311,7 +1624,7 @@ export const switchToWorkspace = (workspaceId) => {
   saveWorkspacesLibrary(library);
 
   const automationSnapshot = normalizeWorkspaceAutomationRecord(workspace.automation || {}, targetId, workspace.name);
-  persistWorkspacePointer(automationSnapshot);
+  persistWorkspacePointer({ ...automationSnapshot, workspaceBypassEnabled: false });
   localStorage.setItem('wordai_role_agents', JSON.stringify(cloneAgentRecords(workspace.agents || [])));
   syncPersistedAppSettings();
 
@@ -1533,64 +1846,35 @@ const WORKSPACE_AGENT_PRESETS = {
     automation: { enabled: true, preset: 'content-studio', workflowMode: 'manager-auto', autoDispatch: true },
     agents: DEFAULT_ROLE_AGENTS,
   },
+  'gemini-studio': {
+    label: 'צוות Gemini',
+    description: 'כל הסוכנים רצים דרך Gemini. המודל בפועל נשאב מהגדרת Gemini הפעילה.',
+    automation: { enabled: true, preset: 'gemini-studio', workflowMode: 'manager-auto', autoDispatch: true },
+    agents: buildProviderFocusedWorkspaceAgents('gemini'),
+  },
+  'claude-studio': {
+    label: 'צוות Claude',
+    description: 'כל הסוכנים רצים דרך Claude. המודל בפועל נשאב מהגדרת Claude הפעילה.',
+    automation: { enabled: true, preset: 'claude-studio', workflowMode: 'manager-auto', autoDispatch: true },
+    agents: buildProviderFocusedWorkspaceAgents('claude'),
+  },
+  'perplexity-studio': {
+    label: 'צוות Perplexity',
+    description: 'כל הסוכנים רצים דרך Perplexity. המודל בפועל נשאב מהגדרת Perplexity הפעילה.',
+    automation: { enabled: true, preset: 'perplexity-studio', workflowMode: 'manager-auto', autoDispatch: true },
+    agents: buildProviderFocusedWorkspaceAgents('perplexity'),
+  },
   'academic-lab': {
     label: 'צוות אקדמי',
     description: 'מתאים לעבודות, סמינרים וסיכומים פורמליים עם מנהל עבודה אוטומטי.',
     automation: { enabled: true, preset: 'academic-lab', workflowMode: 'manager-auto', autoDispatch: true },
-    agents: [
-      { id: 'manager', name: 'מנהל עבודה אקדמי', prompt: 'פרק את המשימה האקדמית לשלבים ברורים: חקר, מבנה, כתיבה וליטוש. שמור על דיוק והחזר תכנית קצרה ותוצר ישים.', provider: '', model: '', enabled: true },
-      { id: 'researcher', name: 'חוקר ספרות', prompt: 'אתר תוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים רלוונטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא חשוב לעבודה. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר להשלמת הסקירה, ואל תסתפק רק בכיווני חיפוש או במילות מפתח. אפשר להוסיף מונחי חיפוש כהשלמה בלבד. אל תמציא פרטים. אם נדרש גם חקר חזותי, ציין זאת כהשלמה למנהל העבודה.', provider: '', model: '', enabled: true },
-      { id: 'designer', name: 'בונה שלד אקדמי', prompt: 'בנה מבנה אקדמי מדויק לפי הוראות המשתמש והמטלה. אם התבקשו מבוא, פרקים, שאלות או היקף מסוים - שמור עליהם; אם לא, אל תוסיף מבנה קבוע כמו מבוא/דיון/סיכום על דעת עצמך. הקפד על רצף טיעוני והיררכיית כותרות רק כשנדרש.', provider: '', model: '', enabled: true },
-      { id: 'writer', name: 'כותב אקדמי', prompt: 'כתוב בעברית אקדמית, פורמלית ומדויקת, בהתאם לסגנון המשתמש. הימנע מהמצאות.', provider: '', model: '', enabled: true },
-      { id: 'proofreader', name: 'מגיה אקדמי', prompt: 'בצע ליטוש סופי של ניסוח, בהירות, פיסוק ואחידות אקדמית.', provider: '', model: '', enabled: true },
-    ],
+    agents: getAcademicLabWorkspaceAgents(),
   },
   'academic-dual-research': {
     label: 'אקדמי מאומת - Claude מוביל',
     description: 'קלוד מנהל, Perplexity מחקר אקדמי, Gemini מחקר משלים, כתיבה ובקרה סופית עם הפניות למקורות.',
     automation: { enabled: true, preset: 'academic-dual-research', workflowMode: 'custom-order', autoDispatch: true, autopilotEnabled: false },
-    agents: [
-      {
-        id: 'manager',
-        name: 'מנהל עבודה - Claude',
-        prompt: 'פעל כמנהל העבודה הראשי. פרק את המטלה לשלבים ברורים לפי ההנחיות, קבע מה בדיוק צריך לאסוף, ומהם הקריטריונים לעבודה מוצלחת לפני כתיבה.',
-        provider: 'claude',
-        model: '',
-        enabled: true,
-      },
-      {
-        id: 'researcher-academic',
-        name: 'אוסף מחקר אקדמי - Perplexity',
-        prompt: 'אסוף חומרים מחקריים ואקדמיים בלבד כתוצר מחקרי קונקרטי וישים. כשאפשר, ספק לפחות 3 מקורות או מאמרים אקדמיים קונקרטיים, ולכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי. אם נמצאו פחות מ-3 מקורות, כתוב במפורש כמה נמצאו ומה חסר, ואל תסתפק רק בכיווני חיפוש או ברעיונות כלליים. אפשר להוסיף מושגי יסוד ומונחי חיפוש כהשלמה בלבד. אל תמציא מקורות, DOI, ציטוטים או פרטים. ציין תמיד מאיפה הגיע כל ממצא.',
-        provider: 'perplexity',
-        model: '',
-        enabled: true,
-      },
-      {
-        id: 'researcher-general',
-        name: 'אוסף משלים - Gemini',
-        prompt: 'אסוף מידע משלים שאינו אקדמי גרידא: הקשרים, דוגמאות, ניסוחים, וסיכום תובנות. אל תמציא עובדות או מקורות, וסמן בבירור מה מקור כל טענה. אם חסר גם רובד חזותי, ציין למנהל העבודה שכדאי להפעיל סוכן מחקר חזותי ייעודי.',
-        provider: 'gemini',
-        model: '',
-        enabled: true,
-      },
-      {
-        id: 'writer',
-        name: 'כותב העבודה - Claude',
-        prompt: 'כתוב את העבודה לפי ההנחיות בלבד ועל בסיס החומרים שנאספו בשלבים הקודמים. שלב הפניות ברורות לכל פסקה משמעותית וציין בסוף רשימת מקורות מסודרת לפי מה שנאסף בפועל.',
-        provider: 'claude',
-        model: '',
-        enabled: true,
-      },
-      {
-        id: 'manager-review',
-        name: 'בקרת התאמה - Claude',
-        prompt: 'בצע ביקורת סופית כמנהל עבודה: בדוק שהעבודה עומדת בהנחיות, שהמבנה נכון, שאין טענות לא מבוססות, ושיש הפניות מספקות למקורות. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש סבב נוסף, אל תחזיר פסקת מטא במקום המסמך המלא.',
-        provider: 'claude',
-        model: '',
-        enabled: true,
-      },
-    ],
+    agents: getAcademicVerifiedWorkspaceAgents(),
   },
   'system-research-heavy': {
     label: 'מחקר מערכת כבד',
@@ -1626,13 +1910,25 @@ const WORKSPACE_AGENT_PRESETS = {
     label: 'צוות מוצר',
     description: 'מתאים למסמכי אפיון, רעיונות ותוכן שיווקי.',
     automation: { enabled: true, preset: 'product-desk', workflowMode: 'design-first', autoDispatch: true },
-    agents: [
-      { id: 'manager', name: 'מנהל מוצר', prompt: 'הגדר מטרה, קהל יעד, תוצרים וסדר עבודה. החזר תוכנית קצרה ותעדוף ברור.', provider: '', model: '', enabled: true },
-      { id: 'designer', name: 'מעצב חוויה', prompt: 'בנה מבנה מסמך חד וברור, כותרות נכונות וזרימת קריאה ידידותית. אל תוסיף מבוא, סיכום או פרקים קבועים אם המשתמש לא ביקש אותם במפורש.', provider: '', model: '', enabled: true },
-      { id: 'writer', name: 'קופירייטר', prompt: 'כתוב תוכן ברור, משכנע וקריא, עם פתיחה רק אם היא נדרשת לפי בקשת המשתמש או סוג המסמך, ועם מעברים טובים בלי לכפות מבוא או hook על דעת עצמך.', provider: '', model: '', enabled: true },
-      { id: 'researcher', name: 'אנליסט שוק', prompt: 'הצע זוויות מחקר, השוואות, שאלות ותובנות מבוססות עבור מסמכי מוצר.', provider: '', model: '', enabled: true },
-      { id: 'proofreader', name: 'עורך סופי', prompt: 'לטש את המסר, קצב הקריאה, הבהירות והעברית.', provider: '', model: '', enabled: true },
-    ],
+    agents: getProductDeskWorkspaceAgents(),
+  },
+  'legal-contracts': {
+    label: 'משפטי וחוזים',
+    description: 'מתאים להסכמים, נהלים, מכתבים רשמיים ומסמכים שדורשים ניסוח זהיר ומדויק.',
+    automation: { enabled: true, preset: 'legal-contracts', workflowMode: 'manager-auto', autoDispatch: true },
+    agents: getLegalContractsWorkspaceAgents(),
+  },
+  'final-polish': {
+    label: 'ליטוש והגשה סופית',
+    description: 'מסלול קצר לשיוף טיוטה, בדיקת מבנה, ליטוש ניסוח ושער הגשה סופי.',
+    automation: { enabled: true, preset: 'final-polish', workflowMode: 'custom-order', autoDispatch: true, autopilotEnabled: false },
+    agents: getFinalPolishWorkspaceAgents(),
+  },
+  'social-content': {
+    label: 'תוכן שיווקי לרשתות',
+    description: 'מיועד לפוסטים, קופי, קרוסלות, מודעות ורצפי תוכן קצרים עם hook ו-CTA.',
+    automation: { enabled: true, preset: 'social-content', workflowMode: 'design-first', autoDispatch: true },
+    agents: getSocialContentWorkspaceAgents(),
   },
   'custom-workspace': {
     label: 'סביבה מותאמת אישית',

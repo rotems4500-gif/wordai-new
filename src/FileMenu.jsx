@@ -1663,14 +1663,136 @@ function SkillsSettings({ skillsState, setSkillsState }) {
   );
 }
 
-function GuideSettings() {
+function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   const [memorySnapshot, setMemorySnapshot] = useState(() => getAppMemory());
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const guidedTourSteps = [
+    {
+      id: 'home',
+      eyebrow: 'שלב 1 · מסך הבית',
+      title: 'כאן מתחילים כל מסמך חדש',
+      description: 'מסך הבית הוא נקודת הכניסה: בוחרים נושא, תבנית, טיוטת בסיס, חומרי עזר והנחיות. אם אין צורך בצוות סוכנים, אפשר לעבוד ישירות כבר מכאן.',
+      bullets: [
+        'שדה הנושא העליון הוא brief קצר בלבד, וההנחיות למטה הן המקור המחייב.',
+        'אפשר לבחור טיוטת בסיס כדי לעדכן מסמך קיים במקום להתחיל מאפס.',
+        'אפשר להוסיף חומרי עזר, קובץ הנחיות וסביבת עבודה עוד לפני שמריצים את היצירה.',
+      ],
+      actions: [],
+    },
+    {
+      id: 'direct',
+      eyebrow: 'שלב 2 · מסלול ישיר',
+      title: 'ללא סביבת עבודה = ספק ומודל ישירים',
+      description: 'כשבוחרים "ללא סביבת עבודה", הבקשה לא עוברת דרך צוות סוכנים. היא נשלחת ישירות לספק והמודל שבחרת במסך הבית.',
+      bullets: [
+        'המסלול הזה טוב לטיוטות מהירות, ניסוחים נקודתיים ועבודה חופשית בלי workflow כבד.',
+        'הבורר של ספק AI ומודל במסך הבית שולט בדיוק על המסלול הזה.',
+        'אם המטרה שלך פשוטה או דחופה, לרוב זה המסלול המהיר ביותר.',
+      ],
+      actions: [
+        { label: 'פתח מנועי AI', tab: 'ai' },
+      ],
+    },
+    {
+      id: 'workspaces',
+      eyebrow: 'שלב 3 · סביבות עבודה',
+      title: 'כשצריך צוות, בוחרים workspace מתאים',
+      description: 'סביבת עבודה מפעילה workflow מוכן מראש: אילו סוכנים רצים, באיזה סדר, ואיזה סוג תוצר המערכת מנסה להחזיר.',
+      bullets: [
+        'בחר workspace לפי סוג המשימה, לא לפי ספק בלבד.',
+        'אם צריך יותר שליטה, אפשר לפתוח את טאב הסוכנים ולערוך את ה-workspace.',
+        'הסביבות החדשות מכסות אקדמי, מחקר, מוצר, משפטי, ליטוש והגשה, ותוכן שיווקי.',
+      ],
+      actions: [
+        { label: 'פתח ניהול סוכנים', tab: 'agents' },
+      ],
+    },
+    {
+      id: 'chat',
+      eyebrow: 'שלב 4 · חלונית AI',
+      title: 'מפה ממשיכים בשיחה רציפה',
+      description: 'חלונית ה-AI מיועדת לעבודה שוטפת על המסמך: שכתוב, קיצור, הרחבה, בדיקות, ורצף איטרציות עד שהתוצאה יושבת נכון.',
+      bullets: [
+        'כותבים בקשה חופשית כשלא צריך שליטה מיוחדת.',
+        'משתמשים ב-@ כדי לבחור סוכן תפקיד ייעודי.',
+        'משתמשים ב-/ כדי להפעיל skill ממוקד כמו academic-structure או source-hunter.',
+      ],
+      actions: [
+        { label: 'פתח הגדרות עוזר', tab: 'assistant' },
+      ],
+    },
+    {
+      id: 'skills',
+      eyebrow: 'שלב 5 · שליטה מדויקת',
+      title: 'סקילים, prompts וסוכנים',
+      description: 'אם אתה רוצה לקבע צורת עבודה מסוימת, זה האזור שבו מגדירים איך המערכת חושבת: skills, prompts משותפים, וסדר הריצה של הצוות.',
+      bullets: [
+        'טאב הסקילים מתאים ליכולות ממוקדות כמו מחקר, שלד אקדמי, או הגשה סופית.',
+        'טאב Prompt מתאים להנחיות רוחביות שחוזרות כמעט בכל הרצה.',
+        'טאב הסוכנים מתאים כשצריך לשנות סדר, תפקידים, timeouts או אוטופיילוט.',
+      ],
+      actions: [
+        { label: 'פתח סקילים', tab: 'skills' },
+        { label: 'פתח Prompt', tab: 'prompt' },
+        { label: 'פתח סוכנים', tab: 'agents' },
+      ],
+    },
+    {
+      id: 'style',
+      eyebrow: 'שלב 6 · התאמה אישית',
+      title: 'מלמדים את המערכת איך אתה כותב',
+      description: 'המערכת יכולה ללמוד העדפות כתיבה, טון, דוגמאות זהב, חומרי לימוד וסגנון אישי, כדי שלא תצטרך לחזור על אותן הנחיות בכל פעם.',
+      bullets: [
+        'טאב פרופיל והגשה מרכז את ה-onboarding, רקע, תפקידי שימוש והשלמת הגשה.',
+        'טאב סגנון אישי מיועד להעדפות כתיבה, דוגמאות, ביטויים ולמידה מחומרים.',
+        'כשאתה מצרף חומרים אישיים, עדיף להסביר בקצרה למה הם משמשים: סגנון, תוכן, או מבנה.',
+      ],
+      actions: [
+        { label: 'פתח פרופיל והגשה', tab: 'onboarding' },
+        { label: 'פתח סגנון אישי', tab: 'personal' },
+      ],
+    },
+    {
+      id: 'finish',
+      eyebrow: 'שלב 7 · לפני מסירה',
+      title: 'ליטוש, עיצוב וייצוא',
+      description: 'בסוף התהליך עוברים על כתיבה, גופנים, מראה, ליטוש והגשה, ואז מייצאים ל-DOCX או ממשיכים לעוד איטרציה אחת קצרה.',
+      bullets: [
+        'טאב כתיבה מרכז ברירות מחדל כמו גופנים, גדלים והעדפות מסמך.',
+        'טאב מראה מתאים להתאמות ויזואליות של הממשק.',
+        'אם הטיוטה כבר כתובה, סביבת העבודה "ליטוש והגשה סופית" היא מסלול ייעודי לסגירה לפני מסירה.',
+      ],
+      actions: [
+        { label: 'פתח כתיבה', tab: 'writing' },
+        { label: 'פתח מראה', tab: 'appearance' },
+      ],
+    },
+  ];
+  const quickRoutes = [
+    { title: 'חיבור ספק AI', text: 'להגדיר API key, לבחור מודל ולבדוק חיבור לפני שמתחילים.', tab: 'ai' },
+    { title: 'בחירת סביבה', text: 'לערוך סוכנים, workflow ואוטופיילוט של סביבות העבודה.', tab: 'agents' },
+    { title: 'התאמת סגנון אישי', text: 'ללמד את המערכת העדפות כתיבה, טון ודוגמאות זהב.', tab: 'personal' },
+    { title: 'אוןבורדינג והגשה', text: 'להשלים פרופיל, רקע אקדמי ומסלול הגשה מסודר.', tab: 'onboarding' },
+  ];
+  const workspaceShowcase = [
+    { workspaceId: '__no-workspace__', title: 'ללא סביבת עבודה', bestFor: 'טיוטה מהירה, שאלה נקודתית או ניסוח ישיר', note: 'המסלול הישיר של ספק+מודל מהמסך הראשי, בלי צוות סוכנים.' },
+    { workspaceId: 'default-content-studio', title: 'סטודיו תוכן', bestFor: 'עבודה כללית, מסמכים, סיכומים וטיוטות', note: 'ברירת המחדל הגמישה כשרוצים להתחיל בלי לחשוב יותר מדי.' },
+    { workspaceId: 'default-system-research-heavy', title: 'מחקר מערכת כבד', bestFor: 'משימות מורכבות עם מחקר רחב, אקדמי וחזותי', note: 'המסלול הכי עשיר לבקשות שדורשות עומק, בדיקה וסבבים.' },
+    { workspaceId: 'default-system-research-light', title: 'מחקר מערכת קל', bestFor: 'מחקר מהיר יותר עם פחות עלות וזמן', note: 'שומר על מבנה מחקרי אבל בגרסה חסכונית יותר.' },
+    { workspaceId: 'default-academic-lab', title: 'כתיבה אקדמית מהירה', bestFor: 'עבודות, סמינרים וסיכומים בלי מסלול מחקר כבד', note: 'טוב כשצריך מבנה אקדמי וליטוש, בלי orchestration עמוס.' },
+    { workspaceId: 'default-academic-verified', title: 'אקדמי מאומת ומבוסס מקורות', bestFor: 'עבודה אקדמית עם הפניות ומקורות כמוקד מרכזי', note: 'מסלול קשיח יותר שמפריד בין מחקר אקדמי למחקר משלים.' },
+    { workspaceId: 'default-product-desk', title: 'מוצר, אפיון ושיווק', bestFor: 'PRD, אפיון, מסמכי מוצר ורעיונות עסקיים', note: 'מתמקד במבנה, בהירות ותיעדוף עסקי.' },
+    { workspaceId: 'default-legal-contracts', title: 'משפטי וחוזים', bestFor: 'נהלים, חוזים, מכתבים רשמיים וניסוח זהיר', note: 'שומר על מבנה משפטי ברור ומצמצם ניסוחים עמומים.' },
+    { workspaceId: 'default-final-polish', title: 'ליטוש והגשה סופית', bestFor: 'מסמך כמעט גמור שצריך מעבר סופי לפני מסירה', note: 'מסלול קצר של מבנה, ניסוח, בדיקת הגשה ושער סופי.' },
+    { workspaceId: 'default-social-content', title: 'תוכן שיווקי לרשתות', bestFor: 'פוסטים, קרוסלות, מודעות ו-CTA מהירים', note: 'מיועד למסרים קצרים, hooks ותוכן מותאם פלטפורמה.' },
+  ].filter((item) => item.workspaceId === '__no-workspace__' || Boolean(DEFAULT_WORKSPACES_LIBRARY[item.workspaceId]));
   const demoPrompts = [
     { title: 'שכתוב מהיר', text: 'שכתב את הפסקה הזאת בצורה טבעית וברורה יותר' },
     { title: 'הפעלת סוכן', text: '@writer נסח לי פתיח קצר ומקצועי למייל הזה' },
     { title: 'הפעלת סקיל', text: '/academic-structure בנה לי שלד לעבודה על מנהיגות דיגיטלית' },
     { title: 'מקורות מחקר', text: '/source-hunter תן לי מילות חיפוש ל-Google Scholar על חרדת מבחנים' },
   ];
+  const activeStep = guidedTourSteps[activeStepIndex] || guidedTourSteps[0];
 
   const resetSavedMemory = () => {
     clearAppMemory();
@@ -1681,70 +1803,177 @@ function GuideSettings() {
   };
 
   return (
-    <div>
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>מדריך שימוש מלא ל-WordFlow AI</div>
-        <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.7 }}>
-          ריכזתי את כל הפעולות במקום אחד ברור: יצירת מסמך, עבודה עם הסוכן, שימוש בסקילים, והבנה איפה כל הגדרה נמצאת.
+    <div style={{ display: 'grid', gap: 14 }}>
+      <div style={{ border: '1px solid #C7D2FE', borderRadius: 20, padding: '18px 18px 16px', background: 'linear-gradient(135deg, #EEF2FF 0%, #F8FAFC 45%, #ECFEFF 100%)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: '#4338CA', marginBottom: 6, letterSpacing: '0.08em' }}>GUIDED TOUR</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>סיור מודרך ב-WordFlow AI</div>
+            <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.8, maxWidth: 760 }}>
+              במקום מדריך סטטי, הטאב הזה מוביל אותך שלב-שלב דרך המסך הראשי, הסביבות, הספקים, הסקילים וההגדרות. אפשר להתקדם בסדר, או לקפוץ ישר לאזור הרלוונטי.
+            </div>
+          </div>
+          <div style={{ minWidth: 180, padding: '12px 14px', borderRadius: 16, background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE' }}>
+            <div style={{ fontSize: 11, color: '#6366F1', fontWeight: 700, marginBottom: 6 }}>התקדמות בסיור</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#1E293B' }}>{activeStepIndex + 1}<span style={{ fontSize: 15, color: '#64748B' }}> / {guidedTourSteps.length}</span></div>
+            <div style={{ marginTop: 10, height: 8, borderRadius: 999, background: '#E2E8F0', overflow: 'hidden' }}>
+              <div style={{ width: `${((activeStepIndex + 1) / guidedTourSteps.length) * 100}%`, height: '100%', background: 'linear-gradient(90deg, #4F46E5 0%, #06B6D4 100%)' }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
+          {guidedTourSteps.map((step, index) => {
+            const selected = index === activeStepIndex;
+            return (
+              <button
+                key={step.id}
+                type="button"
+                onClick={() => setActiveStepIndex(index)}
+                style={{
+                  border: selected ? '1px solid #4F46E5' : '1px solid #CBD5E1',
+                  background: selected ? '#EEF2FF' : 'rgba(255,255,255,0.75)',
+                  color: selected ? '#312E81' : '#334155',
+                  borderRadius: 999,
+                  padding: '8px 12px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {index + 1}. {step.title}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>זיכרון מתמשך</div>
-          <button onClick={resetSavedMemory} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 8, padding: '7px 10px', fontSize: 11, cursor: 'pointer' }}>
-            אפס זיכרון שמור
+      <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 14 }}>
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '18px', background: 'white' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>{activeStep.eyebrow}</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>{activeStep.title}</div>
+          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.8, marginBottom: 14 }}>{activeStep.description}</div>
+          <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
+            {activeStep.bullets.map((item) => (
+              <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderRadius: 12, background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '10px 12px' }}>
+                <span style={{ color: '#4F46E5', fontWeight: 900, lineHeight: 1.5 }}>•</span>
+                <span style={{ fontSize: 12, color: '#334155', lineHeight: 1.75 }}>{item}</span>
+              </div>
+            ))}
+          </div>
+
+          {activeStep.actions.length ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              {activeStep.actions.map((action) => {
+                const selected = action.tab === activeTab;
+                return (
+                  <button
+                    key={`${activeStep.id}-${action.tab}`}
+                    type="button"
+                    onClick={() => onNavigate(action.tab)}
+                    style={{
+                      border: selected ? '1px solid #1D4ED8' : '1px solid #BFDBFE',
+                      background: selected ? '#DBEAFE' : '#EFF6FF',
+                      color: selected ? '#1E3A8A' : '#1D4ED8',
+                      borderRadius: 12,
+                      padding: '9px 12px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {selected ? `פתוח עכשיו: ${action.label}` : action.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => setActiveStepIndex((prev) => Math.max(0, prev - 1))}
+              disabled={activeStepIndex === 0}
+              style={{ border: '1px solid #CBD5E1', background: activeStepIndex === 0 ? '#F8FAFC' : 'white', color: activeStepIndex === 0 ? '#94A3B8' : '#334155', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === 0 ? 'not-allowed' : 'pointer' }}
+            >
+              השלב הקודם
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveStepIndex((prev) => Math.min(guidedTourSteps.length - 1, prev + 1))}
+              disabled={activeStepIndex === guidedTourSteps.length - 1}
+              style={{ border: '1px solid #0EA5E9', background: activeStepIndex === guidedTourSteps.length - 1 ? '#E2E8F0' : '#0EA5E9', color: activeStepIndex === guidedTourSteps.length - 1 ? '#64748B' : 'white', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === guidedTourSteps.length - 1 ? 'not-allowed' : 'pointer' }}
+            >
+              השלב הבא
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>קפיצה מהירה להגדרות</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {quickRoutes.map((route) => (
+                <button
+                  key={route.tab}
+                  type="button"
+                  onClick={() => onNavigate(route.tab)}
+                  style={{ textAlign: 'right', border: '1px solid #E2E8F0', background: route.tab === activeTab ? '#EEF2FF' : '#F8FAFC', borderRadius: 14, padding: '11px 12px', cursor: 'pointer' }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>{route.title}</div>
+                  <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>{route.text}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>זיכרון מתמשך</div>
+              <button onClick={resetSavedMemory} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 10, padding: '7px 10px', fontSize: 11, cursor: 'pointer' }}>
+                אפס זיכרון שמור
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
+              האפליקציה זוכרת מקומית שיחות אחרונות, סקילים והעדפות, כדי להמשיך מאותה נקודה במקום להתחיל מחדש בכל פתיחה.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontSize: 10, background: '#EEF2FF', color: '#3730A3', padding: '4px 8px', borderRadius: 999 }}>שיחות שמורות: {(memorySnapshot.recentChats || []).length}</span>
+              <span style={{ fontSize: 10, background: '#ECFDF5', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>תזכורות פעילות: {(memorySnapshot.memoryNotes || []).length}</span>
+              <span style={{ fontSize: 10, background: '#F8FAFC', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>סקיל אחרון: {memorySnapshot.lastSelectedSkillId || 'ללא'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>איזו סביבת עבודה מתאימה למה?</div>
+            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>הבחירה צריכה להיות לפי סוג המשימה. הסביבות למטה מופיעות לך במסך הבית.</div>
+          </div>
+          <button type="button" onClick={() => onNavigate('agents')} style={{ border: '1px solid #CBD5E1', background: '#F8FAFC', color: '#334155', borderRadius: 12, padding: '8px 11px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+            פתח ניהול workspaces
           </button>
         </div>
-        <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>
-          האפליקציה שומרת מקומית את היסטוריית הצ'אט האחרונה, הסוכן האחרון, הסקיל האחרון והעדפות שנלמדו, כדי שלא תצטרך להסביר הכול מחדש בכל פתיחה.
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-          <span style={{ fontSize: 10, background: '#EEF2FF', color: '#3730A3', padding: '4px 8px', borderRadius: 999 }}>שיחות שמורות: {(memorySnapshot.recentChats || []).length}</span>
-          <span style={{ fontSize: 10, background: '#ECFDF5', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>תזכורות פעילות: {(memorySnapshot.memoryNotes || []).length}</span>
-          <span style={{ fontSize: 10, background: '#F8FAFC', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>סקיל אחרון: {memorySnapshot.lastSelectedSkillId || 'ללא'}</span>
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>איפה עושים כל דבר?</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-          {[
-            { title: 'דף הבית', text: 'רק להתחלת מסמך, פתיחת טיוטה וטעינת חומרי עזר.' },
-            { title: 'הגדרות', text: 'כל מה שקשור לסקילים, זיכרון, סגנון אישי, גופנים ומנועי AI.' },
-            { title: 'חלונית AI', text: 'לשאול, לשכתב, לבחור סוכן עם @ או סקיל עם /.' },
-          ].map((item) => (
-            <div key={item.title} style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: '10px 11px', background: '#FAFAFA' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>{item.title}</div>
-              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>{item.text}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+          {workspaceShowcase.map((workspace) => (
+            <div key={workspace.title} style={{ border: '1px solid #E2E8F0', borderRadius: 16, padding: '12px 13px', background: '#F8FAFC' }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>{workspace.title}</div>
+              <div style={{ fontSize: 11, color: '#1D4ED8', fontWeight: 700, marginBottom: 6 }}>מתאים ל: {workspace.bestFor}</div>
+              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{workspace.note}</div>
             </div>
           ))}
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>זרימת עבודה מומלצת</div>
-        <div style={{ display: 'grid', gap: 8 }}>
-          {[
-            '1. פתח מסמך ריק או בחר תבנית מדף הבית.',
-            '2. אם צריך, צרף חומרי עזר והנחיות למסמך הנוכחי בלבד.',
-            '3. פתח את חלונית ה-AI ובקש ניסוח, שכתוב או בניית שלד.',
-            '4. הקלד @ כדי לבחור סוכן ייעודי, או / כדי לבחור סקיל ממוקד.',
-            '5. אם התוצאה טובה — לחץ על הוספה למסמך. אם לא, חדד את הבקשה במשפט קצר נוסף.',
-            '6. להתאמה קבועה פתח את טאב הסקילים או הסגנון האישי בהגדרות.',
-          ].map((step) => (
-            <div key={step} style={{ fontSize: 12, color: '#334155', lineHeight: 1.7, borderRight: '3px solid #2B579A', paddingRight: 10, background: '#F8FAFC', borderRadius: 8, paddingTop: 8, paddingBottom: 8, paddingLeft: 8 }}>{step}</div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>הדגמות מוכנות להעתקה</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>הדגמות מוכנות להעתקה לחלונית ה-AI</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
           {demoPrompts.map((item) => (
-            <div key={item.title} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 11px', background: '#F8FAFC' }}>
+            <div key={item.title} style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '12px', background: '#F8FAFC' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>{item.title}</div>
-              <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed #CBD5E1', borderRadius: 8, padding: '8px 9px' }}>
+              <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed #CBD5E1', borderRadius: 10, padding: '9px 10px' }}>
                 {item.text}
               </div>
             </div>
@@ -3110,10 +3339,15 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
 function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, config }) {
   const presets = getWorkspaceAgentPresets();
+  const deprecatedPresetIds = new Set(['gemini-studio', 'claude-studio', 'perplexity-studio']);
   const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
   const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
   const isManagerWorkflow = ['manager-auto', 'circular-team'].includes(automation?.workflowMode);
   const isAutopilotManagerMode = isManagerWorkflow && automation?.autopilotEnabled !== false;
+  const bypassActive = automation?.workspaceBypassEnabled === true;
+  const visiblePresetEntries = Object.entries(presets).filter(([presetId]) => (
+    !deprecatedPresetIds.has(presetId) || presetId === (automation?.preset || 'content-studio')
+  ));
   const selectedWorkflowMode = automation?.workflowMode === 'manager-auto'
     ? 'circular-team'
     : (automation?.workflowMode || 'manager-pipeline');
@@ -3212,6 +3446,12 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         כאן בדיוק אפשר לשלב כמה מודלים יחד: בחר לכל סוכן ספק ומודל שונים, והמערכת תריץ אותם לפי סדר העבודה שהגדרת.
       </div>
 
+      {bypassActive ? (
+        <div style={{ border: '1px solid #FDE68A', borderRadius: 12, padding: '10px 12px', background: '#FFFBEB', marginBottom: 10, fontSize: 11, color: '#92400E', lineHeight: 1.7 }}>
+          כרגע מופעל מצב `ללא סביבת עבודה` מהמסך הראשי. ה-workspace נשמר ברקע, ושני המתגים של הפעלת סביבת העבודה הרב-סוכנית ושל הדילוג האוטומטי בין סוכנים מושעים זמנית כאן עד שתחזור לבחור סביבת עבודה פעילה במסך הבית. שאר ההגדרות בטאב הזה עדיין עורכות את ה-workspace שייטען מחדש כשתחזור אליו.
+        </div>
+      ) : null}
+
       <div style={{ border: `1px solid ${isAutopilotManagerMode ? '#BFDBFE' : '#DDD6FE'}`, borderRadius: 12, padding: '12px 14px', background: isAutopilotManagerMode ? '#F8FBFF' : '#F8F7FF', marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: isAutopilotManagerMode ? '#1E3A8A' : '#6D28D9', marginBottom: 6 }}>
           חוקי ההכרעה הפעילים
@@ -3224,10 +3464,11 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
       </div>
 
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#1E3A8A', fontWeight: 700, marginBottom: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: bypassActive ? '#94A3B8' : '#1E3A8A', fontWeight: 700, marginBottom: 12 }}>
           <input
             type="checkbox"
             checked={automation?.enabled !== false}
+            disabled={bypassActive}
             onChange={(e) => setAutomation(prev => ({ ...prev, enabled: e.target.checked }))}
           />
           הפעל סביבת עבודה רב-סוכנית אוטומטית
@@ -3241,7 +3482,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               onChange={(e) => setAutomation(prev => ({ ...prev, preset: e.target.value }))}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
-              {Object.entries(presets).map(([id, preset]) => (
+              {visiblePresetEntries.map(([id, preset]) => (
                 <option key={id} value={id}>{preset.label}</option>
               ))}
             </select>
@@ -3422,10 +3663,11 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
 
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: bypassActive ? '#94A3B8' : '#323130' }}>
             <input
               type="checkbox"
               checked={automation?.autoDispatch !== false}
+              disabled={bypassActive}
               onChange={(e) => setAutomation(prev => ({ ...prev, autoDispatch: e.target.checked }))}
             />
             הפעלה אוטומטית בין הסוכנים
@@ -4460,7 +4702,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 )}
 
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
-                  {settingsTab === 'guide'       && <GuideSettings />}
+                  {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
                   {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}

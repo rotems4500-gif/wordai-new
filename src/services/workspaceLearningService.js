@@ -42,6 +42,12 @@ const DOCUMENT_RUN_PROVIDER_LABELS = {
   scholar: 'Google Scholar',
 };
 
+function resolveRequestedProviderSelection({ selectedModel = '', selectedProviderId = '', selectedProviderModel = '' } = {}) {
+  const providerId = String(selectedProviderId || selectedModel || '').trim();
+  const providerModel = String(selectedProviderModel || '').trim();
+  return { providerId, providerModel };
+}
+
 function mergeCountMaps(base = {}, incoming = {}) {
   const next = { ...base };
   Object.entries(incoming || {}).forEach(([key, count]) => {
@@ -78,12 +84,14 @@ function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureL
     && hasActiveWorkflowAgents;
 }
 
-function getDocumentRunLabel({ automation = {}, selectedModel = '', directStructureLock = false, shouldUseWorkflowAutomation = null } = {}) {
-  const providerLabel = DOCUMENT_RUN_PROVIDER_LABELS[String(selectedModel || '').trim().toLowerCase()] || String(selectedModel || '').trim();
+function getDocumentRunLabel({ automation = {}, selectedModel = '', selectedProviderId = '', selectedProviderModel = '', directStructureLock = false, shouldUseWorkflowAutomation = null } = {}) {
+  const requestedSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
+  const providerLabel = DOCUMENT_RUN_PROVIDER_LABELS[String(requestedSelection.providerId || '').trim().toLowerCase()] || String(requestedSelection.providerId || '').trim();
+  const directLabel = requestedSelection.providerModel ? `${providerLabel || 'יצירה ישירה'} · ${requestedSelection.providerModel}` : (providerLabel || 'יצירה ישירה');
   const useWorkflowAutomation = typeof shouldUseWorkflowAutomation === 'boolean'
     ? shouldUseWorkflowAutomation
     : shouldUseDocumentWorkflowAutomation({ automation, directStructureLock });
-  if (!useWorkflowAutomation) return providerLabel || 'יצירה ישירה';
+  if (!useWorkflowAutomation) return directLabel;
   if (automation?.workflowMode === 'manager-auto' && automation?.autopilotEnabled !== false) return 'AUTOPILOT';
   return String(automation?.workspaceName || '').trim() || 'צוות העבודה';
 }
@@ -1589,13 +1597,14 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, runId: providedRunId = '', returnMeta = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
   const automation = getWorkspaceAutomation();
+  const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
   const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
   const noActiveWorkflowAutomation = automation?.enabled === true
@@ -1608,6 +1617,8 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const documentRunLabel = getDocumentRunLabel({
     automation,
     selectedModel,
+    selectedProviderId: requestedProviderSelection.providerId,
+    selectedProviderModel: requestedProviderSelection.providerModel,
     directStructureLock: structurePolicy.directStructureLock,
     shouldUseWorkflowAutomation,
   });
@@ -1684,9 +1695,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     if (noActiveWorkflowAutomation) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (selectedModel && shouldUseWorkflowAutomation === false) {
-      requestOptions.providerOverride = selectedModel;
+    if (requestedProviderSelection.providerId && shouldUseWorkflowAutomation === false) {
+      requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
+      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
     }
 
     const userRequestSections = [];
@@ -1858,9 +1870,10 @@ async function prepareFeedbackDrivenDocumentContext({
   };
 }
 
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
+  const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
   if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
 
@@ -1929,9 +1942,10 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     if (noActiveWorkflowAutomation) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (selectedModel && !shouldUseWorkflowAutomation) {
-      requestOptions.providerOverride = selectedModel;
+    if (requestedProviderSelection.providerId && !shouldUseWorkflowAutomation) {
+      requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
+      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
     }
 
     const revisionContext = [
@@ -1983,9 +1997,10 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
   }
 }
 
-export async function reviewDocumentRecommendations({ existingHtml = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', runId: providedRunId = '', returnMeta = false, feedback = '', focus = '' }) {
+export async function reviewDocumentRecommendations({ existingHtml = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false, feedback = '', focus = '' }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFocus = [String(focus || '').trim(), String(feedback || '').trim()].filter(Boolean).join('\n\n');
+  const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   if (!cleanHtml) throw new Error('אין מסמך פתוח לבדיקה');
 
   const {
@@ -2053,9 +2068,10 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       requestOptions.skipSkillSelection = true;
       requestOptions.skipMultiModel = true;
     }
-    if (selectedModel) {
-      requestOptions.providerOverride = selectedModel;
+    if (requestedProviderSelection.providerId) {
+      requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
+      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
     }
 
     const reviewContext = [
