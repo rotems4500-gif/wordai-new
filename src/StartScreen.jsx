@@ -233,6 +233,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const rememberedProviderModel = String(memory.homeProviderModel || '').trim();
     return modelChoices.includes(rememberedProviderModel) ? rememberedProviderModel : (modelChoices[0] || '');
   });
+  const previousDirectProviderIdRef = useRef('');
   
   const profile = getPersonalStyleProfile();
   const onboardingDone = Boolean(profile?.onboardingCompletedAt);
@@ -307,6 +308,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       setDirectProviderId(resolvedDirectProviderId);
     }
   }, [directProviderId, resolvedDirectProviderId]);
+
+  useEffect(() => {
+    const previousProviderId = String(previousDirectProviderIdRef.current || '').trim();
+    if (previousProviderId && previousProviderId !== resolvedDirectProviderId) {
+      const nextModelChoices = getProviderModelChoices(resolvedDirectProviderId, providerConfigState);
+      const nextModel = nextModelChoices[0] || '';
+      if (directProviderModel !== nextModel) {
+        setDirectProviderModel(nextModel);
+      }
+    }
+    previousDirectProviderIdRef.current = resolvedDirectProviderId;
+  }, [directProviderModel, providerConfigState, resolvedDirectProviderId]);
 
   useEffect(() => {
     if (directProviderModel !== resolvedDirectProviderModel) {
