@@ -12,7 +12,7 @@ import {
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory } from './services/aiService';
+import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -76,6 +76,47 @@ const QUICK_PROMPTS = [
   '💌 צור פוסט מרגש לרשתות חברתיות',
 ];
 
+const START_SCREEN_REVEAL_DELAYS = {
+  hero: 0,
+  templatesHeading: 140,
+  cards: 210,
+  quickAccess: 360,
+};
+
+const createSeededRandom = (seed = 1) => {
+  let nextSeed = seed % 2147483647;
+  if (nextSeed <= 0) nextSeed += 2147483646;
+  return () => {
+    nextSeed = (nextSeed * 16807) % 2147483647;
+    return (nextSeed - 1) / 2147483646;
+  };
+};
+
+const START_SCREEN_PARTICLES = (() => {
+  const random = createSeededRandom(4129);
+  return Array.from({ length: 14 }, (_, index) => ({
+    id: `start-screen-particle-${index}`,
+    size: Math.round(random() * 8) + 4,
+    left: Math.round(random() * 1000) / 10,
+    top: Math.round(random() * 1000) / 10,
+    driftX: Math.round((random() - 0.5) * 42),
+    driftY: Math.round((random() - 0.5) * 28),
+    duration: Number((12 + random() * 10).toFixed(2)),
+    delay: Number((random() * -10).toFixed(2)),
+    opacity: Number((0.18 + random() * 0.25).toFixed(2)),
+  }));
+})();
+
+const buildStartScreenRevealClassName = (mounted = false, className = '') => [
+  'wordai-reveal',
+  mounted ? 'is-visible' : '',
+  className,
+].filter(Boolean).join(' ');
+
+const buildStartScreenRevealStyle = (delayMs = 0) => ({
+  '--wordai-reveal-delay': `${delayMs}ms`,
+});
+
 const WORKFLOW_LABELS = {
   'manager-auto': 'מנהל אוטומטי בוחר מסלול',
   'circular-team': 'סביבה מעגלית',
@@ -97,13 +138,7 @@ const WORKSPACE_PROVIDER_LABELS = {
   custom: 'Custom',
 };
 
-const summarizeWorkspaceProviders = (agents = []) => {
-  const providers = [...new Set((Array.isArray(agents) ? agents : [])
-    .map((agent) => String(agent?.provider || '').trim())
-    .filter(Boolean))];
-  if (!providers.length) return 'ספקים דינמיים לפי הסוכן או ברירת המחדל';
-  return providers.map((providerId) => WORKSPACE_PROVIDER_LABELS[providerId] || providerId).join(' + ');
-};
+const summarizeWorkspaceProviders = (agents = [], cfg = null) => buildWorkspaceRoutingSummary(agents, cfg && typeof cfg === 'object' ? cfg : getProviderConfig());
 
 const getProviderLabelFromChoices = (providerId = '', choices = []) => {
   const normalizedId = String(providerId || '').trim();
@@ -219,6 +254,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [showChefDialog, setShowChefDialog] = useState(false);
   const [selectedModel, setSelectedModel] = useState();
   const [providerConfigState, setProviderConfigState] = useState(() => getProviderConfig());
@@ -239,9 +275,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const fallbackProviderId = configuredChoices[0]?.id || String(initialConfig?.active || 'gemini').trim() || 'gemini';
     const rememberedProviderId = String(memory.homeProviderId || '').trim() || fallbackProviderId;
     const modelChoices = getProviderModelChoices(rememberedProviderId, initialConfig, [memory.homeProviderModel]);
-    const rememberedProviderModel = String(memory.homeProviderModel || '').trim();
+    const rememberedProviderModel = normalizeProviderModelName(rememberedProviderId, String(memory.homeProviderModel || '').trim());
     return modelChoices.includes(rememberedProviderModel) ? rememberedProviderModel : (modelChoices[0] || '');
   });
+  const [directProviderTestStatus, setDirectProviderTestStatus] = useState('idle');
+  const [directProviderTestMessage, setDirectProviderTestMessage] = useState('');
   const previousDirectProviderIdRef = useRef('');
   
   const profile = getPersonalStyleProfile();
@@ -282,8 +320,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     getProviderModelChoices(resolvedDirectProviderId, providerConfigState, [directProviderModel])
   ), [directProviderModel, providerConfigState, resolvedDirectProviderId]);
 
-  const resolvedDirectProviderModel = directProviderModelChoices.includes(String(directProviderModel || '').trim())
-    ? String(directProviderModel || '').trim()
+  const normalizedDirectProviderModel = normalizeProviderModelName(resolvedDirectProviderId, String(directProviderModel || '').trim());
+
+  const resolvedDirectProviderModel = directProviderModelChoices.includes(normalizedDirectProviderModel)
+    ? normalizedDirectProviderModel
     : (directProviderModelChoices[0] || '');
 
   const directGenerationSummary = buildDirectGenerationSummary({
@@ -291,6 +331,22 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     modelId: resolvedDirectProviderModel,
     choices: directProviderChoices,
   });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const syncMotionPreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    syncMotionPreference();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncMotionPreference);
+      return () => mediaQuery.removeEventListener('change', syncMotionPreference);
+    }
+
+    mediaQuery.addListener(syncMotionPreference);
+    return () => mediaQuery.removeListener(syncMotionPreference);
+  }, []);
 
   useEffect(() => {
     if (instructionsResetToken <= 0) return;
@@ -342,6 +398,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       homeProviderModel: resolvedDirectProviderModel,
     });
   }, [resolvedDirectProviderId, resolvedDirectProviderModel]);
+
+  useEffect(() => {
+    setDirectProviderTestStatus('idle');
+    setDirectProviderTestMessage('');
+  }, [providerConfigState, resolvedDirectProviderId, resolvedDirectProviderModel]);
 
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
@@ -403,7 +464,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const agents = typeof getOrderedRoleAgents === 'function'
       ? getOrderedRoleAgents(automation.workflowMode)
       : [];
-    return { ...automation, agents, providerSummary: summarizeWorkspaceProviders(agents) };
+    return { ...automation, agents, providerSummary: summarizeWorkspaceProviders(agents, providerConfigState) };
   };
 
   const applyAutomationSnapshot = (automation) => {
@@ -439,7 +500,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const nextWorkspacesList = Object.values(library).map((ws) => ({
           id: ws.id,
           name: ws.name,
-          providerSummary: summarizeWorkspaceProviders(ws.agents),
+          providerSummary: summarizeWorkspaceProviders(ws.agents, providerConfigState),
         }));
         setWorkspacesList(nextWorkspacesList);
       }
@@ -451,7 +512,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', refreshWorkspaceState);
     return () => window.removeEventListener('wordai-workspace-changed', refreshWorkspaceState);
-  }, []);
+  }, [providerConfigState]);
 
   const handleUpload = async (event) => {
     const files = Array.from(event.target.files || []);
@@ -672,17 +733,50 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   
   useEffect(() => {
     setMounted(true);
+    if (prefersReducedMotion) {
+      setCurrentPromptIndex(0);
+      return undefined;
+    }
+
     // אנימציה מחזורית של ההצעות המהירות
     const interval = setInterval(() => {
       setCurrentPromptIndex(prev => (prev + 1) % QUICK_PROMPTS.length);
     }, 3000);
     
     return () => clearInterval(interval);
-  }, []);
+  }, [prefersReducedMotion]);
 
   const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
   const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim() || hasBaseDraft);
   const canGenerate = hasGenerationInput && !isGenerating;
+
+  const handleDirectProviderConnectionTest = async () => {
+    setDirectProviderTestStatus('loading');
+    setDirectProviderTestMessage('');
+
+    try {
+      const providerSettings = {
+        ...(providerConfigState?.[resolvedDirectProviderId] || {}),
+        model: resolvedDirectProviderModel,
+      };
+      const result = await testProviderConnection(resolvedDirectProviderId, providerSettings);
+
+      if (result.ok) {
+        const modelLabel = result.model ? ` (${result.model})` : '';
+        const tried = result.triedModels.length > 1 ? ` · ניסה ${result.triedModels.length} מודלים` : '';
+        setDirectProviderTestStatus('ok');
+        setDirectProviderTestMessage(`✅ מחובר${modelLabel}${tried}`);
+        return;
+      }
+
+      const tried = result.triedModels.length ? ` · נוסו: ${result.triedModels.join(', ')}` : '';
+      setDirectProviderTestStatus('fail');
+      setDirectProviderTestMessage(`❌ נכשל: ${result.error}${tried}`);
+    } catch (error) {
+      setDirectProviderTestStatus('fail');
+      setDirectProviderTestMessage(`❌ ${error?.message || 'שגיאה לא ידועה'}`);
+    }
+  };
 
   const handleGenerate = async () => {
     if (!hasGenerationInput || isGenerating) return;
@@ -765,13 +859,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const renderTemplateCards = (cards, indexOffset = 0) => cards.map((template, i) => (
     <div
       key={template.id}
-      className={`group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 transform hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl ${
+      className={`${buildStartScreenRevealClassName(mounted, 'wordai-reveal-card')} group relative bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 cursor-pointer transition-all duration-500 transform hover:scale-105 hover:bg-white/15 shadow-xl hover:shadow-2xl ${
         selectedTemplate === template.id ? 'ring-2 ring-pink-400 bg-white/20' : ''
       }`}
       onClick={() => handleTemplateSelect(template)}
-      style={{
-        animationDelay: `${(indexOffset + i) * 0.1}s`
-      }}
+      style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.cards + ((indexOffset + i) * 70))}
     >
       <span
         onClick={(e) => {
@@ -812,25 +904,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   return (
     <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
       {/* Animated Background Elements */}
-      <div className="absolute inset-0">
-        <div className="absolute top-20 right-20 w-72 h-72 bg-cyan-300/20 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-20 left-20 w-96 h-96 bg-sky-300/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }}></div>
-        <div className="absolute top-1/2 left-1/2 w-80 h-80 bg-amber-200/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '4s' }}></div>
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="wordai-ambient-orb wordai-ambient-orb-cyan absolute top-20 right-20 w-72 h-72 bg-cyan-300/20 rounded-full blur-3xl"></div>
+        <div className="wordai-ambient-orb wordai-ambient-orb-sky absolute bottom-20 left-20 w-96 h-96 bg-sky-300/20 rounded-full blur-3xl"></div>
+        <div className="wordai-ambient-orb wordai-ambient-orb-amber absolute top-1/2 left-1/2 w-80 h-80 bg-amber-200/20 rounded-full blur-3xl"></div>
       </div>
 
       {/* Floating Particles */}
-      <div className="absolute inset-0 overflow-hidden">
-        {[...Array(20)].map((_, i) => (
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {START_SCREEN_PARTICLES.map((particle) => (
           <div
-            key={i}
-            className="absolute bg-white/5 rounded-full animate-bounce"
+            key={particle.id}
+            className="wordai-particle absolute rounded-full bg-white/10"
             style={{
-              width: Math.random() * 10 + 5 + 'px',
-              height: Math.random() * 10 + 5 + 'px',
-              left: Math.random() * 100 + '%',
-              top: Math.random() * 100 + '%',
-              animationDelay: Math.random() * 5 + 's',
-              animationDuration: (Math.random() * 3 + 2) + 's'
+              width: `${particle.size}px`,
+              height: `${particle.size}px`,
+              left: `${particle.left}%`,
+              top: `${particle.top}%`,
+              opacity: particle.opacity,
+              '--wordai-particle-x': `${particle.driftX}px`,
+              '--wordai-particle-y': `${particle.driftY}px`,
+              '--wordai-particle-duration': `${particle.duration}s`,
+              '--wordai-particle-delay': `${particle.delay}s`,
             }}
           />
         ))}
@@ -839,7 +934,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       {/* Main Content */}
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-12">
         {/* Hero Section */}
-        <div className={`text-center mb-16 transition-all duration-1000 ${mounted ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform translate-y-10'}`}>
+        <div className={buildStartScreenRevealClassName(mounted, 'text-center mb-16')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.hero)}>
           <div className="mb-8">
             <h1 className="text-6xl md:text-7xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 20px rgba(0,0,0,0.5)' }}>
               {profile?.displayName ? (
@@ -887,7 +982,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   className="w-full px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
                 />
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
-                  <div className="w-3 h-3 bg-cyan-200 rounded-full animate-pulse"></div>
+                  <div className={`w-3 h-3 bg-cyan-200 rounded-full ${prefersReducedMotion ? '' : 'animate-pulse'}`}></div>
                 </div>
               </div>
               
@@ -905,7 +1000,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               >
                 {isGenerating ? (
                   <div className="flex items-center gap-2">
-                    <div className="animate-spin w-5 h-5 border-2 border-white/30 border-t-white rounded-full"></div>
+                    <div className={`${prefersReducedMotion ? '' : 'animate-spin'} w-5 h-5 border-2 border-white/30 border-t-white rounded-full`}></div>
                     יוצר...
                   </div>
                 ) : (
@@ -1084,6 +1179,27 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    </label>
                  </div>
 
+                  <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <button
+                      type="button"
+                      onClick={handleDirectProviderConnectionTest}
+                      disabled={directProviderTestStatus === 'loading'}
+                      className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-xs font-semibold transition ${directProviderTestStatus === 'ok'
+                        ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-50'
+                        : directProviderTestStatus === 'fail'
+                          ? 'border-rose-300/40 bg-rose-500/20 text-rose-50'
+                          : 'border-white/20 bg-white/10 text-white hover:bg-white/15'} disabled:cursor-not-allowed disabled:opacity-70`}
+                    >
+                      {directProviderTestStatus === 'loading' ? 'בודק חיבור...' : 'בדוק חיבור עם הספק הזה'}
+                    </button>
+
+                    {directProviderTestMessage ? (
+                      <div className={`text-[11px] leading-5 ${directProviderTestStatus === 'ok' ? 'text-emerald-200' : 'text-rose-200'}`}>
+                        {directProviderTestMessage}
+                      </div>
+                    ) : null}
+                  </div>
+
                  <div className="mt-3 text-[11px] text-white/70">
                    הבורר הזה שולט במסלול הישיר של דף הבית. כשהבחירה למעלה היא "ללא סביבת עבודה" הוא יופעל בפועל; כשנבחר workspace, המנועים נקבעים לפי צוות הסוכנים של אותה סביבה.
                  </div>
@@ -1201,8 +1317,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         </div>
 
         {/* Templates Grid */}
-        <div className={`transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform translate-y-10'}`}>
-          <h2 className="text-3xl font-bold text-white mb-8 text-center" style={{ textShadow: '1px 1px 10px rgba(0,0,0,0.5)' }}>
+        <div>
+          <h2 className={buildStartScreenRevealClassName(mounted, 'text-3xl font-bold text-white mb-8 text-center')} style={{ ...buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.templatesHeading), textShadow: '1px 1px 10px rgba(0,0,0,0.5)' }}>
             תבניות חכמות להתחלה מהירה
           </h2>
           
@@ -1237,7 +1353,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         </div>
 
         {/* Quick Access Bar */}
-        <div className={`bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 transition-all duration-1000 delay-500 ${mounted ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform translate-y-10'}`}>
+        <div className={buildStartScreenRevealClassName(mounted, 'bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
           <div className="flex flex-wrap justify-center gap-4">
             <button
               onClick={onOpenDocument}

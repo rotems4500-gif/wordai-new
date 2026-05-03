@@ -15,6 +15,9 @@ import {
 const DOCX_DEFAULT_FONT = 'Arial';
 const DOCX_DEFAULT_LANGUAGE = { value: 'he-IL', eastAsia: 'he-IL', bidirectional: 'he-IL' };
 const DOCX_WORD_SAFE_FONTS = new Set(['Arial', 'Calibri', 'David', 'Georgia', 'Miriam Libre', 'Segoe UI', 'Tahoma', 'Times New Roman']);
+const DOCX_RTL_LANGUAGE_PATTERN = /^(he|ar|fa|ur|yi)(-|_|$)/i;
+const DOCX_RTL_CHARACTER_PATTERN = /[\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/gu;
+const DOCX_LATIN_CHARACTER_PATTERN = /[A-Za-z]/g;
 
 const decodeHtmlEntities = (value = '') => {
   const textarea = typeof document !== 'undefined' ? document.createElement('textarea') : null;
@@ -109,6 +112,57 @@ const readInlineCssValue = (block = '', propertyName = '') => {
   return String(valueMatch?.[1] || '').trim();
 };
 
+const extractDirectionalText = (block = '') => decodeHtmlEntities(
+  String(block || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|section|article|blockquote|li|tr|td|th|h[1-6])>/gi, ' ')
+    .replace(/<[^>]+>/g, ' '),
+)
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const isRtlDocxLanguage = (language = DOCX_DEFAULT_LANGUAGE) => {
+  const candidate = typeof language === 'string'
+    ? language
+    : language?.bidirectional || language?.value || language?.eastAsia || '';
+  return DOCX_RTL_LANGUAGE_PATTERN.test(String(candidate || '').trim());
+};
+
+const hasSignificantRtlText = (block = '') => {
+  const text = extractDirectionalText(block);
+  const rtlCount = (text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length;
+  if (rtlCount < 2) return false;
+  const latinCount = (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length;
+  if (!latinCount) return true;
+  const words = text.split(/\s+/).filter(Boolean);
+  const rtlWordCount = words.filter((word) => (word.match(DOCX_RTL_CHARACTER_PATTERN) || []).length > 0).length;
+  const latinWordCount = words.filter((word) => (word.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length > 0).length;
+  return rtlCount >= 6 && rtlWordCount >= 2 && rtlWordCount > latinWordCount && rtlCount >= latinCount;
+};
+
+const shouldForceRtlBlockFormatting = (block = '', typography = {}) => (
+  hasSignificantRtlText(block)
+);
+
+const hasDominantLtrText = (block = '', typography = {}) => {
+  const text = extractDirectionalText(block);
+  const latinCount = (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length;
+  if (latinCount < 3) return false;
+  const rtlCount = (text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length;
+  const words = text.split(/\s+/).filter(Boolean);
+  const rtlWordCount = words.filter((word) => (word.match(DOCX_RTL_CHARACTER_PATTERN) || []).length > 0).length;
+  const latinWordCount = words.filter((word) => (word.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length > 0).length;
+  if (!rtlCount) return latinWordCount >= 1 && latinCount >= 3;
+  return latinCount >= 6 && latinWordCount >= 2 && latinWordCount > rtlWordCount && latinCount > rtlCount;
+};
+
+const hasDirectionalDocxText = (block = '') => {
+  const text = extractDirectionalText(block);
+  return Boolean((text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length || (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length);
+};
+
 const resolveDocxAlignmentValue = (value = '', fallback = AlignmentType.RIGHT, isRtl = true) => {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return fallback;
@@ -123,10 +177,23 @@ const resolveDocxAlignmentValue = (value = '', fallback = AlignmentType.RIGHT, i
 
 const resolveBlockDocxFormatting = (block = '', typography = {}) => {
   const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
-  const bidirectional = explicitDirection ? !/^ltr$/i.test(explicitDirection) : true;
   const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
+  const documentIsRtl = isRtlDocxLanguage(typography.language);
+  const forcedRtl = !explicitDirection && shouldForceRtlBlockFormatting(block, typography);
+  const dominantLtr = !explicitDirection && !forcedRtl && hasDominantLtrText(block, typography);
+  const bidirectional = explicitDirection
+    ? !/^ltr$/i.test(explicitDirection)
+    : forcedRtl
+      ? true
+      : dominantLtr
+        ? false
+        : documentIsRtl;
+  const fallbackAlignment = !alignmentValue && dominantLtr
+    ? AlignmentType.LEFT
+    : (typography.alignment || AlignmentType.RIGHT);
+  const alignmentDirection = bidirectional;
   return {
-    alignment: resolveDocxAlignmentValue(alignmentValue, typography.alignment || AlignmentType.RIGHT, bidirectional),
+    alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, alignmentDirection),
     bidirectional,
   };
 };
@@ -265,7 +332,21 @@ const buildDocxTable = (block = '', typography = {}) => {
     return new TableRow({
       children: (cells.length ? cells : ['<td></td>']).map((cellHtml) => {
         const isHeader = /^<th/i.test(cellHtml);
-        const cellFormatting = resolveBlockDocxFormatting(cellHtml, typography);
+        const explicitCellDirection = readHtmlAttributeValue(cellHtml, 'dir') || readInlineCssValue(cellHtml, 'direction');
+        const explicitCellAlignment = readInlineCssValue(cellHtml, 'text-align') || readHtmlAttributeValue(cellHtml, 'align');
+        const detectedCellFormatting = resolveBlockDocxFormatting(cellHtml, {
+          ...typography,
+          alignment: tableFormatting.alignment,
+        });
+        const cellBidirectional = explicitCellDirection
+          ? !/^ltr$/i.test(explicitCellDirection)
+          : (detectedCellFormatting.bidirectional ?? tableFormatting.bidirectional);
+        const cellFormatting = {
+          alignment: explicitCellAlignment
+            ? resolveDocxAlignmentValue(explicitCellAlignment, detectedCellFormatting.alignment, cellBidirectional)
+            : detectedCellFormatting.alignment,
+          bidirectional: cellBidirectional,
+        };
         const text = decodeHtmlEntities(String(cellHtml).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) || ' ';
         return new TableCell({
           width: { size: 100, type: WidthType.AUTO },
@@ -477,7 +558,6 @@ const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} } = {}) 
     },
     sections: [
       {
-        properties: {},
         children,
       },
     ],

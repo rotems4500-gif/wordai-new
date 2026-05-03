@@ -7,6 +7,8 @@ import {
   buildExternalStyleAnalysisPrompt,
   getExternalAnalysisProviderHint,
   getProviderConfig,
+  getProviderModelChoices,
+  isProviderModelChoiceCompatible,
   getExternalAnalysisAvailability,
   hasMeaningfulPersonalProfileData,
   mergeExternalStyleExtractionIntoProfile,
@@ -430,16 +432,6 @@ const normalizeExternalAnalysisRuntimeConfig = (providerId = '', cfg = {}) => {
   };
 };
 
-const PROVIDER_MODEL_OPTIONS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
-  openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
-  claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
-  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
-  perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
-  ollama: ['llama3.2', 'qwen2.5', 'mistral'],
-  custom: ['deepseek-chat', 'mistral-large-latest', 'openrouter/auto', 'grok-3-mini-beta', 'loaded-model'],
-};
-
 const DEFAULT_FONT_OPTIONS = ['Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'Arial', 'Calibri', 'David', 'Georgia', 'Segoe UI', 'Tahoma', 'Times New Roman'];
 
 const DEFAULT_FONT_STACKS = {
@@ -676,8 +668,12 @@ const linkifyText = (text = '') => {
 };
 
 // ─── שדה קלט עם toggle לסיסמה ───
-function FieldRow({ label, type = 'text', placeholder, value, onChange, hint }) {
+function FieldRow({ label, type = 'text', placeholder, value, onChange, hint, options = [] }) {
   const [show, setShow] = useState(false);
+  const datalistIdRef = useRef(`field-row-options-${Math.random().toString(36).slice(2, 9)}`);
+  const normalizedOptions = [...new Set((Array.isArray(options) ? options : [])
+    .map((option) => String(option || '').trim())
+    .filter(Boolean))];
   return (
     <div style={{ marginBottom: 10 }}>
       <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>{label}</label>
@@ -686,6 +682,7 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint }) 
           type={type === 'password' && !show ? 'password' : 'text'}
           placeholder={placeholder} value={value || ''}
           onChange={e => onChange(e.target.value)}
+          list={normalizedOptions.length ? datalistIdRef.current : undefined}
           style={{ flex: 1, padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12, direction: 'ltr', fontFamily: 'monospace', outline: 'none' }} />
         {type === 'password' && (
           <button type="button" onClick={() => setShow(v => !v)} style={{ padding: '0 10px', border: '1px solid #C8C6C4', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: 12 }}>
@@ -693,6 +690,13 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint }) 
           </button>
         )}
       </div>
+      {normalizedOptions.length ? (
+        <datalist id={datalistIdRef.current}>
+          {normalizedOptions.map((option) => (
+            <option key={option} value={option} />
+          ))}
+        </datalist>
+      ) : null}
       {hint && <div style={{ fontSize: 10, color: '#919191', marginTop: 2 }}>{hint}</div>}
     </div>
   );
@@ -703,20 +707,32 @@ function ApiTestButton({ providerId, providerConfig }) {
   const [status, setStatus] = useState(null); // null | 'loading' | 'ok' | 'fail'
   const [resultText, setResultText] = useState('');
 
+  const formatAvailableModels = (models = []) => {
+    const safeModels = [...new Set((Array.isArray(models) ? models : [])
+      .map((model) => String(model || '').trim())
+      .filter(Boolean))];
+    if (!safeModels.length) return '';
+    const preview = safeModels.slice(0, 5).join(', ');
+    return safeModels.length > 5 ? `${preview} ועוד ${safeModels.length - 5}` : preview;
+  };
+
   const handleTest = async () => {
     setStatus('loading');
     setResultText('');
     try {
       const result = await testProviderConnection(providerId, providerConfig);
+      const availableModelsLabel = formatAvailableModels(result.availableModels);
       if (result.ok) {
         setStatus('ok');
         const modelLabel = result.model ? ` (${result.model})` : '';
         const tried = result.triedModels.length > 1 ? ` · ניסה ${result.triedModels.length} מודלים` : '';
-        setResultText(`✅ מחובר${modelLabel}${tried}`);
+        const available = availableModelsLabel ? ` · זמינים למפתח: ${availableModelsLabel}` : '';
+        setResultText(`✅ מחובר${modelLabel}${tried}${available}`);
       } else {
         setStatus('fail');
         const tried = result.triedModels.length ? ` · נוסו: ${result.triedModels.join(', ')}` : '';
-        setResultText(`❌ נכשל: ${result.error}${tried}`);
+        const available = availableModelsLabel ? ` · זמינים למפתח: ${availableModelsLabel}` : '';
+        setResultText(`❌ נכשל: ${result.error}${available}${tried}`);
       }
     } catch (e) {
       setStatus('fail');
@@ -1054,7 +1070,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="gemini-2.5-flash"
           value={config.gemini?.model}
           onChange={v => update('gemini', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.gemini}
+          options={getProviderModelChoices('gemini', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="gemini" providerConfig={{ key: config.gemini?.key, model: config.gemini?.model }} />
@@ -1070,7 +1086,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="gpt-4o"
           value={config.openai?.model}
           onChange={v => update('openai', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.openai}
+          options={getProviderModelChoices('openai', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="openai" providerConfig={{ key: config.openai?.key, model: config.openai?.model }} />
@@ -1086,7 +1102,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="claude-sonnet-4-6"
           value={config.claude?.model}
           onChange={v => update('claude', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.claude}
+          options={getProviderModelChoices('claude', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="claude" providerConfig={{ key: config.claude?.key, model: config.claude?.model }} />
@@ -1102,7 +1118,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="llama-3.3-70b-versatile"
           value={config.groq?.model}
           onChange={v => update('groq', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.groq}
+          options={getProviderModelChoices('groq', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="groq" providerConfig={{ key: config.groq?.key, model: config.groq?.model }} />
@@ -1118,7 +1134,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="sonar-pro"
           value={config.perplexity?.model}
           onChange={v => update('perplexity', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.perplexity}
+          options={getProviderModelChoices('perplexity', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="perplexity" providerConfig={{ key: config.perplexity?.key, model: config.perplexity?.model }} />
@@ -1134,7 +1150,7 @@ function AiSettings({ config, setConfig }) {
           placeholder="llama3.2"
           value={config.ollama?.model}
           onChange={v => update('ollama', 'model', v)}
-          options={PROVIDER_MODEL_OPTIONS.ollama}
+          options={getProviderModelChoices('ollama', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
         <ApiTestButton providerId="ollama" providerConfig={{ baseUrl: config.ollama?.baseUrl, model: config.ollama?.model }} />
@@ -3369,7 +3385,16 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   };
 
   const updateAgent = (index, field, value) => {
-    setAgents(prev => prev.map((agent, i) => i === index ? { ...agent, [field]: value } : agent));
+    setAgents((prev) => prev.map((agent, i) => {
+      if (i !== index) return agent;
+
+      const nextAgent = { ...agent, [field]: value };
+      if (field === 'provider' && !isProviderModelChoiceCompatible(String(value || '').trim(), agent?.model || '', config)) {
+        nextAgent.model = '';
+      }
+
+      return nextAgent;
+    }));
   };
 
   const applyPreset = () => {
@@ -3445,6 +3470,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ border: '1px solid #D1FAE5', borderRadius: 12, padding: '10px 12px', background: '#F0FDF4', marginBottom: 10, fontSize: 11, color: '#166534', lineHeight: 1.7 }}>
         כאן בדיוק אפשר לשלב כמה מודלים יחד: בחר לכל סוכן ספק ומודל שונים, והמערכת תריץ אותם לפי סדר העבודה שהגדרת.
+        אם משאירים את הספק ריק, האפליקציה יכולה לנתב את הסוכן אוטומטית בין הספקים שהוגדרו לפי החוזקות שלהם למחקר, ניהול, כתיבה וליטוש. אם בוחרים ספק אבל משאירים את המודל ריק, ייעשה שימוש במודל ברירת המחדל של אותו ספק.
       </div>
 
       {bypassActive ? (
@@ -3773,6 +3799,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {agents.map((agent, index) => {
+          const agentModelChoices = getProviderModelChoices(agent.provider, config, [agent.model]);
           return (
           <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
@@ -3849,12 +3876,12 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               <div>
                 <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל מועדף לסוכן</div>
                 <select
-                  value={(agent.provider && PROVIDER_MODEL_OPTIONS[agent.provider]?.includes(agent.model || '')) ? (agent.model || '') : ''}
+                  value={(agent.provider && agentModelChoices.includes(agent.model || '')) ? (agent.model || '') : ''}
                   onChange={(e) => updateAgent(index, 'model', e.target.value)}
                   style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', marginBottom: 6 }}
                 >
                   <option value="">בחר מודל מהרשימה</option>
-                  {((agent.provider && PROVIDER_MODEL_OPTIONS[agent.provider]) || []).map((modelName) => (
+                  {agentModelChoices.map((modelName) => (
                     <option key={modelName} value={modelName}>{modelName}</option>
                   ))}
                 </select>

@@ -9,7 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
 import { downloadBrowserDocx } from './services/browserDocxExport';
 
@@ -34,12 +34,19 @@ const GENERATION_LABEL_FALLBACKS = {
 const MAGIC_WAND_SELECTION_CONTEXT_SIDE = 420;
 
 const LIVE_GENERATION_SHELL_MARKER = 'data-wordai-live-generation-shell="true"';
+const LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER = 'data-wordai-live-generation-error-placeholder="true"';
+const DOCUMENT_ARRIVAL_PULSE_DURATION_MS = 950;
 
 const escHtml = (txt) => String(txt ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
+
+const normalizeTrackedEditorHtml = (html = '') => String(html || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/>\s+</g, '><')
+  .trim();
 
 const getLiveGenerationStateMeta = (state = 'running') => {
   if (state === 'success') {
@@ -166,6 +173,23 @@ const isLiveGenerationShellHtml = (html = '', runId = '') => {
   return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
 };
 
+const buildLiveGenerationErrorPlaceholder = ({ titleText = 'מסמך חדש', runId = '' } = {}) => {
+  const safeRunId = escHtml(runId);
+  return `
+  <div ${LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER} data-wordai-live-generation-run-id="${safeRunId}">
+    <h1>${escHtml(titleText || 'מסמך חדש')}</h1>
+    <p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>
+  </div>
+`;
+};
+
+const isLiveGenerationErrorPlaceholderHtml = (html = '', runId = '') => {
+  const markup = String(html || '');
+  if (!markup.includes(LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER)) return false;
+  if (!runId) return true;
+  return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
+};
+
 const buildGenerationLabel = ({ promptText = '', instructionsText = '', templateId = 'blank' } = {}) => {
   const cleanPrompt = String(promptText || '').trim();
   if (cleanPrompt) return cleanPrompt;
@@ -251,6 +275,25 @@ const FEEDBACK_OPTION_GROUPS = [
   },
 ];
 
+const FEEDBACK_MAX_REVISION_ROUNDS = 2;
+
+const normalizeFeedbackExecutionMode = (value = '') => (String(value || '').trim() === 'workspace' ? 'workspace' : 'direct');
+
+const normalizeFeedbackRoundIndex = (value = 1) => {
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue)) return 1;
+  return Math.min(FEEDBACK_MAX_REVISION_ROUNDS + 1, Math.max(1, Math.floor(parsedValue)));
+};
+
+const isFeedbackWorkflowAvailable = () => {
+  const automation = getWorkspaceAutomation();
+  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  return automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && Array.isArray(activeWorkflowAgents)
+    && activeWorkflowAgents.length > 0;
+};
+
 const DEFAULT_FEEDBACK_SURVEY = {
   open: false,
   phase: 'question',
@@ -262,6 +305,8 @@ const DEFAULT_FEEDBACK_SURVEY = {
   selectedProviderModel: '',
   selectedOptions: [],
   freeText: '',
+  executionMode: 'direct',
+  roundIndex: 1,
   usedFallback: false,
   submitting: false,
   submissionRequestId: null,
@@ -308,6 +353,8 @@ const getFeedbackSurveyGenerationContext = (survey = {}, fallback = {}) => {
     templateId: (hasSurveyGenerationContext
       ? (surveyTemplateId || fallbackTemplateId || 'blank')
       : (fallbackTemplateId || surveyTemplateId || 'blank')),
+    executionMode: normalizeFeedbackExecutionMode(survey.executionMode || fallback.executionMode || 'direct'),
+    roundIndex: normalizeFeedbackRoundIndex(survey.roundIndex || fallback.roundIndex || 1),
     usedFallback: Boolean(survey.usedFallback || fallback.usedFallback),
     selectedMaterials: surveySelectedMaterials.length ? [...surveySelectedMaterials] : [...fallbackSelectedMaterials],
     selectedModel: surveySelectedProviderId || fallbackSelectedProviderId,
@@ -446,6 +493,7 @@ function App() {
     runId: '',
     workspaceId: getWorkspaceAutomation().activeWorkspaceId || '',
   });
+  const [documentArrival, setDocumentArrival] = React.useState({ active: false, tone: 'success' });
   const [lastGenerationAction, setLastGenerationAction] = React.useState(null);
   const [generationRecovery, setGenerationRecovery] = React.useState({
     runId: '',
@@ -464,10 +512,80 @@ function App() {
   const workspaceEpochRef = React.useRef(0);
   const activeGenerationRequestIdRef = React.useRef(0);
   const lastLiveGenerationShellRef = React.useRef({ runId: '', html: '' });
+  const lastLiveGenerationPlaceholderRef = React.useRef({ runId: '', html: '' });
+  const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
   const pendingImportRef = React.useRef(null);
+  const documentArrivalTimerRef = React.useRef(null);
+  const documentArrivalFrameRef = React.useRef(null);
+  const clearDocumentArrival = React.useCallback(() => {
+    if (documentArrivalFrameRef.current) {
+      window.cancelAnimationFrame(documentArrivalFrameRef.current);
+      documentArrivalFrameRef.current = null;
+    }
+    if (documentArrivalTimerRef.current) {
+      window.clearTimeout(documentArrivalTimerRef.current);
+      documentArrivalTimerRef.current = null;
+    }
+    setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
+  }, []);
+  const triggerDocumentArrival = React.useCallback((tone = 'success') => {
+    clearDocumentArrival();
+    documentArrivalFrameRef.current = window.requestAnimationFrame(() => {
+      documentArrivalFrameRef.current = null;
+      setDocumentArrival({ active: true, tone: tone === 'warning' ? 'warning' : 'success' });
+      documentArrivalTimerRef.current = window.setTimeout(() => {
+        documentArrivalTimerRef.current = null;
+        setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
+      }, DOCUMENT_ARRIVAL_PULSE_DURATION_MS);
+    });
+  }, [clearDocumentArrival]);
+  React.useEffect(() => () => {
+    if (documentArrivalFrameRef.current) {
+      window.cancelAnimationFrame(documentArrivalFrameRef.current);
+    }
+    if (documentArrivalTimerRef.current) {
+      window.clearTimeout(documentArrivalTimerRef.current);
+    }
+  }, []);
   const clearDraftReviewState = React.useCallback(() => {
+    const cancelledRunId = String(
+      liveGeneration.runId
+      || preLiveGenerationSnapshotRef.current.runId
+      || lastLiveGenerationShellRef.current.runId
+      || ''
+    ).trim();
+    const currentHtml = normalizeTrackedEditorHtml(String(editor?.getHTML?.() || ''));
+    const preGenerationSnapshot = preLiveGenerationSnapshotRef.current;
+    const lastShell = lastLiveGenerationShellRef.current;
+    const lastPlaceholder = lastLiveGenerationPlaceholderRef.current;
+    const matchesTrackedShell = Boolean(
+      cancelledRunId
+      && lastShell.runId === cancelledRunId
+      && currentHtml === lastShell.html
+      && isLiveGenerationShellHtml(currentHtml, cancelledRunId)
+    );
+    const matchesTrackedPlaceholder = Boolean(
+      cancelledRunId
+      && lastPlaceholder.runId === cancelledRunId
+      && currentHtml === lastPlaceholder.html
+      && isLiveGenerationErrorPlaceholderHtml(currentHtml, cancelledRunId)
+    );
+    const shouldRestorePreGenerationSnapshot = Boolean(
+      editor
+      && cancelledRunId
+      && preGenerationSnapshot.runId === cancelledRunId
+      && (matchesTrackedShell || matchesTrackedPlaceholder)
+    );
+
     activeGenerationRequestIdRef.current += 1;
+    if (shouldRestorePreGenerationSnapshot) {
+      editor.commands.setContent(preGenerationSnapshot.html, false);
+    }
+
+    preLiveGenerationSnapshotRef.current = { runId: '', html: '' };
     lastLiveGenerationShellRef.current = { runId: '', html: '' };
+    lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
+    clearDocumentArrival();
     setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
     setLiveGeneration((prev) => ({
       ...prev,
@@ -476,7 +594,7 @@ function App() {
       prompt: '',
       runId: '',
     }));
-  }, []);
+  }, [clearDocumentArrival, editor, liveGeneration.runId]);
   const beginGenerationRequest = (runIdPrefix = 'doc') => {
     const requestId = activeGenerationRequestIdRef.current + 1;
     activeGenerationRequestIdRef.current = requestId;
@@ -564,6 +682,7 @@ function App() {
       && surveyTemplateId === templateId;
 
     return {
+      matchesActiveDraft,
       prompt,
       templateId,
       selectedMaterials: matchesActiveDraft && Array.isArray(feedbackSurvey.selectedMaterials)
@@ -585,7 +704,7 @@ function App() {
       setShowStartScreen(false);
     }
     setFeedbackSurvey((prev) => ({
-      ...buildFeedbackSurveyStateWithGenerationContext(currentDraftContext, prev),
+      ...buildFeedbackSurveyStateWithGenerationContext(currentDraftContext, currentDraftContext.matchesActiveDraft ? prev : {}),
       open: true,
       phase: 'details',
     }));
@@ -686,15 +805,26 @@ function App() {
   const submitDocumentFeedback = React.useCallback(async () => {
     const selectedOptions = feedbackSurvey.selectedOptions || [];
     const freeText = String(feedbackSurvey.freeText || '').trim();
+    const requestedExecutionMode = normalizeFeedbackExecutionMode(feedbackSurvey.executionMode);
+    const workflowAvailable = isFeedbackWorkflowAvailable();
+    const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
+    const roundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
     const surveySnapshot = {
       ...feedbackSurvey,
       selectedOptions: [...selectedOptions],
       freeText,
+      executionMode,
+      roundIndex,
       phase: 'details',
       reviewResult: null,
       reviewFocus: '',
       reviewErrorMessage: '',
     };
+
+    if (roundIndex > FEEDBACK_MAX_REVISION_ROUNDS) {
+      alert('מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר לרענן המלצות או להמשיך לערוך ידנית.');
+      return;
+    }
 
     if (!selectedOptions.length && !freeText) {
       alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
@@ -719,6 +849,8 @@ function App() {
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
         selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
         selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+        executionMode,
+        roundIndex,
         surveySnapshot,
       },
     });
@@ -785,6 +917,17 @@ function App() {
   const currentWorkspaceId = getActiveWorkspaceId();
   const currentProviderConfig = getProviderConfig();
   const configuredProviderChoices = getConfiguredProviderChoices(currentProviderConfig);
+  const feedbackWorkflowAvailable = isFeedbackWorkflowAvailable();
+  const feedbackExecutionMode = normalizeFeedbackExecutionMode(feedbackSurvey.executionMode);
+  const effectiveFeedbackExecutionMode = feedbackExecutionMode === 'workspace' && feedbackWorkflowAvailable ? 'workspace' : 'direct';
+  const feedbackRoundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
+  const feedbackRoundsExhausted = feedbackRoundIndex > FEEDBACK_MAX_REVISION_ROUNDS;
+  const feedbackRevisionPending = feedbackSurvey.submitting && String(liveGeneration.runId || '').startsWith('doc-feedback');
+  const feedbackSubmitLabel = feedbackRoundsExhausted
+    ? 'מוצו סבבי התיקון'
+    : effectiveFeedbackExecutionMode === 'workspace'
+      ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
+      : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
   const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
   const failedGenerationStage = liveGeneration.state === 'error'
     ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
@@ -981,7 +1124,7 @@ function App() {
       return;
     }
 
-    const currentHtml = String(editor.getHTML?.() || '');
+    const currentHtml = normalizeTrackedEditorHtml(String(editor.getHTML?.() || ''));
     const lastShell = lastLiveGenerationShellRef.current;
     if (!lastShell.html || lastShell.runId !== liveGeneration.runId || currentHtml !== lastShell.html) {
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
@@ -1004,7 +1147,7 @@ function App() {
     editor.commands.setContent(nextShell, false);
     lastLiveGenerationShellRef.current = {
       runId: liveGeneration.runId,
-      html: String(editor.getHTML?.() || nextShell),
+      html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || nextShell)),
     };
   }, [editor, liveGeneration.state, liveGeneration.prompt, liveGeneration.summary, liveGeneration.logs, liveGeneration.runId]);
 
@@ -1333,6 +1476,7 @@ function App() {
     setSidebarCompact(false);
     setSidebarOpen(true);
     setShowStartScreen(false);
+    clearDocumentArrival();
 
     const generationRequest = beginGenerationRequest('doc');
     const originWorkspaceId = generationRequest.workspaceId;
@@ -1369,10 +1513,15 @@ function App() {
       logs: initialLogs,
       runId: generationRequest.runId,
     });
+    preLiveGenerationSnapshotRef.current = {
+      runId: generationRequest.runId,
+      html: String(editor.getHTML?.() || ''),
+    };
+    lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
     editor.commands.setContent(initialShell);
     lastLiveGenerationShellRef.current = {
       runId: generationRequest.runId,
-      html: String(editor.getHTML?.() || initialShell),
+      html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || initialShell)),
     };
     focusEditorSoon('start');
 
@@ -1402,7 +1551,9 @@ function App() {
       if (!isGenerationRequestCurrent(generationRequest)) return true;
 
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
       editor.commands.setContent(generated);
+      triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
       persistLocalCache(generated);
       setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
@@ -1423,11 +1574,19 @@ function App() {
       if (!isGenerationRequestCurrent(generationRequest)) return true;
       setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
-      editor.commands.setContent(`<h1>${escHtml(generationLabel)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
+      const errorPlaceholder = buildLiveGenerationErrorPlaceholder({
+        titleText: generationLabel,
+        runId: generationRequest.runId,
+      });
+      editor.commands.setContent(errorPlaceholder);
+      lastLiveGenerationPlaceholderRef.current = {
+        runId: generationRequest.runId,
+        html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || errorPlaceholder)),
+      };
     }
 
     return true;
-  }, [beginGenerationRequest, changeDocumentStyle, confirmReplaceCurrentDocument, documentStyle, editor, focusEditorSoon, isGenerationRequestCurrent, persistLocalCache]);
+  }, [beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, focusEditorSoon, isGenerationRequestCurrent, persistLocalCache, triggerDocumentArrival]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -1441,8 +1600,13 @@ function App() {
     const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
       ? { ...payload.surveySnapshot }
       : { ...DEFAULT_FEEDBACK_SURVEY };
+    const workflowAvailable = isFeedbackWorkflowAvailable();
+    const requestedExecutionMode = normalizeFeedbackExecutionMode(payload.executionMode || surveySnapshot.executionMode);
+    const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
+    const roundIndex = normalizeFeedbackRoundIndex(payload.roundIndex || surveySnapshot.roundIndex);
     const generationRequest = beginGenerationRequest('doc-feedback');
     const originWorkspaceId = generationRequest.workspaceId;
+    clearDocumentArrival();
     setFeedbackSurvey((prev) => ({
       ...prev,
       open: false,
@@ -1455,7 +1619,7 @@ function App() {
     setLiveGeneration({
       active: true,
       state: 'running',
-      prompt: 'מעדכן את המסמך לפי המשוב שלך',
+      prompt: executionMode === 'workspace' ? 'מעדכן את המסמך עם צוות הסוכנים הפעיל' : 'מעדכן את המסמך לפי המשוב שלך',
       summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
       logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
       runId: generationRequest.runId,
@@ -1482,8 +1646,9 @@ function App() {
       const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
       const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
       const selectedModel = selectedProviderId;
+      const existingHtml = payload.existingHtml || editor?.getHTML?.() || '';
       const result = await reviseDocumentWithFeedback({
-        existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
+        existingHtml,
         originalPrompt: payload.originalPrompt,
         templateId,
         feedback: payload.feedback || '',
@@ -1491,12 +1656,14 @@ function App() {
         selectedModel,
         selectedProviderId,
         selectedProviderModel,
+        forceDirectMode: executionMode !== 'workspace',
         runId: generationRequest.runId,
         returnMeta: true,
       });
 
-      const revisedHtml = result?.html || payload.existingHtml || editor?.getHTML?.() || '';
+      const revisedHtml = result?.html || existingHtml;
       const usedFallback = Boolean(result?.usedFallback);
+      const consumedRevisionRound = !usedFallback || String(revisedHtml || '').trim() !== String(existingHtml || '').trim();
       if (!isGenerationRequestCurrent(generationRequest)) {
         clearHiddenFeedbackSubmittingAfterStale();
         return true;
@@ -1505,6 +1672,7 @@ function App() {
       if (editor && revisedHtml) {
         lastLiveGenerationShellRef.current = { runId: '', html: '' };
         editor.commands.setContent(revisedHtml);
+        triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       }
 
       persistLocalCache(revisedHtml);
@@ -1537,6 +1705,8 @@ function App() {
         }),
         open: false,
         phase: 'details',
+        executionMode,
+        roundIndex: consumedRevisionRound ? normalizeFeedbackRoundIndex(roundIndex + 1) : roundIndex,
         usedFallback,
       });
 
@@ -1567,7 +1737,7 @@ function App() {
     }
 
     return true;
-  }, [activeTemplateId, beginGenerationRequest, editor, isGenerationRequestCurrent, persistLocalCache]);
+  }, [activeTemplateId, beginGenerationRequest, clearDocumentArrival, editor, isGenerationRequestCurrent, persistLocalCache, triggerDocumentArrival]);
 
   const runDocumentRecommendationsReview = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -2784,6 +2954,25 @@ function App() {
                       <OneAxisAirHockeyGame title="Arcade בזמן שהצוות עובד" compact allowPopup />
                     )}
 
+                      {(liveGeneration.state === 'running' || liveGeneration.state === 'error') && (
+                      <div className={`mt-3 rounded-xl border p-3 ${liveGeneration.state === 'running' ? 'border-amber-200 bg-amber-50/80' : 'border-slate-200 bg-slate-50/80'}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[11px] leading-4 text-slate-700">
+                            {liveGeneration.state === 'running'
+                              ? 'אם ההרצה נראית תקועה, אפשר לנקות את המצב ולהתחיל מחדש.'
+                              : 'אפשר לסגור את מצב השגיאה ולחזור לעבודה.'}
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                            onClick={clearDraftReviewState}
+                          >
+                            {liveGeneration.state === 'running' ? 'שחרר מצב תקוע' : 'נקה מצב שגיאה'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
                       <div className="text-[11px] font-bold text-slate-700 mb-2">לוג חי של ההרצה</div>
                       <div className={`${shouldShowProgressOnlyPanel ? 'max-h-[34vh]' : 'max-h-32'} overflow-auto space-y-1.5 pr-1`}>
@@ -3094,11 +3283,11 @@ function App() {
                         {feedbackSurvey.submitting ? 'מכין המלצות...' : 'רענן המלצות'}
                       </button>
                       <button
-                        className={`btn btn-primary ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
                         onClick={submitDocumentFeedback}
-                        disabled={feedbackSurvey.submitting}
+                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
                       >
-                        שלח לעדכון ישיר
+                        {feedbackSubmitLabel}
                       </button>
                     </div>
                   </div>
@@ -3135,6 +3324,48 @@ function App() {
                       />
                     </div>
 
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                      <div className="font-bold text-slate-800">איך להריץ את סבב התיקון?</div>
+                      <div className="grid md:grid-cols-2 gap-3">
+                        <label className={`rounded-2xl border p-3 cursor-pointer transition ${effectiveFeedbackExecutionMode === 'direct' ? 'border-blue-300 bg-blue-50/70' : 'border-slate-200 bg-slate-50'}`}>
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="radio"
+                              name="feedback-execution-mode"
+                              className="radio radio-sm mt-1"
+                              checked={effectiveFeedbackExecutionMode === 'direct'}
+                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'direct' }))}
+                            />
+                            <div className="space-y-1">
+                              <div className="font-semibold text-slate-800">תיקון ישיר</div>
+                              <div className="text-xs text-slate-500">סבב מהיר מול מודל אחד, בלי להריץ את צוות הסוכנים.</div>
+                            </div>
+                          </div>
+                        </label>
+                        <label className={`rounded-2xl border p-3 transition ${effectiveFeedbackExecutionMode === 'workspace' ? 'border-emerald-300 bg-emerald-50/70' : 'border-slate-200 bg-slate-50'} ${feedbackWorkflowAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="radio"
+                              name="feedback-execution-mode"
+                              className="radio radio-sm mt-1"
+                              checked={effectiveFeedbackExecutionMode === 'workspace'}
+                              disabled={!feedbackWorkflowAvailable}
+                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'workspace' }))}
+                            />
+                            <div className="space-y-1">
+                              <div className="font-semibold text-slate-800">תיקון עם צוות הסוכנים</div>
+                              <div className="text-xs text-slate-500">מריץ את ה-workflow הפעיל וממשיך להציג לוגים חיים לאורך הסבב.</div>
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+                      <div className={`text-xs ${feedbackRoundsExhausted ? 'text-amber-700' : 'text-slate-500'}`}>
+                        {feedbackRoundsExhausted
+                          ? 'מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר עדיין לרענן המלצות או להמשיך לערוך ידנית.'
+                          : `סבב תיקון ${Math.min(feedbackRoundIndex, FEEDBACK_MAX_REVISION_ROUNDS)} מתוך ${FEEDBACK_MAX_REVISION_ROUNDS}. אחרי הסבב הזה ${feedbackRoundIndex < FEEDBACK_MAX_REVISION_ROUNDS ? 'יישאר עוד סבב אחד מאותו מסך.' : 'לא יישאר סבב נוסף מאותו מסך.'}`}
+                      </div>
+                    </div>
+
                     <div className="flex flex-col md:flex-row gap-3 justify-end">
                       <button
                         className="btn btn-ghost"
@@ -3151,11 +3382,11 @@ function App() {
                         קבל המלצות בלבד
                       </button>
                       <button
-                        className={`btn btn-primary ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
                         onClick={submitDocumentFeedback}
-                        disabled={feedbackSurvey.submitting}
+                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
                       >
-                        {feedbackSurvey.submitting ? 'מעדכן...' : 'שלח לעדכון ישיר'}
+                        {feedbackSubmitLabel}
                       </button>
                     </div>
                   </div>
@@ -3163,7 +3394,7 @@ function App() {
               </div>
             </div>
           )}
-          <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
+          <div className={`wordai-document-stage relative w-full flex justify-center ${documentArrival.active ? `wordai-document-arrival wordai-document-arrival--${documentArrival.tone}` : ''}`} style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
             <DocumentEditor
               documentStyle={documentStyle}
               viewMode={viewMode}

@@ -188,7 +188,7 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   sharedGoal: '',
   retryEnabled: true,
   maxRetries: 2,
-  timeoutEnabled: false,
+  timeoutEnabled: true,
   requestTimeoutMs: 45,
   showProgress: true,
   appendAgentNotesToOutput: false,
@@ -362,7 +362,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       sharedGoal: '',
       retryEnabled: true,
       maxRetries: 2,
-      timeoutEnabled: false,
+      timeoutEnabled: true,
       requestTimeoutMs: 45,
       showProgress: true,
       appendAgentNotesToOutput: false,
@@ -387,7 +387,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       sharedGoal: 'להפיק עבודה מלאה ומבוססת מקורות עם הפרדה בין מחקר אקדמי למחקר משלים, כתיבה מגובשת, התאמת סגנון אישי וביקורת מסכמת לפני החזרה למשתמש.',
       retryEnabled: true,
       maxRetries: 2,
-      timeoutEnabled: false,
+      timeoutEnabled: true,
       requestTimeoutMs: 45,
       showProgress: true,
       appendAgentNotesToOutput: true,
@@ -412,7 +412,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       sharedGoal: 'להפיק עבודה קלה ומהירה יותר עם מחקר אקדמי חסכוני, מחקר משלים, כתיבה, התאמת סגנון אישי וביקורת מסכמת לפני החזרה למשתמש.',
       retryEnabled: true,
       maxRetries: 2,
-      timeoutEnabled: false,
+      timeoutEnabled: true,
       requestTimeoutMs: 45,
       showProgress: true,
       appendAgentNotesToOutput: true,
@@ -787,10 +787,12 @@ const normalizeProviderIds = (value, fallback = DEFAULT_PROVIDER_CONFIG.active) 
   return normalized;
 };
 
-const normalizeProviderModelName = (providerId = '', modelName = '') => {
+export const normalizeProviderModelName = (providerId = '', modelName = '') => {
   const clean = String(modelName || '').trim();
   const provider = String(providerId || '').trim();
   if (!clean) return '';
+
+  const canonical = provider === 'gemini' ? clean.replace(/^models\//, '') : clean;
 
   const aliasMap = {
     gemini: {
@@ -822,7 +824,7 @@ const normalizeProviderModelName = (providerId = '', modelName = '') => {
     },
   };
 
-  return aliasMap[provider]?.[clean] || clean;
+  return aliasMap[provider]?.[canonical] || canonical;
 };
 
 const normalizeToolLinkEntry = (entry = {}, fallback = {}) => {
@@ -1249,10 +1251,16 @@ const cloneAgentRecords = (agents = []) => {
 const getFallbackRoleAgents = () => cloneAgentRecords(Array.isArray(DEFAULT_ROLE_AGENTS) ? DEFAULT_ROLE_AGENTS : []);
 
 const normalizeWorkspaceAutomationRecord = (automation = {}, workspaceId = DEFAULT_WORKSPACE_ID, workspaceName = '') => {
+  const sourceAutomation = automation && typeof automation === 'object' ? automation : {};
   const merged = {
     ...DEFAULT_WORKSPACE_AUTOMATION,
-    ...(automation && typeof automation === 'object' ? automation : {}),
+    ...sourceAutomation,
   };
+  const hasStoredTimeoutPreference = typeof sourceAutomation.timeoutEnabled === 'boolean';
+  const hasExplicitTimeoutPreference = hasStoredTimeoutPreference || sourceAutomation.timeoutConfigured === true;
+  if (!hasExplicitTimeoutPreference) {
+    merged.timeoutEnabled = false;
+  }
   merged.activeWorkspaceId = workspaceId;
   merged.workspaceName = sanitizeWorkspaceName(merged.workspaceName || workspaceName || '', 'סביבת עבודה מותאמת');
   return merged;
@@ -1327,12 +1335,51 @@ const removeDeprecatedDefaultProviderWorkspaces = (library = {}) => {
   return { library: nextLibrary, wasUpdated };
 };
 
+const buildLegacyTimeoutDisabledWorkspaceRecord = (workspace = {}) => ({
+  ...(workspace && typeof workspace === 'object' ? workspace : {}),
+  automation: {
+    ...((workspace && typeof workspace === 'object' ? workspace.automation : {}) || {}),
+    timeoutEnabled: false,
+  },
+});
+
+const upgradeLegacyDefaultWorkspaceTimeouts = (library = {}) => {
+  const nextLibrary = { ...(library || {}) };
+  let wasUpdated = false;
+
+  Object.entries(DEFAULT_WORKSPACES_LIBRARY).forEach(([workspaceId, workspace]) => {
+    const currentWorkspace = nextLibrary[workspaceId];
+    if (!currentWorkspace || typeof currentWorkspace !== 'object') return;
+
+    const fallbackName = workspace?.name || (workspaceId === DEFAULT_WORKSPACE_ID ? 'סטודיו תוכן (ברירת מחדל)' : 'סביבה חדשה');
+    const currentSignature = serializeWorkspaceForMigrationComparison(workspaceId, currentWorkspace, fallbackName);
+    const legacySignature = serializeWorkspaceForMigrationComparison(
+      workspaceId,
+      buildLegacyTimeoutDisabledWorkspaceRecord(workspace),
+      fallbackName
+    );
+
+    if (currentSignature !== legacySignature) return;
+
+    nextLibrary[workspaceId] = normalizeWorkspaceRecord(
+      workspaceId,
+      buildLegacyTimeoutDisabledWorkspaceRecord(workspace),
+      fallbackName
+    );
+    wasUpdated = true;
+  });
+
+  return { library: nextLibrary, wasUpdated };
+};
+
 const ensureDefaultWorkspaceEntries = (library = {}) => {
   const migrationResult = removeDeprecatedDefaultProviderWorkspaces(library);
-  const nextLibrary = { ...(migrationResult.library || {}) };
+  const timeoutMigration = upgradeLegacyDefaultWorkspaceTimeouts(migrationResult.library || {});
+  const nextLibrary = { ...(timeoutMigration.library || {}) };
   let wasUpdated = false;
 
   if (migrationResult.wasUpdated) wasUpdated = true;
+  if (timeoutMigration.wasUpdated) wasUpdated = true;
 
   Object.entries(DEFAULT_WORKSPACES_LIBRARY).forEach(([workspaceId, workspace]) => {
     if (nextLibrary[workspaceId]) return;
@@ -1426,6 +1473,11 @@ export const saveWorkspaceAutomation = (config) => {
   const sanitizedConfig = sanitizeWorkspaceAutomationForPersistence(config, {
     preserveWorkspaceToggles: !bypassActive,
   });
+  const timeoutPreferencePatch = Object.prototype.hasOwnProperty.call(sanitizedConfig, 'timeoutEnabled')
+    ? { timeoutConfigured: true }
+    : ((workspace?.automation?.timeoutConfigured === true || currentAutomation.timeoutConfigured === true)
+      ? { timeoutConfigured: true }
+      : {});
   const nextWorkspaceName = sanitizeWorkspaceName(
     config?.workspaceName || workspace?.name || workspace?.automation?.workspaceName,
     workspace?.name || 'סביבת עבודה מותאמת'
@@ -1437,6 +1489,7 @@ export const saveWorkspaceAutomation = (config) => {
   const nextAutomation = normalizeWorkspaceAutomationRecord({
     ...workspace.automation,
     ...sanitizedConfig,
+    ...timeoutPreferencePatch,
     workspaceName: nextWorkspaceName,
   }, activeWorkspaceId, nextWorkspaceName);
 
@@ -2325,6 +2378,160 @@ const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
 const isManagerReviewAgent = (agent = {}) => /manager.*review|review.*manager|מנהל.*בדיק|בדיק.*מנהל/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 const isDocumentDesignerAgent = (agent = {}) => /(document-designer|מעצב מסמך|סגנון אישי|human)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 
+const ROUTING_BASE_PROVIDER_SCORES = {
+  general: {
+    gemini: 100,
+    openai: 98,
+    claude: 96,
+    perplexity: 84,
+    groq: 72,
+    custom: 60,
+    ollama: 56,
+  },
+  manager: {
+    gemini: 130,
+    openai: 122,
+    claude: 116,
+    perplexity: 88,
+    groq: 78,
+    custom: 62,
+    ollama: 58,
+  },
+  researcher: {
+    perplexity: 134,
+    gemini: 114,
+    openai: 108,
+    claude: 102,
+    groq: 78,
+    custom: 60,
+    ollama: 56,
+  },
+  writer: {
+    claude: 134,
+    openai: 126,
+    gemini: 104,
+    groq: 76,
+    custom: 62,
+    ollama: 58,
+    perplexity: 68,
+  },
+  designer: {
+    claude: 136,
+    openai: 122,
+    gemini: 106,
+    groq: 74,
+    custom: 62,
+    ollama: 58,
+    perplexity: 66,
+  },
+  proofreader: {
+    claude: 132,
+    openai: 128,
+    gemini: 106,
+    groq: 74,
+    custom: 62,
+    ollama: 58,
+    perplexity: 66,
+  },
+};
+
+const WORKSPACE_ROUTING_SUMMARY_GROUPS = [
+  { label: 'ניהול', roleKeys: ['manager'], fallbackAgent: { id: 'manager', name: 'manager', enabled: true, provider: '', model: '' } },
+  { label: 'מחקר', roleKeys: ['researcher'], fallbackAgent: { id: 'researcher', name: 'researcher', enabled: true, provider: '', model: '' } },
+  { label: 'כתיבה', roleKeys: ['designer', 'writer', 'proofreader'], fallbackAgent: { id: 'writer', name: 'writer', enabled: true, provider: '', model: '' } },
+];
+
+const getConfiguredModelForProvider = (providerId = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const fallbackModel = DEFAULT_PROVIDER_CONFIG?.[providerId]?.model || '';
+  return normalizeProviderModelName(providerId, String(safeCfg?.[providerId]?.model || fallbackModel || '').trim());
+};
+
+const inferProviderFromModelHint = (modelName = '', allowedProviders = [], cfg = null) => {
+  const cleanModel = String(modelName || '').trim();
+  if (!cleanModel) return '';
+
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const pool = Array.isArray(allowedProviders) && allowedProviders.length
+    ? allowedProviders
+    : getConfiguredProviderPool(safeCfg);
+  if (!pool.length) return '';
+
+  const exactMatch = pool.find((providerId) => {
+    const normalizedRequestedModel = normalizeProviderModelName(providerId, cleanModel).toLowerCase();
+    const configuredModel = getConfiguredModelForProvider(providerId, safeCfg).toLowerCase();
+    return Boolean(configuredModel) && normalizedRequestedModel === configuredModel;
+  });
+  if (exactMatch) return exactMatch;
+
+  const normalizedModel = cleanModel.toLowerCase().replace(/^models\//, '');
+  if (/^(gemini|learnlm)/.test(normalizedModel) && pool.includes('gemini')) return 'gemini';
+  if (/^claude/.test(normalizedModel) && pool.includes('claude')) return 'claude';
+  if (/^(gpt|o\d|chatgpt)/.test(normalizedModel) && pool.includes('openai')) return 'openai';
+  if (/^(sonar|pplx)/.test(normalizedModel) && pool.includes('perplexity')) return 'perplexity';
+  return '';
+};
+
+export const isProviderModelChoiceCompatible = (providerId = '', modelName = '', cfg = null) => {
+  const safeProvider = String(providerId || '').trim();
+  const normalizedModel = normalizeProviderModelName(safeProvider, String(modelName || '').trim());
+  if (!safeProvider || !KNOWN_PROVIDER_IDS.includes(safeProvider) || !normalizedModel) return false;
+  if (safeProvider === 'custom' || safeProvider === 'ollama') return true;
+
+  const inferredProvider = inferProviderFromModelHint(normalizedModel, KNOWN_PROVIDER_IDS, cfg);
+  return !inferredProvider || inferredProvider === safeProvider;
+};
+
+const getProviderRoleFitScore = (roleKey = 'general', providerId = '', cfg = null) => {
+  const safeRoleKey = ROUTING_BASE_PROVIDER_SCORES[roleKey] ? roleKey : 'general';
+  const modelName = getConfiguredModelForProvider(providerId, cfg).toLowerCase();
+  let score = ROUTING_BASE_PROVIDER_SCORES[safeRoleKey]?.[providerId] ?? ROUTING_BASE_PROVIDER_SCORES.general?.[providerId] ?? 0;
+
+  const strongReasoningModel = /(?:gemini-2\.5-pro|gpt-5|gpt-4\.1|o[1345](?:-mini)?|deepseek-r1|reason(?:ing)?|thinking|claude-opus|claude-sonnet-4|claude-3-7|sonar-(?:pro|reasoning))/i.test(modelName);
+  const strongPlanningModel = /(?:gemini-2\.5-pro|gpt-5|gpt-4\.1|o[34](?:-mini)?|deepseek-r1|claude-opus|claude-sonnet-4|reason(?:ing)?)/i.test(modelName);
+  const strongWritingModel = /(?:claude-(?:opus|sonnet)|gpt-5|gpt-4\.1|gpt-4o|o[34](?:-mini)?|gemini-2\.5-pro|gemini-2\.5-flash)/i.test(modelName);
+  const strongPerplexityResearchModel = providerId === 'perplexity' && /(?:sonar|reason)/i.test(modelName);
+  const weakerFastModel = /(?:mini|haiku|flash-lite|instant|8b|7b|3b|1b)/i.test(modelName);
+
+  if (safeRoleKey === 'researcher') {
+    if (providerId === 'perplexity') score += strongPerplexityResearchModel ? 72 : 44;
+    if (strongReasoningModel) score += 34;
+    if (/gemini-2\.5-pro/.test(modelName)) score += 20;
+    if (/(?:gpt-5|gpt-4\.1|o[34](?:-mini)?)/.test(modelName)) score += 18;
+    if (/claude-(?:opus|sonnet-4|3-7)/.test(modelName)) score += 12;
+  } else if (safeRoleKey === 'manager') {
+    if (providerId === 'gemini') score += 18;
+    if (/gemini-2\.5-pro/.test(modelName)) score += 64;
+    if (strongPlanningModel) score += 36;
+    if (providerId === 'claude' && /(?:opus|sonnet)/.test(modelName)) score += 18;
+    if (providerId === 'perplexity' && !strongPerplexityResearchModel) score -= 18;
+  } else if (['writer', 'designer', 'proofreader'].includes(safeRoleKey)) {
+    if (providerId === 'claude' && /(?:opus|sonnet)/.test(modelName)) score += 66;
+    if (providerId === 'openai' && /(?:gpt-5|gpt-4\.1|gpt-4o|o[34](?:-mini)?)/.test(modelName)) score += 54;
+    if (providerId === 'gemini' && /gemini-2\.5-(?:pro|flash)/.test(modelName)) score += 24;
+    if (strongWritingModel) score += 22;
+    if (safeRoleKey === 'designer' && providerId === 'claude') score += 8;
+    if (safeRoleKey === 'proofreader' && providerId === 'openai') score += 8;
+    if (providerId === 'perplexity') score -= 24;
+  } else {
+    if (strongReasoningModel) score += 18;
+    if (strongWritingModel) score += 10;
+  }
+
+  if (providerId === 'groq' && /(?:deepseek-r1|reason|llama-3\.3-70b)/.test(modelName)) score += 12;
+  if (['custom', 'ollama'].includes(providerId)) score -= 8;
+  if (weakerFastModel) score -= 12;
+
+  return score;
+};
+
+const formatProviderRoutingSummaryLabel = (providerId = '', modelName = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const providerLabel = getProviderLabelMap(safeCfg)[providerId] || providerId;
+  const cleanModel = normalizeProviderModelName(providerId, modelName);
+  return cleanModel ? `${providerLabel}/${cleanModel}` : providerLabel;
+};
+
 const getAgentRoleKey = (agent = {}) => {
   const value = `${String(agent?.id || '')} ${String(agent?.name || '')}`.toLowerCase();
   if (isManagerReviewAgent(agent)) return 'manager';
@@ -2338,11 +2545,10 @@ const getAgentRoleKey = (agent = {}) => {
 
 const isPlanningManagerAgent = (agent = {}) => getAgentRoleKey(agent) === 'manager' && !isManagerReviewAgent(agent);
 
-const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = []) => {
+const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [], requestedModel = '') => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const requestedPool = normalizeProviderIds(preferredProviders, safeCfg.active);
-  const routingPool = requestedPool
-    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  const requestedPool = normalizeProviderIds(preferredProviders, '');
+  const routingPool = getConfiguredProviderPool(safeCfg, requestedPool);
   const explicitProvider = String(agent?.provider || '').trim();
   if (explicitProvider) {
     if (!isProviderConfiguredForUse(explicitProvider, safeCfg)) return '';
@@ -2350,23 +2556,59 @@ const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [])
     return explicitProvider;
   }
 
-  const roleKey = getAgentRoleKey(agent);
   if (requestedPool.length && !routingPool.length) return '';
-  const pool = routingPool.length
-    ? routingPool
-    : getSelectedProviderIds(safeCfg).filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  const pool = routingPool;
   if (!pool.length) return '';
-  const preferences = roleKey === 'researcher'
-    ? ['perplexity', 'gemini', 'openai', 'claude', 'groq', 'custom', 'ollama']
-    : roleKey === 'proofreader'
-      ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
-      : roleKey === 'writer'
-        ? ['openai', 'claude', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
-        : roleKey === 'designer'
-          ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
-          : ['gemini', 'openai', 'claude', 'groq', 'custom', 'ollama', 'perplexity'];
 
-  return preferences.find((providerId) => pool.includes(providerId)) || pool[0] || safeCfg.active;
+  const modelHint = String(requestedModel || agent?.model || '').trim();
+  const inferredProvider = inferProviderFromModelHint(modelHint, pool, safeCfg);
+  if (inferredProvider) return inferredProvider;
+
+  const roleKey = getAgentRoleKey(agent);
+  return pool
+    .map((providerId, index) => ({
+      providerId,
+      index,
+      score: getProviderRoleFitScore(roleKey, providerId, safeCfg),
+    }))
+    .sort((left, right) => (right.score - left.score) || (left.index - right.index))?.[0]?.providerId || pool[0] || safeCfg.active;
+};
+
+export const buildWorkspaceRoutingSummary = (agents = [], cfg = null, preferredProviders = []) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const pool = getConfiguredProviderPool(safeCfg, preferredProviders);
+  if (!pool.length) return 'אין ספקים זמינים';
+
+  const enabledAgents = Array.isArray(agents)
+    ? agents.filter((agent) => agent && agent.enabled !== false)
+    : [];
+  const useFallbackGroups = enabledAgents.length === 0;
+
+  return WORKSPACE_ROUTING_SUMMARY_GROUPS
+    .map(({ label, roleKeys, fallbackAgent }) => {
+      const matchingAgents = enabledAgents.filter((agent) => roleKeys.includes(getAgentRoleKey(agent)));
+      const effectiveAgents = matchingAgents.length ? matchingAgents : (useFallbackGroups ? [fallbackAgent] : []);
+      if (!effectiveAgents.length) return '';
+      const routeLabels = [...new Set(effectiveAgents
+        .map((agent) => {
+          const providerId = chooseProviderForAgent(agent, safeCfg, pool);
+          if (!providerId) return '';
+          const explicitProvider = String(agent?.provider || '').trim();
+          const explicitModel = String(agent?.model || '').trim();
+          const resolvedModel = explicitModel && (explicitProvider === providerId || inferProviderFromModelHint(explicitModel, [providerId], safeCfg) === providerId)
+            ? normalizeProviderModelName(providerId, explicitModel)
+            : getConfiguredModelForProvider(providerId, safeCfg);
+          return formatProviderRoutingSummaryLabel(providerId, resolvedModel, safeCfg);
+        })
+        .filter(Boolean))];
+      if (!routeLabels.length) return '';
+      const compactRoutes = routeLabels.length > 2
+        ? `${routeLabels.slice(0, 2).join(' + ')} + עוד`
+        : routeLabels.join(' + ');
+      return `${label}: ${compactRoutes}`;
+    })
+    .filter(Boolean)
+    .join(' • ');
 };
 
 const resolveExplicitProviderCandidate = (candidates = [], allowedProviders = [], cfg = null) => {
@@ -2919,7 +3161,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
   ].filter(Boolean).join('\n\n');
 };
 
-const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null }) => {
+const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], modelOverride = '', runId, logEvent, onStatus, activeSkill = null, preserveFullDocumentContext = false }) => {
   const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText);
   const structureOptOut = hasExplicitStructureOptOut(structureConstraintText || cleanUserPrompt);
   const combinedContext = `${cleanUserPrompt}\n${documentContext}`;
@@ -2956,9 +3198,13 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
   if (!managerAgent) return fallbackPlan;
   const allowDocumentDesigner = shouldAllowDocumentDesigner(cleanUserPrompt, structureConstraintText);
   const planningProviderPool = getConfiguredProviderPool(cfg, preferredProviders);
-  const managerProvider = chooseProviderForAgent(managerAgent, cfg, preferredProviders);
+  const requestedManagerModelOverride = String(modelOverride || managerAgent?.model || '').trim();
+  const managerProvider = chooseProviderForAgent(managerAgent, cfg, preferredProviders, requestedManagerModelOverride);
+  const effectiveManagerModelOverride = managerProvider && requestedManagerModelOverride && !isProviderModelChoiceCompatible(managerProvider, requestedManagerModelOverride, cfg)
+    ? ''
+    : requestedManagerModelOverride;
   const availableProviders = planningProviderPool
-    .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, '')}`)
+    .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, providerId === managerProvider ? effectiveManagerModelOverride : '')}`)
     .join('\n');
   const availableAgents = enabledAgents
     .map((agent) => {
@@ -2978,13 +3224,14 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
 
     const managerPlanText = await chatWithActiveProvider(
       `בקשת המשתמש:\n${cleanUserPrompt}`,
-      String(documentContext || '').slice(0, 8000),
+      preserveFullDocumentContext ? String(documentContext || '') : buildPromptDocumentContext(documentContext),
       `${managerAgent?.prompt || ''}\nלפני שאתה מחלק שלבים והוראות, קרא קודם את בקשת המשתמש במלואה. אם קיים בהקשר המסמך תוכן קיים, טיוטה, מסמך חלקי או חומר שכבר נכתב, קרא גם את הטיוטה או המסמך כפי שסופקו לך בהקשר ורק אחר כך החלט איך לחלק את העבודה. כשיש טיוטה, goals לכל סוכן חייבים להתייחס גם לדרישות המשתמש וגם למה שכבר קיים בטיוטה, כדי לשפר, להשלים או לבדוק אותה במקום לעבוד כאילו מתחילים מאפס. אם המשתמש ביקש חקר חזותי, סרטונים, screenshots, diagrams, demos, walkthroughs או חומר חזותי אחר מהרשת, תן עדיפות לסוכן researcher-visual או לשלב מפורש של מחקר חזותי ייעודי.\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"gemini","manager-review":"gemini"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. מותר להשתמש ב-order, goals, roleLabels ו-providers גם ב-agent ids המדויקים מהרשימה למטה, ולא רק ב-role aliases כלליים. אם יש יותר מסוכן אחד מאותו סוג, השתמש ב-id המדויק כדי לבחור את שניהם או רק אחד מהם. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם מדובר בחקר חזותי או בפער חזותי מפורש, מותר ואף רצוי לבחור researcher-visual כשלב ייעודי. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nסוכנים זמינים כרגע:\n${availableAgents}\nמודלים זמינים כרגע:\n${availableProviders}`,
       {
         providerOverride: managerProvider,
         preferredProviders: managerProvider ? [managerProvider] : preferredProviders,
         strictProviderOverride: true,
-        modelOverride: managerAgent?.model || '',
+        modelOverride: effectiveManagerModelOverride,
+        preserveFullDocumentContext,
         strictFormatting: true,
         skipAutomation: true,
         skipMultiModel: true,
@@ -2996,7 +3243,7 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
           runId,
           agentLabel: managerAgent?.name || 'מנהל עבודה',
           provider: payload.provider || managerProvider,
-          model: payload.model || getModelNameForProvider(managerProvider, cfg, managerAgent?.model || ''),
+          model: payload.model || getModelNameForProvider(managerProvider, cfg, effectiveManagerModelOverride),
           message: payload.message || 'מנהל העבודה מתכנן את השלבים',
           progress: Math.min(18, Number(payload.progress ?? 12)),
         }),
@@ -4716,11 +4963,56 @@ const proxyDesktopHttpRequest = async ({ url, method = 'POST', headers = {}, bod
   }
 };
 
-export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, signal) => {
+const normalizeCompletionMetadataValue = (value = '') => {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+};
+
+const normalizeProviderCompletionPayload = (completion = {}, provider = '') => {
+  if (!completion || typeof completion !== 'object' || Array.isArray(completion)) return null;
+  const finishReason = normalizeCompletionMetadataValue(completion.finishReason);
+  const stopReason = normalizeCompletionMetadataValue(completion.stopReason);
+  const reason = normalizeCompletionMetadataValue(completion.reason) || finishReason || stopReason;
+  const providerId = normalizeCompletionMetadataValue(completion.provider) || normalizeCompletionMetadataValue(provider);
+  const model = normalizeCompletionMetadataValue(completion.model);
+  const normalized = {
+    ...(reason ? { reason } : {}),
+    ...(finishReason ? { finishReason } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    ...(providerId ? { provider: providerId } : {}),
+    ...(model ? { model } : {}),
+  };
+  return Object.keys(normalized).length ? normalized : null;
+};
+
+const normalizeProviderTextResponse = (response = '', provider = '') => {
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    const text = typeof response.text === 'string'
+      ? response.text
+      : String(response.text ?? '');
+    const completion = normalizeProviderCompletionPayload(response.completion, provider);
+    return completion ? { text, completion } : { text };
+  }
+  return { text: String(response || '') };
+};
+
+const finalizeProviderTextResponse = (response = '', provider = '', includeCompletionMetadata = false) => {
+  const normalized = normalizeProviderTextResponse(response, provider);
+  return includeCompletionMetadata ? normalized : normalized.text;
+};
+
+export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, signal, options = {}) => {
+  const includeCompletionMetadata = options.includeCompletionMetadata === true;
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
   const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: false });
+  const buildResponse = (data = {}) => finalizeProviderTextResponse({
+    text: data.choices?.[0]?.message?.content || '',
+    completion: {
+      finishReason: data.choices?.[0]?.finish_reason || '',
+    },
+  }, '', includeCompletionMetadata);
 
   // ב-Electron: נשלח דרך main process כדי לעקוף CORS
   const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
@@ -4730,7 +5022,7 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
       throw new Error(`שגיאת API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
     }
     const data = JSON.parse(result.body);
-    return data.choices?.[0]?.message?.content || '';
+    return buildResponse(data);
   }
 
   const res = await fetch(url, {
@@ -4744,13 +5036,14 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
     throw new Error(`שגיאת API (${res.status}): ${txt.slice(0, 300)}`);
   }
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
+  return buildResponse(data);
 };
 
 // ═══════════════════════════════════════
 // Claude (Anthropic)
 // ═══════════════════════════════════════
-export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, signal) => {
+export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, signal, options = {}) => {
+  const includeCompletionMetadata = options.includeCompletionMetadata === true;
   const url = 'https://api.anthropic.com/v1/messages';
   const headers = {
     'Content-Type': 'application/json',
@@ -4762,6 +5055,12 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
   });
+  const buildResponse = (data = {}) => finalizeProviderTextResponse({
+    text: data.content?.[0]?.text || '',
+    completion: {
+      stopReason: data.stop_reason || '',
+    },
+  }, '', includeCompletionMetadata);
 
   const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
   if (desktopResult) {
@@ -4770,7 +5069,7 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
       throw new Error(`Claude API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
     }
     const data = JSON.parse(result.body);
-    return data.content?.[0]?.text || '';
+    return buildResponse(data);
   }
 
   const res = await fetch(url, {
@@ -4784,12 +5083,34 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
     throw new Error(`Claude API (${res.status}): ${txt.slice(0, 300)}`);
   }
   const data = await res.json();
-  return data.content?.[0]?.text || '';
+  return buildResponse(data);
 };
 
 // ═══════════════════════════════════════
 // Universal Chat — routes by active provider
 // ═══════════════════════════════════════
+const PROMPT_DOCUMENT_CONTEXT_LIMIT = 8000;
+const PROMPT_DOCUMENT_CONTEXT_GAP = '\n\n[... הושמט תוכן אמצעי כדי לשמור גם את סוף המסמך ...]\n\n';
+const WORKFLOW_EXISTING_HTML_SECTION_PATTERN = /\n\nהמסמך הקיים ב-HTML:\n[\s\S]*$/;
+
+const buildPromptDocumentContext = (documentContext = '', maxChars = PROMPT_DOCUMENT_CONTEXT_LIMIT) => {
+  const text = String(documentContext || '');
+  const safeLimit = Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : PROMPT_DOCUMENT_CONTEXT_LIMIT;
+  if (!safeLimit || text.length <= safeLimit) return text;
+  if (PROMPT_DOCUMENT_CONTEXT_GAP.length >= safeLimit) return text.slice(0, safeLimit);
+
+  const remainingChars = safeLimit - PROMPT_DOCUMENT_CONTEXT_GAP.length;
+  const headChars = Math.max(1, Math.ceil(remainingChars * 0.55));
+  const tailChars = Math.max(1, remainingChars - headChars);
+  return `${text.slice(0, headChars)}${PROMPT_DOCUMENT_CONTEXT_GAP}${text.slice(-tailChars)}`;
+};
+
+const buildWorkflowStageDocumentContext = (documentContext = '', stagedOutput = '') => {
+  const contextText = String(documentContext || '');
+  if (!String(stagedOutput || '').trim()) return contextText;
+  return contextText.replace(WORKFLOW_EXISTING_HTML_SECTION_PATTERN, '').trim();
+};
+
 export const chatWithActiveProvider = async (userPrompt, documentContext = '', extraSystemPrompt = '', options = {}) => {
   const cfg = options.providerConfigOverride && typeof options.providerConfigOverride === 'object'
     ? normalizeProviderConfig(options.providerConfigOverride)
@@ -4858,6 +5179,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const onStatus = options.onStatus;
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
   const agentName = options.agentName || agentLabel;
+  const includeCompletionMetadata = options.includeCompletionMetadata === true;
   const requestTimeoutSeconds = Number(automation.requestTimeoutMs);
   const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutSeconds) && requestTimeoutSeconds > 0
     ? Math.max(10000, requestTimeoutSeconds * 1000)
@@ -4896,18 +5218,25 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     ...extra,
   });
   const rememberSuccessfulReply = (replyText = '') => {
-    if (options.shouldPersistMemory === false) return replyText;
+    const normalizedReply = normalizeProviderTextResponse(replyText, activeProvider);
+    if (options.shouldPersistMemory === false) {
+      return includeCompletionMetadata ? normalizedReply : normalizedReply.text;
+    }
     try {
       rememberConversationTurn({
         userPrompt: cleanUserPrompt,
-        reply: String(replyText || ''),
+        reply: normalizedReply.text,
         agentLabel,
         skillId: activeSkill?.id || '',
         skillLabel: activeSkill?.label || '',
       });
     } catch {}
-    return replyText;
+    return includeCompletionMetadata ? normalizedReply : normalizedReply.text;
   };
+  const preserveFullDocumentContext = options.preserveFullDocumentContext === true;
+  const promptDocumentContext = preserveFullDocumentContext
+    ? String(documentContext || '')
+    : buildPromptDocumentContext(documentContext);
   const sysPrompt = `אתה העוזר החכם של מעבד התמלילים "WordFlow AI".
 ענה תמיד בעברית, קצר, ברור ומעשי.
 הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
@@ -4916,7 +5245,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${documentContext ? `\n\nהקשר מהמסמך:\n${documentContext.slice(0, 8000)}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -4959,10 +5288,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         cfg,
         selectedProviders,
         preferredProviders: automationPreferredProviders,
+        modelOverride,
         runId,
         logEvent,
         onStatus,
         activeSkill,
+        preserveFullDocumentContext,
       });
 
       const orderedAgents = executionPlan?.orderedAgents?.length ? executionPlan.orderedAgents : enabledAgents;
@@ -4998,6 +5329,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       let finalManagerReviewPasses = 0;
       let notesAlreadyAppended = false;
       let lastManagerReviewPacket = null;
+      let finalOutputProvider = activeProvider;
+      let finalOutputModel = resolvedModel;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
       const stageArtifacts = [];
       const stageNotes = [];
@@ -5032,7 +5365,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
             executionPlan?.stageProviders?.[stageRoutingKey],
           ], allowedStageProviders, cfg);
-          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders);
+          const stageModelPinnedProvider = inferProviderFromModelHint(stageAgent.model || modelOverride, allowedStageProviders, cfg);
+          const stageProvider = stageModelPinnedProvider || normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders, modelOverride || stageAgent.model || '');
+          const stageRequestedModel = stageAgent.model || taggedRouting.providerModels?.[stageProvider] || getModelNameForProvider(stageProvider, cfg, modelOverride);
+          const stageDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
           const stagePrompt = buildStagePrompt({
           cleanUserPrompt,
           stageGoal,
@@ -5057,7 +5393,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           agentLabel: stageLabel,
           agentName: stageAgent.name || stageLabel,
           provider: stageProvider,
-          model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+          model: stageRequestedModel,
           stageIndex: processedStages + 1,
           stageTotal: maxStageCount,
           roundIndex: runCount,
@@ -5070,14 +5406,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             ? `${stageAgent.prompt}\nבשלב ביקורת ניהולית DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, פערים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא.\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`
             : `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`;
           const previousStageOutput = stagedOutput;
-          const stageReply = await chatWithActiveProvider(stagePrompt, documentContext, stageSystemPrompt, {
+          const stageReply = await chatWithActiveProvider(stagePrompt, stageDocumentContext, stageSystemPrompt, {
             providerOverride: stageProvider,
             preferredProviders: stageProvider ? [stageProvider] : automationPreferredProviders,
             strictProviderOverride: true,
-            modelOverride: stageAgent.model || taggedRouting.providerModels?.[stageProvider] || '',
+            modelOverride: stageRequestedModel || '',
+            includeCompletionMetadata: true,
             strictFormatting: true,
             skipAutomation: true,
             skipMultiModel: true,
+            preserveFullDocumentContext,
             shouldPersistMemory: false,
             agentLabel: stageLabel,
             agentName: stageAgent.name || stageLabel,
@@ -5089,7 +5427,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
                 ...payload,
                 runId,
                 provider: payload.provider || stageProvider,
-                model: payload.model || stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+                model: payload.model || stageRequestedModel,
                 agentId: stageAgent.id,
                 agentLabel: stageLabel,
                 progress: mappedProgress,
@@ -5098,11 +5436,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             },
           });
 
-          const parsedReply = parseStagePacket(stageReply);
+          const normalizedStageReply = normalizeProviderTextResponse(stageReply, stageProvider);
+          const stageReplyProvider = normalizedStageReply.completion?.provider || stageProvider || finalOutputProvider;
+          const stageReplyModel = normalizedStageReply.completion?.model || stageRequestedModel || finalOutputModel;
+          const parsedReply = parseStagePacket(normalizedStageReply.text);
           const rawStageArtifact = String(parsedReply.deliverable || '').trim();
           const stageArtifact = isManagerReviewAgent(stageAgent) && shouldPreservePriorDocumentFromManagerReview(rawStageArtifact, previousStageOutput)
             ? String(previousStageOutput || '').trim()
             : rawStageArtifact;
+          const stageArtifactProvider = stageArtifact === rawStageArtifact ? stageReplyProvider : finalOutputProvider;
+          const stageArtifactModel = stageArtifact === rawStageArtifact ? stageReplyModel : finalOutputModel;
           const effectiveParsedReply = stageArtifact === rawStageArtifact
             ? parsedReply
             : { ...parsedReply, deliverable: stageArtifact };
@@ -5112,12 +5455,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               agentId: stageAgent.id,
               agentLabel: stageLabel,
               agentName: stageAgent.name || stageLabel,
-              provider: stageProvider,
-              model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+              provider: stageReplyProvider,
+              model: stageReplyModel,
               stageIndex: processedStages + 1,
               stageTotal: maxStageCount,
               roundIndex: runCount,
-              outputPreview: trimLogText(rawStageArtifact || stageReply || ''),
+              outputPreview: trimLogText(rawStageArtifact || normalizedStageReply.text || ''),
             });
           }
           if (!hasMeaningfulArtifact(stageArtifact, cleanUserPrompt)) {
@@ -5126,21 +5469,27 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               agentId: stageAgent.id,
               agentLabel: stageLabel,
               agentName: stageAgent.name || stageLabel,
-              provider: stageProvider,
-              model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+              provider: stageReplyProvider,
+              model: stageReplyModel,
               stageIndex: processedStages + 1,
               stageTotal: maxStageCount,
               roundIndex: runCount,
-              outputPreview: trimLogText(stageArtifact || stageReply || ''),
+              outputPreview: trimLogText(stageArtifact || normalizedStageReply.text || ''),
               errorMessage: 'הסוכן לא סיפק deliverable מספק',
             });
             throw new Error(`הסוכן ${stageLabel} לא סיפק deliverable מספק. עצרתי כדי למנוע גז בניוטרל.`);
           }
 
           stagedOutput = stageArtifact;
+          if (stageArtifact === rawStageArtifact) {
+            finalOutputProvider = stageReplyProvider || finalOutputProvider;
+            finalOutputModel = stageReplyModel || finalOutputModel;
+          }
           stageArtifacts.push({
             agentId: stageAgent.id,
             agentLabel: stageLabel,
+            provider: stageArtifactProvider,
+            model: stageArtifactModel,
             chars: stageArtifact.length,
             preview: trimLogText(stageArtifact, 180),
           });
@@ -5263,8 +5612,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             agentId: stageAgent.id,
             agentLabel: stageLabel,
             agentName: stageAgent.name || stageLabel,
-            provider: stageProvider,
-            model: stageAgent.model || getModelNameForProvider(stageProvider, cfg, modelOverride),
+            provider: stageArtifactProvider,
+            model: stageArtifactModel,
             stageIndex: processedStages + 1,
             stageTotal: maxStageCount,
             roundIndex: runCount,
@@ -5323,7 +5672,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
           executionPlan?.stageProviders?.[managerRoleKey],
         ], allowedReviewProviders, cfg);
-        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders);
+        const reviewModelPinnedProvider = inferProviderFromModelHint(managerAgent.model || modelOverride, allowedReviewProviders, cfg);
+        const reviewProvider = reviewModelPinnedProvider || normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders, modelOverride || managerAgent.model || '');
+        const reviewRequestedModel = managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || getModelNameForProvider(reviewProvider, cfg, modelOverride);
+        const reviewDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
         const reviewPrompt = buildStagePrompt({
           cleanUserPrompt,
           stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST.',
@@ -5340,14 +5692,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         });
 
         const previousManagerOutput = stagedOutput;
-        const managerReply = await chatWithActiveProvider(reviewPrompt, documentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
+        const managerReply = await chatWithActiveProvider(reviewPrompt, reviewDocumentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
           providerOverride: reviewProvider,
           preferredProviders: reviewProvider ? [reviewProvider] : automationPreferredProviders,
           strictProviderOverride: true,
-          modelOverride: managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || '',
+          modelOverride: reviewRequestedModel || '',
+          includeCompletionMetadata: true,
           strictFormatting: true,
           skipAutomation: true,
           skipMultiModel: true,
+          preserveFullDocumentContext,
           shouldPersistMemory: false,
           agentLabel: managerAgent.name,
           agentName: managerAgent.name,
@@ -5356,14 +5710,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             ...payload,
             runId,
             provider: payload.provider || reviewProvider,
-            model: payload.model || managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
+            model: payload.model || reviewRequestedModel,
             agentLabel: managerAgent.name,
             progress: Math.max(92, Number(payload.progress ?? 96)),
             message: payload.message || 'מנהל העבודה מבצע סקירה סופית',
           }),
         });
 
-        const parsedManagerReply = parseStagePacket(managerReply);
+        const normalizedManagerReply = normalizeProviderTextResponse(managerReply, reviewProvider);
+        const managerReplyProvider = normalizedManagerReply.completion?.provider || reviewProvider || finalOutputProvider;
+        const managerReplyModel = normalizedManagerReply.completion?.model || reviewRequestedModel || finalOutputModel;
+        const parsedManagerReply = parseStagePacket(normalizedManagerReply.text);
         const rawManagerArtifact = String(parsedManagerReply.deliverable || '').trim();
         const managerArtifact = shouldPreservePriorDocumentFromManagerReview(rawManagerArtifact, previousManagerOutput)
           ? String(previousManagerOutput || '').trim()
@@ -5377,9 +5734,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             agentId: managerAgent.id,
             agentLabel: managerAgent.name,
             agentName: managerAgent.name,
-            provider: reviewProvider,
-            model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-            outputPreview: trimLogText(rawManagerArtifact || managerReply || ''),
+            provider: managerReplyProvider,
+            model: managerReplyModel,
+            outputPreview: trimLogText(rawManagerArtifact || normalizedManagerReply.text || ''),
           });
         }
         lastManagerReviewPacket = effectiveManagerReply;
@@ -5411,9 +5768,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             agentId: managerAgent.id,
             agentLabel: managerAgent.name,
             agentName: managerAgent.name,
-            provider: reviewProvider,
-            model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
-            outputPreview: trimLogText(managerArtifact || managerReply || ''),
+            provider: managerReplyProvider,
+            model: managerReplyModel,
+            outputPreview: trimLogText(managerArtifact || normalizedManagerReply.text || ''),
             errorMessage: 'סקירת המנהל הסתיימה ללא deliverable תקין',
           });
           throw new Error('סקירת המנהל הסתיימה ללא deliverable תקין. עצרתי כדי למנוע תוצאה ריקה.');
@@ -5554,6 +5911,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         }
 
         stagedOutput = managerArtifact;
+        if (managerArtifact === rawManagerArtifact) {
+          finalOutputProvider = managerReplyProvider || finalOutputProvider;
+          finalOutputModel = managerReplyModel || finalOutputModel;
+        }
         pendingFinalManagerReview = false;
         if (effectiveManagerReply.handoff) batonNotes.push(`${managerAgent.name}: ${effectiveManagerReply.handoff.replace(/\n+/g, ' ; ')}`);
         while (batonNotes.length > 10) batonNotes.shift();
@@ -5583,12 +5944,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         state: 'success',
         progress: 100,
         runId,
-        provider: activeProvider,
-        model: resolvedModel,
+        provider: finalOutputProvider,
+        model: finalOutputModel,
         agentLabel: orderedAgents[orderedAgents.length - 1]?.name || agentLabel,
         message: 'כל שלבי העבודה הושלמו'
       });
-      return rememberSuccessfulReply(finalOutput);
+      return rememberSuccessfulReply({
+        text: finalOutput,
+        completion: {
+          provider: finalOutputProvider,
+          model: finalOutputModel,
+        },
+      });
     }
   }
 
@@ -5638,6 +6005,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           preferredProviders: runnableProviders,
           strictProviderOverride: true,
           modelOverride: taggedRouting.providerModels?.[providerId] || '',
+            includeCompletionMetadata: true,
           skipAutomation: true,
           skipMultiModel: true,
           shouldPersistMemory: false,
@@ -5645,7 +6013,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           agentLabel: providerLabel,
           onStatus,
         });
-        collectedResponses.push({ providerId, providerLabel, content: String(providerReply || '').trim() });
+          const normalizedProviderReply = normalizeProviderTextResponse(providerReply, providerId);
+          collectedResponses.push({
+            providerId,
+            providerLabel,
+            reply: normalizedProviderReply,
+            content: normalizedProviderReply.text,
+          });
       } catch (error) {
         if (!firstError) firstError = error;
         logEvent('multi-model-provider-error', `המנוע ${providerLabel} נכשל`, {
@@ -5667,7 +6041,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         provider: collectedResponses[0].providerId,
         agentLabel: collectedResponses[0].providerLabel,
       });
-      return rememberSuccessfulReply(collectedResponses[0].content);
+      return rememberSuccessfulReply(collectedResponses[0].reply);
     }
 
     const mergeProviderId = collectedResponses.find((item) => item.providerId === activeProvider)?.providerId || collectedResponses[0].providerId;
@@ -5693,6 +6067,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         preferredProviders: collectedResponses.map((item) => item.providerId),
         strictProviderOverride: true,
         modelOverride: taggedRouting.providerModels?.[mergeProviderId] || '',
+        includeCompletionMetadata: true,
         skipAutomation: true,
         skipMultiModel: true,
         shouldPersistMemory: false,
@@ -5700,6 +6075,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         agentLabel: `${agentLabel} · איחוד`,
         onStatus,
       });
+      const normalizedMergedReply = normalizeProviderTextResponse(mergedReply, mergeProviderId);
 
       logEvent('multi-model-success', 'האיחוד בין כמה מודלים הושלם', {
         state: 'success',
@@ -5707,18 +6083,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         model: getModelNameForProvider(mergeProviderId, cfg, taggedRouting.providerModels?.[mergeProviderId] || ''),
         agentLabel: mergeProviderLabel,
         responseCount: collectedResponses.length,
-        outputChars: String(mergedReply || '').length,
-        outputPreview: trimLogText(mergedReply),
+        outputChars: normalizedMergedReply.text.length,
+        outputPreview: trimLogText(normalizedMergedReply.text),
       });
 
-      return rememberSuccessfulReply(mergedReply);
+      return rememberSuccessfulReply(normalizedMergedReply);
     } catch (mergeError) {
       logEvent('multi-model-merge-fallback', 'איחוד התשובות נכשל, מחזיר את התשובה הטובה הראשונה', {
         state: 'error',
         provider: mergeProviderId,
         errorMessage: mergeError?.message || 'שגיאה לא ידועה',
       });
-      return rememberSuccessfulReply(collectedResponses[0].content);
+      return rememberSuccessfulReply(collectedResponses[0].reply);
     }
   }
 
@@ -5730,25 +6106,30 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const genAI = new GoogleGenerativeAI(key);
         const mdl = genAI.getGenerativeModel({ model: resolvedModel });
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
-        return result.response.text();
+        return finalizeProviderTextResponse({
+          text: result.response.text(),
+          completion: {
+            finishReason: result.response?.candidates?.[0]?.finishReason || '',
+          },
+        }, activeProvider, includeCompletionMetadata);
       }
       case 'openai': {
         if (!cfg.openai.key) throw new Error('מפתח OpenAI לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal);
+        ], signal, { includeCompletionMetadata });
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal);
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata });
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal);
+        ], signal, { includeCompletionMetadata });
       }
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
@@ -5759,14 +6140,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal);
+        ], signal, { includeCompletionMetadata });
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal);
+        ], signal, { includeCompletionMetadata });
       }
       case 'custom': {
         const { baseUrl, key, model, name } = cfg.custom;
@@ -5777,7 +6158,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal);
+        ], signal, { includeCompletionMetadata });
       }
       default:
         throw new Error('ספק AI לא ידוע');
@@ -5819,14 +6200,25 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       });
       const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
       const result = await withTimeout(runProviderRequest(abortController?.signal), timeoutMs, () => abortController?.abort());
+      const normalizedResult = normalizeProviderTextResponse(result, activeProvider);
+      if (normalizedResult && typeof normalizedResult === 'object' && !Array.isArray(normalizedResult)) {
+        normalizedResult.completion = {
+          ...(normalizedResult.completion && typeof normalizedResult.completion === 'object' ? normalizedResult.completion : {}),
+          provider: normalizedResult.completion?.provider || activeProvider,
+          model: normalizedResult.completion?.model || resolvedModel,
+        };
+      }
       logEvent('attempt-success', 'התקבלה תשובה מהמנוע', {
         state: 'success',
         attempt: attempt + 1,
-        responseChars: String(result || '').length,
-        responsePreview: trimLogText(result),
+        responseChars: normalizedResult.text.length,
+        responsePreview: trimLogText(normalizedResult.text),
+        completionReason: normalizedResult.completion?.reason || '',
+        completionFinishReason: normalizedResult.completion?.finishReason || '',
+        completionStopReason: normalizedResult.completion?.stopReason || '',
       });
       emitStatus(onStatus, { state: 'success', progress: 100, runId, provider: activeProvider, model: resolvedModel, agentLabel, attempt: attempt + 1, message: 'הושלם' });
-      return rememberSuccessfulReply(result);
+      return rememberSuccessfulReply(normalizedResult);
     } catch (error) {
       lastError = error;
       const errMsg = error?.message || '';
@@ -5899,17 +6291,20 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           preferredProviders: [fallbackProvider],
           strictProviderOverride: true,
           modelOverride: taggedRouting.providerModels?.[fallbackProvider] || '',
+          includeCompletionMetadata: true,
           skipAutomation: true,
           shouldPersistMemory: false,
           disableFallback: true,
           runId,
           agentLabel,
         });
+        const normalizedFallbackReply = normalizeProviderTextResponse(fallbackText, fallbackProvider);
 
         logEvent('provider-fallback-success', `${fallbackProvider} החזיר תשובת גיבוי`, {
           state: 'success',
           fallbackProvider,
-          responseChars: String(fallbackText || '').length,
+          responseChars: normalizedFallbackReply.text.length,
+          completionReason: normalizedFallbackReply.completion?.reason || '',
         });
         emitStatus(onStatus, {
           state: 'success',
@@ -5920,7 +6315,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           agentLabel,
           message: `הושלם (גיבוי: ${fallbackProvider})`,
         });
-        return rememberSuccessfulReply(fallbackText);
+        return rememberSuccessfulReply(normalizedFallbackReply);
       } catch (fallbackError) {
         logEvent('provider-fallback-error', `גם ${fallbackProvider} נכשל בגיבוי`, {
           state: 'error',
@@ -5982,15 +6377,21 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
   const cfg = getProviderConfig();
   const selectedProviders = getSelectedProviderIds(cfg);
   const explicitProviderOverride = String(runtimeOptions.providerOverride || '').trim();
+  const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
+  const agentModelOverride = String(agent.model || '').trim();
+  const requestedModelOverride = runtimeModelOverride || agentModelOverride;
   const strictProviderOverride = runtimeOptions.strictProviderOverride === true && Boolean(explicitProviderOverride);
   const providerOverride = strictProviderOverride
     ? explicitProviderOverride
-    : chooseProviderForAgent(agent, cfg, selectedProviders);
+    : chooseProviderForAgent(agent, cfg, selectedProviders, requestedModelOverride);
+  const modelOverride = providerOverride && requestedModelOverride && !isProviderModelChoiceCompatible(providerOverride, requestedModelOverride, cfg)
+    ? ''
+    : requestedModelOverride;
   return chatWithActiveProvider(userPrompt, documentContext, agent.prompt, {
     providerOverride,
     strictProviderOverride,
     preferredProviders: selectedProviders,
-    modelOverride: agent.model,
+    modelOverride,
     agentLabel: agent.name || 'סוכן תפקידי',
     agentName: agent.name || 'סוכן תפקידי',
     onStatus: runtimeOptions.onStatus,
@@ -6247,14 +6648,14 @@ export const chatWithAi = chatWithActiveProvider;
 // ═══════════════════════════════════════
 // בדיקת תקינות ספק — שולח הודעה קצרה ובודק תשובה
 // ═══════════════════════════════════════
-const PROVIDER_MODEL_FALLBACKS = {
-  gemini: ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.0-pro'],
-  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
+const PROVIDER_MODEL_OPTIONS = {
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
   claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
-  ollama: [],
-  custom: [],
+  ollama: ['llama3.2', 'qwen2.5', 'mistral'],
+  custom: ['deepseek-chat', 'mistral-large-latest', 'openrouter/auto', 'grok-3-mini-beta', 'loaded-model'],
 };
 
 export const getProviderModelChoices = (providerId = '', cfg = null, extraModels = []) => {
@@ -6263,21 +6664,56 @@ export const getProviderModelChoices = (providerId = '', cfg = null, extraModels
 
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const configuredModel = normalizeProviderModelName(safeProvider, String(safeCfg?.[safeProvider]?.model || '').trim());
+  const compatibleConfiguredModel = isProviderModelChoiceCompatible(safeProvider, configuredModel, safeCfg)
+    ? configuredModel
+    : '';
   const extra = (Array.isArray(extraModels) ? extraModels : [extraModels])
     .map((model) => normalizeProviderModelName(safeProvider, String(model || '').trim()))
-    .filter(Boolean);
-  const fallbacks = (PROVIDER_MODEL_FALLBACKS[safeProvider] || [])
+    .filter((model) => isProviderModelChoiceCompatible(safeProvider, model, safeCfg));
+  const fallbacks = (PROVIDER_MODEL_OPTIONS[safeProvider] || [])
     .map((model) => normalizeProviderModelName(safeProvider, model))
     .filter(Boolean);
 
-  return [...new Set([configuredModel, ...extra, ...fallbacks].filter(Boolean))];
+  return [...new Set([compatibleConfiguredModel, ...extra, ...fallbacks].filter(Boolean))];
 };
 
 const TEST_PROMPT = [{ role: 'user', content: 'אמור "אוקי" בלבד.' }];
 const GEMINI_TEST_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_LIST_PAGE_SIZE = 1000;
+const GEMINI_GENERATE_CONTENT_METHOD = 'generateContent';
+
+const extractGeminiAvailableModels = (payload = {}) => [...new Set((Array.isArray(payload?.models) ? payload.models : [])
+  .filter((entry) => Array.isArray(entry?.supportedGenerationMethods) && entry.supportedGenerationMethods.includes(GEMINI_GENERATE_CONTENT_METHOD))
+  .map((entry) => String(entry?.name || '').trim().replace(/^models\//, ''))
+  .filter(Boolean))];
+
+const listGeminiAvailableModels = async (key, signal) => {
+  const url = `${GEMINI_TEST_URL}?key=${encodeURIComponent(key)}&pageSize=${GEMINI_LIST_PAGE_SIZE}`;
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'GET', timeoutMs: 12000 }, signal);
+  if (desktopResult) {
+    const result = desktopResult;
+    if (!result.ok) {
+      throw new Error(`${result.status}: ${String(result.body || '').slice(0, 200)}`);
+    }
+    const data = JSON.parse(result.body || '{}');
+    return extractGeminiAvailableModels(data);
+  }
+
+  const res = await fetch(url, {
+    method: 'GET',
+    signal,
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return extractGeminiAvailableModels(data);
+};
 
 const pingGemini = async (key, model, signal) => {
-  const url = `${GEMINI_TEST_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const cleanModel = normalizeProviderModelName('gemini', model);
+  const url = `${GEMINI_TEST_URL}/${encodeURIComponent(cleanModel)}:generateContent?key=${encodeURIComponent(key)}`;
   const res = await fetch(url, {
     method: 'POST',
     signal,
@@ -6354,18 +6790,111 @@ const pingOpenAICompatible = async (baseUrl, key, model, signal) => {
 /**
  * testProviderConnection — בודק חיבור לספק AI מסוים.
  * מנסה תחילה את המודל הנבחר, ואם נכשל — ממשיך לגיבויים.
- * מחזיר { ok, model, error, triedModels }
+ * עבור Gemini, אם המודל המבוקש לא זמין למפתח לפי models/list, נחזיר כשל מפורש.
+ * מחזיר { ok, model, error, triedModels, availableModels?, requestedModel?, requestedModelAvailable? }
  */
 export const testProviderConnection = async (providerId, providerConfig = {}) => {
   const cfg = getProviderConfig();
   const pCfg = { ...cfg[providerId], ...providerConfig };
-  const requestedModel = String(pCfg.model || '').trim();
-  const fallbacks = PROVIDER_MODEL_FALLBACKS[providerId] || [];
-  const modelsToTry = providerId === 'ollama'
-    ? [requestedModel || 'llama3.2']
-    : requestedModel
-      ? [requestedModel, ...fallbacks.filter((m) => m !== requestedModel)]
-      : fallbacks;
+  const rawRequestedModel = String(pCfg.model || '').trim();
+  const requestedModel = normalizeProviderModelName(providerId, rawRequestedModel);
+  const modelChoiceConfig = {
+    ...cfg,
+    [providerId]: {
+      ...(cfg?.[providerId] || {}),
+      ...pCfg,
+      model: requestedModel,
+    },
+  };
+  let modelsToTry = providerId === 'ollama'
+    ? [requestedModel || normalizeProviderModelName('ollama', DEFAULT_PROVIDER_CONFIG.ollama.model)]
+    : providerId === 'custom'
+      ? [requestedModel].filter(Boolean)
+      : providerId === 'gemini'
+        ? (requestedModel
+          ? [requestedModel]
+          : PROVIDER_MODEL_OPTIONS.gemini.slice(0, 3))
+        : getProviderModelChoices(providerId, modelChoiceConfig, [requestedModel]);
+  let availableModels = [];
+  let requestedModelAvailable = null;
+
+  if (providerId === 'gemini') {
+    const key = String(pCfg.key || '').trim();
+    if (!key) {
+      return { ok: false, model: '', reply: '', triedModels: [], error: 'מפתח API חסר', availableModels, requestedModel, requestedModelAvailable };
+    }
+
+    const availabilityController = new AbortController();
+    const availabilityTimeout = setTimeout(() => availabilityController.abort(), 12000);
+    try {
+      availableModels = await listGeminiAvailableModels(key, availabilityController.signal);
+      const availableModelEntries = [...new Map(availableModels
+        .map((model) => String(model || '').trim())
+        .filter(Boolean)
+        .map((raw) => [raw, { raw, normalized: normalizeProviderModelName('gemini', raw) }]))
+        .values()];
+      const availableModelEntriesByRaw = new Map(availableModelEntries.map((entry) => [entry.raw, entry]));
+      const availableModelEntriesByNormalized = availableModelEntries.reduce((map, entry) => {
+        if (entry.normalized && !map.has(entry.normalized)) map.set(entry.normalized, entry);
+        return map;
+      }, new Map());
+
+      if (!availableModelEntries.length) {
+        if (requestedModel) requestedModelAvailable = false;
+        return {
+          ok: false,
+          model: '',
+          reply: '',
+          triedModels: requestedModel ? [requestedModel] : [],
+          error: 'לא נמצאו מודלי Gemini זמינים עבור generateContent עם המפתח הזה',
+          availableModels,
+          requestedModel,
+          requestedModelAvailable,
+        };
+      }
+
+      const findAvailableGeminiEntry = (candidate = '') => {
+        const cleanCandidate = String(candidate || '').trim();
+        if (!cleanCandidate) return null;
+        return availableModelEntriesByRaw.get(cleanCandidate)
+          || availableModelEntriesByNormalized.get(cleanCandidate)
+          || null;
+      };
+
+      if (requestedModel) {
+        const matchedRequestedEntry = findAvailableGeminiEntry(rawRequestedModel) || findAvailableGeminiEntry(requestedModel);
+        requestedModelAvailable = Boolean(matchedRequestedEntry);
+        if (!requestedModelAvailable || !matchedRequestedEntry) {
+          return {
+            ok: false,
+            model: '',
+            reply: '',
+            triedModels: [],
+            error: `המודל שנבחר לא זמין למפתח Gemini הזה: ${requestedModel}`,
+            availableModels,
+            requestedModel,
+            requestedModelAvailable,
+          };
+        }
+        modelsToTry = [matchedRequestedEntry.raw];
+      } else {
+        const availableModelsToTry = PROVIDER_MODEL_OPTIONS.gemini
+          .map((model) => findAvailableGeminiEntry(normalizeProviderModelName('gemini', model)))
+          .filter((entry, index, entries) => entry && entries.findIndex((candidate) => candidate?.raw === entry.raw) === index)
+          .slice(0, 3)
+          .map((entry) => entry.raw);
+        if (availableModelsToTry.length) {
+          modelsToTry = availableModelsToTry;
+        } else {
+          modelsToTry = availableModelEntries.slice(0, 3).map((entry) => entry.raw);
+        }
+      }
+    } catch {
+      requestedModelAvailable = null;
+    } finally {
+      clearTimeout(availabilityTimeout);
+    }
+  }
 
   if (!modelsToTry.length) modelsToTry.push('default');
 
@@ -6412,7 +6941,7 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
         throw new Error(`ספק לא מוכר: ${providerId}`);
       }
       clearTimeout(timeout);
-      return { ok: true, model, reply: String(reply || '').slice(0, 80), triedModels, error: '' };
+      return { ok: true, model, reply: String(reply || '').slice(0, 80), triedModels, error: '', availableModels, requestedModel, requestedModelAvailable };
     } catch (err) {
       clearTimeout(timeout);
       lastError = err?.name === 'AbortError' ? 'הבקשה פגה (timeout 12s)' : (err?.message || 'שגיאה לא ידועה');
@@ -6421,7 +6950,7 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
     }
   }
 
-  return { ok: false, model: '', reply: '', triedModels, error: lastError };
+  return { ok: false, model: '', reply: '', triedModels, error: lastError, availableModels, requestedModel, requestedModelAvailable };
 };
 
 // יצוא הפונקציות החדשות לחלונית
@@ -6430,3 +6959,5 @@ if (typeof window !== 'undefined') {
   window.listAllWorkspaces = listAllWorkspaces;
   window.switchToWorkspace = switchToWorkspace;
 }
+
+

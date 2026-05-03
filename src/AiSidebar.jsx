@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, saveWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, saveWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName } from "./services/aiService";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
 const CONTEXT_PROMPTS = [
@@ -250,6 +250,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse();
   });
   const [selectedProviderId, setSelectedProviderId] = useState(() => getAppMemory().sidebarProviderId || 'default');
+  const [selectedProviderModel, setSelectedProviderModel] = useState(() => String(getAppMemory().sidebarProviderModel || '').trim());
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
@@ -271,11 +272,26 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const generationActions = visibleActions.filter((action) => !action.sel);
   const skillCatalog = getSkillCatalog();
   const skillsConfig = getSkillsConfig();
-  const configuredProviderChoices = getConfiguredProviderChoices();
+  const providerConfig = getProviderConfig();
+  const configuredProviderChoices = getConfiguredProviderChoices(providerConfig);
   const workspaceAutomationEnabled = workspaceAutomation?.enabled === true;
   const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === selectedProviderId) || null;
+  const providerModelChoices = activeProviderChoice
+    ? getProviderModelChoices(activeProviderChoice.id, providerConfig)
+    : [];
+  const normalizedSelectedProviderModel = activeProviderChoice
+    ? normalizeProviderModelName(activeProviderChoice.id, String(selectedProviderModel || '').trim())
+    : String(selectedProviderModel || '').trim();
+  const resolvedSelectedProviderModel = activeProviderChoice
+    ? (providerModelChoices.includes(normalizedSelectedProviderModel)
+      ? normalizedSelectedProviderModel
+      : (providerModelChoices[0] || ''))
+    : '';
   const activeProviderLabel = activeProviderChoice?.label || getActiveProviderName();
-  const activeProviderSummary = activeProviderChoice ? activeProviderLabel : `${activeProviderLabel} · ברירת מחדל`;
+  const persistedSidebarProviderModel = activeProviderChoice ? resolvedSelectedProviderModel : String(selectedProviderModel || '').trim();
+  const activeProviderSummary = activeProviderChoice
+    ? [activeProviderLabel, resolvedSelectedProviderModel].filter(Boolean).join(' · ')
+    : `${activeProviderLabel} · ברירת מחדל`;
   const activeAgent = workspaceAutomationEnabled
     ? roleAgents.find((agent) => agent.id === selectedAgentId) || null
     : null;
@@ -525,17 +541,25 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   }, [selectedSkillId, selectedAgentId, selectedProviderId, skillsConfig, roleAgents, configuredProviderChoices, workspaceAutomationEnabled, clearPendingMentionSelection]);
 
   useEffect(() => {
+    if (!activeProviderChoice) return;
+    if (selectedProviderModel !== resolvedSelectedProviderModel) {
+      setSelectedProviderModel(resolvedSelectedProviderModel);
+    }
+  }, [activeProviderChoice, resolvedSelectedProviderModel, selectedProviderModel]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(messages.slice(-60)));
       saveAppMemory({
         ...getAppMemory(),
         sidebarProviderId: selectedProviderId || 'default',
+        sidebarProviderModel: persistedSidebarProviderModel || '',
         lastSelectedAgentId: selectedAgentId || '',
         lastSelectedSkillId: selectedSkillId || 'none',
         lastResolvedSkillLabel: resolvedSkillLabel || '',
       });
     } catch {}
-  }, [messages, selectedProviderId, selectedAgentId, selectedSkillId, resolvedSkillLabel]);
+  }, [messages, selectedProviderId, persistedSidebarProviderModel, selectedAgentId, selectedSkillId, resolvedSkillLabel, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (tab !== 'agents' && showLogs) setShowLogs(false);
@@ -672,6 +696,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         skillId: runtimeOptions.skillId || '',
         autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
         providerOverride: runtimeOptions.providerOverride || '',
+        modelOverride: runtimeOptions.modelOverride || '',
         strictProviderOverride: runtimeOptions.strictProviderOverride === true,
       });
       if (!isCurrentRequestCycle(requestCycle)) return;
@@ -803,7 +828,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     const directProviderId = activeProviderChoice?.id || '';
     const hasExplicitProviderSelection = Boolean(directProviderId);
-    const explicitProviderLabel = hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary;
+    const explicitProviderModel = hasExplicitProviderSelection ? resolvedSelectedProviderModel : '';
     clearPendingMentionSelection();
 
     if (forcedAgent) {
@@ -812,8 +837,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         skillLabel: runtimeSkillLabel,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
         persistSelection: !usedDraftAgentMention && !usedQueuedAgentMention,
-        providerLabel: explicitProviderLabel,
+        providerLabel: activeProviderSummary,
         providerOverride: directProviderId,
+        modelOverride: explicitProviderModel,
         strictProviderOverride: hasExplicitProviderSelection,
         scopeLabel: contextScopeLabel,
         contextPreview,
@@ -840,6 +866,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         skillId: manualSkillId,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
         providerOverride: directProviderId,
+        modelOverride: explicitProviderModel,
         strictProviderOverride: hasExplicitProviderSelection,
         skipAutomation: true,
         skipAutomationPrompt: true,
@@ -891,16 +918,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         : currentBlockText
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
-      const directProviderId = activeProviderChoice?.id || '';
-      const hasExplicitProviderSelection = Boolean(directProviderId);
+    const directProviderId = activeProviderChoice?.id || '';
+    const hasExplicitProviderSelection = Boolean(directProviderId);
+    const explicitProviderModel = hasExplicitProviderSelection ? resolvedSelectedProviderModel : '';
     await executeRoleAgentTask(agent, task, {
       skillId: selectedSkillId === 'none' ? '' : selectedSkillId,
       autoUseDefaultSkill: selectedSkillId === 'none',
-        providerLabel: hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary,
-        providerOverride: directProviderId,
-        strictProviderOverride: hasExplicitProviderSelection,
-        scopeLabel: contextScopeLabel,
-        contextPreview,
+      providerLabel: activeProviderSummary,
+      providerOverride: directProviderId,
+      modelOverride: explicitProviderModel,
+      strictProviderOverride: hasExplicitProviderSelection,
+      scopeLabel: contextScopeLabel,
+      contextPreview,
     });
   };
 
@@ -2005,7 +2034,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
             <div style={controlLabelStyle}>🛰️ ספק לשיחה</div>
             <div style={controlHelperStyle}>
-              כאן מגדירים override מקומי לצ׳אט. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
+              כאן מגדירים override מקומי ל-sidebar בלבד, גם לצ׳אט הישיר וגם להרצת סוכנים מתוך המסך הזה. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
               {!workspaceAutomationEnabled ? ' סביבת העבודה כבויה כרגע, ולכן הצ׳אט ירוץ ישירות דרך ברירת המחדל.' : ''}
             </div>
             <select
@@ -2027,6 +2056,33 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 </option>
               ))}
             </select>
+            {activeProviderChoice ? (
+              <>
+                <div style={{ ...controlLabelStyle, marginTop: 12 }}>🧠 מודל למסך הזה</div>
+                <div style={controlHelperStyle}>
+                  המודל הזה גובר רק בתוך ה-sidebar. אם חוזרים ל-`ברירת המחדל`, גם המודל יחזור להילקח מההגדרות הכלליות בלי override.
+                </div>
+                <select
+                  value={resolvedSelectedProviderModel}
+                  onChange={(e) => {
+                    clearPendingMentionSelection();
+                    setSelectedProviderModel(e.target.value);
+                  }}
+                  disabled={isSettingsLocked || !providerModelChoices.length}
+                  style={{ ...controlSelectStyle, ...lockedControlStyle }}
+                >
+                  {providerModelChoices.map((modelId) => (
+                    <option key={modelId} value={modelId} style={{ color: '#1F2937' }}>
+                      {modelId}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : (
+              <div style={{ ...controlHelperStyle, marginTop: 10 }}>
+                במצב `ברירת המחדל` לא נשלח override של מודל, והמסך משתמש במודל שהוגדר לספק הפעיל בהגדרות.
+              </div>
+            )}
           </div>
 
           <div style={controlCardStyle}>

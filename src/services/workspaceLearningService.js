@@ -15,6 +15,19 @@ const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
+const FEEDBACK_CONTEXT_TOTAL_LIMIT = 7200;
+const FEEDBACK_CONTEXT_TOPIC_LIMIT = 320;
+const FEEDBACK_CONTEXT_SUPPORTING_LIMIT = 1100;
+const FEEDBACK_CONTEXT_MATERIALS_LIMIT = 1600;
+const FEEDBACK_CONTEXT_HTML_MIN_LIMIT = 3600;
+const FEEDBACK_CONTEXT_HTML_MAX_LIMIT = 5200;
+const FEEDBACK_CONTEXT_HTML_GAP = '\n\n[... קוצר אמצע ה-HTML כדי לשמור גם את ההתחלה וגם את הסוף ...]\n\n';
+const GENERATED_HTML_CONTINUATION_CONTEXT_LIMIT = 2200;
+const GENERATED_HTML_CONTINUATION_PARTIAL_LIMIT = 3200;
+const GENERATED_HTML_CONTINUATION_GAP = '\n\n[... קוצר אמצע ההקשר לצורך continuation ...]\n\n';
+const TRUNCATED_RESPONSE_MARKER_PATTERN = /\[\.\.\.\s*(?:הושמט|קוצר)[^\]]*\]/i;
+const HTML_TAG_TOKEN_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z0-9-]+)\b[^>]*?>/gi;
+const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'docx']);
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
@@ -832,6 +845,63 @@ async function buildEffectiveMaterialsContext({ selectedMaterials = [], requestT
   return buildAutoSelectedMaterialsContext(requestText);
 }
 
+function truncateContextSectionText(value = '', maxChars = 0) {
+  const text = String(value || '').trim();
+  const safeLimit = Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : 0;
+  if (!safeLimit) return '';
+  if (text.length <= safeLimit) return text;
+  if (safeLimit === 1) return '…';
+  return `${text.slice(0, safeLimit - 1).trimEnd()}…`;
+}
+
+function truncateContextSectionHeadTail(value = '', maxChars = 0, gapText = FEEDBACK_CONTEXT_HTML_GAP) {
+  const text = String(value || '').trim();
+  const safeLimit = Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : 0;
+  if (!safeLimit) return '';
+  if (text.length <= safeLimit) return text;
+  if (gapText.length >= safeLimit) return text.slice(0, safeLimit);
+
+  const remainingChars = safeLimit - gapText.length;
+  const headChars = Math.max(1, Math.ceil(remainingChars * 0.55));
+  const tailChars = Math.max(1, remainingChars - headChars);
+  return `${text.slice(0, headChars).trimEnd()}${gapText}${text.slice(-tailChars).trimStart()}`;
+}
+
+function buildFeedbackDrivenRequestContext({
+  originalPrompt = '',
+  supportingText = '',
+  supportingLabel = 'משוב המשתמש',
+  materialsText = '',
+  existingHtml = '',
+  htmlLabel = 'המסמך הקיים ב-HTML',
+  truncateHtml = true,
+} = {}) {
+  const topicSection = truncateContextSectionText(originalPrompt || 'לא צוין', FEEDBACK_CONTEXT_TOPIC_LIMIT);
+  const supportingSection = truncateContextSectionText(supportingText, FEEDBACK_CONTEXT_SUPPORTING_LIMIT);
+  const materialsSection = truncateContextSectionText(materialsText, FEEDBACK_CONTEXT_MATERIALS_LIMIT);
+  const normalizedHtml = String(existingHtml || '').trim();
+  const baseSections = [
+    `נושא המסמך: ${topicSection || 'לא צוין'}`,
+    supportingSection ? `${supportingLabel}:\n${supportingSection}` : '',
+    materialsSection ? `חומרי עזר נלווים:\n${materialsSection}` : '',
+  ].filter(Boolean);
+
+  const reservedBaseContext = baseSections.join('\n\n');
+  const availableHtmlBudget = Math.max(
+    0,
+    FEEDBACK_CONTEXT_TOTAL_LIMIT - reservedBaseContext.length - htmlLabel.length - 4,
+  );
+  const availableHtmlChars = Math.min(FEEDBACK_CONTEXT_HTML_MAX_LIMIT, availableHtmlBudget);
+  const htmlSection = truncateHtml
+    ? truncateContextSectionHeadTail(normalizedHtml, availableHtmlChars, FEEDBACK_CONTEXT_HTML_GAP)
+    : normalizedHtml;
+
+  return [
+    ...baseSections,
+    `${htmlLabel}:\n${htmlSection}`,
+  ].join('\n\n');
+}
+
 function escapeHtml(value = '') {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -1005,11 +1075,379 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
 }
 
 function normalizeGeneratedHtmlResponse(response = '') {
+  return stripGeneratedHtmlResponseCodeFences(response).trim();
+}
+
+function stripGeneratedHtmlResponseCodeFences(response = '') {
   return String(response || '')
     .replace(/^```html\s*/i, '')
     .replace(/^```\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
+    .replace(/```\s*$/i, '');
+}
+
+const HTML_OPTIONAL_END_TAGS = new Set(['dd', 'dt', 'li', 'option', 'p', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr']);
+const HTML_OPTIONAL_END_TAG_PARENT_CLOSERS = new Map([
+  ['dd', new Set(['dl'])],
+  ['dt', new Set(['dl'])],
+  ['li', new Set(['menu', 'ol', 'ul'])],
+  ['option', new Set(['datalist', 'optgroup', 'select'])],
+  ['p', new Set([
+    'address',
+    'article',
+    'aside',
+    'blockquote',
+    'body',
+    'caption',
+    'dd',
+    'details',
+    'dialog',
+    'div',
+    'dl',
+    'dt',
+    'fieldset',
+    'figcaption',
+    'figure',
+    'footer',
+    'form',
+    'header',
+    'hgroup',
+    'html',
+    'li',
+    'main',
+    'menu',
+    'nav',
+    'ol',
+    'p',
+    'pre',
+    'search',
+    'section',
+    'table',
+    'tbody',
+    'td',
+    'tfoot',
+    'th',
+    'thead',
+    'tr',
+    'ul',
+  ])],
+  ['tbody', new Set(['table', 'tbody', 'tfoot'])],
+  ['td', new Set(['table', 'tbody', 'tfoot', 'thead', 'tr'])],
+  ['tfoot', new Set(['table'])],
+  ['th', new Set(['table', 'tbody', 'tfoot', 'thead', 'tr'])],
+  ['thead', new Set(['table', 'tbody', 'tfoot'])],
+  ['tr', new Set(['table', 'tbody', 'tfoot', 'thead'])],
+]);
+
+function closeImplicitOptionalTagsForClosingTag(stack = [], closingTagName = '') {
+  while (stack.length) {
+    const openTagName = stack[stack.length - 1];
+    if (!HTML_OPTIONAL_END_TAGS.has(openTagName)) break;
+
+    const supportedClosers = HTML_OPTIONAL_END_TAG_PARENT_CLOSERS.get(openTagName);
+    if (!supportedClosers || !supportedClosers.has(closingTagName)) break;
+
+    stack.pop();
+  }
+}
+
+function discardImplicitTrailingOptionalTags(stack = []) {
+  while (stack.length && HTML_OPTIONAL_END_TAGS.has(stack[stack.length - 1])) {
+    stack.pop();
+  }
+}
+
+function findGeneratedHtmlIntegrityIssue(html = '') {
+  const source = String(html || '').trim();
+  if (!source) return 'התקבלה תשובה ריקה';
+  if (TRUNCATED_RESPONSE_MARKER_PATTERN.test(source)) {
+    return 'התקבל placeholder של קיצור context או תשובה חלקית';
+  }
+  if (!/<\/?[a-z][^>]*>/i.test(source)) {
+    return 'התקבל פלט שאינו HTML';
+  }
+  if (/<[^>]*$/.test(source)) {
+    return 'ה-HTML נחתך באמצע תגית';
+  }
+  if (/&(?:#\d+|#x[a-f0-9]+|[a-z]+)?$/i.test(source)) {
+    return 'ה-HTML נחתך באמצע entity';
+  }
+
+  const stack = [];
+  for (const match of source.matchAll(HTML_TAG_TOKEN_PATTERN)) {
+    const raw = match[0] || '';
+    const tagName = String(match[1] || '').toLowerCase();
+    if (!tagName || raw.startsWith('<!--')) continue;
+
+    const isClosingTag = raw.startsWith('</');
+    const isSelfClosing = raw.endsWith('/>') || HTML_VOID_TAGS.has(tagName);
+    if (isClosingTag) {
+      closeImplicitOptionalTagsForClosingTag(stack, tagName);
+      const expectedTag = stack.pop();
+      if (!expectedTag) {
+        return `ה-HTML ממשיך מתגית סגירה לא תואמת: </${tagName}>`;
+      }
+      if (expectedTag !== tagName) {
+        return `סגירת תגיות לא תואמת: ציפיתי ל-</${expectedTag}> אבל התקבלה </${tagName}>`;
+      }
+      continue;
+    }
+
+    if (!isSelfClosing) {
+      stack.push(tagName);
+    }
+  }
+
+  discardImplicitTrailingOptionalTags(stack);
+  if (stack.length) {
+    const trailingTags = stack.slice(-2).map((tagName) => `<${tagName}>`).join(', ');
+    return `חסרות תגיות סגירה לסוף המסמך (${trailingTags})`;
+  }
+
+  const strippedMarkup = source.replace(HTML_TAG_TOKEN_PATTERN, '');
+  if (strippedMarkup.includes('<')) {
+    return 'ה-HTML נחתך באמצע תגית';
+  }
+
+  return '';
+}
+
+function ensureCompleteGeneratedHtmlResponse(response = '', operationLabel = 'המסמך') {
+  const normalized = normalizeGeneratedHtmlResponse(response);
+  const visibleText = stripHtmlTags(normalized);
+  if (!hasMeaningfulVisibleText(visibleText)) {
+    throw new Error(`התקבלה תשובת ${operationLabel} ריקה או לא שמישה`);
+  }
+
+  const integrityIssue = findGeneratedHtmlIntegrityIssue(normalized);
+  if (integrityIssue) {
+    throw new Error(`התקבלה תשובת ${operationLabel} חלקית או עם HTML שבור: ${integrityIssue}`);
+  }
+
+  return normalized;
+}
+
+function isRecoverableGeneratedHtmlContinuationIssue(issue = '') {
+  const normalizedIssue = String(issue || '').trim();
+  if (!normalizedIssue) return false;
+  return /placeholder של קיצור context או תשובה חלקית|נחתך באמצע|חסרות תגיות סגירה לסוף המסמך/i.test(normalizedIssue);
+}
+
+function buildGeneratedHtmlContinuationContext({ context = '', partialHtml = '', integrityIssue = '' }) {
+  const trimmedContext = truncateContextSectionHeadTail(
+    String(context || '').trim(),
+    GENERATED_HTML_CONTINUATION_CONTEXT_LIMIT,
+    GENERATED_HTML_CONTINUATION_GAP,
+  );
+  const partialWindow = truncateContextSectionHeadTail(
+    String(partialHtml || '').trim(),
+    GENERATED_HTML_CONTINUATION_PARTIAL_LIMIT,
+    GENERATED_HTML_CONTINUATION_GAP,
+  );
+  return [
+    trimmedContext ? `הקשר מקוצר מהבקשה המקורית:\n${trimmedContext}` : '',
+    `ה-HTML החלקי שכבר התקבל ואסור לחזור עליו:\n${partialWindow}`,
+    integrityIssue ? `סיבת ההשלמה: ${integrityIssue}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function getGeneratedHtmlProviderResponseText(response = '') {
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    return String(response.text || '');
+  }
+  return String(response || '');
+}
+
+function getGeneratedHtmlProviderCompletion(response = '') {
+  if (!response || typeof response !== 'object' || Array.isArray(response) || !response.completion || typeof response.completion !== 'object') {
+    return null;
+  }
+  const reason = String(response.completion.reason || response.completion.finishReason || response.completion.stopReason || '').trim();
+  const finishReason = String(response.completion.finishReason || '').trim();
+  const stopReason = String(response.completion.stopReason || '').trim();
+  const provider = String(response.completion.provider || '').trim();
+  const model = String(response.completion.model || '').trim();
+  const normalized = {
+    ...(reason ? { reason } : {}),
+    ...(finishReason ? { finishReason } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+  };
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function didGeneratedHtmlResponseHitLengthCap(completion = null) {
+  if (!completion || typeof completion !== 'object') return false;
+  return [completion.reason, completion.finishReason, completion.stopReason]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .some((value) => /(^length$|max[_ -]?tokens?|max[_ -]?output|length cap|token cap)/i.test(value));
+}
+
+function buildGeneratedHtmlCompletionContinuationIssue(completion = null) {
+  if (!completion || typeof completion !== 'object') return '';
+  const provider = String(completion.provider || '').trim();
+  const reason = String(completion.reason || completion.finishReason || completion.stopReason || '').trim() || 'מגבלת אורך או טוקנים';
+  return provider
+    ? `${provider} עצר את הפלט בגלל ${reason} לפני סוף התשובה`
+    : `הפלט נעצר בגלל ${reason} לפני סוף התשובה`;
+}
+
+function isGeneratedHtmlContinuationWordChar(char = '') {
+  return Boolean(char) && /[\p{L}\p{N}_]/u.test(char);
+}
+
+function isGeneratedHtmlContinuationOverlapSafe(addition = '', overlap = 0) {
+  if (overlap < 1) return false;
+
+  const overlapText = addition.slice(0, overlap);
+  if (!/\S/.test(overlapText)) return false;
+  if (overlap >= 3) return true;
+  if (overlap === 1) return !isGeneratedHtmlContinuationWordChar(overlapText);
+  return /[^\p{L}\p{N}_]/u.test(overlapText);
+}
+
+function mergeGeneratedHtmlContinuation(partialHtml = '', continuationHtml = '') {
+  const base = String(partialHtml || '');
+  const addition = String(continuationHtml || '');
+  if (!base) return addition;
+  if (!addition) return base;
+  if (base.endsWith(addition)) return base;
+  if (addition.startsWith(base)) return addition;
+
+  const maxOverlap = Math.min(base.length, addition.length);
+  for (let overlap = maxOverlap; overlap >= 1; overlap -= 1) {
+    if (
+      base.slice(-overlap) === addition.slice(0, overlap)
+      && isGeneratedHtmlContinuationOverlapSafe(addition, overlap)
+    ) {
+      return `${base}${addition.slice(overlap)}`;
+    }
+  }
+
+  return `${base}${addition}`;
+}
+
+async function requestGeneratedHtmlResponseWithSingleContinuation({
+  userPrompt = '',
+  context = '',
+  systemPrompt = '',
+  requestOptions = {},
+  operationLabel = 'המסמך',
+  continuationPrompt = 'המשך רק את ה-HTML החסר של אותה תשובה.',
+  runId = '',
+  agentLabel = '',
+  requestLogContext = {},
+}) {
+  const response = await chatWithActiveProvider(userPrompt, context, systemPrompt, {
+    ...requestOptions,
+    includeCompletionMetadata: true,
+  });
+  const completion = getGeneratedHtmlProviderCompletion(response);
+  const partialHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(response));
+  const normalizedResponse = partialHtml.trim();
+  const integrityIssue = findGeneratedHtmlIntegrityIssue(normalizedResponse);
+  let validationError = null;
+  let validatedResponse = '';
+
+  try {
+    validatedResponse = ensureCompleteGeneratedHtmlResponse(normalizedResponse, operationLabel);
+  } catch (error) {
+    validationError = error;
+  }
+
+  const shouldContinueFromIntegrity = Boolean(validationError) && isRecoverableGeneratedHtmlContinuationIssue(integrityIssue);
+    const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
+  const continuationIssue = shouldContinueFromCompletion
+    ? buildGeneratedHtmlCompletionContinuationIssue(completion)
+    : integrityIssue;
+  if (!shouldContinueFromIntegrity && !shouldContinueFromCompletion) {
+    if (validationError) throw validationError;
+    return validatedResponse;
+  }
+
+  logAgentDebugEvent({
+    type: 'doc-html-continuation-attempt',
+    state: 'running',
+    runId,
+    agentLabel,
+    message: shouldContinueFromIntegrity
+      ? `מנסה continuation יחיד ל-${operationLabel} אחרי זיהוי HTML חלקי`
+      : `מנסה continuation יחיד ל-${operationLabel} אחרי זיהוי עצירה ב-limit של הספק`,
+    integrityIssue: continuationIssue,
+    completionReason: completion?.reason || '',
+    partialChars: partialHtml.length,
+    ...requestLogContext,
+  });
+
+  try {
+    const continuationProvider = String(completion?.provider || requestOptions.providerOverride || '').trim();
+    const continuationModel = String(completion?.model || requestOptions.modelOverride || '').trim();
+    const continuationResponse = await chatWithActiveProvider(
+      continuationPrompt,
+      buildGeneratedHtmlContinuationContext({ context, partialHtml, integrityIssue: continuationIssue }),
+      `${systemPrompt}\n\nהמשך רק את ה-HTML החסר של אותה תשובה. אל תחזור על ההתחלה שכבר התקבלה, אל תכתוב markdown או סימוני קוד, ואל תוסיף הסברים. החזר רק את ההמשך הדרוש כדי שהמסמך יהיה HTML שלם ותקין.`,
+      {
+        ...requestOptions,
+        includeCompletionMetadata: true,
+        expectDocumentOutput: true,
+        appendAgentNotesToOutput: requestOptions.appendAgentNotesToOutput === true,
+        agentNotesInstruction: requestOptions.appendAgentNotesToOutput === true
+          ? String(requestOptions.agentNotesInstruction || '').trim()
+          : '',
+        skipAutomation: true,
+        skipAutomationPrompt: true,
+        skipSkillSelection: true,
+        skipMultiModel: true,
+        preserveFullDocumentContext: false,
+        ...(continuationProvider ? {
+          providerOverride: continuationProvider,
+          strictProviderOverride: true,
+        } : {}),
+        ...(continuationModel ? { modelOverride: continuationModel } : {}),
+      },
+    );
+
+    const continuationCompletion = getGeneratedHtmlProviderCompletion(continuationResponse);
+  const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
+  const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
+    const mergedValidatedResponse = ensureCompleteGeneratedHtmlResponse(mergedResponse, operationLabel);
+
+    logAgentDebugEvent({
+      type: 'doc-html-continuation-success',
+      state: 'success',
+      runId,
+      agentLabel,
+      message: `continuation יחיד השלים בהצלחה את ${operationLabel}`,
+      integrityIssue: continuationIssue,
+      completionReason: completion?.reason || '',
+      continuationCompletionReason: continuationCompletion?.reason || '',
+      partialChars: partialHtml.length,
+      continuationChars: continuationHtml.length,
+      outputChars: mergedValidatedResponse.length,
+      ...requestLogContext,
+    });
+
+    return mergedValidatedResponse;
+  } catch (continuationError) {
+    logAgentDebugEvent({
+      type: 'doc-html-continuation-failure',
+      state: 'error',
+      runId,
+      agentLabel,
+      message: `continuation יחיד ל-${operationLabel} נכשל`,
+      integrityIssue: continuationIssue,
+      completionReason: completion?.reason || '',
+      errorMessage: continuationError?.message || validationError?.message || 'שגיאה לא ידועה',
+      partialChars: partialHtml.length,
+      ...requestLogContext,
+    });
+    if (shouldContinueFromCompletion) {
+      const continuationFailureMessage = continuationError?.message || validationError?.message || 'שגיאה לא ידועה';
+      throw new Error(`הפלט עבור ${operationLabel} נעצר במגבלת הספק ו-continuation נכשל: ${continuationFailureMessage}`);
+    }
+    throw continuationError;
+  }
 }
 
 function normalizeJsonOnlyResponse(response = '') {
@@ -1727,14 +2165,20 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       userRequestSections.push(`בקשת המשתמש למסמך:\n${cleanPrompt}`);
     }
 
-    const response = await chatWithActiveProvider(
-      userRequestSections.join('\n\n'),
-      materialsText,
-      `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`,
-      requestOptions,
-    );
+    const userPrompt = userRequestSections.join('\n\n');
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`;
 
-    const cleanedResponse = normalizeGeneratedHtmlResponse(response);
+    const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
+      userPrompt,
+      context: materialsText,
+      systemPrompt,
+      requestOptions,
+      operationLabel: 'יצירת המסמך',
+      continuationPrompt: 'השלם רק את המשך ה-HTML החסר של המסמך שכבר התחלת, בלי לחזור על ההתחלה ובלי markdown.',
+      runId,
+      agentLabel: documentRunLabel,
+      requestLogContext,
+    });
     const repairedResponse = repairGeneratedHtmlForStructurePolicy(cleanedResponse, structurePolicy);
     const usedStructurePolicyRepair = (structurePolicy.noIntro || structurePolicy.noSummary || structurePolicy.noHeadings) && repairedResponse !== cleanedResponse;
     const repairedResponseHasMeaningfulContent = hasMeaningfulRepairedContent(repairedResponse);
@@ -1743,11 +2187,12 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       : repairedResponse.replace(/<[^>]+>/g, '').trim().length >= 10
         ? repairedResponse
         : cleanedResponse;
-    const visibleText = stripHtmlTags(finalResponse);
 
-    if (!finalResponse || (usedStructurePolicyRepair ? !repairedResponseHasMeaningfulContent : visibleText.length < 10)) {
+    if (!finalResponse || (usedStructurePolicyRepair ? !repairedResponseHasMeaningfulContent : stripHtmlTags(finalResponse).length < 10)) {
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
     }
+
+    ensureCompleteGeneratedHtmlResponse(finalResponse, 'יצירת המסמך');
 
     if (finalResponse !== cleanedResponse) {
       logAgentDebugEvent({
@@ -1944,12 +2389,35 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       ...requestLogContext,
     });
 
+    const fullRevisionContext = buildFeedbackDrivenRequestContext({
+      originalPrompt,
+      supportingText: cleanFeedback,
+      supportingLabel: 'משוב המשתמש',
+      materialsText,
+      existingHtml: cleanHtml,
+      htmlLabel: 'המסמך הקיים ב-HTML',
+      truncateHtml: false,
+    });
+    const shouldPreserveFullRevisionContext = fullRevisionContext.length <= FEEDBACK_CONTEXT_TOTAL_LIMIT;
+    const revisionContext = shouldPreserveFullRevisionContext
+      ? fullRevisionContext
+      : buildFeedbackDrivenRequestContext({
+        originalPrompt,
+        supportingText: cleanFeedback,
+        supportingLabel: 'משוב המשתמש',
+        materialsText,
+        existingHtml: cleanHtml,
+        htmlLabel: 'המסמך הקיים ב-HTML',
+        truncateHtml: true,
+      });
+
     const requestOptions = {
       runId,
       agentLabel: documentUpdateLabel,
       activeWorkspaceId: requestWorkspaceId,
       workspaceName: requestWorkspaceName,
       structureConstraintText: cleanFeedback,
+      preserveFullDocumentContext: shouldPreserveFullRevisionContext,
     };
     if (!shouldUseWorkflowAutomation) {
       requestOptions.skipAutomation = true;
@@ -1966,24 +2434,17 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
     }
 
-    const revisionContext = [
-      `נושא המסמך: ${originalPrompt || 'לא צוין'}`,
-      `משוב המשתמש:\n${cleanFeedback}`,
-      `המסמך הקיים ב-HTML:\n${cleanHtml}`,
-      materialsText ? `חומרי עזר נלווים:\n${materialsText}` : '',
-    ].filter(Boolean).join('\n\n');
-
-    const response = await chatWithActiveProvider(
-      'שפר את המסמך הקיים בהתאם למשוב המשתמש',
-      revisionContext,
+    const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
+      userPrompt: 'שפר את המסמך הקיים בהתאם למשוב המשתמש',
+      context: revisionContext,
       systemPrompt,
       requestOptions,
-    );
-
-    const cleanedResponse = normalizeGeneratedHtmlResponse(response);
-    if (!cleanedResponse || cleanedResponse.replace(/<[^>]+>/g, '').trim().length < 10) {
-      throw new Error('התקבלה תשובת תיקון ריקה או לא שמישה');
-    }
+      operationLabel: 'עדכון המסמך',
+      continuationPrompt: 'השלם רק את המשך ה-HTML החסר של המסמך המעודכן, בלי לחזור על ההתחלה ובלי markdown.',
+      runId,
+      agentLabel: documentUpdateLabel,
+      requestLogContext,
+    });
 
     logAgentDebugEvent({
       type: 'doc-feedback-success',
@@ -2092,14 +2553,15 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
     }
 
-    const reviewContext = [
-      `נושא המסמך: ${originalPrompt || 'לא צוין'}`,
-      cleanFocus
-        ? `מיקוד מהמשתמש לבדיקה:\n${cleanFocus}`
-        : 'מיקוד מהמשתמש לבדיקה:\nבצע סקירה כללית למסמך והצע שיפורים לא מחייבים.',
-      `המסמך הקיים ב-HTML:\n${cleanHtml}`,
-      materialsText ? `חומרי עזר נלווים:\n${materialsText}` : '',
-    ].filter(Boolean).join('\n\n');
+    const reviewContext = buildFeedbackDrivenRequestContext({
+      originalPrompt,
+      supportingText: cleanFocus || 'בצע סקירה כללית למסמך והצע שיפורים לא מחייבים.',
+      supportingLabel: 'מיקוד מהמשתמש לבדיקה',
+      materialsText,
+      existingHtml: cleanHtml,
+      htmlLabel: 'המסמך הקיים ב-HTML',
+      truncateHtml: true,
+    });
 
     const response = await chatWithActiveProvider(
       'הכן המלצות עריכה לא מחייבות לטיוטה הקיימת',
@@ -2107,6 +2569,10 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       systemPrompt,
       requestOptions,
     );
+
+    if (TRUNCATED_RESPONSE_MARKER_PATTERN.test(String(response || ''))) {
+      throw new Error('התקבלו המלצות חלקיות או קטועות מהמודל');
+    }
 
     const parsedResponse = normalizeReviewSuggestionsPayload(tryParseJsonObjectResponse(response));
     if (!parsedResponse) {
