@@ -591,6 +591,18 @@ async function extractPdfTextFromBuffer(buffer) {
   return pages.join('\n');
 }
 
+async function extractDocxTextFromBuffer(buffer) {
+  const mammothModule = await import('mammoth/mammoth.browser');
+  const extractRawText = mammothModule?.extractRawText || mammothModule?.default?.extractRawText;
+  if (typeof extractRawText !== 'function') throw new Error('docx-reader-unavailable');
+
+  const result = await extractRawText({ arrayBuffer: buffer });
+  return String(result?.value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function decodeTextBuffer(buffer) {
   const bytes = new Uint8Array(buffer);
   const tryDecode = (encoding) => {
@@ -623,7 +635,7 @@ export async function readInstructionFile(file, maxLength = 6000) {
   if (!file) return '';
   const resolvedMaxLength = Number.isFinite(maxLength) && maxLength > 0 ? maxLength : 6000;
   const ext = String(file.name || '').toLowerCase().split('.').pop();
-  const unsupportedBinary = new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'zip', 'rar', '7z']);
+  const unsupportedBinary = new Set(['doc', 'ppt', 'pptx', 'xls', 'xlsx', 'zip', 'rar', '7z']);
   if (unsupportedBinary.has(ext)) {
     throw new Error('unsupported-binary-file');
   }
@@ -634,6 +646,12 @@ export async function readInstructionFile(file, maxLength = 6000) {
     const pdfText = await extractPdfTextFromBuffer(buffer);
     if (!pdfText.trim()) throw new Error('empty-pdf-text');
     return pdfText.trim().slice(0, resolvedMaxLength);
+  }
+
+  if (ext === 'docx') {
+    const docxText = await extractDocxTextFromBuffer(buffer);
+    if (!docxText.trim()) throw new Error('empty-docx-text');
+    return docxText.trim().slice(0, resolvedMaxLength);
   }
 
   const rawText = decodeTextBuffer(buffer);

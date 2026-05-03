@@ -2252,8 +2252,9 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
 
   const formatSyllabusImportError = (error) => {
     const code = String(error?.message || '').trim();
-    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך. אפשר להעלות כרגע txt, md, html או pdf.';
+    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך. אפשר להעלות כרגע docx, txt, md, html או pdf.';
     if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
+    if (code === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-DOCX.';
     if (code === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך הקובץ שנבחר.';
     return 'לא הצלחתי לקרוא את קובץ הסילבוס.';
   };

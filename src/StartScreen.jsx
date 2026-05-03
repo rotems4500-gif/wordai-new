@@ -204,6 +204,15 @@ const plainTextToHtml = (text = '') => {
 
 const getDraftTitleFromFileName = (name = '') => String(name || '').replace(/\.[^.]+$/, '').trim() || 'טיוטת בסיס';
 
+const formatInstructionFileUploadError = (error) => {
+  const code = String(error?.message || '').trim();
+  if (code === 'unsupported-binary-file') return 'קובץ ההנחיות לא נתמך. אפשר להעלות כרגע docx, txt, md, html, json או pdf.';
+  if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
+  if (code === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-DOCX.';
+  if (code === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך קובץ ההנחיות שנבחר.';
+  return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
+};
+
 export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
@@ -490,6 +499,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       setInstructionFileName(file.name);
     } catch (error) {
       console.error(error);
+      window.alert(formatInstructionFileUploadError(error));
     } finally {
       event.target.value = '';
     }
@@ -1027,7 +1037,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  >
                    {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
                  </button>
-                 <input ref={instructionFileInputRef} type="file" accept=".txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
+                 <input ref={instructionFileInputRef} type="file" accept=".docx,.txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
                  <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
                </div>
 

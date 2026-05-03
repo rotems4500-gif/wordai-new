@@ -428,7 +428,7 @@ export default function ProfileOnboarding({
                         {syllabusImportBusy ? 'מייבא סילבוס...' : 'העלה סילבוס'}
                       </button>
                       <div className="text-[11px] text-white/65">
-                        תומך ב־txt, md, html ו־pdf
+                        תומך ב־docx, txt, md, html ו־pdf
                       </div>
                     </div>
                   </div>
@@ -436,7 +436,7 @@ export default function ProfileOnboarding({
                   <input
                     ref={syllabusFileInputRef}
                     type="file"
-                    accept=".txt,.md,.markdown,.html,.htm,.pdf"
+                    accept=".docx,.txt,.md,.markdown,.html,.htm,.pdf"
                     className="hidden"
                     onChange={handleSyllabusFileSelection}
                   />
