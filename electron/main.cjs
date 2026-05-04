@@ -1563,6 +1563,117 @@ function createAppMenu() {
             }
           },
         },
+        { type: 'separator' },
+        {
+          label: 'מדריך למשתמש',
+          click: () => shell.openExternal('https://github.com/rotems4500-gif/wordai-new/blob/main/docs/user-guide.md'),
+        },
+        {
+          label: 'מדריך מפתחות API',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('open-settings', { tab: 'ai' });
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'מה לעשות כשיצירת מסמך נכשלת?',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'פתרון בעיות — יצירת מסמך',
+              message: 'יצירת המסמך נכשלה — מה לעשות?',
+              detail: [
+                '1. בדוק שה-API key של הספק הפעיל תקין (הגדרות → AI).',
+                '2. לחץ על "בדוק חיבור" בכרטיס הספק.',
+                '3. אם אין אינטרנט — Gemini/Claude/OpenAI לא יעבדו. נסה Ollama מקומי.',
+                '4. נסה לצמצם את ההנחיות/המשימה — prompt ארוך מדי עלול לגרום לחיתוך.',
+                '5. אם מצב Multi-Model פעיל — ודא שכל הספקים שנבחרו מוגדרים עם מפתח.',
+                '',
+                'אם הבעיה חוזרת, פתח את יומן הלוגים (הגדרות → מפתחים) לפרטים נוספים.',
+              ].join('\n'),
+              buttons: ['סגור', 'פתח הגדרות AI'],
+            }).then(({ response }) => {
+              if (response === 1 && mainWindow) {
+                mainWindow.webContents.send('open-settings', { tab: 'ai' });
+              }
+            });
+          },
+        },
+        {
+          label: 'מה לעשות כשה-API לא עובד?',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'פתרון בעיות — חיבור API',
+              message: 'ה-API לא מגיב — מה לבדוק?',
+              detail: [
+                '• Gemini: בדוק שה-key מתחיל ב-AIza ולא פג תוקף ב-AI Studio.',
+                '• Claude: המפתח מתחיל ב-sk-ant-, ווודא מכסה ב-console.anthropic.com.',
+                '• OpenAI: המפתח מתחיל ב-sk-, ווודא שיש credit ב-platform.openai.com.',
+                '• Groq: בחינם! צור key חדש ב-console.groq.com אם הנוכחי נחסם.',
+                '• Ollama: ודא שהשרות רץ מקומית (ollama serve) ושהמודל הורד.',
+                '• Custom: ודא שה-Base URL מסתיים ב-/v1 ושהמודל נכון.',
+                '',
+                'לחץ "בדוק חיבור" בכרטיס הספק בהגדרות לאחר כל תיקון.',
+              ].join('\n'),
+              buttons: ['סגור', 'פתח הגדרות AI'],
+            }).then(({ response }) => {
+              if (response === 1 && mainWindow) {
+                mainWindow.webContents.send('open-settings', { tab: 'ai' });
+              }
+            });
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'קיצורי מקלדת',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'קיצורי מקלדת — WordFlow AI',
+              message: 'קיצורי מקלדת עיקריים',
+              detail: [
+                'Ctrl+S           — שמור מסמך',
+                'Ctrl+Z           — בטל פעולה',
+                'Ctrl+Y           — חזור על פעולה',
+                'Ctrl+B           — מודגש',
+                'Ctrl+I           — נטוי',
+                'Ctrl+U           — קו תחתי',
+                'Ctrl+Shift+V    — הדבק ללא עיצוב',
+                'Ctrl+Enter       — שלח הנחיה ל-AI',
+                'Esc              — סגור פאנל/פופאפ פתוח',
+                '',
+                'לפתיחת הגדרות: לחץ על הגלגל שיניים בפינה',
+              ].join('\n'),
+              buttons: ['סגור'],
+            });
+          },
+        },
+        {
+          label: 'אודות WordFlow AI',
+          click: async () => {
+            const version = app.getVersion();
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'אודות WordFlow AI',
+              message: `WordFlow AI — v${version}`,
+              detail: [
+                'עורך מסמכים חכם עם AI מובנה.',
+                'תומך ב-Gemini, Claude, OpenAI, Groq, Perplexity, Ollama ועוד.',
+                '',
+                'לדיווח על בעיה:',
+                'github.com/rotems4500-gif/wordai-new/issues',
+              ].join('\n'),
+              buttons: ['סגור', 'דווח על בעיה'],
+            }).then(({ response }) => {
+              if (response === 1) {
+                shell.openExternal('https://github.com/rotems4500-gif/wordai-new/issues');
+              }
+            });
+          },
+        },
       ],
     },
   ];

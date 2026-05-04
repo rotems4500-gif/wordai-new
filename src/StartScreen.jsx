@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { GeneratingOverlay } from './WordFlowAnimations';
 import ChefModeDialog from './ChefModeDialog';
 import {
   getHomeInstructions,
@@ -913,6 +914,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   return (
     <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
+      <GeneratingOverlay isVisible={isGenerating} prompt={prompt} prefersReducedMotion={prefersReducedMotion} />
       {/* Animated Background Elements */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="wordai-ambient-orb wordai-ambient-orb-cyan absolute top-20 right-20 w-72 h-72 bg-cyan-300/20 rounded-full blur-3xl"></div>

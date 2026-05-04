@@ -428,6 +428,25 @@
   50% { transform: translateY(-10px) rotate(180deg); }
 }
 
+/* ─── WordFlow Live Animations ─── */
+@keyframes wordaiGeneratingBounce {
+  0%, 100% { transform: translateY(0) rotate(-4deg); }
+  20%  { transform: translateY(-14px) rotate(4deg); }
+  40%  { transform: translateY(-8px) rotate(-3deg); }
+  60%  { transform: translateY(-18px) rotate(5deg); }
+  80%  { transform: translateY(-10px) rotate(-2deg); }
+}
+
+@keyframes wordaiDotBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.6; }
+  30% { transform: translateY(-12px); opacity: 1; }
+}
+
+@keyframes wordaiConfettiFall {
+  0%   { opacity: 1; transform: translateY(0) translateX(0) rotate(0deg); }
+  100% { opacity: 0; transform: translateY(110vh) translateX(var(--confetti-drift, 0px)) rotate(820deg); }
+}
+
 @keyframes pulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.05); }
@@ -651,5 +670,12 @@
 
     .wordai-document-stage::after {
         display: none;
+    }
+
+    [style*="wordaiGeneratingBounce"],
+    [style*="wordaiDotBounce"],
+    [style*="wordaiConfettiFall"],
+    [style*="wordaiRevealIn"] {
+        animation: none !important;
     }
 }

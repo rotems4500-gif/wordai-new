@@ -34,4 +34,9 @@ contextBridge.exposeInMainWorld('desktopApp', {
     ipcRenderer.on('open-external-document', listener);
     return () => ipcRenderer.removeListener('open-external-document', listener);
   },
+  onOpenSettings: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('open-settings', listener);
+    return () => ipcRenderer.removeListener('open-settings', listener);
+  },
 });

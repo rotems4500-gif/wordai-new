@@ -9,6 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
+import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
 import { downloadBrowserDocx } from './services/browserDocxExport';
@@ -480,6 +481,7 @@ function App() {
     if (isLegacyHomeEnabled()) return true;
     return getWordPreferences().showStartExperience !== false;
   });
+  const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
@@ -1939,6 +1941,15 @@ function App() {
   }, [editor, applyImportedDocument]);
 
   React.useEffect(() => {
+    if (!window.desktopApp?.onOpenSettings) return;
+    return window.desktopApp.onOpenSettings((payload) => {
+      const tab = payload?.tab || 'ai';
+      setFileMenuTargetTab(tab);
+      setFileMenuOpen(true);
+    });
+  }, []);
+
+  React.useEffect(() => {
     if (!editor) return;
 
     const applyPending = async () => {
@@ -2882,6 +2893,8 @@ function App() {
     && hasMeaningfulEditorContent(editor);
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
+      {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
+      <ConfettiCelebration active={documentArrival.active && documentArrival.tone === 'success'} />
       <TopBar
         onOpenUpdates={openUpdatesPanel}
         onOpen={() => handleCommand('openFile')}
@@ -2939,6 +2952,7 @@ function App() {
                   </div>
 
                   <div className={`${shouldShowProgressOnlyPanel ? 'flex-1 min-h-0 overflow-y-auto pr-1 pb-1' : ''}`}>
+                    <LiveGenerationMood state={liveGeneration.state} />
                     <div className="space-y-2">
                       {(liveGeneration.summary?.stages || []).slice(0, 6).map((stage) => (
                         <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">

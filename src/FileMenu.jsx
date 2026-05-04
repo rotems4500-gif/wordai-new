@@ -849,6 +849,7 @@ function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
   const [selectedGuideId, setSelectedGuideId] = useState(() => deriveProviderGuideId(config));
   const [openedGuideProviderId, setOpenedGuideProviderId] = useState('');
+  const [quickKeyPopup, setQuickKeyPopup] = useState(null); // { providerId, label, keyField, baseUrlField? }
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
   const updateToolLink = (toolId, field, value) =>
@@ -1044,22 +1045,92 @@ function AiSettings({ config, setConfig }) {
           ].map(([providerId, label]) => {
             const configured = isProviderConfigured(config, providerId);
             const isSelected = selectedProviders.has(providerId);
-            const isDisabled = config.multiModelEnabled !== true || (!configured && !isSelected);
+            const isDisabled = config.multiModelEnabled !== true;
+            const showWarning = isSelected && !configured;
+            const QUICK_KEY_META = {
+              gemini: { keyField: 'key', keyPlaceholder: 'AIza...', hint: 'מפתח Gemini' },
+              claude: { keyField: 'key', keyPlaceholder: 'sk-ant-...', hint: 'מפתח Claude' },
+              openai: { keyField: 'key', keyPlaceholder: 'sk-...', hint: 'מפתח OpenAI' },
+              groq: { keyField: 'key', keyPlaceholder: 'gsk_...', hint: 'מפתח Groq' },
+              perplexity: { keyField: 'key', keyPlaceholder: 'pplx-...', hint: 'מפתח Perplexity' },
+              ollama: { baseUrlField: 'baseUrl', baseUrlPlaceholder: 'http://localhost:11434', hint: 'כתובת Ollama מקומית' },
+              custom: { keyField: 'key', keyPlaceholder: 'API key...', baseUrlField: 'baseUrl', baseUrlPlaceholder: 'https://...', hint: 'ספק מותאם' },
+            };
+            const meta = QUICK_KEY_META[providerId];
             return (
-              <label key={providerId} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: isDisabled ? '#64748B' : '#14532D', background: 'white', border: `1px solid ${isDisabled ? '#E5E7EB' : '#BBF7D0'}`, borderRadius: 999, padding: '6px 10px', opacity: isDisabled ? 0.7 : 1 }}>
+              <label
+                key={providerId}
+                title={!configured ? 'לחץ פעמיים להזנת מפתח מהיר' : 'לחץ פעמיים לעריכת מפתח'}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  if (!meta) return;
+                  setQuickKeyPopup({ providerId, label, ...meta });
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+                  color: isDisabled ? '#64748B' : showWarning ? '#92400E' : '#14532D',
+                  background: showWarning ? '#FFFBEB' : 'white',
+                  border: `1px solid ${isDisabled ? '#E5E7EB' : showWarning ? '#FCD34D' : '#BBF7D0'}`,
+                  borderRadius: 999, padding: '6px 10px',
+                  opacity: isDisabled ? 0.6 : 1,
+                  cursor: isDisabled ? 'not-allowed' : 'pointer',
+                  userSelect: 'none',
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={isSelected}
                   disabled={isDisabled}
                   onChange={() => toggleMultiProvider(providerId)}
                 />
-                {label}{configured ? '' : ' (לא מוגדר)'}
+                {label}
+                {showWarning && <span style={{ fontSize: 10, marginRight: 2 }}>⚠️ חסר מפתח</span>}
+                {!configured && !isSelected && <span style={{ fontSize: 10, color: '#94A3B8' }}> (לא מוגדר)</span>}
               </label>
             );
           })}
         </div>
+        {quickKeyPopup && (
+          <div style={{ position: 'relative', marginTop: 10 }}>
+            <div style={{ border: '1px solid #FCD34D', borderRadius: 12, padding: '14px', background: '#FFFBEB', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E' }}>⚡ הגדרת מפתח מהיר — {quickKeyPopup.label}</div>
+                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#64748B', lineHeight: 1 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 11, color: '#78350F' }}>{quickKeyPopup.hint} — אחרי השמירה, לחץ על "בדוק חיבור" בכרטיס הספק למטה.</div>
+              {quickKeyPopup.baseUrlField && (
+                <div>
+                  <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>Base URL</div>
+                  <input
+                    type="text"
+                    placeholder={quickKeyPopup.baseUrlPlaceholder}
+                    value={config[quickKeyPopup.providerId]?.[quickKeyPopup.baseUrlField] || ''}
+                    onChange={(e) => update(quickKeyPopup.providerId, quickKeyPopup.baseUrlField, e.target.value)}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
+                  />
+                </div>
+              )}
+              {quickKeyPopup.keyField && (
+                <div>
+                  <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>API Key</div>
+                  <input
+                    type="password"
+                    placeholder={quickKeyPopup.keyPlaceholder}
+                    value={config[quickKeyPopup.providerId]?.[quickKeyPopup.keyField] || ''}
+                    onChange={(e) => update(quickKeyPopup.providerId, quickKeyPopup.keyField, e.target.value)}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
+                  />
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ padding: '6px 14px', border: '1px solid #D1D5DB', borderRadius: 8, background: 'white', fontSize: 12, cursor: 'pointer', color: '#374151' }}>סגור</button>
+                <button type="button" onClick={() => { setOpenedGuideProviderId(quickKeyPopup.providerId); setQuickKeyPopup(null); }} style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#D97706', color: 'white', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>פתח כרטיס מלא ↓</button>
+              </div>
+            </div>
+          </div>
+        )}
         <div style={{ fontSize: 10, color: '#166534', marginTop: 8 }}>
-          רק מנועים שהוגדרו במלואם ניתנים לבחירה להפעלה משולבת.
+          ניתן לבחור גם ספקים לא מוגדרים — הם יופיעו עם אזהרה עד שיוגדר מפתח API בכרטיס שלהם למטה. לחיצה כפולה על ספק פותחת הגדרה מהירה.
         </div>
       </div>
 
@@ -1296,67 +1367,141 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
   );
 }
 
-function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle }) {
+function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle, setPersonalStyle }) {
   const [copyState, setCopyState] = useState('');
-  const portablePrompt = buildPortablePrompt({
-    sharedInstructions,
-    profile: personalStyle,
-  });
+  const [analysisOutput, setAnalysisOutput] = useState('');
+  const [applyState, setApplyState] = useState(''); // '' | 'ok' | 'error'
+  const [applyMessage, setApplyMessage] = useState('');
 
-  const copyPortablePrompt = async () => {
+  const portablePrompt = buildPortablePrompt({ sharedInstructions, profile: personalStyle });
+  const analysisPrompt = buildExternalStyleAnalysisPrompt({ profile: personalStyle });
+
+  const copyText = async (text, label) => {
     try {
-      await navigator.clipboard.writeText(portablePrompt || '');
-      setCopyState('הועתק ללוח');
+      await navigator.clipboard.writeText(text || '');
+      setCopyState(label);
     } catch {
       setCopyState('ההעתקה נכשלה');
     } finally {
-      setTimeout(() => setCopyState(''), 1800);
+      setTimeout(() => setCopyState(''), 2000);
+    }
+  };
+
+  const applyAnalysisOutput = () => {
+    const raw = String(analysisOutput || '').trim();
+    if (!raw) { setApplyState('error'); setApplyMessage('אין פלט להדבקה.'); return; }
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('לא נמצא JSON בפלט.');
+      const parsed = JSON.parse(jsonMatch[0]);
+      const merged = mergeExternalStyleExtractionIntoProfile(parsed, personalStyle);
+      if (setPersonalStyle) setPersonalStyle(merged);
+      setApplyState('ok');
+      setApplyMessage('הפרופיל עודכן בהצלחה מהניתוח!');
+      setAnalysisOutput('');
+    } catch (e) {
+      setApplyState('error');
+      setApplyMessage(`שגיאה בפירוש הפלט: ${e.message}`);
+    } finally {
+      setTimeout(() => { setApplyState(''); setApplyMessage(''); }, 3500);
     }
   };
 
   return (
-    <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16, lineHeight: 1.7 }}>
-        כאן מגדירים prompt קבוע ונייד שאפשר להעתיק לכל ספק AI. ה-preview משלב אוטומטית את ההנחיות המשותפות עם הפרופיל והסגנון האישי הקיימים.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7 }}>
+        כאן מגדירים הנחיות קבועות לכל ספקי AI, ואפשר גם לנתח עבודות קיימות דרך AI חיצוני ולייבא את הממצאים לפרופיל.
       </p>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+      {/* הנחיות משותפות */}
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הנחיות משותפות לכל ספקי AI</div>
         <textarea
           value={sharedInstructions}
           onChange={(e) => setSharedInstructions(e.target.value)}
-          rows={7}
+          rows={5}
           placeholder="למשל: כתוב בעברית תקנית, אל תמציא מקורות, שמור על טון ענייני, אל תוסיף מבוא אם לא ביקשו"
-          style={{ width: '100%', padding: '10px 12px', border: '1px solid #C8C6C4', borderRadius: 10, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+          style={{ width: '100%', padding: '10px 12px', border: '1px solid #C8C6C4', borderRadius: 10, fontSize: 12, resize: 'vertical', marginBottom: 6 }}
         />
-        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
-          הפרופיל האישי, העדפות הסגנון והלמידה הקיימת מצטרפים אוטומטית ל-preview שמתחת, בלי להעמיס על StartScreen.
+        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>הפרופיל האישי והלמידה הקיימת מצטרפים אוטומטית ל-Portable Prompt למטה.</div>
+      </div>
+
+      {/* ניתוח סגנון דרך AI חיצוני */}
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>🔍 ניתוח סגנון דרך AI חיצוני → ייבוא לפרופיל</div>
+        <div style={{ fontSize: 11, color: '#475569', marginBottom: 12, lineHeight: 1.7 }}>
+          העתק את פרומפט הניתוח, הדבק אותו ב-Claude / Gemini / ChatGPT יחד עם 2-3 עבודות לדוגמה, ואז הדבק כאן את הפלט JSON שתקבל.
+        </div>
+
+        {/* שלב 1 */}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A' }}>שלב 1 — פרומפט הניתוח</div>
+            <button
+              type="button"
+              onClick={() => copyText(analysisPrompt, 'פרומפט הניתוח הועתק ✓')}
+              style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+            >
+              📋 העתק פרומפט ניתוח
+            </button>
+          </div>
+          <textarea
+            readOnly
+            value={analysisPrompt}
+            rows={6}
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 11, resize: 'vertical', background: 'white', color: '#0F172A', direction: 'ltr' }}
+          />
+          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>צרף לפרומפט גם 2-3 עבודות שכתבת בעבר — ככה הניתוח יהיה מדויק יותר.</div>
+        </div>
+
+        {/* שלב 2 */}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>שלב 2 — הדבק את הפלט מה-AI</div>
+          <textarea
+            value={analysisOutput}
+            onChange={(e) => setAnalysisOutput(e.target.value)}
+            rows={5}
+            placeholder='הדבק כאן את ה-JSON שהחזיר ה-AI (מתחיל ב-{"profileSummary":...)'
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 11, resize: 'vertical', direction: 'ltr', marginBottom: 8 }}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={applyAnalysisOutput}
+              disabled={!analysisOutput.trim()}
+              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: analysisOutput.trim() ? '#1D4ED8' : '#CBD5E1', color: 'white', cursor: analysisOutput.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 700 }}
+            >
+              ✅ החל על הפרופיל
+            </button>
+            {applyMessage && (
+              <div style={{ fontSize: 11, color: applyState === 'ok' ? '#166534' : '#991B1B', fontWeight: 600 }}>{applyMessage}</div>
+            )}
+          </div>
         </div>
       </div>
 
+      {/* Portable Prompt */}
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>Portable Prompt מוכן להעתקה</div>
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>אותו prompt יעבוד גם ב-Claude, Gemini, ChatGPT או כל ספק אחר.</div>
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>יעבוד גם ב-Claude, Gemini, ChatGPT או כל ספק אחר.</div>
           </div>
           <button
             type="button"
-            onClick={copyPortablePrompt}
+            onClick={() => copyText(portablePrompt, 'הועתק ללוח ✓')}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
           >
             העתק Prompt
           </button>
         </div>
-
         <textarea
           readOnly
           value={portablePrompt}
-          rows={14}
+          rows={10}
           style={{ width: '100%', padding: '10px 12px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: '#0F172A' }}
         />
-
-        {copyState ? <div style={{ fontSize: 11, color: copyState === 'הועתק ללוח' ? '#166534' : '#991B1B', marginTop: 8 }}>{copyState}</div> : null}
+        {copyState ? <div style={{ fontSize: 11, color: copyState.includes('נכשלה') ? '#991B1B' : '#166534', marginTop: 8 }}>{copyState}</div> : null}
       </div>
     </div>
   );
@@ -2785,8 +2930,6 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [lastSavedWorkspaceName, setLastSavedWorkspaceName] = useState('');
-  const [quickAgentName, setQuickAgentName] = useState('');
-  const [quickAgentStatus, setQuickAgentStatus] = useState('');
   const [previewWorkspaceId, setPreviewWorkspaceId] = useState('');
   const [editWorkspaceState, setEditWorkspaceState] = useState({ id: '', name: '', sharedGoal: '' });
   const [deepEditWorkspaceState, setDeepEditWorkspaceState] = useState({ id: '', automation: null, agents: [] });
@@ -2991,24 +3134,6 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
     }
     refreshWorkspaceState();
     closeEditWorkspace();
-  };
-
-  const handleAddQuickAgent = () => {
-    const agentName = String(quickAgentName || '').trim() || 'סוכן חדש';
-    setAgents((prev) => ([
-      ...(Array.isArray(prev) ? prev : []),
-      {
-        id: `custom-${Date.now()}`,
-        name: agentName,
-        prompt: 'כתוב כאן את התפקיד וההנחיות של הסוכן.',
-        provider: '',
-        model: '',
-        enabled: true,
-      },
-    ]));
-    setQuickAgentName('');
-    setQuickAgentStatus(`נוסף סוכן חדש לסביבה הפעילה: ${automation?.workspaceName || 'ללא שם'}`);
-    setTimeout(() => setQuickAgentStatus(''), 2500);
   };
 
   return (
@@ -3307,53 +3432,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
         ) : null}
 
       <div style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
-        💡 <strong>טיפ:</strong> אחרי יצירת סביבה חדשה, אפשר להוסיף לה סוכן מיד מהאזור למטה.
-      </div>
-
-      <div style={{ marginTop: 10, border: '1px solid #DBEAFE', borderRadius: 10, background: '#EFF6FF', padding: '10px 12px' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#1D4ED8', marginBottom: 6 }}>
-          הוספת סוכן מהירה
-        </div>
-        <div style={{ fontSize: 11, color: '#475569', marginBottom: 8, lineHeight: 1.6 }}>
-          הסוכן יתווסף לסביבה הפעילה כרגע: <strong>{automation?.workspaceName || 'ללא שם'}</strong>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: quickAgentStatus ? 6 : 0 }}>
-          <input
-            value={quickAgentName}
-            onChange={(e) => setQuickAgentName(e.target.value)}
-            placeholder="שם סוכן, למשל: בודק עובדות"
-            style={{ flex: 1, padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 12 }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleAddQuickAgent();
-              }
-            }}
-          />
-          <button
-            type="button"
-            onClick={handleAddQuickAgent}
-            style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#2563EB', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-          >
-            ➕ צור סוכן
-          </button>
-        </div>
-        {quickAgentStatus ? <div style={{ fontSize: 11, color: '#166534' }}>{quickAgentStatus}</div> : null}
-      </div>
-
-      <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
-        <button
-          type="button"
-          onClick={() => {
-            if (typeof document === 'undefined') return;
-            const target = document.getElementById('role-agents-settings');
-            if (!target) return;
-            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #C7D2FE', background: '#EEF2FF', color: '#3730A3', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-        >
-          ➕ פתח הגדרות סוכנים מלאות
-        </button>
+        💡 <strong>טיפ:</strong> לחץ על <strong>עריכה מלאה</strong> בסביבה שמורה לעריכת הסוכנים שלה, או השתמש בהגדרות הסוכנים למטה לעריכת הסביבה הפעילה.
       </div>
     </div>
   );
@@ -4237,7 +4316,25 @@ const downloadTextAsFile = (filename = 'wordflow-debug.json', text = '') => {
   } catch {}
 };
 
-function DeveloperSettings({ config, setConfig, automation, setAutomation }) {
+const getWordAiStorageInfo = () =>
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith('wordai'))
+    .map((k) => { const val = localStorage.getItem(k) || ''; return { key: k, sizeBytes: new Blob([val]).size }; })
+    .sort((a, b) => b.sizeBytes - a.sizeBytes);
+
+const DEV_QUICK_ACTION_LABELS = {
+  fix: 'תיקון שגיאות', humanize: 'הפנס אנושי', summary: 'סיכום', academic: 'אקדמי',
+  organize: 'ארגון', textToTable: 'טקסט לטבלה', expand: 'הרחבה', translate: 'תרגום',
+  bullets: 'נקודות', shorter: 'קיצור', continue: 'המשך', intro: 'מבוא', conclusion: 'סיכום/מסקנה', sources: 'מקורות',
+};
+
+const WORKFLOW_MODE_OPTIONS = [
+  ['manager-auto', 'Manager Auto — מנהל AI מחליט על סדר הסוכנים'],
+  ['circular-team', 'Circular Team — סבבי ביקורת מרובים'],
+  ['custom-order', 'Custom Order — הסוכנים רצים לפי הסדר שהגדרת'],
+];
+
+function DeveloperSettings({ config, setConfig, automation, setAutomation, assistantBehavior, setAssistantBehavior, wordPrefs, setWordPrefs }) {
   const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
   const activeProviderId = String(config?.active || 'gemini').trim() || 'gemini';
   const activeProviderModel = String(config?.[activeProviderId]?.model || '').trim();
@@ -4246,6 +4343,35 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation }) {
   const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
   const defaultProviderId = DEFAULT_PROVIDER_CONFIG.active;
   const defaultProviderModel = DEFAULT_PROVIDER_CONFIG?.[defaultProviderId]?.model || '';
+
+  // Connection test state
+  const [connTest, setConnTest] = useState({ status: 'idle', result: null, elapsed: null });
+  const runConnTest = async () => {
+    setConnTest({ status: 'running', result: null, elapsed: null });
+    const t0 = Date.now();
+    try {
+      const result = await testProviderConnection(activeProviderId, config?.[activeProviderId] || {});
+      setConnTest({ status: 'done', result, elapsed: Date.now() - t0 });
+    } catch (err) {
+      setConnTest({ status: 'done', result: { ok: false, error: String(err?.message || err) }, elapsed: Date.now() - t0 });
+    }
+  };
+
+  // Storage inspector state
+  const [storageInfo, setStorageInfo] = useState(getWordAiStorageInfo);
+  const refreshStorageInfo = () => setStorageInfo(getWordAiStorageInfo());
+  const clearStorageKey = (key) => {
+    if (!window.confirm(`למחוק את המפתח "${key}" מה-localStorage?\nפעולה זו לא ניתנת לביטול.`)) return;
+    localStorage.removeItem(key);
+    refreshStorageInfo();
+  };
+  const totalStorageBytes = storageInfo.reduce((sum, e) => sum + e.sizeBytes, 0);
+
+  // App memory & chat history state
+  const [appMemory, setAppMemory] = useState(() => getAppMemory());
+  const [chatCleared, setChatCleared] = useState(false);
+  const handleClearAppMemory = () => { clearAppMemory(); setAppMemory(getAppMemory()); };
+  const handleClearChatHistory = () => { clearSidebarChatHistory({ clearAll: true }); setChatCleared(true); setTimeout(() => setChatCleared(false), 3000); };
 
   const resetDeveloperDefaults = () => {
     setConfig((prev) => {
@@ -4482,6 +4608,236 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation }) {
             <button onClick={resetLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>נקה לוגים</button>
           </div>
         </div>
+
+        {/* ─── כרטיס: בדיקת חיבור ─── */}
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>בדיקת חיבור לספק</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            שולח בקשת ping לספק הפעיל ומציג תשובה, מודל שנענה, ועיכוב ברמת מילישניות.
+          </div>
+          <button
+            onClick={runConnTest}
+            disabled={connTest.status === 'running'}
+            style={{ padding: '9px 16px', borderRadius: 999, border: '1px solid #CBD5E1', background: connTest.status === 'running' ? '#F1F5F9' : 'white', cursor: connTest.status === 'running' ? 'wait' : 'pointer', fontSize: 12, fontWeight: 700, marginBottom: 12 }}
+          >
+            {connTest.status === 'running' ? '⏳ בודק...' : '🔌 בדוק עכשיו'}
+          </button>
+          {connTest.status === 'done' && connTest.result && (
+            <div style={{ border: `1px solid ${connTest.result.ok ? '#BBF7D0' : '#FECACA'}`, borderRadius: 10, background: connTest.result.ok ? '#F0FDF4' : '#FEF2F2', padding: '10px 12px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: connTest.result.ok ? '#15803D' : '#B91C1C', marginBottom: 6 }}>
+                {connTest.result.ok ? `✅ חיבור תקין — ${connTest.elapsed}ms` : `❌ שגיאה — ${connTest.elapsed}ms`}
+              </div>
+              {connTest.result.model && (
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מודל: <code style={{ background: '#E2E8F0', padding: '1px 5px', borderRadius: 4 }}>{connTest.result.model}</code></div>
+              )}
+              {connTest.result.reply && (
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 4, lineHeight: 1.5 }}>תגובה: <em>{String(connTest.result.reply).slice(0, 120)}{connTest.result.reply.length > 120 ? '…' : ''}</em></div>
+              )}
+              {connTest.result.error && (
+                <div style={{ fontSize: 11, color: '#B91C1C', lineHeight: 1.5 }}>{connTest.result.error}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ─── כרטיס: Storage Inspector ─── */}
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', flex: 1 }}>Storage Inspector</div>
+            <div style={{ fontSize: 11, color: '#64748B' }}>סה"כ: {(totalStorageBytes / 1024).toFixed(1)} KB</div>
+            <button onClick={refreshStorageInfo} style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11 }}>רענן</button>
+          </div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 10 }}>
+            כל מפתחות ה-localStorage של WordFlow. לחץ על 🗑 למחיקת מפתח ספציפי.
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #F1F5F9', borderRadius: 10 }}>
+            {storageInfo.length === 0 && (
+              <div style={{ padding: 12, fontSize: 11, color: '#94A3B8', textAlign: 'center' }}>אין נתונים</div>
+            )}
+            {storageInfo.map(({ key, sizeBytes }) => (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid #F8FAFC', direction: 'ltr' }}>
+                <div style={{ flex: 1, fontSize: 11, color: '#1F2937', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</div>
+                <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap' }}>{(sizeBytes / 1024).toFixed(1)} KB</div>
+                <button onClick={() => clearStorageKey(key)} title="מחק מפתח" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#F87171', padding: '0 2px', lineHeight: 1 }}>🗑</button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ─── כרטיס: App Memory & Chat History ─── */}
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>App Memory & Chat</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            זיכרון ה-AI (הערות + שיחות אחרונות) והיסטוריית Sidebar Chat.
+          </div>
+          <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: '#64748B' }}>הערות זיכרון</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1F2937' }}>{appMemory.memoryNotes?.length ?? 0}</div>
+            </div>
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: '#64748B' }}>שיחות אחרונות שמורות</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1F2937' }}>{appMemory.recentChats?.length ?? 0}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={handleClearAppMemory} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>נקה זיכרון AI</button>
+            <button onClick={handleClearChatHistory} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #FECACA', background: chatCleared ? '#F0FDF4' : '#FEF2F2', color: chatCleared ? '#15803D' : '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+              {chatCleared ? '✓ נוקה' : 'נקה צ׳אט Sidebar'}
+            </button>
+          </div>
+        </div>
+
+        {/* ─── כרטיס: Workflow Engine ─── */}
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🔄 Workflow Engine</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            שליטה מלאה על מנגנון ריצת הסוכנים: מצב, אוטומציה, ו-Bypass לסביבת עבודה.
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מצב Workflow</span>
+              <select
+                value={automation?.workflowMode || 'manager-auto'}
+                onChange={(e) => setAutomation((prev) => ({ ...prev, workflowMode: e.target.value }))}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+              >
+                {WORKFLOW_MODE_OPTIONS.map(([val, label]) => (
+                  <option key={val} value={val}>{label}</option>
+                ))}
+              </select>
+            </label>
+            {[
+              ['autopilotEnabled', 'Autopilot — AI מחליט על חלוקת העבודה בין סוכנים'],
+              ['autoDispatch', 'Auto Dispatch — שלח למנהל AI אוטומטית בלי אישור ידני'],
+              ['onlyFromMaterials', 'Only From Materials — אסור לסוכנים לייצר מידע ממקורות חיצוניים'],
+              ['workspaceBypassEnabled', 'Workspace Bypass — דלג על סביבת עבודה ורוץ ישירות'],
+            ].map(([key, desc]) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#1F2937', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  style={{ marginTop: 2, flexShrink: 0 }}
+                  checked={automation?.[key] !== false && automation?.[key] !== undefined ? !!automation?.[key] : (key === 'autopilotEnabled' || key === 'autoDispatch')}
+                  onChange={(e) => setAutomation((prev) => ({ ...prev, [key]: e.target.checked }))}
+                />
+                <span style={{ lineHeight: 1.5 }}>{desc}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* ─── כרטיס: Circular + Retry ─── */}
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🔁 Circular Workflow & Retry</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            סבבי ביקורת (circular) ומדיניות ניסיונות חוזרים בכשל.
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
+              <input
+                type="checkbox"
+                checked={automation?.circularWorkflowEnabled === true}
+                onChange={(e) => setAutomation((prev) => ({ ...prev, circularWorkflowEnabled: e.target.checked }))}
+              />
+              הפעל Circular Workflow (ביקורת מרובת סבבים)
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>סבבים מינימום</span>
+                <input type="number" min={1} max={10}
+                  value={automation?.circularMinRounds ?? 1}
+                  onChange={(e) => setAutomation((prev) => ({ ...prev, circularMinRounds: Math.max(1, Number(e.target.value) || 1) }))}
+                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>סבבים מקסימום</span>
+                <input type="number" min={1} max={10}
+                  value={automation?.circularMaxRounds ?? 2}
+                  onChange={(e) => setAutomation((prev) => ({ ...prev, circularMaxRounds: Math.max(1, Number(e.target.value) || 2) }))}
+                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                />
+              </label>
+            </div>
+            <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: 10, display: 'grid', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
+                <input
+                  type="checkbox"
+                  checked={automation?.retryEnabled !== false}
+                  onChange={(e) => setAutomation((prev) => ({ ...prev, retryEnabled: e.target.checked }))}
+                />
+                הפעל Retry בכשל בקשה
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מספר ניסיונות חוזרים</span>
+                <input type="number" min={0} max={5}
+                  disabled={automation?.retryEnabled === false}
+                  value={automation?.maxRetries ?? 2}
+                  onChange={(e) => setAutomation((prev) => ({ ...prev, maxRetries: Math.max(0, Number(e.target.value) || 0) }))}
+                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: automation?.retryEnabled === false ? '#F8FAFC' : 'white' }}
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── כרטיס: Assistant Popup ─── */}
+        {assistantBehavior && setAssistantBehavior && (
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🤖 Assistant Popup</div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
+                <input
+                  type="checkbox"
+                  checked={assistantBehavior?.autoPopup !== false}
+                  onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, autoPopup: e.target.checked }))}
+                />
+                פתח עוזר אוטומטית כשנתקע בכתיבה
+              </label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>זמן עצירה לפני קפיצה (שניות)</span>
+                <input type="number" min={2} max={60}
+                  disabled={assistantBehavior?.autoPopup === false}
+                  value={assistantBehavior?.idleSeconds ?? 5}
+                  onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, idleSeconds: Math.max(2, Number(e.target.value) || 5) }))}
+                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, width: 120 }}
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* ─── כרטיס: AI Quick Actions ─── */}
+        {wordPrefs?.aiQuickActions && setWordPrefs && (
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', flex: 1 }}>⚡ AI Quick Actions בסרגל</div>
+              <button
+                onClick={() => setWordPrefs((prev) => ({ ...prev, aiQuickActions: Object.fromEntries(Object.keys(prev.aiQuickActions || {}).map((k) => [k, true])) }))}
+                style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11 }}
+              >הפעל הכל</button>
+              <button
+                onClick={() => setWordPrefs((prev) => ({ ...prev, aiQuickActions: Object.fromEntries(Object.keys(prev.aiQuickActions || {}).map((k) => [k, false])) }))}
+                style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11 }}
+              >כבה הכל</button>
+            </div>
+            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 10 }}>
+              שלוט אילו כפתורי AI מהיר מוצגים בסרגל הכלים כשמסמנים טקסט.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
+              {Object.entries(wordPrefs.aiQuickActions).map(([key, enabled]) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937', padding: '6px 10px', border: `1px solid ${enabled ? '#BFDBFE' : '#E2E8F0'}`, borderRadius: 8, background: enabled ? '#EFF6FF' : '#F8FAFC', cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!enabled}
+                    onChange={(e) => setWordPrefs((prev) => ({ ...prev, aiQuickActions: { ...prev.aiQuickActions, [key]: e.target.checked } }))}
+                  />
+                  {DEV_QUICK_ACTION_LABELS[key] || key}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5012,7 +5368,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
                   {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
-                  {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} />}
+                  {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                   {settingsTab === 'agents'      && (
                     <div>
@@ -5037,7 +5393,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
                     />
                   )}
-                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} />}
+                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
                   {settingsTab === 'onboarding'  && (

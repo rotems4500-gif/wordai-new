@@ -1237,9 +1237,16 @@ function findGeneratedHtmlIntegrityIssue(html = '') {
       closeImplicitOptionalTagsForClosingTag(stack, tagName);
       const expectedTag = stack.pop();
       if (!expectedTag) {
+        // תגית סגירה ייתומית של אלמנט optional — בדפדפן מתעלמים ממנה
+        if (HTML_OPTIONAL_END_TAGS.has(tagName)) continue;
         return `ה-HTML ממשיך מתגית סגירה לא תואמת: </${tagName}>`;
       }
       if (expectedTag !== tagName) {
+        // תגית סגירה optional שלא מתאימה לפתוח — מחזירים לסטק ומתעלמים
+        if (HTML_OPTIONAL_END_TAGS.has(tagName)) {
+          stack.push(expectedTag);
+          continue;
+        }
         return `סגירת תגיות לא תואמת: ציפיתי ל-</${expectedTag}> אבל התקבלה </${tagName}>`;
       }
       continue;
