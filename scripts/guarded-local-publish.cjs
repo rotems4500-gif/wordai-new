@@ -31,16 +31,18 @@ function capture(command, args) {
 
 const allowLocalPublish = process.env.ALLOW_LOCAL_PUBLISH;
 const allowDirtyLocalPublish = process.env.ALLOW_DIRTY_LOCAL_PUBLISH;
+const allowUnsignedLocalPublish = process.env.ALLOW_UNSIGNED_LOCAL_PUBLISH;
 const hasGenericSigning = hasValue(process.env.CSC_LINK) && hasValue(process.env.CSC_KEY_PASSWORD);
 const hasWindowsSigning = hasValue(process.env.WIN_CSC_LINK) && hasValue(process.env.WIN_CSC_KEY_PASSWORD);
 const hasGitHubToken = hasValue(process.env.GH_TOKEN) || hasValue(process.env.GITHUB_TOKEN);
+const shouldSignAndEditExecutable = hasGenericSigning || hasWindowsSigning;
 
 if (allowLocalPublish !== '1') {
   fail('Refusing local publish. Set ALLOW_LOCAL_PUBLISH=1 to continue.');
 }
 
-if (!hasGenericSigning && !hasWindowsSigning) {
-  fail('Refusing local publish. Missing signing secrets. Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD, or CSC_LINK and CSC_KEY_PASSWORD.');
+if (!shouldSignAndEditExecutable && allowUnsignedLocalPublish !== '1') {
+  fail('Refusing local publish. Missing signing secrets. Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD, or CSC_LINK and CSC_KEY_PASSWORD, or set ALLOW_UNSIGNED_LOCAL_PUBLISH=1 to publish unsigned artifacts.');
 }
 
 if (!hasGitHubToken) {
@@ -95,4 +97,4 @@ function run(command, args) {
 }
 
 run(npmCommand, ['run', 'build']);
-run(npxCommand, ['electron-builder', '--win', 'nsis', '--publish', 'always', '--config.win.signAndEditExecutable=true']);
+run(npxCommand, ['electron-builder', '--win', 'nsis', '--publish', 'always', `--config.win.signAndEditExecutable=${shouldSignAndEditExecutable ? 'true' : 'false'}`]);

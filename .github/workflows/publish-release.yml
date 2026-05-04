@@ -13,10 +13,10 @@ jobs:
   release-windows:
     runs-on: windows-latest
     env:
-      CSC_LINK: ${{ secrets['CSC_LINK'] }}
-      CSC_KEY_PASSWORD: ${{ secrets['CSC_KEY_PASSWORD'] }}
-      WIN_CSC_LINK: ${{ secrets['WIN_CSC_LINK'] }}
-      WIN_CSC_KEY_PASSWORD: ${{ secrets['WIN_CSC_KEY_PASSWORD'] }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
     steps:
       - name: Fail fast for manual publish without a release tag
@@ -73,15 +73,20 @@ jobs:
             throw "Tag version $tagVersion does not match package.json version $($pkg.version)"
           }
 
-      - name: Validate signing configuration for tagged release
+      - name: Resolve signing mode for tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           $hasGenericSigning = -not [string]::IsNullOrWhiteSpace($env:CSC_LINK) -and -not [string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)
           $hasWindowsSigning = -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -and -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)
+          $shouldSignAndEditExecutable = if ($hasGenericSigning -or $hasWindowsSigning) { 'true' } else { 'false' }
 
-          if (-not ($hasGenericSigning -or $hasWindowsSigning)) {
-            throw "Tagged releases require Windows code signing secrets. Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD, or CSC_LINK and CSC_KEY_PASSWORD."
+          "SHOULD_SIGN_AND_EDIT_EXECUTABLE=$shouldSignAndEditExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          if ($shouldSignAndEditExecutable -eq 'true') {
+            Write-Host "Signing secrets detected. Building signed Windows artifacts."
+          } else {
+            Write-Warning "Signing secrets are missing. Building unsigned Windows artifacts for this tagged release."
           }
 
       - name: Clean previous release files
@@ -96,7 +101,8 @@ jobs:
         run: |
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx electron-builder --win --publish never --config.win.signAndEditExecutable=true
+          $signAndEditExecutable = if ([string]::IsNullOrWhiteSpace($env:SHOULD_SIGN_AND_EDIT_EXECUTABLE)) { 'false' } else { $env:SHOULD_SIGN_AND_EDIT_EXECUTABLE }
+          npx electron-builder --win --publish never --config.win.signAndEditExecutable=$signAndEditExecutable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $latest = Get-Content release/latest.yml -Raw
           $pkg = Get-Content package.json | ConvertFrom-Json
