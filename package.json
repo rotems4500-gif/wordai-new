@@ -1,6 +1,6 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.60",
+  "version": "1.0.61",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
@@ -19,7 +19,7 @@
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"",
     "desktop:build": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:publish": "npm run build && electron-builder --win nsis --publish always"
+    "dist:publish": "node scripts/guarded-local-publish.cjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -55,7 +55,9 @@
     "mammoth": "^1.12.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
@@ -86,6 +88,7 @@
     ],
     "productName": "WordFlow AI",
     "asar": true,
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
@@ -103,8 +106,8 @@
         "nsis"
       ],
       "icon": "assets/app-icon.ico",
-      "artifactName": "WordFlow-AI-Setup-${version}.${ext}",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "WordFlow-AI-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

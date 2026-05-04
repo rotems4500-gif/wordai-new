@@ -30,6 +30,11 @@ const HTML_TAG_TOKEN_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z0-9-]+)\b[^>]*?>/gi;
 const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'docx']);
+const DESKTOP_EXTRACTION_EXTENSIONS = new Set(['xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
+const HELPER_MATERIAL_ACCEPT_LIST = '.pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm';
+const HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX = ',.png,.jpg,.jpeg,.webp,.xls,.xlsx';
+const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf';
+const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
 export const MATERIAL_UPLOAD_PRESETS = {
   general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
@@ -41,6 +46,42 @@ export const MATERIAL_UPLOAD_PRESETS = {
 
 export function getMaterialUploadMeta(kind = 'general') {
   return MATERIAL_UPLOAD_PRESETS[String(kind || 'general')] || MATERIAL_UPLOAD_PRESETS.general;
+}
+
+export function hasDesktopMaterialTextExtraction() {
+  return Boolean(typeof window !== 'undefined' && window.desktopApp?.extractMaterialText);
+}
+
+export function getHelperMaterialAcceptList() {
+  return hasDesktopMaterialTextExtraction()
+    ? `${HELPER_MATERIAL_ACCEPT_LIST}${HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX}`
+    : HELPER_MATERIAL_ACCEPT_LIST;
+}
+
+export function getSyllabusFileAcceptList() {
+  return hasDesktopMaterialTextExtraction()
+    ? `${SYLLABUS_ACCEPT_LIST}${SYLLABUS_DESKTOP_ACCEPT_SUFFIX}`
+    : SYLLABUS_ACCEPT_LIST;
+}
+
+function canPreviewMaterialText(type = '') {
+  const normalizedType = String(type || '').toLowerCase();
+  return textLikeExtensions.has(normalizedType)
+    || normalizedType === 'pdf'
+    || (hasDesktopMaterialTextExtraction() && DESKTOP_EXTRACTION_EXTENSIONS.has(normalizedType));
+}
+
+async function extractDesktopMaterialTextFromArrayBuffer(buffer, fileName = '', maxLength = 6000) {
+  if (!hasDesktopMaterialTextExtraction()) return '';
+  const result = await window.desktopApp.extractMaterialText({
+    dataBase64: arrayBufferToBase64(buffer),
+    fileName,
+    maxLength,
+  });
+  if (!result?.ok) {
+    throw new Error(String(result?.error || 'material-extraction-failed').trim() || 'material-extraction-failed');
+  }
+  return String(result.text || '').trim();
 }
 const COMMON_CONNECTORS = ['לכן', 'בנוסף', 'עם זאת', 'עם-זאת', 'כמו כן', 'לעומת זאת', 'עם-כן', 'כלומר', 'למעשה', 'בהתאם לכך', 'בסופו של דבר'];
 const MANUAL_HISTORY_SOURCES = new Set(['manual', 'opened-file', 'save-local', 'save-as']);
@@ -404,7 +445,7 @@ export async function loadProjectMaterials() {
         category: item.category || inferred.category,
         templateId: item.templateId || inferred.templateId,
         learningHint: item.learningHint || '',
-        canPreviewText: textLikeExtensions.has(type) || type === 'pdf',
+        canPreviewText: canPreviewMaterialText(type),
       };
     });
 }
@@ -648,12 +689,17 @@ export async function readInstructionFile(file, maxLength = 6000) {
   if (!file) return '';
   const resolvedMaxLength = Number.isFinite(maxLength) && maxLength > 0 ? maxLength : 6000;
   const ext = String(file.name || '').toLowerCase().split('.').pop();
-  const unsupportedBinary = new Set(['doc', 'ppt', 'pptx', 'xls', 'xlsx', 'zip', 'rar', '7z']);
+  const unsupportedBinary = new Set(['doc', 'ppt', 'pptx', 'zip', 'rar', '7z']);
   if (unsupportedBinary.has(ext)) {
     throw new Error('unsupported-binary-file');
   }
 
   const buffer = await file.arrayBuffer();
+
+  if (DESKTOP_EXTRACTION_EXTENSIONS.has(ext)) {
+    if (!hasDesktopMaterialTextExtraction()) throw new Error('unsupported-binary-file');
+    return extractDesktopMaterialTextFromArrayBuffer(buffer, file.name, resolvedMaxLength);
+  }
 
   if (ext === 'pdf') {
     const pdfText = await extractPdfTextFromBuffer(buffer);
@@ -697,6 +743,10 @@ async function loadMaterialPreview(material) {
         return (await extractPdfTextFromBuffer(buffer)).slice(0, 5000);
       }
 
+      if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
+        return (await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, 5000)).slice(0, 5000);
+      }
+
       const text = decodeTextBuffer(buffer);
       return text.slice(0, 5000);
     }
@@ -714,6 +764,9 @@ async function loadMaterialPreview(material) {
     }
 
     const buffer = await response.arrayBuffer();
+    if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
+      return (await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, 5000)).slice(0, 5000);
+    }
     const text = decodeTextBuffer(buffer);
     return text.slice(0, 5000);
   } catch {
@@ -1357,7 +1410,7 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
   }
 
   const shouldContinueFromIntegrity = Boolean(validationError) && isRecoverableGeneratedHtmlContinuationIssue(integrityIssue);
-    const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
+  const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
   const continuationIssue = shouldContinueFromCompletion
     ? buildGeneratedHtmlCompletionContinuationIssue(completion)
     : integrityIssue;
@@ -1409,8 +1462,8 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
     );
 
     const continuationCompletion = getGeneratedHtmlProviderCompletion(continuationResponse);
-  const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
-  const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
+    const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
+    const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
     const mergedValidatedResponse = ensureCompleteGeneratedHtmlResponse(mergedResponse, operationLabel);
 
     logAgentDebugEvent({

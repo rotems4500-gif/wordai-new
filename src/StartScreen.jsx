@@ -138,7 +138,9 @@ const WORKSPACE_PROVIDER_LABELS = {
   custom: 'Custom',
 };
 
-const summarizeWorkspaceProviders = (agents = [], cfg = null) => buildWorkspaceRoutingSummary(agents, cfg && typeof cfg === 'object' ? cfg : getProviderConfig());
+const summarizeWorkspaceProviders = (agents = []) => {
+  return buildWorkspaceRoutingSummary(agents, getProviderConfig());
+};
 
 const getProviderLabelFromChoices = (providerId = '', choices = []) => {
   const normalizedId = String(providerId || '').trim();
@@ -361,9 +363,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     refreshProviderConfig();
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('focus', refreshProviderConfig);
+    window.addEventListener('wordai-provider-config-changed', refreshProviderConfig);
     window.addEventListener('wordai-settings-hydrated', refreshProviderConfig);
     return () => {
       window.removeEventListener('focus', refreshProviderConfig);
+      window.removeEventListener('wordai-provider-config-changed', refreshProviderConfig);
       window.removeEventListener('wordai-settings-hydrated', refreshProviderConfig);
     };
   }, []);
@@ -464,7 +468,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const agents = typeof getOrderedRoleAgents === 'function'
       ? getOrderedRoleAgents(automation.workflowMode)
       : [];
-    return { ...automation, agents, providerSummary: summarizeWorkspaceProviders(agents, providerConfigState) };
+    return { ...automation, agents, providerSummary: summarizeWorkspaceProviders(agents) };
   };
 
   const applyAutomationSnapshot = (automation) => {
@@ -500,7 +504,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const nextWorkspacesList = Object.values(library).map((ws) => ({
           id: ws.id,
           name: ws.name,
-          providerSummary: summarizeWorkspaceProviders(ws.agents, providerConfigState),
+          providerSummary: summarizeWorkspaceProviders(ws.agents),
         }));
         setWorkspacesList(nextWorkspacesList);
       }
@@ -511,8 +515,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', refreshWorkspaceState);
-    return () => window.removeEventListener('wordai-workspace-changed', refreshWorkspaceState);
-  }, [providerConfigState]);
+    window.addEventListener('wordai-provider-config-changed', refreshWorkspaceState);
+    window.addEventListener('wordai-settings-hydrated', refreshWorkspaceState);
+    return () => {
+      window.removeEventListener('wordai-workspace-changed', refreshWorkspaceState);
+      window.removeEventListener('wordai-provider-config-changed', refreshWorkspaceState);
+      window.removeEventListener('wordai-settings-hydrated', refreshWorkspaceState);
+    };
+  }, []);
 
   const handleUpload = async (event) => {
     const files = Array.from(event.target.files || []);

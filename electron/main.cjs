@@ -4,6 +4,7 @@ const mammoth = require('mammoth');
 const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table, TableRow, TableCell, WidthType, ImageRun } = require('docx');
 const path = require('path');
 const fs = require('fs');
+const { extractMaterialTextFromBuffer, shutdownMaterialExtraction } = require('./materialExtraction.cjs');
 
 const STABLE_USER_DATA_DIRNAME = 'word-ai-assistant';
 const LEGACY_USER_DATA_DIRNAMES = ['Word AI Assistant', 'WordFlow AI', 'wordflow-ai'];
@@ -257,7 +258,7 @@ function hasSignificantRtlText(block = '') {
   return rtlCount >= 6 && rtlWordCount >= 2 && rtlWordCount > latinWordCount && rtlCount >= latinCount;
 }
 
-function shouldForceRtlBlockFormatting(block = '', typography = {}) {
+function shouldForceRtlBlockFormatting(block = '') {
   return hasSignificantRtlText(block);
 }
 
@@ -293,19 +294,18 @@ function resolveDocxAlignmentValue(value = '', fallback = AlignmentType.RIGHT, i
 function resolveBlockDocxFormatting(block = '', typography = {}) {
   const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
   const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
+  const dominantLtr = !explicitDirection && hasDominantLtrText(block, typography);
+  const fallbackAlignment = !alignmentValue && dominantLtr
+    ? AlignmentType.LEFT
+    : (typography.alignment || AlignmentType.RIGHT);
   const documentIsRtl = isRtlDocxLanguage(typography.language);
-  const forcedRtl = !explicitDirection && shouldForceRtlBlockFormatting(block, typography);
-  const dominantLtr = !explicitDirection && !forcedRtl && hasDominantLtrText(block, typography);
   const bidirectional = explicitDirection
     ? !/^ltr$/i.test(explicitDirection)
-    : forcedRtl
+    : shouldForceRtlBlockFormatting(block, typography)
       ? true
       : dominantLtr
         ? false
         : documentIsRtl;
-  const fallbackAlignment = !alignmentValue && dominantLtr
-    ? AlignmentType.LEFT
-    : (typography.alignment || AlignmentType.RIGHT);
   const alignmentDirection = bidirectional;
   return {
     alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, alignmentDirection),
@@ -720,6 +720,19 @@ function getWritableMaterialsDir() {
   const dir = path.join(app.getPath('userData'), 'project-materials');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function getMaterialsOcrCacheDir() {
+  const dir = path.join(getWritableMaterialsDir(), '.ocr-cache');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getMaterialsOcrDataDir() {
+  const dir = app.isPackaged
+    ? path.join(process.resourcesPath, 'ocr-data')
+    : path.join(__dirname, '..', 'ocr-data');
+  return fs.existsSync(dir) ? dir : '';
 }
 
 function getPersistedProviderConfigPath() {
@@ -1246,11 +1259,18 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     const ext = path.extname(safeName).toLowerCase();
     let extractedText = '';
 
-    if (ext === '.docx') {
-      const result = await mammoth.extractRawText({ path: filePath });
-      extractedText = String(result?.value || '').trim();
-    } else if (['.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
-      extractedText = fs.readFileSync(filePath, 'utf8');
+    if (['.docx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
+      try {
+        extractedText = await extractMaterialTextFromBuffer({
+          buffer,
+          fileName: safeName,
+          maxLength: 5000,
+          ocrCacheDir: getMaterialsOcrCacheDir(),
+          ocrDataDir: getMaterialsOcrDataDir(),
+        });
+      } catch {
+        extractedText = '';
+      }
     }
 
     return {
@@ -1261,6 +1281,26 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     };
   } catch (error) {
     return { ok: false, error: error?.message || 'Read failed' };
+  }
+});
+
+ipcMain.handle('extract-material-text', async (_event, payload = {}) => {
+  const fileName = path.basename(String(payload?.fileName || 'material.bin')).replace(/[^\w\u0590-\u05FF .()\-]/g, '_');
+  const dataBase64 = String(payload?.dataBase64 || '').trim();
+  const maxLength = Number(payload?.maxLength || 12000);
+  if (!fileName || !dataBase64) return { ok: false, error: 'missing-extraction-payload' };
+
+  try {
+    const text = await extractMaterialTextFromBuffer({
+      buffer: Buffer.from(dataBase64, 'base64'),
+      fileName,
+      maxLength,
+      ocrCacheDir: getMaterialsOcrCacheDir(),
+      ocrDataDir: getMaterialsOcrDataDir(),
+    });
+    return { ok: true, text };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'material-extraction-failed' };
   }
 });
 
@@ -1569,6 +1609,7 @@ if (!singleInstanceLock) {
 }
 
 app.on('will-quit', () => {
+  shutdownMaterialExtraction().catch(() => {});
   globalShortcut.unregisterAll();
 });
 

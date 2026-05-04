@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   saveLocalMaterial: (payload) => ipcRenderer.invoke('save-local-material', payload),
   listLocalMaterials: () => ipcRenderer.invoke('list-local-materials'),
   readLocalMaterial: (fileName) => ipcRenderer.invoke('read-local-material', fileName),
+  extractMaterialText: (payload) => ipcRenderer.invoke('extract-material-text', payload),
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),

@@ -4,6 +4,8 @@ import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListIn
 import {
   DEFAULT_WORKSPACES_LIBRARY,
   DEFAULT_PERSONAL_STYLE,
+  DEFAULT_PROVIDER_CONFIG,
+  DEFAULT_WORKSPACE_AUTOMATION,
   buildExternalStyleAnalysisPrompt,
   getExternalAnalysisProviderHint,
   getProviderConfig,
@@ -51,7 +53,7 @@ import {
   processSyllabusProfileImport,
   testProviderConnection,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
 const POPULAR_CUSTOM = [
@@ -487,6 +489,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
   skills: ['skills', 'skill', 'capabilities', 'סקילים'],
   agents: ['agents', 'agent', 'timeout', 'workflow', 'autopilot', 'workspace', 'automation', 'manager', 'retry', 'סוכנים', 'אוטומציה', 'סביבת עבודה'],
+  developer: ['developer', 'advanced', 'timeout', 'override', 'logs', 'model', 'provider', 'מתקדם', 'לוגים', 'timeout ms'],
   onboarding: ['onboarding', 'profile', 'style', 'learning', 'materials', 'submission', 'פרופיל', 'הגשה'],
   writing: ['writing', 'document', 'word', 'defaults', 'כתיבה'],
   appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
@@ -509,7 +512,7 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'תחזוקה ולוגים',
-    tabs: [['debug', '🪵 לוגים']],
+    tabs: [['developer', '🛠️ Developer'], ['debug', '🪵 לוגים']],
   },
 ];
 
@@ -2268,9 +2271,11 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
 
   const formatSyllabusImportError = (error) => {
     const code = String(error?.message || '').trim();
-    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך. אפשר להעלות כרגע docx, txt, md, html או pdf.';
+    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך בסביבה הזו. אפשר להעלות docx, txt, md, html או pdf, ובגרסת desktop גם Excel ותמונות עם OCR.';
     if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
     if (code === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-DOCX.';
+    if (code === 'empty-spreadsheet-text' || code === 'spreadsheet-read-failed') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-Excel.';
+    if (code === 'empty-image-text' || code === 'image-ocr-failed') return 'לא הצלחתי לחלץ טקסט קריא מתוך התמונה באמצעות OCR.';
     if (code === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך הקובץ שנבחר.';
     return 'לא הצלחתי לקרוא את קובץ הסילבוס.';
   };
@@ -2674,7 +2679,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
               {uploading ? 'מעלה...' : 'העלה קבצים'}
             </button>
           </div>
-          <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" style={{ display: 'none' }} onChange={handleUpload} />
+          <input ref={fileInputRef} type="file" multiple accept={getHelperMaterialAcceptList()} style={{ display: 'none' }} onChange={handleUpload} />
         </div>
         <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
           אפשר לצרף עבודות קודמות, סיכומים, PDF, מצגות, דפי שער לדוגמה, תבניות מסמך או טיוטות. בחר את סוג הקובץ לפני ההעלאה כדי שהסוכן ילמד בדיוק ממה להשתמש.
@@ -3720,11 +3725,12 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               <span>Timeout</span>
               <input
                 type="number"
-                min="10"
-                max="180"
+                min="10000"
+                max="300000"
+                step="1000"
                 disabled={automation?.timeoutEnabled !== true}
-                value={automation?.requestTimeoutMs ?? 45}
-                onChange={(e) => setAutomation(prev => ({ ...prev, requestTimeoutMs: Math.max(10, Number(e.target.value) || 45) }))}
+                value={automation?.requestTimeoutMs ?? 45000}
+                onChange={(e) => setAutomation(prev => ({ ...prev, requestTimeoutMs: Math.max(10000, Number(e.target.value) || 45000) }))}
                 style={{
                   width: 70,
                   padding: '6px 8px',
@@ -3736,11 +3742,11 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   opacity: automation?.timeoutEnabled === true ? 1 : 0.75,
                 }}
               />
-              <span>שניות</span>
+              <span>ms</span>
             </div>
             <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? '#475569' : '#0F766E', lineHeight: 1.6 }}>
               {automation?.timeoutEnabled === true
-                ? 'המערכת תעצור ריצת סוכנים ארוכה במיוחד לפי הערך שהוגדר.'
+                ? 'המערכת תעצור ריצת סוכנים ארוכה במיוחד לפי הערך שהוגדר במילישניות.'
                 : 'כבוי כברירת מחדל. ריצות סוכנים ימשיכו ללא timeout אוטומטי.'}
             </div>
           </div>
@@ -4207,6 +4213,280 @@ function DebugConsoleSettings({ automation }) {
   );
 }
 
+const DEVELOPER_PROVIDER_OPTIONS = [
+  ['gemini', 'Gemini'],
+  ['openai', 'OpenAI'],
+  ['claude', 'Claude'],
+  ['groq', 'Groq'],
+  ['perplexity', 'Perplexity'],
+  ['ollama', 'Ollama'],
+  ['custom', 'Custom API'],
+];
+
+const downloadTextAsFile = (filename = 'wordflow-debug.json', text = '') => {
+  try {
+    const blob = new Blob([String(text || '')], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  } catch {}
+};
+
+function DeveloperSettings({ config, setConfig, automation, setAutomation }) {
+  const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
+  const activeProviderId = String(config?.active || 'gemini').trim() || 'gemini';
+  const activeProviderModel = String(config?.[activeProviderId]?.model || '').trim();
+  const activeModelChoices = getProviderModelChoices(activeProviderId, config, [activeProviderModel]);
+  const [logsCount, setLogsCount] = useState(() => getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).length);
+  const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
+  const defaultProviderId = DEFAULT_PROVIDER_CONFIG.active;
+  const defaultProviderModel = DEFAULT_PROVIDER_CONFIG?.[defaultProviderId]?.model || '';
+
+  const resetDeveloperDefaults = () => {
+    setConfig((prev) => {
+      const fallbackProviderId = [
+        defaultProviderId,
+        String(prev?.active || '').trim(),
+        'gemini',
+        'openai',
+        'claude',
+        'groq',
+        'perplexity',
+        'ollama',
+        'custom',
+      ].find((providerId) => providerId && isProviderConfigured(prev, providerId)) || defaultProviderId;
+      const fallbackProviderModel = DEFAULT_PROVIDER_CONFIG?.[fallbackProviderId]?.model || '';
+
+      return {
+        ...prev,
+        active: fallbackProviderId,
+        [fallbackProviderId]: {
+          ...(prev?.[fallbackProviderId] || {}),
+          model: fallbackProviderModel,
+        },
+      };
+    });
+    setAutomation((prev) => ({
+      ...prev,
+      timeoutEnabled: DEFAULT_WORKSPACE_AUTOMATION.timeoutEnabled,
+      requestTimeoutMs: DEFAULT_WORKSPACE_AUTOMATION.requestTimeoutMs,
+      appendAgentNotesToOutput: DEFAULT_WORKSPACE_AUTOMATION.appendAgentNotesToOutput,
+      agentNotesInstruction: DEFAULT_WORKSPACE_AUTOMATION.agentNotesInstruction,
+    }));
+  };
+
+  useEffect(() => {
+    const sync = () => {
+      setLogsCount(getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).length);
+      setSummary(getLatestAgentRunSummary(getWorkspaceAutomation()));
+    };
+
+    sync();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('wordai-agent-logs-updated', sync);
+    window.addEventListener('wordai-workspace-changed', sync);
+    return () => {
+      window.removeEventListener('wordai-agent-logs-updated', sync);
+      window.removeEventListener('wordai-workspace-changed', sync);
+    };
+  }, [activeWorkspaceId, automation]);
+
+  const exportLogs = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      workspaceId: activeWorkspaceId,
+      workspaceName: summary?.workspaceName || automation?.workspaceName || '',
+      summary,
+      logs: getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }),
+    };
+    downloadTextAsFile(`wordflow-debug-${activeWorkspaceId}-${Date.now()}.json`, JSON.stringify(payload, null, 2));
+  };
+
+  const resetLogs = () => {
+    clearAgentDebugLogs(activeWorkspaceId);
+    setLogsCount(0);
+    setSummary(getLatestAgentRunSummary(getWorkspaceAutomation()));
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7, flex: '1 1 320px' }}>
+          אזור מרוכז למשתמש מתקדם: שליטה מהירה על provider/model פעיל, timeout במילישניות, נספח הערות סוכנים, וכלי debug בסיסיים בלי לטייל בין כמה טאבים.
+        </p>
+        <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
+          <button
+            onClick={resetDeveloperDefaults}
+            style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+          >
+            Reset to defaults
+          </button>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+            מחזיר provider/model, timeout ונספח הערות סוכנים לברירת המחדל. מפתחות API לא נמחקים.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Provider / Model פעיל</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            זהו ה-override הזמין ביותר למסלול הישיר ולכל מקום שנשען על הספק הפעיל בהגדרות.
+          </div>
+
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>ספק פעיל</span>
+              <select
+                value={activeProviderId}
+                onChange={(e) => setConfig((prev) => ({ ...prev, active: e.target.value }))}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+              >
+                {DEVELOPER_PROVIDER_OPTIONS.map(([providerId, label]) => (
+                  <option key={providerId} value={providerId} disabled={!isProviderConfigured(config, providerId) && activeProviderId !== providerId}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מודל פעיל</span>
+              <select
+                value={activeModelChoices.includes(activeProviderModel) ? activeProviderModel : ''}
+                onChange={(e) => setConfig((prev) => ({
+                  ...prev,
+                  [activeProviderId]: {
+                    ...(prev?.[activeProviderId] || {}),
+                    model: e.target.value,
+                  },
+                }))}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white', marginBottom: 6 }}
+              >
+                <option value="">בחר מודל מוכן</option>
+                {activeModelChoices.map((modelName) => (
+                  <option key={modelName} value={modelName}>{modelName}</option>
+                ))}
+              </select>
+              <input
+                value={activeProviderModel}
+                onChange={(e) => setConfig((prev) => ({
+                  ...prev,
+                  [activeProviderId]: {
+                    ...(prev?.[activeProviderId] || {}),
+                    model: e.target.value,
+                  },
+                }))}
+                placeholder="אפשר גם להקליד ידנית model id"
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, direction: 'ltr', background: 'white' }}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Timeout לסוכנים</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            כאן משנים את timeout ברמת orchestration. הערך נשמר במילישניות ומוחל בכל הריצות הבאות.
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937', marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={automation?.timeoutEnabled === true}
+              onChange={(e) => setAutomation((prev) => ({ ...prev, timeoutEnabled: e.target.checked }))}
+            />
+            הפעל timeout גלובלי לבקשות סוכנים
+          </label>
+
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: automation?.timeoutEnabled === true ? '#475569' : '#94A3B8' }}>Timeout במילישניות</span>
+            <input
+              type="number"
+              min="10000"
+              max="300000"
+              step="1000"
+              disabled={automation?.timeoutEnabled !== true}
+              value={automation?.requestTimeoutMs ?? 45000}
+              onChange={(e) => setAutomation((prev) => ({ ...prev, requestTimeoutMs: Math.max(10000, Number(e.target.value) || 45000) }))}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: automation?.timeoutEnabled === true ? 'white' : '#F8FAFC', color: automation?.timeoutEnabled === true ? '#1F2937' : '#94A3B8' }}
+            />
+          </label>
+
+          <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? '#475569' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
+            {automation?.timeoutEnabled === true
+              ? 'הערך ייחתך אוטומטית למינימום 10000ms כדי למנוע timeout אגרסיבי מדי.'
+              : 'כבוי כרגע. ריצות ארוכות ימשיכו ללא עצירה אוטומטית.'}
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Workspace automation</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            Override נקודתי למסלול העבודה הרב-סוכני כשבסוף הריצה מוחזר מסמך מלא.
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937', marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={automation?.appendAgentNotesToOutput === true}
+              onChange={(e) => setAutomation((prev) => ({ ...prev, appendAgentNotesToOutput: e.target.checked }))}
+            />
+            צרף בסוף הפלט נספח הערות סוכנים
+          </label>
+
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>הנחיה מותאמת לנספח</span>
+            <textarea
+              value={automation?.agentNotesInstruction || ''}
+              onChange={(e) => setAutomation((prev) => ({ ...prev, agentNotesInstruction: e.target.value }))}
+              placeholder="למשל: ציין פערים מתודולוגיים, מה לתקן לפני הגשה, ומה נשמר מצוין לפי ההנחיות"
+              rows={3}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white' }}
+            />
+          </label>
+
+          <div style={{ fontSize: 11, color: automation?.appendAgentNotesToOutput === true ? '#475569' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
+            {automation?.appendAgentNotesToOutput === true
+              ? 'הנספח יצורף רק לריצות automation שמחזירות מסמך, עם ההנחיה הייעודית שנכתבה כאן.'
+              : 'כבוי כרגע. הפלט יישאר נקי מנספח הערות עד שמפעילים את ההגדרה.'}
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Debug Logs</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            ייצוא מהיר של הלוגים הפעילים או ניקוי מלא של סביבת העבודה הנוכחית.
+          </div>
+
+          <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: '#64748B' }}>סביבה פעילה</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginTop: 4 }}>{summary?.workspaceName || automation?.workspaceName || 'ללא שם'}</div>
+              <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>לוגים שמורים: {logsCount}</div>
+            </div>
+            {!!summary?.lastError && (
+              <div style={{ border: '1px solid #FECACA', borderRadius: 10, background: '#FEF2F2', padding: '10px 12px', fontSize: 11, color: '#991B1B', lineHeight: 1.6 }}>
+                שגיאה אחרונה: {summary.lastError}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={exportLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>ייצא JSON</button>
+            <button onClick={resetLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>נקה לוגים</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── הגדרות מראה ───
 function AppearanceSettings() {
   const themes = [
@@ -4618,7 +4898,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
           <button
             className="flex items-center gap-3 px-4 py-3 rounded-xl text-white bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/10 transition-all w-full text-right group mt-2 outline-none focus:ring-2 focus:ring-indigo-400/50"
-            onClick={() => { setActivePanel('settings'); setSettingsTab('ai'); }}>
+            onClick={() => { setActivePanel('settings'); setSettingsTab('developer'); }}>
             <i className="ph-fill ph-sliders-horizontal text-lg text-indigo-300 group-hover:text-white transition-colors" />
             <span className="font-bold text-[13px]">הגדרות מתקדמות</span>
           </button>
@@ -4757,6 +5037,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
                     />
                   )}
+                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
                   {settingsTab === 'onboarding'  && (

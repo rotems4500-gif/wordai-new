@@ -189,7 +189,7 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   retryEnabled: true,
   maxRetries: 2,
   timeoutEnabled: true,
-  requestTimeoutMs: 45,
+  requestTimeoutMs: 45000,
   showProgress: true,
   appendAgentNotesToOutput: false,
   agentNotesInstruction: '',
@@ -363,7 +363,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45,
+      requestTimeoutMs: 45000,
       showProgress: true,
       appendAgentNotesToOutput: false,
       agentNotesInstruction: '',
@@ -388,7 +388,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45,
+      requestTimeoutMs: 45000,
       showProgress: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
@@ -413,7 +413,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45,
+      requestTimeoutMs: 45000,
       showProgress: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
@@ -1256,10 +1256,13 @@ const normalizeWorkspaceAutomationRecord = (automation = {}, workspaceId = DEFAU
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...sourceAutomation,
   };
+  const rawRequestTimeoutMs = Number(merged.requestTimeoutMs);
+  merged.requestTimeoutMs = Number.isFinite(rawRequestTimeoutMs) && rawRequestTimeoutMs > 0
+    ? (rawRequestTimeoutMs < 1000 ? rawRequestTimeoutMs * 1000 : rawRequestTimeoutMs)
+    : DEFAULT_WORKSPACE_AUTOMATION.requestTimeoutMs;
   const hasStoredTimeoutPreference = typeof sourceAutomation.timeoutEnabled === 'boolean';
-  const hasExplicitTimeoutPreference = hasStoredTimeoutPreference || sourceAutomation.timeoutConfigured === true;
-  if (!hasExplicitTimeoutPreference) {
-    merged.timeoutEnabled = false;
+  if (merged.timeoutConfigured !== true && !hasStoredTimeoutPreference) {
+    merged.timeoutEnabled = true;
   }
   merged.activeWorkspaceId = workspaceId;
   merged.workspaceName = sanitizeWorkspaceName(merged.workspaceName || workspaceName || '', 'סביבת עבודה מותאמת');
@@ -1361,11 +1364,7 @@ const upgradeLegacyDefaultWorkspaceTimeouts = (library = {}) => {
 
     if (currentSignature !== legacySignature) return;
 
-    nextLibrary[workspaceId] = normalizeWorkspaceRecord(
-      workspaceId,
-      buildLegacyTimeoutDisabledWorkspaceRecord(workspace),
-      fallbackName
-    );
+    nextLibrary[workspaceId] = normalizeWorkspaceRecord(workspaceId, workspace, fallbackName);
     wasUpdated = true;
   });
 
@@ -2071,6 +2070,12 @@ export const saveProviderConfig = (config, options = {}) => {
   if (safeConfig.gemini?.key) localStorage.setItem('GEMINI_API_KEY', safeConfig.gemini.key);
   else localStorage.removeItem('GEMINI_API_KEY');
 
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('wordai-provider-config-changed', {
+      detail: { config: safeConfig },
+    }));
+  }
+
   if (!options?.skipDisk && window.desktopApp?.saveProviderConfig) {
     window.desktopApp.saveProviderConfig(safeConfig).catch(() => {});
   }
@@ -2378,160 +2383,6 @@ const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
 const isManagerReviewAgent = (agent = {}) => /manager.*review|review.*manager|מנהל.*בדיק|בדיק.*מנהל/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 const isDocumentDesignerAgent = (agent = {}) => /(document-designer|מעצב מסמך|סגנון אישי|human)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 
-const ROUTING_BASE_PROVIDER_SCORES = {
-  general: {
-    gemini: 100,
-    openai: 98,
-    claude: 96,
-    perplexity: 84,
-    groq: 72,
-    custom: 60,
-    ollama: 56,
-  },
-  manager: {
-    gemini: 130,
-    openai: 122,
-    claude: 116,
-    perplexity: 88,
-    groq: 78,
-    custom: 62,
-    ollama: 58,
-  },
-  researcher: {
-    perplexity: 134,
-    gemini: 114,
-    openai: 108,
-    claude: 102,
-    groq: 78,
-    custom: 60,
-    ollama: 56,
-  },
-  writer: {
-    claude: 134,
-    openai: 126,
-    gemini: 104,
-    groq: 76,
-    custom: 62,
-    ollama: 58,
-    perplexity: 68,
-  },
-  designer: {
-    claude: 136,
-    openai: 122,
-    gemini: 106,
-    groq: 74,
-    custom: 62,
-    ollama: 58,
-    perplexity: 66,
-  },
-  proofreader: {
-    claude: 132,
-    openai: 128,
-    gemini: 106,
-    groq: 74,
-    custom: 62,
-    ollama: 58,
-    perplexity: 66,
-  },
-};
-
-const WORKSPACE_ROUTING_SUMMARY_GROUPS = [
-  { label: 'ניהול', roleKeys: ['manager'], fallbackAgent: { id: 'manager', name: 'manager', enabled: true, provider: '', model: '' } },
-  { label: 'מחקר', roleKeys: ['researcher'], fallbackAgent: { id: 'researcher', name: 'researcher', enabled: true, provider: '', model: '' } },
-  { label: 'כתיבה', roleKeys: ['designer', 'writer', 'proofreader'], fallbackAgent: { id: 'writer', name: 'writer', enabled: true, provider: '', model: '' } },
-];
-
-const getConfiguredModelForProvider = (providerId = '', cfg = null) => {
-  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const fallbackModel = DEFAULT_PROVIDER_CONFIG?.[providerId]?.model || '';
-  return normalizeProviderModelName(providerId, String(safeCfg?.[providerId]?.model || fallbackModel || '').trim());
-};
-
-const inferProviderFromModelHint = (modelName = '', allowedProviders = [], cfg = null) => {
-  const cleanModel = String(modelName || '').trim();
-  if (!cleanModel) return '';
-
-  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const pool = Array.isArray(allowedProviders) && allowedProviders.length
-    ? allowedProviders
-    : getConfiguredProviderPool(safeCfg);
-  if (!pool.length) return '';
-
-  const exactMatch = pool.find((providerId) => {
-    const normalizedRequestedModel = normalizeProviderModelName(providerId, cleanModel).toLowerCase();
-    const configuredModel = getConfiguredModelForProvider(providerId, safeCfg).toLowerCase();
-    return Boolean(configuredModel) && normalizedRequestedModel === configuredModel;
-  });
-  if (exactMatch) return exactMatch;
-
-  const normalizedModel = cleanModel.toLowerCase().replace(/^models\//, '');
-  if (/^(gemini|learnlm)/.test(normalizedModel) && pool.includes('gemini')) return 'gemini';
-  if (/^claude/.test(normalizedModel) && pool.includes('claude')) return 'claude';
-  if (/^(gpt|o\d|chatgpt)/.test(normalizedModel) && pool.includes('openai')) return 'openai';
-  if (/^(sonar|pplx)/.test(normalizedModel) && pool.includes('perplexity')) return 'perplexity';
-  return '';
-};
-
-export const isProviderModelChoiceCompatible = (providerId = '', modelName = '', cfg = null) => {
-  const safeProvider = String(providerId || '').trim();
-  const normalizedModel = normalizeProviderModelName(safeProvider, String(modelName || '').trim());
-  if (!safeProvider || !KNOWN_PROVIDER_IDS.includes(safeProvider) || !normalizedModel) return false;
-  if (safeProvider === 'custom' || safeProvider === 'ollama') return true;
-
-  const inferredProvider = inferProviderFromModelHint(normalizedModel, KNOWN_PROVIDER_IDS, cfg);
-  return !inferredProvider || inferredProvider === safeProvider;
-};
-
-const getProviderRoleFitScore = (roleKey = 'general', providerId = '', cfg = null) => {
-  const safeRoleKey = ROUTING_BASE_PROVIDER_SCORES[roleKey] ? roleKey : 'general';
-  const modelName = getConfiguredModelForProvider(providerId, cfg).toLowerCase();
-  let score = ROUTING_BASE_PROVIDER_SCORES[safeRoleKey]?.[providerId] ?? ROUTING_BASE_PROVIDER_SCORES.general?.[providerId] ?? 0;
-
-  const strongReasoningModel = /(?:gemini-2\.5-pro|gpt-5|gpt-4\.1|o[1345](?:-mini)?|deepseek-r1|reason(?:ing)?|thinking|claude-opus|claude-sonnet-4|claude-3-7|sonar-(?:pro|reasoning))/i.test(modelName);
-  const strongPlanningModel = /(?:gemini-2\.5-pro|gpt-5|gpt-4\.1|o[34](?:-mini)?|deepseek-r1|claude-opus|claude-sonnet-4|reason(?:ing)?)/i.test(modelName);
-  const strongWritingModel = /(?:claude-(?:opus|sonnet)|gpt-5|gpt-4\.1|gpt-4o|o[34](?:-mini)?|gemini-2\.5-pro|gemini-2\.5-flash)/i.test(modelName);
-  const strongPerplexityResearchModel = providerId === 'perplexity' && /(?:sonar|reason)/i.test(modelName);
-  const weakerFastModel = /(?:mini|haiku|flash-lite|instant|8b|7b|3b|1b)/i.test(modelName);
-
-  if (safeRoleKey === 'researcher') {
-    if (providerId === 'perplexity') score += strongPerplexityResearchModel ? 72 : 44;
-    if (strongReasoningModel) score += 34;
-    if (/gemini-2\.5-pro/.test(modelName)) score += 20;
-    if (/(?:gpt-5|gpt-4\.1|o[34](?:-mini)?)/.test(modelName)) score += 18;
-    if (/claude-(?:opus|sonnet-4|3-7)/.test(modelName)) score += 12;
-  } else if (safeRoleKey === 'manager') {
-    if (providerId === 'gemini') score += 18;
-    if (/gemini-2\.5-pro/.test(modelName)) score += 64;
-    if (strongPlanningModel) score += 36;
-    if (providerId === 'claude' && /(?:opus|sonnet)/.test(modelName)) score += 18;
-    if (providerId === 'perplexity' && !strongPerplexityResearchModel) score -= 18;
-  } else if (['writer', 'designer', 'proofreader'].includes(safeRoleKey)) {
-    if (providerId === 'claude' && /(?:opus|sonnet)/.test(modelName)) score += 66;
-    if (providerId === 'openai' && /(?:gpt-5|gpt-4\.1|gpt-4o|o[34](?:-mini)?)/.test(modelName)) score += 54;
-    if (providerId === 'gemini' && /gemini-2\.5-(?:pro|flash)/.test(modelName)) score += 24;
-    if (strongWritingModel) score += 22;
-    if (safeRoleKey === 'designer' && providerId === 'claude') score += 8;
-    if (safeRoleKey === 'proofreader' && providerId === 'openai') score += 8;
-    if (providerId === 'perplexity') score -= 24;
-  } else {
-    if (strongReasoningModel) score += 18;
-    if (strongWritingModel) score += 10;
-  }
-
-  if (providerId === 'groq' && /(?:deepseek-r1|reason|llama-3\.3-70b)/.test(modelName)) score += 12;
-  if (['custom', 'ollama'].includes(providerId)) score -= 8;
-  if (weakerFastModel) score -= 12;
-
-  return score;
-};
-
-const formatProviderRoutingSummaryLabel = (providerId = '', modelName = '', cfg = null) => {
-  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const providerLabel = getProviderLabelMap(safeCfg)[providerId] || providerId;
-  const cleanModel = normalizeProviderModelName(providerId, modelName);
-  return cleanModel ? `${providerLabel}/${cleanModel}` : providerLabel;
-};
-
 const getAgentRoleKey = (agent = {}) => {
   const value = `${String(agent?.id || '')} ${String(agent?.name || '')}`.toLowerCase();
   if (isManagerReviewAgent(agent)) return 'manager';
@@ -2545,10 +2396,51 @@ const getAgentRoleKey = (agent = {}) => {
 
 const isPlanningManagerAgent = (agent = {}) => getAgentRoleKey(agent) === 'manager' && !isManagerReviewAgent(agent);
 
-const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [], requestedModel = '') => {
+const getConfiguredModelForProvider = (providerId = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const fallbackModel = DEFAULT_PROVIDER_CONFIG?.[providerId]?.model || '';
+  return normalizeProviderModelName(providerId, String(safeCfg?.[providerId]?.model || fallbackModel || '').trim());
+};
+
+const inferProviderFromModelHint = (modelName = '', allowedProviders = [], cfg = null) => {
+  const cleanModel = String(modelName || '').trim();
+  if (!cleanModel) return '';
+
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const requestedProviders = normalizeProviderIds(allowedProviders, '')
+    .filter((providerId) => KNOWN_PROVIDER_IDS.includes(providerId));
+  const pool = requestedProviders.length ? requestedProviders : [...KNOWN_PROVIDER_IDS];
+
+  const exactMatch = pool.find((providerId) => {
+    const normalizedRequestedModel = normalizeProviderModelName(providerId, cleanModel).toLowerCase();
+    const configuredModel = getConfiguredModelForProvider(providerId, safeCfg).toLowerCase();
+    return Boolean(configuredModel) && normalizedRequestedModel === configuredModel;
+  });
+  if (exactMatch) return exactMatch;
+
+  const normalizedModel = cleanModel.toLowerCase().replace(/^models\//, '');
+  if (/^(gemini|learnlm)/.test(normalizedModel) && pool.includes('gemini')) return 'gemini';
+  if (/^claude/.test(normalizedModel) && pool.includes('claude')) return 'claude';
+  if (/^(gpt|o\d|chatgpt)/.test(normalizedModel) && pool.includes('openai')) return 'openai';
+  if (/^(sonar|pplx|llama-3\.1-sonar)/.test(normalizedModel) && pool.includes('perplexity')) return 'perplexity';
+  return '';
+};
+
+export const isProviderModelChoiceCompatible = (providerId = '', modelName = '', cfg = null) => {
+  const safeProvider = String(providerId || '').trim();
+  const normalizedModel = normalizeProviderModelName(safeProvider, String(modelName || '').trim());
+  if (!safeProvider || !KNOWN_PROVIDER_IDS.includes(safeProvider) || !normalizedModel) return false;
+  if (safeProvider === 'custom' || safeProvider === 'ollama') return true;
+
+  const inferredProvider = inferProviderFromModelHint(normalizedModel, KNOWN_PROVIDER_IDS, cfg);
+  return !inferredProvider || inferredProvider === safeProvider;
+};
+
+const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = []) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const requestedPool = normalizeProviderIds(preferredProviders, '');
-  const routingPool = getConfiguredProviderPool(safeCfg, requestedPool);
+  const routingPool = requestedPool
+    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
   const explicitProvider = String(agent?.provider || '').trim();
   if (explicitProvider) {
     if (!isProviderConfiguredForUse(explicitProvider, safeCfg)) return '';
@@ -2556,59 +2448,57 @@ const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [],
     return explicitProvider;
   }
 
-  if (requestedPool.length && !routingPool.length) return '';
-  const pool = routingPool;
-  if (!pool.length) return '';
-
-  const modelHint = String(requestedModel || agent?.model || '').trim();
-  const inferredProvider = inferProviderFromModelHint(modelHint, pool, safeCfg);
-  if (inferredProvider) return inferredProvider;
-
   const roleKey = getAgentRoleKey(agent);
-  return pool
-    .map((providerId, index) => ({
-      providerId,
-      index,
-      score: getProviderRoleFitScore(roleKey, providerId, safeCfg),
-    }))
-    .sort((left, right) => (right.score - left.score) || (left.index - right.index))?.[0]?.providerId || pool[0] || safeCfg.active;
+  if (requestedPool.length && !routingPool.length) return '';
+  const pool = routingPool.length
+    ? routingPool
+    : getSelectedProviderIds(safeCfg).filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
+  if (!pool.length) return '';
+  const inferredProvider = inferProviderFromModelHint(agent?.model || '', pool, safeCfg);
+  if (inferredProvider) return inferredProvider;
+  const preferences = roleKey === 'researcher'
+    ? ['perplexity', 'gemini', 'openai', 'claude', 'groq', 'custom', 'ollama']
+    : roleKey === 'proofreader'
+      ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
+      : roleKey === 'writer'
+        ? ['openai', 'claude', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
+        : roleKey === 'designer'
+          ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
+          : ['gemini', 'openai', 'claude', 'groq', 'custom', 'ollama', 'perplexity'];
+
+  return preferences.find((providerId) => pool.includes(providerId)) || pool[0] || safeCfg.active;
+};
+
+const formatProviderRoutingSummaryLabel = (providerId = '', modelName = '', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const providerLabel = getProviderLabelMap(safeCfg)[providerId] || providerId;
+  const cleanModel = normalizeProviderModelName(providerId, modelName);
+  return cleanModel ? `${providerLabel}/${cleanModel}` : providerLabel;
 };
 
 export const buildWorkspaceRoutingSummary = (agents = [], cfg = null, preferredProviders = []) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const pool = getConfiguredProviderPool(safeCfg, preferredProviders);
-  if (!pool.length) return 'אין ספקים זמינים';
-
-  const enabledAgents = Array.isArray(agents)
+  const enabledAgents = Array.isArray(agents) && agents.length
     ? agents.filter((agent) => agent && agent.enabled !== false)
-    : [];
-  const useFallbackGroups = enabledAgents.length === 0;
+    : getDefaultRoleAgents();
 
-  return WORKSPACE_ROUTING_SUMMARY_GROUPS
-    .map(({ label, roleKeys, fallbackAgent }) => {
-      const matchingAgents = enabledAgents.filter((agent) => roleKeys.includes(getAgentRoleKey(agent)));
-      const effectiveAgents = matchingAgents.length ? matchingAgents : (useFallbackGroups ? [fallbackAgent] : []);
-      if (!effectiveAgents.length) return '';
-      const routeLabels = [...new Set(effectiveAgents
-        .map((agent) => {
-          const providerId = chooseProviderForAgent(agent, safeCfg, pool);
-          if (!providerId) return '';
-          const explicitProvider = String(agent?.provider || '').trim();
-          const explicitModel = String(agent?.model || '').trim();
-          const resolvedModel = explicitModel && (explicitProvider === providerId || inferProviderFromModelHint(explicitModel, [providerId], safeCfg) === providerId)
-            ? normalizeProviderModelName(providerId, explicitModel)
-            : getConfiguredModelForProvider(providerId, safeCfg);
-          return formatProviderRoutingSummaryLabel(providerId, resolvedModel, safeCfg);
-        })
-        .filter(Boolean))];
-      if (!routeLabels.length) return '';
-      const compactRoutes = routeLabels.length > 2
-        ? `${routeLabels.slice(0, 2).join(' + ')} + עוד`
-        : routeLabels.join(' + ');
-      return `${label}: ${compactRoutes}`;
+  const routeLabels = [...new Set(enabledAgents
+    .map((agent) => {
+      const providerId = chooseProviderForAgent(agent, safeCfg, preferredProviders);
+      if (!providerId) return '';
+      const explicitProvider = String(agent?.provider || '').trim();
+      const explicitModel = String(agent?.model || '').trim();
+      const resolvedModel = explicitModel && (explicitProvider === providerId || inferProviderFromModelHint(explicitModel, [providerId], safeCfg) === providerId)
+        ? normalizeProviderModelName(providerId, explicitModel)
+        : getConfiguredModelForProvider(providerId, safeCfg);
+      return formatProviderRoutingSummaryLabel(providerId, resolvedModel, safeCfg);
     })
-    .filter(Boolean)
-    .join(' • ');
+    .filter(Boolean))];
+
+  if (!routeLabels.length) return 'אין ספקים זמינים';
+  return routeLabels.length > 2
+    ? `${routeLabels.slice(0, 2).join(' + ')} + עוד`
+    : routeLabels.join(' + ');
 };
 
 const resolveExplicitProviderCandidate = (candidates = [], allowedProviders = [], cfg = null) => {
@@ -3161,7 +3051,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
   ].filter(Boolean).join('\n\n');
 };
 
-const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], modelOverride = '', runId, logEvent, onStatus, activeSkill = null, preserveFullDocumentContext = false }) => {
+const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null, preserveFullDocumentContext = false }) => {
   const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText);
   const structureOptOut = hasExplicitStructureOptOut(structureConstraintText || cleanUserPrompt);
   const combinedContext = `${cleanUserPrompt}\n${documentContext}`;
@@ -3198,13 +3088,13 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
   if (!managerAgent) return fallbackPlan;
   const allowDocumentDesigner = shouldAllowDocumentDesigner(cleanUserPrompt, structureConstraintText);
   const planningProviderPool = getConfiguredProviderPool(cfg, preferredProviders);
-  const requestedManagerModelOverride = String(modelOverride || managerAgent?.model || '').trim();
-  const managerProvider = chooseProviderForAgent(managerAgent, cfg, preferredProviders, requestedManagerModelOverride);
+  const managerProvider = chooseProviderForAgent(managerAgent, cfg, preferredProviders);
+  const requestedManagerModelOverride = String(managerAgent?.model || '').trim();
   const effectiveManagerModelOverride = managerProvider && requestedManagerModelOverride && !isProviderModelChoiceCompatible(managerProvider, requestedManagerModelOverride, cfg)
     ? ''
     : requestedManagerModelOverride;
   const availableProviders = planningProviderPool
-    .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, providerId === managerProvider ? effectiveManagerModelOverride : '')}`)
+    .map((providerId) => `${providerId}: ${getModelNameForProvider(providerId, cfg, '')}`)
     .join('\n');
   const availableAgents = enabledAgents
     .map((agent) => {
@@ -5180,9 +5070,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
   const agentName = options.agentName || agentLabel;
   const includeCompletionMetadata = options.includeCompletionMetadata === true;
-  const requestTimeoutSeconds = Number(automation.requestTimeoutMs);
-  const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutSeconds) && requestTimeoutSeconds > 0
-    ? Math.max(10000, requestTimeoutSeconds * 1000)
+  const requestTimeoutMs = Number(automation.requestTimeoutMs);
+  const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+    ? Math.max(10000, Math.round(requestTimeoutMs))
     : 0;
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
@@ -5288,7 +5178,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         cfg,
         selectedProviders,
         preferredProviders: automationPreferredProviders,
-        modelOverride,
         runId,
         logEvent,
         onStatus,
@@ -5365,8 +5254,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
             executionPlan?.stageProviders?.[stageRoutingKey],
           ], allowedStageProviders, cfg);
-          const stageModelPinnedProvider = inferProviderFromModelHint(stageAgent.model || modelOverride, allowedStageProviders, cfg);
-          const stageProvider = stageModelPinnedProvider || normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders, modelOverride || stageAgent.model || '');
+          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders);
           const stageRequestedModel = stageAgent.model || taggedRouting.providerModels?.[stageProvider] || getModelNameForProvider(stageProvider, cfg, modelOverride);
           const stageDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
           const stagePrompt = buildStagePrompt({
@@ -5672,8 +5560,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
           executionPlan?.stageProviders?.[managerRoleKey],
         ], allowedReviewProviders, cfg);
-        const reviewModelPinnedProvider = inferProviderFromModelHint(managerAgent.model || modelOverride, allowedReviewProviders, cfg);
-        const reviewProvider = reviewModelPinnedProvider || normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders, modelOverride || managerAgent.model || '');
+        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders);
         const reviewRequestedModel = managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || getModelNameForProvider(reviewProvider, cfg, modelOverride);
         const reviewDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
         const reviewPrompt = buildStagePrompt({
@@ -6005,21 +5892,21 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           preferredProviders: runnableProviders,
           strictProviderOverride: true,
           modelOverride: taggedRouting.providerModels?.[providerId] || '',
-            includeCompletionMetadata: true,
           skipAutomation: true,
           skipMultiModel: true,
           shouldPersistMemory: false,
+          includeCompletionMetadata: true,
           runId,
           agentLabel: providerLabel,
           onStatus,
         });
-          const normalizedProviderReply = normalizeProviderTextResponse(providerReply, providerId);
-          collectedResponses.push({
-            providerId,
-            providerLabel,
-            reply: normalizedProviderReply,
-            content: normalizedProviderReply.text,
-          });
+        const normalizedProviderReply = normalizeProviderTextResponse(providerReply, providerId);
+        collectedResponses.push({
+          providerId,
+          providerLabel,
+          content: normalizedProviderReply.text,
+          reply: normalizedProviderReply,
+        });
       } catch (error) {
         if (!firstError) firstError = error;
         logEvent('multi-model-provider-error', `המנוע ${providerLabel} נכשל`, {
@@ -6067,10 +5954,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         preferredProviders: collectedResponses.map((item) => item.providerId),
         strictProviderOverride: true,
         modelOverride: taggedRouting.providerModels?.[mergeProviderId] || '',
-        includeCompletionMetadata: true,
         skipAutomation: true,
         skipMultiModel: true,
         shouldPersistMemory: false,
+        includeCompletionMetadata: true,
         runId,
         agentLabel: `${agentLabel} · איחוד`,
         onStatus,
@@ -6291,7 +6178,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           preferredProviders: [fallbackProvider],
           strictProviderOverride: true,
           modelOverride: taggedRouting.providerModels?.[fallbackProvider] || '',
-          includeCompletionMetadata: true,
           skipAutomation: true,
           shouldPersistMemory: false,
           disableFallback: true,
@@ -6383,7 +6269,7 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
   const strictProviderOverride = runtimeOptions.strictProviderOverride === true && Boolean(explicitProviderOverride);
   const providerOverride = strictProviderOverride
     ? explicitProviderOverride
-    : chooseProviderForAgent(agent, cfg, selectedProviders, requestedModelOverride);
+    : chooseProviderForAgent(agent, cfg, selectedProviders);
   const modelOverride = providerOverride && requestedModelOverride && !isProviderModelChoiceCompatible(providerOverride, requestedModelOverride, cfg)
     ? ''
     : requestedModelOverride;
@@ -6664,17 +6550,14 @@ export const getProviderModelChoices = (providerId = '', cfg = null, extraModels
 
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const configuredModel = normalizeProviderModelName(safeProvider, String(safeCfg?.[safeProvider]?.model || '').trim());
-  const compatibleConfiguredModel = isProviderModelChoiceCompatible(safeProvider, configuredModel, safeCfg)
-    ? configuredModel
-    : '';
   const extra = (Array.isArray(extraModels) ? extraModels : [extraModels])
     .map((model) => normalizeProviderModelName(safeProvider, String(model || '').trim()))
-    .filter((model) => isProviderModelChoiceCompatible(safeProvider, model, safeCfg));
+    .filter(Boolean);
   const fallbacks = (PROVIDER_MODEL_OPTIONS[safeProvider] || [])
     .map((model) => normalizeProviderModelName(safeProvider, model))
     .filter(Boolean);
 
-  return [...new Set([compatibleConfiguredModel, ...extra, ...fallbacks].filter(Boolean))];
+  return [...new Set([configuredModel, ...extra, ...fallbacks].filter(Boolean))];
 };
 
 const TEST_PROMPT = [{ role: 'user', content: 'אמור "אוקי" בלבד.' }];

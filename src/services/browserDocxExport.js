@@ -142,9 +142,7 @@ const hasSignificantRtlText = (block = '') => {
   return rtlCount >= 6 && rtlWordCount >= 2 && rtlWordCount > latinWordCount && rtlCount >= latinCount;
 };
 
-const shouldForceRtlBlockFormatting = (block = '', typography = {}) => (
-  hasSignificantRtlText(block)
-);
+const shouldForceRtlBlockFormatting = (block = '') => hasSignificantRtlText(block);
 
 const hasDominantLtrText = (block = '', typography = {}) => {
   const text = extractDirectionalText(block);
@@ -178,19 +176,18 @@ const resolveDocxAlignmentValue = (value = '', fallback = AlignmentType.RIGHT, i
 const resolveBlockDocxFormatting = (block = '', typography = {}) => {
   const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
   const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
+  const dominantLtr = !explicitDirection && hasDominantLtrText(block, typography);
+  const fallbackAlignment = !alignmentValue && dominantLtr
+    ? AlignmentType.LEFT
+    : (typography.alignment || AlignmentType.RIGHT);
   const documentIsRtl = isRtlDocxLanguage(typography.language);
-  const forcedRtl = !explicitDirection && shouldForceRtlBlockFormatting(block, typography);
-  const dominantLtr = !explicitDirection && !forcedRtl && hasDominantLtrText(block, typography);
   const bidirectional = explicitDirection
     ? !/^ltr$/i.test(explicitDirection)
-    : forcedRtl
+    : shouldForceRtlBlockFormatting(block, typography)
       ? true
       : dominantLtr
         ? false
         : documentIsRtl;
-  const fallbackAlignment = !alignmentValue && dominantLtr
-    ? AlignmentType.LEFT
-    : (typography.alignment || AlignmentType.RIGHT);
   const alignmentDirection = bidirectional;
   return {
     alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, alignmentDirection),

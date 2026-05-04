@@ -12,8 +12,19 @@ permissions:
 jobs:
   release-windows:
     runs-on: windows-latest
+    env:
+      CSC_LINK: ${{ secrets['CSC_LINK'] }}
+      CSC_KEY_PASSWORD: ${{ secrets['CSC_KEY_PASSWORD'] }}
+      WIN_CSC_LINK: ${{ secrets['WIN_CSC_LINK'] }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets['WIN_CSC_KEY_PASSWORD'] }}
 
     steps:
+      - name: Fail fast for manual publish without a release tag
+        if: github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          throw "Manual publish runs must target a release tag matching v*. Re-run workflow_dispatch from a v* tag ref."
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -62,6 +73,17 @@ jobs:
             throw "Tag version $tagVersion does not match package.json version $($pkg.version)"
           }
 
+      - name: Validate signing configuration for tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $hasGenericSigning = -not [string]::IsNullOrWhiteSpace($env:CSC_LINK) -and -not [string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)
+          $hasWindowsSigning = -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -and -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)
+
+          if (-not ($hasGenericSigning -or $hasWindowsSigning)) {
+            throw "Tagged releases require Windows code signing secrets. Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD, or CSC_LINK and CSC_KEY_PASSWORD."
+          }
+
       - name: Clean previous release files
         shell: pwsh
         run: |
@@ -74,7 +96,7 @@ jobs:
         run: |
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx electron-builder --win --publish never
+          npx electron-builder --win --publish never --config.win.signAndEditExecutable=true
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $latest = Get-Content release/latest.yml -Raw
           $pkg = Get-Content package.json | ConvertFrom-Json
