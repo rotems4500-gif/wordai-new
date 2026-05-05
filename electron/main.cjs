@@ -81,6 +81,7 @@ function resolveAutoUpdateFeedUrl() {
 
 let mainWindow;
 let pendingFilePayload = null;
+let pendingSettingsPayload = null;
 let loadRendererInProgress = false;
 const activeProxyRequests = new Map();
 const abortedProxyRequests = new Set();
@@ -1131,10 +1132,50 @@ function createMainWindow() {
   });
 }
 
+function getUsableMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return null;
+  return mainWindow;
+}
+
+function openSettingsTabSafely(tab = 'ai') {
+  const resolvedTab = String(tab || '').trim() || 'ai';
+  pendingSettingsPayload = { tab: resolvedTab };
+  const sendOpenSettings = (targetWindow) => {
+    if (!targetWindow || targetWindow.isDestroyed()) return;
+    if (!targetWindow.webContents || targetWindow.webContents.isDestroyed()) return;
+    if (targetWindow.isMinimized()) targetWindow.restore();
+    if (!targetWindow.isVisible()) targetWindow.show();
+    targetWindow.focus();
+    targetWindow.webContents.send('open-settings', { tab: resolvedTab });
+  };
+
+  const existingWindow = getUsableMainWindow();
+  if (existingWindow) {
+    if (existingWindow.webContents.isLoading()) {
+      existingWindow.webContents.once('did-finish-load', () => sendOpenSettings(existingWindow));
+      return;
+    }
+    sendOpenSettings(existingWindow);
+    return;
+  }
+
+  createMainWindow();
+  const createdWindow = getUsableMainWindow();
+  if (!createdWindow) return;
+  createdWindow.webContents.once('did-finish-load', () => sendOpenSettings(createdWindow));
+}
+
 ipcMain.handle('consume-pending-open-document', async () => {
   const payload = pendingFilePayload;
   pendingFilePayload = null;
   return payload || { canceled: true };
+});
+
+ipcMain.handle('consume-pending-open-settings', async () => {
+  const payload = pendingSettingsPayload;
+  pendingSettingsPayload = null;
+  return payload || null;
 });
 
 ipcMain.handle('open-document-dialog', async () => {
@@ -1566,14 +1607,14 @@ function createAppMenu() {
         { type: 'separator' },
         {
           label: 'מדריך למשתמש',
-          click: () => shell.openExternal('https://github.com/rotems4500-gif/wordai-new/blob/main/docs/user-guide.md'),
+          click: () => {
+            openSettingsTabSafely('guide');
+          },
         },
         {
           label: 'מדריך מפתחות API',
           click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.send('open-settings', { tab: 'ai' });
-            }
+            openSettingsTabSafely('ai');
           },
         },
         { type: 'separator' },
@@ -1595,8 +1636,8 @@ function createAppMenu() {
               ].join('\n'),
               buttons: ['סגור', 'פתח הגדרות AI'],
             }).then(({ response }) => {
-              if (response === 1 && mainWindow) {
-                mainWindow.webContents.send('open-settings', { tab: 'ai' });
+              if (response === 1) {
+                openSettingsTabSafely('ai');
               }
             });
           },
@@ -1620,8 +1661,8 @@ function createAppMenu() {
               ].join('\n'),
               buttons: ['סגור', 'פתח הגדרות AI'],
             }).then(({ response }) => {
-              if (response === 1 && mainWindow) {
-                mainWindow.webContents.send('open-settings', { tab: 'ai' });
+              if (response === 1) {
+                openSettingsTabSafely('ai');
               }
             });
           },

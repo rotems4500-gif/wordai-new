@@ -38,6 +38,17 @@ tmp-*.mjs
 tmp-*.js
 tmp-ocr-test.png
 *.vsix
+patch*.js
+run-patch*.js
+preview-agent-redesign.html
+preview-app-product.html
+preview-home.html
+icon-preview.html
+workspace-create-view.html
+fix3.js
+script.js
+temp.txt
+test.js
 
 
 *.exe

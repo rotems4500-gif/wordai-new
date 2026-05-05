@@ -2012,6 +2012,61 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
         </div>
       </div>
 
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>מתחילים כאן</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>מילון מושגים למתחילים</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה Agent?</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>Agent הוא עוזר עם תפקיד מוגדר מראש, למשל כתיבה, מחקר או ליטוש. במקום בקשה כללית אחת, כל Agent מטפל בחלק אחר של המשימה.</div>
+          </div>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה API key?</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>API key הוא מפתח גישה אישי לספק ה-AI שלך. האפליקציה משתמשת בו כדי להתחבר לחשבון שלך ולהפעיל מודלים.</div>
+          </div>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה Provider?</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>Provider הוא ספק השירות שמריץ את מודל ה-AI בפועל, כמו Gemini או OpenAI. אפשר לבחור ספק אחר לפי מהירות, מחיר וסוג המשימה.</div>
+          </div>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>Direct mode מול Workspace/Workflow mode</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>ב-Direct mode הבקשה נשלחת ישירות למודל שבחרת. ב-Workspace/Workflow mode המערכת מפעילה תהליך מסודר עם כמה סוכנים ותפקידים.</div>
+          </div>
+        </div>
+        <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, background: '#EFF6FF', padding: '10px 12px', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>מתי לבחור "ללא סביבת עבודה"?</div>
+          <div style={{ fontSize: 11, color: '#1E40AF', lineHeight: 1.7 }}>כשרוצים תשובה מהירה, ניסוח נקודתי או טיוטה קצרה בלי תהליך מורכב. אם המשימה גדולה או דורשת מבנה מחקרי, עדיף לבחור סביבת עבודה.</div>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {[
+            { label: 'הגדרת AI וספקים', tab: 'ai' },
+            { label: 'ניהול Agents ו-Workflow', tab: 'agents' },
+            { label: 'הגדרות Assistant', tab: 'assistant' },
+          ].map((action) => {
+            const selected = action.tab === activeTab;
+            return (
+              <button
+                key={`beginner-${action.tab}`}
+                type="button"
+                onClick={() => onNavigate(action.tab)}
+                style={{
+                  border: selected ? '1px solid #1D4ED8' : '1px solid #BFDBFE',
+                  background: selected ? '#DBEAFE' : '#EFF6FF',
+                  color: selected ? '#1E3A8A' : '#1D4ED8',
+                  borderRadius: 12,
+                  padding: '8px 11px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {selected ? `פתוח עכשיו: ${action.label}` : action.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 14 }}>
         <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '18px', background: 'white' }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>{activeStep.eyebrow}</div>

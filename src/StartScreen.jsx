@@ -139,6 +139,70 @@ const WORKSPACE_PROVIDER_LABELS = {
   custom: 'Custom',
 };
 
+const MATERIAL_FILTER_OPTIONS = [
+  { id: 'all', label: 'הכל' },
+  { id: 'examples', label: 'דוגמאות' },
+  { id: 'course-materials', label: 'חומרי קורס' },
+  { id: 'writing-samples', label: 'דוגמאות כתיבה' },
+  { id: 'templates', label: 'תבניות' },
+];
+
+const MATERIAL_GROUP_ORDER = ['course-materials', 'writing-samples', 'templates', 'examples', 'other'];
+
+const MATERIAL_GROUP_LABELS = {
+  'course-materials': 'חומרי קורס',
+  'writing-samples': 'דוגמאות כתיבה',
+  templates: 'תבניות',
+  examples: 'דוגמאות',
+  other: 'כללי',
+};
+
+const normalizeMaterialValue = (value = '') => String(value || '').trim().toLowerCase();
+
+const isTemplateMaterial = ({ kind = '', label = '' } = {}) => (
+  ['template-example', 'cover-page'].includes(kind)
+  || /תבנית|דף\s*שער|template/.test(label)
+);
+
+const isWritingSampleMaterial = ({ kind = '', label = '' } = {}) => (
+  kind === 'writing-sample'
+  || /דוגמ(?:ת|ה)?\s*כתיבה|writing\s*sample/.test(label)
+);
+
+const isCourseMaterial = ({ kind = '', label = '' } = {}) => (
+  kind === 'course-material'
+  || /חומר\s*קורס|רקע|course\s*material/.test(label)
+);
+
+const isExampleMaterial = ({ kind = '', label = '' } = {}) => (
+  kind.includes('example')
+  || kind === 'cover-page'
+  || /דוגמ(?:ת|ה)?|example|sample/.test(label)
+);
+
+const resolveMaterialGroupId = (item = {}) => {
+  const kind = normalizeMaterialValue(item.uploadKind);
+  const label = normalizeMaterialValue(item.label);
+
+  if (isCourseMaterial({ kind, label })) return 'course-materials';
+  if (isWritingSampleMaterial({ kind, label })) return 'writing-samples';
+  if (isTemplateMaterial({ kind, label })) return 'templates';
+  if (isExampleMaterial({ kind, label })) return 'examples';
+  return 'other';
+};
+
+const doesMaterialMatchFilter = (item = {}, filter = 'all') => {
+  if (filter === 'all') return true;
+
+  const kind = normalizeMaterialValue(item.uploadKind);
+  const label = normalizeMaterialValue(item.label);
+  if (filter === 'course-materials') return isCourseMaterial({ kind, label });
+  if (filter === 'writing-samples') return isWritingSampleMaterial({ kind, label });
+  if (filter === 'templates') return isTemplateMaterial({ kind, label });
+  if (filter === 'examples') return isExampleMaterial({ kind, label });
+  return true;
+};
+
 const summarizeWorkspaceProviders = (agents = []) => {
   return buildWorkspaceRoutingSummary(agents, getProviderConfig());
 };
@@ -294,6 +358,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [instructions, setInstructions] = useState(() => (instructionsResetToken > 0 ? '' : (typeof getHomeInstructions === 'function' ? getHomeInstructions() : '')));
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [materialsFilter, setMaterialsFilter] = useState('all');
   const [uploading, setUploading] = useState(false);
   const [instructionFileName, setInstructionFileName] = useState('');
   const [baseDraft, setBaseDraft] = useState(null);
@@ -760,6 +825,29 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
   const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim() || hasBaseDraft);
   const canGenerate = hasGenerationInput && !isGenerating;
+
+  const filteredMaterials = React.useMemo(() => (
+    materials.filter((item) => doesMaterialMatchFilter(item, materialsFilter))
+  ), [materials, materialsFilter]);
+
+  const groupedFilteredMaterials = React.useMemo(() => {
+    const grouped = filteredMaterials.reduce((acc, item) => {
+      const groupId = resolveMaterialGroupId(item);
+      if (!acc[groupId]) {
+        acc[groupId] = {
+          id: groupId,
+          label: MATERIAL_GROUP_LABELS[groupId] || MATERIAL_GROUP_LABELS.other,
+          items: [],
+        };
+      }
+      acc[groupId].items.push(item);
+      return acc;
+    }, {});
+
+    return MATERIAL_GROUP_ORDER
+      .map((groupId) => grouped[groupId])
+      .filter((group) => Array.isArray(group?.items) && group.items.length > 0);
+  }, [filteredMaterials]);
 
   const handleDirectProviderConnectionTest = async () => {
     setDirectProviderTestStatus('loading');
@@ -1281,17 +1369,45 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    />
                  </div>
                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] max-h-[140px] overflow-y-auto">
+                   {materials.length > 0 ? (
+                     <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                       {MATERIAL_FILTER_OPTIONS.map((option) => {
+                         const isActive = materialsFilter === option.id;
+                         return (
+                           <button
+                             key={option.id}
+                             type="button"
+                             onClick={() => setMaterialsFilter(option.id)}
+                             className={`px-2 py-1 rounded-lg text-[10px] border transition-colors ${isActive
+                               ? 'bg-cyan-500/35 border-cyan-200/60 text-cyan-50'
+                               : 'bg-white/5 border-white/15 text-white/70 hover:bg-white/10'}`}
+                           >
+                             {option.label}
+                           </button>
+                         );
+                       })}
+                     </div>
+                   ) : null}
                    {materials.length === 0 ? (
                      <div className="text-white/40 text-[11px] text-center mt-4">בחר 'הוסף מסמכי עזר' כדי לבסס את הצ'אט עליהם.</div>
+                   ) : groupedFilteredMaterials.length === 0 ? (
+                     <div className="text-white/40 text-[11px] text-center mt-4">אין פריטים שמתאימים לפילטר שנבחר.</div>
                    ) : (
-                     materials.map(item => (
-                       <label key={item.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg mb-1 cursor-pointer transition-colors">
-                         <div className="flex items-center gap-2 overflow-hidden w-[85%]">
-                           <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
-                           <span className="text-white/90 text-xs truncate leading-tight w-full" title={item.title}>{item.title}</span>
+                     groupedFilteredMaterials.map((group) => (
+                       <div key={group.id} className="mb-2 last:mb-0">
+                         <div className="text-white/65 text-[10px] font-semibold mb-1 px-1">
+                           {group.label} ({group.items.length})
                          </div>
-                         <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
-                       </label>
+                         {group.items.map((item) => (
+                           <label key={item.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg mb-1 cursor-pointer transition-colors">
+                             <div className="flex items-center gap-2 overflow-hidden w-[85%]">
+                               <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
+                               <span className="text-white/90 text-xs truncate leading-tight w-full" title={item.title}>{item.title}</span>
+                             </div>
+                             <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
+                           </label>
+                         ))}
+                       </div>
                      ))
                    )}
                  </div>

@@ -37,6 +37,410 @@ const MAGIC_WAND_SELECTION_CONTEXT_SIDE = 420;
 const LIVE_GENERATION_SHELL_MARKER = 'data-wordai-live-generation-shell="true"';
 const LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER = 'data-wordai-live-generation-error-placeholder="true"';
 const DOCUMENT_ARRIVAL_PULSE_DURATION_MS = 950;
+const START_SCREEN_TRANSITION_DURATION_MS = 1800;
+const START_SCREEN_TRANSITION_APPROACH_START = 76;
+const START_SCREEN_TRANSITION_IMPACT_START = 82;
+const START_SCREEN_TRANSITION_IMPACT_CENTER_X = '51%';
+const START_SCREEN_TRANSITION_IMPACT_CENTER_Y = '52%';
+const START_SCREEN_TRANSITION_IMPACT_START_MS = Math.round(
+  START_SCREEN_TRANSITION_DURATION_MS * (START_SCREEN_TRANSITION_IMPACT_START / 100)
+);
+const START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX = 240;
+const START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX = 96;
+const START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX = 228;
+const START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX = 44;
+const START_SCREEN_TRANSITION_ROCKET_START_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 75%)`;
+const START_SCREEN_TRANSITION_ROCKET_START_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px + 6%)`;
+const START_SCREEN_TRANSITION_ROCKET_MID_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 47%)`;
+const START_SCREEN_TRANSITION_ROCKET_MID_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px - 2%)`;
+const START_SCREEN_TRANSITION_ROCKET_CRUISE_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 23%)`;
+const START_SCREEN_TRANSITION_ROCKET_CRUISE_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px - 12%)`;
+const START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px)`;
+const START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px)`;
+const START_SCREEN_TRANSITION_ROCKET_APPROACH_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX + 76}px)`;
+const START_SCREEN_TRANSITION_ROCKET_APPROACH_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX + 72}px)`;
+const getStartScreenTransitionDelayMs = (offsetMs = 0) => `${START_SCREEN_TRANSITION_IMPACT_START_MS + offsetMs}ms`;
+
+const getPrefersReducedMotion = () => (
+  typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+);
+
+const START_SCREEN_TRANSITION_PARTICLES = [
+  { id: 'a', size: 14, left: '50%', top: '50%', angle: '-84deg', distance: '236px', delay: getStartScreenTransitionDelayMs(-22), color: '#FFFFFF' },
+  { id: 'b', size: 12, left: '50%', top: '50%', angle: '-52deg', distance: '284px', delay: getStartScreenTransitionDelayMs(-6), color: '#FDE68A' },
+  { id: 'c', size: 16, left: '50%', top: '50%', angle: '-18deg', distance: '328px', delay: getStartScreenTransitionDelayMs(6), color: '#FB7185' },
+  { id: 'd', size: 13, left: '50%', top: '50%', angle: '18deg', distance: '344px', delay: getStartScreenTransitionDelayMs(18), color: '#FDBA74' },
+  { id: 'e', size: 15, left: '50%', top: '50%', angle: '54deg', distance: '286px', delay: getStartScreenTransitionDelayMs(10), color: '#FFFFFF' },
+  { id: 'f', size: 14, left: '50%', top: '50%', angle: '92deg', distance: '250px', delay: getStartScreenTransitionDelayMs(-2), color: '#FDBA74' },
+  { id: 'g', size: 16, left: '50%', top: '50%', angle: '132deg', distance: '318px', delay: getStartScreenTransitionDelayMs(24), color: '#FDE68A' },
+  { id: 'h', size: 13, left: '50%', top: '50%', angle: '174deg', distance: '360px', delay: getStartScreenTransitionDelayMs(32), color: '#F8FAFC' },
+  { id: 'i', size: 12, left: '50%', top: '50%', angle: '214deg', distance: '274px', delay: getStartScreenTransitionDelayMs(4), color: '#FB7185' },
+  { id: 'j', size: 11, left: '50%', top: '50%', angle: '248deg', distance: '312px', delay: getStartScreenTransitionDelayMs(40), color: '#FDBA74' },
+  { id: 'k', size: 13, left: '50%', top: '50%', angle: '286deg', distance: '294px', delay: getStartScreenTransitionDelayMs(16), color: '#FFFFFF' },
+  { id: 'l', size: 15, left: '50%', top: '50%', angle: '324deg', distance: '332px', delay: getStartScreenTransitionDelayMs(28), color: '#FDE68A' },
+];
+
+function StartScreenTransitionOverlay() {
+  return (
+    <div
+      aria-hidden="true"
+      className="wordai-start-transition"
+      style={{
+        '--wordai-start-transition-duration': `${START_SCREEN_TRANSITION_DURATION_MS}ms`,
+        position: 'absolute',
+        inset: 0,
+        zIndex: 35,
+        pointerEvents: 'none',
+        overflow: 'hidden',
+        isolation: 'isolate',
+      }}
+    >
+      <style>{`
+        @keyframes wordai-start-transition-backdrop {
+          0% { opacity: 0; transform: scale(1.08); }
+          8% { opacity: 1; }
+          72% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.98); }
+        }
+        @keyframes wordai-start-transition-flight {
+          0% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_START_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_START_TOP}; transform: rotate(-12deg) scale(0.72); }
+          8% { opacity: 1; }
+          34% { left: ${START_SCREEN_TRANSITION_ROCKET_MID_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_MID_TOP}; transform: rotate(-15deg) scale(0.8); }
+          58% { left: ${START_SCREEN_TRANSITION_ROCKET_CRUISE_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_CRUISE_TOP}; transform: rotate(-10deg) scale(0.88); }
+          ${START_SCREEN_TRANSITION_APPROACH_START}% { opacity: 1; left: ${START_SCREEN_TRANSITION_ROCKET_APPROACH_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_APPROACH_TOP}; transform: rotate(8deg) scale(0.96); }
+          ${START_SCREEN_TRANSITION_IMPACT_START}% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP}; transform: rotate(12deg) scale(0.99); }
+          100% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP}; transform: rotate(12deg) scale(0.99); }
+        }
+        @keyframes wordai-start-transition-trail {
+          0% { opacity: 0.3; transform: scaleX(0.72); }
+          100% { opacity: 0.95; transform: scaleX(1); }
+        }
+        @keyframes wordai-start-transition-smoke {
+          0% { opacity: 0.18; transform: translate(0, 0) scale(0.6); }
+          100% { opacity: 0.62; transform: translate(-42px, 4px) scale(1.15); }
+        }
+        @keyframes wordai-start-transition-flash {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.18); }
+          12% { opacity: 1; transform: translate(-50%, -50%) scale(0.8); }
+          34% { opacity: 1; transform: translate(-50%, -50%) scale(1.52); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(3.8); }
+        }
+        @keyframes wordai-start-transition-burst {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.08); }
+          18% { opacity: 1; }
+          55% { opacity: 0.92; }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(2.55); }
+        }
+        @keyframes wordai-start-transition-ring {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); }
+          10% { opacity: 0.98; }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(2.75); }
+        }
+        @keyframes wordai-start-transition-particle {
+          0% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--particle-angle)) translateX(0px) scale(0.25); }
+          14% { opacity: 1; }
+          100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--particle-angle)) translateX(var(--particle-distance)) scale(1.18); }
+        }
+        @keyframes wordai-start-transition-glow {
+          0%, 54% { opacity: 0; transform: scale(0.84); }
+          74% { opacity: 0.7; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.35); }
+        }
+        @keyframes wordai-start-transition-screen-flash {
+          0% { opacity: 0; transform: scale(0.94); }
+          24% { opacity: 0.88; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.04); }
+        }
+        @keyframes wordai-start-transition-heatwave {
+          0% { opacity: 0; transform: scale(0.82); }
+          28% { opacity: 0.7; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.18); }
+        }
+        @keyframes wordai-start-transition-shake {
+          0% { transform: translate3d(0, 0, 0); }
+          16% { transform: translate3d(-16px, 10px, 0) rotate(-0.5deg); }
+          34% { transform: translate3d(14px, -10px, 0) rotate(0.45deg); }
+          52% { transform: translate3d(-10px, 8px, 0) rotate(-0.3deg); }
+          70% { transform: translate3d(8px, -6px, 0) rotate(0.2deg); }
+          100% { transform: translate3d(0, 0, 0); }
+        }
+      `}</style>
+
+      <div
+        className="wordai-start-transition__backdrop"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255, 244, 214, 0.36) 0%, rgba(253, 186, 116, 0.26) 9%, rgba(251, 146, 60, 0.14) 18%, rgba(15, 23, 42, 0) 36%), linear-gradient(180deg, rgba(2, 6, 23, 0.08) 0%, rgba(2, 6, 23, 0.62) 100%)`,
+          animation: 'wordai-start-transition-backdrop var(--wordai-start-transition-duration) cubic-bezier(0.22, 1, 0.36, 1) both',
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__glow"
+        style={{
+          position: 'absolute',
+          inset: '-24%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255, 255, 255, 0.96) 0%, rgba(255, 244, 214, 0.9) 6%, rgba(253, 186, 116, 0.78) 12%, rgba(251, 146, 60, 0.3) 22%, rgba(255, 255, 255, 0) 40%)`,
+          mixBlendMode: 'screen',
+          animation: 'wordai-start-transition-glow var(--wordai-start-transition-duration) ease-out both',
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__screen-flash"
+        style={{
+          position: 'absolute',
+          inset: '-18%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255,255,255,0.98) 0%, rgba(255,248,220,0.98) 8%, rgba(253,186,116,0.5) 18%, rgba(255,255,255,0) 40%), linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,248,220,0.08) 28%, rgba(255,255,255,0) 58%)`,
+          mixBlendMode: 'screen',
+          filter: 'blur(12px)',
+          animation: `wordai-start-transition-screen-flash 320ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-44)} both`,
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__heatwave"
+        style={{
+          position: 'absolute',
+          inset: '-24%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255,255,255,0.82) 0%, rgba(253,186,116,0.56) 12%, rgba(251,146,60,0.26) 24%, rgba(255,255,255,0) 46%)`,
+          mixBlendMode: 'screen',
+          filter: 'blur(26px)',
+          animation: `wordai-start-transition-heatwave 560ms cubic-bezier(0.16, 1, 0.3, 1) ${getStartScreenTransitionDelayMs(-4)} both`,
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__rocket-wrap"
+        style={{
+          position: 'absolute',
+          left: START_SCREEN_TRANSITION_ROCKET_START_LEFT,
+          top: START_SCREEN_TRANSITION_ROCKET_START_TOP,
+          width: `${START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX}px`,
+          height: `${START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX}px`,
+          animation: 'wordai-start-transition-flight var(--wordai-start-transition-duration) cubic-bezier(0.16, 1, 0.3, 1) both',
+        }}
+      >
+        <div
+          className="wordai-start-transition__rocket-scene"
+          style={{
+            position: 'relative',
+            width: `${START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX}px`,
+            height: `${START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX}px`,
+          }}
+        >
+          <div
+            className="wordai-start-transition__trail"
+            style={{
+              position: 'absolute',
+              right: '72px',
+              top: '42px',
+              width: '180px',
+              height: '14px',
+              borderRadius: '999px',
+              background: 'linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.12), rgba(251,146,60,0.76), rgba(254,240,138,0.98))',
+              filter: 'blur(7px)',
+              transformOrigin: 'right center',
+              animation: 'wordai-start-transition-trail 150ms ease-in-out infinite alternate',
+            }}
+          />
+          <div
+            className="wordai-start-transition__trail-hot"
+            style={{
+              position: 'absolute',
+              right: '86px',
+              top: '45px',
+              width: '132px',
+              height: '8px',
+              borderRadius: '999px',
+              background: 'linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.14), rgba(254,240,138,0.92), rgba(255,255,255,1))',
+              filter: 'blur(4px)',
+              transformOrigin: 'right center',
+              animation: 'wordai-start-transition-trail 120ms ease-in-out infinite alternate-reverse',
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              right: '182px',
+              top: '32px',
+              width: '36px',
+              height: '36px',
+              borderRadius: '999px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.32) 30%, rgba(255,255,255,0) 72%)',
+              filter: 'blur(2px)',
+              animation: 'wordai-start-transition-smoke 460ms ease-out infinite alternate',
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              right: '208px',
+              top: '40px',
+              width: '52px',
+              height: '52px',
+              borderRadius: '999px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.62) 0%, rgba(226,232,240,0.22) 40%, rgba(255,255,255,0) 76%)',
+              filter: 'blur(4px)',
+              animation: 'wordai-start-transition-smoke 620ms ease-out infinite alternate-reverse',
+            }}
+          />
+
+          <svg
+            viewBox="0 0 140 76"
+            style={{
+              position: 'absolute',
+              right: '0',
+              top: '6px',
+              width: '140px',
+              height: '76px',
+              overflow: 'visible',
+              filter: 'drop-shadow(0 10px 26px rgba(15, 23, 42, 0.34))',
+            }}
+          >
+            <defs>
+              <linearGradient id="wordai-start-transition-rocket-body" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#F8FAFC" />
+                <stop offset="52%" stopColor="#E2E8F0" />
+                <stop offset="100%" stopColor="#CBD5E1" />
+              </linearGradient>
+              <linearGradient id="wordai-start-transition-rocket-nose" x1="0%" y1="50%" x2="100%" y2="50%">
+                <stop offset="0%" stopColor="#F97316" />
+                <stop offset="100%" stopColor="#FB7185" />
+              </linearGradient>
+              <linearGradient id="wordai-start-transition-wing-top" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#FB7185" />
+                <stop offset="100%" stopColor="#F97316" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="56" cy="38" rx="36" ry="20" fill="url(#wordai-start-transition-rocket-body)" />
+            <path d="M82 19 L128 38 L82 57 Z" fill="url(#wordai-start-transition-rocket-nose)" />
+            <path d="M28 22 L8 12 L18 32 Z" fill="url(#wordai-start-transition-wing-top)" />
+            <path d="M28 54 L8 64 L18 44 Z" fill="#F97316" />
+            <path d="M18 30 L0 38 L18 46 Z" fill="#F8FAFC" opacity="0.9" />
+            <circle cx="56" cy="38" r="8" fill="#0F172A" opacity="0.86" />
+            <circle cx="56" cy="38" r="4" fill="#60A5FA" opacity="0.88" />
+            <path d="M66 21 Q82 38 66 55" fill="none" stroke="#94A3B8" strokeWidth="3.5" strokeLinecap="round" opacity="0.7" />
+          </svg>
+        </div>
+      </div>
+
+      <div
+        className="wordai-start-transition__impact"
+        style={{
+          position: 'absolute',
+          left: START_SCREEN_TRANSITION_IMPACT_CENTER_X,
+          top: START_SCREEN_TRANSITION_IMPACT_CENTER_Y,
+          width: 'min(88vw, 820px)',
+          height: 'min(88vw, 820px)',
+          transform: 'translate(-50%, -50%)',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '240px',
+            height: '240px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,250,240,0.98) 16%, rgba(255,227,168,0.96) 28%, rgba(253,186,116,0.92) 44%, rgba(251,146,60,0.22) 72%, rgba(255,255,255,0) 100%)',
+            filter: 'blur(2px)',
+            mixBlendMode: 'screen',
+            animation: `wordai-start-transition-flash 620ms ease-out ${getStartScreenTransitionDelayMs(-34)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '430px',
+            height: '430px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(254,240,138,0.98) 0%, rgba(255,210,118,0.94) 18%, rgba(251,146,60,0.82) 36%, rgba(249,115,22,0.24) 58%, rgba(255,255,255,0) 100%)',
+            filter: 'blur(8px)',
+            animation: `wordai-start-transition-burst 720ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-14)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '620px',
+            height: '620px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(255,244,214,0.48) 0%, rgba(253,186,116,0.3) 24%, rgba(251,146,60,0.14) 40%, rgba(255,255,255,0) 72%)',
+            filter: 'blur(18px)',
+            mixBlendMode: 'screen',
+            animation: `wordai-start-transition-burst 820ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(21)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '240px',
+            height: '240px',
+            borderRadius: '999px',
+            border: '3px solid rgba(255,255,255,0.96)',
+            boxShadow: '0 0 30px rgba(255,255,255,0.34)',
+            animation: `wordai-start-transition-ring 760ms ease-out ${getStartScreenTransitionDelayMs(6)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '420px',
+            height: '420px',
+            borderRadius: '999px',
+            border: '3px solid rgba(253,186,116,0.82)',
+            boxShadow: '0 0 42px rgba(251,146,60,0.24)',
+            animation: `wordai-start-transition-ring 900ms ease-out ${getStartScreenTransitionDelayMs(31)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '620px',
+            height: '620px',
+            borderRadius: '999px',
+            border: '2px solid rgba(255,255,255,0.52)',
+            animation: `wordai-start-transition-ring 1120ms ease-out ${getStartScreenTransitionDelayMs(61)} both`,
+          }}
+        />
+        {START_SCREEN_TRANSITION_PARTICLES.map((particle) => (
+          <span
+            key={particle.id}
+            style={{
+              '--particle-angle': particle.angle,
+              '--particle-distance': particle.distance,
+              position: 'absolute',
+              left: particle.left,
+              top: particle.top,
+              width: particle.size,
+              height: particle.size,
+              borderRadius: '999px',
+              background: particle.color,
+              boxShadow: `0 0 24px ${particle.color}`,
+              filter: 'blur(0.35px)',
+              animation: `wordai-start-transition-particle 780ms cubic-bezier(0.22, 1, 0.36, 1) ${particle.delay} both`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const escHtml = (txt) => String(txt ?? '')
   .replace(/&/g, '&amp;')
@@ -483,6 +887,7 @@ function App() {
   });
   const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
+  const [startTransitionPhase, setStartTransitionPhase] = React.useState('idle');
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
@@ -517,6 +922,9 @@ function App() {
   const lastLiveGenerationPlaceholderRef = React.useRef({ runId: '', html: '' });
   const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
   const pendingImportRef = React.useRef(null);
+  const startTransitionTimerRef = React.useRef(null);
+  const startTransitionRunIdRef = React.useRef(0);
+  const pendingStartTransitionFocusRef = React.useRef('start');
   const documentArrivalTimerRef = React.useRef(null);
   const documentArrivalFrameRef = React.useRef(null);
   const clearDocumentArrival = React.useCallback(() => {
@@ -547,6 +955,20 @@ function App() {
     }
     if (documentArrivalTimerRef.current) {
       window.clearTimeout(documentArrivalTimerRef.current);
+    }
+  }, []);
+  const cancelStartTransition = React.useCallback(() => {
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    startTransitionRunIdRef.current += 1;
+    setStartTransitionPhase('idle');
+  }, []);
+  React.useEffect(() => () => {
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
     }
   }, []);
   const clearDraftReviewState = React.useCallback(() => {
@@ -732,16 +1154,43 @@ function App() {
     });
   }, [editor]);
 
+  const completeStartTransition = React.useCallback((runId = startTransitionRunIdRef.current) => {
+    if (runId !== startTransitionRunIdRef.current) return;
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    setStartTransitionPhase('idle');
+    setShowStartScreen(false);
+    focusEditorSoon(pendingStartTransitionFocusRef.current || 'start');
+  }, [focusEditorSoon]);
+
   const runStartTransition = React.useCallback((applyChange, focusPosition = 'start') => {
     if (!editor) {
       window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
       return false;
     }
     applyChange(editor);
-    setShowStartScreen(false);
-    focusEditorSoon(focusPosition);
+    pendingStartTransitionFocusRef.current = focusPosition;
+
+    const runId = startTransitionRunIdRef.current + 1;
+    startTransitionRunIdRef.current = runId;
+
+    if (getPrefersReducedMotion() || !showStartScreen) {
+      completeStartTransition(runId);
+      return true;
+    }
+
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    setStartTransitionPhase('running');
+    startTransitionTimerRef.current = window.setTimeout(() => {
+      completeStartTransition(runId);
+    }, START_SCREEN_TRANSITION_DURATION_MS);
     return true;
-  }, [editor, focusEditorSoon]);
+  }, [completeStartTransition, editor, showStartScreen]);
 
   const openExternalLink = React.useCallback((url) => {
     if (!url) return;
@@ -906,6 +1355,23 @@ function App() {
       };
     });
   }, []);
+
+  const openHomeSafely = React.useCallback(() => {
+    cancelStartTransition();
+
+    if (typeof document !== 'undefined') {
+      const wrapper = document.getElementById('editor-wrapper');
+      const activeElement = document.activeElement;
+
+      if (wrapper instanceof HTMLElement && activeElement instanceof HTMLElement && wrapper.contains(activeElement)) {
+        activeElement.blur();
+      }
+    }
+
+    closeInputDialog(null);
+    setFeedbackSurvey((prev) => (prev.open ? { ...prev, open: false } : prev));
+    setShowStartScreen(true);
+  }, [cancelStartTransition, closeInputDialog]);
 
   const approveFeedbackSurvey = React.useCallback(() => {
     setFeedbackSurvey((prev) => ({
@@ -1186,11 +1652,13 @@ function App() {
   }, [shortcuts, editor]);
 
   React.useEffect(() => {
+    const isInputDialogVisible = inputDialog.open;
+    const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
     const topmostOverlay = fileMenuOpen
       ? ''
-      : inputDialog.open && inputDialog.closeOnEscape !== false
+      : isInputDialogVisible && inputDialog.closeOnEscape !== false
         ? 'input-dialog'
-        : feedbackSurvey.open
+        : isFeedbackSurveyVisible
           ? 'feedback-survey'
           : sidebarOpen && !showStartScreen
             ? 'ai-sidebar'
@@ -1477,8 +1945,6 @@ function App() {
     setAssistantTrigger('autopilot');
     setSidebarCompact(false);
     setSidebarOpen(true);
-    setShowStartScreen(false);
-    clearDocumentArrival();
 
     const generationRequest = beginGenerationRequest('doc');
     const originWorkspaceId = generationRequest.workspaceId;
@@ -1520,12 +1986,15 @@ function App() {
       html: String(editor.getHTML?.() || ''),
     };
     lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
-    editor.commands.setContent(initialShell);
-    lastLiveGenerationShellRef.current = {
-      runId: generationRequest.runId,
-      html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || initialShell)),
-    };
-    focusEditorSoon('start');
+    const didStartTransition = runStartTransition((activeEditor) => {
+      clearDocumentArrival();
+      activeEditor.commands.setContent(initialShell);
+      lastLiveGenerationShellRef.current = {
+        runId: generationRequest.runId,
+        html: normalizeTrackedEditorHtml(String(activeEditor.getHTML?.() || initialShell)),
+      };
+    }, 'start');
+    if (!didStartTransition) return false;
 
     try {
       const result = hasBaseDraft
@@ -1588,7 +2057,7 @@ function App() {
     }
 
     return true;
-  }, [beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, focusEditorSoon, isGenerationRequestCurrent, persistLocalCache, triggerDocumentArrival]);
+  }, [beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, runStartTransition, triggerDocumentArrival]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -1964,6 +2433,15 @@ function App() {
         const payload = await window.desktopApp.consumePendingOpenDocument();
         if (payload && !payload.canceled) {
           applyImportedDocument(payload);
+          return;
+        }
+      }
+
+      if (window.desktopApp?.consumePendingOpenSettings) {
+        const payload = await window.desktopApp.consumePendingOpenSettings();
+        if (payload?.tab) {
+          setFileMenuTargetTab(payload.tab);
+          setFileMenuOpen(true);
         }
       }
     };
@@ -2891,6 +3369,11 @@ function App() {
   const canOpenDraftRecommendations = !feedbackSurvey.submitting
     && liveGeneration.state !== 'running'
     && hasMeaningfulEditorContent(editor);
+  const isStartTransitionRunning = startTransitionPhase === 'running';
+  const prefersReducedMotion = getPrefersReducedMotion();
+  const isInputDialogVisible = inputDialog.open;
+  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
+  const shouldHideEditorWrapper = showStartScreen && !isInputDialogVisible;
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
@@ -2903,7 +3386,7 @@ function App() {
         onSaveAs={() => handleCommand('saveAs')}
         onUndo={() => editor?.chain().focus().undo().run()}
         onRedo={() => editor?.chain().focus().redo().run()}
-        onHome={() => setShowStartScreen(true)}
+        onHome={openHomeSafely}
         onOpenDraftRecommendations={openDraftRecommendations}
         draftRecommendationsDisabled={!canOpenDraftRecommendations}
       />
@@ -3101,8 +3584,24 @@ function App() {
           </aside>
         )}
 
-        <div id="editor-wrapper" className={`flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative ${showStartScreen ? '!hidden' : 'flex'}`} style={{ display: showStartScreen ? 'none' : 'flex' }}>
-          {inputDialog.open && (
+        <div
+          id="editor-wrapper"
+          className="flex flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative"
+          style={{
+            opacity: shouldHideEditorWrapper ? 0 : 1,
+            transform: prefersReducedMotion
+              ? 'none'
+              : (shouldHideEditorWrapper ? 'translateY(24px) scale(0.985)' : 'translateY(0px) scale(1)'),
+            filter: prefersReducedMotion ? 'none' : (shouldHideEditorWrapper ? 'blur(12px)' : 'blur(0px)'),
+            transition: prefersReducedMotion
+              ? 'none'
+              : 'opacity 320ms ease-out, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease-out',
+            pointerEvents: shouldHideEditorWrapper ? 'none' : 'auto',
+          }}
+          aria-hidden={shouldHideEditorWrapper}
+          inert={shouldHideEditorWrapper ? true : undefined}
+        >
+          {isInputDialogVisible && (
             <div
               className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all duration-300"
               dir="rtl"
@@ -3193,7 +3692,7 @@ function App() {
             </div>
           )}
 
-          {feedbackSurvey.open && (
+          {isFeedbackSurveyVisible && (
             <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
               <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
                 <div className="flex items-start justify-between gap-4 mb-4">
@@ -3428,85 +3927,104 @@ function App() {
         </div>
 
         {showStartScreen && (
-          <div className="flex-1 overflow-y-auto">
-            <StartScreen
-              instructionsResetToken={startScreenInstructionsResetToken}
-              onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
-              documentStyle={documentStyle}
-              onDocumentStyleChange={changeDocumentStyle}
-              escapeBlocked={fileMenuOpen || inputDialog.open || feedbackSurvey.open}
-              onClose={() => {
-                setShowStartScreen(false);
-                focusEditorSoon('start');
+          <div
+            className="absolute inset-0 z-30 overflow-y-auto"
+            style={{
+              opacity: 1,
+              transform: prefersReducedMotion ? 'none' : (isStartTransitionRunning ? 'scale(0.992)' : 'scale(1)'),
+              filter: prefersReducedMotion ? 'none' : (isStartTransitionRunning ? 'brightness(0.74) saturate(0.84)' : 'none'),
+              transition: prefersReducedMotion ? 'none' : 'transform 240ms ease-out, filter 220ms linear',
+              pointerEvents: isStartTransitionRunning ? 'none' : 'auto',
+            }}
+          >
+            <div
+              style={{
+                minHeight: '100%',
+                animation: prefersReducedMotion || !isStartTransitionRunning
+                  ? 'none'
+                  : `wordai-start-transition-shake 360ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-4)} both`,
+                transformOrigin: 'center center',
+                willChange: isStartTransitionRunning ? 'transform' : undefined,
               }}
-              hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
-              lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
-              onCreateBlank={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                clearPersistedDraftCache();
-                clearDraftReviewState();
-                runStartTransition((activeEditor) => {
-                  activeEditor.chain().focus().clearContent().run();
-                  setCurrentFilePath('');
-                  localStorage.setItem('wordai_active_template', 'blank');
-                  syncPersistedAppSettings();
-                  setActiveTemplateId('blank');
-                }, 'start');
-              }}
-              onCreateTemplate={(template) => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const templateId = typeof template === 'string' ? template : template?.id;
-                const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
-                clearPersistedDraftCache();
-                clearDraftReviewState();
-                runStartTransition((activeEditor) => {
-                  setCurrentFilePath('');
-                  localStorage.setItem('wordai_active_template', templateId || 'blank');
-                  syncPersistedAppSettings();
-                  setActiveTemplateId(templateId || 'blank');
-                  const recommendedStyle = {
-                    academic: 'academic',
-                    legal: 'legal',
-                    report: 'business',
-                    summary: 'presentation',
-                    office: 'business',
-                    proposal: 'business',
-                    letter: 'legal',
-                  };
-                  changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
-                  activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
-                }, 'start');
-              }}
-              onOpenDocument={() => handleCommand('openFile')}
-              onOpenLastDraft={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const savedDraft = wordPreferences.keepLastAutosavedVersion === false
-                  ? null
-                  : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
-                clearDraftReviewState();
-                runStartTransition((activeEditor) => {
-                  if (savedDraft) activeEditor.commands.setContent(savedDraft);
-                  setCurrentFilePath('');
-                  setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
-                }, 'end');
-              }}
-              onOpenSettings={(targetTab = 'guide') => {
-                setFileMenuTargetTab(targetTab || 'guide');
-                setFileMenuOpen(true);
-              }}
-              onGenerateFromPrompt={(payload) => executeStartScreenGeneration({
-                kind: 'start-screen-generate',
-                workspaceId: getActiveWorkspaceId(),
-                payload,
-              })}
-            />
+            >
+              <StartScreen
+                instructionsResetToken={startScreenInstructionsResetToken}
+                onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
+                documentStyle={documentStyle}
+                onDocumentStyleChange={changeDocumentStyle}
+                escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible}
+                onClose={() => {
+                  runStartTransition(() => {}, 'start');
+                }}
+                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
+                lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
+                onCreateBlank={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  clearPersistedDraftCache();
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    activeEditor.commands.clearContent();
+                    setCurrentFilePath('');
+                    localStorage.setItem('wordai_active_template', 'blank');
+                    syncPersistedAppSettings();
+                    setActiveTemplateId('blank');
+                  }, 'start');
+                }}
+                onCreateTemplate={(template) => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const templateId = typeof template === 'string' ? template : template?.id;
+                  const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                  clearPersistedDraftCache();
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    setCurrentFilePath('');
+                    localStorage.setItem('wordai_active_template', templateId || 'blank');
+                    syncPersistedAppSettings();
+                    setActiveTemplateId(templateId || 'blank');
+                    const recommendedStyle = {
+                      academic: 'academic',
+                      legal: 'legal',
+                      report: 'business',
+                      summary: 'presentation',
+                      office: 'business',
+                      proposal: 'business',
+                      letter: 'legal',
+                    };
+                    changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
+                    activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
+                  }, 'start');
+                }}
+                onOpenDocument={() => handleCommand('openFile')}
+                onOpenLastDraft={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const savedDraft = wordPreferences.keepLastAutosavedVersion === false
+                    ? null
+                    : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    if (savedDraft) activeEditor.commands.setContent(savedDraft);
+                    setCurrentFilePath('');
+                    setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+                  }, 'end');
+                }}
+                onOpenSettings={(targetTab = 'guide') => {
+                  setFileMenuTargetTab(targetTab || 'guide');
+                  setFileMenuOpen(true);
+                }}
+                onGenerateFromPrompt={(payload) => executeStartScreenGeneration({
+                  kind: 'start-screen-generate',
+                  workspaceId: getActiveWorkspaceId(),
+                  payload,
+                })}
+              />
+            </div>
           </div>
         )}
 
         {/* עט קסמים צף */}
         {!showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
-          escapeBlocked={fileMenuOpen || inputDialog.open || feedbackSurvey.open || sidebarOpen}
+          escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
           selectedText={selectedText}
           selectionContext={selectionContext}
@@ -3515,8 +4033,9 @@ function App() {
             if (editor) editor.chain().focus().insertContent(text).run();
           }}
         />}
-      </main>
 
+        {isStartTransitionRunning && <StartScreenTransitionOverlay />}
+      </main>
       <footer id="status-bar" className="h-6 bg-[#2B579A] text-white flex items-center justify-between px-4 text-[11px] shrink-0 z-30">
         <div className="flex items-center gap-4">
           <span>עמוד 1 מתוך {pageCount}</span>

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   extractMaterialText: (payload) => ipcRenderer.invoke('extract-material-text', payload),
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
+  consumePendingOpenSettings: () => ipcRenderer.invoke('consume-pending-open-settings'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
   loadProviderConfig: () => ipcRenderer.invoke('load-provider-config'),
   saveProviderConfig: (payload) => ipcRenderer.invoke('save-provider-config', payload),

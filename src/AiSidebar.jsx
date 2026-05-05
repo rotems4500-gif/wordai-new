@@ -96,6 +96,46 @@ const MODERN_QUICK_ACTIONS = [
     hoverColor: 'linear-gradient(135deg, #34D399 0%, #10B981 100%)',
     category: 'transform'
   },
+  {
+    id: 'hebrew-flow',
+    icon: '🌿',
+    label: 'עברית טבעית',
+    prompt: 'שכתב לעברית טבעית, זורמת וברורה תוך שמירה על המשמעות המקורית',
+    sel: true,
+    color: 'linear-gradient(135deg, #0EA5E9 0%, #0284C7 100%)',
+    hoverColor: 'linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%)',
+    category: 'style'
+  },
+  {
+    id: 'sentence-rhythm',
+    icon: '🎼',
+    label: 'איזון קצב',
+    prompt: 'איזן את קצב המשפטים: שלב משפטים קצרים, בינוניים וארוכים לקריאות טובה יותר',
+    sel: true,
+    color: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+    hoverColor: 'linear-gradient(135deg, #60A5FA 0%, #2563EB 100%)',
+    category: 'style'
+  },
+  {
+    id: 'remove-cliches',
+    icon: '🧹',
+    label: 'ניקוי קלישאות',
+    prompt: 'נקה ניסוחים כלליים ושחוקים והחלף אותם בביטויים מדויקים וקונקרטיים',
+    sel: true,
+    color: 'linear-gradient(135deg, #14B8A6 0%, #0F766E 100%)',
+    hoverColor: 'linear-gradient(135deg, #2DD4BF 0%, #14B8A6 100%)',
+    category: 'edit'
+  },
+  {
+    id: 'sharpen-argument',
+    icon: '🎯',
+    label: 'חידוד טיעון',
+    prompt: 'חדד את העמדה והטיעון המרכזי עם נימוק ברור ומבנה לוגי עקבי',
+    sel: true,
+    color: 'linear-gradient(135deg, #0D9488 0%, #0F766E 100%)',
+    hoverColor: 'linear-gradient(135deg, #14B8A6 0%, #0D9488 100%)',
+    category: 'edit'
+  },
   { 
     id: 'translate', 
     icon: '🌐', 
@@ -121,12 +161,39 @@ const QUICK_PROMPTS = [
     color: 'linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%)' },
   { text: '🔍 בדוק עובדות ונתונים', icon: '🔍', category: 'generate',
     color: 'linear-gradient(135deg, #06B6D4 0%, #0891B2 100%)' },
+  { text: '🌿 שכתב לעברית טבעית וזורמת', icon: '🌿', category: 'generate',
+    color: 'linear-gradient(135deg, #0EA5E9 0%, #0284C7 100%)' },
+  { text: '🎼 איזן קצב משפטים (קצר/בינוני/ארוך)', icon: '🎼', category: 'generate',
+    color: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)' },
+  { text: '🎯 חדד עמדה וטיעון מרכזי', icon: '🎯', category: 'generate',
+    color: 'linear-gradient(135deg, #14B8A6 0%, #0F766E 100%)' },
 ];
 
 const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
 const getChatMemoryStorageKey = (workspaceId = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
   return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}`;
+};
+
+const PROMPT_HISTORY_STORAGE_KEY = 'wordai_sidebar_prompt_history';
+const PROMPT_HISTORY_LIMIT = 100;
+const getPromptHistoryStorageKey = (workspaceId = '') => {
+  const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
+  return `${PROMPT_HISTORY_STORAGE_KEY}:${resolvedWorkspaceId}`;
+};
+
+const getSavedPromptHistory = (workspaceId = '') => {
+  const storageKey = getPromptHistoryStorageKey(workspaceId);
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => String(entry || '').trim())
+      .filter(Boolean)
+      .slice(-PROMPT_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
 };
 
 const getDefaultMessages = () => ([
@@ -240,6 +307,9 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
   const [messages, setMessages] = useState(() => getSavedMessages(getWorkspaceAutomation().activeWorkspaceId));
   const [input, setInput] = useState('');
+  const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistory(getWorkspaceAutomation().activeWorkspaceId));
+  const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
+  const [preNavigationDraft, setPreNavigationDraft] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeAgentStatus, setActiveAgentStatus] = useState(() => ({ ...IDLE_AGENT_STATUS }));
@@ -387,6 +457,60 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     setInput(nextValue);
   }, [clearPendingMentionSelection]);
 
+  const navigatePromptHistory = useCallback((direction) => {
+    if (!promptHistory.length) return false;
+
+    if (direction === 'up') {
+      let moved = false;
+      setPromptHistoryIndex((prevIndex) => {
+        if (prevIndex === -1) {
+          setPreNavigationDraft(input);
+          const nextIndex = promptHistory.length - 1;
+          setDraftInput(promptHistory[nextIndex]);
+          moved = true;
+          return nextIndex;
+        }
+        const nextIndex = Math.max(prevIndex - 1, 0);
+        if (nextIndex === prevIndex) return prevIndex;
+        setDraftInput(promptHistory[nextIndex]);
+        moved = true;
+        return nextIndex;
+      });
+      return moved;
+    }
+
+    if (direction === 'down') {
+      let moved = false;
+      setPromptHistoryIndex((prevIndex) => {
+        if (prevIndex === -1) return -1;
+        const nextIndex = prevIndex + 1;
+        if (nextIndex >= promptHistory.length) {
+          setDraftInput(preNavigationDraft);
+          setPreNavigationDraft('');
+          moved = true;
+          return -1;
+        }
+        setDraftInput(promptHistory[nextIndex]);
+        moved = true;
+        return nextIndex;
+      });
+      return moved;
+    }
+
+    return false;
+  }, [input, preNavigationDraft, promptHistory, setDraftInput]);
+
+  const appendPromptHistory = useCallback((value) => {
+    const normalizedPrompt = String(value || '').trim();
+    if (!normalizedPrompt) return;
+    setPromptHistory((prev) => {
+      if (prev[prev.length - 1] === normalizedPrompt) return prev;
+      return [...prev, normalizedPrompt].slice(-PROMPT_HISTORY_LIMIT);
+    });
+    setPromptHistoryIndex(-1);
+    setPreNavigationDraft('');
+  }, []);
+
   const beginRequestCycle = useCallback(() => {
     requestCycleRef.current += 1;
     return requestCycleRef.current;
@@ -480,6 +604,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
       setMessages(getSavedMessages(nextAutomation.activeWorkspaceId));
+      setPromptHistory(getSavedPromptHistory(nextAutomation.activeWorkspaceId));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
       if (shouldResetWorkspaceState) {
         beginRequestCycle();
@@ -488,6 +613,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
         setAgentProgressMap({});
         setSelectedAgentId('');
+        setPromptHistoryIndex(-1);
+        setPreNavigationDraft('');
         clearPendingMentionSelection();
         setMentionMenu({ ...EMPTY_MENTION_MENU });
       }
@@ -498,6 +625,12 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     window.addEventListener('wordai-workspace-changed', syncWorkspace);
     return () => window.removeEventListener('wordai-workspace-changed', syncWorkspace);
   }, [beginRequestCycle, clearPendingMentionSelection]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(getPromptHistoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(promptHistory.slice(-PROMPT_HISTORY_LIMIT)));
+    } catch {}
+  }, [promptHistory, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     setAgentProgressMap((prev) => {
@@ -636,6 +769,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     clearPendingMentionSelection();
     setMessages(getDefaultMessages());
     setInput('');
+    setPromptHistoryIndex(-1);
+    setPreNavigationDraft('');
     setAgentTaskInput('');
     setLoading(false);
     setResolvedSkillLabel('');
@@ -825,6 +960,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       inputRef.current?.focus();
       return;
     }
+
+    appendPromptHistory(originalText);
 
     const directProviderId = activeProviderChoice?.id || '';
     const hasExplicitProviderSelection = Boolean(directProviderId);
@@ -1723,6 +1860,10 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 ref={inputRef}
                 value={input}
                 onChange={(e) => {
+                  if (promptHistoryIndex !== -1) {
+                    setPromptHistoryIndex(-1);
+                    setPreNavigationDraft('');
+                  }
                   setDraftInput(e.target.value);
                   updateMentionMenu(e.target.value, e.target.selectionStart ?? e.target.value.length);
                 }}
@@ -1746,6 +1887,31 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                     const choice = mentionMenu.items[mentionMenu.activeIndex] || mentionMenu.items[0];
                     if (choice) applyMentionChoice(choice);
                     return;
+                  }
+                  const selectionStart = e.currentTarget.selectionStart ?? 0;
+                  const selectionEnd = e.currentTarget.selectionEnd ?? selectionStart;
+                  const hasSelection = selectionStart !== selectionEnd;
+                  const caretAtStart = selectionStart === 0 && selectionEnd === 0;
+                  const caretAtEnd = selectionStart === e.currentTarget.value.length && selectionEnd === e.currentTarget.value.length;
+
+                  if (e.key === 'ArrowUp') {
+                    if (!hasSelection && caretAtStart) {
+                      const moved = navigatePromptHistory('up');
+                      if (moved) {
+                        e.preventDefault();
+                        return;
+                      }
+                    }
+                  }
+                  if (e.key === 'ArrowDown') {
+                    const canNavigateDown = !hasSelection && (promptHistoryIndex !== -1 || caretAtEnd);
+                    if (canNavigateDown) {
+                      const moved = navigatePromptHistory('down');
+                      if (moved) {
+                        e.preventDefault();
+                        return;
+                      }
+                    }
                   }
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
