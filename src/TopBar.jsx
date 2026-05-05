@@ -1,8 +1,13 @@
 import React from 'react';
 
-export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onUndo = () => {}, onRedo = () => {}, onHome = () => {}, onOpenUpdates = () => {}, onFocus = () => {} }) {
-  const quickBtn = (icon, title, action) => (
-    <button onClick={action} title={title} className="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center transition">
+export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onUndo = () => {}, onRedo = () => {}, onHome = () => {}, onOpenUpdates = () => {}, onFocus = () => {}, onOpenDraftRecommendations = () => {}, draftRecommendationsDisabled = false }) {
+  const quickBtn = (icon, title, action, disabled = false) => (
+    <button
+      onClick={action}
+      title={title}
+      disabled={disabled}
+      className={`w-8 h-8 rounded-full flex items-center justify-center transition ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/20'}`}
+    >
       <i className={icon}></i>
     </button>
   );
@@ -17,6 +22,7 @@ export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen 
         {quickBtn('ph ph-floppy-disk-back', 'שמור בשם', onSaveAs)}
         {quickBtn('ph ph-arrow-counter-clockwise', 'בטל', onUndo)}
         {quickBtn('ph ph-arrow-clockwise', 'בצע שוב', onRedo)}
+        {quickBtn('ph ph-list-checks', 'המלצות לטיוטה', onOpenDraftRecommendations, draftRecommendationsDisabled)}
         <div className="w-px h-6 bg-white/30 mx-1"></div>
         <button onClick={onFocus} title="מצב מיקוד" className="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center transition">
           <i className="ph ph-arrows-out-simple text-lg"></i>

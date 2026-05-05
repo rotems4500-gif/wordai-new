@@ -4,6 +4,7 @@ const mammoth = require('mammoth');
 const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table, TableRow, TableCell, WidthType, ImageRun } = require('docx');
 const path = require('path');
 const fs = require('fs');
+const { extractMaterialTextFromBuffer, shutdownMaterialExtraction } = require('./materialExtraction.cjs');
 
 const STABLE_USER_DATA_DIRNAME = 'word-ai-assistant';
 const LEGACY_USER_DATA_DIRNAMES = ['Word AI Assistant', 'WordFlow AI', 'wordflow-ai'];
@@ -71,10 +72,19 @@ if (!app.isPackaged) {
 }
 
 const MANUAL_RELEASES_URL = 'https://github.com/rotems4500-gif/wordai-new/releases';
+const DEFAULT_AUTO_UPDATE_FEED_URL = `${MANUAL_RELEASES_URL}/latest/download`;
+
+function resolveAutoUpdateFeedUrl() {
+  const customFeedUrl = String(process.env.WORDFLOW_UPDATE_FEED_URL || '').trim();
+  return customFeedUrl || DEFAULT_AUTO_UPDATE_FEED_URL;
+}
 
 let mainWindow;
 let pendingFilePayload = null;
+let pendingSettingsPayload = null;
 let loadRendererInProgress = false;
+const activeProxyRequests = new Map();
+const abortedProxyRequests = new Set();
 let latestUpdateState = {
   status: 'idle',
   message: 'מוכן לבדיקת עדכונים',
@@ -130,7 +140,218 @@ function decodeHtmlEntities(value = '') {
     .replace(/&#39;/g, "'");
 }
 
-async function createDocxImageParagraph(block = '') {
+const DOCX_DEFAULT_FONT = 'Arial';
+const DOCX_DEFAULT_LANGUAGE = { value: 'he-IL', eastAsia: 'he-IL', bidirectional: 'he-IL' };
+const DOCX_WORD_SAFE_FONTS = new Set(['Arial', 'Calibri', 'David', 'Georgia', 'Miriam Libre', 'Segoe UI', 'Tahoma', 'Times New Roman']);
+const DOCX_RTL_LANGUAGE_PATTERN = /^(he|ar|fa|ur|yi)(-|_|$)/i;
+const DOCX_RTL_CHARACTER_PATTERN = /[\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/gu;
+const DOCX_LATIN_CHARACTER_PATTERN = /[A-Za-z]/g;
+
+function splitFontCandidates(fontValue = '') {
+  return String(fontValue || '')
+    .split(',')
+    .map((part) => part.replace(/["']/g, '').trim())
+    .filter((part) => part && !/^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-sans-serif|ui-serif|inherit|initial|unset)$/i.test(part));
+}
+
+function pickWordSafeFontName(fontValue = '', fallbackFont = DOCX_DEFAULT_FONT) {
+  const candidates = splitFontCandidates(fontValue);
+  return candidates.find((candidate) => DOCX_WORD_SAFE_FONTS.has(candidate)) || fallbackFont || DOCX_DEFAULT_FONT;
+}
+
+function normalizeDocxFontSize(rawValue = '', fallbackSize = 24) {
+  const raw = String(rawValue || '').trim().toLowerCase();
+  if (!raw) return fallbackSize;
+
+  const numeric = Number.parseFloat(raw);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallbackSize;
+
+  const points = raw.endsWith('px')
+    ? numeric * 0.75
+    : raw.endsWith('rem') || raw.endsWith('em')
+      ? numeric * 12
+      : numeric;
+
+  return Math.max(16, Math.round(points * 2));
+}
+
+function normalizeDocxLanguage(language = '') {
+  const resolved = String(language || '').trim() || DOCX_DEFAULT_LANGUAGE.value;
+  return {
+    value: resolved,
+    eastAsia: resolved,
+    bidirectional: resolved,
+  };
+}
+
+function resolveDocxParagraphAlignment(documentStyle = '') {
+  const normalizedStyle = String(documentStyle || '').trim().toLowerCase();
+  if (normalizedStyle === 'legal') return AlignmentType.JUSTIFIED;
+  if (normalizedStyle === 'presentation') return AlignmentType.CENTER;
+  return AlignmentType.RIGHT;
+}
+
+function resolveDocxExportOptions({ html = '', exportOptions = {} } = {}) {
+  const safeOptions = exportOptions && typeof exportOptions === 'object' ? exportOptions : {};
+  const htmlFontMatch = String(html || '').match(/font-family\s*:\s*([^;]+)/i);
+  const htmlFontStack = String(htmlFontMatch?.[1] || '').trim();
+  const fallbackFont = pickWordSafeFontName(htmlFontStack, DOCX_DEFAULT_FONT);
+  const fontName = pickWordSafeFontName(safeOptions.fontStack || safeOptions.fontFamily || '', fallbackFont);
+
+  return {
+    fontName,
+    fontSpec: {
+      ascii: fontName,
+      hAnsi: fontName,
+      cs: fontName,
+      eastAsia: fontName,
+    },
+    fontSize: normalizeDocxFontSize(safeOptions.fontSize, 24),
+    language: normalizeDocxLanguage(safeOptions.language),
+    noProof: safeOptions.disableProofing === true,
+    alignment: resolveDocxParagraphAlignment(safeOptions.documentStyle),
+  };
+}
+
+function readHtmlAttributeValue(block = '', attrName = '') {
+  if (!attrName) return '';
+  const match = String(block || '').match(new RegExp(`${attrName}\\s*=\\s*["']([^"']+)["']`, 'i'));
+  return String(match?.[1] || '').trim();
+}
+
+function readInlineCssValue(block = '', propertyName = '') {
+  if (!propertyName) return '';
+  const styleMatch = String(block || '').match(/style=["']([^"']+)["']/i);
+  if (!styleMatch) return '';
+  const valueMatch = String(styleMatch[1] || '').match(new RegExp(`${propertyName}\\s*:\\s*([^;]+)`, 'i'));
+  return String(valueMatch?.[1] || '').trim();
+}
+
+function extractDirectionalText(block = '') {
+  return decodeHtmlEntities(
+    String(block || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|section|article|blockquote|li|tr|td|th|h[1-6])>/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isRtlDocxLanguage(language = DOCX_DEFAULT_LANGUAGE) {
+  const candidate = typeof language === 'string'
+    ? language
+    : language?.bidirectional || language?.value || language?.eastAsia || '';
+  return DOCX_RTL_LANGUAGE_PATTERN.test(String(candidate || '').trim());
+}
+
+function hasSignificantRtlText(block = '') {
+  const text = extractDirectionalText(block);
+  const rtlCount = (text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length;
+  if (rtlCount < 2) return false;
+  const latinCount = (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length;
+  if (!latinCount) return true;
+  const words = text.split(/\s+/).filter(Boolean);
+  const rtlWordCount = words.filter((word) => (word.match(DOCX_RTL_CHARACTER_PATTERN) || []).length > 0).length;
+  const latinWordCount = words.filter((word) => (word.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length > 0).length;
+  return rtlCount >= 6 && rtlWordCount >= 2 && rtlWordCount > latinWordCount && rtlCount >= latinCount;
+}
+
+function shouldForceRtlBlockFormatting(block = '') {
+  return hasSignificantRtlText(block);
+}
+
+function hasDominantLtrText(block = '', typography = {}) {
+  const text = extractDirectionalText(block);
+  const latinCount = (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length;
+  if (latinCount < 3) return false;
+  const rtlCount = (text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length;
+  const words = text.split(/\s+/).filter(Boolean);
+  const rtlWordCount = words.filter((word) => (word.match(DOCX_RTL_CHARACTER_PATTERN) || []).length > 0).length;
+  const latinWordCount = words.filter((word) => (word.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length > 0).length;
+  if (!rtlCount) return latinWordCount >= 1 && latinCount >= 3;
+  return latinCount >= 6 && latinWordCount >= 2 && latinWordCount > rtlWordCount && latinCount > rtlCount;
+}
+
+function hasDirectionalDocxText(block = '') {
+  const text = extractDirectionalText(block);
+  return Boolean((text.match(DOCX_RTL_CHARACTER_PATTERN) || []).length || (text.match(DOCX_LATIN_CHARACTER_PATTERN) || []).length);
+}
+
+function resolveDocxAlignmentValue(value = '', fallback = AlignmentType.RIGHT, isRtl = true) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === 'center' || normalized === 'centre') return AlignmentType.CENTER;
+  if (normalized === 'left') return AlignmentType.LEFT;
+  if (normalized === 'right') return AlignmentType.RIGHT;
+  if (normalized === 'start') return isRtl ? AlignmentType.RIGHT : AlignmentType.LEFT;
+  if (normalized === 'end') return isRtl ? AlignmentType.LEFT : AlignmentType.RIGHT;
+  if (normalized.startsWith('justify')) return AlignmentType.JUSTIFIED;
+  return fallback;
+}
+
+function resolveBlockDocxFormatting(block = '', typography = {}) {
+  const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
+  const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
+  const dominantLtr = !explicitDirection && hasDominantLtrText(block, typography);
+  const fallbackAlignment = !alignmentValue && dominantLtr
+    ? AlignmentType.LEFT
+    : (typography.alignment || AlignmentType.RIGHT);
+  const documentIsRtl = isRtlDocxLanguage(typography.language);
+  const bidirectional = explicitDirection
+    ? !/^ltr$/i.test(explicitDirection)
+    : shouldForceRtlBlockFormatting(block, typography)
+      ? true
+      : dominantLtr
+        ? false
+        : documentIsRtl;
+  const alignmentDirection = bidirectional;
+  return {
+    alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, alignmentDirection),
+    bidirectional,
+  };
+}
+
+function buildDocxRunStyle(typography = {}, overrides = {}) {
+  const baseFontSpec = typography.fontSpec || {
+    ascii: typography.fontName || DOCX_DEFAULT_FONT,
+    hAnsi: typography.fontName || DOCX_DEFAULT_FONT,
+    cs: typography.fontName || DOCX_DEFAULT_FONT,
+    eastAsia: typography.fontName || DOCX_DEFAULT_FONT,
+  };
+  const merged = {
+    font: baseFontSpec,
+    size: typography.fontSize || 24,
+    sizeComplexScript: typography.fontSize || 24,
+    rightToLeft: true,
+    language: typography.language || DOCX_DEFAULT_LANGUAGE,
+    ...(typography.noProof === true ? { noProof: true } : {}),
+    ...(overrides || {}),
+  };
+
+  if (Object.prototype.hasOwnProperty.call(overrides || {}, 'size') && !Object.prototype.hasOwnProperty.call(overrides || {}, 'sizeComplexScript')) {
+    merged.sizeComplexScript = overrides.size;
+  }
+  if (merged.bold === true && !Object.prototype.hasOwnProperty.call(overrides || {}, 'boldComplexScript')) {
+    merged.boldComplexScript = true;
+  }
+  if (merged.italics === true && !Object.prototype.hasOwnProperty.call(overrides || {}, 'italicsComplexScript')) {
+    merged.italicsComplexScript = true;
+  }
+
+  return merged;
+}
+
+function createDocxTextRun(text = '', options = {}, typography = {}) {
+  return new TextRun({
+    text: String(text || ''),
+    ...buildDocxRunStyle(typography, options),
+  });
+}
+
+async function createDocxImageParagraph(block = '', typography = {}) {
   const srcMatch = String(block || '').match(/src=["']([^"']+)["']/i);
   const altMatch = String(block || '').match(/alt=["']([^"']*)["']/i);
   const src = decodeHtmlEntities(srcMatch?.[1] || '');
@@ -139,8 +360,9 @@ async function createDocxImageParagraph(block = '') {
   if (!src) {
     return new Paragraph({
       alignment: AlignmentType.RIGHT,
+      bidirectional: true,
       spacing: { after: 160 },
-      children: [new TextRun({ text: `[${alt}]`, italics: true, color: '475569' })],
+      children: [createDocxTextRun(`[${alt}]`, { italics: true, color: '475569' }, typography)],
     });
   }
 
@@ -165,6 +387,7 @@ async function createDocxImageParagraph(block = '') {
 
     return new Paragraph({
       alignment: AlignmentType.CENTER,
+      bidirectional: true,
       spacing: { after: 160 },
       children: [
         new ImageRun({
@@ -177,25 +400,44 @@ async function createDocxImageParagraph(block = '') {
   } catch {
     return new Paragraph({
       alignment: AlignmentType.RIGHT,
+      bidirectional: true,
       spacing: { after: 160 },
-      children: [new TextRun({ text: `[תמונה] ${alt || src}`, italics: true, color: '475569' })],
+      children: [createDocxTextRun(`[תמונה] ${alt || src}`, { italics: true, color: '475569' }, typography)],
     });
   }
 }
 
-function buildDocxTable(block = '') {
+function buildDocxTable(block = '', typography = {}) {
+  const tableFormatting = resolveBlockDocxFormatting(block, typography);
   const rows = (String(block || '').match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || []).map((rowHtml) => {
     const cells = rowHtml.match(/<(th|td)[^>]*>[\s\S]*?<\/\1>/gi) || [];
     return new TableRow({
       children: (cells.length ? cells : ['<td></td>']).map((cellHtml) => {
         const isHeader = /^<th/i.test(cellHtml);
+        const explicitCellDirection = readHtmlAttributeValue(cellHtml, 'dir') || readInlineCssValue(cellHtml, 'direction');
+        const explicitCellAlignment = readInlineCssValue(cellHtml, 'text-align') || readHtmlAttributeValue(cellHtml, 'align');
+        const detectedCellFormatting = resolveBlockDocxFormatting(cellHtml, {
+          ...typography,
+          alignment: tableFormatting.alignment,
+        });
+        const cellBidirectional = explicitCellDirection
+          ? !/^ltr$/i.test(explicitCellDirection)
+          : (detectedCellFormatting.bidirectional ?? tableFormatting.bidirectional);
+        const cellFormatting = {
+          alignment: explicitCellAlignment
+            ? resolveDocxAlignmentValue(explicitCellAlignment, detectedCellFormatting.alignment, cellBidirectional)
+            : detectedCellFormatting.alignment,
+          bidirectional: cellBidirectional,
+        };
         const text = decodeHtmlEntities(String(cellHtml).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) || ' ';
         return new TableCell({
           width: { size: 100, type: WidthType.AUTO },
           children: [
             new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text, bold: isHeader })],
+              style: 'Normal',
+              alignment: cellFormatting.alignment,
+              bidirectional: cellFormatting.bidirectional,
+              children: [createDocxTextRun(text, { bold: isHeader, rightToLeft: cellFormatting.bidirectional }, typography)],
             }),
           ],
         });
@@ -204,34 +446,61 @@ function buildDocxTable(block = '') {
   });
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: rows.length ? rows : [new TableRow({ children: [new TableCell({ children: [new Paragraph(' ')] })] })],
+    width: { size: '100%', type: WidthType.PERCENTAGE },
+    visuallyRightToLeft: tableFormatting.bidirectional,
+    rows: rows.length ? rows : [new TableRow({
+      children: [new TableCell({
+        children: [new Paragraph({
+          style: 'Normal',
+          text: ' ',
+          alignment: tableFormatting.alignment,
+          bidirectional: tableFormatting.bidirectional,
+        })],
+      })],
+    })],
   });
 }
 
-async function htmlToDocxParagraphs(html = '', fallbackText = '') {
+async function htmlToDocxParagraphs(html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) {
   const source = String(html || '')
     .replace(/\r\n/g, '\n')
-    .replace(/<div data-type="page-break"><\/div>/gi, '\n[[PAGE_BREAK]]\n');
+    .replace(/<(div|p)[^>]*(?:data-type=["']page-break["']|data-page-break=["']true["']|class=["'][^"']*page-break(?:-node)?[^"']*["']|style=["'][^"']*(?:page-break-after\s*:\s*always|break-after\s*:\s*page)[^"']*["'])[^>]*>(?:\s|&nbsp;|&#160;|<br\s*\/?>)*<\/\1>/gi, '\n[[PAGE_BREAK]]\n');
 
-  const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>/gi;
+  const blockRegex = /\[\[PAGE_BREAK\]\]|<table[^>]*>[\s\S]*?<\/table>|<img[^>]*>|<h1[^>]*>[\s\S]*?<\/h1>|<h2[^>]*>[\s\S]*?<\/h2>|<h3[^>]*>[\s\S]*?<\/h3>|<blockquote[^>]*>[\s\S]*?<\/blockquote>|<li[^>]*>[\s\S]*?<\/li>|<p[^>]*>[\s\S]*?<\/p>|<div[^>]*>[\s\S]*?<\/div>/gi;
   const children = [];
   const blocks = source.match(blockRegex) || [];
 
-  const pushTextParagraph = (text, options = {}) => {
-    const cleanText = decodeHtmlEntities(String(text || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+  const pushTextParagraph = (text, options = {}, blockHtml = '') => {
+    const cleanText = decodeHtmlEntities(
+      String(text || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim(),
+    );
     if (!cleanText) return;
+      const blockFormatting = resolveBlockDocxFormatting(blockHtml, typography);
     const runOptions = {
-      text: cleanText,
       ...(options.bold ? { bold: true } : {}),
       ...(options.italics ? { italics: true } : {}),
       ...(options.color ? { color: options.color } : {}),
       ...(options.size ? { size: options.size } : {}),
+        rightToLeft: typeof options.bidirectional === 'boolean' ? options.bidirectional : blockFormatting.bidirectional,
     };
+    const textRuns = cleanText.split('\n').flatMap((line, index) => (
+      index === 0
+        ? [createDocxTextRun(line, runOptions, typography)]
+        : [createDocxTextRun(line, { ...runOptions, break: 1 }, typography)]
+    ));
     children.push(new Paragraph({
-      alignment: AlignmentType.RIGHT,
+      ...(options.heading ? {} : { style: 'Normal' }),
+      alignment: options.alignment || blockFormatting.alignment || typography.alignment || AlignmentType.RIGHT,
+      bidirectional: typeof options.bidirectional === 'boolean' ? options.bidirectional : blockFormatting.bidirectional,
       spacing: { after: 160, line: 360 },
-      children: [new TextRun(runOptions)],
+      children: textRuns,
       ...('bullet' in options ? { bullet: options.bullet } : {}),
       ...(options.heading ? { heading: options.heading } : {}),
     }));
@@ -242,49 +511,136 @@ async function htmlToDocxParagraphs(html = '', fallbackText = '') {
       .split(/\n{2,}/)
       .map((chunk) => chunk.trim())
       .filter(Boolean)
-      .forEach((chunk) => pushTextParagraph(chunk));
+      .forEach((chunk) => pushTextParagraph(chunk, {}, chunk));
     return children.length ? children : [new Paragraph({ text: '' })];
   }
 
   for (const block of blocks) {
     if (block === '[[PAGE_BREAK]]') {
-      children.push(new Paragraph({ text: '', pageBreakBefore: true }));
+      children.push(new Paragraph({ style: 'Normal', text: '', pageBreakBefore: true, bidirectional: true }));
       continue;
     }
     if (/^<table/i.test(block)) {
-      children.push(buildDocxTable(block));
+      children.push(buildDocxTable(block, typography));
       continue;
     }
     if (/^<img/i.test(block)) {
-      children.push(await createDocxImageParagraph(block));
+      children.push(await createDocxImageParagraph(block, typography));
       continue;
     }
-    if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }); continue; }
-    if (/^<h2/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }); continue; }
-    if (/^<h3/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_3, bold: true, size: 24 }); continue; }
-    if (/^<li/i.test(block)) { pushTextParagraph(block, { bullet: { level: 0 } }); continue; }
-    if (/^<blockquote/i.test(block)) { pushTextParagraph(block, { italics: true, color: '475569' }); continue; }
-    pushTextParagraph(block);
+    if (/^<h1/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_1, bold: true, size: 34 }, block); continue; }
+    if (/^<h2/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }, block); continue; }
+    if (/^<h3/i.test(block)) { pushTextParagraph(block, { heading: HeadingLevel.HEADING_3, bold: true, size: 24 }, block); continue; }
+    if (/^<li/i.test(block)) { pushTextParagraph(block, { bullet: { level: 0 } }, block); continue; }
+    if (/^<blockquote/i.test(block)) { pushTextParagraph(block, { italics: true, color: '475569' }, block); continue; }
+    pushTextParagraph(block, {}, block);
   }
 
   return children.length ? children : [new Paragraph({ text: '' })];
 }
 
-async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Document' } = {}) {
-  const children = await htmlToDocxParagraphs(html, text);
+async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Document', exportOptions = {} } = {}) {
+  const typography = resolveDocxExportOptions({ html, exportOptions });
+  const headingOneSize = Math.max(typography.fontSize + 10, 34);
+  const headingTwoSize = Math.max(typography.fontSize + 4, 28);
+  const headingThreeSize = Math.max(typography.fontSize + 2, 24);
+  const children = await htmlToDocxParagraphs(html, text, typography);
   const doc = new Document({
+    styles: {
+      default: {
+        document: {
+          run: {
+            ...buildDocxRunStyle(typography),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 160, line: 360 },
+          },
+        },
+        title: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingOneSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 220 },
+          },
+        },
+        heading1: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingOneSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 240, after: 160 },
+          },
+        },
+        heading2: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingTwoSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 220, after: 160 },
+          },
+        },
+        heading3: {
+          run: {
+            ...buildDocxRunStyle(typography, {
+              size: headingThreeSize,
+              bold: true,
+              color: '000000',
+            }),
+          },
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { before: 200, after: 140 },
+          },
+        },
+        listParagraph: {
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+          },
+        },
+      },
+      paragraphStyles: [
+        {
+          id: 'Normal',
+          name: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          paragraph: {
+            alignment: typography.alignment,
+            bidirectional: true,
+            spacing: { after: 160, line: 360 },
+          },
+          run: {
+            ...buildDocxRunStyle(typography),
+          },
+        },
+      ],
+    },
     sections: [
       {
-        properties: {},
-        children: [
-          new Paragraph({
-            alignment: AlignmentType.RIGHT,
-            heading: HeadingLevel.HEADING_1,
-            spacing: { after: 220 },
-            children: [new TextRun({ text: title, bold: true, size: 36 })],
-          }),
-          ...children,
-        ],
+        children,
       },
     ],
   });
@@ -292,8 +648,16 @@ async function buildDocxBuffer({ html = '', text = '', title = 'WordFlow AI Docu
   return Packer.toBuffer(doc);
 }
 
-function wrapHtmlDocument(html = '', title = 'WordFlow AI Document') {
-  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{direction:rtl;font-family:Arial,sans-serif;padding:40px;line-height:1.7}[data-type="page-break"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
+function wrapHtmlDocument(html = '', title = 'WordFlow AI Document', exportOptions = {}) {
+  const typography = resolveDocxExportOptions({ html, exportOptions });
+  const textAlign = typography.alignment === AlignmentType.CENTER
+    ? 'center'
+    : typography.alignment === AlignmentType.JUSTIFIED
+      ? 'justify'
+      : 'right';
+  const fontSizePt = Math.max(8, (typography.fontSize || 24) / 2);
+  const blockStyle = `direction:rtl;unicode-bidi:embed;text-align:${textAlign};`;
+  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>html,body{${blockStyle}font-family:"${escapeHtml(typography.fontName)}",Arial,sans-serif;font-size:${fontSizePt}pt}body{padding:40px;line-height:1.7}p,div,section,article,blockquote,li,table,thead,tbody,tr,td,th,h1,h2,h3,h4,h5,h6{${blockStyle}}[dir="ltr"]{direction:ltr;unicode-bidi:embed;text-align:left}[dir="rtl"]{direction:rtl;unicode-bidi:embed;text-align:${textAlign}}[data-type="page-break"],[data-page-break="true"]{display:block;height:0;page-break-after:always;break-after:page}</style></head><body>${html}</body></html>`;
 }
 
 async function readDocumentPayload(filePath) {
@@ -359,6 +723,19 @@ function getWritableMaterialsDir() {
   return dir;
 }
 
+function getMaterialsOcrCacheDir() {
+  const dir = path.join(getWritableMaterialsDir(), '.ocr-cache');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getMaterialsOcrDataDir() {
+  const dir = app.isPackaged
+    ? path.join(process.resourcesPath, 'ocr-data')
+    : path.join(__dirname, '..', 'ocr-data');
+  return fs.existsSync(dir) ? dir : '';
+}
+
 function getPersistedProviderConfigPath() {
   const dir = app.getPath('userData');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -404,6 +781,40 @@ function writePersistedProviderConfig(config = {}) {
   }, null, 2) + '\n', 'utf8');
 
   return { ok: true, filePath };
+}
+
+function normalizeProxyHost(value = '') {
+  return String(value || '').replace(/^\[|\]$/g, '').toLowerCase();
+}
+
+function isLoopbackProxyHost(hostname = '') {
+  return hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d+){3}$/.test(hostname);
+}
+
+function getAllowedPersistedCustomTarget() {
+  try {
+    const { URL: NodeURL } = require('url');
+    const providerConfig = readPersistedProviderConfig();
+    const customBaseUrl = String(providerConfig?.custom?.baseUrl || '').trim();
+    if (!customBaseUrl) return null;
+
+    const parsed = new NodeURL(customBaseUrl);
+    const normalizedHost = normalizeProxyHost(parsed.hostname || '');
+    if (!normalizedHost) return null;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (parsed.username || parsed.password) return null;
+
+    const resolvedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    if (parsed.protocol === 'http:' && !isLoopbackProxyHost(normalizedHost)) return null;
+
+    return {
+      protocol: parsed.protocol,
+      host: normalizedHost,
+      port: resolvedPort,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function getPersistedAppSettingsPath() {
@@ -473,10 +884,12 @@ function setupAutoUpdater() {
     return;
   }
 
+  const runtimeAutoUpdateFeedUrl = resolveAutoUpdateFeedUrl();
+
   let manualDownloadShown = false;
   const handleUpdaterFailure = async (err, fallbackMessage = 'שגיאה בבדיקת העדכונים') => {
     const rawMessage = String(err?.message || fallbackMessage);
-    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*406/i.test(rawMessage);
+    const isReleaseFeedIssue = /Cannot parse releases feed|Unable to find latest version on GitHub|HttpError:\s*(?:404|406)|404 Not Found|authentication token|access token|personal access token|GH_TOKEN|requires authentication|Bad credentials|private repo|private repository/i.test(rawMessage);
 
     if (isReleaseFeedIssue) {
       sendUpdateStatus({
@@ -507,9 +920,21 @@ function setupAutoUpdater() {
   };
 
   const updateConfigPath = path.join(process.resourcesPath || '', 'app-update.yml');
-  if (!fs.existsSync(updateConfigPath)) {
+  if (!fs.existsSync(updateConfigPath) && !runtimeAutoUpdateFeedUrl) {
     console.warn('Skipping auto update: app-update.yml not found');
     sendUpdateStatus({ status: 'unavailable', message: 'קובץ הגדרות העדכון חסר בגרסה הזו' });
+    return;
+  }
+
+  try {
+    if (runtimeAutoUpdateFeedUrl) {
+      autoUpdater.setFeedURL(runtimeAutoUpdateFeedUrl);
+      console.log(`Using generic auto-update feed: ${runtimeAutoUpdateFeedUrl}`);
+    }
+  } catch (error) {
+    handleUpdaterFailure(error, 'הגדרת מסלול העדכונים נכשלה').catch((nestedError) => {
+      console.error('Auto update feed setup error:', nestedError?.message || nestedError);
+    });
     return;
   }
 
@@ -634,7 +1059,9 @@ function createMainWindow() {
     minHeight: 720,
     show: false,
     backgroundColor: '#f3f2f1',
-    icon: path.join(__dirname, '..', 'dist', 'app-icon.png'),
+    icon: process.platform === 'win32'
+      ? path.join(__dirname, '..', 'assets', 'app-icon.ico')
+      : path.join(__dirname, '..', app.isPackaged ? 'dist' : 'public', 'app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -705,10 +1132,50 @@ function createMainWindow() {
   });
 }
 
+function getUsableMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return null;
+  return mainWindow;
+}
+
+function openSettingsTabSafely(tab = 'ai') {
+  const resolvedTab = String(tab || '').trim() || 'ai';
+  pendingSettingsPayload = { tab: resolvedTab };
+  const sendOpenSettings = (targetWindow) => {
+    if (!targetWindow || targetWindow.isDestroyed()) return;
+    if (!targetWindow.webContents || targetWindow.webContents.isDestroyed()) return;
+    if (targetWindow.isMinimized()) targetWindow.restore();
+    if (!targetWindow.isVisible()) targetWindow.show();
+    targetWindow.focus();
+    targetWindow.webContents.send('open-settings', { tab: resolvedTab });
+  };
+
+  const existingWindow = getUsableMainWindow();
+  if (existingWindow) {
+    if (existingWindow.webContents.isLoading()) {
+      existingWindow.webContents.once('did-finish-load', () => sendOpenSettings(existingWindow));
+      return;
+    }
+    sendOpenSettings(existingWindow);
+    return;
+  }
+
+  createMainWindow();
+  const createdWindow = getUsableMainWindow();
+  if (!createdWindow) return;
+  createdWindow.webContents.once('did-finish-load', () => sendOpenSettings(createdWindow));
+}
+
 ipcMain.handle('consume-pending-open-document', async () => {
   const payload = pendingFilePayload;
   pendingFilePayload = null;
   return payload || { canceled: true };
+});
+
+ipcMain.handle('consume-pending-open-settings', async () => {
+  const payload = pendingSettingsPayload;
+  pendingSettingsPayload = null;
+  return payload || null;
 });
 
 ipcMain.handle('open-document-dialog', async () => {
@@ -765,10 +1232,11 @@ ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
       html: String(payload?.html || ''),
       text: String(payload?.text || ''),
       title: baseName,
+      exportOptions: payload?.exportOptions,
     });
     fs.writeFileSync(targetPath, buffer);
   } else {
-    fs.writeFileSync(targetPath, wrapHtmlDocument(String(payload?.html || ''), baseName), 'utf8');
+    fs.writeFileSync(targetPath, wrapHtmlDocument(String(payload?.html || ''), baseName, payload?.exportOptions), 'utf8');
   }
 
   return { ok: true, canceled: false, filePath: targetPath };
@@ -832,11 +1300,18 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     const ext = path.extname(safeName).toLowerCase();
     let extractedText = '';
 
-    if (ext === '.docx') {
-      const result = await mammoth.extractRawText({ path: filePath });
-      extractedText = String(result?.value || '').trim();
-    } else if (['.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
-      extractedText = fs.readFileSync(filePath, 'utf8');
+    if (['.docx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
+      try {
+        extractedText = await extractMaterialTextFromBuffer({
+          buffer,
+          fileName: safeName,
+          maxLength: 5000,
+          ocrCacheDir: getMaterialsOcrCacheDir(),
+          ocrDataDir: getMaterialsOcrDataDir(),
+        });
+      } catch {
+        extractedText = '';
+      }
     }
 
     return {
@@ -847,6 +1322,26 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     };
   } catch (error) {
     return { ok: false, error: error?.message || 'Read failed' };
+  }
+});
+
+ipcMain.handle('extract-material-text', async (_event, payload = {}) => {
+  const fileName = path.basename(String(payload?.fileName || 'material.bin')).replace(/[^\w\u0590-\u05FF .()\-]/g, '_');
+  const dataBase64 = String(payload?.dataBase64 || '').trim();
+  const maxLength = Number(payload?.maxLength || 12000);
+  if (!fileName || !dataBase64) return { ok: false, error: 'missing-extraction-payload' };
+
+  try {
+    const text = await extractMaterialTextFromBuffer({
+      buffer: Buffer.from(dataBase64, 'base64'),
+      fileName,
+      maxLength,
+      ocrCacheDir: getMaterialsOcrCacheDir(),
+      ocrDataDir: getMaterialsOcrDataDir(),
+    });
+    return { ok: true, text };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'material-extraction-failed' };
   }
 });
 
@@ -910,6 +1405,147 @@ async function triggerUpdateCheck() {
 
 ipcMain.handle('check-for-app-updates', async () => triggerUpdateCheck());
 
+// ─── Proxy HTTP: מאפשר ל-renderer לשלוח בקשות HTTP דרך main process (עוקף CORS) ───
+ipcMain.handle('abort-proxy-http-request', async (_event, requestId = '') => {
+  const normalizedRequestId = String(requestId || '').trim();
+  if (!normalizedRequestId) return { ok: false, aborted: false };
+
+  const req = activeProxyRequests.get(normalizedRequestId);
+  if (!req) {
+    abortedProxyRequests.add(normalizedRequestId);
+    return { ok: true, aborted: true };
+  }
+
+  activeProxyRequests.delete(normalizedRequestId);
+  abortedProxyRequests.add(normalizedRequestId);
+  try {
+    req.destroy(new Error('Request aborted'));
+  } catch {}
+  return { ok: true, aborted: true };
+});
+
+ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', headers = {}, body, requestId = '', timeoutMs = 0 } = {}) => {
+  try {
+    const https = require('https');
+    const http = require('http');
+    const { URL: NodeURL } = require('url');
+
+    const parsed = new NodeURL(url);
+    const normalizedRequestId = String(requestId || '').trim();
+    const normalizedHost = normalizeProxyHost(parsed.hostname || '');
+    const normalizedMethod = String(method || 'POST').toUpperCase();
+    const resolvedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    const numericTimeoutMs = Number(timeoutMs);
+    const effectiveTimeoutMs = Number.isFinite(numericTimeoutMs) && numericTimeoutMs > 0
+      ? Math.max(1000, Math.min(300000, Math.round(numericTimeoutMs)))
+      : 120000;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { ok: false, status: 0, body: 'פרוטוקול לא מורשה' };
+    }
+    if (parsed.username || parsed.password) {
+      return { ok: false, status: 0, body: 'כתובת עם פרטי הזדהות אינה מורשית' };
+    }
+
+    // רק endpoints מוכרים או loopback מקומי מאושר של Ollama/LM Studio מורשים.
+    const ALLOWED_HTTPS_HOSTS = new Set([
+      'api.perplexity.ai',
+      'api.openai.com',
+      'api.anthropic.com',
+      'api.groq.com',
+      'generativelanguage.googleapis.com',
+      'api.deepseek.com',
+      'api.mistral.ai',
+      'api.together.xyz',
+      'openrouter.ai',
+      'api.x.ai',
+    ]);
+    const ALLOWED_LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+    const ALLOWED_LOCAL_PORTS = new Set([11434, 1234]);
+    const isAllowedLocalDevTarget = ALLOWED_LOCAL_HOSTS.has(normalizedHost) && ALLOWED_LOCAL_PORTS.has(resolvedPort);
+    const allowedPersistedCustomTarget = getAllowedPersistedCustomTarget();
+    const isAllowedPersistedCustomTarget = Boolean(
+      allowedPersistedCustomTarget
+      && normalizedHost === allowedPersistedCustomTarget.host
+      && resolvedPort === allowedPersistedCustomTarget.port
+      && parsed.protocol === allowedPersistedCustomTarget.protocol
+    );
+
+    if (parsed.protocol === 'http:' && !isAllowedLocalDevTarget && !isAllowedPersistedCustomTarget) {
+      return { ok: false, status: 0, body: 'HTTP מותר רק ל-loopback מקומי מאושר' };
+    }
+    if (!isAllowedLocalDevTarget && !isAllowedPersistedCustomTarget && !ALLOWED_HTTPS_HOSTS.has(normalizedHost)) {
+      return { ok: false, status: 0, body: `Host לא מורשה: ${normalizedHost}` };
+    }
+    if (normalizedRequestId && abortedProxyRequests.has(normalizedRequestId)) {
+      abortedProxyRequests.delete(normalizedRequestId);
+      return { ok: false, status: 0, body: 'Request aborted' };
+    }
+
+    const result = await new Promise((resolve, reject) => {
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const bodyBuffer = body ? Buffer.from(body, 'utf8') : null;
+      const reqHeaders = {
+        ...Object.fromEntries(
+          Object.entries(headers || {}).filter(([headerName]) => !['host', 'content-length', 'connection'].includes(String(headerName || '').toLowerCase()))
+        ),
+        ...(bodyBuffer ? { 'Content-Length': String(bodyBuffer.length) } : {}),
+      };
+      let settled = false;
+      let timeoutHandle = null;
+      const finishResolve = (value) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (normalizedRequestId) activeProxyRequests.delete(normalizedRequestId);
+        if (normalizedRequestId) abortedProxyRequests.delete(normalizedRequestId);
+        resolve(value);
+      };
+      const finishReject = (error) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (normalizedRequestId) activeProxyRequests.delete(normalizedRequestId);
+        if (normalizedRequestId) abortedProxyRequests.delete(normalizedRequestId);
+        reject(error);
+      };
+      const req = lib.request(
+        { hostname: parsed.hostname, port: resolvedPort, path: parsed.pathname + (parsed.search || ''), method: normalizedMethod, headers: reqHeaders },
+        (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('error', finishReject);
+          res.on('aborted', () => finishReject(new Error('Response aborted')));
+          res.on('close', () => {
+            if (!settled && !res.complete) finishReject(new Error('Response closed before completion'));
+          });
+          res.on('end', () => finishResolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+        }
+      );
+      req.on('error', finishReject);
+      req.on('close', () => {
+        if (!settled && req.destroyed) finishReject(new Error('Request closed before completion'));
+      });
+      if (normalizedRequestId) activeProxyRequests.set(normalizedRequestId, req);
+      if (normalizedRequestId && abortedProxyRequests.has(normalizedRequestId)) {
+        abortedProxyRequests.delete(normalizedRequestId);
+        finishReject(new Error('Request aborted'));
+        req.destroy();
+        return;
+      }
+      timeoutHandle = setTimeout(() => {
+        const timeoutError = new Error('Proxy request timed out');
+        timeoutError.code = 'PROXY_TIMEOUT';
+        req.destroy(timeoutError);
+      }, effectiveTimeoutMs);
+      if (bodyBuffer) req.write(bodyBuffer);
+      req.end();
+    });
+    return result;
+  } catch (err) {
+    return { ok: false, status: 0, body: err?.message || 'שגיאת רשת' };
+  }
+});
+
 ipcMain.handle('install-app-update', async () => {
   if (latestUpdateState.status !== 'downloaded') {
     return { ok: false, ...latestUpdateState, message: 'עדיין אין עדכון מוכן להתקנה' };
@@ -968,6 +1604,117 @@ function createAppMenu() {
             }
           },
         },
+        { type: 'separator' },
+        {
+          label: 'מדריך למשתמש',
+          click: () => {
+            openSettingsTabSafely('guide');
+          },
+        },
+        {
+          label: 'מדריך מפתחות API',
+          click: () => {
+            openSettingsTabSafely('ai');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'מה לעשות כשיצירת מסמך נכשלת?',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'פתרון בעיות — יצירת מסמך',
+              message: 'יצירת המסמך נכשלה — מה לעשות?',
+              detail: [
+                '1. בדוק שה-API key של הספק הפעיל תקין (הגדרות → AI).',
+                '2. לחץ על "בדוק חיבור" בכרטיס הספק.',
+                '3. אם אין אינטרנט — Gemini/Claude/OpenAI לא יעבדו. נסה Ollama מקומי.',
+                '4. נסה לצמצם את ההנחיות/המשימה — prompt ארוך מדי עלול לגרום לחיתוך.',
+                '5. אם מצב Multi-Model פעיל — ודא שכל הספקים שנבחרו מוגדרים עם מפתח.',
+                '',
+                'אם הבעיה חוזרת, פתח את יומן הלוגים (הגדרות → מפתחים) לפרטים נוספים.',
+              ].join('\n'),
+              buttons: ['סגור', 'פתח הגדרות AI'],
+            }).then(({ response }) => {
+              if (response === 1) {
+                openSettingsTabSafely('ai');
+              }
+            });
+          },
+        },
+        {
+          label: 'מה לעשות כשה-API לא עובד?',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'פתרון בעיות — חיבור API',
+              message: 'ה-API לא מגיב — מה לבדוק?',
+              detail: [
+                '• Gemini: בדוק שה-key מתחיל ב-AIza ולא פג תוקף ב-AI Studio.',
+                '• Claude: המפתח מתחיל ב-sk-ant-, ווודא מכסה ב-console.anthropic.com.',
+                '• OpenAI: המפתח מתחיל ב-sk-, ווודא שיש credit ב-platform.openai.com.',
+                '• Groq: בחינם! צור key חדש ב-console.groq.com אם הנוכחי נחסם.',
+                '• Ollama: ודא שהשרות רץ מקומית (ollama serve) ושהמודל הורד.',
+                '• Custom: ודא שה-Base URL מסתיים ב-/v1 ושהמודל נכון.',
+                '',
+                'לחץ "בדוק חיבור" בכרטיס הספק בהגדרות לאחר כל תיקון.',
+              ].join('\n'),
+              buttons: ['סגור', 'פתח הגדרות AI'],
+            }).then(({ response }) => {
+              if (response === 1) {
+                openSettingsTabSafely('ai');
+              }
+            });
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'קיצורי מקלדת',
+          click: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'קיצורי מקלדת — WordFlow AI',
+              message: 'קיצורי מקלדת עיקריים',
+              detail: [
+                'Ctrl+S           — שמור מסמך',
+                'Ctrl+Z           — בטל פעולה',
+                'Ctrl+Y           — חזור על פעולה',
+                'Ctrl+B           — מודגש',
+                'Ctrl+I           — נטוי',
+                'Ctrl+U           — קו תחתי',
+                'Ctrl+Shift+V    — הדבק ללא עיצוב',
+                'Ctrl+Enter       — שלח הנחיה ל-AI',
+                'Esc              — סגור פאנל/פופאפ פתוח',
+                '',
+                'לפתיחת הגדרות: לחץ על הגלגל שיניים בפינה',
+              ].join('\n'),
+              buttons: ['סגור'],
+            });
+          },
+        },
+        {
+          label: 'אודות WordFlow AI',
+          click: async () => {
+            const version = app.getVersion();
+            await dialog.showMessageBox({
+              type: 'info',
+              title: 'אודות WordFlow AI',
+              message: `WordFlow AI — v${version}`,
+              detail: [
+                'עורך מסמכים חכם עם AI מובנה.',
+                'תומך ב-Gemini, Claude, OpenAI, Groq, Perplexity, Ollama ועוד.',
+                '',
+                'לדיווח על בעיה:',
+                'github.com/rotems4500-gif/wordai-new/issues',
+              ].join('\n'),
+              buttons: ['סגור', 'דווח על בעיה'],
+            }).then(({ response }) => {
+              if (response === 1) {
+                shell.openExternal('https://github.com/rotems4500-gif/wordai-new/issues');
+              }
+            });
+          },
+        },
       ],
     },
   ];
@@ -1014,6 +1761,7 @@ if (!singleInstanceLock) {
 }
 
 app.on('will-quit', () => {
+  shutdownMaterialExtraction().catch(() => {});
   globalShortcut.unregisterAll();
 });
 

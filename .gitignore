@@ -22,6 +22,34 @@ test_gemini.js
 
 # Local personal data and temporary development files
 my_personal_style.json
+PAST-DOC/*
+!PAST-DOC/.gitkeep
+!PAST-DOC/index.json
 past-works/*
 !past-works/.gitkeep
 src/__TEMP_ROUTING_OVERRIDE.js
+
+# Large/temp files that should never be committed
+temp-docx-inspect/
+temp-docx-inspect-2/
+temp-ocr-cache/
+temp-ocr-cache-runtime/
+tmp-*.mjs
+tmp-*.js
+tmp-ocr-test.png
+*.vsix
+patch*.js
+run-patch*.js
+preview-agent-redesign.html
+preview-app-product.html
+preview-home.html
+icon-preview.html
+workspace-create-view.html
+fix3.js
+script.js
+temp.txt
+test.js
+
+
+*.exe
+*.exe.blockmap

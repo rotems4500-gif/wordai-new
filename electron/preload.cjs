@@ -11,8 +11,10 @@ contextBridge.exposeInMainWorld('desktopApp', {
   saveLocalMaterial: (payload) => ipcRenderer.invoke('save-local-material', payload),
   listLocalMaterials: () => ipcRenderer.invoke('list-local-materials'),
   readLocalMaterial: (fileName) => ipcRenderer.invoke('read-local-material', fileName),
+  extractMaterialText: (payload) => ipcRenderer.invoke('extract-material-text', payload),
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
+  consumePendingOpenSettings: () => ipcRenderer.invoke('consume-pending-open-settings'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),
   loadProviderConfig: () => ipcRenderer.invoke('load-provider-config'),
   saveProviderConfig: (payload) => ipcRenderer.invoke('save-provider-config', payload),
@@ -21,6 +23,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   getAppUpdateInfo: () => ipcRenderer.invoke('get-app-update-info'),
   checkForAppUpdates: () => ipcRenderer.invoke('check-for-app-updates'),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
+  proxyHttpRequest: (payload) => ipcRenderer.invoke('proxy-http-request', payload),
+  abortProxyHttpRequest: (requestId) => ipcRenderer.invoke('abort-proxy-http-request', requestId),
   onAppUpdateStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('app-update-status', listener);
@@ -30,5 +34,10 @@ contextBridge.exposeInMainWorld('desktopApp', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('open-external-document', listener);
     return () => ipcRenderer.removeListener('open-external-document', listener);
+  },
+  onOpenSettings: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('open-settings', listener);
+    return () => ipcRenderer.removeListener('open-settings', listener);
   },
 });

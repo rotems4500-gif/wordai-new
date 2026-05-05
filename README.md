@@ -105,9 +105,12 @@ To publish a real desktop update that installed users can receive automatically:
 1. Bump the app version in [package.json](package.json).
 2. Push the code to GitHub.
 3. Trigger the release workflow or push a tag like v1.0.1.
-4. GitHub Actions will build the Windows installer, upload the release assets, and publish update metadata.
+4. GitHub Actions will build the Windows installer, upload the release assets, and publish `latest.yml` plus the installer files to the GitHub Release.
+5. Installed apps will check the public `releases/latest/download` feed automatically, download the update in the background, and install it on quit.
 
 Local builds alone do not trigger auto-update for installed users.
+
+If you ever need to override the update host, set `WORDFLOW_UPDATE_FEED_URL` before launching the packaged app.
 
 ## 🏗️ Built With
 - **Vanilla JS & HTML5**

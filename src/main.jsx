@@ -8,8 +8,11 @@ import TopBar from './TopBar';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings } from './services/aiService';
-import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, saveDocumentHistory, learnFromDocumentDraft } from './services/workspaceLearningService';
+import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
+import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
+import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
+import { downloadBrowserDocx } from './services/browserDocxExport';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
@@ -18,14 +21,643 @@ const DOCUMENT_STYLE_PRESETS = {
   presentation: { label: 'מצגת', fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '15pt', lineHeight: '1.5', padding: '1.8cm', maxWidth: '25cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', textAlign: 'center' },
 };
 
-const buildLiveGenerationShell = (promptText = '') => `
-  <div style="border:1px solid #BFDBFE;background:#EFF6FF;padding:16px 18px;border-radius:14px;margin-bottom:18px;">
-    <p><strong>מכין את המסמך בלייב...</strong></p>
-    <p>אפשר כבר לראות את שלבי העבודה בזמן אמת. התוכן המלא יופיע כאן אוטומטית בעוד רגע.</p>
+const GENERATION_LABEL_FALLBACKS = {
+  blank: 'מסמך חדש',
+  academic: 'עבודה אקדמית',
+  legal: 'מסמך משפטי',
+  report: 'דוח מסודר',
+  summary: 'סיכום נושא',
+  office: 'מסמך משרדי',
+  proposal: 'הצעה',
+  letter: 'מכתב רשמי',
+};
+
+const MAGIC_WAND_SELECTION_CONTEXT_SIDE = 420;
+
+const LIVE_GENERATION_SHELL_MARKER = 'data-wordai-live-generation-shell="true"';
+const LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER = 'data-wordai-live-generation-error-placeholder="true"';
+const DOCUMENT_ARRIVAL_PULSE_DURATION_MS = 950;
+const START_SCREEN_TRANSITION_DURATION_MS = 1800;
+const START_SCREEN_TRANSITION_APPROACH_START = 76;
+const START_SCREEN_TRANSITION_IMPACT_START = 82;
+const START_SCREEN_TRANSITION_IMPACT_CENTER_X = '51%';
+const START_SCREEN_TRANSITION_IMPACT_CENTER_Y = '52%';
+const START_SCREEN_TRANSITION_IMPACT_START_MS = Math.round(
+  START_SCREEN_TRANSITION_DURATION_MS * (START_SCREEN_TRANSITION_IMPACT_START / 100)
+);
+const START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX = 240;
+const START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX = 96;
+const START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX = 228;
+const START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX = 44;
+const START_SCREEN_TRANSITION_ROCKET_START_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 75%)`;
+const START_SCREEN_TRANSITION_ROCKET_START_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px + 6%)`;
+const START_SCREEN_TRANSITION_ROCKET_MID_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 47%)`;
+const START_SCREEN_TRANSITION_ROCKET_MID_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px - 2%)`;
+const START_SCREEN_TRANSITION_ROCKET_CRUISE_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px - 23%)`;
+const START_SCREEN_TRANSITION_ROCKET_CRUISE_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px - 12%)`;
+const START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX}px)`;
+const START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX}px)`;
+const START_SCREEN_TRANSITION_ROCKET_APPROACH_LEFT = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_X} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_X_PX + 76}px)`;
+const START_SCREEN_TRANSITION_ROCKET_APPROACH_TOP = `calc(${START_SCREEN_TRANSITION_IMPACT_CENTER_Y} - ${START_SCREEN_TRANSITION_ROCKET_TIP_OFFSET_Y_PX + 72}px)`;
+const getStartScreenTransitionDelayMs = (offsetMs = 0) => `${START_SCREEN_TRANSITION_IMPACT_START_MS + offsetMs}ms`;
+
+const getPrefersReducedMotion = () => (
+  typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+);
+
+const START_SCREEN_TRANSITION_PARTICLES = [
+  { id: 'a', size: 14, left: '50%', top: '50%', angle: '-84deg', distance: '236px', delay: getStartScreenTransitionDelayMs(-22), color: '#FFFFFF' },
+  { id: 'b', size: 12, left: '50%', top: '50%', angle: '-52deg', distance: '284px', delay: getStartScreenTransitionDelayMs(-6), color: '#FDE68A' },
+  { id: 'c', size: 16, left: '50%', top: '50%', angle: '-18deg', distance: '328px', delay: getStartScreenTransitionDelayMs(6), color: '#FB7185' },
+  { id: 'd', size: 13, left: '50%', top: '50%', angle: '18deg', distance: '344px', delay: getStartScreenTransitionDelayMs(18), color: '#FDBA74' },
+  { id: 'e', size: 15, left: '50%', top: '50%', angle: '54deg', distance: '286px', delay: getStartScreenTransitionDelayMs(10), color: '#FFFFFF' },
+  { id: 'f', size: 14, left: '50%', top: '50%', angle: '92deg', distance: '250px', delay: getStartScreenTransitionDelayMs(-2), color: '#FDBA74' },
+  { id: 'g', size: 16, left: '50%', top: '50%', angle: '132deg', distance: '318px', delay: getStartScreenTransitionDelayMs(24), color: '#FDE68A' },
+  { id: 'h', size: 13, left: '50%', top: '50%', angle: '174deg', distance: '360px', delay: getStartScreenTransitionDelayMs(32), color: '#F8FAFC' },
+  { id: 'i', size: 12, left: '50%', top: '50%', angle: '214deg', distance: '274px', delay: getStartScreenTransitionDelayMs(4), color: '#FB7185' },
+  { id: 'j', size: 11, left: '50%', top: '50%', angle: '248deg', distance: '312px', delay: getStartScreenTransitionDelayMs(40), color: '#FDBA74' },
+  { id: 'k', size: 13, left: '50%', top: '50%', angle: '286deg', distance: '294px', delay: getStartScreenTransitionDelayMs(16), color: '#FFFFFF' },
+  { id: 'l', size: 15, left: '50%', top: '50%', angle: '324deg', distance: '332px', delay: getStartScreenTransitionDelayMs(28), color: '#FDE68A' },
+];
+
+function StartScreenTransitionOverlay() {
+  return (
+    <div
+      aria-hidden="true"
+      className="wordai-start-transition"
+      style={{
+        '--wordai-start-transition-duration': `${START_SCREEN_TRANSITION_DURATION_MS}ms`,
+        position: 'absolute',
+        inset: 0,
+        zIndex: 35,
+        pointerEvents: 'none',
+        overflow: 'hidden',
+        isolation: 'isolate',
+      }}
+    >
+      <style>{`
+        @keyframes wordai-start-transition-backdrop {
+          0% { opacity: 0; transform: scale(1.08); }
+          8% { opacity: 1; }
+          72% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.98); }
+        }
+        @keyframes wordai-start-transition-flight {
+          0% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_START_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_START_TOP}; transform: rotate(-12deg) scale(0.72); }
+          8% { opacity: 1; }
+          34% { left: ${START_SCREEN_TRANSITION_ROCKET_MID_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_MID_TOP}; transform: rotate(-15deg) scale(0.8); }
+          58% { left: ${START_SCREEN_TRANSITION_ROCKET_CRUISE_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_CRUISE_TOP}; transform: rotate(-10deg) scale(0.88); }
+          ${START_SCREEN_TRANSITION_APPROACH_START}% { opacity: 1; left: ${START_SCREEN_TRANSITION_ROCKET_APPROACH_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_APPROACH_TOP}; transform: rotate(8deg) scale(0.96); }
+          ${START_SCREEN_TRANSITION_IMPACT_START}% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP}; transform: rotate(12deg) scale(0.99); }
+          100% { opacity: 0; left: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_LEFT}; top: ${START_SCREEN_TRANSITION_ROCKET_IMPACT_TOP}; transform: rotate(12deg) scale(0.99); }
+        }
+        @keyframes wordai-start-transition-trail {
+          0% { opacity: 0.3; transform: scaleX(0.72); }
+          100% { opacity: 0.95; transform: scaleX(1); }
+        }
+        @keyframes wordai-start-transition-smoke {
+          0% { opacity: 0.18; transform: translate(0, 0) scale(0.6); }
+          100% { opacity: 0.62; transform: translate(-42px, 4px) scale(1.15); }
+        }
+        @keyframes wordai-start-transition-flash {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.18); }
+          12% { opacity: 1; transform: translate(-50%, -50%) scale(0.8); }
+          34% { opacity: 1; transform: translate(-50%, -50%) scale(1.52); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(3.8); }
+        }
+        @keyframes wordai-start-transition-burst {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.08); }
+          18% { opacity: 1; }
+          55% { opacity: 0.92; }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(2.55); }
+        }
+        @keyframes wordai-start-transition-ring {
+          0% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); }
+          10% { opacity: 0.98; }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(2.75); }
+        }
+        @keyframes wordai-start-transition-particle {
+          0% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--particle-angle)) translateX(0px) scale(0.25); }
+          14% { opacity: 1; }
+          100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--particle-angle)) translateX(var(--particle-distance)) scale(1.18); }
+        }
+        @keyframes wordai-start-transition-glow {
+          0%, 54% { opacity: 0; transform: scale(0.84); }
+          74% { opacity: 0.7; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.35); }
+        }
+        @keyframes wordai-start-transition-screen-flash {
+          0% { opacity: 0; transform: scale(0.94); }
+          24% { opacity: 0.88; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.04); }
+        }
+        @keyframes wordai-start-transition-heatwave {
+          0% { opacity: 0; transform: scale(0.82); }
+          28% { opacity: 0.7; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.18); }
+        }
+        @keyframes wordai-start-transition-shake {
+          0% { transform: translate3d(0, 0, 0); }
+          16% { transform: translate3d(-16px, 10px, 0) rotate(-0.5deg); }
+          34% { transform: translate3d(14px, -10px, 0) rotate(0.45deg); }
+          52% { transform: translate3d(-10px, 8px, 0) rotate(-0.3deg); }
+          70% { transform: translate3d(8px, -6px, 0) rotate(0.2deg); }
+          100% { transform: translate3d(0, 0, 0); }
+        }
+      `}</style>
+
+      <div
+        className="wordai-start-transition__backdrop"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255, 244, 214, 0.36) 0%, rgba(253, 186, 116, 0.26) 9%, rgba(251, 146, 60, 0.14) 18%, rgba(15, 23, 42, 0) 36%), linear-gradient(180deg, rgba(2, 6, 23, 0.08) 0%, rgba(2, 6, 23, 0.62) 100%)`,
+          animation: 'wordai-start-transition-backdrop var(--wordai-start-transition-duration) cubic-bezier(0.22, 1, 0.36, 1) both',
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__glow"
+        style={{
+          position: 'absolute',
+          inset: '-24%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255, 255, 255, 0.96) 0%, rgba(255, 244, 214, 0.9) 6%, rgba(253, 186, 116, 0.78) 12%, rgba(251, 146, 60, 0.3) 22%, rgba(255, 255, 255, 0) 40%)`,
+          mixBlendMode: 'screen',
+          animation: 'wordai-start-transition-glow var(--wordai-start-transition-duration) ease-out both',
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__screen-flash"
+        style={{
+          position: 'absolute',
+          inset: '-18%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255,255,255,0.98) 0%, rgba(255,248,220,0.98) 8%, rgba(253,186,116,0.5) 18%, rgba(255,255,255,0) 40%), linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,248,220,0.08) 28%, rgba(255,255,255,0) 58%)`,
+          mixBlendMode: 'screen',
+          filter: 'blur(12px)',
+          animation: `wordai-start-transition-screen-flash 320ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-44)} both`,
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__heatwave"
+        style={{
+          position: 'absolute',
+          inset: '-24%',
+          background: `radial-gradient(circle at ${START_SCREEN_TRANSITION_IMPACT_CENTER_X} ${START_SCREEN_TRANSITION_IMPACT_CENTER_Y}, rgba(255,255,255,0.82) 0%, rgba(253,186,116,0.56) 12%, rgba(251,146,60,0.26) 24%, rgba(255,255,255,0) 46%)`,
+          mixBlendMode: 'screen',
+          filter: 'blur(26px)',
+          animation: `wordai-start-transition-heatwave 560ms cubic-bezier(0.16, 1, 0.3, 1) ${getStartScreenTransitionDelayMs(-4)} both`,
+        }}
+      />
+
+      <div
+        className="wordai-start-transition__rocket-wrap"
+        style={{
+          position: 'absolute',
+          left: START_SCREEN_TRANSITION_ROCKET_START_LEFT,
+          top: START_SCREEN_TRANSITION_ROCKET_START_TOP,
+          width: `${START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX}px`,
+          height: `${START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX}px`,
+          animation: 'wordai-start-transition-flight var(--wordai-start-transition-duration) cubic-bezier(0.16, 1, 0.3, 1) both',
+        }}
+      >
+        <div
+          className="wordai-start-transition__rocket-scene"
+          style={{
+            position: 'relative',
+            width: `${START_SCREEN_TRANSITION_ROCKET_SCENE_WIDTH_PX}px`,
+            height: `${START_SCREEN_TRANSITION_ROCKET_SCENE_HEIGHT_PX}px`,
+          }}
+        >
+          <div
+            className="wordai-start-transition__trail"
+            style={{
+              position: 'absolute',
+              right: '72px',
+              top: '42px',
+              width: '180px',
+              height: '14px',
+              borderRadius: '999px',
+              background: 'linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.12), rgba(251,146,60,0.76), rgba(254,240,138,0.98))',
+              filter: 'blur(7px)',
+              transformOrigin: 'right center',
+              animation: 'wordai-start-transition-trail 150ms ease-in-out infinite alternate',
+            }}
+          />
+          <div
+            className="wordai-start-transition__trail-hot"
+            style={{
+              position: 'absolute',
+              right: '86px',
+              top: '45px',
+              width: '132px',
+              height: '8px',
+              borderRadius: '999px',
+              background: 'linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.14), rgba(254,240,138,0.92), rgba(255,255,255,1))',
+              filter: 'blur(4px)',
+              transformOrigin: 'right center',
+              animation: 'wordai-start-transition-trail 120ms ease-in-out infinite alternate-reverse',
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              right: '182px',
+              top: '32px',
+              width: '36px',
+              height: '36px',
+              borderRadius: '999px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.32) 30%, rgba(255,255,255,0) 72%)',
+              filter: 'blur(2px)',
+              animation: 'wordai-start-transition-smoke 460ms ease-out infinite alternate',
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              right: '208px',
+              top: '40px',
+              width: '52px',
+              height: '52px',
+              borderRadius: '999px',
+              background: 'radial-gradient(circle, rgba(255,255,255,0.62) 0%, rgba(226,232,240,0.22) 40%, rgba(255,255,255,0) 76%)',
+              filter: 'blur(4px)',
+              animation: 'wordai-start-transition-smoke 620ms ease-out infinite alternate-reverse',
+            }}
+          />
+
+          <svg
+            viewBox="0 0 140 76"
+            style={{
+              position: 'absolute',
+              right: '0',
+              top: '6px',
+              width: '140px',
+              height: '76px',
+              overflow: 'visible',
+              filter: 'drop-shadow(0 10px 26px rgba(15, 23, 42, 0.34))',
+            }}
+          >
+            <defs>
+              <linearGradient id="wordai-start-transition-rocket-body" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#F8FAFC" />
+                <stop offset="52%" stopColor="#E2E8F0" />
+                <stop offset="100%" stopColor="#CBD5E1" />
+              </linearGradient>
+              <linearGradient id="wordai-start-transition-rocket-nose" x1="0%" y1="50%" x2="100%" y2="50%">
+                <stop offset="0%" stopColor="#F97316" />
+                <stop offset="100%" stopColor="#FB7185" />
+              </linearGradient>
+              <linearGradient id="wordai-start-transition-wing-top" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#FB7185" />
+                <stop offset="100%" stopColor="#F97316" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="56" cy="38" rx="36" ry="20" fill="url(#wordai-start-transition-rocket-body)" />
+            <path d="M82 19 L128 38 L82 57 Z" fill="url(#wordai-start-transition-rocket-nose)" />
+            <path d="M28 22 L8 12 L18 32 Z" fill="url(#wordai-start-transition-wing-top)" />
+            <path d="M28 54 L8 64 L18 44 Z" fill="#F97316" />
+            <path d="M18 30 L0 38 L18 46 Z" fill="#F8FAFC" opacity="0.9" />
+            <circle cx="56" cy="38" r="8" fill="#0F172A" opacity="0.86" />
+            <circle cx="56" cy="38" r="4" fill="#60A5FA" opacity="0.88" />
+            <path d="M66 21 Q82 38 66 55" fill="none" stroke="#94A3B8" strokeWidth="3.5" strokeLinecap="round" opacity="0.7" />
+          </svg>
+        </div>
+      </div>
+
+      <div
+        className="wordai-start-transition__impact"
+        style={{
+          position: 'absolute',
+          left: START_SCREEN_TRANSITION_IMPACT_CENTER_X,
+          top: START_SCREEN_TRANSITION_IMPACT_CENTER_Y,
+          width: 'min(88vw, 820px)',
+          height: 'min(88vw, 820px)',
+          transform: 'translate(-50%, -50%)',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '240px',
+            height: '240px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,250,240,0.98) 16%, rgba(255,227,168,0.96) 28%, rgba(253,186,116,0.92) 44%, rgba(251,146,60,0.22) 72%, rgba(255,255,255,0) 100%)',
+            filter: 'blur(2px)',
+            mixBlendMode: 'screen',
+            animation: `wordai-start-transition-flash 620ms ease-out ${getStartScreenTransitionDelayMs(-34)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '430px',
+            height: '430px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(254,240,138,0.98) 0%, rgba(255,210,118,0.94) 18%, rgba(251,146,60,0.82) 36%, rgba(249,115,22,0.24) 58%, rgba(255,255,255,0) 100%)',
+            filter: 'blur(8px)',
+            animation: `wordai-start-transition-burst 720ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-14)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '620px',
+            height: '620px',
+            borderRadius: '999px',
+            background: 'radial-gradient(circle, rgba(255,244,214,0.48) 0%, rgba(253,186,116,0.3) 24%, rgba(251,146,60,0.14) 40%, rgba(255,255,255,0) 72%)',
+            filter: 'blur(18px)',
+            mixBlendMode: 'screen',
+            animation: `wordai-start-transition-burst 820ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(21)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '240px',
+            height: '240px',
+            borderRadius: '999px',
+            border: '3px solid rgba(255,255,255,0.96)',
+            boxShadow: '0 0 30px rgba(255,255,255,0.34)',
+            animation: `wordai-start-transition-ring 760ms ease-out ${getStartScreenTransitionDelayMs(6)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '420px',
+            height: '420px',
+            borderRadius: '999px',
+            border: '3px solid rgba(253,186,116,0.82)',
+            boxShadow: '0 0 42px rgba(251,146,60,0.24)',
+            animation: `wordai-start-transition-ring 900ms ease-out ${getStartScreenTransitionDelayMs(31)} both`,
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: '620px',
+            height: '620px',
+            borderRadius: '999px',
+            border: '2px solid rgba(255,255,255,0.52)',
+            animation: `wordai-start-transition-ring 1120ms ease-out ${getStartScreenTransitionDelayMs(61)} both`,
+          }}
+        />
+        {START_SCREEN_TRANSITION_PARTICLES.map((particle) => (
+          <span
+            key={particle.id}
+            style={{
+              '--particle-angle': particle.angle,
+              '--particle-distance': particle.distance,
+              position: 'absolute',
+              left: particle.left,
+              top: particle.top,
+              width: particle.size,
+              height: particle.size,
+              borderRadius: '999px',
+              background: particle.color,
+              boxShadow: `0 0 24px ${particle.color}`,
+              filter: 'blur(0.35px)',
+              animation: `wordai-start-transition-particle 780ms cubic-bezier(0.22, 1, 0.36, 1) ${particle.delay} both`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const escHtml = (txt) => String(txt ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+const normalizeTrackedEditorHtml = (html = '') => String(html || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/>\s+</g, '><')
+  .trim();
+
+const getLiveGenerationStateMeta = (state = 'running') => {
+  if (state === 'success') {
+    return {
+      label: 'הושלם',
+      title: 'המסמך מוכן',
+      description: 'התוכן המלא נטען לעורך.',
+      tone: '#047857',
+      background: '#ECFDF5',
+      border: '#A7F3D0',
+    };
+  }
+  if (state === 'warning') {
+    return {
+      label: 'ממתין לאישור',
+      title: 'המסמך מוכן לבדיקה',
+      description: 'נוצרה טיוטה בטוחה שממתינה לעדכון או אישור.',
+      tone: '#B45309',
+      background: '#FFFBEB',
+      border: '#FCD34D',
+    };
+  }
+  if (state === 'error') {
+    return {
+      label: 'שגיאה',
+      title: 'אירעה שגיאה בתהליך',
+      description: 'ההרצה נעצרה לפני שהמסמך הושלם.',
+      tone: '#B91C1C',
+      background: '#FEF2F2',
+      border: '#FCA5A5',
+    };
+  }
+  return {
+    label: 'בתהליך',
+    title: 'בונה את המסמך בלייב',
+    description: 'העורך מתעדכן כאן בכל פעם שמתקבל שלב או אירוע חדש מההרצה.',
+    tone: '#1D4ED8',
+    background: '#EFF6FF',
+    border: '#BFDBFE',
+  };
+};
+
+const formatLiveGenerationTime = (value) => {
+  if (!value) return '--:--:--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--:--:--';
+  return date.toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+};
+
+const buildLiveGenerationStageMarkup = (stages = []) => {
+  const recentStages = Array.isArray(stages) ? stages.slice(0, 5) : [];
+  if (!recentStages.length) {
+    return '<li style="padding:8px 10px;border:1px solid #DBEAFE;border-radius:10px;background:#FFFFFF;">מאתחל שלבי ריצה...</li>';
+  }
+  return recentStages.map((stage) => {
+    const stateLabel = stage?.state === 'success'
+      ? 'הושלם'
+      : stage?.state === 'error'
+        ? 'שגיאה'
+        : stage?.state === 'running'
+          ? 'רץ עכשיו'
+          : 'ממתין';
+    const stateColor = stage?.state === 'success'
+      ? '#047857'
+      : stage?.state === 'error'
+        ? '#B91C1C'
+        : stage?.state === 'running'
+          ? '#1D4ED8'
+          : '#64748B';
+    return `<li style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 10px;border:1px solid #DBEAFE;border-radius:10px;background:#FFFFFF;"><span style="font-weight:600;color:#0F172A;">${escHtml(stage?.label || 'שלב לא מזוהה')}</span><span style="font-size:12px;font-weight:700;color:${stateColor};white-space:nowrap;">${stateLabel}</span></li>`;
+  }).join('');
+};
+
+const buildLiveGenerationLogMarkup = (logs = []) => {
+  const recentLogs = Array.isArray(logs) ? logs.slice(0, 6) : [];
+  if (!recentLogs.length) {
+    return '<li style="padding:8px 10px;border:1px solid #E2E8F0;border-radius:10px;background:#FFFFFF;">ממתין לאירועים הראשונים של ההרצה...</li>';
+  }
+  return recentLogs.map((log, index) => {
+    const logTime = formatLiveGenerationTime(log?.timestamp || log?.time || log?.ts);
+    const logAgent = escHtml(log?.agentLabel || log?.agentId || 'מערכת');
+    const logMessage = escHtml(log?.message || log?.type || 'עודכן סטטוס תהליך');
+    return `<li style="padding:8px 10px;border:1px solid #E2E8F0;border-radius:10px;background:#FFFFFF;"><div style="display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#64748B;margin-bottom:4px;"><span style="font-weight:700;color:#334155;">${logAgent}</span><span>${logTime}</span></div><div style="color:#0F172A;line-height:1.55;">${logMessage}</div></li>`;
+  }).join('');
+};
+
+const buildLiveGenerationShell = ({ titleText = 'מסמך חדש', state = 'running', stages = [], logs = [], runId = '' } = {}) => {
+  const stateMeta = getLiveGenerationStateMeta(state);
+  const safeRunId = escHtml(runId);
+  return `
+  <div ${LIVE_GENERATION_SHELL_MARKER} data-wordai-live-generation-run-id="${safeRunId}" data-wordai-live-generation-state="${escHtml(state)}" style="border:1px solid ${stateMeta.border};background:${stateMeta.background};padding:18px;border-radius:16px;margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px;">
+      <div>
+        <p style="margin:0 0 6px 0;font-size:18px;font-weight:700;color:#0F172A;">${stateMeta.title}</p>
+        <p style="margin:0;color:#334155;line-height:1.6;">${stateMeta.description}</p>
+      </div>
+      <div style="padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;color:${stateMeta.tone};background:#FFFFFF;border:1px solid ${stateMeta.border};white-space:nowrap;">${stateMeta.label}</div>
+    </div>
+    <h1 style="margin:0 0 10px 0;color:#0F172A;">${escHtml(titleText || 'מסמך חדש')}</h1>
+    <p style="margin:0 0 14px 0;color:#334155;"><strong>סטטוס:</strong> ${stateMeta.label}</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;align-items:start;">
+      <div>
+        <p style="margin:0 0 8px 0;font-size:13px;font-weight:700;color:#0F172A;">שלבי הריצה האחרונים</p>
+        <ul style="margin:0;padding:0;list-style:none;display:grid;gap:8px;">${buildLiveGenerationStageMarkup(stages)}</ul>
+      </div>
+      <div>
+        <p style="margin:0 0 8px 0;font-size:13px;font-weight:700;color:#0F172A;">אירועים אחרונים</p>
+        <ul style="margin:0;padding:0;list-style:none;display:grid;gap:8px;">${buildLiveGenerationLogMarkup(logs)}</ul>
+      </div>
+    </div>
   </div>
-  <h1>${String(promptText || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
-  <p>טוען מבנה, מקורות וניסוח...</p>
+  <p style="margin:0;color:#475569;">התוכן המלא יחליף את ה־shell הזה אוטומטית כשההרצה תסתיים.</p>
 `;
+};
+
+const isLiveGenerationShellHtml = (html = '', runId = '') => {
+  const markup = String(html || '');
+  if (!markup.includes(LIVE_GENERATION_SHELL_MARKER)) return false;
+  if (!runId) return true;
+  return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
+};
+
+const buildLiveGenerationErrorPlaceholder = ({ titleText = 'מסמך חדש', runId = '' } = {}) => {
+  const safeRunId = escHtml(runId);
+  return `
+  <div ${LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER} data-wordai-live-generation-run-id="${safeRunId}">
+    <h1>${escHtml(titleText || 'מסמך חדש')}</h1>
+    <p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>
+  </div>
+`;
+};
+
+const isLiveGenerationErrorPlaceholderHtml = (html = '', runId = '') => {
+  const markup = String(html || '');
+  if (!markup.includes(LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER)) return false;
+  if (!runId) return true;
+  return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
+};
+
+const buildGenerationLabel = ({ promptText = '', instructionsText = '', templateId = 'blank' } = {}) => {
+  const cleanPrompt = String(promptText || '').trim();
+  if (cleanPrompt) return cleanPrompt;
+
+  const lines = String(instructionsText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preferredLine = lines.find((line, index) => index > 0 || !/^קובץ\s+הנחיות\s*:/i.test(line)) || lines[0] || '';
+  const normalizedLine = preferredLine
+    .replace(/^(?:[-*]+|\d+[.)])\s+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:!?-]+|[\s,;:!?-]+$/g, '')
+    .trim();
+
+  return normalizedLine || GENERATION_LABEL_FALLBACKS[templateId] || GENERATION_LABEL_FALLBACKS.blank;
+};
+
+const DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST = 'המשתמש בחר ללטש את הטיוטה הקיימת. שפר ניסוח, סדר מבנה, תקן שגיאות ושמור על כל המידע החשוב.';
+
+const buildBaseDraftRevisionRequest = ({ promptText = '', instructionsText = '', baseDraftTitle = '', templateId = 'blank' } = {}) => {
+  const cleanPrompt = String(promptText || '').trim();
+  const cleanInstructions = String(instructionsText || '').trim();
+  const resolvedDraftTitle = String(baseDraftTitle || '').trim();
+
+  if (!cleanPrompt && !cleanInstructions) {
+    return {
+      feedback: DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
+      title: resolvedDraftTitle ? `${resolvedDraftTitle} · ליטוש טיוטה` : 'ליטוש טיוטה',
+      originalPrompt: resolvedDraftTitle || 'טיוטת בסיס',
+    };
+  }
+
+  const sections = [];
+  if (cleanInstructions) sections.push(`הנחיות לעדכון:\n${cleanInstructions}`);
+  if (cleanPrompt) sections.push(`מטרה או הקשר:\n${cleanPrompt}`);
+
+  return {
+    feedback: sections.join('\n\n'),
+    title: buildGenerationLabel({ promptText: cleanPrompt, instructionsText: cleanInstructions, templateId }),
+    originalPrompt: cleanPrompt || resolvedDraftTitle || 'טיוטת בסיס',
+  };
+};
+
+const shouldAutoOpenOnboarding = (profile = {}) => {
+  if (String(profile?.onboardingCompletedAt || '').trim()) return false;
+  if (String(profile?.onboardingDismissedAt || '').trim()) return false;
+  const snoozedUntil = String(profile?.onboardingSnoozedUntil || '').trim();
+  if (snoozedUntil) {
+    const snoozeDate = new Date(snoozedUntil);
+    if (Number.isNaN(snoozeDate.getTime())) return true;
+    return snoozeDate.getTime() <= Date.now();
+  }
+
+  return !hasMeaningfulPersonalProfileData(profile);
+};
+
+const normalizeStoredDefaultFont = (value = '') => {
+  const firstFamily = String(value || '').split(',')[0] || '';
+  return firstFamily.replace(/^['"]+|['"]+$/g, '').trim() || 'Alef';
+};
+
+const getActiveWorkspaceId = () => String(getWorkspaceAutomation().activeWorkspaceId || '').trim();
 
 const FEEDBACK_OPTION_GROUPS = [
   {
@@ -48,15 +680,44 @@ const FEEDBACK_OPTION_GROUPS = [
   },
 ];
 
+const FEEDBACK_MAX_REVISION_ROUNDS = 2;
+
+const normalizeFeedbackExecutionMode = (value = '') => (String(value || '').trim() === 'workspace' ? 'workspace' : 'direct');
+
+const normalizeFeedbackRoundIndex = (value = 1) => {
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue)) return 1;
+  return Math.min(FEEDBACK_MAX_REVISION_ROUNDS + 1, Math.max(1, Math.floor(parsedValue)));
+};
+
+const isFeedbackWorkflowAvailable = () => {
+  const automation = getWorkspaceAutomation();
+  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  return automation?.enabled === true
+    && automation?.autoDispatch !== false
+    && Array.isArray(activeWorkflowAgents)
+    && activeWorkflowAgents.length > 0;
+};
+
 const DEFAULT_FEEDBACK_SURVEY = {
   open: false,
   phase: 'question',
   prompt: '',
   templateId: 'blank',
+  selectedMaterials: [],
+  selectedModel: '',
+  selectedProviderId: '',
+  selectedProviderModel: '',
   selectedOptions: [],
   freeText: '',
+  executionMode: 'direct',
+  roundIndex: 1,
   usedFallback: false,
   submitting: false,
+  submissionRequestId: null,
+  reviewResult: null,
+  reviewFocus: '',
+  reviewErrorMessage: '',
 };
 
 const DEFAULT_INPUT_DIALOG = {
@@ -71,6 +732,82 @@ const DEFAULT_INPUT_DIALOG = {
   submitOnEnter: true,
   submitOnCtrlEnterForTextarea: true,
   resolve: null,
+};
+
+const getFeedbackSurveyGenerationContext = (survey = {}, fallback = {}) => {
+  const surveyPrompt = String(survey.prompt || '').trim();
+  const fallbackPrompt = String(fallback.prompt || '').trim();
+  const surveyTemplateId = String(survey.templateId || '').trim();
+  const fallbackTemplateId = String(fallback.templateId || '').trim();
+  const surveySelectedMaterials = Array.isArray(survey.selectedMaterials) ? survey.selectedMaterials.filter(Boolean) : [];
+  const fallbackSelectedMaterials = Array.isArray(fallback.selectedMaterials) ? fallback.selectedMaterials.filter(Boolean) : [];
+  const surveySelectedProviderId = String(survey.selectedProviderId || survey.selectedModel || '').trim();
+  const fallbackSelectedProviderId = String(fallback.selectedProviderId || fallback.selectedModel || '').trim();
+  const surveySelectedProviderModel = String(survey.selectedProviderModel || '').trim();
+  const fallbackSelectedProviderModel = String(fallback.selectedProviderModel || '').trim();
+  const hasSurveyGenerationContext = Boolean(
+    surveyPrompt
+    || survey.usedFallback
+    || surveySelectedMaterials.length
+    || surveySelectedProviderId
+    || surveySelectedProviderModel
+  );
+
+  return {
+    prompt: surveyPrompt || fallbackPrompt,
+    templateId: (hasSurveyGenerationContext
+      ? (surveyTemplateId || fallbackTemplateId || 'blank')
+      : (fallbackTemplateId || surveyTemplateId || 'blank')),
+    executionMode: normalizeFeedbackExecutionMode(survey.executionMode || fallback.executionMode || 'direct'),
+    roundIndex: normalizeFeedbackRoundIndex(survey.roundIndex || fallback.roundIndex || 1),
+    usedFallback: Boolean(survey.usedFallback || fallback.usedFallback),
+    selectedMaterials: surveySelectedMaterials.length ? [...surveySelectedMaterials] : [...fallbackSelectedMaterials],
+    selectedModel: surveySelectedProviderId || fallbackSelectedProviderId,
+    selectedProviderId: surveySelectedProviderId || fallbackSelectedProviderId,
+    selectedProviderModel: surveySelectedProviderModel || fallbackSelectedProviderModel,
+  };
+};
+
+const buildFeedbackSurveyStateWithGenerationContext = (survey = {}, fallback = {}) => ({
+  ...DEFAULT_FEEDBACK_SURVEY,
+  ...getFeedbackSurveyGenerationContext(survey, fallback),
+});
+
+const buildFeedbackSurveyRequestText = ({ selectedOptions = [], freeText = '', includeIntro = true } = {}) => {
+  const normalizedOptions = Array.isArray(selectedOptions)
+    ? selectedOptions.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const cleanFreeText = String(freeText || '').trim();
+  const sections = [];
+
+  if (normalizedOptions.length) sections.push(`נקודות לתיקון:\n- ${normalizedOptions.join('\n- ')}`);
+  if (cleanFreeText) sections.push(`בקשה חופשית:\n${cleanFreeText}`);
+  if (!sections.length) return '';
+
+  return includeIntro
+    ? ['המשתמש ביקש לעדכן את המסמך לפי המשוב הבא:', ...sections].join('\n\n')
+    : sections.join('\n\n');
+};
+
+const getDraftTitleFromFilePath = (filePath = '') => {
+  const filename = String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  return filename.replace(/\.[^.]+$/, '').replace(/\s+/g, ' ').trim();
+};
+
+const getDraftTitleFromText = (text = '', templateId = 'blank') => {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const normalized = String(lines[0] || '')
+    .replace(/^[#*\-\d.)\s]+/, '')
+    .trim();
+
+  if (!normalized) {
+    return GENERATION_LABEL_FALLBACKS[templateId] || GENERATION_LABEL_FALLBACKS.blank;
+  }
+
+  return normalized.length > 72 ? `${normalized.slice(0, 72).trim()}...` : normalized;
 };
 
 const EXPORT_DOC_STYLES = `<style>
@@ -91,20 +828,38 @@ const isLegacyHomeEnabled = () => {
   }
 };
 
+const getRecentAgentLogs = (limit = 18, filters = {}) => {
+  const automation = getWorkspaceAutomation();
+  const workspaceId = String(filters.workspaceId || automation?.activeWorkspaceId || 'default-content-studio').trim();
+  const runId = String(filters.runId || '').trim();
+  return getAgentDebugLogs({ workspaceId, runId, includeUnscoped: false }).slice(-limit).reverse();
+};
+
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
   React.useEffect(() => {
     if (window.__mountTimer) clearTimeout(window.__mountTimer);
 
+    let isMounted = true;
+
     (async () => {
-      await hydrateAppSettingsFromDisk().catch(() => {});
-      await hydrateProviderConfigFromDisk().catch(() => {});
-      setShortcuts(getShortcutsConfig());
-      setAssistantBehavior(getAssistantBehavior());
-      setWordPreferences(getWordPreferences());
-      setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
-      setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+      try {
+        await hydrateAppSettingsFromDisk().catch(() => {});
+        await hydrateProviderConfigFromDisk().catch(() => {});
+        if (!isMounted) return;
+        setShortcuts(getShortcutsConfig());
+        setAssistantBehavior(getAssistantBehavior());
+        setWordPreferences(getWordPreferences());
+        setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
+        setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+      } finally {
+        if (isMounted) setSettingsHydrated(true);
+      }
     })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const [editor, setEditor] = React.useState(null);
@@ -115,8 +870,10 @@ function App() {
   const [viewMode, setViewMode] = React.useState('print');
   const [fileMenuOpen, setFileMenuOpen] = React.useState(false);
   const [fileMenuTargetTab, setFileMenuTargetTab] = React.useState(null);
+  const [updateCheckToken, setUpdateCheckToken] = React.useState(0);
   const [formatPainterActive, setFormatPainterActive] = React.useState(false);
   const [selectedText, setSelectedText] = React.useState('');
+  const [selectionContext, setSelectionContext] = React.useState(null);
   const [currentBlockText, setCurrentBlockText] = React.useState('');
   const [trackChanges, setTrackChanges] = React.useState(false);
   const [shortcuts, setShortcuts] = React.useState(getShortcutsConfig());
@@ -128,6 +885,9 @@ function App() {
     if (isLegacyHomeEnabled()) return true;
     return getWordPreferences().showStartExperience !== false;
   });
+  const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
+  const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
+  const [startTransitionPhase, setStartTransitionPhase] = React.useState('idle');
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
@@ -136,13 +896,144 @@ function App() {
     state: 'idle',
     prompt: '',
     summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-    logs: getAgentDebugLogs().slice(-5).reverse(),
+    logs: getRecentAgentLogs(),
+    runId: '',
+    workspaceId: getWorkspaceAutomation().activeWorkspaceId || '',
+  });
+  const [documentArrival, setDocumentArrival] = React.useState({ active: false, tone: 'success' });
+  const [lastGenerationAction, setLastGenerationAction] = React.useState(null);
+  const [generationRecovery, setGenerationRecovery] = React.useState({
+    runId: '',
+    agentId: '',
+    provider: '',
+    model: '',
+    pending: false,
+    error: '',
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
+  const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
+  const activeWorkspaceIdRef = React.useRef(getActiveWorkspaceId());
+  const workspaceEpochRef = React.useRef(0);
+  const activeGenerationRequestIdRef = React.useRef(0);
+  const lastLiveGenerationShellRef = React.useRef({ runId: '', html: '' });
+  const lastLiveGenerationPlaceholderRef = React.useRef({ runId: '', html: '' });
+  const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
   const pendingImportRef = React.useRef(null);
+  const startTransitionTimerRef = React.useRef(null);
+  const startTransitionRunIdRef = React.useRef(0);
+  const pendingStartTransitionFocusRef = React.useRef('start');
+  const documentArrivalTimerRef = React.useRef(null);
+  const documentArrivalFrameRef = React.useRef(null);
+  const clearDocumentArrival = React.useCallback(() => {
+    if (documentArrivalFrameRef.current) {
+      window.cancelAnimationFrame(documentArrivalFrameRef.current);
+      documentArrivalFrameRef.current = null;
+    }
+    if (documentArrivalTimerRef.current) {
+      window.clearTimeout(documentArrivalTimerRef.current);
+      documentArrivalTimerRef.current = null;
+    }
+    setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
+  }, []);
+  const triggerDocumentArrival = React.useCallback((tone = 'success') => {
+    clearDocumentArrival();
+    documentArrivalFrameRef.current = window.requestAnimationFrame(() => {
+      documentArrivalFrameRef.current = null;
+      setDocumentArrival({ active: true, tone: tone === 'warning' ? 'warning' : 'success' });
+      documentArrivalTimerRef.current = window.setTimeout(() => {
+        documentArrivalTimerRef.current = null;
+        setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
+      }, DOCUMENT_ARRIVAL_PULSE_DURATION_MS);
+    });
+  }, [clearDocumentArrival]);
+  React.useEffect(() => () => {
+    if (documentArrivalFrameRef.current) {
+      window.cancelAnimationFrame(documentArrivalFrameRef.current);
+    }
+    if (documentArrivalTimerRef.current) {
+      window.clearTimeout(documentArrivalTimerRef.current);
+    }
+  }, []);
+  const cancelStartTransition = React.useCallback(() => {
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    startTransitionRunIdRef.current += 1;
+    setStartTransitionPhase('idle');
+  }, []);
+  React.useEffect(() => () => {
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+  }, []);
+  const clearDraftReviewState = React.useCallback(() => {
+    const cancelledRunId = String(
+      liveGeneration.runId
+      || preLiveGenerationSnapshotRef.current.runId
+      || lastLiveGenerationShellRef.current.runId
+      || ''
+    ).trim();
+    const currentHtml = normalizeTrackedEditorHtml(String(editor?.getHTML?.() || ''));
+    const preGenerationSnapshot = preLiveGenerationSnapshotRef.current;
+    const lastShell = lastLiveGenerationShellRef.current;
+    const lastPlaceholder = lastLiveGenerationPlaceholderRef.current;
+    const matchesTrackedShell = Boolean(
+      cancelledRunId
+      && lastShell.runId === cancelledRunId
+      && currentHtml === lastShell.html
+      && isLiveGenerationShellHtml(currentHtml, cancelledRunId)
+    );
+    const matchesTrackedPlaceholder = Boolean(
+      cancelledRunId
+      && lastPlaceholder.runId === cancelledRunId
+      && currentHtml === lastPlaceholder.html
+      && isLiveGenerationErrorPlaceholderHtml(currentHtml, cancelledRunId)
+    );
+    const shouldRestorePreGenerationSnapshot = Boolean(
+      editor
+      && cancelledRunId
+      && preGenerationSnapshot.runId === cancelledRunId
+      && (matchesTrackedShell || matchesTrackedPlaceholder)
+    );
+
+    activeGenerationRequestIdRef.current += 1;
+    if (shouldRestorePreGenerationSnapshot) {
+      editor.commands.setContent(preGenerationSnapshot.html, false);
+    }
+
+    preLiveGenerationSnapshotRef.current = { runId: '', html: '' };
+    lastLiveGenerationShellRef.current = { runId: '', html: '' };
+    lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
+    clearDocumentArrival();
+    setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+    setLiveGeneration((prev) => ({
+      ...prev,
+      active: false,
+      state: 'idle',
+      prompt: '',
+      runId: '',
+    }));
+  }, [clearDocumentArrival, editor, liveGeneration.runId]);
+  const beginGenerationRequest = (runIdPrefix = 'doc') => {
+    const requestId = activeGenerationRequestIdRef.current + 1;
+    activeGenerationRequestIdRef.current = requestId;
+    return {
+      requestId,
+      runId: `${runIdPrefix}-${Date.now()}-${requestId}`,
+      workspaceEpoch: workspaceEpochRef.current,
+      workspaceId: getActiveWorkspaceId(),
+    };
+  };
+  const isGenerationRequestCurrent = (request) => (
+    activeGenerationRequestIdRef.current === request.requestId
+    && workspaceEpochRef.current === request.workspaceEpoch
+    && getActiveWorkspaceId() === request.workspaceId
+  );
   const [activeFormats, setActiveFormats] = React.useState({
     bold: false,
     italic: false,
@@ -160,13 +1051,6 @@ function App() {
   });
   // פונקציות מברשת עיצוב מה-DocumentEditor
   const formatPainterRef = React.useRef({ copyFormat: null, applyFormat: null });
-
-  // סניטיזציה פשוטה נגד XSS ל-HTML שמוזרק לעורך
-  const escHtml = (txt) => String(txt)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 
   const normalizeFontSizeValue = React.useCallback((rawValue) => {
     const raw = String(rawValue || '').trim().toLowerCase();
@@ -186,7 +1070,7 @@ function App() {
       styleOverrides = {};
     }
     const currentOverride = styleOverrides?.[styleId] || {};
-    const savedFont = String(wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
+    const savedFont = String(wordPreferences.defaultFontStack || localStorage.getItem('default-font-stack') || wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
     const savedSizeRaw = String(wordPreferences.defaultFontSize || localStorage.getItem('default-size') || '').trim();
     const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
     dom.setAttribute('data-doc-style', styleId);
@@ -208,6 +1092,48 @@ function App() {
     return /<(img|table|hr|ul|ol|li|blockquote)\b|data-type="page-break"/i.test(html);
   }, [editor]);
 
+  const resolveCurrentDraftFeedbackMeta = React.useCallback(() => {
+    const templateId = activeTemplateId || 'blank';
+    const editorText = String(editor?.getText?.() || '').trim();
+    const prompt = getDraftTitleFromFilePath(currentFilePath)
+      || getDraftTitleFromText(editorText, templateId)
+      || GENERATION_LABEL_FALLBACKS[templateId]
+      || GENERATION_LABEL_FALLBACKS.blank;
+    const surveyPrompt = String(feedbackSurvey.prompt || '').trim();
+    const surveyTemplateId = String(feedbackSurvey.templateId || '').trim() || 'blank';
+    const matchesActiveDraft = Boolean(surveyPrompt)
+      && surveyPrompt === prompt
+      && surveyTemplateId === templateId;
+
+    return {
+      matchesActiveDraft,
+      prompt,
+      templateId,
+      selectedMaterials: matchesActiveDraft && Array.isArray(feedbackSurvey.selectedMaterials)
+        ? feedbackSurvey.selectedMaterials.filter(Boolean)
+        : [],
+      selectedModel: matchesActiveDraft ? String(feedbackSurvey.selectedModel || '').trim() : '',
+      selectedProviderId: matchesActiveDraft ? String(feedbackSurvey.selectedProviderId || '').trim() : '',
+      selectedProviderModel: matchesActiveDraft ? String(feedbackSurvey.selectedProviderModel || '').trim() : '',
+    };
+  }, [editor, currentFilePath, feedbackSurvey.prompt, feedbackSurvey.templateId, feedbackSurvey.selectedMaterials, feedbackSurvey.selectedModel, feedbackSurvey.selectedProviderId, feedbackSurvey.selectedProviderModel, activeTemplateId]);
+
+  const openDraftRecommendations = React.useCallback(() => {
+    if (feedbackSurvey.submitting || liveGeneration.state === 'running' || !hasMeaningfulEditorContent(editor)) {
+      return;
+    }
+
+    const currentDraftContext = resolveCurrentDraftFeedbackMeta();
+    if (showStartScreen) {
+      setShowStartScreen(false);
+    }
+    setFeedbackSurvey((prev) => ({
+      ...buildFeedbackSurveyStateWithGenerationContext(currentDraftContext, currentDraftContext.matchesActiveDraft ? prev : {}),
+      open: true,
+      phase: 'details',
+    }));
+  }, [editor, feedbackSurvey.submitting, hasMeaningfulEditorContent, liveGeneration.state, resolveCurrentDraftFeedbackMeta, showStartScreen]);
+
   const changeDocumentStyle = React.useCallback((styleId) => {
     const nextStyle = DOCUMENT_STYLE_PRESETS[styleId] ? styleId : 'academic';
     setDocumentStyle(nextStyle);
@@ -228,16 +1154,43 @@ function App() {
     });
   }, [editor]);
 
+  const completeStartTransition = React.useCallback((runId = startTransitionRunIdRef.current) => {
+    if (runId !== startTransitionRunIdRef.current) return;
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    setStartTransitionPhase('idle');
+    setShowStartScreen(false);
+    focusEditorSoon(pendingStartTransitionFocusRef.current || 'start');
+  }, [focusEditorSoon]);
+
   const runStartTransition = React.useCallback((applyChange, focusPosition = 'start') => {
     if (!editor) {
       window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
       return false;
     }
     applyChange(editor);
-    setShowStartScreen(false);
-    focusEditorSoon(focusPosition);
+    pendingStartTransitionFocusRef.current = focusPosition;
+
+    const runId = startTransitionRunIdRef.current + 1;
+    startTransitionRunIdRef.current = runId;
+
+    if (getPrefersReducedMotion() || !showStartScreen) {
+      completeStartTransition(runId);
+      return true;
+    }
+
+    if (startTransitionTimerRef.current) {
+      window.clearTimeout(startTransitionTimerRef.current);
+      startTransitionTimerRef.current = null;
+    }
+    setStartTransitionPhase('running');
+    startTransitionTimerRef.current = window.setTimeout(() => {
+      completeStartTransition(runId);
+    }, START_SCREEN_TRANSITION_DURATION_MS);
     return true;
-  }, [editor, focusEditorSoon]);
+  }, [completeStartTransition, editor, showStartScreen]);
 
   const openExternalLink = React.useCallback((url) => {
     if (!url) return;
@@ -303,85 +1256,273 @@ function App() {
   const submitDocumentFeedback = React.useCallback(async () => {
     const selectedOptions = feedbackSurvey.selectedOptions || [];
     const freeText = String(feedbackSurvey.freeText || '').trim();
+    const requestedExecutionMode = normalizeFeedbackExecutionMode(feedbackSurvey.executionMode);
+    const workflowAvailable = isFeedbackWorkflowAvailable();
+    const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
+    const roundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
+    const surveySnapshot = {
+      ...feedbackSurvey,
+      selectedOptions: [...selectedOptions],
+      freeText,
+      executionMode,
+      roundIndex,
+      phase: 'details',
+      reviewResult: null,
+      reviewFocus: '',
+      reviewErrorMessage: '',
+    };
+
+    if (roundIndex > FEEDBACK_MAX_REVISION_ROUNDS) {
+      alert('מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר לרענן המלצות או להמשיך לערוך ידנית.');
+      return;
+    }
 
     if (!selectedOptions.length && !freeText) {
       alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
       return;
     }
 
-    const feedbackText = [
-      'המשתמש ביקש לעדכן את המסמך לפי המשוב הבא:',
-      selectedOptions.length ? `נקודות לתיקון:\n- ${selectedOptions.join('\n- ')}` : '',
-      freeText ? `בקשה חופשית:\n${freeText}` : '',
-    ].filter(Boolean).join('\n\n');
-
-    setFeedbackSurvey((prev) => ({ ...prev, submitting: true }));
-    setAssistantTrigger('autopilot');
-    setSidebarOpen(true);
-    setLiveGeneration({
-      active: true,
-      state: 'running',
-      prompt: 'מנהל הצוות מתקן את המסמך לפי המשוב שלך',
-      summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-      logs: getAgentDebugLogs().slice(-5).reverse(),
+    const feedbackText = buildFeedbackSurveyRequestText({
+      selectedOptions,
+      freeText,
+      includeIntro: true,
     });
 
-    try {
-      const result = await reviseDocumentWithFeedback({
+    await runDocumentFeedbackRevision({
+      kind: 'feedback-revision',
+      workspaceId: getActiveWorkspaceId(),
+      payload: {
         existingHtml: editor?.getHTML?.() || '',
         originalPrompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
         feedback: feedbackText,
-        returnMeta: true,
-      });
+        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
+        selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+        selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+        selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+        executionMode,
+        roundIndex,
+        surveySnapshot,
+      },
+    });
+  }, [activeTemplateId, editor, feedbackSurvey]);
 
-      const revisedHtml = result?.html || editor?.getHTML?.() || '';
-      const usedFallback = Boolean(result?.usedFallback);
+  const requestDocumentRecommendations = React.useCallback(async () => {
+    const selectedOptions = feedbackSurvey.selectedOptions || [];
+    const freeText = String(feedbackSurvey.freeText || '').trim();
+    const reviewFocus = buildFeedbackSurveyRequestText({
+      selectedOptions,
+      freeText,
+      includeIntro: false,
+    });
+    const surveySnapshot = {
+      ...feedbackSurvey,
+      selectedOptions: [...selectedOptions],
+      freeText,
+      phase: 'details',
+      reviewResult: null,
+      reviewFocus,
+      reviewErrorMessage: '',
+    };
 
-      if (editor && revisedHtml) {
-        editor.commands.setContent(revisedHtml);
+    await runDocumentRecommendationsReview({
+      kind: 'review-recommendations',
+      workspaceId: getActiveWorkspaceId(),
+      payload: {
+        existingHtml: editor?.getHTML?.() || '',
+        originalPrompt: feedbackSurvey.prompt,
+        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
+        selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+        selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+        selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+        focus: reviewFocus,
+        surveySnapshot,
+      },
+    });
+  }, [activeTemplateId, editor, feedbackSurvey]);
+
+  const closeFeedbackSurvey = React.useCallback(() => {
+    setFeedbackSurvey((prev) => {
+      if (prev.submitting) {
+        return prev;
       }
 
-      persistLocalCache(revisedHtml);
-      saveDocumentHistory({
-        title: `${feedbackSurvey.prompt || 'מסמך'} · תיקון לפי משוב`,
-        content: revisedHtml,
-        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
-        source: 'feedback-revision',
-      });
-
-      setLiveGeneration({
-        active: true,
-        state: usedFallback ? 'warning' : 'success',
-        prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
-      });
-
-      setFeedbackSurvey({
-        ...DEFAULT_FEEDBACK_SURVEY,
+      return {
+        ...buildFeedbackSurveyStateWithGenerationContext(prev),
         open: false,
         phase: 'details',
-        prompt: feedbackSurvey.prompt,
-        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
-        usedFallback,
-      });
+      };
+    });
+  }, []);
 
-      if (usedFallback && result?.errorMessage) {
-        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
+  const openHomeSafely = React.useCallback(() => {
+    cancelStartTransition();
+
+    if (typeof document !== 'undefined') {
+      const wrapper = document.getElementById('editor-wrapper');
+      const activeElement = document.activeElement;
+
+      if (wrapper instanceof HTMLElement && activeElement instanceof HTMLElement && wrapper.contains(activeElement)) {
+        activeElement.blur();
       }
-    } catch (error) {
-      setFeedbackSurvey((prev) => ({ ...prev, submitting: false }));
-      setLiveGeneration({
-        active: true,
-        state: 'error',
-        prompt: 'עדכון המסמך נכשל',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
-      });
-      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
     }
-  }, [feedbackSurvey, editor, activeTemplateId]);
+
+    closeInputDialog(null);
+    setFeedbackSurvey((prev) => (prev.open ? { ...prev, open: false } : prev));
+    setShowStartScreen(true);
+  }, [cancelStartTransition, closeInputDialog]);
+
+  const approveFeedbackSurvey = React.useCallback(() => {
+    setFeedbackSurvey((prev) => ({
+      ...buildFeedbackSurveyStateWithGenerationContext(prev),
+      open: false,
+      phase: 'details',
+    }));
+    setLiveGeneration((prev) => ({ ...prev, active: false }));
+  }, []);
+
+  const currentWorkspaceId = getActiveWorkspaceId();
+  const currentProviderConfig = getProviderConfig();
+  const configuredProviderChoices = getConfiguredProviderChoices(currentProviderConfig);
+  const feedbackWorkflowAvailable = isFeedbackWorkflowAvailable();
+  const feedbackExecutionMode = normalizeFeedbackExecutionMode(feedbackSurvey.executionMode);
+  const effectiveFeedbackExecutionMode = feedbackExecutionMode === 'workspace' && feedbackWorkflowAvailable ? 'workspace' : 'direct';
+  const feedbackRoundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
+  const feedbackRoundsExhausted = feedbackRoundIndex > FEEDBACK_MAX_REVISION_ROUNDS;
+  const feedbackRevisionPending = feedbackSurvey.submitting && String(liveGeneration.runId || '').startsWith('doc-feedback');
+  const feedbackSubmitLabel = feedbackRoundsExhausted
+    ? 'מוצו סבבי התיקון'
+    : effectiveFeedbackExecutionMode === 'workspace'
+      ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
+      : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
+  const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
+  const failedGenerationStage = liveGeneration.state === 'error'
+    ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
+    : null;
+  const activeWorkspaceAgents = lastGenerationAction?.workspaceId === currentWorkspaceId && liveGeneration.workspaceId === currentWorkspaceId
+    ? getRoleAgents()
+    : [];
+  const failedStageAgentRecord = failedGenerationStage
+    ? activeWorkspaceAgents.find((agent) => agent.id === failedGenerationStage.id) || null
+    : null;
+  const failedStageCurrentProvider = failedStageAgentRecord?.provider || failedGenerationStage?.provider || '';
+  const failedStageCurrentModel = failedStageAgentRecord?.model || failedGenerationStage?.model || '';
+  const recoveryModelChoices = getProviderModelChoices(
+    generationRecovery.provider || failedStageCurrentProvider,
+    currentProviderConfig,
+    [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean),
+  );
+  const canRetryFailedGeneration = Boolean(
+    liveGeneration.state === 'error'
+    && failedGenerationStage?.id
+    && failedStageAgentRecord
+    && lastGenerationAction?.payload
+    && lastGenerationAction.workspaceId === currentWorkspaceId
+    && liveGeneration.workspaceId === currentWorkspaceId
+    && configuredProviderChoices.length
+  );
+  const failedStageProviderLabel = configuredProviderChoices.find((item) => item.id === failedStageCurrentProvider)?.label || failedStageCurrentProvider || 'לא הוגדר';
+  const failedStageModelLabel = failedStageCurrentModel || 'לא הוגדר';
+
+  React.useEffect(() => {
+    if (!canRetryFailedGeneration) {
+      setGenerationRecovery((prev) => (
+        prev.runId || prev.agentId || prev.provider || prev.model || prev.error || prev.pending
+          ? { runId: '', agentId: '', provider: '', model: '', pending: false, error: '' }
+          : prev
+      ));
+      return;
+    }
+
+    const initialProvider = configuredProviderChoices.some((item) => item.id === failedStageCurrentProvider)
+      ? failedStageCurrentProvider
+      : (configuredProviderChoices[0]?.id || '');
+    const initialModels = getProviderModelChoices(initialProvider, currentProviderConfig, [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean));
+    const preferredModel = failedStageCurrentModel && initialModels.includes(failedStageCurrentModel)
+      ? failedStageCurrentModel
+      : (initialModels[0] || '');
+
+    setGenerationRecovery((prev) => {
+      if (prev.runId === liveGeneration.runId && prev.agentId === failedGenerationStage.id) {
+        return prev;
+      }
+      return {
+        runId: liveGeneration.runId,
+        agentId: failedGenerationStage.id,
+        provider: initialProvider,
+        model: preferredModel,
+        pending: false,
+        error: '',
+      };
+    });
+  }, [canRetryFailedGeneration, configuredProviderChoices, currentProviderConfig, failedGenerationStage, failedStageAgentRecord, failedStageCurrentModel, failedStageCurrentProvider, liveGeneration.runId]);
+
+  const handleRecoveryProviderChange = React.useCallback((event) => {
+    const nextProvider = String(event.target.value || '').trim();
+    const nextModels = getProviderModelChoices(nextProvider, getProviderConfig(), [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean));
+    setGenerationRecovery((prev) => ({
+      ...prev,
+      provider: nextProvider,
+      model: nextModels[0] || '',
+      error: '',
+    }));
+  }, [failedGenerationStage, failedStageAgentRecord]);
+
+  const handleRecoveryModelChange = React.useCallback((event) => {
+    const nextModel = String(event.target.value || '').trim();
+    setGenerationRecovery((prev) => ({
+      ...prev,
+      model: nextModel,
+      error: '',
+    }));
+  }, []);
+
+  const retryFailedGenerationWithUpdatedAgent = React.useCallback(async () => {
+    if (!canRetryFailedGeneration || generationRecovery.pending) return;
+
+    const nextProvider = String(generationRecovery.provider || '').trim();
+    const nextModel = String(generationRecovery.model || '').trim();
+    if (!nextProvider || !nextModel) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'בחר provider ומודל תקפים לפני ההרצה מחדש.' }));
+      return;
+    }
+
+    const latestEditorHtml = editor?.getHTML?.() || '';
+    const agents = getRoleAgents();
+    const targetAgent = agents.find((agent) => agent.id === failedGenerationStage.id);
+    if (!targetAgent) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'לא מצאתי את הסוכן שנכשל בסביבת העבודה הפעילה.' }));
+      return;
+    }
+
+    const updated = updateCurrentWorkspace({
+      agents: agents.map((agent) => (agent.id === targetAgent.id ? { ...agent, provider: nextProvider, model: nextModel } : agent)),
+    });
+    if (!updated) {
+      setGenerationRecovery((prev) => ({ ...prev, error: 'לא הצלחתי לעדכן את הסוכן בסביבת העבודה הפעילה.' }));
+      return;
+    }
+
+    setGenerationRecovery((prev) => ({ ...prev, pending: true, error: '' }));
+    try {
+      const started = await runStoredGenerationAction({
+        ...lastGenerationAction,
+        workspaceId: currentWorkspaceId,
+        payload: {
+          ...(lastGenerationAction?.payload || {}),
+          ...((lastGenerationAction?.kind === 'feedback-revision' || lastGenerationAction?.kind === 'review-recommendations')
+            ? { existingHtml: latestEditorHtml }
+            : {}),
+        },
+      }, { skipConfirmReplace: true });
+      if (!started) {
+        setGenerationRecovery((prev) => ({ ...prev, error: 'לא הצלחתי להפעיל מחדש את הפעולה האחרונה.' }));
+      }
+    } finally {
+      setGenerationRecovery((prev) => ({ ...prev, pending: false }));
+    }
+  }, [canRetryFailedGeneration, currentWorkspaceId, editor, failedGenerationStage, generationRecovery.model, generationRecovery.pending, generationRecovery.provider, lastGenerationAction]);
 
   const updateActiveFormats = React.useCallback((currentEditor) => {
     if (!currentEditor) return;
@@ -409,18 +1550,74 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    const syncLiveGeneration = () => {
-      setLiveGeneration((prev) => ({
-        ...prev,
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-        logs: getAgentDebugLogs().slice(-5).reverse(),
-      }));
+    const syncLiveGeneration = (event) => {
+      const nextAutomation = getWorkspaceAutomation();
+      const nextWorkspaceId = getActiveWorkspaceId();
+      const previousWorkspaceId = activeWorkspaceIdRef.current;
+      const isWorkspaceChange = event?.type === 'wordai-workspace-changed';
+      const hasWorkspaceSwitched = isWorkspaceChange && previousWorkspaceId !== nextWorkspaceId;
+      if (hasWorkspaceSwitched) {
+        workspaceEpochRef.current += 1;
+        setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+      }
+      setLiveGeneration((prev) => {
+        const scopedRunId = hasWorkspaceSwitched ? '' : String(prev.runId || '').trim();
+        const scopedWorkspaceId = nextWorkspaceId || previousWorkspaceId;
+        return {
+          ...(hasWorkspaceSwitched
+            ? { active: false, state: 'idle', prompt: '', runId: '' }
+            : prev),
+          summary: getLatestAgentRunSummary(nextAutomation, scopedRunId),
+          logs: getRecentAgentLogs(18, { workspaceId: scopedWorkspaceId, runId: scopedRunId }),
+          runId: scopedRunId,
+          workspaceId: scopedWorkspaceId,
+        };
+      });
+      activeWorkspaceIdRef.current = nextWorkspaceId || previousWorkspaceId;
     };
 
     syncLiveGeneration();
     window.addEventListener('wordai-agent-logs-updated', syncLiveGeneration);
-    return () => window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
+    window.addEventListener('wordai-workspace-changed', syncLiveGeneration);
+    return () => {
+      window.removeEventListener('wordai-agent-logs-updated', syncLiveGeneration);
+      window.removeEventListener('wordai-workspace-changed', syncLiveGeneration);
+    };
   }, []);
+
+  React.useEffect(() => {
+    if (!editor) return;
+    if (liveGeneration.state !== 'running') {
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      return;
+    }
+
+    const currentHtml = normalizeTrackedEditorHtml(String(editor.getHTML?.() || ''));
+    const lastShell = lastLiveGenerationShellRef.current;
+    if (!lastShell.html || lastShell.runId !== liveGeneration.runId || currentHtml !== lastShell.html) {
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      return;
+    }
+    if (!isLiveGenerationShellHtml(currentHtml, liveGeneration.runId)) {
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      return;
+    }
+
+    const nextShell = buildLiveGenerationShell({
+      titleText: liveGeneration.prompt || 'מסמך חדש',
+      state: liveGeneration.state,
+      stages: liveGeneration.summary?.stages || [],
+      logs: liveGeneration.logs || [],
+      runId: liveGeneration.runId,
+    });
+
+    if (currentHtml === nextShell) return;
+    editor.commands.setContent(nextShell, false);
+    lastLiveGenerationShellRef.current = {
+      runId: liveGeneration.runId,
+      html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || nextShell)),
+    };
+  }, [editor, liveGeneration.state, liveGeneration.prompt, liveGeneration.summary, liveGeneration.logs, liveGeneration.runId]);
 
   // Ref allows the keyboard shortcut effect to call handleCommand without
   // adding it to the dependency array (which would cause a TDZ error since
@@ -455,21 +1652,57 @@ function App() {
   }, [shortcuts, editor]);
 
   React.useEffect(() => {
-    if (!inputDialog.open || inputDialog.closeOnEscape === false) return;
+    const isInputDialogVisible = inputDialog.open;
+    const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
+    const topmostOverlay = fileMenuOpen
+      ? ''
+      : isInputDialogVisible && inputDialog.closeOnEscape !== false
+        ? 'input-dialog'
+        : isFeedbackSurveyVisible
+          ? 'feedback-survey'
+          : sidebarOpen && !showStartScreen
+            ? 'ai-sidebar'
+            : '';
+    if (!topmostOverlay) return;
+
     const onKeyDown = (event) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+
+      if (topmostOverlay === 'input-dialog') {
+        event.preventDefault();
+        closeInputDialog(null);
+        return;
+      }
+
+      if (topmostOverlay === 'feedback-survey') {
+        event.preventDefault();
+        closeFeedbackSurvey();
+        return;
+      }
+
       event.preventDefault();
-      closeInputDialog(null);
+      closeAssistantPopup();
     };
+
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [inputDialog.open, inputDialog.closeOnEscape, closeInputDialog]);
+  }, [
+    inputDialog.open,
+    inputDialog.closeOnEscape,
+    feedbackSurvey.open,
+    sidebarOpen,
+    fileMenuOpen,
+    showStartScreen,
+    closeInputDialog,
+    closeFeedbackSurvey,
+  ]);
 
   const initializedDocRef = React.useRef(false);
 
   const openUpdatesPanel = React.useCallback(() => {
     setFileMenuTargetTab('updates');
     setFileMenuOpen(true);
+    setUpdateCheckToken((prev) => prev + 1);
   }, []);
 
   const handleEditorReady = React.useCallback((ed, helpers) => {
@@ -489,8 +1722,16 @@ function App() {
     const syncState = (includePages = false) => {
       if (frameId) window.cancelAnimationFrame(frameId);
       frameId = window.requestAnimationFrame(() => {
-        const { from, to, empty } = editor.state.selection;
-        setSelectedText(empty ? '' : editor.state.doc.textBetween(from, to, ' '));
+        const { doc, selection } = editor.state;
+        const { from, to, empty } = selection;
+        const selectionText = empty ? '' : doc.textBetween(from, to, ' ');
+        const docEnd = doc.content.size;
+        setSelectedText(selectionText);
+        setSelectionContext(empty ? null : {
+          before: doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim(),
+          selection: selectionText,
+          after: doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim(),
+        });
         setCurrentBlockText(editor.state.selection.$from.parent?.textContent || '');
         setLastEditorActivityAt(Date.now());
         if (includePages) {
@@ -531,12 +1772,13 @@ function App() {
   }, [editor, documentStyle, applyDocumentStyleToEditor]);
 
   React.useEffect(() => {
-    if (!editor || initializedDocRef.current) return;
+    if (!editor || initializedDocRef.current || !settingsHydrated) return;
 
     const shouldShowHome = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
     const savedDraft = wordPreferences.keepLastAutosavedVersion === false
       ? null
       : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+    const profile = getPersonalStyleProfile();
 
     if (shouldShowHome) {
       setShowStartScreen(true);
@@ -548,8 +1790,13 @@ function App() {
       focusEditorSoon('start');
     }
 
+    if (shouldAutoOpenOnboarding(profile)) {
+      setFileMenuTargetTab('onboarding');
+      setFileMenuOpen(true);
+    }
+
     initializedDocRef.current = true;
-  }, [editor, wordPreferences, focusEditorSoon]);
+  }, [editor, settingsHydrated, wordPreferences, focusEditorSoon]);
 
   React.useEffect(() => {
     if (!editor) return;
@@ -627,11 +1874,11 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [editor, lastEditorActivityAt, sidebarOpen, assistantBehavior]);
 
-  const closeAssistantPopup = () => {
+  const closeAssistantPopup = React.useCallback(() => {
     setSidebarOpen(false);
     setAssistantTrigger('manual');
     setLastEditorActivityAt(Date.now());
-  };
+  }, []);
 
   const hasMeaningfulContent = React.useCallback(() => {
     return hasMeaningfulEditorContent(editor);
@@ -664,6 +1911,452 @@ function App() {
     }
   }, []);
 
+  const executeStartScreenGeneration = React.useCallback(async (action, options = {}) => {
+    const payload = action?.payload || {};
+    if (!editor) {
+      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      return false;
+    }
+    if (!options.skipConfirmReplace && !confirmReplaceCurrentDocument()) return false;
+
+    const resolvedAction = {
+      ...action,
+      kind: 'start-screen-generate',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const prompt = String(payload.prompt || '').trim();
+    const templateId = String(payload.templateId || 'blank').trim() || 'blank';
+    const instructions = String(payload.instructions || '').trim();
+    const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+    const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+    const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+    const selectedModel = selectedProviderId;
+    const requestedStyle = String(payload.documentStyle || '').trim();
+    const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
+
+    setCurrentFilePath('');
+    localStorage.setItem('wordai_active_template', templateId);
+    syncPersistedAppSettings();
+    setActiveTemplateId(templateId);
+    setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+    changeDocumentStyle(requestedStyle || documentStyle);
+    setAssistantTrigger('autopilot');
+    setSidebarCompact(false);
+    setSidebarOpen(true);
+
+    const generationRequest = beginGenerationRequest('doc');
+    const originWorkspaceId = generationRequest.workspaceId;
+    const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
+    const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
+    const revisionRequest = hasBaseDraft
+      ? buildBaseDraftRevisionRequest({
+          promptText: prompt,
+          instructionsText: instructions,
+          baseDraftTitle,
+          templateId,
+        })
+      : null;
+    const generationLabel = hasBaseDraft
+      ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
+      : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId });
+    const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+    const initialLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: generationLabel,
+      summary: initialSummary,
+      logs: initialLogs,
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const initialShell = buildLiveGenerationShell({
+      titleText: generationLabel,
+      state: 'running',
+      stages: initialSummary?.stages || [],
+      logs: initialLogs,
+      runId: generationRequest.runId,
+    });
+    preLiveGenerationSnapshotRef.current = {
+      runId: generationRequest.runId,
+      html: String(editor.getHTML?.() || ''),
+    };
+    lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
+    const didStartTransition = runStartTransition((activeEditor) => {
+      clearDocumentArrival();
+      activeEditor.commands.setContent(initialShell);
+      lastLiveGenerationShellRef.current = {
+        runId: generationRequest.runId,
+        html: normalizeTrackedEditorHtml(String(activeEditor.getHTML?.() || initialShell)),
+      };
+    }, 'start');
+    if (!didStartTransition) return false;
+
+    try {
+      const result = hasBaseDraft
+        ? await reviseDocumentWithFeedback({
+            existingHtml: baseDraft.html,
+            originalPrompt: revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס',
+            templateId,
+            feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
+            selectedMaterials,
+            selectedModel,
+            selectedProviderId,
+            selectedProviderModel,
+            forceDirectMode: false,
+            runId: generationRequest.runId,
+            returnMeta: true,
+          })
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, runId: generationRequest.runId, returnMeta: true });
+      const resolvedTitle = hasBaseDraft
+        ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
+        : String(result?.title || generationLabel || 'מסמך חדש').trim();
+      const generated = result?.html || (hasBaseDraft
+        ? String(baseDraft?.html || '').trim() || `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`
+        : `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`);
+      const usedFallback = Boolean(result?.usedFallback);
+      if (!isGenerationRequestCurrent(generationRequest)) return true;
+
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
+      editor.commands.setContent(generated);
+      triggerDocumentArrival(usedFallback ? 'warning' : 'success');
+      saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
+      persistLocalCache(generated);
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setFeedbackSurvey({
+        ...buildFeedbackSurveyStateWithGenerationContext({}, {
+          prompt: resolvedTitle,
+          templateId,
+          usedFallback,
+          selectedMaterials,
+          selectedModel,
+          selectedProviderId,
+          selectedProviderModel,
+        }),
+        open: false,
+        phase: 'details',
+      });
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) return true;
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      lastLiveGenerationShellRef.current = { runId: '', html: '' };
+      const errorPlaceholder = buildLiveGenerationErrorPlaceholder({
+        titleText: generationLabel,
+        runId: generationRequest.runId,
+      });
+      editor.commands.setContent(errorPlaceholder);
+      lastLiveGenerationPlaceholderRef.current = {
+        runId: generationRequest.runId,
+        html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || errorPlaceholder)),
+      };
+    }
+
+    return true;
+  }, [beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, runStartTransition, triggerDocumentArrival]);
+
+  const runDocumentFeedbackRevision = React.useCallback(async (action) => {
+    const payload = action?.payload || {};
+    const resolvedAction = {
+      ...action,
+      kind: 'feedback-revision',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
+      ? { ...payload.surveySnapshot }
+      : { ...DEFAULT_FEEDBACK_SURVEY };
+    const workflowAvailable = isFeedbackWorkflowAvailable();
+    const requestedExecutionMode = normalizeFeedbackExecutionMode(payload.executionMode || surveySnapshot.executionMode);
+    const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
+    const roundIndex = normalizeFeedbackRoundIndex(payload.roundIndex || surveySnapshot.roundIndex);
+    const generationRequest = beginGenerationRequest('doc-feedback');
+    const originWorkspaceId = generationRequest.workspaceId;
+    clearDocumentArrival();
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      open: false,
+      phase: 'details',
+      submitting: true,
+      submissionRequestId: generationRequest.requestId,
+    }));
+    setAssistantTrigger('manual');
+    setSidebarOpen(true);
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: executionMode === 'workspace' ? 'מעדכן את המסמך עם צוות הסוכנים הפעיל' : 'מעדכן את המסמך לפי המשוב שלך',
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const clearHiddenFeedbackSubmittingAfterStale = () => {
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId || prev.open || !prev.submitting) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          submitting: false,
+          submissionRequestId: null,
+        };
+      });
+    };
+
+    try {
+      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+      const selectedModel = selectedProviderId;
+      const existingHtml = payload.existingHtml || editor?.getHTML?.() || '';
+      const result = await reviseDocumentWithFeedback({
+        existingHtml,
+        originalPrompt: payload.originalPrompt,
+        templateId,
+        feedback: payload.feedback || '',
+        selectedMaterials,
+        selectedModel,
+        selectedProviderId,
+        selectedProviderModel,
+        forceDirectMode: executionMode !== 'workspace',
+        runId: generationRequest.runId,
+        returnMeta: true,
+      });
+
+      const revisedHtml = result?.html || existingHtml;
+      const usedFallback = Boolean(result?.usedFallback);
+      const consumedRevisionRound = !usedFallback || String(revisedHtml || '').trim() !== String(existingHtml || '').trim();
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return true;
+      }
+
+      if (editor && revisedHtml) {
+        lastLiveGenerationShellRef.current = { runId: '', html: '' };
+        editor.commands.setContent(revisedHtml);
+        triggerDocumentArrival(usedFallback ? 'warning' : 'success');
+      }
+
+      persistLocalCache(revisedHtml);
+      saveDocumentHistory({
+        title: `${payload.originalPrompt || 'מסמך'} · תיקון לפי משוב`,
+        content: revisedHtml,
+        templateId,
+        source: 'feedback-revision',
+      });
+
+      setLiveGeneration({
+        active: true,
+        state: usedFallback ? 'warning' : 'success',
+        prompt: usedFallback ? 'נשמרה הגרסה הקודמת כי העדכון לא הושלם במלואו' : 'המסמך עודכן לפי המשוב שלך',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+
+      setFeedbackSurvey({
+        ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
+          prompt: payload.originalPrompt,
+          templateId,
+          usedFallback,
+          selectedMaterials,
+          selectedModel,
+          selectedProviderId,
+          selectedProviderModel,
+        }),
+        open: false,
+        phase: 'details',
+        executionMode,
+        roundIndex: consumedRevisionRound ? normalizeFeedbackRoundIndex(roundIndex + 1) : roundIndex,
+        usedFallback,
+      });
+
+      if (usedFallback && result?.errorMessage) {
+        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
+      }
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenFeedbackSubmittingAfterStale();
+        return true;
+      }
+      setFeedbackSurvey({
+        ...surveySnapshot,
+        open: true,
+        phase: 'details',
+        submitting: false,
+      });
+      setLiveGeneration({
+        active: true,
+        state: 'error',
+        prompt: 'עדכון המסמך נכשל',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
+    }
+
+    return true;
+  }, [activeTemplateId, beginGenerationRequest, clearDocumentArrival, editor, isGenerationRequestCurrent, persistLocalCache, triggerDocumentArrival]);
+
+  const runDocumentRecommendationsReview = React.useCallback(async (action) => {
+    const payload = action?.payload || {};
+    const resolvedAction = {
+      ...action,
+      kind: 'review-recommendations',
+      workspaceId: action?.workspaceId || getActiveWorkspaceId(),
+    };
+    setLastGenerationAction(resolvedAction);
+
+    const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
+      ? { ...payload.surveySnapshot }
+      : { ...DEFAULT_FEEDBACK_SURVEY };
+    const generationRequest = beginGenerationRequest('doc-review');
+    const originWorkspaceId = generationRequest.workspaceId;
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      open: true,
+      phase: 'review',
+      submitting: true,
+      submissionRequestId: generationRequest.requestId,
+      reviewResult: null,
+      reviewFocus: String(payload.focus || '').trim(),
+      reviewErrorMessage: '',
+    }));
+    setAssistantTrigger('manual');
+    setSidebarOpen(true);
+    setLiveGeneration({
+      active: true,
+      state: 'running',
+      prompt: 'מכין המלצות עריכה למסמך',
+      summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+      logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+      runId: generationRequest.runId,
+      workspaceId: originWorkspaceId,
+    });
+
+    const clearHiddenReviewSubmittingAfterStale = () => {
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId || !prev.submitting) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          submitting: false,
+          submissionRequestId: null,
+        };
+      });
+    };
+
+    try {
+      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+      const selectedModel = selectedProviderId;
+      const reviewFocus = String(payload.focus || '').trim();
+      const result = await reviewDocumentRecommendations({
+        existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
+        originalPrompt: payload.originalPrompt,
+        templateId,
+        selectedMaterials,
+        selectedModel,
+        selectedProviderId,
+        selectedProviderModel,
+        focus: reviewFocus,
+        runId: generationRequest.runId,
+        returnMeta: true,
+      });
+
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenReviewSubmittingAfterStale();
+        return true;
+      }
+
+      setFeedbackSurvey((prev) => {
+        if (prev.submissionRequestId !== generationRequest.requestId) return prev;
+
+        return {
+          ...prev,
+          phase: 'review',
+          submitting: false,
+          submissionRequestId: null,
+          reviewFocus,
+          reviewErrorMessage: String(result?.errorMessage || '').trim(),
+          reviewResult: {
+            summary: String(result?.summary || '').trim(),
+            suggestions: Array.isArray(result?.suggestions) ? result.suggestions : [],
+            usedFallback: Boolean(result?.usedFallback),
+          },
+        };
+      });
+
+      setLiveGeneration((prev) => (prev.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        active: false,
+        state: 'idle',
+        prompt: '',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: '',
+        workspaceId: originWorkspaceId,
+      }));
+    } catch (error) {
+      if (!isGenerationRequestCurrent(generationRequest)) {
+        clearHiddenReviewSubmittingAfterStale();
+        return true;
+      }
+
+      setFeedbackSurvey({
+        ...surveySnapshot,
+        open: true,
+        phase: 'details',
+        submitting: false,
+        submissionRequestId: null,
+        reviewResult: null,
+        reviewErrorMessage: '',
+      });
+      setLiveGeneration({
+        active: true,
+        state: 'error',
+        prompt: 'הכנת המלצות העריכה נכשלה',
+        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
+        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        runId: generationRequest.runId,
+        workspaceId: originWorkspaceId,
+      });
+      alert(error?.message || 'לא הצלחתי להכין המלצות עריכה למסמך.');
+    }
+
+    return true;
+  }, [activeTemplateId, beginGenerationRequest, editor, isGenerationRequestCurrent]);
+
+  const runStoredGenerationAction = React.useCallback(async (action, options = {}) => {
+    if (!action?.kind) return false;
+    if (action.kind === 'start-screen-generate') return executeStartScreenGeneration(action, options);
+    if (action.kind === 'feedback-revision') return runDocumentFeedbackRevision(action);
+    if (action.kind === 'review-recommendations') return runDocumentRecommendationsReview(action);
+    return false;
+  }, [executeStartScreenGeneration, runDocumentFeedbackRevision, runDocumentRecommendationsReview]);
+
+  const clearPersistedDraftCache = React.useCallback(() => {
+    localStorage.removeItem('wordai_document');
+    localStorage.removeItem('wordai_document_autosave');
+    localStorage.removeItem('wordai_document_autosave_at');
+  }, []);
+
   const getCurrentBlockElement = React.useCallback(() => {
     const selection = window.getSelection?.();
     const anchorNode = selection?.anchorNode;
@@ -680,6 +2373,7 @@ function App() {
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
     if (!confirmReplaceCurrentDocument()) return;
 
+    clearDraftReviewState();
     editor.commands.setContent(importedHtml);
     editor.setEditable(true);
     setViewMode('print');
@@ -702,7 +2396,7 @@ function App() {
     setLastEditorActivityAt(Date.now());
     setShowStartScreen(false);
     focusEditorSoon('start');
-  }, [editor, confirmReplaceCurrentDocument, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle]);
+  }, [editor, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle]);
 
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenExternalDocument) return;
@@ -714,6 +2408,15 @@ function App() {
       applyImportedDocument(payload);
     });
   }, [editor, applyImportedDocument]);
+
+  React.useEffect(() => {
+    if (!window.desktopApp?.onOpenSettings) return;
+    return window.desktopApp.onOpenSettings((payload) => {
+      const tab = payload?.tab || 'ai';
+      setFileMenuTargetTab(tab);
+      setFileMenuOpen(true);
+    });
+  }, []);
 
   React.useEffect(() => {
     if (!editor) return;
@@ -730,12 +2433,65 @@ function App() {
         const payload = await window.desktopApp.consumePendingOpenDocument();
         if (payload && !payload.canceled) {
           applyImportedDocument(payload);
+          return;
+        }
+      }
+
+      if (window.desktopApp?.consumePendingOpenSettings) {
+        const payload = await window.desktopApp.consumePendingOpenSettings();
+        if (payload?.tab) {
+          setFileMenuTargetTab(payload.tab);
+          setFileMenuOpen(true);
         }
       }
     };
 
     applyPending();
   }, [editor, applyImportedDocument]);
+
+  const buildDesktopSavePayload = React.useCallback((preferredExtension = 'docx') => {
+    const currentPreset = DOCUMENT_STYLE_PRESETS[documentStyle] || DOCUMENT_STYLE_PRESETS.academic;
+    const html = editor?.getHTML?.() || '';
+    const text = editor?.getText?.() || '';
+    const fontStack = String(
+      wordPreferences.defaultFontStack
+      || localStorage.getItem('default-font-stack')
+      || wordPreferences.defaultFontFamily
+      || localStorage.getItem('default-font')
+      || currentPreset.fontFamily
+      || ''
+    ).trim();
+    const fontSize = String(
+      wordPreferences.defaultFontSize
+      || localStorage.getItem('default-size')
+      || currentPreset.fontSize
+      || '12pt'
+    ).trim();
+
+    return {
+      title: text.trim().slice(0, 60) || 'מסמך',
+      html,
+      text,
+      preferredExtension,
+      exportOptions: {
+        documentStyle,
+        fontStack,
+        fontSize,
+        language: 'he-IL',
+        disableProofing: false,
+      },
+    };
+  }, [documentStyle, editor, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
+
+  const downloadBrowserDocxOrAlert = React.useCallback(async (preferredExtension = 'docx') => {
+    try {
+      return await downloadBrowserDocx(buildDesktopSavePayload(preferredExtension));
+    } catch (error) {
+      console.error('Browser DOCX export failed:', error);
+      window.alert(error?.message || 'לא הצלחתי לשמור את קובץ ה-Word בדפדפן.');
+      return { handled: false, canceled: false, error };
+    }
+  }, [buildDesktopSavePayload]);
 
 
 
@@ -801,14 +2557,22 @@ function App() {
         break;
       }
       case 'saveDefaultTypography': {
-        const currentFont = editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef';
+        const currentFontStack = String(editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef').trim();
+        const currentFont = normalizeStoredDefaultFont(currentFontStack);
         const currentSize = editor.getAttributes('textStyle')?.fontSize || window.getComputedStyle(editor.view.dom).fontSize || '12pt';
         localStorage.setItem('default-font', currentFont);
+        localStorage.setItem('default-font-stack', currentFontStack || currentFont);
         localStorage.setItem('default-size', currentSize);
-        syncPersistedAppSettings();
+        saveWordPreferences({
+          ...wordPreferences,
+          defaultFontFamily: currentFont,
+          defaultFontStack: currentFontStack || currentFont,
+          defaultFontSize: currentSize,
+        });
         setWordPreferences((prev) => ({
           ...prev,
           defaultFontFamily: currentFont,
+          defaultFontStack: currentFontStack || currentFont,
           defaultFontSize: currentSize,
         }));
         applyDocumentStyleToEditor(documentStyle);
@@ -1065,15 +2829,19 @@ function App() {
       // --- פקודות File Menu ---
       case 'newDoc': {
         if (window.confirm('האם למחוק את תוכן המסמך הנוכחי ולפתוח מסמך חדש?')) {
+          const shouldShowStartExperience = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
+          clearDraftReviewState();
           editor.chain().focus().clearContent().run();
           localStorage.removeItem('wordai_document_autosave');
           localStorage.removeItem('wordai_document_autosave_at');
           localStorage.removeItem('wordai_document');
+          saveHomeInstructions('');
+          setStartScreenInstructionsResetToken((prev) => prev + 1);
           setCurrentFilePath('');
           localStorage.setItem('wordai_active_template', 'blank');
           syncPersistedAppSettings();
           setActiveTemplateId('blank');
-          setShowStartScreen(wordPreferences.showStartExperience !== false);
+          setShowStartScreen(shouldShowStartExperience);
         }
         break;
       }
@@ -1086,11 +2854,8 @@ function App() {
           const ext = String(currentFilePath || '').toLowerCase().split('.').pop();
           const canSaveDirectly = Boolean(currentFilePath) && ['txt', 'html', 'htm', 'docx'].includes(ext);
           const result = await window.desktopApp.saveDocumentDialog({
+            ...buildDesktopSavePayload(ext === 'txt' ? 'txt' : 'docx'),
             filePath: canSaveDirectly ? currentFilePath : '',
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: ext === 'txt' ? 'txt' : 'docx',
           });
 
           if (!result?.canceled && result?.filePath) {
@@ -1106,13 +2871,15 @@ function App() {
           break;
         }
 
-        saveDocumentHistory({
-          title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
-          content: html,
-          templateId: activeTemplateId || 'blank',
-          source: 'save-local',
-        });
-        downloadFile(html, 'document.doc', 'application/msword');
+        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
+          saveDocumentHistory({
+            title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+            content: html,
+            templateId: activeTemplateId || 'blank',
+            source: 'save-local',
+          });
+        }
         break;
       }
       case 'openFile': {
@@ -1139,21 +2906,16 @@ function App() {
       }
       case 'saveAs': {
         const html = editor.getHTML();
-        const text = editor.getText();
+        const title = editor.getText().trim().slice(0, 60) || 'מסמך שמור';
 
         if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog({
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: 'docx',
-          });
+          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
 
           if (!result?.canceled) {
             setCurrentFilePath(String(result.filePath || ''));
             persistLocalCache(html);
             saveDocumentHistory({
-              title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+              title,
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-as',
@@ -1163,24 +2925,25 @@ function App() {
           break;
         }
 
-        downloadFile(html, 'document.doc', 'application/msword');
+        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
+          persistLocalCache(html);
+          saveDocumentHistory({
+            title,
+            content: html,
+            templateId: activeTemplateId || 'blank',
+            source: 'save-as',
+          });
+        }
         break;
       }
       case 'exportDocx': {
-        const html = editor.getHTML();
-        const text = editor.getText();
         if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog({
-            title: editor.getText().trim().slice(0, 60) || 'מסמך',
-            html,
-            text,
-            preferredExtension: 'docx',
-          });
+          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
           if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
           break;
         }
-        const htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'/><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body dir="rtl">${html}</body></html>`;
-        downloadFile(htmlContent, 'document.doc', 'application/msword');
+        await downloadBrowserDocxOrAlert('docx');
         break;
       }
       case 'print': {
@@ -1594,17 +3357,38 @@ function App() {
   };
   handleCommandRef.current = handleCommand;
 
+  const hasPendingUserApproval = Boolean(feedbackSurvey.prompt || feedbackSurvey.usedFallback)
+    && (liveGeneration.state === 'success' || liveGeneration.state === 'warning');
+  const shouldShowProgressOnlyPanel = liveGeneration.active
+    && (liveGeneration.state === 'running' || feedbackSurvey.open || hasPendingUserApproval);
+  const progressLogs = Array.isArray(liveGeneration.logs) ? liveGeneration.logs : [];
+  const feedbackReviewSuggestions = Array.isArray(feedbackSurvey.reviewResult?.suggestions)
+    ? feedbackSurvey.reviewResult.suggestions
+    : [];
+  const feedbackReviewSummary = String(feedbackSurvey.reviewResult?.summary || '').trim();
+  const canOpenDraftRecommendations = !feedbackSurvey.submitting
+    && liveGeneration.state !== 'running'
+    && hasMeaningfulEditorContent(editor);
+  const isStartTransitionRunning = startTransitionPhase === 'running';
+  const prefersReducedMotion = getPrefersReducedMotion();
+  const isInputDialogVisible = inputDialog.open;
+  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
+  const shouldHideEditorWrapper = showStartScreen && !isInputDialogVisible;
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
+      {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
+      <ConfettiCelebration active={documentArrival.active && documentArrival.tone === 'success'} />
       <TopBar
         onOpenUpdates={openUpdatesPanel}
         onOpen={() => handleCommand('openFile')}
+        onNew={() => handleCommand('newDoc')}
         onSave={() => handleCommand('saveLocal')}
         onSaveAs={() => handleCommand('saveAs')}
-        onNew={() => handleCommand('newDoc')}
         onUndo={() => editor?.chain().focus().undo().run()}
         onRedo={() => editor?.chain().focus().redo().run()}
-        onHome={() => setShowStartScreen(true)}
+        onHome={openHomeSafely}
+        onOpenDraftRecommendations={openDraftRecommendations}
+        draftRecommendationsDisabled={!canOpenDraftRecommendations}
       />
       <Ribbon
         onCommand={handleCommand}
@@ -1632,81 +3416,192 @@ function App() {
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         {!showStartScreen && sidebarOpen && (
           <aside
-            className="order-last h-full shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)]"
+            className="order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden"
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
-              <div className="border-b border-slate-200 bg-white px-3 py-3">
-                <div className="rounded-2xl border border-blue-200 bg-gradient-to-br from-white to-blue-50 p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
-                      <div className="text-sm font-bold text-slate-800">{liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה' : 'מכין את המסמך בלייב'}</div>
-                      <div className="text-[11px] text-slate-500">{liveGeneration.prompt || 'מעבד את הבקשה שלך'}</div>
-                    </div>
-                    <div className={`text-[10px] font-bold px-2 py-1 rounded-full ${liveGeneration.state === 'success' ? 'bg-green-100 text-green-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'לבדיקה' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    {(liveGeneration.summary?.stages || []).slice(0, 4).map((stage) => (
-                      <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-[11px] bg-white">
-                        <span className="font-medium text-slate-700">{stage.label}</span>
-                        <span className={`${stage.state === 'success' ? 'text-green-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
-                          {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '…' : '•'}
-                        </span>
+              <div className={`${shouldShowProgressOnlyPanel ? 'h-full min-h-0 p-4' : 'border-b border-slate-200 bg-white px-3 py-3'}`}>
+                <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${shouldShowProgressOnlyPanel ? 'h-full min-h-0 flex flex-col overflow-hidden p-4' : 'p-3'}`}>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0">
+                      <div className="text-base font-bold text-slate-900">
+                        {liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה בתהליך' : 'יוצר מסמך עכשיו'}
                       </div>
-                    ))}
+                      <div className="text-xs text-slate-600 mt-1 truncate">{liveGeneration.prompt || 'מעבד את הבקשה שלך...'}</div>
+                    </div>
+                    <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${liveGeneration.state === 'success' ? 'bg-emerald-100 text-emerald-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'ממתין לאישור' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
+                    </div>
                   </div>
 
-                  {!!(liveGeneration.logs || []).length && (
-                    <div className="mt-2 rounded-xl bg-slate-900 text-slate-100 p-2 text-[11px] space-y-1 max-h-24 overflow-auto">
-                      {(liveGeneration.logs || []).slice(0, 3).map((log) => (
-                        <div key={log.id || `${log.ts}-${log.message}`}>
-                          {log.message || 'מעדכן סטטוס...'}
+                  <div className={`${shouldShowProgressOnlyPanel ? 'flex-1 min-h-0 overflow-y-auto pr-1 pb-1' : ''}`}>
+                    <LiveGenerationMood state={liveGeneration.state} />
+                    <div className="space-y-2">
+                      {(liveGeneration.summary?.stages || []).slice(0, 6).map((stage) => (
+                        <div key={stage.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-xs bg-slate-50">
+                          <span className="font-medium text-slate-700 truncate pr-2">{stage.label}</span>
+                          <span className={`font-bold ${stage.state === 'success' ? 'text-emerald-600' : stage.state === 'error' ? 'text-red-600' : stage.state === 'running' ? 'text-blue-600' : 'text-slate-400'}`}>
+                            {stage.state === 'success' ? '✓' : stage.state === 'error' ? '✗' : stage.state === 'running' ? '...' : '•'}
+                          </span>
                         </div>
                       ))}
                     </div>
-                  )}
 
-                  {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        className="btn btn-sm btn-primary flex-1"
-                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
-                      >
-                        פתח תיקונים
-                      </button>
-                      <button
-                        className="btn btn-sm btn-ghost flex-1"
-                        onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
-                      >
-                        המשך לערוך
-                      </button>
+                    {liveGeneration.state === 'running' && (
+                      <OneAxisAirHockeyGame title="Arcade בזמן שהצוות עובד" compact allowPopup />
+                    )}
+
+                      {(liveGeneration.state === 'running' || liveGeneration.state === 'error') && (
+                      <div className={`mt-3 rounded-xl border p-3 ${liveGeneration.state === 'running' ? 'border-amber-200 bg-amber-50/80' : 'border-slate-200 bg-slate-50/80'}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[11px] leading-4 text-slate-700">
+                            {liveGeneration.state === 'running'
+                              ? 'אם ההרצה נראית תקועה, אפשר לנקות את המצב ולהתחיל מחדש.'
+                              : 'אפשר לסגור את מצב השגיאה ולחזור לעבודה.'}
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                            onClick={clearDraftReviewState}
+                          >
+                            {liveGeneration.state === 'running' ? 'שחרר מצב תקוע' : 'נקה מצב שגיאה'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-2.5">
+                      <div className="text-[11px] font-bold text-slate-700 mb-2">לוג חי של ההרצה</div>
+                      <div className={`${shouldShowProgressOnlyPanel ? 'max-h-[34vh]' : 'max-h-32'} overflow-auto space-y-1.5 pr-1`}>
+                        {progressLogs.length ? progressLogs.map((log, index) => {
+                          const logTimeValue = log?.timestamp || log?.time || log?.ts;
+                          const logTime = logTimeValue ? new Date(logTimeValue).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+                          const logAgent = String(log?.agentLabel || log?.agentId || 'מערכת');
+                          const logMessage = String(log?.message || log?.type || 'עודכן סטטוס תהליך');
+                          return (
+                            <div key={`${logTime}-${logAgent}-${index}`} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                              <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 mb-0.5">
+                                <span className="font-semibold text-slate-600 truncate">{logAgent}</span>
+                                <span>{logTime}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-700 leading-4">{logMessage}</div>
+                            </div>
+                          );
+                        }) : (
+                          <div className="text-[11px] text-slate-500 px-1 py-1">הלוגים יופיעו כאן בזמן אמת...</div>
+                        )}
+                      </div>
                     </div>
-                  )}
+
+                    {canRetryFailedGeneration && (
+                      <div className="mt-3 rounded-xl border border-red-200 bg-red-50/80 p-3">
+                        <div className="text-[11px] font-bold text-red-700">הסוכן שנכשל: {failedGenerationStage?.label || failedStageAgentRecord?.name || 'לא זוהה'}</div>
+                        <div className="mt-1 text-[11px] leading-4 text-slate-700">
+                          ההרצה נעצרה ב־{failedStageProviderLabel} / {failedStageModelLabel}. אפשר לעדכן רק את הסוכן הזה ולהפעיל מחדש את אותה פעולה מההתחלה.
+                        </div>
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <label className="block text-[11px] text-slate-700">
+                            <span className="mb-1 block font-semibold">Provider חלופי</span>
+                            <select
+                              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                              value={generationRecovery.provider}
+                              onChange={handleRecoveryProviderChange}
+                              disabled={generationRecovery.pending}
+                            >
+                              {configuredProviderChoices.map((provider) => (
+                                <option key={provider.id} value={provider.id}>{provider.label}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="block text-[11px] text-slate-700">
+                            <span className="mb-1 block font-semibold">מודל חלופי</span>
+                            <select
+                              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-[12px] text-slate-800 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                              value={generationRecovery.model}
+                              onChange={handleRecoveryModelChange}
+                              disabled={generationRecovery.pending || !recoveryModelChoices.length}
+                            >
+                              {recoveryModelChoices.map((model) => (
+                                <option key={model} value={model}>{model}</option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        {generationRecovery.error && (
+                          <div className="mt-2 text-[11px] font-medium text-red-700">{generationRecovery.error}</div>
+                        )}
+
+                        <button
+                          className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
+                          onClick={retryFailedGenerationWithUpdatedAgent}
+                          disabled={generationRecovery.pending || !generationRecovery.provider || !generationRecovery.model}
+                        >
+                          {generationRecovery.pending ? 'מעדכן סוכן ומריץ מחדש...' : 'החלף מודל והרץ מחדש'}
+                        </button>
+                      </div>
+                    )}
+
+                    {(liveGeneration.state === 'success' || liveGeneration.state === 'warning') && (feedbackSurvey.prompt || feedbackSurvey.usedFallback) && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          className="btn btn-sm btn-primary flex-1"
+                          onClick={() => setFeedbackSurvey((prev) => ({ ...prev, open: true, phase: 'details' }))}
+                        >
+                          בקש תיקונים
+                        </button>
+                        <button
+                          className="btn btn-sm btn-ghost flex-1"
+                          onClick={() => setLiveGeneration((prev) => ({ ...prev, active: false }))}
+                        >
+                          אשר והמשך לערוך
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
-            <AiSidebar
-              mode="sidebar"
-              compactMode={sidebarCompact}
-              onToggleCompact={() => setSidebarCompact((prev) => !prev)}
-              reason={assistantTrigger}
-              documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
-              selectedText={selectedText}
-              currentBlockText={currentBlockText}
-              wordPreferences={wordPreferences}
-              onInsert={(text) => {
-                if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
-              }}
-              onClose={closeAssistantPopup}
-            />
+
+            {!shouldShowProgressOnlyPanel && (
+              <AiSidebar
+                mode="sidebar"
+                compactMode={sidebarCompact}
+                onToggleCompact={() => setSidebarCompact((prev) => !prev)}
+                reason={assistantTrigger}
+                documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
+                selectedText={selectedText}
+                currentBlockText={currentBlockText}
+                wordPreferences={wordPreferences}
+                onInsert={(text) => {
+                  if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
+                }}
+                onClose={closeAssistantPopup}
+              />
+            )}
           </aside>
         )}
 
-        <div id="editor-wrapper" className={`flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative ${showStartScreen ? '!hidden' : 'flex'}`} style={{ display: showStartScreen ? 'none' : 'flex' }}>
-          {inputDialog.open && (
+        <div
+          id="editor-wrapper"
+          className="flex flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative"
+          style={{
+            opacity: shouldHideEditorWrapper ? 0 : 1,
+            transform: prefersReducedMotion
+              ? 'none'
+              : (shouldHideEditorWrapper ? 'translateY(24px) scale(0.985)' : 'translateY(0px) scale(1)'),
+            filter: prefersReducedMotion ? 'none' : (shouldHideEditorWrapper ? 'blur(12px)' : 'blur(0px)'),
+            transition: prefersReducedMotion
+              ? 'none'
+              : 'opacity 320ms ease-out, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease-out',
+            pointerEvents: shouldHideEditorWrapper ? 'none' : 'auto',
+          }}
+          aria-hidden={shouldHideEditorWrapper}
+          inert={shouldHideEditorWrapper ? true : undefined}
+        >
+          {isInputDialogVisible && (
             <div
               className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all duration-300"
               dir="rtl"
@@ -1797,24 +3692,23 @@ function App() {
             </div>
           )}
 
-          {feedbackSurvey.open && (
+          {isFeedbackSurveyVisible && (
             <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
               <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
                 <div className="flex items-start justify-between gap-4 mb-4">
                   <div>
-                    <h3 className="text-xl font-bold text-slate-800">{feedbackSurvey.phase === 'question' ? 'איך יצא המסמך?' : 'מה לתקן במסמך?'}</h3>
+                    <h3 className="text-xl font-bold text-slate-800">{feedbackSurvey.phase === 'question' ? 'איך יצא המסמך?' : feedbackSurvey.phase === 'review' ? 'המלצות לעריכה בטיוטה' : 'מה לתקן במסמך?'}</h3>
                     <p className="text-sm text-slate-500 mt-1">
                       {feedbackSurvey.phase === 'question'
-                        ? 'אפשר לאשר שהכול מצוין, או לבקש תיקון ממנהל הצוות.'
-                        : 'בחר את הנקודות החשובות לך, או כתוב חופשי מה לשפר.'}
+                        ? 'אפשר לאשר שהכול מצוין, או לבקש תיקון ישיר של המסמך.'
+                        : feedbackSurvey.phase === 'review'
+                          ? (feedbackSurvey.submitting ? 'בודק את הטיוטה ומכין המלצות לא מחייבות בלבד.' : 'אלו המלצות עריכה בלבד. המסמך עצמו לא שונה.')
+                          : 'בחר את הנקודות החשובות לך, כתוב חופשי מה לשפר, או בקש קודם המלצות בלבד.'}
                     </p>
                   </div>
                   <button
                     className="btn btn-sm btn-ghost"
-                    onClick={() => {
-                      setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                      setLiveGeneration((prev) => ({ ...prev, active: false }));
-                    }}
+                    onClick={closeFeedbackSurvey}
                   >
                     סגור
                   </button>
@@ -1822,7 +3716,7 @@ function App() {
 
                 {feedbackSurvey.usedFallback && (
                   <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    נוצרה כרגע טיוטה בטוחה. אפשר לאשר אותה או לשלוח עכשיו הערות כדי שמנהל הצוות ישפר אותה.
+                    נוצרה כרגע טיוטה בטוחה. אפשר לאשר אותה או לשלוח עכשיו הערות לעדכון ישיר של המסמך.
                   </div>
                 )}
 
@@ -1830,12 +3724,9 @@ function App() {
                   <div className="flex flex-col md:flex-row gap-3">
                     <button
                       className="btn btn-primary flex-1"
-                      onClick={() => {
-                        setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                        setLiveGeneration((prev) => ({ ...prev, active: false }));
-                      }}
+                      onClick={approveFeedbackSurvey}
                     >
-                      כן, המסמך טוב
+                      כן, המסמך מוכן
                     </button>
                     <button
                       className="btn btn-outline flex-1"
@@ -1846,6 +3737,72 @@ function App() {
                     >
                       לא, צריך תיקונים
                     </button>
+                  </div>
+                ) : feedbackSurvey.phase === 'review' ? (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="text-sm font-bold text-slate-800">
+                        {feedbackSurvey.submitting ? 'בודק ומכין המלצות לעריכת המסמך...' : (feedbackReviewSummary || 'אלו כמה המלצות לעריכה ממוקדת בטיוטה.')}
+                      </div>
+                      <div className="mt-2 text-xs leading-6 text-slate-500 whitespace-pre-wrap">
+                        {feedbackSurvey.reviewFocus || 'המיקוד לבדיקה לא הוגדר ולכן נבדקה הטיוטה בכללותה.'}
+                      </div>
+                    </div>
+
+                    {feedbackSurvey.reviewErrorMessage && (
+                      <div className={`rounded-2xl px-4 py-3 text-sm ${feedbackReviewUsedFallback ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'border border-rose-200 bg-rose-50 text-rose-700'}`}>
+                        {feedbackReviewUsedFallback
+                          ? `חלק מההמלצות לא הושלמו במלואן${feedbackSurvey.reviewErrorMessage ? `: ${feedbackSurvey.reviewErrorMessage}` : '.'}`
+                          : feedbackSurvey.reviewErrorMessage}
+                      </div>
+                    )}
+
+                    {feedbackSurvey.submitting ? (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                        ההמלצות נבנות עכשיו לפי המיקוד שביקשת, בלי לשנות עדיין את המסמך עצמו.
+                      </div>
+                    ) : feedbackReviewSuggestions.length ? (
+                      <div className="space-y-3 max-h-[48vh] overflow-y-auto pr-1">
+                        {feedbackReviewSuggestions.map((suggestion, index) => (
+                          <div key={`${suggestion.title || 'review'}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                            <div className="text-base font-bold text-slate-800">{suggestion.title || `המלצה ${index + 1}`}</div>
+                            <div className="mt-2 text-sm leading-6 text-slate-600">{suggestion.reason}</div>
+                            <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-3">
+                              <div className="text-[11px] font-bold tracking-[0.16em] text-slate-400">ניסוח מוצע</div>
+                              <div className="mt-1 text-sm leading-6 text-slate-700">{suggestion.suggestedChange}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
+                        לא נוצרו המלצות ממוקדות. אפשר לנסות שוב, או לשלוח הערות מדויקות כדי שנבצע תיקון ישיר.
+                      </div>
+                    )}
+
+                    <div className="flex flex-col md:flex-row gap-3 justify-end">
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'details', submitting: false, submissionRequestId: null }))}
+                        disabled={feedbackSurvey.submitting}
+                      >
+                        שנה מיקוד
+                      </button>
+                      <button
+                        className={`btn btn-outline ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        onClick={requestDocumentRecommendations}
+                        disabled={feedbackSurvey.submitting}
+                      >
+                        {feedbackSurvey.submitting ? 'מכין המלצות...' : 'רענן המלצות'}
+                      </button>
+                      <button
+                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
+                        onClick={submitDocumentFeedback}
+                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
+                      >
+                        {feedbackSubmitLabel}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -1871,13 +3828,55 @@ function App() {
                     </div>
 
                     <div>
-                      <div className="font-bold text-slate-800 mb-2">כתיבה חופשית</div>
+                      <div className="font-bold text-slate-800 mb-2">הערה חופשית</div>
                       <textarea
                         className="textarea textarea-bordered w-full min-h-[120px]"
-                        placeholder="לדוגמה: תוסיף יותר מקורות, תחדד את המסקנה, תקצר את הפתיחה, או תשנה את הסגנון..."
+                        placeholder="למשל: חזקי יותר את הטיעון המרכזי, הוסיפי מקור עדכני, קצרי את הפתיחה, או בדקי שוב את ניסוח הסיכום..."
                         value={feedbackSurvey.freeText}
                         onChange={(e) => setFeedbackSurvey((prev) => ({ ...prev, freeText: e.target.value }))}
                       />
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                      <div className="font-bold text-slate-800">איך להריץ את סבב התיקון?</div>
+                      <div className="grid md:grid-cols-2 gap-3">
+                        <label className={`rounded-2xl border p-3 cursor-pointer transition ${effectiveFeedbackExecutionMode === 'direct' ? 'border-blue-300 bg-blue-50/70' : 'border-slate-200 bg-slate-50'}`}>
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="radio"
+                              name="feedback-execution-mode"
+                              className="radio radio-sm mt-1"
+                              checked={effectiveFeedbackExecutionMode === 'direct'}
+                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'direct' }))}
+                            />
+                            <div className="space-y-1">
+                              <div className="font-semibold text-slate-800">תיקון ישיר</div>
+                              <div className="text-xs text-slate-500">סבב מהיר מול מודל אחד, בלי להריץ את צוות הסוכנים.</div>
+                            </div>
+                          </div>
+                        </label>
+                        <label className={`rounded-2xl border p-3 transition ${effectiveFeedbackExecutionMode === 'workspace' ? 'border-emerald-300 bg-emerald-50/70' : 'border-slate-200 bg-slate-50'} ${feedbackWorkflowAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="radio"
+                              name="feedback-execution-mode"
+                              className="radio radio-sm mt-1"
+                              checked={effectiveFeedbackExecutionMode === 'workspace'}
+                              disabled={!feedbackWorkflowAvailable}
+                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'workspace' }))}
+                            />
+                            <div className="space-y-1">
+                              <div className="font-semibold text-slate-800">תיקון עם צוות הסוכנים</div>
+                              <div className="text-xs text-slate-500">מריץ את ה-workflow הפעיל וממשיך להציג לוגים חיים לאורך הסבב.</div>
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+                      <div className={`text-xs ${feedbackRoundsExhausted ? 'text-amber-700' : 'text-slate-500'}`}>
+                        {feedbackRoundsExhausted
+                          ? 'מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר עדיין לרענן המלצות או להמשיך לערוך ידנית.'
+                          : `סבב תיקון ${Math.min(feedbackRoundIndex, FEEDBACK_MAX_REVISION_ROUNDS)} מתוך ${FEEDBACK_MAX_REVISION_ROUNDS}. אחרי הסבב הזה ${feedbackRoundIndex < FEEDBACK_MAX_REVISION_ROUNDS ? 'יישאר עוד סבב אחד מאותו מסך.' : 'לא יישאר סבב נוסף מאותו מסך.'}`}
+                      </div>
                     </div>
 
                     <div className="flex flex-col md:flex-row gap-3 justify-end">
@@ -1886,14 +3885,21 @@ function App() {
                         onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'question' }))}
                         disabled={feedbackSurvey.submitting}
                       >
-                        חזרה
+                        חזור
                       </button>
                       <button
-                        className={`btn btn-primary ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
-                        onClick={submitDocumentFeedback}
+                        className={`btn btn-outline ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        onClick={requestDocumentRecommendations}
                         disabled={feedbackSurvey.submitting}
                       >
-                        {feedbackSurvey.submitting ? 'מעדכן...' : 'שלח למנהל הצוות'}
+                        קבל המלצות בלבד
+                      </button>
+                      <button
+                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
+                        onClick={submitDocumentFeedback}
+                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
+                      >
+                        {feedbackSubmitLabel}
                       </button>
                     </div>
                   </div>
@@ -1901,7 +3907,7 @@ function App() {
               </div>
             </div>
           )}
-          <div className="w-full flex justify-center" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
+          <div className={`wordai-document-stage relative w-full flex justify-center ${documentArrival.active ? `wordai-document-arrival wordai-document-arrival--${documentArrival.tone}` : ''}`} style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
             <DocumentEditor
               documentStyle={documentStyle}
               viewMode={viewMode}
@@ -1921,115 +3927,115 @@ function App() {
         </div>
 
         {showStartScreen && (
-          <div className="flex-1 overflow-y-auto">
-            <StartScreen
-              documentStyle={documentStyle}
-              onDocumentStyleChange={changeDocumentStyle}
-              hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
-              lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
-              onCreateBlank={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                runStartTransition((activeEditor) => {
-                  activeEditor.chain().focus().clearContent().run();
-                  setCurrentFilePath('');
-                  localStorage.setItem('wordai_active_template', 'blank');
-                  syncPersistedAppSettings();
-                  setActiveTemplateId('blank');
-                }, 'start');
+          <div
+            className="absolute inset-0 z-30 overflow-y-auto"
+            style={{
+              opacity: 1,
+              transform: prefersReducedMotion ? 'none' : (isStartTransitionRunning ? 'scale(0.992)' : 'scale(1)'),
+              filter: prefersReducedMotion ? 'none' : (isStartTransitionRunning ? 'brightness(0.74) saturate(0.84)' : 'none'),
+              transition: prefersReducedMotion ? 'none' : 'transform 240ms ease-out, filter 220ms linear',
+              pointerEvents: isStartTransitionRunning ? 'none' : 'auto',
+            }}
+          >
+            <div
+              style={{
+                minHeight: '100%',
+                animation: prefersReducedMotion || !isStartTransitionRunning
+                  ? 'none'
+                  : `wordai-start-transition-shake 360ms cubic-bezier(0.22, 1, 0.36, 1) ${getStartScreenTransitionDelayMs(-4)} both`,
+                transformOrigin: 'center center',
+                willChange: isStartTransitionRunning ? 'transform' : undefined,
               }}
-              onCreateTemplate={(template) => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const templateId = typeof template === 'string' ? template : template?.id;
-                const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
-                runStartTransition((activeEditor) => {
-                  setCurrentFilePath('');
-                  localStorage.setItem('wordai_active_template', templateId || 'blank');
-                  syncPersistedAppSettings();
-                  setActiveTemplateId(templateId || 'blank');
-                  const recommendedStyle = {
-                    academic: 'academic',
-                    legal: 'legal',
-                    report: 'business',
-                    summary: 'presentation',
-                    office: 'business',
-                    proposal: 'business',
-                    letter: 'legal',
-                  };
-                  changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
-                  activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
-                }, 'start');
-              }}
-              onOpenDocument={() => handleCommand('openFile')}
-              onOpenLastDraft={() => {
-                if (!confirmReplaceCurrentDocument()) return;
-                const savedDraft = wordPreferences.keepLastAutosavedVersion === false
-                  ? null
-                  : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
-                runStartTransition((activeEditor) => {
-                  if (savedDraft) activeEditor.commands.setContent(savedDraft);
-                  setCurrentFilePath('');
-                  setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
-                }, 'end');
-              }}
-              onOpenSettings={() => {
-                setFileMenuTargetTab('guide');
-                setFileMenuOpen(true);
-              }}
-              onGenerateFromPrompt={async ({ prompt, templateId, instructions, selectedMaterials, documentStyle: requestedStyle }) => {
-                if (!editor) {
-                  window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
-                  return;
-                }
-                if (!confirmReplaceCurrentDocument()) return;
-                setCurrentFilePath('');
-                localStorage.setItem('wordai_active_template', templateId || 'blank');
-                syncPersistedAppSettings();
-                setActiveTemplateId(templateId || 'blank');
-                setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
-                changeDocumentStyle(requestedStyle || documentStyle);
-                setAssistantTrigger('autopilot');
-                setSidebarCompact(false);
-                setSidebarOpen(true);
-                setShowStartScreen(false);
-                setLiveGeneration({
-                  active: true,
-                  state: 'running',
-                  prompt,
-                  summary: getLatestAgentRunSummary(getWorkspaceAutomation()),
-                  logs: getAgentDebugLogs().slice(-5).reverse(),
-                });
-                editor.commands.setContent(buildLiveGenerationShell(prompt));
-                focusEditorSoon('start');
-                try {
-                  const result = await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, returnMeta: true });
-                  const generated = result?.html || `<h1>${escHtml(prompt)}</h1><p>לא נוצר תוכן.</p>`;
-                  const usedFallback = Boolean(result?.usedFallback);
-                  editor.commands.setContent(generated);
-                  saveDocumentHistory({ title: prompt, content: generated, templateId, source: 'start-screen' });
-                  persistLocalCache(generated);
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : prompt, summary: getLatestAgentRunSummary(getWorkspaceAutomation()), logs: getAgentDebugLogs().slice(-5).reverse() }));
-                  setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY, open: false, phase: 'details', prompt, templateId: templateId || 'blank', usedFallback });
-                } catch (error) {
-                  setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', logs: getAgentDebugLogs().slice(-5).reverse() }));
-                  if (editor) editor.commands.setContent(`<h1>${escHtml(prompt)}</h1><p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>`);
-                }
-              }}
-            />
+            >
+              <StartScreen
+                instructionsResetToken={startScreenInstructionsResetToken}
+                onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
+                documentStyle={documentStyle}
+                onDocumentStyleChange={changeDocumentStyle}
+                escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible}
+                onClose={() => {
+                  runStartTransition(() => {}, 'start');
+                }}
+                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
+                lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
+                onCreateBlank={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  clearPersistedDraftCache();
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    activeEditor.commands.clearContent();
+                    setCurrentFilePath('');
+                    localStorage.setItem('wordai_active_template', 'blank');
+                    syncPersistedAppSettings();
+                    setActiveTemplateId('blank');
+                  }, 'start');
+                }}
+                onCreateTemplate={(template) => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const templateId = typeof template === 'string' ? template : template?.id;
+                  const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
+                  clearPersistedDraftCache();
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    setCurrentFilePath('');
+                    localStorage.setItem('wordai_active_template', templateId || 'blank');
+                    syncPersistedAppSettings();
+                    setActiveTemplateId(templateId || 'blank');
+                    const recommendedStyle = {
+                      academic: 'academic',
+                      legal: 'legal',
+                      report: 'business',
+                      summary: 'presentation',
+                      office: 'business',
+                      proposal: 'business',
+                      letter: 'legal',
+                    };
+                    changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
+                    activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
+                  }, 'start');
+                }}
+                onOpenDocument={() => handleCommand('openFile')}
+                onOpenLastDraft={() => {
+                  if (!confirmReplaceCurrentDocument()) return;
+                  const savedDraft = wordPreferences.keepLastAutosavedVersion === false
+                    ? null
+                    : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+                  clearDraftReviewState();
+                  runStartTransition((activeEditor) => {
+                    if (savedDraft) activeEditor.commands.setContent(savedDraft);
+                    setCurrentFilePath('');
+                    setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+                  }, 'end');
+                }}
+                onOpenSettings={(targetTab = 'guide') => {
+                  setFileMenuTargetTab(targetTab || 'guide');
+                  setFileMenuOpen(true);
+                }}
+                onGenerateFromPrompt={(payload) => executeStartScreenGeneration({
+                  kind: 'start-screen-generate',
+                  workspaceId: getActiveWorkspaceId(),
+                  payload,
+                })}
+              />
+            </div>
           </div>
         )}
 
         {/* עט קסמים צף */}
         {!showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
+          escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
           selectedText={selectedText}
+          selectionContext={selectionContext}
           shortcuts={shortcuts}
           onInsert={(text) => {
             if (editor) editor.chain().focus().insertContent(text).run();
           }}
         />}
-      </main>
 
+        {isStartTransitionRunning && <StartScreenTransitionOverlay />}
+      </main>
       <footer id="status-bar" className="h-6 bg-[#2B579A] text-white flex items-center justify-between px-4 text-[11px] shrink-0 z-30">
         <div className="flex items-center gap-4">
           <span>עמוד 1 מתוך {pageCount}</span>
@@ -2046,9 +4052,11 @@ function App() {
       {fileMenuOpen && (
         <FileMenu
           initialSettingsTab={fileMenuTargetTab}
+          updateCheckToken={updateCheckToken}
           onClose={() => {
             setFileMenuOpen(false);
             setFileMenuTargetTab(null);
+            setUpdateCheckToken(0);
           }}
           onCommand={(cmd, value) => handleCommand(cmd, value)}
           shortcuts={shortcuts}
@@ -2077,7 +4085,9 @@ if (rootElement) {
       return this.props.children;
     }
   }
-  ReactDOM.createRoot(rootElement).render(
+  const appRoot = rootElement.__wordflowReactRoot || ReactDOM.createRoot(rootElement);
+  rootElement.__wordflowReactRoot = appRoot;
+  appRoot.render(
     <ErrorBoundary><App /></ErrorBoundary>
   );
 }
