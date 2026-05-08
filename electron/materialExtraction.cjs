@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const JSZip = require('jszip');
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 const { createWorker } = require('tesseract.js');
@@ -35,6 +36,152 @@ function trimToLength(value = '', maxLength = DEFAULT_MAX_LENGTH) {
 
 function decodeTextBuffer(buffer) {
   return trimToLength(Buffer.from(buffer).toString('utf8').replace(/\u0000/g, ''));
+}
+
+function decodeXmlEntities(value = '') {
+  return String(value ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, codePoint) => String.fromCodePoint(parseInt(codePoint, 16)))
+    .replace(/&#(\d+);/g, (_match, codePoint) => String.fromCodePoint(parseInt(codePoint, 10)))
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&');
+}
+
+function compareSlidePaths(left = '', right = '') {
+  const leftNumber = Number(String(left).match(/slide(\d+)\.xml$/i)?.[1] || 0);
+  const rightNumber = Number(String(right).match(/slide(\d+)\.xml$/i)?.[1] || 0);
+  return leftNumber - rightNumber;
+}
+
+function parseXmlAttributes(rawAttributes = '') {
+  const attributes = {};
+  String(rawAttributes || '').replace(/([A-Za-z_][\w:.-]*)\s*=\s*(['"])([\s\S]*?)\2/g, (_match, name, _quote, value) => {
+    attributes[name] = value;
+    return _match;
+  });
+  return attributes;
+}
+
+function resolveArchivePath(baseDir = '', relativePath = '') {
+  const normalizedBaseDir = String(baseDir || '').replace(/\\/g, '/');
+  const normalizedRelativePath = String(relativePath || '').replace(/\\/g, '/').trim();
+  if (!normalizedRelativePath) return '';
+  if (/^[a-z]+:/i.test(normalizedRelativePath)) return '';
+  return path.posix.normalize(path.posix.join(normalizedBaseDir || '.', normalizedRelativePath)).replace(/^\.\//, '');
+}
+
+async function resolvePptxSlidePaths(archive) {
+  const fallbackSlidePaths = Object.keys(archive.files)
+    .filter((entryPath) => /^ppt\/slides\/slide\d+\.xml$/i.test(entryPath))
+    .sort(compareSlidePaths);
+
+  if (!fallbackSlidePaths.length) return [];
+
+  let presentationXml = '';
+  let presentationRelsXml = '';
+  try {
+    presentationXml = await archive.file('ppt/presentation.xml')?.async('string');
+    presentationRelsXml = await archive.file('ppt/_rels/presentation.xml.rels')?.async('string');
+  } catch {
+    return fallbackSlidePaths;
+  }
+
+  if (!presentationXml || !presentationRelsXml) {
+    return fallbackSlidePaths;
+  }
+
+  const relationshipTargets = new Map();
+  for (const match of presentationRelsXml.matchAll(/<Relationship\b([^>]*)\/?>(?:<\/Relationship>)?/gi)) {
+    const attributes = parseXmlAttributes(match[1]);
+    const relId = String(attributes.Id || '').trim();
+    const target = resolveArchivePath('ppt', attributes.Target || '');
+    if (!relId || !target) continue;
+    if (!/^ppt\/slides\/slide\d+\.xml$/i.test(target)) continue;
+    if (!archive.file(target)) continue;
+    relationshipTargets.set(relId, target);
+  }
+
+  const orderedSlidePaths = [];
+  const seenPaths = new Set();
+  for (const match of presentationXml.matchAll(/<p:sldId\b([^>]*)\/?>(?:<\/p:sldId>)?/gi)) {
+    const attributes = parseXmlAttributes(match[1]);
+    const relId = String(attributes['r:id'] || '').trim();
+    const slidePath = relationshipTargets.get(relId);
+    if (!slidePath || seenPaths.has(slidePath)) continue;
+    seenPaths.add(slidePath);
+    orderedSlidePaths.push(slidePath);
+  }
+
+  return orderedSlidePaths.length ? orderedSlidePaths : fallbackSlidePaths;
+}
+
+function extractPptxParagraphText(paragraphXml = '') {
+  let text = '';
+  const tokenPattern = /<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>|<a:br(?:\s[^>]*)?\s*(?:\/>|><\/a:br>)|<a:tab(?:\s[^>]*)?\s*(?:\/>|><\/a:tab>)/gi;
+
+  for (const match of String(paragraphXml || '').matchAll(tokenPattern)) {
+    if (typeof match[1] === 'string') {
+      text += decodeXmlEntities(match[1]);
+      continue;
+    }
+    const token = String(match[0] || '').toLowerCase();
+    if (token.startsWith('<a:br')) {
+      text += '\n';
+      continue;
+    }
+    if (token.startsWith('<a:tab')) {
+      text += ' ';
+    }
+  }
+
+  return text
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractPptxParagraphs(slideXml = '') {
+  return Array.from(String(slideXml || '').matchAll(/<a:p\b[^>]*>([\s\S]*?)<\/a:p>/gi))
+    .map((match) => extractPptxParagraphText(match[1]))
+    .filter(Boolean);
+}
+
+async function extractPptxTextFromBuffer(buffer, { maxLength = DEFAULT_MAX_LENGTH } = {}) {
+  let archive;
+  try {
+    archive = await JSZip.loadAsync(buffer);
+  } catch {
+    throw new Error('pptx-read-failed');
+  }
+
+  const slidePaths = await resolvePptxSlidePaths(archive);
+
+  if (!slidePaths.length) {
+    throw new Error('empty-pptx-text');
+  }
+
+  const slideSections = [];
+  for (const [slideIndex, slidePath] of slidePaths.entries()) {
+    let slideXml = '';
+    try {
+      slideXml = await archive.file(slidePath)?.async('string');
+    } catch {
+      slideXml = '';
+    }
+    if (!slideXml) continue;
+
+    const paragraphs = extractPptxParagraphs(slideXml);
+    if (!paragraphs.length) continue;
+    slideSections.push(`שקופית ${slideIndex + 1}:\n${paragraphs.join('\n\n')}`);
+  }
+
+  const extractedText = trimToLength(slideSections.join('\n\n'), maxLength);
+  if (!extractedText) throw new Error('empty-pptx-text');
+  return extractedText;
 }
 
 function normalizeSpreadsheetCell(value = '') {
@@ -152,6 +299,10 @@ async function extractMaterialTextFromBuffer({ buffer, fileName = '', maxLength 
     return extractedText;
   }
 
+  if (ext === '.pptx') {
+    return extractPptxTextFromBuffer(buffer, { maxLength });
+  }
+
   if (ext === '.xlsx' || ext === '.xls') {
     return extractSpreadsheetTextFromBuffer(buffer, { maxLength });
   }
@@ -160,7 +311,7 @@ async function extractMaterialTextFromBuffer({ buffer, fileName = '', maxLength 
     return extractImageTextFromBuffer(buffer, { maxLength, ocrCacheDir, ocrDataDir });
   }
 
-  if (['.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
+  if (['.txt', '.md', '.markdown', '.html', '.htm', '.json', '.csv', '.tsv', '.rtf', '.xml', '.yml', '.yaml', '.log', '.svg'].includes(ext)) {
     return decodeTextBuffer(buffer).slice(0, resolveMaxLength(maxLength));
   }
 

@@ -4,6 +4,7 @@ const mammoth = require('mammoth');
 const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table, TableRow, TableCell, WidthType, ImageRun } = require('docx');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('node:crypto');
 const { extractMaterialTextFromBuffer, shutdownMaterialExtraction } = require('./materialExtraction.cjs');
 
 const STABLE_USER_DATA_DIRNAME = 'word-ai-assistant';
@@ -80,9 +81,14 @@ function resolveAutoUpdateFeedUrl() {
 }
 
 let mainWindow;
-let pendingFilePayload = null;
-let pendingSettingsPayload = null;
-let loadRendererInProgress = false;
+let lastFocusedWindowId = null;
+const pendingFilePayloadsByWindowId = new Map();
+const pendingSettingsPayloadsByWindowId = new Map();
+const rendererLoadInProgressWindowIds = new Set();
+const isolatedDocumentSessionWindowIds = new Set();
+const documentStorageScopeIdsByWindowId = new Map();
+const WINDOW_CONTEXT_ARGUMENT_PREFIX = '--wordflow-window-context=';
+let devToolsShortcutRegistered = false;
 const activeProxyRequests = new Map();
 const abortedProxyRequests = new Set();
 let latestUpdateState = {
@@ -94,6 +100,174 @@ let latestUpdateState = {
   checkedAt: '',
 };
 
+function isUsableWindow(targetWindow) {
+  return Boolean(
+    targetWindow
+    && !targetWindow.isDestroyed()
+    && targetWindow.webContents
+    && !targetWindow.webContents.isDestroyed()
+  );
+}
+
+function getAllUsableWindows() {
+  return BrowserWindow.getAllWindows().filter((targetWindow) => isUsableWindow(targetWindow));
+}
+
+function rememberWindow(targetWindow) {
+  if (!isUsableWindow(targetWindow)) return null;
+  mainWindow = targetWindow;
+  lastFocusedWindowId = targetWindow.id;
+  return targetWindow;
+}
+
+function focusWindow(targetWindow) {
+  if (!isUsableWindow(targetWindow)) return;
+  if (targetWindow.isMinimized()) targetWindow.restore();
+  if (!targetWindow.isVisible()) targetWindow.show();
+  targetWindow.focus();
+  rememberWindow(targetWindow);
+}
+
+function getFocusedAppWindow() {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (isUsableWindow(focusedWindow)) return rememberWindow(focusedWindow);
+
+  if (Number.isInteger(lastFocusedWindowId)) {
+    const lastFocusedWindow = BrowserWindow.fromId(lastFocusedWindowId);
+    if (isUsableWindow(lastFocusedWindow)) return rememberWindow(lastFocusedWindow);
+  }
+
+  const fallbackWindow = getAllUsableWindows()[0] || null;
+  return fallbackWindow ? rememberWindow(fallbackWindow) : null;
+}
+
+function getSenderWindow(event) {
+  if (!event?.sender) return null;
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  return isUsableWindow(senderWindow) ? senderWindow : null;
+}
+
+function queuePendingWindowPayload(store, targetWindow, payload) {
+  if (!isUsableWindow(targetWindow)) return;
+  if (payload == null) {
+    store.delete(targetWindow.id);
+    return;
+  }
+  store.set(targetWindow.id, payload);
+}
+
+function consumePendingWindowPayload(store, event) {
+  const targetWindow = getSenderWindow(event);
+  if (!targetWindow) return null;
+  const payload = store.get(targetWindow.id) ?? null;
+  store.delete(targetWindow.id);
+  return payload;
+}
+
+function markIsolatedDocumentSessionWindow(targetWindow, isIsolated = false) {
+  if (!targetWindow?.id) return;
+  if (isIsolated) {
+    isolatedDocumentSessionWindowIds.add(targetWindow.id);
+    return;
+  }
+  isolatedDocumentSessionWindowIds.delete(targetWindow.id);
+}
+
+function isIsolatedDocumentSessionWindow(targetWindow) {
+  return Boolean(targetWindow?.id && isolatedDocumentSessionWindowIds.has(targetWindow.id));
+}
+
+function setDocumentStorageScopeId(targetWindow, scopeId = '') {
+  if (!targetWindow?.id) return;
+  const normalizedScopeId = String(scopeId || '').trim();
+  if (!normalizedScopeId) {
+    documentStorageScopeIdsByWindowId.delete(targetWindow.id);
+    return;
+  }
+  documentStorageScopeIdsByWindowId.set(targetWindow.id, normalizedScopeId);
+}
+
+function getDocumentStorageScopeId(targetWindow) {
+  if (!targetWindow?.id) return 'primary';
+  return documentStorageScopeIdsByWindowId.get(targetWindow.id) || 'primary';
+}
+
+function isPrimaryAppWindow(targetWindow) {
+  return isUsableWindow(targetWindow)
+    && !isIsolatedDocumentSessionWindow(targetWindow)
+    && getDocumentStorageScopeId(targetWindow) === 'primary';
+}
+
+function hasPrimaryAppWindow() {
+  return getAllUsableWindows().some((targetWindow) => isPrimaryAppWindow(targetWindow));
+}
+
+function hasPendingOpenDocument(targetWindow) {
+  return Boolean(targetWindow?.id && pendingFilePayloadsByWindowId.has(targetWindow.id));
+}
+
+function createWindowContext({
+  isolatedDocumentSession = false,
+  documentStorageScopeId = 'primary',
+  hasPendingOpenDocument = false,
+} = {}) {
+  return {
+    isolatedDocumentSession: Boolean(isolatedDocumentSession),
+    documentStorageScopeId: String(documentStorageScopeId || 'primary'),
+    hasPendingOpenDocument: Boolean(hasPendingOpenDocument),
+  };
+}
+
+function encodeWindowContextArgument(windowContext = {}) {
+  const serializedWindowContext = JSON.stringify(createWindowContext(windowContext));
+  return `${WINDOW_CONTEXT_ARGUMENT_PREFIX}${Buffer.from(serializedWindowContext, 'utf8').toString('base64')}`;
+}
+
+function getWindowContext(targetWindow = null) {
+  return createWindowContext({
+    isolatedDocumentSession: isIsolatedDocumentSessionWindow(targetWindow),
+    documentStorageScopeId: getDocumentStorageScopeId(targetWindow),
+    hasPendingOpenDocument: hasPendingOpenDocument(targetWindow),
+  });
+}
+
+async function showMessageBoxWithOwner(options = {}, ownerWindow = null) {
+  const dialogOwner = isUsableWindow(ownerWindow) ? ownerWindow : getUsableMainWindow();
+  if (dialogOwner) return dialog.showMessageBox(dialogOwner, options);
+  return dialog.showMessageBox(options);
+}
+
+async function showDocumentOpenErrorDialog(payload, ownerWindow = null) {
+  const options = {
+    type: 'error',
+    buttons: ['סגור'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'פתיחת קובץ נכשלה',
+    message: 'לא ניתן לפתוח את הקובץ שנבחר.',
+    detail: String(payload?.error || 'לא ניתן לקרוא את הקובץ הזה ישירות. מומלץ להשתמש בקבצי DOCX, TXT, MD או HTML.'),
+  };
+
+  await showMessageBoxWithOwner(options, ownerWindow);
+}
+
+function clearWindowState(targetWindow) {
+  if (!targetWindow) return;
+  pendingFilePayloadsByWindowId.delete(targetWindow.id);
+  pendingSettingsPayloadsByWindowId.delete(targetWindow.id);
+  rendererLoadInProgressWindowIds.delete(targetWindow.id);
+  isolatedDocumentSessionWindowIds.delete(targetWindow.id);
+  documentStorageScopeIdsByWindowId.delete(targetWindow.id);
+
+  const fallbackWindow = getAllUsableWindows().find((candidate) => candidate.id !== targetWindow.id) || null;
+  if (lastFocusedWindowId === targetWindow.id) {
+    lastFocusedWindowId = fallbackWindow?.id ?? null;
+  }
+  if (mainWindow === targetWindow) {
+    mainWindow = fallbackWindow;
+  }
+}
+
 function sendUpdateStatus(nextPatch = {}) {
   latestUpdateState = {
     ...latestUpdateState,
@@ -102,9 +276,9 @@ function sendUpdateStatus(nextPatch = {}) {
     checkedAt: new Date().toISOString(),
   };
 
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('app-update-status', latestUpdateState);
-  }
+  getAllUsableWindows().forEach((targetWindow) => {
+    targetWindow.webContents.send('app-update-status', latestUpdateState);
+  });
 
   return latestUpdateState;
 }
@@ -864,18 +1038,9 @@ function writePersistedAppSettings(settings = {}) {
   return { ok: true, filePath };
 }
 
-function sendDocumentToRenderer(payload) {
-  if (!payload) return;
-  pendingFilePayload = payload;
-  if (!mainWindow) return;
-  const send = () => {
-    mainWindow?.webContents?.send('open-external-document', payload);
-  };
-  if (mainWindow.webContents.isLoading()) {
-    mainWindow.webContents.once('did-finish-load', send);
-  } else {
-    send();
-  }
+function openDocumentInNewWindow(payload) {
+  if (!payload) return null;
+  return createMainWindow({ pendingFilePayload: payload });
 }
 
 function setupAutoUpdater() {
@@ -897,9 +1062,10 @@ function setupAutoUpdater() {
         message: 'העדכון האוטומטי לא זמין כרגע. אפשר להוריד ידנית מעמוד ההורדות.',
       });
 
-      if (!manualDownloadShown && mainWindow && !mainWindow.isDestroyed()) {
+      const dialogOwner = getUsableMainWindow();
+      if (!manualDownloadShown && dialogOwner) {
         manualDownloadShown = true;
-        const result = await dialog.showMessageBox(mainWindow, {
+        const result = await dialog.showMessageBox(dialogOwner, {
           type: 'warning',
           buttons: ['פתח הורדות', 'סגור'],
           defaultId: 0,
@@ -953,12 +1119,12 @@ function setupAutoUpdater() {
       percent: 0,
     });
 
-    dialog.showMessageBox({
+    showMessageBoxWithOwner({
       type: 'info',
       title: 'עדכון זמין',
       message: 'נמצאה גרסה חדשה של WordFlow AI.',
       detail: 'העדכון יורד כעת ברקע.',
-    });
+    }).catch(() => {});
   });
 
   autoUpdater.on('download-progress', (progress = {}) => {
@@ -986,7 +1152,7 @@ function setupAutoUpdater() {
       percent: 100,
     });
 
-    const result = await dialog.showMessageBox({
+    const result = await showMessageBoxWithOwner({
       type: 'question',
       buttons: ['התקן עכשיו', 'מאוחר יותר'],
       defaultId: 0,
@@ -1031,27 +1197,38 @@ async function loadRenderer(win) {
   // כך הגרסה הארוזה וגם הרצה מקומית רגילה אינן תלויות ב-VS Code או ב-localhost.
   if (!app.isPackaged && envUrl) {
     try {
-      loadRendererInProgress = true;
+      rendererLoadInProgressWindowIds.add(win.id);
       await win.loadURL(envUrl);
-      loadRendererInProgress = false;
+      rendererLoadInProgressWindowIds.delete(win.id);
       return true;
     } catch (error) {
-      loadRendererInProgress = false;
       console.error('[Main] Failed to load Vite dev server, falling back to dist:', error?.message || error);
     }
   }
 
   try {
+    rendererLoadInProgressWindowIds.add(win.id);
     await win.loadFile(distPath);
+    rendererLoadInProgressWindowIds.delete(win.id);
     return false;
   } catch (error) {
+    rendererLoadInProgressWindowIds.delete(win.id);
     await showLoadErrorPage(win, error?.message || 'קובץ הממשק המקומי לא נטען.');
     return false;
   }
 }
 
-function createMainWindow() {
-  mainWindow = new BrowserWindow({
+function createMainWindow({ pendingFilePayload = null, pendingSettingsPayload = null } = {}) {
+  const hadPrimaryWindow = hasPrimaryAppWindow();
+  const isolatedDocumentSession = Boolean(pendingFilePayload) || hadPrimaryWindow;
+  const documentStorageScopeId = isolatedDocumentSession ? `window-${randomUUID()}` : 'primary';
+  const windowContextArgument = encodeWindowContextArgument({
+    isolatedDocumentSession,
+    documentStorageScopeId,
+    hasPendingOpenDocument: pendingFilePayload != null,
+  });
+
+  const win = new BrowserWindow({
     title: 'WordFlow AI',
     width: 1600,
     height: 1000,
@@ -1064,23 +1241,36 @@ function createMainWindow() {
       : path.join(__dirname, '..', app.isPackaged ? 'dist' : 'public', 'app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: [windowContextArgument],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
 
+  setDocumentStorageScopeId(win, documentStorageScopeId);
+  markIsolatedDocumentSessionWindow(win, isolatedDocumentSession);
+  queuePendingWindowPayload(pendingFilePayloadsByWindowId, win, pendingFilePayload);
+  queuePendingWindowPayload(pendingSettingsPayloadsByWindowId, win, pendingSettingsPayload);
+
   const revealWindow = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (!mainWindow.isVisible()) mainWindow.show();
-    mainWindow.focus();
+    if (!isUsableWindow(win)) return;
+    focusWindow(win);
   };
 
-  mainWindow.once('ready-to-show', revealWindow);
-  mainWindow.webContents.once('did-finish-load', revealWindow);
-  mainWindow.on('unresponsive', revealWindow);
+  win.on('focus', () => {
+    rememberWindow(win);
+  });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.on('closed', () => {
+    clearWindowState(win);
+  });
+
+  win.once('ready-to-show', revealWindow);
+  win.webContents.once('did-finish-load', revealWindow);
+  win.on('unresponsive', revealWindow);
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
@@ -1093,94 +1283,100 @@ function createMainWindow() {
   });
 
   // לכידת שגיאות ה-renderer לצורך אבחון ומניעת מסך ריק
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    if (level >= 2) { // 2=warning, 3=error
-      console.error(`[Renderer ${level === 3 ? 'ERROR' : 'WARN'}] ${message} (${sourceId}:${line})`);
+  win.webContents.on('console-message', (details) => {
+    const { level, message, lineNumber, sourceId } = details;
+    if (level === 'warning' || level === 'error') {
+      console.error(`[Renderer ${level === 'error' ? 'ERROR' : 'WARN'}] ${message} (${sourceId}:${lineNumber})`);
     }
   });
 
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+  win.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer process gone:', details.reason, details.exitCode);
-    if (!mainWindow.isDestroyed()) {
-      showLoadErrorPage(mainWindow, `הרנדרר קרס: ${details.reason} (exit code ${details.exitCode})`);
+    if (!win.isDestroyed()) {
+      showLoadErrorPage(win, `הרנדרר קרס: ${details.reason} (exit code ${details.exitCode})`);
     }
   });
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return; // התעלם מכשלון טעינת משאבים משניים (CDN, iframes)
     if (errorCode === -3) return; // ERR_ABORTED — טעינה בוטלה בכוונה, מתעלמים
     console.error(`[Main] did-fail-load: ${errorCode} ${errorDescription} (${validatedURL})`);
     // לא טוענים דף שגיאה בזמן ש-loadRenderer מנסה כתובות — מונע race condition
-    if (loadRendererInProgress) return;
-    if (!mainWindow.isDestroyed()) {
-      showLoadErrorPage(mainWindow, `${errorDescription} (${errorCode})`);
+    if (rendererLoadInProgressWindowIds.has(win.id)) return;
+    if (!win.isDestroyed()) {
+      showLoadErrorPage(win, `${errorDescription} (${errorCode})`);
     }
   });
 
   // DevTools רק בפיתוח
   if (!app.isPackaged) {
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
-    globalShortcut.register('CommandOrControl+Shift+I', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.toggleDevTools();
-      }
-    });
+    win.webContents.openDevTools({ mode: 'detach' });
+    if (!devToolsShortcutRegistered) {
+      devToolsShortcutRegistered = globalShortcut.register('CommandOrControl+Shift+I', () => {
+        const targetWindow = getFocusedAppWindow();
+        if (isUsableWindow(targetWindow)) {
+          targetWindow.webContents.toggleDevTools();
+        }
+      });
+    }
   }
 
-  loadRenderer(mainWindow).then(() => {
-    if (pendingFilePayload) sendDocumentToRenderer(pendingFilePayload);
-  });
+  loadRenderer(win);
+  return win;
 }
 
 function getUsableMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) return null;
-  if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return null;
-  return mainWindow;
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (isUsableWindow(focusedWindow)) return rememberWindow(focusedWindow);
+  if (isUsableWindow(mainWindow)) return mainWindow;
+  return getFocusedAppWindow();
 }
 
 function openSettingsTabSafely(tab = 'ai') {
   const resolvedTab = String(tab || '').trim() || 'ai';
-  pendingSettingsPayload = { tab: resolvedTab };
+  const payload = { tab: resolvedTab };
   const sendOpenSettings = (targetWindow) => {
-    if (!targetWindow || targetWindow.isDestroyed()) return;
-    if (!targetWindow.webContents || targetWindow.webContents.isDestroyed()) return;
-    if (targetWindow.isMinimized()) targetWindow.restore();
-    if (!targetWindow.isVisible()) targetWindow.show();
-    targetWindow.focus();
-    targetWindow.webContents.send('open-settings', { tab: resolvedTab });
+    if (!isUsableWindow(targetWindow)) return;
+    focusWindow(targetWindow);
+    targetWindow.webContents.send('open-settings', payload);
   };
 
   const existingWindow = getUsableMainWindow();
   if (existingWindow) {
-    if (existingWindow.webContents.isLoading()) {
-      existingWindow.webContents.once('did-finish-load', () => sendOpenSettings(existingWindow));
+    if (rendererLoadInProgressWindowIds.has(existingWindow.id) || existingWindow.webContents.isLoading()) {
+      queuePendingWindowPayload(pendingSettingsPayloadsByWindowId, existingWindow, payload);
       return;
     }
     sendOpenSettings(existingWindow);
     return;
   }
 
-  createMainWindow();
-  const createdWindow = getUsableMainWindow();
-  if (!createdWindow) return;
-  createdWindow.webContents.once('did-finish-load', () => sendOpenSettings(createdWindow));
+  createMainWindow({ pendingSettingsPayload: payload });
 }
 
-ipcMain.handle('consume-pending-open-document', async () => {
-  const payload = pendingFilePayload;
-  pendingFilePayload = null;
+ipcMain.handle('consume-pending-open-document', async (event) => {
+  const payload = consumePendingWindowPayload(pendingFilePayloadsByWindowId, event);
   return payload || { canceled: true };
 });
 
-ipcMain.handle('consume-pending-open-settings', async () => {
-  const payload = pendingSettingsPayload;
-  pendingSettingsPayload = null;
+ipcMain.handle('consume-pending-open-settings', async (event) => {
+  const payload = consumePendingWindowPayload(pendingSettingsPayloadsByWindowId, event);
   return payload || null;
 });
 
-ipcMain.handle('open-document-dialog', async () => {
-  if (!mainWindow) return { canceled: true };
-  const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.on('get-window-context', (event) => {
+  event.returnValue = getWindowContext(getSenderWindow(event));
+});
+
+ipcMain.handle('create-app-window', async () => {
+  const createdWindow = createMainWindow();
+  return { ok: Boolean(createdWindow), windowId: createdWindow?.id || null };
+});
+
+ipcMain.handle('open-document-dialog', async (event) => {
+  const ownerWindow = getSenderWindow(event) || getUsableMainWindow();
+  if (!ownerWindow) return { canceled: true };
+  const result = await dialog.showOpenDialog(ownerWindow, {
     title: 'פתח קובץ',
     properties: ['openFile'],
     filters: [
@@ -1193,8 +1389,9 @@ ipcMain.handle('open-document-dialog', async () => {
   return readDocumentPayload(result.filePaths[0]);
 });
 
-ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
-  if (!mainWindow) return { canceled: true };
+ipcMain.handle('save-document-dialog', async (event, payload = {}) => {
+  const ownerWindow = getSenderWindow(event) || getUsableMainWindow();
+  if (!ownerWindow) return { canceled: true };
   const baseName = sanitizeFileName(payload?.title || 'document');
   const preferredExtension = String(payload?.preferredExtension || 'docx').toLowerCase();
   let targetPath = payload?.filePath || '';
@@ -1205,7 +1402,7 @@ ipcMain.handle('save-document-dialog', async (_event, payload = {}) => {
   }
 
   if (!targetPath) {
-    const result = await dialog.showSaveDialog(mainWindow, {
+    const result = await dialog.showSaveDialog(ownerWindow, {
       title: 'שמור בשם',
       defaultPath: `${baseName}.${preferredExtension === 'txt' ? 'txt' : preferredExtension === 'html' ? 'html' : 'docx'}`,
       filters: [
@@ -1272,6 +1469,15 @@ ipcMain.handle('save-local-material', async (_event, payload) => {
     category: String(payload?.category || 'general'),
     templateId: String(payload?.templateId || 'blank'),
     learningHint: String(payload?.learningHint || ''),
+    previewText: String(payload?.previewText || '').trim(),
+    previewChars: Math.max(0, Number(payload?.previewChars) || 0),
+    previewStatus: String(payload?.previewStatus || '').trim(),
+    previewSource: String(payload?.previewSource || '').trim(),
+    previewError: String(payload?.previewError || '').trim(),
+    extractedChars: Math.max(0, Number(payload?.extractedChars) || 0),
+    extractionStatus: String(payload?.extractionStatus || '').trim(),
+    extractionMessage: String(payload?.extractionMessage || '').trim(),
+    extractionTruncated: payload?.extractionTruncated === true,
     uploadedAt: new Date().toISOString(),
   };
   const merged = [...(Array.isArray(existing) ? existing.filter((item) => item.file !== safeName) : []), nextEntry];
@@ -1300,7 +1506,7 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     const ext = path.extname(safeName).toLowerCase();
     let extractedText = '';
 
-    if (['.docx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json'].includes(ext)) {
+    if (['.docx', '.pptx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json', '.csv', '.tsv', '.rtf', '.xml', '.yml', '.yaml', '.log', '.svg'].includes(ext)) {
       try {
         extractedText = await extractMaterialTextFromBuffer({
           buffer,
@@ -1452,6 +1658,8 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
       'api.openai.com',
       'api.anthropic.com',
       'api.groq.com',
+      'api.copyleaks.com',
+      'id.copyleaks.com',
       'generativelanguage.googleapis.com',
       'api.deepseek.com',
       'api.mistral.ai',
@@ -1596,7 +1804,7 @@ function createAppMenu() {
           click: async () => {
             const result = await triggerUpdateCheck();
             if (result?.ok === false) {
-              await dialog.showMessageBox({
+              await showMessageBoxWithOwner({
                 type: result.status === 'error' ? 'error' : 'info',
                 title: 'עדכונים',
                 message: result.message || 'לא ניתן לבדוק עדכונים כרגע.',
@@ -1621,7 +1829,7 @@ function createAppMenu() {
         {
           label: 'מה לעשות כשיצירת מסמך נכשלת?',
           click: async () => {
-            await dialog.showMessageBox({
+            const { response } = await showMessageBoxWithOwner({
               type: 'info',
               title: 'פתרון בעיות — יצירת מסמך',
               message: 'יצירת המסמך נכשלה — מה לעשות?',
@@ -1635,17 +1843,16 @@ function createAppMenu() {
                 'אם הבעיה חוזרת, פתח את יומן הלוגים (הגדרות → מפתחים) לפרטים נוספים.',
               ].join('\n'),
               buttons: ['סגור', 'פתח הגדרות AI'],
-            }).then(({ response }) => {
-              if (response === 1) {
-                openSettingsTabSafely('ai');
-              }
             });
+            if (response === 1) {
+              openSettingsTabSafely('ai');
+            }
           },
         },
         {
           label: 'מה לעשות כשה-API לא עובד?',
           click: async () => {
-            await dialog.showMessageBox({
+            const { response } = await showMessageBoxWithOwner({
               type: 'info',
               title: 'פתרון בעיות — חיבור API',
               message: 'ה-API לא מגיב — מה לבדוק?',
@@ -1660,18 +1867,17 @@ function createAppMenu() {
                 'לחץ "בדוק חיבור" בכרטיס הספק בהגדרות לאחר כל תיקון.',
               ].join('\n'),
               buttons: ['סגור', 'פתח הגדרות AI'],
-            }).then(({ response }) => {
-              if (response === 1) {
-                openSettingsTabSafely('ai');
-              }
             });
+            if (response === 1) {
+              openSettingsTabSafely('ai');
+            }
           },
         },
         { type: 'separator' },
         {
           label: 'קיצורי מקלדת',
           click: async () => {
-            await dialog.showMessageBox({
+            await showMessageBoxWithOwner({
               type: 'info',
               title: 'קיצורי מקלדת — WordFlow AI',
               message: 'קיצורי מקלדת עיקריים',
@@ -1696,7 +1902,7 @@ function createAppMenu() {
           label: 'אודות WordFlow AI',
           click: async () => {
             const version = app.getVersion();
-            await dialog.showMessageBox({
+            const { response } = await showMessageBoxWithOwner({
               type: 'info',
               title: 'אודות WordFlow AI',
               message: `WordFlow AI — v${version}`,
@@ -1708,11 +1914,10 @@ function createAppMenu() {
                 'github.com/rotems4500-gif/wordai-new/issues',
               ].join('\n'),
               buttons: ['סגור', 'דווח על בעיה'],
-            }).then(({ response }) => {
-              if (response === 1) {
-                shell.openExternal('https://github.com/rotems4500-gif/wordai-new/issues');
-              }
             });
+            if (response === 1) {
+              shell.openExternal('https://github.com/rotems4500-gif/wordai-new/issues');
+            }
           },
         },
       ],
@@ -1729,30 +1934,34 @@ if (!singleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', async (_event, argv) => {
-    if (mainWindow) {
-      if (!mainWindow.isVisible()) mainWindow.show();
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
     const launchFilePath = getLaunchFilePath(argv);
     if (launchFilePath) {
       const payload = await readDocumentPayload(launchFilePath);
-      sendDocumentToRenderer(payload);
+      if (payload?.ok === false || payload?.error) {
+        await showDocumentOpenErrorDialog(payload, getUsableMainWindow());
+        return;
+      }
+      openDocumentInNewWindow(payload);
+      return;
     }
+
+    const existingWindow = getUsableMainWindow();
+    if (existingWindow) {
+      focusWindow(existingWindow);
+      return;
+    }
+
+    createMainWindow();
   });
 
   app.whenReady().then(async () => {
     app.setName('WordFlow AI');
     app.setAppUserModelId('com.wordai.assistant');
     createAppMenu();
-    createMainWindow();
-    setupAutoUpdater();
-
     const launchFilePath = getLaunchFilePath(process.argv.slice(1));
-    if (launchFilePath) {
-      const payload = await readDocumentPayload(launchFilePath);
-      sendDocumentToRenderer(payload);
-    }
+    const launchPayload = launchFilePath ? await readDocumentPayload(launchFilePath) : null;
+    createMainWindow(launchPayload ? { pendingFilePayload: launchPayload } : undefined);
+    setupAutoUpdater();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

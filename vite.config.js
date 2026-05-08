@@ -107,7 +107,25 @@ function styleBankPlugin() {
         req.on('data', (chunk) => { body += chunk; });
         req.on('end', () => {
           try {
-            const { name, dataBase64 } = JSON.parse(body || '{}');
+            const {
+              name,
+              title,
+              dataBase64,
+              uploadKind,
+              label,
+              category,
+              templateId,
+              learningHint,
+              previewText,
+              previewChars,
+              previewStatus,
+              previewSource,
+              previewError,
+              extractedChars,
+              extractionStatus,
+              extractionMessage,
+              extractionTruncated,
+            } = JSON.parse(body || '{}');
             const safeName = path.basename(String(name || 'material.bin')).replace(/[^\w\u0590-\u05FF .()\-]/g, '_');
             if (!safeName || !dataBase64) {
               res.writeHead(400, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
@@ -126,15 +144,31 @@ function styleBankPlugin() {
             try { existing = JSON.parse(fs.readFileSync(indexPath, 'utf8')); } catch {}
             const nextEntry = {
               id: safeName,
-              title: safeName,
+              title: String(title || safeName),
               file: safeName,
               type: path.extname(safeName).replace(/^\./, ''),
+              source: 'materials',
+              uploadKind: String(uploadKind || 'general'),
+              label: String(label || 'קובץ עזר כללי'),
+              category: String(category || 'general'),
+              templateId: String(templateId || 'blank'),
+              learningHint: String(learningHint || ''),
+              previewText: String(previewText || '').trim(),
+              previewChars: Math.max(0, Number(previewChars) || 0),
+              previewStatus: String(previewStatus || '').trim(),
+              previewSource: String(previewSource || '').trim(),
+              previewError: String(previewError || '').trim(),
+              extractedChars: Math.max(0, Number(extractedChars) || 0),
+              extractionStatus: String(extractionStatus || '').trim(),
+              extractionMessage: String(extractionMessage || '').trim(),
+              extractionTruncated: extractionTruncated === true,
+              uploadedAt: new Date().toISOString(),
             };
             const merged = [...(Array.isArray(existing) ? existing.filter((item) => item.file !== safeName) : []), nextEntry];
             fs.writeFileSync(indexPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
 
             res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true, file: safeName }));
+            res.end(JSON.stringify({ ok: true, file: safeName, entry: nextEntry }));
           } catch (error) {
             res.writeHead(500, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: error.message || 'upload failed' }));

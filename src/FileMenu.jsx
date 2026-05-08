@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
+import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
   DEFAULT_PERSONAL_STYLE,
@@ -54,6 +55,7 @@ import {
   testProviderConnection,
 } from "./services/aiService";
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
+import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
 const POPULAR_CUSTOM = [
@@ -485,7 +487,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   guide: ['guide', 'help', 'manual', 'docs', 'מדריך', 'עזרה'],
   assistant: ['assistant', 'helper', 'behavior', 'tone', 'assistant behavior', 'עוזר'],
   updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
-  ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'ספק', 'מודל', 'מפתח'],
+  ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'copyleaks', 'detector', 'detection', 'ai detector', 'ספק', 'מודל', 'מפתח', 'זיהוי ai', 'בדיקת ai'],
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
   skills: ['skills', 'skill', 'capabilities', 'סקילים'],
   agents: ['agents', 'agent', 'timeout', 'workflow', 'autopilot', 'workspace', 'automation', 'manager', 'retry', 'סוכנים', 'אוטומציה', 'סביבת עבודה'],
@@ -777,6 +779,8 @@ const isProviderConfigured = (config, providerId) => {
     case 'perplexity':
     case 'scholar':
       return Boolean(String(provider.key || '').trim());
+    case 'copyleaks':
+      return Boolean(String(provider.email || '').trim() && String(provider.key || '').trim());
     case 'ollama': {
       const baseUrl = String(provider.baseUrl || '').trim();
       return Boolean(baseUrl && String(provider.model || '').trim() && isLocalOpenAICompatibleBaseUrl(baseUrl));
@@ -1234,6 +1238,61 @@ function AiSettings({ config, setConfig }) {
         description="אם קיבלת מפתח דרך SerpAPI, אפשר לשמור אותו כאן לשימוש במחקר וחיפוש מקורות. הוצא מפתח מכאן: https://serpapi.com/google-scholar-api">
         <FieldRow label="מפתח SerpAPI" type="password" placeholder="your_serpapi_key" value={config.scholar?.key}
           onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לחיבור חיפושי Google Scholar" />
+      </ProviderSection>
+
+      <ProviderSection title="Copyleaks לזיהוי AI" icon="🛡️" active={false} configured={isProviderConfigured(config, 'copyleaks')} onActivate={() => {}} allowActivate={false}
+        description="בדיקת טקסט דרך Copyleaks למסמך, לפסקה או לטקסט מסומן. ממלאים את הפרטים כאן, ואפשר לבדוק חיבור כדי לוודא שהכל מוכן לפני ההרצה הראשונה.">
+        <div style={{ border: '1px solid #DBEAFE', borderRadius: 10, padding: '10px 12px', background: '#F8FBFF', color: '#1E3A8A', fontSize: 11, lineHeight: 1.7, marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>מה זה?</div>
+          <div>זה כלי שבודק אם טקסט נראה אנושי או נראה כתוכן שנוצר בעזרת AI דרך Copyleaks. הוא לא כותב טקסט ולא מחליף את מנוע הכתיבה.</div>
+          <div style={{ marginTop: 8 }}>1. כתבו את האימייל של חשבון Copyleaks.</div>
+          <div>2. הדביקו את המפתח הסודי מלוח הבקרה של Copyleaks.</div>
+          <div>
+            אין לכם עדיין מפתח? <a href="https://api.copyleaks.com/dashboard" target="_blank" rel="noreferrer" style={{ color: '#1D4ED8', textDecoration: 'underline', fontWeight: 700 }}>פתחו את Copyleaks Developer Dashboard</a>.
+          </div>
+          <div>3. אפשר ללחוץ על בדיקת חיבור כדי לוודא שהפרטים נכונים, ומומלץ לעשות זאת לפני הפעם הראשונה.</div>
+          <div style={{ marginTop: 8 }}>בכל בדיקה אפשר לשלוח קטע באורך {COPYLEAKS_TEXT_MIN_CHARS}-{COPYLEAKS_TEXT_MAX_CHARS} תווים.</div>
+        </div>
+        <FieldRow label="אימייל של חשבון Copyleaks" placeholder="name@example.com" value={config.copyleaks?.email}
+          onChange={v => update('copyleaks', 'email', v)} hint="האימייל שאיתו נכנסים לחשבון Copyleaks." />
+        <FieldRow label="מפתח סודי" type="password" placeholder="הדביקו כאן את המפתח" value={config.copyleaks?.key}
+          onChange={v => update('copyleaks', 'key', v)} hint="המפתח הסודי מלוח הבקרה של Copyleaks. הוא משמש רק לבדיקה הזו." />
+        <FieldRow label="רגישות" placeholder="2" value={String(config.copyleaks?.sensitivity ?? 2)}
+          onChange={v => update('copyleaks', 'sensitivity', v)} options={['1', '2', '3']} hint="כמה מחמיר הזיהוי: 1 פחות מחמיר, 3 יותר מחמיר." />
+        <FieldRow label="שפה לבדיקה (אופציונלי)" placeholder="he" value={config.copyleaks?.language}
+          onChange={v => update('copyleaks', 'language', v)} hint="אפשר להשאיר ריק כדי ש-Copyleaks יזהה את השפה לבד." />
+
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={config.copyleaks?.explain === true}
+              onChange={(e) => update('copyleaks', 'explain', e.target.checked)}
+            />
+            פירוט נוסף: מוסיף הסבר מפורט יותר למה Copyleaks סימן את הטקסט
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={config.copyleaks?.sandbox === true}
+              onChange={(e) => update('copyleaks', 'sandbox', e.target.checked)}
+            />
+            מצב הדגמה: מחזיר תוצאות הדגמה כדי לוודא שהחיבור עובד, בלי בדיקה אמיתית
+          </label>
+        </div>
+
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px', background: '#F8FAFC', color: '#475569', fontSize: 11, lineHeight: 1.7, marginBottom: 10 }}>
+          חשוב: זה כלי בדיקה בלבד. הוא לא ספק הכתיבה הפעיל, לא יוצר טקסט, ופועל רק מטאב "זיהוי AI" ב-Ribbon או מתוך חלון הבדיקה.
+        </div>
+
+        <ApiTestButton providerId="copyleaks" providerConfig={{
+          email: config.copyleaks?.email,
+          key: config.copyleaks?.key,
+          sensitivity: config.copyleaks?.sensitivity,
+          explain: config.copyleaks?.explain,
+          sandbox: config.copyleaks?.sandbox,
+          language: config.copyleaks?.language,
+        }} />
       </ProviderSection>
 
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: '#F8FBFF', marginBottom: 16 }}>
@@ -2602,6 +2661,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [recentMaterials, setRecentMaterials] = useState([]);
+  const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
   const fileInputRef = useRef(null);
   const currentCoursesInput = useDelimitedListInput(profile.currentCourses, (value) => updateList('currentCourses', value));
@@ -2629,13 +2689,26 @@ function PersonalStyleSettings({ profile, setProfile }) {
     setUploading(true);
     try {
       const selectedUploadMeta = getMaterialUploadMeta(uploadKind);
+      const uploadedIds = [];
       for (const file of files) {
-        await saveHelperMaterial(file, selectedUploadMeta);
+        const result = await saveHelperMaterial(file, selectedUploadMeta);
+        if (result?.entry?.id) uploadedIds.push(result.entry.id);
       }
       await syncLearnedStyleFromWorkspace();
       setProfile(getPersonalStyleProfile());
       const items = await loadProjectMaterials();
       setRecentMaterials(items.slice(0, 4));
+      const uploadedMaterials = uploadedIds.length ? items.filter((item) => uploadedIds.includes(item.id)) : [];
+      setLastUploadedMaterials(uploadedMaterials);
+      const problematicUploads = uploadedMaterials
+        .map((item) => ({ item, info: getMaterialExtractionStatusInfo(item) }))
+        .filter(({ info }) => info.status !== 'success');
+      if (problematicUploads.length) {
+        window.alert([
+          'חלק מהקבצים נשמרו אבל לא נקראו במלואם:',
+          ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
+        ].join('\n'));
+      }
     } finally {
       setUploading(false);
       event.target.value = '';
@@ -2887,13 +2960,52 @@ function PersonalStyleSettings({ profile, setProfile }) {
         <div style={{ marginTop: 10, fontSize: 11, color: '#334155', background: 'white', border: '1px solid #DBEAFE', borderRadius: 10, padding: '8px 10px' }}>
           נסרקו: {profile.scanStats?.totalScanned || 0} מתוך {profile.scanStats?.totalKnown || 0} • חדשים בריענון האחרון: {profile.scanStats?.newlyScanned || 0}
         </div>
+        {lastUploadedMaterials.length ? (
+          <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {lastUploadedMaterials.slice(0, 6).map((item) => {
+              const extractionInfo = getMaterialExtractionStatusInfo(item);
+              const successTone = extractionInfo.status === 'success';
+              return (
+                <span
+                  key={`last-upload-${item.id}`}
+                  title={`${item.title}\n${extractionInfo.message}`}
+                  style={{
+                    fontSize: 10,
+                    background: successTone ? '#DCFCE7' : '#FEE2E2',
+                    color: successTone ? '#166534' : '#B91C1C',
+                    padding: '4px 8px',
+                    borderRadius: 999,
+                    border: `1px solid ${successTone ? '#86EFAC' : '#FCA5A5'}`,
+                  }}
+                >
+                  {item.title} · {extractionInfo.label}
+                </span>
+              );
+            })}
+          </div>
+        ) : null}
         {recentMaterials.length ? (
           <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {recentMaterials.map((item) => (
-              <span key={item.id} style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>
-                {item.title}
-              </span>
-            ))}
+            {recentMaterials.map((item) => {
+              const extractionInfo = getMaterialExtractionStatusInfo(item);
+              const successTone = extractionInfo.status === 'success';
+              return (
+                <span
+                  key={item.id}
+                  title={`${item.title}\n${extractionInfo.message}`}
+                  style={{
+                    fontSize: 10,
+                    background: successTone ? '#DCFCE7' : '#FEE2E2',
+                    color: successTone ? '#166534' : '#B91C1C',
+                    padding: '4px 8px',
+                    borderRadius: 999,
+                    border: `1px solid ${successTone ? '#86EFAC' : '#FCA5A5'}`,
+                  }}
+                >
+                  {item.title}
+                </span>
+              );
+            })}
           </div>
         ) : null}
       </div>
@@ -4389,7 +4501,237 @@ const WORKFLOW_MODE_OPTIONS = [
   ['custom-order', 'Custom Order — הסוכנים רצים לפי הסדר שהגדרת'],
 ];
 
-function DeveloperSettings({ config, setConfig, automation, setAutomation, assistantBehavior, setAssistantBehavior, wordPrefs, setWordPrefs }) {
+const buildGenerationInspectorMaterialSummary = (item = {}, index = 0) => {
+  const previewText = String(item?.previewText || '').trim();
+  const rawPreviewChars = Number(item?.previewChars);
+  return {
+    id: item?.id || item?.file || `material-${index + 1}`,
+    title: String(item?.title || item?.file || `material-${index + 1}`).trim(),
+    label: String(item?.label || '').trim(),
+    hasPreview: Boolean(item?.hasPreview || previewText),
+    previewChars: Number.isFinite(rawPreviewChars) && rawPreviewChars >= 0 ? rawPreviewChars : previewText.length,
+    previewStatus: String(item?.previewStatus || (previewText ? 'ready' : '')).trim(),
+    previewError: String(item?.previewError || '').trim(),
+  };
+};
+
+const resolveGenerationInspectorRouteMode = (logs = []) => {
+  const requestStart = (Array.isArray(logs) ? logs : []).find((log) => log?.type === 'request-start');
+  if (!requestStart) return { routeMode: '', routeModeReason: '' };
+  return {
+    routeMode: requestStart.automationSkipped === true ? 'direct' : 'workspace-automation',
+    routeModeReason: String(requestStart.automationSkipReason || '').trim(),
+  };
+};
+
+const resolveGenerationInspectorProviderMeta = ({ logs = [], stages = [], inspector = {}, actionPayload = {} } = {}) => {
+  const lastLogMeta = [...(Array.isArray(logs) ? logs : [])]
+    .reverse()
+    .find((log) => String(log?.provider || '').trim() || String(log?.model || '').trim());
+  const lastStageMeta = [...(Array.isArray(stages) ? stages : [])]
+    .reverse()
+    .find((stage) => String(stage?.provider || '').trim() || String(stage?.model || '').trim());
+  const meta = lastLogMeta || lastStageMeta || {};
+  return {
+    provider: String(meta?.provider || inspector?.requestedProviderId || actionPayload?.selectedProviderId || '').trim(),
+    model: String(meta?.model || inspector?.requestedProviderModel || actionPayload?.selectedProviderModel || '').trim(),
+  };
+};
+
+const buildGenerationInspectorSnapshot = ({ lastGenerationAction = null, liveGeneration = null } = {}) => {
+  if (!lastGenerationAction || typeof lastGenerationAction !== 'object') return null;
+
+  const inspector = lastGenerationAction?.inspector && typeof lastGenerationAction.inspector === 'object'
+    ? lastGenerationAction.inspector
+    : {};
+  const actionPayload = lastGenerationAction?.payload && typeof lastGenerationAction.payload === 'object'
+    ? lastGenerationAction.payload
+    : {};
+  const runId = String(inspector.runId || lastGenerationAction?.runId || '').trim();
+  const liveMatchesRun = Boolean(runId) && String(liveGeneration?.runId || '').trim() === runId;
+  const liveLogs = liveMatchesRun && Array.isArray(liveGeneration?.logs) ? liveGeneration.logs : [];
+  const liveSummary = liveMatchesRun && liveGeneration?.summary && typeof liveGeneration.summary === 'object'
+    ? liveGeneration.summary
+    : null;
+  const stages = Array.isArray(liveSummary?.stages) ? liveSummary.stages : [];
+  const routeMeta = resolveGenerationInspectorRouteMode(liveLogs);
+  const routeMode = String(routeMeta.routeMode || inspector?.routeMode || '').trim();
+  const routeModeReason = String(routeMeta.routeModeReason || inspector?.routeModeReason || '').trim();
+  const providerMeta = resolveGenerationInspectorProviderMeta({
+    logs: liveLogs,
+    stages,
+    inspector,
+    actionPayload,
+  });
+  const baseDraft = inspector?.baseDraft || (actionPayload?.baseDraft ? {
+    title: String(actionPayload?.baseDraft?.title || actionPayload?.baseDraft?.name || '').trim() || 'טיוטת בסיס',
+    htmlChars: String(actionPayload?.baseDraft?.html || '').trim().length,
+    textChars: String(actionPayload?.baseDraft?.text || '').trim().length,
+  } : null);
+  const selectedMaterialsSource = Array.isArray(inspector?.selectedMaterials)
+    ? inspector.selectedMaterials
+    : Array.isArray(actionPayload?.selectedMaterials)
+      ? actionPayload.selectedMaterials
+      : [];
+  const selectedMaterials = selectedMaterialsSource.map(buildGenerationInspectorMaterialSummary);
+  const actionType = String(
+    inspector?.actionType
+    || (lastGenerationAction?.kind === 'feedback-revision' ? 'revise' : '')
+    || (lastGenerationAction?.kind === 'review-recommendations' ? 'review' : '')
+    || (baseDraft ? 'revise' : 'generate')
+  ).trim() || 'generate';
+  const instructionsChars = Number.isFinite(Number(inspector?.instructionsChars))
+    ? Number(inspector.instructionsChars)
+    : String(actionPayload?.instructions || '').trim().length;
+  const promptChars = Number.isFinite(Number(inspector?.promptChars))
+    ? Number(inspector.promptChars)
+    : String(actionPayload?.prompt || '').trim().length;
+
+  return {
+    actionType,
+    actionKind: String(lastGenerationAction?.kind || '').trim(),
+    runId,
+    route: String(inspector?.routeResolved || inspector?.routeRequested || '').trim(),
+    routeMode,
+    routeModeReason,
+    provider: providerMeta.provider,
+    model: providerMeta.model,
+    state: String(inspector?.liveState || (liveMatchesRun ? liveGeneration?.state : '') || '').trim(),
+    workspaceId: String(lastGenerationAction?.workspaceId || liveGeneration?.workspaceId || '').trim(),
+    promptChars,
+    instructionsChars,
+    baseDraft,
+    selectedMaterials,
+    usedFallback: Boolean(inspector?.usedFallback),
+    errorMessage: String(inspector?.errorMessage || liveSummary?.lastError || '').trim(),
+  };
+};
+
+function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
+  const snapshot = buildGenerationInspectorSnapshot({ lastGenerationAction, liveGeneration });
+
+  if (!snapshot) {
+    return (
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Generation Inspector</div>
+        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>עדיין לא נשמר snapshot של generation או revise להצגה.</div>
+      </div>
+    );
+  }
+
+  const exportPayload = {
+    actionType: snapshot.actionType,
+    actionKind: snapshot.actionKind,
+    state: snapshot.state,
+    runId: snapshot.runId,
+    route: snapshot.route,
+    routeMode: snapshot.routeMode,
+    routeModeReason: snapshot.routeModeReason,
+    provider: snapshot.provider,
+    model: snapshot.model,
+    workspaceId: snapshot.workspaceId,
+    promptChars: snapshot.promptChars,
+    instructionsChars: snapshot.instructionsChars,
+    baseDraft: snapshot.baseDraft,
+    selectedMaterials: snapshot.selectedMaterials,
+    usedFallback: snapshot.usedFallback,
+    errorMessage: snapshot.errorMessage,
+  };
+  const exportText = JSON.stringify(exportPayload, null, 2);
+
+  const copySummary = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText);
+    } catch {}
+  };
+
+  const exportSummary = () => {
+    downloadTextAsFile(`wordflow-generation-${snapshot.runId || Date.now()}.json`, exportText);
+  };
+
+  return (
+    <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 4 }}>Generation Inspector</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+            snapshot מינימלי של מה שנשלח למסלול generation ומה באמת נפתר בזמן הריצה האחרונה.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={copySummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Copy summary</button>
+          <button onClick={exportSummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: '#F8FAFC', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Export JSON</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
+        {[
+          { label: 'פעולה', value: snapshot.actionType || 'generate' },
+          { label: 'Route', value: snapshot.route || 'לא זוהה' },
+          { label: 'Routing mode', value: snapshot.routeMode || 'לא זוהה' },
+          { label: 'Provider / Model', value: [snapshot.provider, snapshot.model].filter(Boolean).join(' · ') || 'לא זוהה' },
+          { label: 'runId', value: snapshot.runId || 'לא זוהה' },
+          { label: 'instructions chars', value: String(snapshot.instructionsChars || 0) },
+        ].map((item) => (
+          <div key={item.label} style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
+            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>{item.label}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937', lineHeight: 1.5, wordBreak: 'break-word' }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gap: 10, marginBottom: 12 }}>
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>Base draft</div>
+          <div style={{ fontSize: 12, color: '#1F2937', lineHeight: 1.6 }}>
+            {snapshot.baseDraft
+              ? `${snapshot.baseDraft.title || 'טיוטת בסיס'} · html ${snapshot.baseDraft.htmlChars || 0} chars · text ${snapshot.baseDraft.textChars || 0} chars`
+              : 'לא נשלחה טיוטת בסיס בהרצה האחרונה.'}
+          </div>
+        </div>
+
+        <div style={{ border: `1px solid ${snapshot.errorMessage ? '#FECACA' : snapshot.usedFallback ? '#FDE68A' : '#E2E8F0'}`, borderRadius: 10, background: snapshot.errorMessage ? '#FEF2F2' : snapshot.usedFallback ? '#FFFBEB' : '#F8FAFC', padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>Fallback / Error</div>
+          <div style={{ fontSize: 12, color: snapshot.errorMessage ? '#991B1B' : '#1F2937', lineHeight: 1.6 }}>
+            {snapshot.errorMessage || (snapshot.usedFallback ? 'ההרצה חזרה ל-fallback בטוח.' : 'לא נרשם fallback או error בהרצה האחרונה.')}
+          </div>
+          {snapshot.routeModeReason ? (
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>route hint: {snapshot.routeModeReason}</div>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#FFFFFF', padding: '12px 12px 4px' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937', marginBottom: 10 }}>Selected materials</div>
+        {snapshot.selectedMaterials.length ? snapshot.selectedMaterials.map((item) => {
+          const previewLabel = item.hasPreview
+            ? `excerpt ${item.previewChars || 0} chars`
+            : item.previewStatus
+              ? `preview ${item.previewStatus}`
+              : 'ללא preview';
+          return (
+            <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, borderTop: '1px solid #F1F5F9', padding: '10px 0' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937' }}>{item.title || 'חומר עזר'}</div>
+                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{item.label || 'ללא label'}</div>
+                {item.previewError ? (
+                  <div style={{ fontSize: 11, color: '#B91C1C', marginTop: 4 }}>preview error: {item.previewError}</div>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 11, color: item.hasPreview ? '#166534' : '#475569', background: item.hasPreview ? '#F0FDF4' : '#F8FAFC', border: `1px solid ${item.hasPreview ? '#BBF7D0' : '#E2E8F0'}`, borderRadius: 999, padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                {previewLabel}
+              </div>
+            </div>
+          );
+        }) : (
+          <div style={{ fontSize: 11, color: '#94A3B8', paddingBottom: 8 }}>לא נבחרו חומרי עזר בהרצה האחרונה.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DeveloperSettings({ config, setConfig, automation, setAutomation, assistantBehavior, setAssistantBehavior, wordPrefs, setWordPrefs, lastGenerationAction, liveGeneration }) {
   const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
   const activeProviderId = String(config?.active || 'gemini').trim() || 'gemini';
   const activeProviderModel = String(config?.[activeProviderId]?.model || '').trim();
@@ -4664,6 +5006,8 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
           </div>
         </div>
 
+        <GenerationInspectorCard lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />
+
         {/* ─── כרטיס: בדיקת חיבור ─── */}
         <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>בדיקת חיבור לספק</div>
@@ -4929,7 +5273,7 @@ function AppearanceSettings() {
 }
 
 // ─── FileMenu ראשי ───
-export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0 }) {
+export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0, lastGenerationAction = null, liveGeneration = null }) {
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
@@ -5448,7 +5792,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
                     />
                   )}
-                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} />}
+                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
                   {settingsTab === 'onboarding'  && (

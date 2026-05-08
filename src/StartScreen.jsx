@@ -6,12 +6,15 @@ import {
   getWorkspaceTemplateCards,
   loadPastDocsIndex,
   loadProjectMaterials,
+  getMaterialExtractionStatusInfo,
   saveHelperMaterial,
   saveHomeInstructions,
   syncLearnedStyleFromWorkspace,
   readInstructionFile,
   MATERIAL_UPLOAD_PRESETS,
   getMaterialUploadMeta,
+  getHelperMaterialAcceptList,
+  getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
 import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary } from './services/aiService';
 
@@ -146,6 +149,20 @@ const MATERIAL_FILTER_OPTIONS = [
   { id: 'writing-samples', label: 'דוגמאות כתיבה' },
   { id: 'templates', label: 'תבניות' },
 ];
+
+const ACADEMIC_GENERATION_STRONG_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|doi|peer[-\s]?reviewed|journal|מאמר|מחקר\s+אקדמי|literature\s+review)/i;
+const ACADEMIC_GENERATION_WEAK_SIGNALS = ['קורס', 'מרצה', 'מנחה', 'סטודנט', 'ציטוט'];
+
+const countAcademicGenerationWeakSignals = (value = '') => {
+  const normalizedValue = String(value || '').toLowerCase();
+  return ACADEMIC_GENERATION_WEAK_SIGNALS.filter((token) => normalizedValue.includes(token)).length;
+};
+
+const isLikelyAcademicGenerationRequest = ({ prompt = '', instructions = '', templateId = 'blank' } = {}) => (
+  String(templateId || '').trim().toLowerCase() === 'academic'
+  || ACADEMIC_GENERATION_STRONG_SIGNAL_PATTERN.test([prompt, instructions].filter(Boolean).join('\n'))
+  || countAcademicGenerationWeakSignals([prompt, instructions].filter(Boolean).join('\n')) >= 2
+);
 
 const MATERIAL_GROUP_ORDER = ['course-materials', 'writing-samples', 'templates', 'examples', 'other'];
 
@@ -306,6 +323,40 @@ const plainTextToHtml = (text = '') => {
 
 const getDraftTitleFromFileName = (name = '') => String(name || '').replace(/\.[^.]+$/, '').trim() || 'טיוטת בסיס';
 
+const getAcceptedFileExtensions = (acceptList = '') => new Set(
+  String(acceptList || '')
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.startsWith('.'))
+);
+
+const getFileExtensionFromName = (name = '') => {
+  const normalizedName = String(name || '').trim().toLowerCase();
+  const lastDotIndex = normalizedName.lastIndexOf('.');
+  return lastDotIndex > -1 ? normalizedName.slice(lastDotIndex) : '';
+};
+
+const partitionFilesByAcceptList = (files = [], acceptList = '') => {
+  const acceptedExtensions = getAcceptedFileExtensions(acceptList);
+  const initialState = { accepted: [], rejected: [] };
+  if (!acceptedExtensions.size) {
+    return {
+      accepted: Array.from(files || []).filter(Boolean),
+      rejected: [],
+    };
+  }
+
+  return Array.from(files || []).filter(Boolean).reduce((state, file) => {
+    const extension = getFileExtensionFromName(file?.name || '');
+    if (extension && acceptedExtensions.has(extension)) {
+      state.accepted.push(file);
+    } else {
+      state.rejected.push(file);
+    }
+    return state;
+  }, initialState);
+};
+
 const formatInstructionFileUploadError = (error) => {
   const code = String(error?.message || '').trim();
   if (code === 'unsupported-binary-file') return 'קובץ ההנחיות לא נתמך. אפשר להעלות כרגע docx, txt, md, html, json או pdf.';
@@ -360,6 +411,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [selectedIds, setSelectedIds] = useState([]);
   const [materialsFilter, setMaterialsFilter] = useState('all');
   const [uploading, setUploading] = useState(false);
+  const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
+  const [activeDropZone, setActiveDropZone] = useState('');
   const [instructionFileName, setInstructionFileName] = useState('');
   const [baseDraft, setBaseDraft] = useState(null);
   const [loadedWorkspace, setLoadedWorkspace] = useState(null);
@@ -399,6 +452,30 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     modelId: resolvedDirectProviderModel,
     choices: directProviderChoices,
   });
+  const selectedUploadMeta = typeof getMaterialUploadMeta === 'function' ? getMaterialUploadMeta(uploadKind) : { id: uploadKind, label: uploadKind };
+  const helperMaterialAcceptList = typeof getHelperMaterialAcceptList === 'function'
+    ? getHelperMaterialAcceptList()
+    : '.pdf,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp';
+  const instructionFileAcceptList = typeof getInstructionFileAcceptList === 'function'
+    ? getInstructionFileAcceptList()
+    : '.docx,.txt,.md,.markdown,.html,.htm,.json,.pdf';
+
+  const validateMaterialFiles = (files = []) => {
+    const { accepted, rejected } = partitionFilesByAcceptList(files, helperMaterialAcceptList);
+    if (rejected.length) {
+      window.alert('חלק מהקבצים נדחו כי הסוג שלהם לא נתמך למסמכי עזר.');
+    }
+    return accepted;
+  };
+
+  const validateInstructionFile = (file) => {
+    const { accepted, rejected } = partitionFilesByAcceptList(file ? [file] : [], instructionFileAcceptList);
+    if (rejected.length) {
+      window.alert('קובץ ההנחיות לא נתמך.');
+      return null;
+    }
+    return accepted[0] || null;
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
@@ -590,34 +667,52 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     };
   }, []);
 
-  const handleUpload = async (event) => {
-    const files = Array.from(event.target.files || []);
-    if (!files.length) return;
+  const processMaterialUploads = async (files = []) => {
+    const normalizedFiles = Array.from(files || []).filter(Boolean);
+    if (!normalizedFiles.length || uploading) return;
     setUploading(true);
     try {
-      const selectedUploadMeta = typeof getMaterialUploadMeta === 'function' ? getMaterialUploadMeta(uploadKind) : { id: uploadKind };
       const uploadedIds = [];
-      for (const file of files) {
+      for (const file of normalizedFiles) {
         if (typeof saveHelperMaterial === 'function') {
           const result = await saveHelperMaterial(file, selectedUploadMeta);
           if (result?.entry?.id) uploadedIds.push(result.entry.id);
         }
       }
+      let uploadedMaterials = [];
       if (typeof loadProjectMaterials === 'function') {
         const mats = await loadProjectMaterials();
         setMaterials(mats);
+        uploadedMaterials = uploadedIds.length ? mats.filter((item) => uploadedIds.includes(item.id)) : [];
       }
       if (uploadedIds.length) {
         setSelectedIds((prev) => Array.from(new Set([...prev, ...uploadedIds])));
       }
+      setLastUploadedMaterials(uploadedMaterials);
+      const problematicUploads = uploadedMaterials
+        .map((item) => ({ item, info: getMaterialExtractionStatusInfo(item) }))
+        .filter(({ info }) => info.status !== 'success');
+      if (problematicUploads.length) {
+        window.alert([
+          'חלק מהקבצים נשמרו אבל לא נקראו במלואם:',
+          ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
+        ].join('\n'));
+      }
     } catch(e) { console.error(e); } finally {
       setUploading(false);
+    }
+  };
+
+  const handleUpload = async (event) => {
+    const files = validateMaterialFiles(Array.from(event.target.files || []));
+    try {
+      await processMaterialUploads(files);
+    } finally {
       event.target.value = '';
     }
   };
 
-  const handleInstructionFileUpload = async (event) => {
-    const file = event.target.files?.[0];
+  const processInstructionUpload = async (file) => {
     if (!file) return;
     try {
       let extracted = '';
@@ -637,9 +732,45 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     } catch (error) {
       console.error(error);
       window.alert(formatInstructionFileUploadError(error));
+    }
+  };
+
+  const handleInstructionFileUpload = async (event) => {
+    const file = validateInstructionFile(event.target.files?.[0]);
+    try {
+      await processInstructionUpload(file);
     } finally {
       event.target.value = '';
     }
+  };
+
+  const activateDropZone = (zone) => (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (activeDropZone !== zone) setActiveDropZone(zone);
+  };
+
+  const deactivateDropZone = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setActiveDropZone('');
+  };
+
+  const handleMaterialsDrop = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDropZone('');
+    await processMaterialUploads(validateMaterialFiles(Array.from(event.dataTransfer?.files || [])));
+  };
+
+  const handleInstructionDrop = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDropZone('');
+    const file = validateInstructionFile(Array.from(event.dataTransfer?.files || [])[0]);
+    await processInstructionUpload(file);
   };
 
   const normalizeBaseDraft = (payload = {}) => {
@@ -894,6 +1025,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedProviderId,
         selectedProviderModel,
         baseDraft,
+        additionalReviewRounds: 0,
       });
     } finally {
       setIsGenerating(false);
@@ -928,6 +1060,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedProviderId,
         selectedProviderModel,
         baseDraft,
+        additionalReviewRounds: 0,
       });
       setSelectedModel(undefined);
       setShowChefDialog(false);
@@ -1208,34 +1341,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  </div>
                </div>
 
-               <div className="flex flex-wrap items-center justify-end gap-2 mb-4">
-                 <button
-                   type="button"
-                   onClick={() => instructionFileInputRef.current?.click()}
-                   className="px-3 py-2 bg-fuchsia-500/25 hover:bg-fuchsia-500/35 border border-fuchsia-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
-                 >
-                   קובץ הנחיות
-                 </button>
-                 <select
-                   value={uploadKind}
-                   onChange={(e) => setUploadKind(e.target.value)}
-                   className="px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/25 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[140px]"
-                 >
-                   {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => (
-                     <option key={item.id} value={item.id} className="bg-slate-900 text-white">{item.label}</option>
-                   ))}
-                 </select>
-                 <button
-                   type="button"
-                   onClick={() => fileInputRef.current?.click()}
-                   className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
-                 >
-                   {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
-                 </button>
-                 <input ref={instructionFileInputRef} type="file" accept=".docx,.txt,.md,.markdown,.html,.htm,.json,.pdf" className="hidden" onChange={handleInstructionFileUpload} />
-                 <input ref={fileInputRef} type="file" multiple accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleUpload} />
-               </div>
-
                <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
                    <div className="text-white font-semibold text-sm">🧠 ספק ומודל למסלול הישיר</div>
@@ -1308,9 +1413,6 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
                    <div className="text-white font-semibold text-sm">🔁 הגדרות זרימת עבודה מהירה</div>
-                   {instructionFileName ? (
-                     <span className="text-[11px] text-fuchsia-100 bg-fuchsia-500/20 border border-fuchsia-200/30 px-3 py-1 rounded-full">קובץ הנחיות: {instructionFileName}</span>
-                   ) : null}
                  </div>
                  <select
                    value={quickWorkflowMode}
@@ -1353,68 +1455,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    <div className="mt-3 text-[11px] text-white/70">מצב העבודה הנוכחי נשמר כפי שהוגדר בסביבת העבודה: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}.</div>
                  )}
                </div>
-               
-               <div className="grid md:grid-cols-2 gap-4 text-right">
-                 <div>
-                   <textarea
-                     value={instructions}
-                     onChange={(e) => {
-                       const nextInstructions = e.target.value;
-                       setInstructions(nextInstructions);
-                       if (!nextInstructions.trim()) setInstructionFileName('');
-                       if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
-                     }}
-                     placeholder="הנחיות מחייבות למסמך הזה... (למשל: מבנה, סגנון, דרישות, היקף)"
-                     className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-1 focus:ring-pink-400 focus:border-transparent resize-y min-h-[90px] h-full"
-                   />
-                 </div>
-                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] max-h-[140px] overflow-y-auto">
-                   {materials.length > 0 ? (
-                     <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                       {MATERIAL_FILTER_OPTIONS.map((option) => {
-                         const isActive = materialsFilter === option.id;
-                         return (
-                           <button
-                             key={option.id}
-                             type="button"
-                             onClick={() => setMaterialsFilter(option.id)}
-                             className={`px-2 py-1 rounded-lg text-[10px] border transition-colors ${isActive
-                               ? 'bg-cyan-500/35 border-cyan-200/60 text-cyan-50'
-                               : 'bg-white/5 border-white/15 text-white/70 hover:bg-white/10'}`}
-                           >
-                             {option.label}
-                           </button>
-                         );
-                       })}
-                     </div>
-                   ) : null}
-                   {materials.length === 0 ? (
-                     <div className="text-white/40 text-[11px] text-center mt-4">בחר 'הוסף מסמכי עזר' כדי לבסס את הצ'אט עליהם.</div>
-                   ) : groupedFilteredMaterials.length === 0 ? (
-                     <div className="text-white/40 text-[11px] text-center mt-4">אין פריטים שמתאימים לפילטר שנבחר.</div>
-                   ) : (
-                     groupedFilteredMaterials.map((group) => (
-                       <div key={group.id} className="mb-2 last:mb-0">
-                         <div className="text-white/65 text-[10px] font-semibold mb-1 px-1">
-                           {group.label} ({group.items.length})
-                         </div>
-                         {group.items.map((item) => (
-                           <label key={item.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg mb-1 cursor-pointer transition-colors">
-                             <div className="flex items-center gap-2 overflow-hidden w-[85%]">
-                               <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
-                               <span className="text-white/90 text-xs truncate leading-tight w-full" title={item.title}>{item.title}</span>
-                             </div>
-                             <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
-                           </label>
-                         ))}
-                       </div>
-                     ))
-                   )}
-                 </div>
-               </div>
-               
+
                {currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE ? (
-                 <div className="mt-4 p-3 bg-slate-500/20 border border-slate-300/30 rounded-xl text-right">
+                 <div className="mb-4 p-3 bg-slate-500/20 border border-slate-300/30 rounded-xl text-right">
                    <div className="text-slate-100 text-sm font-semibold mb-1">ללא סביבת עבודה</div>
                    <div className="text-slate-200/85 text-xs">
                      כל הבקשות יישלחו ישירות דרך: {directGenerationSummary}
@@ -1424,7 +1467,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    </div>
                  </div>
                ) : loadedWorkspace && (
-                 <div className="mt-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
+                 <div className="mb-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
                    <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
                    <div className="text-amber-200/80 text-xs">
                      {loadedWorkspace?.workflowMode === 'custom-order' || loadedWorkspace?.autopilotEnabled === false
@@ -1439,6 +1482,201 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    </div>
                  </div>
                )}
+
+               <div className="border-t border-white/10 pt-4">
+                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                   <div>
+                     <div className="text-white/80 font-medium whitespace-nowrap">📎 קבצים, חומרי עזר והנחיות</div>
+                     <div className="text-white/55 text-[11px] mt-1">ניהול ההנחיות והחומרים למסמך הנוכחי, אחרי הגדרת סביבת העבודה והמסלול.</div>
+                   </div>
+                   {instructionFileName ? (
+                     <span className="text-[11px] text-fuchsia-100 bg-fuchsia-500/20 border border-fuchsia-200/30 px-3 py-1 rounded-full">קובץ הנחיות: {instructionFileName}</span>
+                   ) : null}
+                 </div>
+
+                 <div className="flex flex-wrap items-center justify-end gap-2 mb-4">
+                   <button
+                     type="button"
+                     onClick={() => instructionFileInputRef.current?.click()}
+                     className="px-3 py-2 bg-fuchsia-500/25 hover:bg-fuchsia-500/35 border border-fuchsia-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                   >
+                     קובץ הנחיות
+                   </button>
+                   <button
+                     type="button"
+                     onClick={() => fileInputRef.current?.click()}
+                     className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                   >
+                     {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
+                   </button>
+                   <input ref={instructionFileInputRef} type="file" accept={instructionFileAcceptList} className="hidden" onChange={handleInstructionFileUpload} />
+                   <input ref={fileInputRef} type="file" multiple accept={helperMaterialAcceptList} className="hidden" onChange={handleUpload} />
+                 </div>
+
+                 <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
+                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                     <label className="flex flex-col gap-2 text-right">
+                       <span className="text-white font-semibold text-sm">סוג שמירה למסמכי העזר</span>
+                       <select
+                         value={uploadKind}
+                         onChange={(e) => setUploadKind(e.target.value)}
+                         className="px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/25 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[220px]"
+                       >
+                         {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => (
+                           <option key={item.id} value={item.id} className="bg-slate-900 text-white">{item.label}</option>
+                         ))}
+                       </select>
+                     </label>
+                     <div className="text-[11px] text-cyan-100 bg-cyan-500/20 border border-cyan-200/30 px-3 py-2 rounded-xl">
+                       סוג שמירה פעיל: {selectedUploadMeta?.label || 'קובץ עזר כללי'}
+                     </div>
+                   </div>
+                 </div>
+
+                 <div className="grid md:grid-cols-2 gap-3 mb-4">
+                   <div
+                     onDragEnter={activateDropZone('materials')}
+                     onDragOver={activateDropZone('materials')}
+                     onDragLeave={deactivateDropZone}
+                     onDrop={handleMaterialsDrop}
+                     className={`rounded-2xl border border-dashed p-4 transition-all ${activeDropZone === 'materials'
+                       ? 'border-cyan-200/80 bg-cyan-400/20 shadow-lg shadow-cyan-950/20'
+                       : 'border-white/20 bg-white/5 hover:bg-white/10'}`}
+                   >
+                     <div className="flex items-start justify-between gap-3">
+                       <div>
+                         <div className="text-white font-semibold text-sm">גרירה ייעודית לחומרי עזר</div>
+                         <div className="text-white/65 text-[11px] mt-1">
+                           {activeDropZone === 'materials' ? 'שחרר כאן כדי להעלות את הקבצים למסלול materials.' : 'גרור לכאן PDF, DOCX, TXT, HTML, תמונות או גיליונות נתמכים.'}
+                         </div>
+                       </div>
+                       <div className={`text-[11px] px-3 py-1 rounded-full border ${activeDropZone === 'materials'
+                         ? 'bg-cyan-500/25 text-cyan-50 border-cyan-200/60'
+                         : 'bg-white/10 text-white/75 border-white/20'}`}>
+                         {uploading ? 'מעלה...' : 'materials'}
+                       </div>
+                     </div>
+                   </div>
+
+                   <div
+                     onDragEnter={activateDropZone('instructions')}
+                     onDragOver={activateDropZone('instructions')}
+                     onDragLeave={deactivateDropZone}
+                     onDrop={handleInstructionDrop}
+                     className={`rounded-2xl border border-dashed p-4 transition-all ${activeDropZone === 'instructions'
+                       ? 'border-fuchsia-200/80 bg-fuchsia-400/20 shadow-lg shadow-fuchsia-950/20'
+                       : 'border-white/20 bg-white/5 hover:bg-white/10'}`}
+                   >
+                     <div className="flex items-start justify-between gap-3">
+                       <div>
+                         <div className="text-white font-semibold text-sm">גרירה ייעודית להנחיות</div>
+                         <div className="text-white/65 text-[11px] mt-1">
+                           {activeDropZone === 'instructions' ? 'שחרר כאן כדי לקרוא את קובץ ההנחיות ולהוסיף את תוכנו.' : 'גרור לכאן DOCX, PDF, TXT, MD, HTML או JSON עם הנחיות.'}
+                         </div>
+                       </div>
+                       <div className={`text-[11px] px-3 py-1 rounded-full border ${activeDropZone === 'instructions'
+                         ? 'bg-fuchsia-500/25 text-fuchsia-50 border-fuchsia-200/60'
+                         : 'bg-white/10 text-white/75 border-white/20'}`}>
+                         instructions
+                       </div>
+                     </div>
+                     <div className="mt-3 text-[11px] text-fuchsia-100/90 bg-fuchsia-500/10 border border-fuchsia-200/20 rounded-xl px-3 py-2 min-h-[42px] flex items-center">
+                       {instructionFileName ? `הקובץ האחרון שנקרא: ${instructionFileName}` : 'עדיין לא נטען קובץ הנחיות במסלול הזה.'}
+                     </div>
+                   </div>
+                 </div>
+
+                 <div className="grid md:grid-cols-2 gap-4 text-right">
+                   <div>
+                     <textarea
+                       value={instructions}
+                       onChange={(e) => {
+                         const nextInstructions = e.target.value;
+                         setInstructions(nextInstructions);
+                         if (!nextInstructions.trim()) setInstructionFileName('');
+                         if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
+                       }}
+                       placeholder="הנחיות מחייבות למסמך הזה... (למשל: מבנה, סגנון, דרישות, היקף)"
+                       className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-1 focus:ring-pink-400 focus:border-transparent resize-y min-h-[90px] h-full"
+                     />
+                   </div>
+                   <div className="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] max-h-[140px] overflow-y-auto">
+                     {lastUploadedMaterials.length ? (
+                       <div className="flex flex-wrap gap-1.5 mb-3">
+                         {lastUploadedMaterials.slice(0, 6).map((item) => {
+                           const extractionInfo = getMaterialExtractionStatusInfo(item);
+                           const successTone = extractionInfo.status === 'success';
+                           return (
+                             <span
+                               key={`last-upload-${item.id}`}
+                               title={`${item.title}\n${extractionInfo.message}`}
+                               className={`px-2 py-1 rounded-lg text-[10px] border ${successTone
+                                 ? 'bg-emerald-500/20 border-emerald-300/40 text-emerald-50'
+                                 : 'bg-rose-500/20 border-rose-300/40 text-rose-50'}`}
+                             >
+                               {item.title} · {extractionInfo.label}
+                             </span>
+                           );
+                         })}
+                       </div>
+                     ) : null}
+                     {materials.length > 0 ? (
+                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                         {MATERIAL_FILTER_OPTIONS.map((option) => {
+                           const isActive = materialsFilter === option.id;
+                           return (
+                             <button
+                               key={option.id}
+                               type="button"
+                               onClick={() => setMaterialsFilter(option.id)}
+                               className={`px-2 py-1 rounded-lg text-[10px] border transition-colors ${isActive
+                                 ? 'bg-cyan-500/35 border-cyan-200/60 text-cyan-50'
+                                 : 'bg-white/5 border-white/15 text-white/70 hover:bg-white/10'}`}
+                             >
+                               {option.label}
+                             </button>
+                           );
+                         })}
+                       </div>
+                     ) : null}
+                     {materials.length === 0 ? (
+                       <div className="text-white/40 text-[11px] text-center mt-4">בחר 'הוסף מסמכי עזר' כדי לבסס את הצ'אט עליהם.</div>
+                     ) : groupedFilteredMaterials.length === 0 ? (
+                       <div className="text-white/40 text-[11px] text-center mt-4">אין פריטים שמתאימים לפילטר שנבחר.</div>
+                     ) : (
+                       groupedFilteredMaterials.map((group) => (
+                         <div key={group.id} className="mb-2 last:mb-0">
+                           <div className="text-white/65 text-[10px] font-semibold mb-1 px-1">
+                             {group.label} ({group.items.length})
+                           </div>
+                           {group.items.map((item) => {
+                             const extractionInfo = getMaterialExtractionStatusInfo(item);
+                             const successTone = extractionInfo.status === 'success';
+                             return (
+                               <label
+                                 key={item.id}
+                                 title={`${item.title}\n${extractionInfo.message}`}
+                                 className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg mb-1 cursor-pointer transition-colors border ${successTone
+                                   ? 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-300/25'
+                                   : 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-300/25'}`}
+                               >
+                                 <div className="flex items-center gap-2 overflow-hidden w-[85%]">
+                                   <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
+                                   <div className="flex flex-col overflow-hidden w-full">
+                                     <span className="text-white/90 text-xs truncate leading-tight w-full">{item.title}</span>
+                                     <span className={`text-[10px] truncate ${successTone ? 'text-emerald-100' : 'text-rose-100'}`}>{extractionInfo.label}</span>
+                                   </div>
+                                 </div>
+                                 <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
+                               </label>
+                             );
+                           })}
+                         </div>
+                       ))
+                     )}
+                   </div>
+                 </div>
+               </div>
             </div>
             
           </div>

@@ -378,12 +378,12 @@ export default function ProfileOnboarding({
 
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-rose-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      תעודת זהות / מזהה סטודנט 🪪
+                      תז 🪪
                     </label>
                     <input
                       value={profile.studentId || ''}
                       onChange={(e) => updateField('studentId', e.target.value)}
-                      placeholder="מספר מזהה להגשה..."
+                      placeholder="מספר תז להגשה..."
                       className="w-full px-4 py-2 bg-slate-800/60 backdrop-blur-sm border border-slate-600 rounded-xl text-white placeholder-slate-300 outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 transition-all duration-300 hover:bg-slate-800/80"
                     />
                   </div>

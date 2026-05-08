@@ -1,8 +1,46 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const WINDOW_CONTEXT_ARGUMENT_PREFIX = '--wordflow-window-context=';
+
+function normalizeWindowContext(rawWindowContext = {}) {
+  return {
+    isolatedDocumentSession: rawWindowContext?.isolatedDocumentSession === true,
+    documentStorageScopeId: String(rawWindowContext?.documentStorageScopeId || 'primary'),
+    hasPendingOpenDocument: rawWindowContext?.hasPendingOpenDocument === true,
+  };
+}
+
+const DEFAULT_WINDOW_CONTEXT = normalizeWindowContext();
+
+function readInjectedWindowContext() {
+  const encodedWindowContext = process.argv.find((value) => String(value || '').startsWith(WINDOW_CONTEXT_ARGUMENT_PREFIX));
+  if (!encodedWindowContext) return null;
+
+  const serializedWindowContext = String(encodedWindowContext).slice(WINDOW_CONTEXT_ARGUMENT_PREFIX.length);
+  if (!serializedWindowContext) return null;
+
+  try {
+    return normalizeWindowContext(JSON.parse(Buffer.from(serializedWindowContext, 'base64').toString('utf8')));
+  } catch {
+    return null;
+  }
+}
+
+const windowContext = (() => {
+  const injectedWindowContext = readInjectedWindowContext();
+  if (injectedWindowContext) return injectedWindowContext;
+
+  try {
+    return normalizeWindowContext(ipcRenderer.sendSync('get-window-context') || DEFAULT_WINDOW_CONTEXT);
+  } catch {
+    return DEFAULT_WINDOW_CONTEXT;
+  }
+})();
+
 contextBridge.exposeInMainWorld('desktopApp', {
   isDesktop: true,
   platform: process.platform,
+  windowContext,
   versions: {
     node: process.versions.node,
     electron: process.versions.electron,
@@ -12,6 +50,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   listLocalMaterials: () => ipcRenderer.invoke('list-local-materials'),
   readLocalMaterial: (fileName) => ipcRenderer.invoke('read-local-material', fileName),
   extractMaterialText: (payload) => ipcRenderer.invoke('extract-material-text', payload),
+  createAppWindow: () => ipcRenderer.invoke('create-app-window'),
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
   consumePendingOpenSettings: () => ipcRenderer.invoke('consume-pending-open-settings'),

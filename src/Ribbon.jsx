@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getToolLinksConfig } from './services/aiService';
+import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 
 const FONTS = [
   'Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'Secular One',
@@ -83,6 +84,14 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
 
   const handleZoom = (val) => {
     onCommand('zoom', val);
+  };
+
+  const handleNewWindow = () => {
+    if (window.desktopApp?.createAppWindow) {
+      Promise.resolve(window.desktopApp.createAppWindow()).catch(() => {});
+      return;
+    }
+    window.open(window.location.href, '_blank');
   };
 
   const activeStyle = (flag) => (flag ? {
@@ -492,6 +501,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <li className={`tab-btn ${activeTab === "layout" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "layout" ? "" : "layout")}>פריסה</li>
             <li className={`tab-btn ${activeTab === "references" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "references" ? "" : "references")}>הפניות</li>
             <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "review" ? "" : "review")}>סקירה</li>
+          <li className={`tab-btn ${activeTab === "detector" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "detector" ? "" : "detector")}>זיהוי AI</li>
             <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "view" ? "" : "view")}>תצוגה</li>
             <li className="tab-btn" style={{ color: "var(--word-blue)", fontWeight: "bold" }} onClick={() => onToggleTaskpane()} title={`קיצור: ${shortcuts.toggleAssistant || 'Ctrl+Shift+A'}`}>WordFlow AI</li>
         </ul>
@@ -875,6 +885,43 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             </div>
         </div>
 
+            <div id="panel-detector" className={`toolbar-panel ${activeTab === "detector" ? "active" : ""}`}>
+              <div className="toolbar-group">
+                <div className="toolbar-group-items">
+                  <button className="r-btn r-btn-large" onClick={() => onCommand('openCopyleaksDetector', { source: 'selection' })}>
+                    <i className="ph-fill ph-selection text-blue-600"></i><span>טקסט<br />מסומן</span>
+                  </button>
+                  <div className="btn-column">
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('openCopyleaksDetector', { source: 'currentBlock' })}><i className="ph-fill ph-text-align-right text-slate-600"></i> פסקה פעילה</button>
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('openCopyleaksDetector', { source: 'document' })}><i className="ph-fill ph-file-text text-slate-700"></i> כל המסמך</button>
+                  </div>
+                </div>
+                <div className="toolbar-group-label">Copyleaks</div>
+              </div>
+
+              <div className="toolbar-group">
+                <div className="toolbar-group-items">
+                  <button className="r-btn r-btn-large" onClick={() => onCommand('openCopyleaksSettings')}>
+                    <i className="ph-fill ph-gear-six text-indigo-600"></i><span>הגדרות<br />Copyleaks</span>
+                  </button>
+                  <div className="btn-column">
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('copyCurrentParagraph')}><i className="ph-fill ph-copy text-slate-700"></i> העתק פסקה פעילה</button>
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('openCopyleaksDetector', { source: 'currentBlock' })}><i className="ph-fill ph-shield-check text-emerald-600"></i> פתח בדיקה מהירה</button>
+                  </div>
+                </div>
+                <div className="toolbar-group-label">כלים</div>
+              </div>
+
+              <div className="toolbar-group">
+                <div className="toolbar-group-items flex-col items-start gap-2" style={{ minWidth: '280px', maxWidth: '360px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1E3A8A' }}>לפני שמריצים</div>
+                  <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.7 }}>זה כלי בדיקה נפרד. הוא לא כותב טקסט ולא משנה את מנוע הכתיבה.</div>
+                  <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.7 }}>Copyleaks מקבל קטעים באורך {COPYLEAKS_TEXT_MIN_CHARS}-{COPYLEAKS_TEXT_MAX_CHARS} תווים. אפשר להפעיל מצב הדגמה או פירוט נוסף מתוך ההגדרות.</div>
+                </div>
+                <div className="toolbar-group-label">מה חשוב לדעת</div>
+              </div>
+            </div>
+
         {/*  */}
         <div id="panel-view" className={`toolbar-panel ${activeTab === "view" ? "active" : ""}`}>
             <div className="toolbar-group">
@@ -927,7 +974,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
 
             <div className="toolbar-group">
                 <div className="toolbar-group-items">
-                    <button className="r-btn r-btn-large" onClick={() => window.open(window.location.href, '_blank')}><i className="ph-fill ph-plus-square"></i><span>חלון<br />חדש</span></button>
+                <button className="r-btn r-btn-large" onClick={handleNewWindow}><i className="ph-fill ph-plus-square"></i><span>חלון<br />חדש</span></button>
                     <button className="r-btn r-btn-large" onClick={() => onCommand('splitWindow')}><i className="ph-fill ph-split-horizontal"></i><span>פצל</span></button>
                 </div>
                 <div className="toolbar-group-label">חלון</div>

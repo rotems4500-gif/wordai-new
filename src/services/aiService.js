@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DOMSerializer } from "@tiptap/pm/model";
 import { AGENTS_CONFIG } from "../agentConfig";
+import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 
 // Personal style seed – loaded at runtime from disk, not bundled
 const personalStyleSeed = {};
@@ -21,6 +22,7 @@ export const DEFAULT_PROVIDER_CONFIG = {
   perplexity: { key: '', model: 'sonar-pro' },
   custom:     { name: '', baseUrl: '', key: '', model: '' },
   scholar:    { key: '', provider: 'serpapi' },
+  copyleaks:  { ...DEFAULT_COPYLEAKS_CONFIG },
   toolLinks: {
     googleSearch: { label: 'חיפוש גוגל', url: 'https://www.google.com/search?q={query}' },
     scholar: { label: 'Google Scholar', url: 'https://scholar.google.com/scholar?q={query}' },
@@ -730,12 +732,35 @@ const hasMeaningfulStoredValue = (value = '') => {
   return Boolean(clean) && !['{}', '[]', 'null', 'undefined'].includes(clean);
 };
 
-export const syncPersistedAppSettings = () => {
+const resolvePersistedAppSettingsSyncOptions = (options = {}) => {
+  const skipKeys = new Set(
+    Array.isArray(options?.skipKeys)
+      ? options.skipKeys.map((key) => String(key || '').trim()).filter(Boolean)
+      : []
+  );
+  const includeKeys = new Set(
+    Array.isArray(options?.includeKeys)
+      ? options.includeKeys.map((key) => String(key || '').trim()).filter(Boolean)
+      : []
+  );
+  const isIsolatedDocumentSession = typeof window !== 'undefined'
+    && window.desktopApp?.windowContext?.isolatedDocumentSession === true;
+
+  if (isIsolatedDocumentSession && !includeKeys.has('wordai_active_template')) {
+    skipKeys.add('wordai_active_template');
+  }
+
+  return { skipKeys, includeKeys };
+};
+
+export const syncPersistedAppSettings = (options = {}) => {
   if (typeof window === 'undefined' || !window.desktopApp?.saveAppSettings) return;
 
   try {
+    const { skipKeys, includeKeys } = resolvePersistedAppSettingsSyncOptions(options);
     const snapshot = {};
     PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
+      if (skipKeys.has(key) && !includeKeys.has(key)) return;
       const value = localStorage.getItem(key);
       if (value !== null) snapshot[key] = value;
     });
@@ -774,6 +799,8 @@ export const hydrateAppSettingsFromDisk = async () => {
       return diskState;
     } catch {
       return {};
+    } finally {
+      appSettingsHydrationPromise = null;
     }
   })();
 
@@ -2044,6 +2071,7 @@ const normalizeProviderConfig = (config = {}) => {
     perplexity: { ...DEFAULT_PROVIDER_CONFIG.perplexity, ...(config?.perplexity || {}) },
     custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...(config?.custom || {}) },
     scholar:    { ...DEFAULT_PROVIDER_CONFIG.scholar,    ...(config?.scholar || {}) },
+    copyleaks:  { ...DEFAULT_PROVIDER_CONFIG.copyleaks,  ...(config?.copyleaks || {}) },
     toolLinks: getToolLinksConfig({ ...DEFAULT_PROVIDER_CONFIG, ...(config || {}) }),
     active: safeActive,
   };
@@ -2052,6 +2080,7 @@ const normalizeProviderConfig = (config = {}) => {
   merged.perplexity.model = normalizeProviderModelName('perplexity', merged.perplexity.model || DEFAULT_PROVIDER_CONFIG.perplexity.model);
   merged.ollama.model = normalizeProviderModelName('ollama', merged.ollama.model || DEFAULT_PROVIDER_CONFIG.ollama.model);
   merged.custom.model = normalizeProviderModelName('custom', merged.custom.model || '');
+  merged.copyleaks = normalizeCopyleaksConfig(merged.copyleaks);
   merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
   return merged;
@@ -2070,7 +2099,11 @@ export const getProviderConfig = () => {
 };
 
 export const saveProviderConfig = (config, options = {}) => {
-  const safeConfig = normalizeProviderConfig(config);
+  const previousConfig = providerConfigCache || getProviderConfig();
+  const safeConfig = normalizeProviderConfig({
+    ...(config || {}),
+    copyleaks: resolvePersistedCopyleaksConfig(config?.copyleaks, previousConfig?.copyleaks),
+  });
   providerConfigCache = safeConfig;
   localStorage.setItem('ai_provider_config', JSON.stringify(safeConfig));
   if (safeConfig.gemini?.key) localStorage.setItem('GEMINI_API_KEY', safeConfig.gemini.key);
@@ -2103,6 +2136,44 @@ const pickStoredString = (source = {}, key = '', fallbackValue = '') => {
   return String(fallbackValue ?? '').trim();
 };
 
+const getCopyleaksUpdatedAt = (value = {}) => Number(normalizeCopyleaksConfig(value).updatedAt || 0);
+
+const hasCopyleaksSnapshot = (value = {}) => Object.keys(DEFAULT_COPYLEAKS_CONFIG).some((key) => hasOwnSetting(value, key));
+
+const hasSameCopyleaksSettings = (left = {}, right = {}) => {
+  const normalizedLeft = normalizeCopyleaksConfig(left);
+  const normalizedRight = normalizeCopyleaksConfig(right);
+  return Object.keys(DEFAULT_COPYLEAKS_CONFIG).every((key) => normalizedLeft[key] === normalizedRight[key]);
+};
+
+const withHydratedCopyleaksTimestamp = (value = {}) => {
+  const normalized = normalizeCopyleaksConfig(value);
+  if (getCopyleaksUpdatedAt(normalized)) return normalized;
+  return {
+    ...normalized,
+    updatedAt: Date.now(),
+  };
+};
+
+const resolvePersistedCopyleaksConfig = (nextValue = {}, previousValue = {}) => {
+  const normalizedNext = normalizeCopyleaksConfig(nextValue);
+  const normalizedPrevious = normalizeCopyleaksConfig(previousValue);
+  const nextUpdatedAt = getCopyleaksUpdatedAt(normalizedNext);
+  const previousUpdatedAt = getCopyleaksUpdatedAt(normalizedPrevious);
+
+  if (!hasSameCopyleaksSettings(normalizedNext, normalizedPrevious)) {
+    return {
+      ...normalizedNext,
+      updatedAt: Math.max(Date.now(), nextUpdatedAt, previousUpdatedAt + 1),
+    };
+  }
+
+  return {
+    ...normalizedNext,
+    updatedAt: Math.max(nextUpdatedAt, previousUpdatedAt, 0),
+  };
+};
+
 const mergeProviderSettings = (providerId = '', diskValue = {}, localValue = {}) => {
   const merged = {
     ...(diskValue || {}),
@@ -2121,6 +2192,28 @@ const mergeScholarSettings = (diskValue = {}, localValue = {}) => ({
   provider: pickStoredString(localValue, 'provider', diskValue?.provider || DEFAULT_PROVIDER_CONFIG.scholar.provider) || DEFAULT_PROVIDER_CONFIG.scholar.provider,
   key: pickStoredString(localValue, 'key', diskValue?.key),
 });
+
+const mergeCopyleaksSettings = (diskValue = {}, localValue = {}) => {
+  const normalizedDisk = normalizeCopyleaksConfig(diskValue);
+  const normalizedLocal = normalizeCopyleaksConfig(localValue);
+  const diskUpdatedAt = getCopyleaksUpdatedAt(normalizedDisk);
+  const localUpdatedAt = getCopyleaksUpdatedAt(normalizedLocal);
+
+  if (localUpdatedAt || diskUpdatedAt) {
+    if (localUpdatedAt > diskUpdatedAt) return normalizedLocal;
+    if (diskUpdatedAt > localUpdatedAt) return normalizedDisk;
+    return normalizedLocal;
+  }
+
+  const localHasSnapshot = hasCopyleaksSnapshot(localValue);
+  const diskHasSnapshot = hasCopyleaksSnapshot(diskValue);
+
+  if (localHasSnapshot && !diskHasSnapshot) return withHydratedCopyleaksTimestamp(normalizedLocal);
+  if (diskHasSnapshot && !localHasSnapshot) return withHydratedCopyleaksTimestamp(normalizedDisk);
+  if (hasSameCopyleaksSettings(normalizedDisk, normalizedLocal)) return withHydratedCopyleaksTimestamp(normalizedLocal);
+
+  return withHydratedCopyleaksTimestamp(normalizedLocal);
+};
 
 const mergeToolLinksSettings = (diskValue = {}, localValue = {}) => {
   return Object.fromEntries(
@@ -2163,6 +2256,7 @@ export const hydrateProviderConfigFromDisk = async () => {
         perplexity: mergeProviderSettings('perplexity', diskConfig.perplexity, localRaw.perplexity),
         custom: mergeProviderSettings('custom', diskConfig.custom, localRaw.custom),
         scholar: mergeScholarSettings(diskConfig.scholar, localRaw.scholar),
+        copyleaks: mergeCopyleaksSettings(diskConfig.copyleaks, localRaw.copyleaks),
         toolLinks: mergeToolLinksSettings(diskConfig.toolLinks, localRaw.toolLinks),
       });
 
@@ -2171,6 +2265,8 @@ export const hydrateProviderConfigFromDisk = async () => {
       return merged;
     } catch {
       return getProviderConfig();
+    } finally {
+      providerConfigHydrationPromise = null;
     }
   })();
 
@@ -2782,20 +2878,25 @@ const parseStagePacket = (reply = '') => {
     const match = raw.match(new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?=\\n(?:DELIVERABLE|HANDOFF|MISSING|DECISION|CHECKLIST)\\s*:|$)`, 'i'));
     return String(match?.[1] || '').trim();
   };
+  const hasSection = (label) => new RegExp(`(?:^|\\n)${label}\\s*:`, 'i').test(raw);
 
   const deliverable = extract('DELIVERABLE');
   const handoff = extract('HANDOFF');
   const missing = extract('MISSING');
   const decision = extract('DECISION');
   const checklist = extract('CHECKLIST');
+  const hasStructuredMetaSections = ['HANDOFF', 'MISSING', 'DECISION', 'CHECKLIST'].some((label) => hasSection(label));
+  const structuredWithoutDeliverable = !deliverable && hasStructuredMetaSections;
 
   return {
     raw,
-    deliverable: deliverable || raw,
+    deliverable: structuredWithoutDeliverable ? '' : (deliverable || raw),
     handoff,
     missing,
     decision,
     checklist,
+    hasStructuredMetaSections,
+    structuredWithoutDeliverable,
   };
 };
 
@@ -3243,6 +3344,44 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
   }
 };
 
+const ACADEMIC_PROFILE_STRONG_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|doi|peer[-\s]?reviewed|journal|מאמר|מחקר\s+אקדמי|literature\s+review)/i;
+const ACADEMIC_PROFILE_WEAK_SIGNALS = ['קורס', 'מרצה', 'מנחה', 'סטודנט', 'ציטוט'];
+
+const tokenizeAcademicContext = (value = '') => Array.from(new Set(
+  String(value || '')
+    .toLowerCase()
+    .split(/[^a-z0-9א-ת]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3),
+));
+
+const filterRelevantAcademicProfileValues = (values = [], requestText = '') => {
+  const normalizedValues = Array.isArray(values)
+    ? values.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const requestTokens = tokenizeAcademicContext(requestText);
+  if (!requestTokens.length) return [];
+
+  return normalizedValues.filter((item) => {
+    const normalizedItem = item.toLowerCase();
+    const itemTokens = tokenizeAcademicContext(normalizedItem);
+    return requestTokens.some((token) => normalizedItem.includes(token))
+      || itemTokens.some((token) => requestTokens.includes(token));
+  });
+};
+
+const countAcademicWeakSignals = (value = '') => {
+  const normalizedValue = String(value || '').toLowerCase();
+  return ACADEMIC_PROFILE_WEAK_SIGNALS.filter((token) => normalizedValue.includes(token)).length;
+};
+
+const shouldIncludeAcademicProfileContext = ({ requestText = '', templateId = '', isAcademicTask } = {}) => {
+  if (typeof isAcademicTask === 'boolean') return isAcademicTask;
+  if (String(templateId || '').trim().toLowerCase() === 'academic') return true;
+  return ACADEMIC_PROFILE_STRONG_SIGNAL_PATTERN.test(String(requestText || ''))
+    || countAcademicWeakSignals(requestText) >= 2;
+};
+
 const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   const omitStructuralHints = options.omitStructuralHints === true;
   const labels = {
@@ -3280,23 +3419,32 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   const lecturerNames = getNormalizedLecturerNames(profile);
   const currentCourses = normalizeProfileListValue(profile.currentCourses);
   const syllabusTopics = normalizeProfileListValue(profile.syllabusTopics);
+  const requestText = String(options.requestText || '').trim();
+  const includeAcademicContext = shouldIncludeAcademicProfileContext({
+    requestText,
+    templateId: options.templateId,
+    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+  });
+  const relevantLecturerNames = includeAcademicContext ? filterRelevantAcademicProfileValues(lecturerNames, requestText) : [];
+  const relevantCurrentCourses = includeAcademicContext ? filterRelevantAcademicProfileValues(currentCourses, requestText) : [];
+  const relevantSyllabusTopics = includeAcademicContext ? filterRelevantAcademicProfileValues(syllabusTopics, requestText) : [];
   const normalizedGoldenExample = String(profile.goldenExample || '').trim().replace(/\s+/g, ' ');
   const submissionDefaults = [
     profile.assignmentType ? `סוג מטלה: ${String(profile.assignmentType).trim()}` : '',
     profile.submissionDate ? `תאריך הגשה: ${String(profile.submissionDate).trim()}` : '',
-    profile.studentId ? `מזהה מגיש: ${String(profile.studentId).trim()}` : '',
+    profile.studentId ? `תז: ${String(profile.studentId).trim()}` : '',
     profile.aiAssistanceDeclaration ? `הצהרת AI: ${String(profile.aiAssistanceDeclaration).trim()}` : '',
   ].filter(Boolean);
   const parts = [];
   if (profile.academic_level) parts.push(`רמת הכתיבה המועדפת: ${labels[profile.academic_level] || profile.academic_level}`);
   if (profile.displayName) parts.push(`שם המשתמש: ${String(profile.displayName).trim()}`);
   if (profile.userRole) parts.push(`תפקיד או סטטוס נוכחי: ${String(profile.userRole).trim()}`);
-  if (profile.institutionName) parts.push(`מוסד לימודים או ארגון מרכזי: ${String(profile.institutionName).trim()}`);
-  if (profile.studyTrack) parts.push(`מסלול, חוג או תחום עיקרי: ${String(profile.studyTrack).trim()}`);
-  if (lecturerNames.length) parts.push(`מרצים או מנחים רלוונטיים: ${lecturerNames.join(', ')}`);
-  if (currentCourses.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${currentCourses.join(', ')}`);
-  if (syllabusTopics.length) parts.push(`נושאי סילבוס, יחידות לימוד או דגשים מרכזיים: ${syllabusTopics.join(', ')}`);
-  if (!omitStructuralHints && submissionDefaults.length) parts.push(`פרטי הגשה ברירת מחדל לשימוש כשמתבקשים עמוד שער או פרטי מסירה: ${submissionDefaults.join(' | ')}`);
+  if (includeAcademicContext && profile.institutionName) parts.push(`מוסד לימודים או ארגון מרכזי: ${String(profile.institutionName).trim()}`);
+  if (includeAcademicContext && profile.studyTrack) parts.push(`מסלול, חוג או תחום עיקרי: ${String(profile.studyTrack).trim()}`);
+  if (includeAcademicContext && relevantLecturerNames.length) parts.push(`מרצים או מנחים רלוונטיים: ${relevantLecturerNames.join(', ')}`);
+  if (includeAcademicContext && relevantCurrentCourses.length) parts.push(`קורסים או נושאי עיסוק עכשוויים: ${relevantCurrentCourses.join(', ')}`);
+  if (includeAcademicContext && relevantSyllabusTopics.length) parts.push(`נושאי סילבוס, יחידות לימוד או דגשים מרכזיים: ${relevantSyllabusTopics.join(', ')}`);
+  if (includeAcademicContext && !omitStructuralHints && submissionDefaults.length) parts.push(`פרטי הגשה ברירת מחדל לשימוש כשמתבקשים עמוד שער או פרטי מסירה: ${submissionDefaults.join(' | ')}`);
   if (!omitStructuralHints && profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
   if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
@@ -3356,6 +3504,9 @@ export const buildPortablePrompt = (options = {}) => {
     : getSharedAgentInstructions();
   const personalStylePrompt = buildPersonalStyleInstructions(options.profile || getPersonalStyleProfile(), {
     omitStructuralHints: options.omitStructuralHints === true,
+    requestText: String(options.requestText || '').trim(),
+    templateId: String(options.templateId || '').trim(),
+    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
   });
   const sections = [
     'אתה עוזר כתיבה כללי שנועד לעבוד היטב מול כל ספק AI.',
@@ -4294,6 +4445,18 @@ const withTimeout = async (promise, timeoutMs, onTimeout) => {
   }
 };
 
+const GEMINI_TRANSIENT_OVERLOAD_PATTERN = /\b(?:429|502|503|504)\b|high demand|try again later|service unavailable|overloaded|resource exhausted/i;
+
+const isTransientGeminiOverloadError = (error) => {
+  const message = typeof error === 'string' ? error : error?.message || '';
+  return GEMINI_TRANSIENT_OVERLOAD_PATTERN.test(String(message || ''));
+};
+
+const buildGeminiTransientOverloadError = (model = '') => {
+  const safeModel = String(model || '').trim() || 'המודל הנוכחי';
+  return new Error(`Gemini עמוס כרגע במודל ${safeModel}. זה עומס זמני של השירות. אפשר לנסות שוב בעוד רגע או לעבור זמנית ל-gemini-2.5-flash.`);
+};
+
 const emitStatus = (callback, payload) => {
   if (typeof callback === 'function') callback(payload);
 };
@@ -4346,6 +4509,38 @@ const shouldPreservePriorDocumentFromManagerReview = (deliverable = '', previous
   if (!normalizedDeliverable) return true;
 
   return /(?:^|\n)(?:MISSING|DECISION|CHECKLIST)\s*:/i.test(normalizedDeliverable);
+};
+
+const isAgentNotesAppendixOnlyArtifact = (value = '') => {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return false;
+  if (/^\s*<div[^>]*data-agent-notes\s*=\s*["']true["'][^>]*>/i.test(normalizedValue)) return true;
+  return /^(?:<[^>]+>\s*){0,3}נספח\s+הערות\s+סוכנים(?:\s|<|$)/i.test(normalizedValue)
+    || /^(?:<[^>]+>\s*){0,3}<h2>\s*נספח\s+הערות\s+סוכנים\s*<\/h2>/i.test(normalizedValue);
+};
+
+const shouldPreservePriorDocumentFromStageArtifact = ({
+  packet = null,
+  previousDocument = '',
+  stageAgent = null,
+  expectDocumentOutput = false,
+} = {}) => {
+  const normalizedPrevious = normalizeArtifactText(previousDocument);
+  if (!expectDocumentOutput || !normalizedPrevious) return false;
+
+  const deliverable = String(packet?.deliverable || '').trim();
+  if (packet?.structuredWithoutDeliverable === true) return true;
+  if (isAgentNotesAppendixOnlyArtifact(deliverable)) return true;
+  if (isManagerReviewAgent(stageAgent)) {
+    return shouldPreservePriorDocumentFromManagerReview(deliverable, previousDocument);
+  }
+  return false;
+};
+
+const resolveDocumentPreservationCandidate = (primaryDocument = '', fallbackDocument = '') => {
+  const primaryText = String(primaryDocument || '').trim();
+  if (primaryText && !isAgentNotesAppendixOnlyArtifact(primaryText)) return primaryText;
+  return String(fallbackDocument || '').trim();
 };
 
 const escapeHtmlForOutput = (value = '') => String(value || '')
@@ -4988,6 +5183,7 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
 const PROMPT_DOCUMENT_CONTEXT_LIMIT = 8000;
 const PROMPT_DOCUMENT_CONTEXT_GAP = '\n\n[... הושמט תוכן אמצעי כדי לשמור גם את סוף המסמך ...]\n\n';
 const WORKFLOW_EXISTING_HTML_SECTION_PATTERN = /\n\nהמסמך הקיים ב-HTML:\n[\s\S]*$/;
+const WORKFLOW_EXISTING_HTML_CAPTURE_PATTERN = /(?:^|\n\n)המסמך הקיים ב-HTML:\n([\s\S]*)$/;
 
 const buildPromptDocumentContext = (documentContext = '', maxChars = PROMPT_DOCUMENT_CONTEXT_LIMIT) => {
   const text = String(documentContext || '');
@@ -5005,6 +5201,12 @@ const buildWorkflowStageDocumentContext = (documentContext = '', stagedOutput = 
   const contextText = String(documentContext || '');
   if (!String(stagedOutput || '').trim()) return contextText;
   return contextText.replace(WORKFLOW_EXISTING_HTML_SECTION_PATTERN, '').trim();
+};
+
+const extractExistingHtmlFromWorkflowContext = (documentContext = '') => {
+  const contextText = String(documentContext || '');
+  const match = contextText.match(WORKFLOW_EXISTING_HTML_CAPTURE_PATTERN);
+  return String(match?.[1] || '').trim();
 };
 
 export const chatWithActiveProvider = async (userPrompt, documentContext = '', extraSystemPrompt = '', options = {}) => {
@@ -5055,6 +5257,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
     omitStructuralHints: omitPersonalStyleStructureHints,
+    requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+    templateId: String(options.templateId || '').trim(),
+    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
   });
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt });
@@ -5081,7 +5286,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     ? Math.max(10000, Math.round(requestTimeoutMs))
     : 0;
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
-  const effectiveRetries = activeProvider === 'gemini' ? 0 : retries;
+  const effectiveRetries = retries;
   const runId = options.runId || createRunId();
   const activeWorkspaceId = String(options.activeWorkspaceId || automation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const workspaceName = String(options.workspaceName || automation.workspaceName || '').trim();
@@ -5196,9 +5401,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       const decisionMode = getDecisionMode(automation, enabledAgents);
       const allowDecisionRevisits = allowCircularWorkflow || decisionMode === 'manager';
       const skillsConfig = getSkillsConfig();
-      const maxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
+      const requestedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(options.additionalReviewRounds || 0)));
+      const baseMaxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
+      const maxRoundsPerAgent = baseMaxRoundsPerAgent;
+      const maxFinalManagerReviewPasses = baseMaxRoundsPerAgent + requestedAdditionalReviewRounds;
       const minRoundsPerAgent = allowCircularWorkflow ? Math.min(maxRoundsPerAgent, getCircularMinRoundLimit(automation)) : 1;
-      const maxStageCount = Math.max(orderedAgents.length, orderedAgents.length * maxRoundsPerAgent);
+      const maxAdditionalReviewStages = requestedAdditionalReviewRounds * Math.max(2, enabledAgents.length);
+      const maxStageCount = Math.max(orderedAgents.length, orderedAgents.length * maxRoundsPerAgent) + maxAdditionalReviewStages;
       const agentRunCounts = {};
       const executionQueue = orderedAgents.map((agent) => ({ agent, revisitReason: '' }));
 
@@ -5213,12 +5422,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         configuredAgentCount: enabledAgents.length,
         planSummary: executionPlan?.summary || '',
         circularEnabled: allowCircularWorkflow,
+        additionalReviewRounds: requestedAdditionalReviewRounds,
+        maxAdditionalReviewStages,
         maxRoundsPerAgent,
         minRoundsPerAgent,
         decisionMode,
       });
 
       let stagedOutput = '';
+      const seededDocumentOutput = expectDocumentOutput
+        ? String(options.documentFallbackHtml || extractExistingHtmlFromWorkflowContext(documentContext) || '').trim()
+        : '';
       let processedStages = 0;
       let pendingFinalManagerReview = executionPlan?.needsFinalManagerReview === true;
       let finalManagerReviewPasses = 0;
@@ -5299,7 +5513,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           const stageSystemPrompt = isManagerReviewAgent(stageAgent)
             ? `${stageAgent.prompt}\nבשלב ביקורת ניהולית DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, פערים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא.\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`
             : `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`;
-          const previousStageOutput = stagedOutput;
+          const previousStageOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
           const stageReply = await chatWithActiveProvider(stagePrompt, stageDocumentContext, stageSystemPrompt, {
             providerOverride: stageProvider,
             preferredProviders: stageProvider ? [stageProvider] : automationPreferredProviders,
@@ -5335,7 +5549,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           const stageReplyModel = normalizedStageReply.completion?.model || stageRequestedModel || finalOutputModel;
           const parsedReply = parseStagePacket(normalizedStageReply.text);
           const rawStageArtifact = String(parsedReply.deliverable || '').trim();
-          const stageArtifact = isManagerReviewAgent(stageAgent) && shouldPreservePriorDocumentFromManagerReview(rawStageArtifact, previousStageOutput)
+          const stageArtifact = shouldPreservePriorDocumentFromStageArtifact({
+            packet: parsedReply,
+            previousDocument: previousStageOutput,
+            stageAgent,
+            expectDocumentOutput,
+          })
             ? String(previousStageOutput || '').trim()
             : rawStageArtifact;
           const stageArtifactProvider = stageArtifact === rawStageArtifact ? stageReplyProvider : finalOutputProvider;
@@ -5344,7 +5563,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             ? parsedReply
             : { ...parsedReply, deliverable: stageArtifact };
           if (stageArtifact !== rawStageArtifact) {
-            logEvent('stage-artifact-fallback', 'ביקורת ניהולית החזירה פלט מטא; נשמר המסמך המלא האחרון כ-DELIVERABLE', {
+            logEvent('stage-artifact-fallback', isManagerReviewAgent(stageAgent)
+              ? 'ביקורת ניהולית החזירה פלט מטא; נשמר המסמך המלא האחרון כ-DELIVERABLE'
+              : 'השלב החזיר פלט מטא או נספח הערות במקום מסמך; נשמר המסמך המלא האחרון כ-DELIVERABLE', {
               state: 'success',
               agentId: stageAgent.id,
               agentLabel: stageLabel,
@@ -5552,9 +5773,29 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         }
 
         const nextFinalManagerReviewPass = finalManagerReviewPasses + 1;
-        const allowedFinalReviewBudget = maxRoundsPerAgent + (isPlanningManagerAgent(managerAgent) ? 1 : 0);
-        if (((agentRunCounts[managerAgent.id] || 0) + nextFinalManagerReviewPass) > allowedFinalReviewBudget) {
-          throw new Error('סקירת manager סופית חרגה ממגבלת הסבבים המותרת עבור אותו סוכן.');
+        const priorManagerRuns = agentRunCounts[managerAgent.id] || 0;
+        const allowedFinalReviewBudget = maxRoundsPerAgent + maxFinalManagerReviewPasses;
+        if ((priorManagerRuns + nextFinalManagerReviewPass) > allowedFinalReviewBudget) {
+          logEvent('stage-revisit-required', 'סקירת manager סופית הייתה חורגת ממגבלת הסבבים; מוחזרת הטיוטה המלאה האחרונה', {
+            state: 'error',
+            agentId: managerAgent.id,
+            agentLabel: managerAgent.name,
+            agentName: managerAgent.name,
+            priorManagerRuns,
+            finalManagerReviewPasses,
+            allowedFinalReviewBudget,
+          });
+          pendingFinalManagerReview = false;
+          executionQueue.length = 0;
+          logEvent('workflow-recovered', expectDocumentOutput
+            ? 'סקירת manager סופית הגיעה למגבלת הסבבים, והוחזרה הטיוטה המלאה האחרונה במקום כשלון'
+            : 'סקירת manager סופית הגיעה למגבלת הסבבים, והוחזרה התשובה הטובה ביותר שנצברה עד כה', {
+            state: 'success',
+            agentId: managerAgent.id,
+            agentLabel: managerAgent.name || 'מנהל העבודה',
+            outputChars: String(stagedOutput || cleanUserPrompt).trim().length,
+          });
+          break;
         }
         finalManagerReviewPasses = nextFinalManagerReviewPass;
         const managerRoleKey = isManagerReviewAgent(managerAgent) ? 'manager-review' : getAgentRoleKey(managerAgent);
@@ -5584,7 +5825,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           collectAgentNotes: appendAgentNotesToOutput,
         });
 
-        const previousManagerOutput = stagedOutput;
+        const previousManagerOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
         const managerReply = await chatWithActiveProvider(reviewPrompt, reviewDocumentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
           providerOverride: reviewProvider,
           preferredProviders: reviewProvider ? [reviewProvider] : automationPreferredProviders,
@@ -5615,7 +5856,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const managerReplyModel = normalizedManagerReply.completion?.model || reviewRequestedModel || finalOutputModel;
         const parsedManagerReply = parseStagePacket(normalizedManagerReply.text);
         const rawManagerArtifact = String(parsedManagerReply.deliverable || '').trim();
-        const managerArtifact = shouldPreservePriorDocumentFromManagerReview(rawManagerArtifact, previousManagerOutput)
+        const managerArtifact = shouldPreservePriorDocumentFromStageArtifact({
+          packet: parsedManagerReply,
+          previousDocument: previousManagerOutput,
+          stageAgent: managerAgent,
+          expectDocumentOutput,
+        })
           ? String(previousManagerOutput || '').trim()
           : rawManagerArtifact;
         const effectiveManagerReply = managerArtifact === rawManagerArtifact
@@ -5683,7 +5929,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             : (fallbackPlanningManager && fallbackPlanningManager.id !== managerAgent.id
               ? [fallbackPlanningManager]
               : (fallbackWorkerAgent ? [fallbackWorkerAgent] : []));
-          if (processedStages >= maxStageCount || finalManagerReviewPasses >= maxRoundsPerAgent) {
+          if (processedStages >= maxStageCount || finalManagerReviewPasses >= maxFinalManagerReviewPasses) {
             logEvent('stage-revisit-required', 'סקירת המנהל דרשה סבב נוסף אך ה-workflow כבר הגיע למגבלת הסבבים', {
               state: 'error',
               agentId: managerAgent.id,
@@ -5693,6 +5939,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
               model: managerAgent.model || getModelNameForProvider(reviewProvider, cfg, modelOverride),
               decision: effectiveManagerReply.decision || '',
               missing: effectiveManagerReply.missing || '',
+              maxFinalManagerReviewPasses,
             });
             const recoverySource = expectDocumentOutput
               ? (stagedOutput || managerArtifact || cleanUserPrompt)
@@ -5813,7 +6060,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         while (batonNotes.length > 10) batonNotes.shift();
       }
 
-      let finalOutput = String(stagedOutput || cleanUserPrompt).trim();
+      let finalOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput) || String(cleanUserPrompt || '').trim();
       if (expectDocumentOutput && appendAgentNotesToOutput && !notesAlreadyAppended) {
         const appendix = buildAgentNotesAppendix({
           stageNotes,
@@ -6217,6 +6464,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         // ממשיך לניסיון הבא בשרשרת
       }
     }
+  }
+
+  if (activeProvider === 'gemini' && isTransientGeminiOverloadError(lastError)) {
+    throw buildGeminiTransientOverloadError(resolvedModel);
   }
 
   throw lastError || new Error('שגיאה לא ידועה בבקשת AI');
@@ -6685,6 +6936,38 @@ const pingOpenAICompatible = async (baseUrl, key, model, signal) => {
 export const testProviderConnection = async (providerId, providerConfig = {}) => {
   const cfg = getProviderConfig();
   const pCfg = { ...cfg[providerId], ...providerConfig };
+
+  if (providerId === 'copyleaks') {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      await getCopyleaksBearerToken(pCfg, { signal: controller.signal, forceRefresh: true });
+      clearTimeout(timeout);
+      return {
+        ok: true,
+        model: pCfg.sandbox ? 'sandbox' : 'writer-detector',
+        reply: 'Bearer token מוכן',
+        triedModels: ['login'],
+        error: '',
+        availableModels: [],
+        requestedModel: '',
+        requestedModelAvailable: null,
+      };
+    } catch (err) {
+      clearTimeout(timeout);
+      return {
+        ok: false,
+        model: '',
+        reply: '',
+        triedModels: ['login'],
+        error: err?.name === 'AbortError' ? 'הבקשה פגה (timeout 12s)' : (err?.message || 'שגיאה לא ידועה'),
+        availableModels: [],
+        requestedModel: '',
+        requestedModelAvailable: null,
+      };
+    }
+  }
+
   const rawRequestedModel = String(pCfg.model || '').trim();
   const requestedModel = normalizeProviderModelName(providerId, rawRequestedModel);
   const modelChoiceConfig = {

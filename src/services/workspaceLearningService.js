@@ -15,6 +15,8 @@ const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
+const MATERIAL_PREVIEW_MAX_LENGTH = 5000;
+const MATERIAL_EXTRACTION_AUDIT_LIMIT = 180000;
 const FEEDBACK_CONTEXT_TOTAL_LIMIT = 7200;
 const FEEDBACK_CONTEXT_TOPIC_LIMIT = 320;
 const FEEDBACK_CONTEXT_SUPPORTING_LIMIT = 1100;
@@ -29,12 +31,16 @@ const TRUNCATED_RESPONSE_MARKER_PATTERN = /\[\.\.\.\s*(?:הושמט|קוצר)[^\
 const HTML_TAG_TOKEN_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z0-9-]+)\b[^>]*?>/gi;
 const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
-const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'docx']);
-const DESKTOP_EXTRACTION_EXTENSIONS = new Set(['xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
-const HELPER_MATERIAL_ACCEPT_LIST = '.pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.markdown,.html,.htm';
-const HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX = ',.png,.jpg,.jpeg,.webp,.xls,.xlsx';
-const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf';
-const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'csv', 'tsv', 'rtf', 'xml', 'yml', 'yaml', 'log', 'svg', 'docx']);
+const DESKTOP_EXTRACTION_EXTENSIONS = new Set(['pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
+const MATERIAL_PARTIAL_EXTRACTION_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'xls', 'xlsx']);
+const HELPER_MATERIAL_ACCEPT_LIST = '.pdf,.doc,.docx,.txt,.md,.markdown,.html,.htm,.json,.csv,.tsv,.rtf,.xml,.yml,.yaml,.log,.svg';
+const HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.png,.jpg,.jpeg,.webp,.xls,.xlsx';
+const INSTRUCTION_FILE_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.json,.pdf,.csv,.tsv,.rtf,.xml,.yml,.yaml,.log,.svg';
+const INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv,.rtf,.xml';
+const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
 export const MATERIAL_UPLOAD_PRESETS = {
   general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
@@ -58,10 +64,178 @@ export function getHelperMaterialAcceptList() {
     : HELPER_MATERIAL_ACCEPT_LIST;
 }
 
+export function getInstructionFileAcceptList() {
+  return hasDesktopMaterialTextExtraction()
+    ? `${INSTRUCTION_FILE_ACCEPT_LIST}${INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX}`
+    : INSTRUCTION_FILE_ACCEPT_LIST;
+}
+
 export function getSyllabusFileAcceptList() {
   return hasDesktopMaterialTextExtraction()
     ? `${SYLLABUS_ACCEPT_LIST}${SYLLABUS_DESKTOP_ACCEPT_SUFFIX}`
     : SYLLABUS_ACCEPT_LIST;
+}
+
+function sanitizeMaterialPreviewText(value = '', maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
+  const normalized = String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeMaterialPreviewStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['ready', 'empty', 'unsupported', 'error'].includes(normalized) ? normalized : '';
+}
+
+function isLikelyAcademicDocumentRequest({ prompt = '', instructions = '', templateId = 'blank' } = {}) {
+  if (String(templateId || '').trim().toLowerCase() === 'academic') return true;
+  return ACADEMIC_REQUEST_SIGNAL_PATTERN.test([prompt, instructions].filter(Boolean).join('\n'));
+}
+
+function normalizeMaterialExtractionStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['success', 'partial', 'failed', 'unsupported'].includes(normalized) ? normalized : '';
+}
+
+function getMaterialFileExtension(fileName = '') {
+  const normalized = String(fileName || '').trim().toLowerCase();
+  const lastDotIndex = normalized.lastIndexOf('.');
+  return lastDotIndex === -1 ? normalized : normalized.slice(lastDotIndex + 1);
+}
+
+function resolveMaterialExtractionFailureMessage(errorCode = '') {
+  const normalizedCode = String(errorCode || '').trim();
+  if (!normalizedCode) return 'לא נמצא טקסט קריא בקובץ.';
+  if (normalizedCode === 'unsupported-binary-file') return 'סוג הקובץ עדיין לא נתמך לחילוץ טקסט אוטומטי.';
+  if (normalizedCode === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך ה-PDF.';
+  if (normalizedCode === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך ה-DOCX.';
+  if (normalizedCode === 'empty-pptx-text' || normalizedCode === 'pptx-read-failed') return 'לא הצלחתי לחלץ את כל הטקסט מהמצגת.';
+  if (normalizedCode === 'empty-spreadsheet-text' || normalizedCode === 'spreadsheet-read-failed') return 'לא הצלחתי לחלץ טקסט שימושי מהגיליון.';
+  if (normalizedCode === 'empty-image-text' || normalizedCode === 'image-ocr-failed') return 'ה-OCR לא הצליח לחלץ טקסט קריא מהתמונה.';
+  if (normalizedCode === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך הקובץ.';
+  return 'חילוץ הטקסט נכשל עבור הקובץ הזה.';
+}
+
+function resolveMaterialExtractionState({ fileName = '', text = '', error = '', extractionTruncated = false } = {}) {
+  const normalizedText = sanitizeMaterialPreviewText(text, MATERIAL_EXTRACTION_AUDIT_LIMIT);
+  const normalizedError = String(error || '').trim();
+  const extension = getMaterialFileExtension(fileName);
+
+  if (normalizedText) {
+    if (MATERIAL_PARTIAL_EXTRACTION_EXTENSIONS.has(extension)) {
+      return {
+        extractionStatus: 'partial',
+        extractionMessage: ['png', 'jpg', 'jpeg', 'webp'].includes(extension)
+          ? 'חולץ טקסט בעזרת OCR, אבל אי אפשר לוודא שהוא מלא ב-100%.'
+          : 'חולץ טקסט שימושי, אבל בגיליונות החילוץ הוא חלקי לצורך בטיחות וביצועים.',
+      };
+    }
+
+    if (extractionTruncated) {
+      return {
+        extractionStatus: 'partial',
+        extractionMessage: 'חולץ טקסט, אבל הקובץ גדול מדי ולכן נקרא רק חלק ממנו בשלב ההעלאה.',
+      };
+    }
+
+    return {
+      extractionStatus: 'success',
+      extractionMessage: 'הטקסט חולץ במלואו והקובץ מוכן לשימוש.',
+    };
+  }
+
+  if (normalizedError === 'unsupported-binary-file') {
+    return {
+      extractionStatus: 'unsupported',
+      extractionMessage: resolveMaterialExtractionFailureMessage(normalizedError),
+    };
+  }
+
+  return {
+    extractionStatus: 'failed',
+    extractionMessage: resolveMaterialExtractionFailureMessage(normalizedError),
+  };
+}
+
+function buildMaterialPreviewMeta({ text = '', source = '', error = '', fileName = '', previewMaxLength = MATERIAL_PREVIEW_MAX_LENGTH } = {}) {
+  const extractedText = sanitizeMaterialPreviewText(text, MATERIAL_EXTRACTION_AUDIT_LIMIT);
+  const previewText = sanitizeMaterialPreviewText(extractedText, previewMaxLength);
+  const cleanError = String(error || '').trim();
+  const extractionTruncated = Boolean(extractedText) && extractedText.length >= MATERIAL_EXTRACTION_AUDIT_LIMIT;
+  const previewStatus = previewText
+    ? 'ready'
+    : cleanError === 'unsupported-binary-file'
+      ? 'unsupported'
+      : cleanError
+        ? 'error'
+        : 'empty';
+  const extractionState = resolveMaterialExtractionState({
+    fileName,
+    text: extractedText,
+    error: cleanError,
+    extractionTruncated,
+  });
+
+  return {
+    previewText,
+    previewChars: previewText.length,
+    previewStatus,
+    previewSource: previewText ? String(source || '').trim() : '',
+    previewError: previewText ? '' : cleanError,
+    extractedChars: extractedText.length,
+    extractionStatus: extractionState.extractionStatus,
+    extractionMessage: extractionState.extractionMessage,
+    extractionTruncated,
+  };
+}
+
+function getStoredMaterialPreviewText(material = {}, maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
+  return sanitizeMaterialPreviewText(
+    material?.previewText
+      || material?.excerptText
+      || material?.preview
+      || material?.extractedText
+      || '',
+    maxLength,
+  );
+}
+
+function cacheMaterialPreviewOnItem(material, { text = '', source = '' } = {}) {
+  if (!material || typeof material !== 'object') {
+    return sanitizeMaterialPreviewText(text, MATERIAL_PREVIEW_MAX_LENGTH);
+  }
+
+  const previewMeta = buildMaterialPreviewMeta({
+    text,
+    source,
+    fileName: material?.file || material?.title || `${material?.id || 'material'}.${material?.type || ''}`,
+  });
+  Object.assign(material, previewMeta, {
+    canPreviewText: canPreviewMaterialText(material?.type) || Boolean(previewMeta.previewText),
+  });
+  return previewMeta.previewText;
+}
+
+async function extractHelperMaterialPreview(file, maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
+  try {
+    const extractedText = await readInstructionFile(file, MATERIAL_EXTRACTION_AUDIT_LIMIT);
+    return buildMaterialPreviewMeta({
+      text: extractedText,
+      source: 'readInstructionFile',
+      fileName: file?.name,
+      previewMaxLength: maxLength,
+    });
+  } catch (error) {
+    return buildMaterialPreviewMeta({
+      source: 'readInstructionFile',
+      error: error?.message || 'material-preview-extraction-failed',
+      fileName: file?.name,
+      previewMaxLength: maxLength,
+    });
+  }
 }
 
 function canPreviewMaterialText(type = '') {
@@ -434,6 +608,21 @@ export async function loadProjectMaterials() {
       const name = item.title || item.file || `material-${index + 1}`;
       const type = String(item.type || '').toLowerCase();
       const inferred = classifyDocName(name);
+      const previewText = getStoredMaterialPreviewText(item, MATERIAL_PREVIEW_MAX_LENGTH);
+      const extractedCharsRaw = Number(item?.extractedChars);
+      const extractedChars = Number.isFinite(extractedCharsRaw) && extractedCharsRaw >= 0
+        ? extractedCharsRaw
+        : previewText.length;
+      const rawPreviewChars = Number(item?.previewChars);
+      const previewChars = Number.isFinite(rawPreviewChars) && rawPreviewChars >= 0
+        ? rawPreviewChars
+        : previewText.length;
+      const extractedState = resolveMaterialExtractionState({
+        fileName: item.file || name,
+        text: previewText,
+        error: item.previewError || '',
+        extractionTruncated: item?.extractionTruncated === true,
+      });
       return {
         id: item.id || item.file || `material-${index + 1}`,
         title: name,
@@ -445,9 +634,70 @@ export async function loadProjectMaterials() {
         category: item.category || inferred.category,
         templateId: item.templateId || inferred.templateId,
         learningHint: item.learningHint || '',
-        canPreviewText: canPreviewMaterialText(type),
+        previewText,
+        previewChars,
+        previewStatus: normalizeMaterialPreviewStatus(item.previewStatus || (previewText ? 'ready' : '')),
+        previewSource: String(item.previewSource || '').trim(),
+        previewError: String(item.previewError || '').trim(),
+        extractedChars,
+        extractionStatus: normalizeMaterialExtractionStatus(item.extractionStatus) || extractedState.extractionStatus,
+        extractionMessage: String(item.extractionMessage || '').trim() || extractedState.extractionMessage,
+        extractionTruncated: item?.extractionTruncated === true,
+        canPreviewText: canPreviewMaterialText(type) || Boolean(previewText),
       };
     });
+}
+
+export function getMaterialExtractionStatusInfo(material = {}) {
+  const previewText = getStoredMaterialPreviewText(material, MATERIAL_PREVIEW_MAX_LENGTH);
+  const extractedCharsRaw = Number(material?.extractedChars);
+  const extractedChars = Number.isFinite(extractedCharsRaw) && extractedCharsRaw >= 0
+    ? extractedCharsRaw
+    : previewText.length;
+  const fallbackState = resolveMaterialExtractionState({
+    fileName: material?.file || material?.title || `${material?.id || 'material'}.${material?.type || ''}`,
+    text: previewText,
+    error: material?.previewError || '',
+    extractionTruncated: material?.extractionTruncated === true,
+  });
+  const extractionStatus = normalizeMaterialExtractionStatus(material?.extractionStatus) || fallbackState.extractionStatus;
+  const extractionMessage = String(material?.extractionMessage || '').trim() || fallbackState.extractionMessage;
+
+  if (extractionStatus === 'success') {
+    return {
+      status: 'success',
+      tone: 'success',
+      label: 'נקרא במלואו',
+      message: extractedChars > 0
+        ? `${extractionMessage} חולצו ${extractedChars.toLocaleString('he-IL')} תווים.`
+        : extractionMessage,
+    };
+  }
+
+  if (extractionStatus === 'unsupported') {
+    return {
+      status: 'unsupported',
+      tone: 'error',
+      label: 'לא נתמך',
+      message: extractionMessage,
+    };
+  }
+
+  if (extractionStatus === 'partial') {
+    return {
+      status: 'partial',
+      tone: 'error',
+      label: 'נקרא חלקית',
+      message: extractionMessage,
+    };
+  }
+
+  return {
+    status: 'failed',
+    tone: 'error',
+    label: 'חילוץ נכשל',
+    message: extractionMessage,
+  };
 }
 
 export function getSavedDocsHistory() {
@@ -635,14 +885,16 @@ async function extractPdfTextFromBuffer(buffer) {
   const pdfjs = window?.pdfjsLib;
   if (!pdfjs?.getDocument) return '';
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
+  const maxLength = MATERIAL_EXTRACTION_AUDIT_LIMIT;
   const pages = [];
-  for (let pageNo = 1; pageNo <= Math.min(pdf.numPages, 5); pageNo += 1) {
+  for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     const page = await pdf.getPage(pageNo);
     const content = await page.getTextContent();
     const pageText = (content.items || []).map((item) => item.str || '').join(' ');
     if (pageText.trim()) pages.push(pageText.trim());
+    if (pages.join('\n').length >= maxLength) break;
   }
-  return pages.join('\n');
+  return pages.join('\n').slice(0, maxLength);
 }
 
 async function extractDocxTextFromBuffer(buffer) {
@@ -689,7 +941,7 @@ export async function readInstructionFile(file, maxLength = 6000) {
   if (!file) return '';
   const resolvedMaxLength = Number.isFinite(maxLength) && maxLength > 0 ? maxLength : 6000;
   const ext = String(file.name || '').toLowerCase().split('.').pop();
-  const unsupportedBinary = new Set(['doc', 'ppt', 'pptx', 'zip', 'rar', '7z']);
+  const unsupportedBinary = new Set(['doc', 'ppt', 'zip', 'rar', '7z']);
   if (unsupportedBinary.has(ext)) {
     throw new Error('unsupported-binary-file');
   }
@@ -726,49 +978,68 @@ export async function readInstructionFile(file, maxLength = 6000) {
 }
 
 async function loadMaterialPreview(material) {
-  if (!material?.file || !material?.canPreviewText) return '';
+  const cachedPreview = getStoredMaterialPreviewText(material, MATERIAL_PREVIEW_MAX_LENGTH);
+  if (cachedPreview) return cachedPreview;
+
+  const previewStatus = normalizeMaterialPreviewStatus(material?.previewStatus);
+  const canPreviewNow = canPreviewMaterialText(material?.type);
+  const hasPreviewPath = Boolean(material?.canPreviewText || canPreviewNow);
+  if (previewStatus === 'unsupported' && !canPreviewNow) return '';
+  if (!material?.file || !hasPreviewPath) return '';
+
+  const storePreview = (text, source) => cacheMaterialPreviewOnItem(material, { text, source });
+
   try {
     if (material.source === 'materials-local' && window.desktopApp?.readLocalMaterial) {
       const payload = await window.desktopApp.readLocalMaterial(material.file);
       if (!payload?.ok || !payload?.dataBase64) return '';
-      if (payload?.extractedText && material.type !== 'pdf') {
-        return String(payload.extractedText || '').slice(0, 5000);
+      if (payload?.extractedText) {
+        return storePreview(payload.extractedText, 'desktop-readLocalMaterial');
       }
-      if (material.type === 'docx') return '';
       const binary = atob(payload.dataBase64);
       const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
       const buffer = bytes.buffer;
 
       if (material.type === 'pdf') {
-        return (await extractPdfTextFromBuffer(buffer)).slice(0, 5000);
+        return storePreview(await extractPdfTextFromBuffer(buffer), 'extractPdfTextFromBuffer');
+      }
+
+      if (material.type === 'docx') {
+        return storePreview(await extractDocxTextFromBuffer(buffer), 'extractDocxTextFromBuffer');
       }
 
       if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
-        return (await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, 5000)).slice(0, 5000);
+        return storePreview(
+          await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_PREVIEW_MAX_LENGTH),
+          'extractDesktopMaterialTextFromArrayBuffer',
+        );
       }
 
       const text = decodeTextBuffer(buffer);
-      return text.slice(0, 5000);
+      return storePreview(text, 'decodeTextBuffer');
     }
 
     const response = await fetch(resolveAppUrl(`project-materials/${encodeURIComponent(material.file)}`), { cache: 'no-store' });
     if (!response.ok) return '';
 
+    const buffer = await response.arrayBuffer();
+
     if (material.type === 'pdf') {
-      const buffer = await response.arrayBuffer();
-      return (await extractPdfTextFromBuffer(buffer)).slice(0, 5000);
+      return storePreview(await extractPdfTextFromBuffer(buffer), 'extractPdfTextFromBuffer');
     }
 
     if (material.type === 'docx') {
-      return '';
+      return storePreview(await extractDocxTextFromBuffer(buffer), 'extractDocxTextFromBuffer');
     }
 
-    const buffer = await response.arrayBuffer();
     if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
-      return (await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, 5000)).slice(0, 5000);
+      return storePreview(
+        await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_PREVIEW_MAX_LENGTH),
+        'extractDesktopMaterialTextFromArrayBuffer',
+      );
     }
     const text = decodeTextBuffer(buffer);
-    return text.slice(0, 5000);
+    return storePreview(text, 'decodeTextBuffer');
   } catch {
     return '';
   }
@@ -1128,7 +1399,107 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
 }
 
 function normalizeGeneratedHtmlResponse(response = '') {
-  return stripGeneratedHtmlResponseCodeFences(response).trim();
+    const stripped = stripGeneratedHtmlResponseCodeFences(response).trim();
+    const parsedJson = tryParseJsonObjectResponse(stripped);
+    const extractedHtml = parsedJson && typeof parsedJson.html === 'string'
+      ? parsedJson.html.trim()
+      : '';
+    const normalized = extractedHtml || stripped;
+  const convertedPlainText = convertMeaningfulPlainTextToBasicHtml(normalized);
+  return convertedPlainText || normalized;
+}
+
+function convertMeaningfulPlainTextToBasicHtml(response = '') {
+  const source = String(response || '').trim();
+  if (!source) return '';
+  if (isJsonOnlyGeneratedHtmlFallbackCandidate(source)) return '';
+    if (/<\/?[a-z][^>]*>/i.test(source)) return '';
+  if (/<\/?[a-z!][^>\n]*$/im.test(source) || /<!--[^>\n]*$/im.test(source)) return '';
+
+  const visibleText = source.replace(/\s+/g, ' ').trim();
+  if (!hasMeaningfulVisibleText(visibleText)) return '';
+
+  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let paragraphLines = [];
+  let listType = '';
+  let listItems = [];
+
+  const flushParagraph = () => {
+    if (!paragraphLines.length) return;
+    blocks.push(`<p>${paragraphLines.map((line) => escapeHtml(line)).join('<br />')}</p>`);
+    paragraphLines = [];
+  };
+
+  const flushList = () => {
+    if (!listItems.length || !listType) return;
+    blocks.push(`<${listType}>${listItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</${listType}>`);
+    listType = '';
+    listItems = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '').trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = headingMatch[1].length;
+      blocks.push(`<h${level}>${escapeHtml(headingMatch[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+    if (bulletMatch) {
+      flushParagraph();
+      if (listType && listType !== 'ul') flushList();
+      listType = 'ul';
+      listItems.push(bulletMatch[1].trim());
+      continue;
+    }
+
+    const orderedMatch = line.match(/^\d+[\.)]\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listType && listType !== 'ol') flushList();
+      listType = 'ol';
+      listItems.push(orderedMatch[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return blocks.join('\n');
+}
+
+function isJsonOnlyGeneratedHtmlFallbackCandidate(response = '') {
+  const source = String(response || '').trim();
+  if (!source || !/^[\[{]/.test(source)) return false;
+
+  const looksJsonLike = /^[\[{]/.test(source) && (
+    /^\{[\s\S]*["'][^"'\n]+["']\s*:/m.test(source)
+    || /^\[[\s\S]*\{/m.test(source)
+    || /^\[[\s\S]*(?:"|true\b|false\b|null\b|-?\d)/m.test(source)
+  );
+  if (!looksJsonLike) return false;
+
+  try {
+    const parsed = JSON.parse(source);
+    return Array.isArray(parsed) || Boolean(parsed && typeof parsed === 'object');
+  } catch {
+    return true;
+  }
 }
 
 function stripGeneratedHtmlResponseCodeFences(response = '') {
@@ -1215,6 +1586,9 @@ function findGeneratedHtmlIntegrityIssue(html = '') {
   if (TRUNCATED_RESPONSE_MARKER_PATTERN.test(source)) {
     return 'התקבל placeholder של קיצור context או תשובה חלקית';
   }
+  if (isJsonOnlyGeneratedHtmlFallbackCandidate(source)) {
+    return 'התקבלה מעטפת JSON או pseudo-JSON במקום HTML';
+  }
   if (!/<\/?[a-z][^>]*>/i.test(source)) {
     return 'התקבל פלט שאינו HTML';
   }
@@ -1284,6 +1658,131 @@ function ensureCompleteGeneratedHtmlResponse(response = '', operationLabel = 'ה
   }
 
   return normalized;
+}
+
+function normalizeDocumentVisibleText(html = '') {
+  return stripHtmlTags(normalizeGeneratedHtmlResponse(html)).replace(/\s+/g, ' ').trim();
+}
+
+function normalizeDocumentSignature(value = '') {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/[^\u0590-\u05FFA-Za-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractDocumentHeadingSignatures(html = '', limit = 3) {
+  return Array.from(String(html || '').matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi))
+    .map((match) => normalizeDocumentSignature(match[2]))
+    .filter(Boolean)
+    .slice(0, Math.max(0, limit));
+}
+
+function feedbackAllowsWideDocumentRewrite(feedback = '') {
+  const normalizedFeedback = String(feedback || '').replace(/\s+/g, ' ').trim();
+  if (!normalizedFeedback) return false;
+
+  const negatedWholeDocumentRewritePattern = /(אל|לא|בלי|don't|do not|dont)\s+(?:להפוך|תהפוך|לקצר|תקצר|לתמצת|תמצת|לסכם|סכם|לשכתב|שכתב|rewrite|shorten|summari[sz]e|condense|convert)/i;
+  if (negatedWholeDocumentRewritePattern.test(normalizedFeedback)) return false;
+
+  const explicitWholeDocumentPattern = /((?:לקצר|תקצר|לתמצת|תמצת|לסכם|סכם|שכתב|לשכתב|כתב\s+מחדש|לכתוב\s+מחדש|תכתוב\s+מחדש|כתוב\s+מחדש|ארגן\s+מחדש|סדר\s+מחדש|שנה\s+מבנה|הפוך|הפכי|תהפוך|להפוך)\s+(?:את\s+)?(?:כל\s+)?(?:המסמך|העבודה|הטקסט))(?:\s|$)|(?:המסמך|העבודה|הטקסט)\s+(?:כולו|כולה)\s+(?:בקיצור|בתמצות|בקצרה)|(?:rewrite|summari[sz]e|shorten|condense|restructure|reorganize)\s+(?:the\s+)?(?:entire|whole)\s+(?:document|text|draft)|(?:remove|delete)\s+(?:entire|whole)\s+(?:sections?|paragraphs?|document)/i;
+  if (explicitWholeDocumentPattern.test(normalizedFeedback)) return true;
+
+  const localTargetPattern = /(מבוא|פתיח|פרק|סעיף|פסקה|כותרת|chapter|section|paragraph|intro|heading|conclusion|summary)/i;
+  const globalCondenseVerbPattern = /(לקצר|תקצר|לתמצת|תמצת|לסכם|סכם|shorten|summari[sz]e|condense|reduce)/i;
+  const pageBudgetPattern = /(עמוד\s+אחד|חצי\s+עמוד|one\s+page|half\s+page)/i;
+  if (!localTargetPattern.test(normalizedFeedback) && globalCondenseVerbPattern.test(normalizedFeedback) && pageBudgetPattern.test(normalizedFeedback)) {
+    return true;
+  }
+
+  const convertToShortFormPattern = /(הפוך|הפכי|להפוך|תהפוך|convert|transform).{0,24}(?:את\s+)?(?:כל\s+)?(?:המסמך|העבודה|הטקסט)?(?:\s+)?(?:ל|into\s+)?(?:מייל|אימייל|מכתב\s+קצר|email|short\s+letter|brief)/i;
+  if (!localTargetPattern.test(normalizedFeedback) && convertToShortFormPattern.test(normalizedFeedback)) {
+    return true;
+  }
+
+  return false;
+}
+
+function feedbackAllowsUltraShortDocumentForm(feedback = '') {
+  return /(מייל|אימייל|email|תקציר\s+קצר|סיכום\s+קצר|brief|short\s+letter|message\s+short)/i.test(String(feedback || '').trim());
+}
+
+function feedbackRequestsGlobalCondense(feedback = '') {
+  return /(לקצר|תקצר|לתמצת|תמצת|לסכם|סכם|shorten|summari[sz]e|condense|reduce)/i.test(String(feedback || '').trim());
+}
+
+function extractDocumentBoundarySignatures(html = '', maxChars = 120) {
+  const visibleText = normalizeDocumentVisibleText(html);
+  if (!visibleText) {
+    return {
+      start: '',
+      end: '',
+    };
+  }
+
+  return {
+    start: normalizeDocumentSignature(visibleText.slice(0, maxChars)),
+    end: normalizeDocumentSignature(visibleText.slice(-maxChars)),
+  };
+}
+
+function countDocumentContentBlocks(html = '') {
+  return (String(html || '').match(/<(?:h[1-6]|p|li|blockquote|table|tr|td|th)\b/gi) || []).length;
+}
+
+function findSuspiciousRevisionOutputIssue({ existingHtml = '', revisedHtml = '', feedback = '' } = {}) {
+  const previousVisible = normalizeDocumentVisibleText(existingHtml);
+  const revisedVisible = normalizeDocumentVisibleText(revisedHtml);
+  if (!previousVisible || !revisedVisible) return '';
+
+  const previousLength = previousVisible.length;
+  const revisedLength = revisedVisible.length;
+  const wideRewriteAllowed = feedbackAllowsWideDocumentRewrite(feedback);
+  const ultraShortRewriteAllowed = feedbackAllowsUltraShortDocumentForm(feedback);
+  const globalCondenseRequested = feedbackRequestsGlobalCondense(feedback);
+  const previousBoundaries = extractDocumentBoundarySignatures(existingHtml);
+  const revisedSignature = normalizeDocumentSignature(revisedHtml);
+  const preservesStartBoundary = previousBoundaries.start && revisedSignature.includes(previousBoundaries.start);
+  const preservesEndBoundary = previousBoundaries.end && revisedSignature.includes(previousBoundaries.end);
+  const previousBlockCount = countDocumentContentBlocks(existingHtml);
+  const revisedBlockCount = countDocumentContentBlocks(revisedHtml);
+
+  if (wideRewriteAllowed) {
+    if (!ultraShortRewriteAllowed && previousLength >= 160 && revisedLength < 80) {
+      return 'תשובת השכתוב המלא קצרה מדי ונראית כמו fragment במקום מסמך מלא';
+    }
+
+    if (!ultraShortRewriteAllowed && !globalCondenseRequested && previousBlockCount >= 3 && revisedBlockCount <= 1 && revisedLength < Math.max(220, Math.floor(previousLength * 0.35))) {
+      return 'תשובת השכתוב המלא נראית כמו פסקה בודדת במקום מסמך מלא';
+    }
+  }
+
+  if (!wideRewriteAllowed && previousLength >= 40 && revisedLength < (previousLength < 80
+    ? Math.max(20, Math.floor(previousLength * 0.38))
+    : Math.max(80, Math.floor(previousLength * 0.38)))) {
+    return 'תשובת התיקון נראית כמו fragment חלקי או קיצור לא מבוקש של המסמך כולו';
+  }
+
+  if (!wideRewriteAllowed && previousLength >= 40 && !preservesStartBoundary && !preservesEndBoundary && revisedLength < Math.max(120, Math.floor(previousLength * 0.72))) {
+    return 'תשובת התיקון לא שומרת על תחילת או סוף המסמך ונראית כמו החלפה חלקית במקום מסמך מלא';
+  }
+
+  if (!wideRewriteAllowed && previousLength >= 40 && (!preservesStartBoundary || !preservesEndBoundary) && revisedLength < Math.max(120, Math.floor(previousLength * 0.9))) {
+    return 'תשובת התיקון איבדה אחד מקצוות המסמך לצד קיטון מהותי ונראית כמו החלפה חלקית';
+  }
+
+  const previousHeadings = extractDocumentHeadingSignatures(existingHtml);
+  if (!wideRewriteAllowed && previousHeadings.length) {
+    const preservedHeadingCount = previousHeadings.filter((heading) => heading && revisedSignature.includes(heading)).length;
+    if (previousLength >= 1800 && preservedHeadingCount === 0 && revisedLength < Math.max(900, Math.floor(previousLength * 0.55))) {
+      return 'תשובת התיקון איבדה את שלד המסמך הקיים ונראית כמו החלפה חלקית במקום מסמך מלא';
+    }
+  }
+
+  return '';
 }
 
 function isRecoverableGeneratedHtmlContinuationIssue(issue = '') {
@@ -1399,14 +1898,18 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
   agentLabel = '',
   requestLogContext = {},
 }) {
+  const maxContinuationPassesRaw = Number(requestOptions?.maxContinuationPasses);
+  const maxContinuationPasses = Number.isFinite(maxContinuationPassesRaw)
+    ? Math.max(1, Math.min(4, Math.floor(maxContinuationPassesRaw)))
+    : 2;
   const response = await chatWithActiveProvider(userPrompt, context, systemPrompt, {
     ...requestOptions,
     includeCompletionMetadata: true,
   });
-  const completion = getGeneratedHtmlProviderCompletion(response);
-  const partialHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(response));
-  const normalizedResponse = partialHtml.trim();
-  const integrityIssue = findGeneratedHtmlIntegrityIssue(normalizedResponse);
+  let completion = getGeneratedHtmlProviderCompletion(response);
+  let partialHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(response));
+  let normalizedResponse = partialHtml.trim();
+  let integrityIssue = findGeneratedHtmlIntegrityIssue(normalizedResponse);
   let validationError = null;
   let validatedResponse = '';
 
@@ -1416,98 +1919,117 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
     validationError = error;
   }
 
-  const shouldContinueFromIntegrity = Boolean(validationError) && isRecoverableGeneratedHtmlContinuationIssue(integrityIssue);
-  const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
-  const continuationIssue = shouldContinueFromCompletion
-    ? buildGeneratedHtmlCompletionContinuationIssue(completion)
-    : integrityIssue;
-  if (!shouldContinueFromIntegrity && !shouldContinueFromCompletion) {
-    if (validationError) throw validationError;
-    return validatedResponse;
-  }
+  for (let continuationAttempt = 0; continuationAttempt < maxContinuationPasses; continuationAttempt += 1) {
+    const shouldContinueFromIntegrity = Boolean(validationError) && isRecoverableGeneratedHtmlContinuationIssue(integrityIssue);
+    const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
+    const continuationIssue = shouldContinueFromCompletion
+      ? buildGeneratedHtmlCompletionContinuationIssue(completion)
+      : integrityIssue;
 
-  logAgentDebugEvent({
-    type: 'doc-html-continuation-attempt',
-    state: 'running',
-    runId,
-    agentLabel,
-    message: shouldContinueFromIntegrity
-      ? `מנסה continuation יחיד ל-${operationLabel} אחרי זיהוי HTML חלקי`
-      : `מנסה continuation יחיד ל-${operationLabel} אחרי זיהוי עצירה ב-limit של הספק`,
-    integrityIssue: continuationIssue,
-    completionReason: completion?.reason || '',
-    partialChars: partialHtml.length,
-    ...requestLogContext,
-  });
-
-  try {
-    const continuationProvider = String(completion?.provider || requestOptions.providerOverride || '').trim();
-    const continuationModel = String(completion?.model || requestOptions.modelOverride || '').trim();
-    const continuationResponse = await chatWithActiveProvider(
-      continuationPrompt,
-      buildGeneratedHtmlContinuationContext({ context, partialHtml, integrityIssue: continuationIssue }),
-      `${systemPrompt}\n\nהמשך רק את ה-HTML החסר של אותה תשובה. אל תחזור על ההתחלה שכבר התקבלה, אל תכתוב markdown או סימוני קוד, ואל תוסיף הסברים. החזר רק את ההמשך הדרוש כדי שהמסמך יהיה HTML שלם ותקין.`,
-      {
-        ...requestOptions,
-        includeCompletionMetadata: true,
-        expectDocumentOutput: true,
-        appendAgentNotesToOutput: requestOptions.appendAgentNotesToOutput === true,
-        agentNotesInstruction: requestOptions.appendAgentNotesToOutput === true
-          ? String(requestOptions.agentNotesInstruction || '').trim()
-          : '',
-        skipAutomation: true,
-        skipAutomationPrompt: true,
-        skipSkillSelection: true,
-        skipMultiModel: true,
-        preserveFullDocumentContext: false,
-        ...(continuationProvider ? {
-          providerOverride: continuationProvider,
-          strictProviderOverride: true,
-        } : {}),
-        ...(continuationModel ? { modelOverride: continuationModel } : {}),
-      },
-    );
-
-    const continuationCompletion = getGeneratedHtmlProviderCompletion(continuationResponse);
-    const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
-    const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
-    const mergedValidatedResponse = ensureCompleteGeneratedHtmlResponse(mergedResponse, operationLabel);
-
-    logAgentDebugEvent({
-      type: 'doc-html-continuation-success',
-      state: 'success',
-      runId,
-      agentLabel,
-      message: `continuation יחיד השלים בהצלחה את ${operationLabel}`,
-      integrityIssue: continuationIssue,
-      completionReason: completion?.reason || '',
-      continuationCompletionReason: continuationCompletion?.reason || '',
-      partialChars: partialHtml.length,
-      continuationChars: continuationHtml.length,
-      outputChars: mergedValidatedResponse.length,
-      ...requestLogContext,
-    });
-
-    return mergedValidatedResponse;
-  } catch (continuationError) {
-    logAgentDebugEvent({
-      type: 'doc-html-continuation-failure',
-      state: 'error',
-      runId,
-      agentLabel,
-      message: `continuation יחיד ל-${operationLabel} נכשל`,
-      integrityIssue: continuationIssue,
-      completionReason: completion?.reason || '',
-      errorMessage: continuationError?.message || validationError?.message || 'שגיאה לא ידועה',
-      partialChars: partialHtml.length,
-      ...requestLogContext,
-    });
-    if (shouldContinueFromCompletion) {
-      const continuationFailureMessage = continuationError?.message || validationError?.message || 'שגיאה לא ידועה';
-      throw new Error(`הפלט עבור ${operationLabel} נעצר במגבלת הספק ו-continuation נכשל: ${continuationFailureMessage}`);
+    if (!shouldContinueFromIntegrity && !shouldContinueFromCompletion) {
+      if (validationError) throw validationError;
+      return validatedResponse;
     }
-    throw continuationError;
+
+    logAgentDebugEvent({
+      type: 'doc-html-continuation-attempt',
+      state: 'running',
+      runId,
+      agentLabel,
+      message: shouldContinueFromIntegrity
+        ? `מנסה continuation ${continuationAttempt + 1} מתוך ${maxContinuationPasses} ל-${operationLabel} אחרי זיהוי HTML חלקי`
+        : `מנסה continuation ${continuationAttempt + 1} מתוך ${maxContinuationPasses} ל-${operationLabel} אחרי זיהוי עצירה ב-limit של הספק`,
+      integrityIssue: continuationIssue,
+      completionReason: completion?.reason || '',
+      partialChars: partialHtml.length,
+      ...requestLogContext,
+    });
+
+    try {
+      const continuationProvider = String(completion?.provider || requestOptions.providerOverride || '').trim();
+      const continuationModel = String(completion?.model || requestOptions.modelOverride || '').trim();
+      const continuationResponse = await chatWithActiveProvider(
+        continuationPrompt,
+        buildGeneratedHtmlContinuationContext({ context, partialHtml, integrityIssue: continuationIssue }),
+        `${systemPrompt}\n\nהמשך רק את ה-HTML החסר של אותה תשובה. אל תחזור על ההתחלה שכבר התקבלה, אל תכתוב markdown או סימוני קוד, ואל תוסיף הסברים. החזר רק את ההמשך הדרוש כדי שהמסמך יהיה HTML שלם ותקין.`,
+        {
+          ...requestOptions,
+          includeCompletionMetadata: true,
+          expectDocumentOutput: true,
+          appendAgentNotesToOutput: requestOptions.appendAgentNotesToOutput === true,
+          agentNotesInstruction: requestOptions.appendAgentNotesToOutput === true
+            ? String(requestOptions.agentNotesInstruction || '').trim()
+            : '',
+          skipAutomation: true,
+          skipAutomationPrompt: true,
+          skipSkillSelection: true,
+          skipMultiModel: true,
+          preserveFullDocumentContext: false,
+          ...(continuationProvider ? {
+            providerOverride: continuationProvider,
+            strictProviderOverride: true,
+          } : {}),
+          ...(continuationModel ? { modelOverride: continuationModel } : {}),
+        },
+      );
+
+      const continuationCompletion = getGeneratedHtmlProviderCompletion(continuationResponse);
+      const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
+      const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
+
+      partialHtml = mergedResponse;
+      completion = continuationCompletion;
+      normalizedResponse = mergedResponse.trim();
+      integrityIssue = findGeneratedHtmlIntegrityIssue(normalizedResponse);
+
+      try {
+        const mergedValidatedResponse = ensureCompleteGeneratedHtmlResponse(mergedResponse, operationLabel);
+
+        logAgentDebugEvent({
+          type: 'doc-html-continuation-success',
+          state: 'success',
+          runId,
+          agentLabel,
+          message: `continuation ${continuationAttempt + 1} השלים בהצלחה את ${operationLabel}`,
+          integrityIssue: continuationIssue,
+          completionReason: completion?.reason || '',
+          continuationCompletionReason: continuationCompletion?.reason || '',
+          partialChars: partialHtml.length,
+          continuationChars: continuationHtml.length,
+          outputChars: mergedValidatedResponse.length,
+          ...requestLogContext,
+        });
+
+        return mergedValidatedResponse;
+      } catch (retryValidationError) {
+        validationError = retryValidationError;
+        if (continuationAttempt >= maxContinuationPasses - 1) {
+          throw retryValidationError;
+        }
+      }
+    } catch (continuationError) {
+      logAgentDebugEvent({
+        type: 'doc-html-continuation-failure',
+        state: 'error',
+        runId,
+        agentLabel,
+        message: `continuation ${continuationAttempt + 1} ל-${operationLabel} נכשל`,
+        integrityIssue: continuationIssue,
+        completionReason: completion?.reason || '',
+        errorMessage: continuationError?.message || validationError?.message || 'שגיאה לא ידועה',
+        partialChars: partialHtml.length,
+        ...requestLogContext,
+      });
+      if (shouldContinueFromCompletion) {
+        const continuationFailureMessage = continuationError?.message || validationError?.message || 'שגיאה לא ידועה';
+        throw new Error(`הפלט עבור ${operationLabel} נעצר במגבלת הספק ו-continuation נכשל: ${continuationFailureMessage}`);
+      }
+      throw continuationError;
+    }
   }
+
+  if (validationError) throw validationError;
+  return validatedResponse;
 }
 
 function normalizeJsonOnlyResponse(response = '') {
@@ -2113,10 +2635,12 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
+  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
+  const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: cleanPrompt, instructions: cleanInstructions, templateId });
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
   const automation = getWorkspaceAutomation();
@@ -2195,6 +2719,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       workspaceName: requestWorkspaceName,
       structureConstraintText: [cleanInstructions, cleanPrompt].filter(Boolean).join('\n').trim(),
       expectDocumentOutput: true,
+      templateId,
+      isAcademicTask,
+      additionalReviewRounds: normalizedAdditionalReviewRounds,
+      maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
       appendAgentNotesToOutput: suppressVisibleAgentNotes ? false : automation?.appendAgentNotesToOutput === true,
       agentNotesInstruction: !suppressVisibleAgentNotes && automation?.appendAgentNotesToOutput === true
         ? String(automation?.agentNotesInstruction || '').trim()
@@ -2393,10 +2921,12 @@ async function prepareFeedbackDrivenDocumentContext({
   };
 }
 
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
+  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
+  const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: originalPrompt, instructions: cleanFeedback, templateId });
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
   if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
 
@@ -2433,9 +2963,10 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       : cleanHtml;
   }
 
+  const revisionPreservationContract = 'חוזה מחייב לעדכון: החזר תמיד את המסמך המלא מתחילתו ועד סופו, גם אם התיקון נוגע רק בפסקה אחת. אסור להחזיר רק fragment, רק קטע מתוקן, או רק את ההמשך החסר. ברירת המחדל היא שימור: כל חלק שלא התבקש להשתנות צריך להישאר באותה משמעות, באותו סדר ובאותו מבנה; אם אין סיבה חזקה לשנות ניסוח קיים, השאר אותו כפי שהוא.';
   const systemPrompt = shouldUseWorkflowAutomation
-    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`
-    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`;
+    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`
+    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`;
 
   try {
     logAgentDebugEvent({
@@ -2476,8 +3007,14 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       agentLabel: documentUpdateLabel,
       activeWorkspaceId: requestWorkspaceId,
       workspaceName: requestWorkspaceName,
+      expectDocumentOutput: true,
+      documentFallbackHtml: cleanHtml,
       structureConstraintText: cleanFeedback,
       preserveFullDocumentContext: shouldPreserveFullRevisionContext,
+      templateId,
+      isAcademicTask,
+      additionalReviewRounds: normalizedAdditionalReviewRounds,
+      maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
     };
     if (!shouldUseWorkflowAutomation) {
       requestOptions.skipAutomation = true;
@@ -2506,19 +3043,29 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       requestLogContext,
     });
 
+    const validatedResponse = ensureCompleteGeneratedHtmlResponse(cleanedResponse, 'עדכון המסמך');
+    const suspiciousRevisionIssue = findSuspiciousRevisionOutputIssue({
+      existingHtml: cleanHtml,
+      revisedHtml: validatedResponse,
+      feedback: cleanFeedback,
+    });
+    if (suspiciousRevisionIssue) {
+      throw new Error(`${suspiciousRevisionIssue}. עצרתי כדי לא לדרוס את המסמך המלא הקיים.`);
+    }
+
     logAgentDebugEvent({
       type: 'doc-feedback-success',
       state: 'success',
       runId,
       agentLabel: documentUpdateLabel,
       message: shouldUseWorkflowAutomation ? 'המסמך עודכן לפי המשוב דרך workflow' : 'המסמך עודכן ישירות לפי המשוב',
-      outputChars: cleanedResponse.length,
+      outputChars: validatedResponse.length,
       ...requestLogContext,
     });
 
     return returnMeta
-      ? { html: cleanedResponse, usedFallback: false, runId, errorMessage: '' }
-      : cleanedResponse;
+      ? { html: validatedResponse, usedFallback: false, runId, errorMessage: '' }
+      : validatedResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-feedback-fallback',
@@ -2686,6 +3233,7 @@ function arrayBufferToBase64(buffer) {
 export async function saveHelperMaterial(file, options = {}) {
   if (!file) throw new Error('לא נבחר קובץ');
   const meta = getMaterialUploadMeta(options.uploadKind || options.id || 'general');
+  const previewMeta = await extractHelperMaterialPreview(file, MATERIAL_PREVIEW_MAX_LENGTH);
   const arrayBuffer = await file.arrayBuffer();
   const payload = {
     name: file.name,
@@ -2696,6 +3244,15 @@ export async function saveHelperMaterial(file, options = {}) {
     category: meta.category,
     templateId: meta.templateId,
     learningHint: meta.learningHint,
+    previewText: previewMeta.previewText,
+    previewChars: previewMeta.previewChars,
+    previewStatus: previewMeta.previewStatus,
+    previewSource: previewMeta.previewSource,
+    previewError: previewMeta.previewError,
+    extractedChars: previewMeta.extractedChars,
+    extractionStatus: previewMeta.extractionStatus,
+    extractionMessage: previewMeta.extractionMessage,
+    extractionTruncated: previewMeta.extractionTruncated,
   };
 
   if (window.desktopApp?.saveLocalMaterial) {

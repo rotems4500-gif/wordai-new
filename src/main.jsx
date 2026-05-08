@@ -13,6 +13,7 @@ import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './Wor
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
 import { downloadBrowserDocx } from './services/browserDocxExport';
+import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
@@ -613,7 +614,87 @@ const buildGenerationLabel = ({ promptText = '', instructionsText = '', template
   return normalizedLine || GENERATION_LABEL_FALLBACKS[templateId] || GENERATION_LABEL_FALLBACKS.blank;
 };
 
-const DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST = 'המשתמש בחר ללטש את הטיוטה הקיימת. שפר ניסוח, סדר מבנה, תקן שגיאות ושמור על כל המידע החשוב.';
+const summarizeInspectorMaterialSelection = (selectedMaterials = []) => (
+  (Array.isArray(selectedMaterials) ? selectedMaterials : []).map((item, index) => {
+    const previewText = String(item?.previewText || '').trim();
+    const rawPreviewChars = Number(item?.previewChars);
+    return {
+      id: item?.id || item?.file || `material-${index + 1}`,
+      title: String(item?.title || item?.file || `material-${index + 1}`).trim(),
+      label: String(item?.label || '').trim(),
+      hasPreview: Boolean(previewText),
+      previewChars: Number.isFinite(rawPreviewChars) && rawPreviewChars >= 0 ? rawPreviewChars : previewText.length,
+      previewStatus: String(item?.previewStatus || (previewText ? 'ready' : '')).trim(),
+      previewError: String(item?.previewError || '').trim(),
+    };
+  })
+);
+
+const buildStartScreenGenerationInspector = ({
+  runId = '',
+  actionType = '',
+  prompt = '',
+  instructions = '',
+  selectedMaterials = [],
+  templateId = 'blank',
+  baseDraft = null,
+  selectedProviderId = '',
+  selectedProviderModel = '',
+  route = 'generateDocumentFromPrompt',
+  routeMode = '',
+  routeModeReason = '',
+} = {}) => {
+  const cleanBaseDraftHtml = String(baseDraft?.html || '').trim();
+  const cleanBaseDraftText = String(baseDraft?.text || '').trim();
+  const hasBaseDraft = Boolean(cleanBaseDraftHtml);
+
+  return {
+    actionType: String(actionType || (hasBaseDraft ? 'revise' : 'generate')).trim() || 'generate',
+    routeRequested: String(route || 'generateDocumentFromPrompt').trim(),
+    routeResolved: String(route || 'generateDocumentFromPrompt').trim(),
+    routeMode: String(routeMode || '').trim(),
+    routeModeReason: String(routeModeReason || '').trim(),
+    runId: String(runId || '').trim(),
+    templateId: String(templateId || 'blank').trim() || 'blank',
+    promptChars: String(prompt || '').trim().length,
+    instructionsChars: String(instructions || '').trim().length,
+    requestedProviderId: String(selectedProviderId || '').trim(),
+    requestedProviderModel: String(selectedProviderModel || '').trim(),
+    selectedMaterials: summarizeInspectorMaterialSelection(selectedMaterials),
+    baseDraft: hasBaseDraft ? {
+      title: String(baseDraft?.title || baseDraft?.name || '').trim() || 'טיוטת בסיס',
+      htmlChars: cleanBaseDraftHtml.length,
+      textChars: cleanBaseDraftText.length,
+    } : null,
+    usedFallback: false,
+    errorMessage: '',
+    liveState: 'running',
+  };
+};
+
+const resolveStartScreenGenerationInspectorMeta = ({ summary = null, logs = [] } = {}) => {
+  const latestLogs = Array.isArray(logs) ? logs : [];
+  const latestStages = Array.isArray(summary?.stages) ? summary.stages : [];
+  const requestStartLog = latestLogs.find((log) => log?.type === 'request-start');
+  const lastLogMeta = [...latestLogs].reverse().find(
+    (log) => String(log?.provider || '').trim() || String(log?.model || '').trim(),
+  );
+  const lastStageMeta = [...latestStages].reverse().find(
+    (stage) => String(stage?.provider || '').trim() || String(stage?.model || '').trim(),
+  );
+  const resolvedProviderMeta = lastLogMeta || lastStageMeta || {};
+
+  return {
+    requestedProviderId: String(resolvedProviderMeta?.provider || '').trim(),
+    requestedProviderModel: String(resolvedProviderMeta?.model || '').trim(),
+    routeMode: requestStartLog
+      ? (requestStartLog.automationSkipped === true ? 'direct' : 'workspace-automation')
+      : '',
+    routeModeReason: String(requestStartLog?.automationSkipReason || '').trim(),
+  };
+};
+
+const DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST = 'המשתמש בחר לעדכן את טיוטת הבסיס הקיימת. הטיוטה היא מקור האמת: שמור את התוכן, המבנה, הטענות והמידע שכבר קיימים, ולטש או הרחב אותם במקום רק כשיש צורך. אל תכתוב מסמך חדש מאפס ואל תמחק חלקים קיימים בלי בקשה מפורשת.';
 
 const buildBaseDraftRevisionRequest = ({ promptText = '', instructionsText = '', baseDraftTitle = '', templateId = 'blank' } = {}) => {
   const cleanPrompt = String(promptText || '').trim();
@@ -628,7 +709,8 @@ const buildBaseDraftRevisionRequest = ({ promptText = '', instructionsText = '',
     };
   }
 
-  const sections = [];
+  const sections = [DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST];
+  if (resolvedDraftTitle) sections.push(`שם הטיוטה לעדכון:\n${resolvedDraftTitle}`);
   if (cleanInstructions) sections.push(`הנחיות לעדכון:\n${cleanInstructions}`);
   if (cleanPrompt) sections.push(`מטרה או הקשר:\n${cleanPrompt}`);
 
@@ -636,6 +718,44 @@ const buildBaseDraftRevisionRequest = ({ promptText = '', instructionsText = '',
     feedback: sections.join('\n\n'),
     title: buildGenerationLabel({ promptText: cleanPrompt, instructionsText: cleanInstructions, templateId }),
     originalPrompt: cleanPrompt || resolvedDraftTitle || 'טיוטת בסיס',
+  };
+};
+
+const normalizeDeferredReviewOfferText = (value = '', limit = 220) => {
+  const normalizedValue = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalizedValue) return '';
+  return normalizedValue.length > limit
+    ? `${normalizedValue.slice(0, Math.max(0, limit - 3)).trim()}...`
+    : normalizedValue;
+};
+
+const buildDeferredReviewOffer = ({ logs = [], additionalReviewRounds = 0, usedFallback = false } = {}) => {
+  if (usedFallback || Number(additionalReviewRounds) > 0) return null;
+
+  const revisitLog = (Array.isArray(logs) ? logs : []).find((log) => String(log?.type || '').trim() === 'stage-revisit-required');
+  if (!revisitLog) return null;
+
+  const noteText = normalizeDeferredReviewOfferText(revisitLog.message || revisitLog.type || '');
+  const decisionText = normalizeDeferredReviewOfferText(revisitLog.decision || '');
+  const missingText = normalizeDeferredReviewOfferText(revisitLog.missing || '', 260);
+  const confirmSections = [
+    'בסוף הסבב מנהל העבודה ביקש סבב בקרת איכות נוסף.',
+    noteText ? `הערת הסיום: ${noteText}` : '',
+    missingText ? `פערים שזוהו: ${missingText}` : '',
+    'להריץ עכשיו סבב נוסף על הטיוטה שכבר נוצרה?',
+  ].filter(Boolean);
+  const feedbackSections = [
+    'מנהל העבודה ביקש עכשיו סבב בקרת איכות נוסף על הטיוטה הקיימת לפני מסירה.',
+    'הטיוטה הקיימת היא בסיס העבודה. שמור על המבנה, המידע והחלקים הטובים שכבר קיימים, ותקן רק את הפערים שעלו בסיום הסבב.',
+    noteText ? `הערת הסיום של מנהל העבודה:\n${noteText}` : '',
+    decisionText ? `החלטת מנהל:\n${decisionText}` : '',
+    missingText ? `פערים לטיפול:\n${missingText}` : '',
+    'בצע תיקונים ממוקדים, השלם רק מה שחסר, ואל תוסיף מבנה חדש או חלקים שלא נתבקשו.',
+  ].filter(Boolean);
+
+  return {
+    confirmMessage: confirmSections.join('\n\n'),
+    feedback: feedbackSections.join('\n\n'),
   };
 };
 
@@ -734,6 +854,27 @@ const DEFAULT_INPUT_DIALOG = {
   resolve: null,
 };
 
+const COPYLEAKS_SOURCE_LABELS = {
+  selection: 'טקסט מסומן',
+  currentBlock: 'פסקה פעילה',
+  document: 'כל המסמך',
+};
+
+const DEFAULT_COPYLEAKS_DETECTOR = {
+  open: false,
+  source: 'selection',
+  sourceLabel: COPYLEAKS_SOURCE_LABELS.selection,
+  text: '',
+  submitting: false,
+  result: null,
+  error: '',
+};
+
+const formatCopyleaksPercent = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : '—';
+};
+
 const getFeedbackSurveyGenerationContext = (survey = {}, fallback = {}) => {
   const surveyPrompt = String(survey.prompt || '').trim();
   const fallbackPrompt = String(fallback.prompt || '').trim();
@@ -828,6 +969,120 @@ const isLegacyHomeEnabled = () => {
   }
 };
 
+const PRIMARY_DOCUMENT_STORAGE_SCOPE_ID = 'primary';
+const DOCUMENT_STORAGE_KEYS = Object.freeze({
+  draft: 'wordai_document',
+  autosave: 'wordai_document_autosave',
+  autosaveAt: 'wordai_document_autosave_at',
+  activeTemplate: 'wordai_active_template',
+});
+
+const DESKTOP_WINDOW_CONTEXT = (() => {
+  if (typeof window === 'undefined') {
+    return {
+      isolatedDocumentSession: false,
+      documentStorageScopeId: PRIMARY_DOCUMENT_STORAGE_SCOPE_ID,
+      hasPendingOpenDocument: false,
+    };
+  }
+  const rawContext = window.desktopApp?.windowContext;
+  if (!rawContext || typeof rawContext !== 'object') {
+    return {
+      isolatedDocumentSession: false,
+      documentStorageScopeId: PRIMARY_DOCUMENT_STORAGE_SCOPE_ID,
+      hasPendingOpenDocument: false,
+    };
+  }
+
+  const scopedId = typeof rawContext.documentStorageScopeId === 'string'
+    ? rawContext.documentStorageScopeId.trim()
+    : '';
+
+  return {
+    isolatedDocumentSession: rawContext.isolatedDocumentSession === true,
+    documentStorageScopeId: scopedId || PRIMARY_DOCUMENT_STORAGE_SCOPE_ID,
+    hasPendingOpenDocument: rawContext.hasPendingOpenDocument === true,
+  };
+})();
+
+const DOCUMENT_STORAGE_SCOPE_ID = String(
+  DESKTOP_WINDOW_CONTEXT.documentStorageScopeId || PRIMARY_DOCUMENT_STORAGE_SCOPE_ID
+).trim() || PRIMARY_DOCUMENT_STORAGE_SCOPE_ID;
+const HAS_PENDING_STARTUP_DOCUMENT = DESKTOP_WINDOW_CONTEXT.hasPendingOpenDocument === true;
+const SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE = DOCUMENT_STORAGE_SCOPE_ID === PRIMARY_DOCUMENT_STORAGE_SCOPE_ID;
+
+const buildScopedDocumentStorageKey = (storageKey) => `wordai_window_scope:${DOCUMENT_STORAGE_SCOPE_ID}:${storageKey}`;
+
+const readDocumentStorageValue = (storageKey, { fallbackToLegacy = false } = {}) => {
+  try {
+    const scopedValue = localStorage.getItem(buildScopedDocumentStorageKey(storageKey));
+    if (scopedValue !== null) return scopedValue;
+    if (fallbackToLegacy && SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE) {
+      return localStorage.getItem(storageKey);
+    }
+  } catch {}
+  return null;
+};
+
+const writeDocumentStorageValue = (storageKey, value, { mirrorLegacy = SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE } = {}) => {
+  try {
+    const normalizedValue = String(value ?? '');
+    localStorage.setItem(buildScopedDocumentStorageKey(storageKey), normalizedValue);
+    if (mirrorLegacy && SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE) {
+      localStorage.setItem(storageKey, normalizedValue);
+    }
+  } catch {}
+};
+
+const removeDocumentStorageValue = (storageKey, { removeLegacy = SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE } = {}) => {
+  try {
+    localStorage.removeItem(buildScopedDocumentStorageKey(storageKey));
+    if (removeLegacy && SHOULD_FALLBACK_TO_LEGACY_DOCUMENT_STORAGE) {
+      localStorage.removeItem(storageKey);
+    }
+  } catch {}
+};
+
+const getPersistedDraftHtml = () => {
+  const autosaveHtml = readDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosave, { fallbackToLegacy: true });
+  if (autosaveHtml) return autosaveHtml;
+  return readDocumentStorageValue(DOCUMENT_STORAGE_KEYS.draft, { fallbackToLegacy: true }) || null;
+};
+
+const getPersistedDraftSavedAt = () => {
+  return readDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosaveAt, { fallbackToLegacy: true }) || '';
+};
+
+const clearPersistedAutosaveCache = () => {
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosave);
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosaveAt);
+};
+
+const persistAutosaveSnapshot = (html) => {
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosave, html);
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosaveAt, new Date().toISOString());
+};
+
+const persistLocalDraftCache = (html) => {
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.draft, html);
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosave, html);
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosaveAt, new Date().toISOString());
+};
+
+const clearPersistedDraftCacheStorage = () => {
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.draft);
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosave);
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.autosaveAt);
+};
+
+const getPersistedActiveTemplateId = () => {
+  return readDocumentStorageValue(DOCUMENT_STORAGE_KEYS.activeTemplate, { fallbackToLegacy: true }) || 'blank';
+};
+
+const persistActiveTemplateId = (templateId = 'blank') => {
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.activeTemplate, templateId || 'blank');
+};
+
 const getRecentAgentLogs = (limit = 18, filters = {}) => {
   const automation = getWorkspaceAutomation();
   const workspaceId = String(filters.workspaceId || automation?.activeWorkspaceId || 'default-content-studio').trim();
@@ -837,6 +1092,14 @@ const getRecentAgentLogs = (limit = 18, filters = {}) => {
 
 function App() {
   // ביטול טיימר הפולבק לאחר שReact עשה commit ראשון לDOM
+  const applyHydratedSettingsState = React.useCallback(() => {
+    setShortcuts(getShortcutsConfig());
+    setAssistantBehavior(getAssistantBehavior());
+    setWordPreferences(getWordPreferences());
+    setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
+    setActiveTemplateId(getPersistedActiveTemplateId());
+  }, []);
+
   React.useEffect(() => {
     if (window.__mountTimer) clearTimeout(window.__mountTimer);
 
@@ -847,11 +1110,7 @@ function App() {
         await hydrateAppSettingsFromDisk().catch(() => {});
         await hydrateProviderConfigFromDisk().catch(() => {});
         if (!isMounted) return;
-        setShortcuts(getShortcutsConfig());
-        setAssistantBehavior(getAssistantBehavior());
-        setWordPreferences(getWordPreferences());
-        setDocumentStyle(localStorage.getItem('wordai_document_style') || 'academic');
-        setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+        applyHydratedSettingsState();
       } finally {
         if (isMounted) setSettingsHydrated(true);
       }
@@ -860,7 +1119,37 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [applyHydratedSettingsState]);
+
+  React.useEffect(() => {
+    const refreshSettingsFromDisk = () => {
+      hydrateAppSettingsFromDisk()
+        .catch(() => {})
+        .then(() => hydrateProviderConfigFromDisk().catch(() => {}))
+        .then(() => {
+          applyHydratedSettingsState();
+        })
+        .catch(() => {});
+    };
+
+    const handleWindowFocus = () => {
+      refreshSettingsFromDisk();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSettingsFromDisk();
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [applyHydratedSettingsState]);
 
   const [editor, setEditor] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
@@ -880,8 +1169,10 @@ function App() {
   const [assistantBehavior, setAssistantBehavior] = React.useState(getAssistantBehavior());
   const [wordPreferences, setWordPreferences] = React.useState(getWordPreferences());
   const [documentStyle, setDocumentStyle] = React.useState(() => localStorage.getItem('wordai_document_style') || 'academic');
-  const [activeTemplateId, setActiveTemplateId] = React.useState(() => localStorage.getItem('wordai_active_template') || 'blank');
+  const [activeTemplateId, setActiveTemplateId] = React.useState(() => getPersistedActiveTemplateId());
+  const [pendingStartupDocument, setPendingStartupDocument] = React.useState(HAS_PENDING_STARTUP_DOCUMENT);
   const [showStartScreen, setShowStartScreen] = React.useState(() => {
+    if (HAS_PENDING_STARTUP_DOCUMENT) return false;
     if (isLegacyHomeEnabled()) return true;
     return getWordPreferences().showStartExperience !== false;
   });
@@ -900,6 +1191,8 @@ function App() {
     runId: '',
     workspaceId: getWorkspaceAutomation().activeWorkspaceId || '',
   });
+  const liveGenerationStateRef = React.useRef(null);
+  liveGenerationStateRef.current = liveGeneration;
   const [documentArrival, setDocumentArrival] = React.useState({ active: false, tone: 'success' });
   const [lastGenerationAction, setLastGenerationAction] = React.useState(null);
   const [generationRecovery, setGenerationRecovery] = React.useState({
@@ -912,6 +1205,7 @@ function App() {
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
+  const [copyleaksDetector, setCopyleaksDetector] = React.useState({ ...DEFAULT_COPYLEAKS_DETECTOR });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
   const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
@@ -972,8 +1266,9 @@ function App() {
     }
   }, []);
   const clearDraftReviewState = React.useCallback(() => {
+    const currentLiveGeneration = liveGenerationStateRef.current || {};
     const cancelledRunId = String(
-      liveGeneration.runId
+      currentLiveGeneration.runId
       || preLiveGenerationSnapshotRef.current.runId
       || lastLiveGenerationShellRef.current.runId
       || ''
@@ -1011,6 +1306,40 @@ function App() {
     lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
     clearDocumentArrival();
     setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
+    setLastGenerationAction((prev) => {
+      const latestLiveGeneration = liveGenerationStateRef.current || {};
+      const latestLiveState = String(latestLiveGeneration.state || '').trim();
+      const latestLiveRunId = String(latestLiveGeneration.runId || '').trim();
+
+      if (
+        latestLiveState !== 'running'
+        || !cancelledRunId
+        || (latestLiveRunId && latestLiveRunId !== cancelledRunId)
+        || !prev
+        || typeof prev !== 'object'
+      ) {
+        return prev;
+      }
+
+      const prevInspector = prev.inspector && typeof prev.inspector === 'object'
+        ? prev.inspector
+        : null;
+      const actionRunId = String(prev.runId || '').trim();
+      const inspectorRunId = String(prevInspector?.runId || '').trim();
+
+      if (actionRunId !== cancelledRunId && inspectorRunId !== cancelledRunId) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        inspector: {
+          ...(prevInspector || {}),
+          runId: inspectorRunId || actionRunId,
+          liveState: 'cancelled',
+        },
+      };
+    });
     setLiveGeneration((prev) => ({
       ...prev,
       active: false,
@@ -1018,7 +1347,7 @@ function App() {
       prompt: '',
       runId: '',
     }));
-  }, [clearDocumentArrival, editor, liveGeneration.runId]);
+  }, [clearDocumentArrival, editor]);
   const beginGenerationRequest = (runIdPrefix = 'doc') => {
     const requestId = activeGenerationRequestIdRef.current + 1;
     activeGenerationRequestIdRef.current = requestId;
@@ -1243,6 +1572,123 @@ function App() {
   const submitInputDialog = React.useCallback(() => {
     closeInputDialog(inputDialog.values || {});
   }, [closeInputDialog, inputDialog.values]);
+
+  const closeCopyleaksDetector = React.useCallback(() => {
+    setCopyleaksDetector((prev) => (prev.open ? { ...DEFAULT_COPYLEAKS_DETECTOR } : prev));
+  }, []);
+
+  const copyPlainTextToClipboard = React.useCallback(async (text = '') => {
+    const value = String(text || '');
+    if (!value.trim()) return false;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return copied;
+      } catch {
+        return false;
+      }
+    }
+  }, []);
+
+  const openCopyleaksDetector = React.useCallback((source = 'selection') => {
+    const normalizedSource = COPYLEAKS_SOURCE_LABELS[source] ? source : 'selection';
+    const nextText = normalizedSource === 'document'
+      ? String(editor?.getText?.() || '')
+      : normalizedSource === 'currentBlock'
+        ? String(currentBlockText || '')
+        : String(selectedText || '');
+
+    if (normalizedSource === 'selection' && !nextText.trim()) {
+      alert('אין כרגע טקסט מסומן לבדיקה.');
+      return;
+    }
+    if (normalizedSource === 'currentBlock' && !nextText.trim()) {
+      alert('לא זוהתה פסקה פעילה לבדיקה.');
+      return;
+    }
+    if (normalizedSource === 'document' && !nextText.trim()) {
+      alert('המסמך ריק כרגע.');
+      return;
+    }
+
+    setCopyleaksDetector({
+      ...DEFAULT_COPYLEAKS_DETECTOR,
+      open: true,
+      source: normalizedSource,
+      sourceLabel: COPYLEAKS_SOURCE_LABELS[normalizedSource],
+      text: nextText,
+    });
+  }, [currentBlockText, editor, selectedText]);
+
+  const openCopyleaksSettingsPanel = React.useCallback(() => {
+    closeCopyleaksDetector();
+    setFileMenuTargetTab('ai');
+    setFileMenuOpen(true);
+  }, [closeCopyleaksDetector]);
+
+  const submitCopyleaksDetector = React.useCallback(async () => {
+    const stats = getCopyleaksTextStats(copyleaksDetector.text);
+    const validationMessage = getCopyleaksValidationMessage(copyleaksDetector.text);
+    const copyleaksConfig = normalizeCopyleaksConfig(getProviderConfig().copyleaks);
+
+    if (!copyleaksConfig.email || !copyleaksConfig.key) {
+      setCopyleaksDetector((prev) => ({
+        ...prev,
+        submitting: false,
+        result: null,
+        error: 'לפני שמריצים בדיקה, מלאו בהגדרות את האימייל והמפתח הסודי של Copyleaks.',
+      }));
+      return;
+    }
+
+    if (!stats.isValid) {
+      setCopyleaksDetector((prev) => ({
+        ...prev,
+        submitting: false,
+        result: null,
+        error: validationMessage || 'הטקסט לא עומד במגבלות Copyleaks.',
+      }));
+      return;
+    }
+
+    setCopyleaksDetector((prev) => ({
+      ...prev,
+      submitting: true,
+      error: '',
+      result: null,
+    }));
+
+    try {
+      const result = await detectCopyleaksText(copyleaksConfig, copyleaksDetector.text);
+      setCopyleaksDetector((prev) => ({
+        ...prev,
+        submitting: false,
+        error: '',
+        result,
+      }));
+    } catch (error) {
+      setCopyleaksDetector((prev) => ({
+        ...prev,
+        submitting: false,
+        result: null,
+        error: error?.message || 'Copyleaks לא הצליח להשלים את הבדיקה.',
+      }));
+    }
+  }, [copyleaksDetector.text]);
 
   const toggleFeedbackOption = React.useCallback((option) => {
     setFeedbackSurvey((prev) => ({
@@ -1653,11 +2099,14 @@ function App() {
 
   React.useEffect(() => {
     const isInputDialogVisible = inputDialog.open;
+    const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen;
     const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
     const topmostOverlay = fileMenuOpen
       ? ''
       : isInputDialogVisible && inputDialog.closeOnEscape !== false
         ? 'input-dialog'
+        : isCopyleaksDetectorVisible
+          ? 'copyleaks-detector'
         : isFeedbackSurveyVisible
           ? 'feedback-survey'
           : sidebarOpen && !showStartScreen
@@ -1671,6 +2120,12 @@ function App() {
       if (topmostOverlay === 'input-dialog') {
         event.preventDefault();
         closeInputDialog(null);
+        return;
+      }
+
+      if (topmostOverlay === 'copyleaks-detector') {
+        event.preventDefault();
+        closeCopyleaksDetector();
         return;
       }
 
@@ -1689,11 +2144,13 @@ function App() {
   }, [
     inputDialog.open,
     inputDialog.closeOnEscape,
+    copyleaksDetector.open,
     feedbackSurvey.open,
     sidebarOpen,
     fileMenuOpen,
     showStartScreen,
     closeInputDialog,
+    closeCopyleaksDetector,
     closeFeedbackSurvey,
   ]);
 
@@ -1772,12 +2229,12 @@ function App() {
   }, [editor, documentStyle, applyDocumentStyleToEditor]);
 
   React.useEffect(() => {
-    if (!editor || initializedDocRef.current || !settingsHydrated) return;
+    if (!editor || initializedDocRef.current || !settingsHydrated || pendingStartupDocument) return;
 
     const shouldShowHome = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
     const savedDraft = wordPreferences.keepLastAutosavedVersion === false
       ? null
-      : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+      : getPersistedDraftHtml();
     const profile = getPersonalStyleProfile();
 
     if (shouldShowHome) {
@@ -1796,7 +2253,7 @@ function App() {
     }
 
     initializedDocRef.current = true;
-  }, [editor, settingsHydrated, wordPreferences, focusEditorSoon]);
+  }, [editor, settingsHydrated, wordPreferences, focusEditorSoon, pendingStartupDocument]);
 
   React.useEffect(() => {
     if (!editor) return;
@@ -1809,8 +2266,7 @@ function App() {
 
   React.useEffect(() => {
     if (wordPreferences.keepLastAutosavedVersion === false) {
-      localStorage.removeItem('wordai_document_autosave');
-      localStorage.removeItem('wordai_document_autosave_at');
+      clearPersistedAutosaveCache();
     }
   }, [wordPreferences.keepLastAutosavedVersion]);
 
@@ -1837,12 +2293,7 @@ function App() {
       if (wordPreferences.keepLastAutosavedVersion === false) return;
       if (!hasMeaningfulEditorContent(editor)) return;
       const html = editor.getHTML();
-      try {
-        localStorage.setItem('wordai_document_autosave', html);
-        localStorage.setItem('wordai_document_autosave_at', new Date().toISOString());
-      } catch {
-        // לא חוסמים את המשתמש אם המטמון התמלא
-      }
+      persistAutosaveSnapshot(html);
     };
 
     const interval = window.setInterval(
@@ -1902,13 +2353,7 @@ function App() {
   };
 
   const persistLocalCache = React.useCallback((html) => {
-    try {
-      localStorage.setItem('wordai_document', html);
-      localStorage.setItem('wordai_document_autosave', html);
-      localStorage.setItem('wordai_document_autosave_at', new Date().toISOString());
-    } catch {
-      // המטמון נועד לנוחות וללמידה — לא נחסום עבודה אם הוא מלא
-    }
+    persistLocalDraftCache(html);
   }, []);
 
   const executeStartScreenGeneration = React.useCallback(async (action, options = {}) => {
@@ -1924,7 +2369,6 @@ function App() {
       kind: 'start-screen-generate',
       workspaceId: action?.workspaceId || getActiveWorkspaceId(),
     };
-    setLastGenerationAction(resolvedAction);
 
     const prompt = String(payload.prompt || '').trim();
     const templateId = String(payload.templateId || 'blank').trim() || 'blank';
@@ -1935,9 +2379,13 @@ function App() {
     const selectedModel = selectedProviderId;
     const requestedStyle = String(payload.documentStyle || '').trim();
     const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
+    const additionalReviewRounds = Math.max(0, Math.min(2, Number(payload.additionalReviewRounds) || 0));
+    const suppressDeferredReviewOffer = payload.suppressDeferredReviewOffer === true;
+    const forceDirectMode = payload.forceDirectMode === true;
+    const preserveCurrentDocumentOnError = payload.preserveCurrentDocumentOnError === true;
 
     setCurrentFilePath('');
-    localStorage.setItem('wordai_active_template', templateId);
+  persistActiveTemplateId(templateId);
     syncPersistedAppSettings();
     setActiveTemplateId(templateId);
     setFeedbackSurvey({ ...DEFAULT_FEEDBACK_SURVEY });
@@ -1950,6 +2398,7 @@ function App() {
     const originWorkspaceId = generationRequest.workspaceId;
     const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
     const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
+    const generationRoute = hasBaseDraft ? 'reviseDocumentWithFeedback' : 'generateDocumentFromPrompt';
     const revisionRequest = hasBaseDraft
       ? buildBaseDraftRevisionRequest({
           promptText: prompt,
@@ -1958,9 +2407,34 @@ function App() {
           templateId,
         })
       : null;
+    const inspectorPrompt = hasBaseDraft
+      ? String(revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס').trim()
+      : prompt;
+    const inspectorInstructions = hasBaseDraft
+      ? String(revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST).trim()
+      : instructions;
+    const isKnownDirectStartScreenRoute = String(resolvedAction.workspaceId || '').trim() === '__no-workspace__'
+      && Boolean(selectedProviderId);
     const generationLabel = hasBaseDraft
       ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
       : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId });
+    setLastGenerationAction({
+      ...resolvedAction,
+      runId: generationRequest.runId,
+      inspector: buildStartScreenGenerationInspector({
+        runId: generationRequest.runId,
+        prompt: inspectorPrompt,
+        instructions: inspectorInstructions,
+        selectedMaterials,
+        templateId,
+        baseDraft,
+        selectedProviderId,
+        selectedProviderModel,
+        route: generationRoute,
+        routeMode: isKnownDirectStartScreenRoute ? 'direct' : '',
+        routeModeReason: isKnownDirectStartScreenRoute ? 'providerOverride' : '',
+      }),
+    });
     const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
     const initialLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
 
@@ -1983,11 +2457,9 @@ function App() {
     });
     preLiveGenerationSnapshotRef.current = {
       runId: generationRequest.runId,
-      html: String(editor.getHTML?.() || ''),
+      html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || '')),
     };
-    lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
-    const didStartTransition = runStartTransition((activeEditor) => {
-      clearDocumentArrival();
+    const didStartTransition = await runStartTransition(async (activeEditor) => {
       activeEditor.commands.setContent(initialShell);
       lastLiveGenerationShellRef.current = {
         runId: generationRequest.runId,
@@ -2007,11 +2479,12 @@ function App() {
             selectedModel,
             selectedProviderId,
             selectedProviderModel,
-            forceDirectMode: false,
+            additionalReviewRounds,
+            forceDirectMode,
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = hasBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -2020,6 +2493,9 @@ function App() {
         : `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`);
       const usedFallback = Boolean(result?.usedFallback);
       if (!isGenerationRequestCurrent(generationRequest)) return true;
+      const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
 
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
       lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
@@ -2027,7 +2503,21 @@ function App() {
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
       persistLocalCache(generated);
-      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+          usedFallback,
+          errorMessage: String(result?.errorMessage || '').trim(),
+          liveState: usedFallback ? 'warning' : 'success',
+          routeResolved: generationRoute,
+        },
+      }));
       setFeedbackSurvey({
         ...buildFeedbackSurveyStateWithGenerationContext({}, {
           prompt: resolvedTitle,
@@ -2041,19 +2531,81 @@ function App() {
         open: false,
         phase: 'details',
       });
+
+      const deferredReviewOffer = suppressDeferredReviewOffer
+        ? null
+        : buildDeferredReviewOffer({
+            logs: latestLogs,
+            additionalReviewRounds,
+            usedFallback,
+          });
+
+      if (deferredReviewOffer && window.confirm(deferredReviewOffer.confirmMessage)) {
+        const followUpInstructions = [
+          String(instructions || '').trim(),
+          deferredReviewOffer.feedback,
+        ].filter(Boolean).join('\n\n');
+
+        return executeStartScreenGeneration({
+          ...resolvedAction,
+          payload: {
+            prompt,
+            templateId,
+            instructions: followUpInstructions,
+            selectedMaterials,
+            selectedModel,
+            selectedProviderId,
+            selectedProviderModel,
+            baseDraft: {
+              html: generated,
+              title: resolvedTitle,
+            },
+            additionalReviewRounds: 1,
+            suppressDeferredReviewOffer: true,
+            forceDirectMode: resolvedInspectorMeta.routeMode === 'direct',
+            preserveCurrentDocumentOnError: true,
+          },
+        }, {
+          ...options,
+          skipConfirmReplace: true,
+        });
+      }
     } catch (error) {
       if (!isGenerationRequestCurrent(generationRequest)) return true;
-      setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId), logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }), runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+          usedFallback: false,
+          errorMessage: String(error?.message || latestSummary?.lastError || '').trim(),
+          liveState: 'error',
+          routeResolved: generationRoute,
+        },
+      }));
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
-      const errorPlaceholder = buildLiveGenerationErrorPlaceholder({
-        titleText: generationLabel,
-        runId: generationRequest.runId,
-      });
-      editor.commands.setContent(errorPlaceholder);
-      lastLiveGenerationPlaceholderRef.current = {
-        runId: generationRequest.runId,
-        html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || errorPlaceholder)),
-      };
+      const fallbackDraftHtml = preserveCurrentDocumentOnError ? String(baseDraft?.html || '').trim() : '';
+      if (fallbackDraftHtml) {
+        editor.commands.setContent(fallbackDraftHtml);
+        lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
+      } else {
+        const errorPlaceholder = buildLiveGenerationErrorPlaceholder({
+          titleText: generationLabel,
+          runId: generationRequest.runId,
+        });
+        editor.commands.setContent(errorPlaceholder);
+        lastLiveGenerationPlaceholderRef.current = {
+          runId: generationRequest.runId,
+          html: normalizeTrackedEditorHtml(String(editor.getHTML?.() || errorPlaceholder)),
+        };
+      }
     }
 
     return true;
@@ -2066,7 +2618,6 @@ function App() {
       kind: 'feedback-revision',
       workspaceId: action?.workspaceId || getActiveWorkspaceId(),
     };
-    setLastGenerationAction(resolvedAction);
 
     const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
       ? { ...payload.surveySnapshot }
@@ -2075,8 +2626,31 @@ function App() {
     const requestedExecutionMode = normalizeFeedbackExecutionMode(payload.executionMode || surveySnapshot.executionMode);
     const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
     const roundIndex = normalizeFeedbackRoundIndex(payload.roundIndex || surveySnapshot.roundIndex);
+    const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+    const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+    const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+    const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+    const selectedModel = selectedProviderId;
+    const existingHtml = payload.existingHtml || editor?.getHTML?.() || '';
     const generationRequest = beginGenerationRequest('doc-feedback');
     const originWorkspaceId = generationRequest.workspaceId;
+    setLastGenerationAction({
+      ...resolvedAction,
+      runId: generationRequest.runId,
+      inspector: buildStartScreenGenerationInspector({
+        runId: generationRequest.runId,
+        actionType: 'revise',
+        prompt: String(payload.originalPrompt || '').trim(),
+        instructions: String(payload.feedback || '').trim(),
+        selectedMaterials,
+        templateId,
+        selectedProviderId,
+        selectedProviderModel,
+        route: 'reviseDocumentWithFeedback',
+        routeMode: executionMode === 'workspace' ? 'workspace-automation' : 'direct',
+        routeModeReason: executionMode === 'workspace' ? '' : 'feedback-direct',
+      }),
+    });
     clearDocumentArrival();
     setFeedbackSurvey((prev) => ({
       ...prev,
@@ -2112,12 +2686,6 @@ function App() {
     };
 
     try {
-      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
-      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
-      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
-      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
-      const selectedModel = selectedProviderId;
-      const existingHtml = payload.existingHtml || editor?.getHTML?.() || '';
       const result = await reviseDocumentWithFeedback({
         existingHtml,
         originalPrompt: payload.originalPrompt,
@@ -2163,6 +2731,23 @@ function App() {
         runId: generationRequest.runId,
         workspaceId: originWorkspaceId,
       });
+      const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+          usedFallback,
+          errorMessage: String(result?.errorMessage || '').trim(),
+          liveState: usedFallback ? 'warning' : 'success',
+          routeResolved: 'reviseDocumentWithFeedback',
+        },
+      }));
 
       setFeedbackSurvey({
         ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
@@ -2195,15 +2780,32 @@ function App() {
         phase: 'details',
         submitting: false,
       });
+      const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
       setLiveGeneration({
         active: true,
         state: 'error',
         prompt: 'עדכון המסמך נכשל',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
-        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        summary: latestSummary,
+        logs: latestLogs,
         runId: generationRequest.runId,
         workspaceId: originWorkspaceId,
       });
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+          usedFallback: false,
+          errorMessage: String(error?.message || '').trim(),
+          liveState: 'error',
+          routeResolved: 'reviseDocumentWithFeedback',
+        },
+      }));
       alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
     }
 
@@ -2217,13 +2819,35 @@ function App() {
       kind: 'review-recommendations',
       workspaceId: action?.workspaceId || getActiveWorkspaceId(),
     };
-    setLastGenerationAction(resolvedAction);
 
     const surveySnapshot = payload.surveySnapshot && typeof payload.surveySnapshot === 'object'
       ? { ...payload.surveySnapshot }
       : { ...DEFAULT_FEEDBACK_SURVEY };
+    const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
+    const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
+    const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
+    const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
+    const selectedModel = selectedProviderId;
+    const reviewFocus = String(payload.focus || '').trim();
     const generationRequest = beginGenerationRequest('doc-review');
     const originWorkspaceId = generationRequest.workspaceId;
+    setLastGenerationAction({
+      ...resolvedAction,
+      runId: generationRequest.runId,
+      inspector: buildStartScreenGenerationInspector({
+        runId: generationRequest.runId,
+        actionType: 'review',
+        prompt: String(payload.originalPrompt || '').trim(),
+        instructions: reviewFocus,
+        selectedMaterials,
+        templateId,
+        selectedProviderId,
+        selectedProviderModel,
+        route: 'reviewDocumentRecommendations',
+        routeMode: 'direct',
+        routeModeReason: 'review-direct',
+      }),
+    });
     setFeedbackSurvey((prev) => ({
       ...prev,
       open: true,
@@ -2231,7 +2855,7 @@ function App() {
       submitting: true,
       submissionRequestId: generationRequest.requestId,
       reviewResult: null,
-      reviewFocus: String(payload.focus || '').trim(),
+      reviewFocus,
       reviewErrorMessage: '',
     }));
     setAssistantTrigger('manual');
@@ -2261,12 +2885,6 @@ function App() {
     };
 
     try {
-      const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
-      const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
-      const selectedProviderId = String(payload.selectedProviderId || payload.selectedModel || '').trim();
-      const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
-      const selectedModel = selectedProviderId;
-      const reviewFocus = String(payload.focus || '').trim();
       const result = await reviewDocumentRecommendations({
         existingHtml: payload.existingHtml || editor?.getHTML?.() || '',
         originalPrompt: payload.originalPrompt,
@@ -2303,13 +2921,45 @@ function App() {
         };
       });
 
+      const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const latestStages = Array.isArray(latestSummary?.stages) ? latestSummary.stages : [];
+      const requestStartLog = latestLogs.find((log) => log?.type === 'request-start');
+      const lastLogMeta = [...latestLogs].reverse().find(
+        (log) => String(log?.provider || '').trim() || String(log?.model || '').trim(),
+      );
+      const lastStageMeta = [...latestStages].reverse().find(
+        (stage) => String(stage?.provider || '').trim() || String(stage?.model || '').trim(),
+      );
+      const resolvedProviderMeta = lastLogMeta || lastStageMeta || {};
+      const resolvedProviderId = String(resolvedProviderMeta?.provider || '').trim();
+      const resolvedProviderModel = String(resolvedProviderMeta?.model || '').trim();
+      const resolvedRouteMode = requestStartLog
+        ? (requestStartLog.automationSkipped === true ? 'direct' : 'workspace-automation')
+        : '';
+      const resolvedRouteModeReason = String(requestStartLog?.automationSkipReason || '').trim();
+
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          requestedProviderId: resolvedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+          requestedProviderModel: resolvedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+          routeMode: resolvedRouteMode || String(prev?.inspector?.routeMode || '').trim(),
+          routeModeReason: resolvedRouteModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+          usedFallback: Boolean(result?.usedFallback),
+          errorMessage: String(result?.errorMessage || '').trim(),
+          liveState: Boolean(result?.usedFallback) ? 'warning' : 'success',
+          routeResolved: 'reviewDocumentRecommendations',
+        },
+      }));
       setLiveGeneration((prev) => (prev.runId !== generationRequest.runId ? prev : {
         ...prev,
         active: false,
         state: 'idle',
         prompt: '',
-        summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
-        logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
+        summary: latestSummary,
+        logs: latestLogs,
         runId: '',
         workspaceId: originWorkspaceId,
       }));
@@ -2337,6 +2987,16 @@ function App() {
         runId: generationRequest.runId,
         workspaceId: originWorkspaceId,
       });
+      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+        ...prev,
+        inspector: {
+          ...(prev?.inspector || {}),
+          usedFallback: false,
+          errorMessage: String(error?.message || '').trim(),
+          liveState: 'error',
+          routeResolved: 'reviewDocumentRecommendations',
+        },
+      }));
       alert(error?.message || 'לא הצלחתי להכין המלצות עריכה למסמך.');
     }
 
@@ -2352,9 +3012,7 @@ function App() {
   }, [executeStartScreenGeneration, runDocumentFeedbackRevision, runDocumentRecommendationsReview]);
 
   const clearPersistedDraftCache = React.useCallback(() => {
-    localStorage.removeItem('wordai_document');
-    localStorage.removeItem('wordai_document_autosave');
-    localStorage.removeItem('wordai_document_autosave_at');
+    clearPersistedDraftCacheStorage();
   }, []);
 
   const getCurrentBlockElement = React.useCallback(() => {
@@ -2367,11 +3025,15 @@ function App() {
   const applyImportedDocument = React.useCallback((payload = {}) => {
     if (!editor) return;
     if (payload?.ok === false || payload?.error) {
+      setPendingStartupDocument(false);
       alert(payload?.error || 'לא ניתן לפתוח את הקובץ שנבחר.');
       return;
     }
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
-    if (!confirmReplaceCurrentDocument()) return;
+    if (!confirmReplaceCurrentDocument()) {
+      setPendingStartupDocument(false);
+      return;
+    }
 
     clearDraftReviewState();
     editor.commands.setContent(importedHtml);
@@ -2381,9 +3043,9 @@ function App() {
       editor.view.dom.contentEditable = 'true';
       editor.view.dom.dataset.viewMode = 'print';
     }
-    applyDocumentStyleToEditor(localStorage.getItem('wordai_document_style') || documentStyle, editor);
+    applyDocumentStyleToEditor(documentStyle, editor);
     setCurrentFilePath(String(payload.filePath || ''));
-    localStorage.setItem('wordai_active_template', 'blank');
+    persistActiveTemplateId('blank');
     syncPersistedAppSettings();
     setActiveTemplateId('blank');
     saveDocumentHistory({
@@ -2393,6 +3055,8 @@ function App() {
       source: 'opened-file',
     });
     persistLocalCache(importedHtml);
+    setPendingStartupDocument(false);
+    initializedDocRef.current = true;
     setLastEditorActivityAt(Date.now());
     setShowStartScreen(false);
     focusEditorSoon('start');
@@ -2401,7 +3065,11 @@ function App() {
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenExternalDocument) return;
     return window.desktopApp.onOpenExternalDocument((payload) => {
+      if (window.desktopApp?.consumePendingOpenDocument) {
+        Promise.resolve(window.desktopApp.consumePendingOpenDocument()).catch(() => {});
+      }
       if (!editor) {
+        setPendingStartupDocument(true);
         pendingImportRef.current = payload;
         return;
       }
@@ -2412,6 +3080,9 @@ function App() {
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenSettings) return;
     return window.desktopApp.onOpenSettings((payload) => {
+      if (window.desktopApp?.consumePendingOpenSettings) {
+        Promise.resolve(window.desktopApp.consumePendingOpenSettings()).catch(() => {});
+      }
       const tab = payload?.tab || 'ai';
       setFileMenuTargetTab(tab);
       setFileMenuOpen(true);
@@ -2426,15 +3097,15 @@ function App() {
         const payload = pendingImportRef.current;
         pendingImportRef.current = null;
         applyImportedDocument(payload);
-        return;
-      }
-
-      if (window.desktopApp?.consumePendingOpenDocument) {
+      } else if (window.desktopApp?.consumePendingOpenDocument) {
         const payload = await window.desktopApp.consumePendingOpenDocument();
         if (payload && !payload.canceled) {
           applyImportedDocument(payload);
-          return;
+        } else {
+          setPendingStartupDocument(false);
         }
+      } else {
+        setPendingStartupDocument(false);
       }
 
       if (window.desktopApp?.consumePendingOpenSettings) {
@@ -2448,6 +3119,11 @@ function App() {
 
     applyPending();
   }, [editor, applyImportedDocument]);
+
+  React.useEffect(() => {
+    if (!fileMenuOpen) return;
+    setCopyleaksDetector((prev) => (prev.open ? { ...DEFAULT_COPYLEAKS_DETECTOR } : prev));
+  }, [fileMenuOpen]);
 
   const buildDesktopSavePayload = React.useCallback((preferredExtension = 'docx') => {
     const currentPreset = DOCUMENT_STYLE_PRESETS[documentStyle] || DOCUMENT_STYLE_PRESETS.academic;
@@ -2497,7 +3173,7 @@ function App() {
 
   const handleCommand = async (cmd, value) => {
     const safeCommands = ['zoom','exportHTML','exportText','focusMode','toggleWatermark',
-      'setPageColor','togglePageBorders','toggleRuler','toggleGrid','formatPainter','openFile'];
+      'setPageColor','togglePageBorders','toggleRuler','toggleGrid','formatPainter','openFile','openCopyleaksSettings'];
     if (!editor && !safeCommands.includes(cmd)) return;
 
     switch (cmd) {
@@ -2718,6 +3394,14 @@ function App() {
         if (url) openExternalLink(url);
         break;
       }
+      case 'openCopyleaksDetector': {
+        openCopyleaksDetector(typeof value === 'string' ? value : value?.source);
+        break;
+      }
+      case 'openCopyleaksSettings': {
+        openCopyleaksSettingsPanel();
+        break;
+      }
       case 'setColor': editor.chain().focus().setColor(value).run(); break;
       case 'setHighlight': editor.chain().focus().toggleHighlight({ color: value }).run(); break;
       case 'insertTaskList': editor.chain().focus().toggleTaskList().run(); break;
@@ -2745,6 +3429,20 @@ function App() {
         } catch {
           document.execCommand('copy');
         }
+        break;
+      }
+      case 'copyCurrentParagraph': {
+        const paragraphText = String(currentBlockText || '').trim();
+        if (!paragraphText) {
+          alert('לא זוהתה פסקה פעילה להעתקה.');
+          break;
+        }
+        const copied = await copyPlainTextToClipboard(paragraphText);
+        if (!copied) {
+          alert('לא הצלחתי להעתיק את הפסקה הפעילה.');
+          break;
+        }
+        alert('הפסקה הפעילה הועתקה ללוח.');
         break;
       }
       case 'cutSelection': {
@@ -2832,13 +3530,11 @@ function App() {
           const shouldShowStartExperience = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
           clearDraftReviewState();
           editor.chain().focus().clearContent().run();
-          localStorage.removeItem('wordai_document_autosave');
-          localStorage.removeItem('wordai_document_autosave_at');
-          localStorage.removeItem('wordai_document');
+          clearPersistedDraftCache();
           saveHomeInstructions('');
           setStartScreenInstructionsResetToken((prev) => prev + 1);
           setCurrentFilePath('');
-          localStorage.setItem('wordai_active_template', 'blank');
+          persistActiveTemplateId('blank');
           syncPersistedAppSettings();
           setActiveTemplateId('blank');
           setShowStartScreen(shouldShowStartExperience);
@@ -3172,7 +3868,7 @@ function App() {
           bold: `<div data-cover-page="true"><p>דוח / מצגת / מסמך</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p></div>`,
         };
 
-        localStorage.setItem('wordai_active_template', 'cover');
+  persistActiveTemplateId('cover');
         syncPersistedAppSettings();
         setActiveTemplateId('cover');
         const existingHtml = String(editor.getHTML() || '').replace(/<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i, '').trim();
@@ -3372,8 +4068,15 @@ function App() {
   const isStartTransitionRunning = startTransitionPhase === 'running';
   const prefersReducedMotion = getPrefersReducedMotion();
   const isInputDialogVisible = inputDialog.open;
+  const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen;
   const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
+  const copyleaksConfig = normalizeCopyleaksConfig(getProviderConfig().copyleaks);
+  const copyleaksTextStats = getCopyleaksTextStats(copyleaksDetector.text);
+  const copyleaksValidationMessage = getCopyleaksValidationMessage(copyleaksDetector.text);
+  const isCopyleaksConfigured = Boolean(copyleaksConfig.email && copyleaksConfig.key);
+  const canSubmitCopyleaks = Boolean(!copyleaksDetector.submitting && isCopyleaksConfigured && copyleaksTextStats.isValid);
   const shouldHideEditorWrapper = showStartScreen && !isInputDialogVisible;
+  const canCreateDesktopWindow = Boolean(window.desktopApp?.createAppWindow);
   return (
     <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
@@ -3382,6 +4085,11 @@ function App() {
         onOpenUpdates={openUpdatesPanel}
         onOpen={() => handleCommand('openFile')}
         onNew={() => handleCommand('newDoc')}
+        onNewWindow={() => {
+          if (!window.desktopApp?.createAppWindow) return;
+          Promise.resolve(window.desktopApp.createAppWindow()).catch(() => {});
+        }}
+        newWindowDisabled={!canCreateDesktopWindow}
         onSave={() => handleCommand('saveLocal')}
         onSaveAs={() => handleCommand('saveAs')}
         onUndo={() => editor?.chain().focus().undo().run()}
@@ -3692,6 +4400,205 @@ function App() {
             </div>
           )}
 
+          {isCopyleaksDetectorVisible && (
+            <div
+              className="fixed inset-0 z-[101] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4"
+              dir="rtl"
+              onMouseDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                closeCopyleaksDetector();
+              }}
+            >
+              <div className="w-[1180px] max-w-[98%] max-h-[92vh] overflow-hidden rounded-[28px] bg-white shadow-2xl border border-slate-200 flex flex-col">
+                <div className="flex items-start justify-between gap-4 px-6 py-5 md:px-8 border-b border-slate-100 bg-slate-50/70">
+                  <div className="min-w-0 flex-1 text-right">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-[11px] font-bold text-blue-700">Copyleaks</span>
+                      <span className="inline-flex items-center rounded-full bg-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-700">{copyleaksDetector.sourceLabel}</span>
+                      <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${isCopyleaksConfigured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {isCopyleaksConfigured ? 'ההגדרות מוכנות' : 'צריך למלא הגדרות'}
+                      </span>
+                    </div>
+                    <h3 className="text-2xl font-bold text-slate-800 tracking-tight">זיהוי AI עם Copyleaks</h3>
+                    <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+                      הכלי הזה בודק טקסט קיים דרך Copyleaks כדי להעריך אם הוא נראה אנושי או נראה כתוכן שנוצר בעזרת AI. הוא לא כותב טקסט ולא משנה את מנוע הכתיבה שלכם.
+                    </p>
+                  </div>
+                  <button
+                    className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0"
+                    onClick={closeCopyleaksDetector}
+                    title="סגור"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-[1.15fr,0.85fr] gap-0 min-h-0 flex-1 overflow-hidden">
+                  <div className="p-6 md:p-8 overflow-y-auto border-b xl:border-b-0 xl:border-l border-slate-100 space-y-5">
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">רגישות: {copyleaksConfig.sensitivity}</span>
+                      <span className={`inline-flex items-center rounded-full px-3 py-1 font-semibold ${copyleaksConfig.explain ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>פירוט נוסף: {copyleaksConfig.explain ? 'פעיל' : 'כבוי'}</span>
+                      <span className={`inline-flex items-center rounded-full px-3 py-1 font-semibold ${copyleaksConfig.sandbox ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>מצב הדגמה: {copyleaksConfig.sandbox ? 'פעיל' : 'כבוי'}</span>
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">שפה: {copyleaksConfig.language || 'אוטומטי'}</span>
+                    </div>
+
+                    <label className="block text-right">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <span className="text-sm font-semibold text-slate-700">טקסט לבדיקה</span>
+                        <span className={`text-xs font-semibold ${copyleaksTextStats.isValid ? 'text-emerald-700' : copyleaksTextStats.length ? 'text-amber-700' : 'text-slate-400'}`}>
+                          {copyleaksTextStats.length.toLocaleString('he-IL')} תווים
+                        </span>
+                      </div>
+                      <textarea
+                        dir="auto"
+                        className="w-full min-h-[240px] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none resize-y leading-7"
+                        placeholder={`הדביקו כאן טקסט לבדיקה בטווח ${COPYLEAKS_TEXT_MIN_CHARS}-${COPYLEAKS_TEXT_MAX_CHARS} תווים`}
+                        value={copyleaksDetector.text}
+                        onChange={(event) => setCopyleaksDetector((prev) => ({
+                          ...prev,
+                          text: event.target.value,
+                          error: '',
+                          result: null,
+                        }))}
+                      />
+                    </label>
+
+                    <div className={`rounded-2xl border px-4 py-3 text-sm ${copyleaksTextStats.isValid ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                      {copyleaksTextStats.isValid
+                        ? `הטקסט מוכן לשליחה. Copyleaks יקבל ${copyleaksTextStats.length.toLocaleString('he-IL')} תווים לבדיקה.`
+                        : (copyleaksValidationMessage || `Copyleaks דורש ${COPYLEAKS_TEXT_MIN_CHARS}-${COPYLEAKS_TEXT_MAX_CHARS} תווים לבדיקה.`)}
+                    </div>
+
+                    {!isCopyleaksConfigured && (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800 leading-7">
+                        כדי להריץ בדיקה אמיתית, פתחו את הגדרות Copyleaks ומלאו אימייל ומפתח סודי. אפשר גם לבדוק חיבור כדי לוודא שהפרטים נכונים. ההגדרה הזו נפרדת ממנוע הכתיבה הפעיל.
+                      </div>
+                    )}
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="text-sm font-bold text-slate-800 mb-2">מה חשוב לדעת</div>
+                      <div className="space-y-2 text-sm leading-7 text-slate-600">
+                        {COPYLEAKS_HELP_LINES.map((line) => (
+                          <div key={line}>• {line}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row gap-3 justify-end">
+                      <button
+                        className="px-4 py-2.5 rounded-xl font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors"
+                        onClick={openCopyleaksSettingsPanel}
+                      >
+                        פתח הגדרות Copyleaks
+                      </button>
+                      <button
+                        className="px-4 py-2.5 rounded-xl font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                        onClick={closeCopyleaksDetector}
+                      >
+                        סגור
+                      </button>
+                      <button
+                        className={`px-6 py-2.5 rounded-xl font-semibold text-white shadow-sm transition-all ${canSubmitCopyleaks ? 'bg-[#0066cc] hover:bg-blue-700 hover:shadow active:scale-[0.98]' : 'bg-slate-300 cursor-not-allowed'}`}
+                        onClick={submitCopyleaksDetector}
+                        disabled={!canSubmitCopyleaks}
+                      >
+                        {copyleaksDetector.submitting ? 'מריץ בדיקת Copyleaks...' : 'הרץ בדיקה'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-6 md:p-8 overflow-y-auto space-y-5 bg-white">
+                    {copyleaksDetector.error && (
+                      <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700 leading-7">
+                        {copyleaksDetector.error}
+                      </div>
+                    )}
+
+                    {copyleaksDetector.result ? (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                            <div className="text-xs font-bold tracking-[0.16em] text-slate-400 mb-2">נראה כ-AI</div>
+                            <div className="text-2xl font-bold text-slate-900">{formatCopyleaksPercent(copyleaksDetector.result.summary.ai)}</div>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                            <div className="text-xs font-bold tracking-[0.16em] text-slate-400 mb-2">נראה אנושי</div>
+                            <div className="text-2xl font-bold text-slate-900">{formatCopyleaksPercent(copyleaksDetector.result.summary.human)}</div>
+                          </div>
+                          <div className={`rounded-2xl border px-4 py-4 ${copyleaksDetector.result.classificationCode === COPYLEAKS_CLASSIFICATION_AI ? 'border-rose-200 bg-rose-50' : copyleaksDetector.result.classificationCode === COPYLEAKS_CLASSIFICATION_HUMAN ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                            <div className="text-xs font-bold tracking-[0.16em] text-slate-400 mb-2">הערכה כללית</div>
+                            <div className={`text-lg font-bold ${copyleaksDetector.result.classificationCode === COPYLEAKS_CLASSIFICATION_AI ? 'text-rose-700' : copyleaksDetector.result.classificationCode === COPYLEAKS_CLASSIFICATION_HUMAN ? 'text-emerald-700' : 'text-slate-700'}`}>
+                              {copyleaksDetector.result.classificationLabel}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                          <div className="text-sm font-bold text-slate-800 mb-3">פרטי הבדיקה</div>
+                          <div className="flex flex-wrap gap-2 text-[12px] text-slate-600">
+                            {copyleaksDetector.result.modelVersion && <span className="inline-flex items-center rounded-full bg-white px-3 py-1 border border-slate-200">גרסת מנוע: {copyleaksDetector.result.modelVersion}</span>}
+                            {copyleaksDetector.result.scannedDocument?.wordCount != null && <span className="inline-flex items-center rounded-full bg-white px-3 py-1 border border-slate-200">מילים: {Number(copyleaksDetector.result.scannedDocument.wordCount).toLocaleString('he-IL')}</span>}
+                            {copyleaksDetector.result.scannedDocument?.credits != null && <span className="inline-flex items-center rounded-full bg-white px-3 py-1 border border-slate-200">קרדיטים: {Number(copyleaksDetector.result.scannedDocument.credits).toLocaleString('he-IL')}</span>}
+                            {(copyleaksDetector.result.scannedDocument?.language || copyleaksDetector.result.requestMeta?.language) && <span className="inline-flex items-center rounded-full bg-white px-3 py-1 border border-slate-200">שפה: {copyleaksDetector.result.scannedDocument?.language || copyleaksDetector.result.requestMeta?.language}</span>}
+                            {copyleaksDetector.result.requestMeta?.sandbox && <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-700">תוצאות הדגמה פעילות</span>}
+                            {copyleaksDetector.result.requestMeta?.explain && <span className="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 font-semibold text-indigo-700">פירוט נוסף פעיל</span>}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                          <div className="text-sm font-bold text-slate-800 mb-3">קטעים שסומנו</div>
+                          {copyleaksDetector.result.results.length ? (
+                            <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+                              {copyleaksDetector.result.results.map((entry, index) => (
+                                <div key={`${entry.id}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <div className="text-sm font-semibold text-slate-800">{entry.classificationLabel}</div>
+                                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                                      {entry.score != null && <span>ציון: {formatCopyleaksPercent(entry.score)}</span>}
+                                      {entry.ai != null && <span>נראה כ-AI: {formatCopyleaksPercent(entry.ai)}</span>}
+                                      {entry.human != null && <span>נראה אנושי: {formatCopyleaksPercent(entry.human)}</span>}
+                                      {(entry.startIndex != null || entry.endIndex != null) && <span>טווח: {entry.startIndex ?? '?'}-{entry.endIndex ?? '?'}</span>}
+                                    </div>
+                                  </div>
+                                  <div className="text-sm leading-7 text-slate-600 whitespace-pre-wrap">{entry.preview || 'Copyleaks לא החזיר טקסט מקטע מפורט עבור פריט זה.'}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-sm text-slate-500 leading-7">לא הוחזרו תתי-מקטעים מפורטים עבור הבדיקה הזו.</div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                          <div className="text-sm font-bold text-slate-800 mb-3">פירוט נוסף</div>
+                          {copyleaksDetector.result.explainPatterns.length ? (
+                            <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                              {copyleaksDetector.result.explainPatterns.map((pattern) => (
+                                <div key={pattern.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <div className="text-sm font-semibold text-slate-800">{pattern.title}</div>
+                                    {pattern.score != null && <div className="text-[11px] font-semibold text-indigo-700">{formatCopyleaksPercent(pattern.score)}</div>}
+                                  </div>
+                                  <div className="text-sm leading-7 text-slate-600">{pattern.text || 'Copyleaks ציין pattern בלי תיאור טקסטואלי נוסף.'}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-sm text-slate-500 leading-7">לא הוחזר פירוט נוסף. אם צריך הסבר מפורט יותר, הפעילו את האפשרות "פירוט נוסף" בהגדרות Copyleaks והריצו שוב.</div>
+                          )}
+                        </div>
+                      </>
+                    ) : !copyleaksDetector.error ? (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500 leading-7">
+                        Copyleaks יציג כאן אחוזים, הערכה כללית, גרסת מנוע, פרטי הבדיקה, קטעים שסומנו ופירוט נוסף כשזמינים. במצב הדגמה יוצגו תוצאות הדגמה לצורכי בדיקה בלבד.
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isFeedbackSurveyVisible && (
             <div className="absolute inset-0 z-40 bg-slate-900/35 flex items-center justify-center p-4">
               <div className="w-[760px] max-w-[96%] rounded-[28px] bg-white shadow-2xl border border-slate-200 p-5 md:p-6">
@@ -3952,12 +4859,12 @@ function App() {
                 onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
                 documentStyle={documentStyle}
                 onDocumentStyleChange={changeDocumentStyle}
-                escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible}
+                escapeBlocked={fileMenuOpen || isInputDialogVisible || isCopyleaksDetectorVisible || isFeedbackSurveyVisible}
                 onClose={() => {
                   runStartTransition(() => {}, 'start');
                 }}
-                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'))}
-                lastSavedAt={localStorage.getItem('wordai_document_autosave_at') || ''}
+                hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(getPersistedDraftHtml())}
+                lastSavedAt={getPersistedDraftSavedAt()}
                 onCreateBlank={() => {
                   if (!confirmReplaceCurrentDocument()) return;
                   clearPersistedDraftCache();
@@ -3965,7 +4872,7 @@ function App() {
                   runStartTransition((activeEditor) => {
                     activeEditor.commands.clearContent();
                     setCurrentFilePath('');
-                    localStorage.setItem('wordai_active_template', 'blank');
+                    persistActiveTemplateId('blank');
                     syncPersistedAppSettings();
                     setActiveTemplateId('blank');
                   }, 'start');
@@ -3978,7 +4885,7 @@ function App() {
                   clearDraftReviewState();
                   runStartTransition((activeEditor) => {
                     setCurrentFilePath('');
-                    localStorage.setItem('wordai_active_template', templateId || 'blank');
+                    persistActiveTemplateId(templateId || 'blank');
                     syncPersistedAppSettings();
                     setActiveTemplateId(templateId || 'blank');
                     const recommendedStyle = {
@@ -3999,12 +4906,12 @@ function App() {
                   if (!confirmReplaceCurrentDocument()) return;
                   const savedDraft = wordPreferences.keepLastAutosavedVersion === false
                     ? null
-                    : (localStorage.getItem('wordai_document_autosave') || localStorage.getItem('wordai_document'));
+                    : getPersistedDraftHtml();
                   clearDraftReviewState();
                   runStartTransition((activeEditor) => {
                     if (savedDraft) activeEditor.commands.setContent(savedDraft);
                     setCurrentFilePath('');
-                    setActiveTemplateId(localStorage.getItem('wordai_active_template') || 'blank');
+                    setActiveTemplateId(getPersistedActiveTemplateId());
                   }, 'end');
                 }}
                 onOpenSettings={(targetTab = 'guide') => {
@@ -4024,7 +4931,7 @@ function App() {
         {/* עט קסמים צף */}
         {!showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
-          escapeBlocked={fileMenuOpen || isInputDialogVisible || isFeedbackSurveyVisible || sidebarOpen}
+          escapeBlocked={fileMenuOpen || isInputDialogVisible || isCopyleaksDetectorVisible || isFeedbackSurveyVisible || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
           selectedText={selectedText}
           selectionContext={selectionContext}
@@ -4065,6 +4972,8 @@ function App() {
           onAssistantBehaviorChange={setAssistantBehavior}
           wordPreferences={wordPreferences}
           onWordPreferencesChange={setWordPreferences}
+          lastGenerationAction={lastGenerationAction}
+          liveGeneration={liveGeneration}
         />
       )}
     </div>

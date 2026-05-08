@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onUndo = () => {}, onRedo = () => {}, onHome = () => {}, onOpenUpdates = () => {}, onFocus = () => {}, onOpenDraftRecommendations = () => {}, draftRecommendationsDisabled = false }) {
+export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen = () => {}, onNew = () => {}, onNewWindow = () => {}, newWindowDisabled = false, onUndo = () => {}, onRedo = () => {}, onHome = () => {}, onOpenUpdates = () => {}, onFocus = () => {}, onOpenDraftRecommendations = () => {}, draftRecommendationsDisabled = false }) {
   const quickBtn = (icon, title, action, disabled = false) => (
     <button
       onClick={action}
@@ -18,6 +18,7 @@ export default function TopBar({ onSave = () => {}, onSaveAs = () => {}, onOpen 
         {quickBtn('ph ph-house', 'בית', onHome)}
         {quickBtn('ph ph-folder-open', 'פתח מהמחשב', onOpen)}
         {quickBtn('ph ph-file-plus', 'חדש', onNew)}
+        {quickBtn('ph ph-plus-square', 'חלון חדש', onNewWindow, newWindowDisabled)}
         {quickBtn('ph ph-floppy-disk', 'שמור', onSave)}
         {quickBtn('ph ph-floppy-disk-back', 'שמור בשם', onSaveAs)}
         {quickBtn('ph ph-arrow-counter-clockwise', 'בטל', onUndo)}
