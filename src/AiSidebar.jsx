@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
@@ -1440,15 +1440,45 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 </div>
 
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, fontWeight: 600, color: '#111827' }}>
-                    <span>🏢 מצב סביבת עבודה</span>
-                    <span style={{ color: workspaceAutomationEnabled ? '#166534' : '#92400E' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>
+                    <span>🏢 בחירת סביבת עבודה</span>
+                    <span style={{ color: workspaceAutomationEnabled ? '#166534' : '#92400E', fontSize: 11, fontWeight: 600 }}>
                       {workspaceAutomationEnabled ? 'פעילה' : 'כבויה'}
                     </span>
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.6 }}>
-                    זהו סטטוס קריאה בלבד. שינוי מצב סביבת העבודה מתבצע ממסכי ההגדרות של הסביבה, לא מהחלונית המקומית הזו.
-                  </div>
+                  <select
+                    value={workspaceAutomationEnabled ? (workspaceAutomation?.activeWorkspaceId || '') : '__no-workspace__'}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '__no-workspace__') {
+                        setWorkspaceBypassEnabled(true);
+                      } else {
+                        switchToWorkspace(value);
+                      }
+                    }}
+                    disabled={isSettingsLocked}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
+                  >
+                    <option value="__no-workspace__">ללא סביבה פעילה (כבויה)</option>
+                    <optgroup label="סביבות מערכת מתוכננות">
+                      {Object.keys(DEFAULT_WORKSPACES_LIBRARY).map((wsId) => (
+                        <option key={wsId} value={wsId}>
+                          {DEFAULT_WORKSPACES_LIBRARY[wsId].name || 'סביבת מערכת'}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="סביבות אישיות">
+                      {Object.values(getWorkspacesLibrary()).map((ws) => {
+                        // Skip if it's already in the default library to avoid duplicates
+                        if (DEFAULT_WORKSPACES_LIBRARY[ws.id]) return null;
+                        return (
+                          <option key={ws.id} value={ws.id}>
+                            {ws.name || ws.workspaceName || 'סביבה ללא שם'}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
                 </div>
 
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
