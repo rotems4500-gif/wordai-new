@@ -41,6 +41,9 @@ export const DEFAULT_SHORTCUTS = {
 export const DEFAULT_ASSISTANT_BEHAVIOR = {
   autoPopup: true,
   idleSeconds: 5,
+  sidebarPreset: 'word-taskpane',
+  autoRouteSourceRequests: true,
+  strictSourceGrounding: true,
 };
 
 export const DEFAULT_WORD_PREFERENCES = {
@@ -198,6 +201,11 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   activeWorkspaceId: 'default-content-studio',
   workspaceBypassEnabled: false,
 };
+
+const AUTOPILOT_MANAGER_WORKFLOW_MODES = new Set(['manager-auto', 'circular-team', 'autopilot-full']);
+const AUTOPILOT_EXECUTION_STYLE_OPTIONS = new Set(['lean', 'balanced', 'deep']);
+const AUTOPILOT_MAX_STAGE_ROUNDS = 4;
+const AUTOPILOT_MAX_FINAL_REVIEW_PASSES = 3;
 
 const PROVIDER_WORKSPACE_LABELS = {
   gemini: 'Gemini',
@@ -472,6 +480,15 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
     workflowMode: 'design-first',
     sharedGoal: 'להפיק פוסטים, קופי, קרוסלות ורצפי תוכן קצרים עם hook ברור, התאמה לפלטפורמה ו-CTA מדויק.',
     agents: getSocialContentWorkspaceAgents(),
+  }),
+  'default-autopilot': buildDefaultWorkspaceSeed({
+    id: 'default-autopilot',
+    name: 'Auto Pilot (מנהל חכם)',
+    preset: 'autopilot-full',
+    workflowMode: 'autopilot-full',
+    autopilotEnabled: true,
+    sharedGoal: 'מצב אוטופיילוט מלא: תן לצוות הסוכנים לנווט את קצב העבודה. מנהל העבודה מגדיר לבד איזה סוכן לשתף ומתי עד להשלמת המשימה בצורה אופטימלית.',
+    agents: getDefaultRoleAgents(),
   }),
 };
 
@@ -1897,11 +1914,12 @@ export const getOrderedRoleAgents = (workflowMode = getWorkspaceAutomation().wor
     ...agents.filter((agent) => isManagerReviewAgent(agent)),
   ];
 
-  if (['manager-auto', 'circular-team'].includes(workflowMode) && automation?.autopilotEnabled === false) {
+  if (AUTOPILOT_MANAGER_WORKFLOW_MODES.has(workflowMode) && automation?.autopilotEnabled === false) {
     return configuredOrder;
   }
 
   const desiredOrders = {
+    'autopilot-full': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
     'manager-auto': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
     'circular-team': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
     'manager-pipeline': ['manager', 'researcher', 'designer', 'writer', 'proofreader'],
@@ -2397,6 +2415,467 @@ const buildResponseModePrompt = ({ strictFormatting = false } = {}) => {
   ].join('\n');
 };
 
+const SOURCE_GROUNDING_FAILURE_TOKEN = 'NO_VERIFIED_SOURCES_FOUND';
+const SOURCE_REQUEST_PATTERN = /(doi|scholar|peer[-\s]?reviewed|fact[\s-]?check|בדוק\s+עובדות|בדיקת\s+עובדות|מקור(?:ות)?\s+אקדמ(?:י(?:ים)?)?)/i;
+const SOURCE_GROUNDING_PROVIDER_IDS = new Set(['perplexity']);
+const SOURCE_GROUNDING_SKILL_IDS = new Set(['source-hunter', 'citation-weaver']);
+const SOURCE_GROUNDING_URL_REGEX = /https?:\/\/[^\s<>()]+/gi;
+const VERIFIED_SOURCE_RESULT_LIMIT = 5;
+const GENERIC_SOURCE_QUERY_PATTERN = /^(?:יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|doi)\??|מקור(?:ות)?\??|sources?\??|citations?\??|references?\??|links?\??|לינק(?:ים)?\??|קישור(?:ים)?\??)$/i;
+const NON_SOURCE_REQUEST_PATTERN = /(source\s+code|קוד\s+מקור|reference\s+letter|recommendation\s+letter|מכתב\s+המלצה|תקן(?:י)?\s+(?:את\s+)?(?:ה-)?url|fix\s+(?:the\s+)?url|replace\s+(?:the\s+)?url|update\s+(?:the\s+)?url)/i;
+const SOURCE_FOLLOW_UP_PATTERN = /^(?:עוד|תן\s+עוד|תביא\s+עוד|עוד\s+\d+|עוד\s+שניים|עוד\s+שלושה|כאלה|כזה|similar\s+ones|same\s+kind|more|more\s+sources|another\s+two|add\s+more|תוסיף\s+עוד)/i;
+const SOURCE_EXPLICIT_FOLLOW_UP_PATTERN = /^(?:עוד(?:\s+\d+|\s+שניים|\s+שלושה)?\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תן\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תביא\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|more\s+(?:sources?|references?|citations?|links?)|another\s+\d*\s*(?:sources?|references?|citations?|links?)|add\s+more\s+(?:sources?|references?|citations?|links?))/i;
+const SOURCE_DISCOVERY_ACTION_PATTERN = /(חפש|חיפוש|מצא|תן(?:י)?|תביא|הבא|שלח|צריך|צריכה|צריכים|מבקש|מבקשת|אסוף|אתר|תאתר|הוסף|צרף|שלב|show|give|need|find|send|collect|locate|provide|include|attach|add)/i;
+const SOURCE_DISCOVERY_TARGET_PATTERN = /(לינק(?:ים)?|links?|קישור(?:ים)?|urls?|מאמר(?:ים)?(?:\s+אקדמ(?:י(?:ים)?)?)?|כתבה(?:ות)?|papers?|sources?|references?|citations?|journal(?:s)?(?:\s+articles?)?|מקור(?:ות)?)/i;
+const DIRECT_SOURCE_DISCOVERY_PATTERN = /(יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|doi|לינק(?:ים)?|link|קישור(?:ים)?|url)|מצא\s+מקור(?:ות)?|מצא\s+מאמר(?:ים)?|מצא\s+כתבה(?:ות)?|תן\s+לי\s+(?:מקור(?:ות)?|מאמר(?:ים)?|כתבה(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|links?)|need\s+(?:sources?|references?|citations?|links?)|find\s+(?:sources?|references?|citations?|links?))/i;
+const SOURCE_TRANSFORM_REQUEST_PATTERN = /(סדר|ארגן|עצב|format|reformat|תקן|fix|שכתב|rewrite|שמור|keep|preserve|המר|convert|עדכן|update|ערוך|edit).*(?:ביבליוגרפ|reference(?:\s+list)?|citation(?:s)?|ציטוט(?:ים)?|references?)/i;
+const FACT_CHECK_REQUEST_PATTERN = /(fact[\s-]?check|בדוק\s+עובדות|בדיקת\s+עובדות)/i;
+const SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN = /((כתוב|נסח|draft|write|compose|generate|צור|בנה|הכן|prepare|summari[sz]e|סכם|analy[sz]e|נתח|rewrite|שכתב|ערוך|edit).*(סקיר|literature|review|פסקה|paragraph|section|פרק|essay|paper|עבודה|מאמר|מסמך|outline|מבנה|טיוטה|draft|מבוא|introduction|abstract|סיכום|מסקנה))|((סקיר(?:ת)?\s+ספרות|literature\s+review|essay|paper|עבודה|מאמר|מסמך).*(?:מקור|citation|reference|doi|scholar))/i;
+const HEBREW_TEXT_PATTERN = /[\u0590-\u05FF]/;
+const DOI_PATTERN = /\b10\.\d{4,9}\/[\-._;()/:A-Z0-9]+\b/i;
+const RECENT_VERIFIED_SOURCE_FOLLOW_UP_WINDOW_MS = 30 * 60 * 1000;
+const VERIFIED_SOURCE_REPLY_PATTERN = /(NO_VERIFIED_SOURCES_FOUND|מקורות(?:\s+אקדמיים)?\s+מאומתים בלבד|verified\s+sources?)/i;
+
+const isExplicitSourceRequest = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text || NON_SOURCE_REQUEST_PATTERN.test(text)) return false;
+  if (SOURCE_TRANSFORM_REQUEST_PATTERN.test(text)) return false;
+  return GENERIC_SOURCE_QUERY_PATTERN.test(text)
+    || DIRECT_SOURCE_DISCOVERY_PATTERN.test(text)
+    || SOURCE_REQUEST_PATTERN.test(text)
+    || (SOURCE_DISCOVERY_ACTION_PATTERN.test(text) && SOURCE_DISCOVERY_TARGET_PATTERN.test(text));
+};
+
+const shouldUseStrictSourceGrounding = ({ userPrompt = '', documentContext = '', extraSystemPrompt = '', skillId = '' } = {}) => {
+  if (SOURCE_GROUNDING_SKILL_IDS.has(String(skillId || '').trim())) return true;
+  const combined = [userPrompt, extraSystemPrompt]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  if (!combined) return false;
+  if (isExplicitSourceRequest(combined)) return true;
+  if (!SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(String(userPrompt || '').trim())) return false;
+  try {
+    const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+    return Boolean(getLastVerifiedSourceQuery({ workspaceId }) && hasRecentVerifiedSourceFollowUpContext({ workspaceId }));
+  } catch {
+    return false;
+  }
+};
+
+const isSourceOnlyGroundingRequest = ({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) => {
+  const normalizedPrompt = String(userPrompt || '').trim();
+  const combined = [normalizedPrompt, extraSystemPrompt]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  if (!combined) return false;
+
+  const isSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(normalizedPrompt);
+  if (!isExplicitSourceRequest(combined) && !isSourceFollowUp) return false;
+  if (FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
+  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
+  return true;
+};
+
+const isSourceGroundingProvider = (providerId = '') => SOURCE_GROUNDING_PROVIDER_IDS.has(String(providerId || '').trim());
+
+const extractUrlSetFromText = (value = '') => {
+  const matches = String(value || '').match(SOURCE_GROUNDING_URL_REGEX) || [];
+  return new Set(matches.map((url) => String(url || '').trim()).filter(Boolean));
+};
+
+const buildSourceGroundingPrompt = ({ enforce = false, providerSupportsGrounding = false } = {}) => {
+  if (!enforce) return '';
+  if (providerSupportsGrounding) {
+    return [
+      'בקשות למקורות, כתבות, DOI או URLs חייבות להיות מקורקעות בתוצאות אמיתיות בלבד.',
+      'אסור לבנות URL ידנית, אסור להשלים slug, ואסור להמציא כותרות או שמות פרסום שנשמעים סבירים.',
+      `אם אין לפחות מקור אמין אחד שנשלף בפועל, החזר בדיוק ${SOURCE_GROUNDING_FAILURE_TOKEN}.`,
+      'אם אתה כן מחזיר מקור, השתמש רק ב-URL מלא כפי שהתקבל במפורש מתוצאות האחזור.',
+    ].join('\n');
+  }
+
+  return [
+    'הבקשה הנוכחית דורשת מקורות או URLs, אבל למסלול הפעיל אין אחזור מאומת.',
+    'אסור לך להמציא URL, DOI, כותרת מאמר, כתבה, שם כתב עת או גוף מפרסם.',
+    `אם אין מקור מאומת בתוך ההקשר שסופק לך, החזר בדיוק ${SOURCE_GROUNDING_FAILURE_TOKEN}.`,
+    'מותר להציע מילות חיפוש או לתאר מה חסר, אבל בלי לייצר קישור או מקור בדוי.',
+  ].join('\n');
+};
+
+const sanitizeSourceGroundingResponse = (text = '', { enforce = false, providerSupportsGrounding = false, allowedUrls = new Set() } = {}) => {
+  const normalizedText = String(text || '').trim();
+  if (!normalizedText || !enforce || providerSupportsGrounding) return normalizedText;
+  const allowedUrlSet = allowedUrls instanceof Set
+    ? allowedUrls
+    : new Set(Array.isArray(allowedUrls) ? allowedUrls : []);
+  const responseUrls = normalizedText.match(SOURCE_GROUNDING_URL_REGEX) || [];
+  if (!responseUrls.length) return normalizedText;
+  const disallowedUrls = responseUrls.filter((url) => !allowedUrlSet.has(String(url || '').trim()));
+  if (!disallowedUrls.length) return normalizedText;
+  const disallowedUrlSet = new Set(disallowedUrls.map((url) => String(url || '').trim()).filter(Boolean));
+  const strippedText = normalizedText
+    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (disallowedUrlSet.has(String(url || '').trim()) ? '' : url))
+    .replace(/\[([^\]]+)\]\(\s*\)/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return strippedText ? `${strippedText}\n\n${SOURCE_GROUNDING_FAILURE_TOKEN}` : SOURCE_GROUNDING_FAILURE_TOKEN;
+};
+
+const stripHtmlTags = (value = '') => String(value || '').replace(/<[^>]+>/g, ' ');
+
+const normalizeSourceSearchText = (value = '') => stripHtmlTags(value)
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = '', fallbackQuery = '', workspaceId = '' } = {}) => {
+  const promptText = normalizeSourceSearchText(userPrompt);
+  const contextText = normalizeSourceSearchText(documentContext);
+  const fallbackText = normalizeSourceSearchText(fallbackQuery);
+  const explicitSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(promptText);
+  const followUpTail = explicitSourceFollowUp
+    ? normalizeSourceSearchText(promptText.replace(SOURCE_EXPLICIT_FOLLOW_UP_PATTERN, ''))
+    : '';
+  if (explicitSourceFollowUp && fallbackText && hasRecentVerifiedSourceFollowUpContext({ workspaceId }) && !followUpTail) {
+    return String(fallbackText || '').slice(0, 420).trim();
+  }
+  const effectivePromptText = followUpTail || promptText;
+  const promptNeedsContext = !effectivePromptText || effectivePromptText.length < 28 || GENERIC_SOURCE_QUERY_PATTERN.test(effectivePromptText);
+  const merged = promptNeedsContext && contextText
+    ? [effectivePromptText, contextText].filter(Boolean).join(' ')
+    : effectivePromptText;
+  return String(merged || '').slice(0, 420).trim();
+};
+
+const parseSourceYear = (value = '') => {
+  const matches = String(value || '').match(/\b(?:19|20)\d{2}\b/g);
+  return matches?.[matches.length - 1] || '';
+};
+
+const extractDoiFromSource = (value = '') => {
+  const match = String(value || '').match(DOI_PATTERN);
+  return match ? String(match[0] || '').replace(/[),.;]+$/, '') : '';
+};
+
+const buildVerifiedSourceKey = (item = {}) => {
+  const url = String(item?.url || '').trim().toLowerCase();
+  const title = String(item?.title || '').trim().toLowerCase();
+  return `${url}::${title}`;
+};
+
+const dedupeVerifiedSourceResults = (results = []) => {
+  const seen = new Set();
+  return (Array.isArray(results) ? results : []).filter((item) => {
+    if (!item || typeof item !== 'object') return false;
+    if (!String(item.url || '').trim() && !String(item.title || '').trim()) return false;
+    const key = buildVerifiedSourceKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const normalizeScholarVerifiedSource = (raw = {}) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const publicationInfo = raw.publication_info && typeof raw.publication_info === 'object' ? raw.publication_info : {};
+  const authors = Array.isArray(publicationInfo.authors)
+    ? publicationInfo.authors.map((author) => normalizeSourceSearchText(author?.name || '')).filter(Boolean)
+    : [];
+  const summary = normalizeSourceSearchText(publicationInfo.summary || '');
+  const title = normalizeSourceSearchText(raw.title || '');
+  const url = normalizeSourceSearchText(raw.link || raw.inline_links?.html_version || raw.resources?.[0]?.link || '');
+  const snippet = normalizeSourceSearchText(raw.snippet || '');
+  const citedByRaw = Number(raw.inline_links?.cited_by?.total);
+  const citedBy = Number.isFinite(citedByRaw) && citedByRaw > 0 ? citedByRaw : null;
+  const doi = extractDoiFromSource([url, snippet, summary].filter(Boolean).join(' '));
+  if (!title && !url) return null;
+  return {
+    title,
+    url,
+    snippet,
+    summary,
+    authors,
+    year: parseSourceYear(summary),
+    citedBy,
+    doi,
+    providerId: 'serpapi-scholar',
+  };
+};
+
+const normalizePerplexityVerifiedSource = (raw = {}) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = normalizeSourceSearchText(raw.title || '');
+  const url = normalizeSourceSearchText(raw.url || raw.link || '');
+  const snippet = normalizeSourceSearchText(raw.snippet || '');
+  const sourceLabel = normalizeSourceSearchText(raw.source || '');
+  const dateLabel = normalizeSourceSearchText(raw.date || raw.last_updated || '');
+  const summary = [sourceLabel, dateLabel].filter(Boolean).join(' | ');
+  const doi = extractDoiFromSource([title, url, snippet].filter(Boolean).join(' '));
+  if (!title && !url) return null;
+  return {
+    title,
+    url,
+    snippet,
+    summary,
+    authors: [],
+    year: parseSourceYear(dateLabel),
+    citedBy: null,
+    doi,
+    providerId: 'perplexity-search',
+  };
+};
+
+const normalizePerplexityCitationSource = (url = '') => {
+  const safeUrl = normalizeSourceSearchText(url);
+  if (!safeUrl) return null;
+  return {
+    title: '',
+    url: safeUrl,
+    snippet: '',
+    summary: '',
+    authors: [],
+    year: '',
+    citedBy: null,
+    doi: extractDoiFromSource(safeUrl),
+    providerId: 'perplexity-search',
+  };
+};
+
+const requestJsonOverHttp = async ({ url, method = 'GET', headers = {}, body = '', signal, timeoutMs = 0 } = {}) => {
+  const desktopResult = await proxyDesktopHttpRequest({ url, method, headers, body, timeoutMs }, signal);
+  if (desktopResult) {
+    if (!desktopResult.ok) {
+      throw new Error(`HTTP ${desktopResult.status}: ${String(desktopResult.body || '').slice(0, 300)}`);
+    }
+    return JSON.parse(desktopResult.body || '{}');
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    signal,
+    ...(body ? { body } : {}),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => response.statusText);
+    throw new Error(`HTTP ${response.status}: ${String(text || '').slice(0, 300)}`);
+  }
+  return response.json();
+};
+
+const fetchScholarVerifiedSources = async ({ query = '', apiKey = '', signal, timeoutMs = 0, limit = VERIFIED_SOURCE_RESULT_LIMIT } = {}) => {
+  const safeQuery = String(query || '').trim();
+  const safeApiKey = String(apiKey || '').trim();
+  if (!safeQuery || !safeApiKey) return [];
+
+  const params = new URLSearchParams({
+    engine: 'google_scholar',
+    q: safeQuery,
+    api_key: safeApiKey,
+    num: String(Math.max(1, Math.min(10, Number(limit) || VERIFIED_SOURCE_RESULT_LIMIT))),
+    hl: HEBREW_TEXT_PATTERN.test(safeQuery) ? 'iw' : 'en',
+    as_vis: '1',
+    output: 'json',
+  });
+  const data = await requestJsonOverHttp({
+    url: `https://serpapi.com/search.json?${params.toString()}`,
+    method: 'GET',
+    signal,
+    timeoutMs,
+  });
+  const status = String(data?.search_metadata?.status || '').trim().toLowerCase();
+  if (status === 'error') {
+    throw new Error(String(data?.error || 'SerpAPI Scholar search failed').trim());
+  }
+  const results = Array.isArray(data?.organic_results) ? data.organic_results : [];
+  return dedupeVerifiedSourceResults(results.map(normalizeScholarVerifiedSource).filter(Boolean)).slice(0, limit);
+};
+
+const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model = 'sonar', signal, timeoutMs = 0, academic = false, limit = VERIFIED_SOURCE_RESULT_LIMIT } = {}) => {
+  const safeQuery = String(query || '').trim();
+  const safeApiKey = String(apiKey || '').trim();
+  if (!safeQuery || !safeApiKey) return [];
+
+  const body = JSON.stringify({
+    model: String(model || '').trim() || 'sonar',
+    messages: [
+      {
+        role: 'system',
+        content: academic
+          ? 'Search for real academic sources for the user query. The answer text itself can be just OK.'
+          : 'Search for real web sources for the user query. The answer text itself can be just OK.',
+      },
+      { role: 'user', content: safeQuery },
+    ],
+    max_tokens: 64,
+    temperature: 0,
+    stream: false,
+    disable_search: false,
+    web_search_options: {
+      search_mode: academic ? 'academic' : 'web',
+    },
+    return_related_questions: false,
+  });
+  const data = await requestJsonOverHttp({
+    url: 'https://api.perplexity.ai/chat/completions',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${safeApiKey}`,
+    },
+    body,
+    signal,
+    timeoutMs,
+  });
+  const searchResults = Array.isArray(data?.search_results)
+    ? data.search_results.map(normalizePerplexityVerifiedSource).filter(Boolean)
+    : [];
+  if (searchResults.length) {
+    return dedupeVerifiedSourceResults(searchResults).slice(0, limit);
+  }
+  const citations = Array.isArray(data?.citations)
+    ? data.citations.map(normalizePerplexityCitationSource).filter(Boolean)
+    : [];
+  return dedupeVerifiedSourceResults(citations).slice(0, limit);
+};
+
+const buildVerifiedSourceFailureMessage = ({ query = '', providerAvailable = false, academic = false } = {}) => {
+  const lines = [SOURCE_GROUNDING_FAILURE_TOKEN];
+  lines.push(providerAvailable
+    ? (academic
+      ? 'לא נמצאו מקורות אקדמיים מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.'
+      : 'לא נמצאו מקורות מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.')
+    : (academic
+      ? 'אין כרגע ספק אחזור מאומת למקורות אקדמיים. הגדר SerpAPI או Perplexity academic כדי לקבל מקורות אמיתיים.'
+      : 'אין כרגע ספק אחזור מאומת למקורות. הגדר Perplexity או SerpAPI כדי לקבל תוצאות אמיתיות.'));
+  if (query) lines.push(`שאילתת החיפוש שנבדקה: ${query}`);
+  return lines.join('\n\n');
+};
+
+const formatVerifiedSourceItem = (item = {}, index = 0) => {
+  const lines = [`${index + 1}. ${item.title || item.url || 'מקור מאומת'}`];
+  const publicationSummary = String(item.summary || '').trim();
+  if (publicationSummary) lines.push(`פרטי פרסום: ${publicationSummary}`);
+  else if (Array.isArray(item.authors) && item.authors.length) lines.push(`מחברים: ${item.authors.join(', ')}`);
+  if (item.citedBy) lines.push(`צוטט על ידי: ${item.citedBy}`);
+  if (item.doi) lines.push(`DOI: ${item.doi}`);
+  if (item.url) lines.push(`קישור: ${item.url}`);
+  if (item.snippet) lines.push(`תקציר: ${item.snippet}`);
+  return lines.join('\n');
+};
+
+const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', academic = false } = {}) => {
+  const providerLabel = providerId === 'serpapi-scholar'
+    ? 'Google Scholar / SerpAPI'
+    : 'Perplexity Search';
+  return [
+    `${academic ? 'מקורות אקדמיים' : 'מקורות'} מאומתים בלבד${query ? ` עבור: ${query}` : ''}`,
+    `הוחזרו רק פריטים שאותרו ישירות דרך ${providerLabel}, בלי השלמה חופשית של המודל.`,
+    ...results.map((item, index) => formatVerifiedSourceItem(item, index)),
+    'לא הוספתי מקורות שלא הופיעו בתוצאות האחזור.',
+  ].filter(Boolean).join('\n\n');
+};
+
+const resolveVerifiedSourceReply = async ({
+  userPrompt = '',
+  documentContext = '',
+  extraSystemPrompt = '',
+  skillId = '',
+  isAcademicTask,
+  cfg = DEFAULT_PROVIDER_CONFIG,
+  timeoutMs = 0,
+} = {}) => {
+  const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const query = extractVerifiedSourceQuery({
+    userPrompt,
+    documentContext,
+    fallbackQuery: getLastVerifiedSourceQuery({ workspaceId }),
+    workspaceId,
+  });
+  const normalizedSkillId = String(skillId || '').trim().toLowerCase();
+  const academic = typeof isAcademicTask === 'boolean'
+    ? isAcademicTask
+    : (SOURCE_GROUNDING_SKILL_IDS.has(normalizedSkillId)
+      || ACADEMIC_SOURCE_SIGNAL_PATTERN.test([userPrompt, extraSystemPrompt, documentContext, normalizedSkillId].filter(Boolean).join('\n')));
+
+  const attempts = [];
+  if (academic && String(cfg?.scholar?.provider || '').trim() === 'serpapi' && String(cfg?.scholar?.key || '').trim()) {
+    attempts.push({
+      providerId: 'serpapi-scholar',
+      model: 'google_scholar',
+      run: (signal) => fetchScholarVerifiedSources({
+        query,
+        apiKey: cfg.scholar.key,
+        signal,
+        timeoutMs,
+        limit: VERIFIED_SOURCE_RESULT_LIMIT,
+      }),
+    });
+  }
+  if (String(cfg?.perplexity?.key || '').trim()) {
+    attempts.push({
+      providerId: 'perplexity-search',
+      model: String(cfg?.perplexity?.model || '').trim() || 'sonar',
+      run: (signal) => fetchPerplexityVerifiedSources({
+        query,
+        apiKey: cfg.perplexity.key,
+        model: cfg.perplexity.model,
+        signal,
+        timeoutMs,
+        academic,
+        limit: VERIFIED_SOURCE_RESULT_LIMIT,
+      }),
+    });
+  }
+
+  if (!attempts.length || !query) {
+    return {
+      text: buildVerifiedSourceFailureMessage({ query, providerAvailable: false, academic }),
+      providerId: 'verified-source-block',
+      model: '',
+      urls: new Set(),
+      query,
+      workspaceId,
+      academic,
+    };
+  }
+
+  let lastError = null;
+  for (const attempt of attempts) {
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    try {
+      const results = await withTimeout(attempt.run(abortController?.signal), timeoutMs, () => abortController?.abort());
+      if (results.length) {
+        return {
+          text: buildVerifiedSourceReply({ query, results, providerId: attempt.providerId, academic }),
+          providerId: attempt.providerId,
+          model: attempt.model,
+          urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+          query,
+          workspaceId,
+          academic,
+        };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return {
+    text: buildVerifiedSourceFailureMessage({ query, providerAvailable: true, academic }),
+    providerId: 'verified-source-block',
+    model: lastError ? 'retrieval-failed' : '',
+    urls: new Set(),
+    query,
+    workspaceId,
+    academic,
+    error: lastError,
+  };
+};
+
 const buildWorkspaceAutomationInstructions = ({ disabled = false } = {}) => {
   const automation = getWorkspaceAutomation();
   if (disabled || !automation.enabled) return '';
@@ -2416,6 +2895,7 @@ const buildWorkspaceAutomationInstructions = ({ disabled = false } = {}) => {
   const circularRounds = normalizeCircularRounds(automation);
 
   const workflowMap = {
+    'autopilot-full': 'עבוד במצב AUTOPILOT מלא עם קריאת preflight: קודם נתח את המשימה, בחר לבד אילו סוכנים, ספקים, מודלים, הוראות stage-level וכמה סבבים באמת נדרשים, ורק אחר כך הרץ את הצוות. אל תמחזר אותו pipeline לכל מטלה.',
     'manager-auto': 'עבוד במצב AUTOPILOT מלא: קודם תכנן, אחר כך קבע לבד אילו תפקידים נדרשים, איזה מודל מתאים לכל שלב, ובאיזה סדר להפעיל אותם. החזר תהליך מתואם וסופי.',
     'circular-team': 'עבוד כצוות מעגלי: הסוכנים לא חייבים לרוץ רק בקו ישר. אם מתגלים פערים, אפשר להחזיר את הכתיבה, המבנה או הליטוש לסבב נוסף עד שהתוצר מתייצב.',
     'manager-pipeline': 'עבוד כצוות אוטומטי: קודם מנהל העבודה מפרק את הבקשה, אחר כך החוקר מאתר מקורות, לאחר מכן מעצב המבנה מארגן את השלד, הכותב מנסח, ולבסוף המגיה מלטש. החזר למשתמש תוצאה סופית מגובשת.',
@@ -2434,7 +2914,7 @@ const buildWorkspaceAutomationInstructions = ({ disabled = false } = {}) => {
     decisionMode === 'manager'
       ? 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, ומנהל העבודה הוא זה שמכריע על הצעד הבא.'
       : 'כל סוכן חייב לדווח בסיום מה הושלם ומה עדיין חסר, והמשך הזרימה ייקבע לפי כללים וסקילים פעילים.',
-    ['manager-auto', 'circular-team'].includes(automation.workflowMode) && decisionMode === 'manager'
+    AUTOPILOT_MANAGER_WORKFLOW_MODES.has(automation.workflowMode) && decisionMode === 'manager'
       ? 'פעל כמו מנהל עבודה אמיתי: נתח את ההנחיות והחומרים, תכנן שלבים והעבר את השרביט באופן חכם לסוכנים מתאימים.'
       : '',
     circularEnabled
@@ -2675,7 +3155,7 @@ const resolvePlanningManagerAgent = (enabledAgents = []) => enabledAgents.find((
 const resolveFinalManagerReviewAgent = (enabledAgents = []) => enabledAgents.find((agent) => isManagerReviewAgent(agent)) || resolvePlanningManagerAgent(enabledAgents);
 const GLOBAL_STRUCTURE_OPT_OUT_PATTERN = /(?:^|[\s,;:!?])(?:בלי\s+מבנה(?:\s+בכלל)?|ללא\s+מבנה(?:\s+בכלל)?|אין\s+צורך\s+במבנה(?:\s+בכלל)?|בלי\s+שלד(?:\s+בכלל)?|ללא\s+שלד(?:\s+בכלל)?|בלי\s+outline(?:\s+בכלל)?|בלי\s+כותרות\s+בכלל|ללא\s+כותרות\s+בכלל|בלי\s+פרקים\s+בכלל|ללא\s+פרקים\s+בכלל|no\s+structure\s+at\s+all|no\s+structure|without\s+structure|no\s+outline|without\s+outline|no\s+headings\s+at\s+all|without\s+headings\s+entirely|no\s+sections\s+at\s+all|without\s+sections\s+entirely)/i;
 const hasExplicitStructureOptOut = (text = '') => GLOBAL_STRUCTURE_OPT_OUT_PATTERN.test(String(text || ''));
-const ACADEMIC_SOURCE_SIGNAL_PATTERN = /(אקדמ|סמינר|ביבליוגרפ|ציטוט|citation|references?|journal|literature|doi|scholar|peer[-\s]?reviewed|google scholar|מאמר|ספרות)/i;
+const ACADEMIC_SOURCE_SIGNAL_PATTERN = /(אקדמ|סמינר|ביבליוגרפ|ציטוט|citation|references?|journal\s+articles?|literature|doi|scholar|peer[-\s]?reviewed|google scholar|מאמר\s+אקדמי|ספרות|apa|mla)/i;
 const isVisualResearchAgent = (agent = {}) => /(researcher-visual|visual-research|visual research|חוקר חזותי|חקר חזותי)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 const VISUAL_RESEARCH_DIRECT_PATTERN = /(חקר\s+חזותי|מחקר\s+חזותי|חיפוש\s+חזותי|מקורות\s+חזותיים|חומר(?:י|ים)?\s+עזר\s+חזותי(?:ים)?|חומר(?:י|ים)?\s+חזותי(?:ים)?|visual\s+research|visual\s+sources?|visual\s+materials?)/i;
 const VISUAL_RESEARCH_STRONG_SIGNAL_PATTERN = /(youtube|vimeo|video|videos|וידאו|סרטון|סרטונים|סרטוני|screenshot|screen\s?shot|צילום\s+מסך|diagram|diagrams|תרשים|תרשימים|walkthrough|walkthroughs)/i;
@@ -2872,6 +3352,141 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
   };
 };
 
+const clampAutopilotRoundCount = (value, fallback = 1, max = AUTOPILOT_MAX_STAGE_ROUNDS) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return Math.max(1, Math.min(max, Math.round(fallback || 1)));
+  return Math.max(1, Math.min(max, Math.round(numericValue)));
+};
+
+const getAutopilotRoundBudgetForExecutionStyle = (executionStyle = 'balanced', taskProfile = {}) => {
+  const normalizedStyle = AUTOPILOT_EXECUTION_STYLE_OPTIONS.has(String(executionStyle || '').trim())
+    ? String(executionStyle).trim()
+    : 'balanced';
+
+  if (normalizedStyle === 'deep') {
+    return {
+      minPerAgent: taskProfile?.needsResearch || taskProfile?.needsStructure ? 2 : 1,
+      maxPerAgent: 3,
+      finalManagerPasses: 2,
+    };
+  }
+
+  if (normalizedStyle === 'lean') {
+    return {
+      minPerAgent: 1,
+      maxPerAgent: 1,
+      finalManagerPasses: 1,
+    };
+  }
+
+  return {
+    minPerAgent: 1,
+    maxPerAgent: 2,
+    finalManagerPasses: 1,
+  };
+};
+
+const getStagePlanRoleKeys = (agent = {}) => {
+  const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
+  const specializedRoleKey = isVisualResearchAgent(agent)
+    ? 'researcher-visual'
+    : isDocumentDesignerAgent(agent)
+      ? 'document-designer'
+      : roleKey;
+  return [...new Set([specializedRoleKey, roleKey].filter(Boolean))];
+};
+
+const resolveStagePlanString = (mapping = {}, agent = {}) => {
+  if (!mapping || typeof mapping !== 'object') return '';
+  const keys = [
+    agent?.id,
+    agent?.name,
+    String(agent?.id || '').toLowerCase(),
+    ...getStagePlanRoleKeys(agent),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  for (const key of keys) {
+    const value = mapping[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  return '';
+};
+
+const buildAutopilotTaskProfile = ({ userPrompt = '', documentContext = '', structureConstraintText = '', activeSkill = null, enabledAgents = [] } = {}) => {
+  const combined = [userPrompt, documentContext, structureConstraintText].filter(Boolean).join('\n');
+  const skillId = String(activeSkill?.id || '').trim().toLowerCase();
+  const requestText = String(userPrompt || '').trim();
+  const structureText = String(structureConstraintText || userPrompt || '').trim();
+  const draftExists = Boolean(String(documentContext || '').trim());
+  const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר\s+אקדמי|ביבליוגרפ|apa|ציטוט|מקורות|doi|scholar)/i.test(combined);
+  const needsVisualResearch = hasExplicitVisualResearchNeed(`${requestText}\n${structureText}`)
+    || hasExplicitVisualResearchNeed(documentContext)
+    || hasVisualResearchGapInContext(documentContext);
+  const disablesResearch = /(בלי מקורות|ללא מקורות|לא נדרשים מקורות|בלי מקור|ללא מקור|no sources|without sources)/i.test(combined);
+  const needsResearch = !disablesResearch && (
+    ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId)
+    || isAcademic
+    || isExplicitSourceRequest(requestText)
+    || /(research|מחקר|literature|peer[-\s]?reviewed|evidence|evidence-based)/i.test(combined)
+  );
+  const needsStructure = !hasExplicitStructureOptOut(structureText)
+    && (['academic-structure', 'template-autopilot'].includes(skillId) || /(שלד|מבנה|outline|כותרות|פרקים|sections?|headings?)/i.test(combined));
+  const needsHumanization = shouldAllowDocumentDesigner(requestText, structureText);
+  const isEditPass = /(תקן|ערוך|שכתב|polish|rewrite|edit|fix|refine|humanize|shorten|expand|ליטוש|ניסוח)/i.test(requestText);
+  const isFreshDraft = /(כתוב|נסח|draft|write|compose|generate|צור|בנה|create)/i.test(requestText) && !draftExists;
+  const enabledAgentCount = Array.isArray(enabledAgents) ? enabledAgents.length : 0;
+  const complexityScore = [
+    draftExists ? 1 : 0,
+    String(documentContext || '').length > 3000 ? 1 : 0,
+    needsResearch ? 2 : 0,
+    needsVisualResearch ? 1 : 0,
+    needsStructure ? 1 : 0,
+    needsHumanization ? 1 : 0,
+    isAcademic ? 1 : 0,
+    enabledAgentCount > 5 ? 1 : 0,
+  ].reduce((sum, value) => sum + value, 0);
+
+  const recommendedExecutionStyle = complexityScore >= 6
+    ? 'deep'
+    : complexityScore >= 3
+      ? 'balanced'
+      : 'lean';
+
+  const recommendedRounds = getAutopilotRoundBudgetForExecutionStyle(recommendedExecutionStyle, {
+    needsResearch,
+    needsStructure,
+  });
+
+  const signals = [
+    draftExists ? 'existing-draft' : 'blank-page',
+    needsResearch ? 'research' : '',
+    needsVisualResearch ? 'visual-research' : '',
+    needsStructure ? 'structure' : '',
+    needsHumanization ? 'humanization' : '',
+    isAcademic ? 'academic' : '',
+    isEditPass ? 'editing' : '',
+    isFreshDraft ? 'fresh-draft' : '',
+  ].filter(Boolean);
+
+  return {
+    recommendedExecutionStyle,
+    recommendedRounds,
+    complexityScore,
+    draftExists,
+    needsResearch,
+    needsVisualResearch,
+    needsStructure,
+    needsHumanization,
+    isAcademic,
+    isEditPass,
+    isFreshDraft,
+    enabledAgentCount,
+    activeSkillId: skillId,
+    signals,
+  };
+};
+
 const parseStagePacket = (reply = '') => {
   const raw = stripCodeFences(reply);
   const extract = (label) => {
@@ -2913,6 +3528,7 @@ const getDecisionMode = (automation = {}, enabledAgents = null) => {
   const resolvedAgents = Array.isArray(enabledAgents) ? enabledAgents : getOrderedRoleAgents(automation.workflowMode);
   const hasManagerAgent = Boolean(resolvePlanningManagerAgent(resolvedAgents));
   if (!hasManagerAgent) return 'rules';
+  if (automation?.workflowMode === 'autopilot-full') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
   if (automation?.workflowMode === 'manager-auto') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
   if (automation?.workflowMode === 'circular-team') return automation?.autopilotEnabled === false ? 'rules' : 'manager';
   return 'rules';
@@ -3089,7 +3705,7 @@ const enqueueWorkflowRevisits = ({
 
 const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או להחזיר סבב, DELIVERABLE נשאר הטיוטה המלאה האחרונה או גרסה מלאה מתוקנת.';
 
-const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false }) => {
+const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageInstruction = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
   const currentOutputBlock = stagedOutput ? `תוצר עדכני עד כה:\n${stagedOutput}` : '';
   const isPlanningManagerStage = isPlanningManagerAgent(stageAgent);
@@ -3138,6 +3754,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
     batonBlock,
     currentOutputBlock,
     stageGoal ? `יעד השלב הנוכחי:\n${stageGoal}` : '',
+    stageInstruction ? `הנחיית AUTOPILOT לשלב הנוכחי:\n${stageInstruction}` : '',
     revisitReason ? `למה הוחזרת עכשיו לסבב נוסף:\n${revisitReason}` : '',
     collectAgentNotes && agentNotesInstruction ? `הנחיה מחייבת לנספח הערות סוכנים בסוף המסמך:\n${agentNotesInstruction}\nבסוף השלב, הוסף ב-CHECKLIST נקודות קצרות שמסבירות מה בוצע ומה נשאר.` : '',
     `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
@@ -3159,13 +3776,28 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageAgent, stagedO
 };
 
 const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, structureConstraintText = '', enabledAgents, automation, cfg, selectedProviders, preferredProviders = [], runId, logEvent, onStatus, activeSkill = null, preserveFullDocumentContext = false }) => {
-  const fallbackPlan = buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText);
+  const autopilotTaskProfile = buildAutopilotTaskProfile({
+    userPrompt: cleanUserPrompt,
+    documentContext,
+    structureConstraintText,
+    activeSkill,
+    enabledAgents,
+  });
+  const fallbackPlan = {
+    ...buildHeuristicAgentPlan(cleanUserPrompt, documentContext, enabledAgents, activeSkill, structureConstraintText),
+    executionStyle: autopilotTaskProfile.recommendedExecutionStyle,
+    roundBudget: { ...autopilotTaskProfile.recommendedRounds },
+    stageInstructions: {},
+    stageModels: {},
+    autopilotTaskProfile,
+  };
   const structureOptOut = hasExplicitStructureOptOut(structureConstraintText || cleanUserPrompt);
   const combinedContext = `${cleanUserPrompt}\n${documentContext}`;
   const isAcademicTask = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combinedContext);
+  const isFullAutopilot = automation.workflowMode === 'autopilot-full';
   if (!enabledAgents.length) return fallbackPlan;
 
-  if (['manager-auto', 'circular-team'].includes(automation.workflowMode) && automation?.autopilotEnabled === false) {
+  if (AUTOPILOT_MANAGER_WORKFLOW_MODES.has(automation.workflowMode) && automation?.autopilotEnabled === false) {
     const preservedOrderedAgents = [
       ...enabledAgents.filter((agent) => isPlanningManagerAgent(agent)),
       ...enabledAgents.filter((agent) => !isPlanningManagerAgent(agent) && !isManagerReviewAgent(agent)),
@@ -3189,7 +3821,7 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
     };
   }
 
-  if (!['manager-auto', 'circular-team'].includes(automation.workflowMode)) return fallbackPlan;
+  if (!AUTOPILOT_MANAGER_WORKFLOW_MODES.has(automation.workflowMode)) return fallbackPlan;
 
   const managerAgent = resolvePlanningManagerAgent(enabledAgents);
   if (!managerAgent) return fallbackPlan;
@@ -3210,6 +3842,10 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
       return `- ${agent.id}: ${agent.name} (${roleKey}${providerLabel})`;
     })
     .join('\n');
+  const autopilotProfileJson = JSON.stringify(autopilotTaskProfile, null, 2);
+  const planningSchemaText = isFullAutopilot
+    ? 'החזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","executionStyle":"lean|balanced|deep","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"stageInstructions":{"writer":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי"},"providers":{"researcher-academic":"perplexity"},"models":{"writer":"gpt-4o"},"roundBudget":{"minPerAgent":1,"maxPerAgent":3,"finalManagerPasses":2},"needsFinalManagerReview":true}.'
+    : 'החזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"gemini","manager-review":"gemini"},"needsFinalManagerReview":false}.';
 
   try {
     logEvent('manager-plan-start', 'מנהל העבודה בונה תכנית ביצוע דינמית', {
@@ -3217,12 +3853,13 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
       agentLabel: managerAgent?.name || 'מנהל עבודה',
       provider: managerProvider,
       orderedAgents: enabledAgents.map((agent) => agent.name),
+      executionStyle: autopilotTaskProfile.recommendedExecutionStyle,
     });
 
     const managerPlanText = await chatWithActiveProvider(
       `בקשת המשתמש:\n${cleanUserPrompt}`,
       preserveFullDocumentContext ? String(documentContext || '') : buildPromptDocumentContext(documentContext),
-      `${managerAgent?.prompt || ''}\nלפני שאתה מחלק שלבים והוראות, קרא קודם את בקשת המשתמש במלואה. אם קיים בהקשר המסמך תוכן קיים, טיוטה, מסמך חלקי או חומר שכבר נכתב, קרא גם את הטיוטה או המסמך כפי שסופקו לך בהקשר ורק אחר כך החלט איך לחלק את העבודה. כשיש טיוטה, goals לכל סוכן חייבים להתייחס גם לדרישות המשתמש וגם למה שכבר קיים בטיוטה, כדי לשפר, להשלים או לבדוק אותה במקום לעבוד כאילו מתחילים מאפס. אם המשתמש ביקש חקר חזותי, סרטונים, screenshots, diagrams, demos, walkthroughs או חומר חזותי אחר מהרשת, תן עדיפות לסוכן researcher-visual או לשלב מפורש של מחקר חזותי ייעודי.\nהחזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"gemini","manager-review":"gemini"},"needsFinalManagerReview":false}.\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. מותר להשתמש ב-order, goals, roleLabels ו-providers גם ב-agent ids המדויקים מהרשימה למטה, ולא רק ב-role aliases כלליים. אם יש יותר מסוכן אחד מאותו סוג, השתמש ב-id המדויק כדי לבחור את שניהם או רק אחד מהם. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם מדובר בחקר חזותי או בפער חזותי מפורש, מותר ואף רצוי לבחור researcher-visual כשלב ייעודי. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד. אם מצב העבודה הוא מעגלי, מותר לך לתכנן כך שסוכן יחזור לסבב נוסף בהמשך לפי הצורך.\nסוכנים זמינים כרגע:\n${availableAgents}\nמודלים זמינים כרגע:\n${availableProviders}`,
+      `${managerAgent?.prompt || ''}\nלפני שאתה מחלק שלבים והוראות, קרא קודם את בקשת המשתמש במלואה. אם קיים בהקשר המסמך תוכן קיים, טיוטה, מסמך חלקי או חומר שכבר נכתב, קרא גם את הטיוטה או המסמך כפי שסופקו לך בהקשר ורק אחר כך החלט איך לחלק את העבודה. כשיש טיוטה, goals לכל סוכן חייבים להתייחס גם לדרישות המשתמש וגם למה שכבר קיים בטיוטה, כדי לשפר, להשלים או לבדוק אותה במקום לעבוד כאילו מתחילים מאפס. אם המשתמש ביקש חקר חזותי, סרטונים, screenshots, diagrams, demos, walkthroughs או חומר חזותי אחר מהרשת, תן עדיפות לסוכן researcher-visual או לשלב מפורש של מחקר חזותי ייעודי.\n${planningSchemaText}\nבחר רק את הסוכנים הנחוצים באמת. במצב AUTOPILOT אתה גם מגדיר את התפקיד המעשי של כל שלב דרך roleLabels. במצב AUTOPILOT מלא אתה רשאי וגם נדרש לבחור provider/model/round budget/stageInstructions לכל שלב רק אם זה באמת משפר את ההתאמה למטלה. אל תמחזר pipeline קבוע כשפרופיל המטלה שונה. מותר להשתמש ב-order, goals, roleLabels, providers, models ו-stageInstructions גם ב-agent ids המדויקים מהרשימה למטה, ולא רק ב-role aliases כלליים. אם יש יותר מסוכן אחד מאותו סוג, השתמש ב-id המדויק כדי לבחור את שניהם או רק אחד מהם. אם מדובר בעבודה אקדמית, טיוטה, נושא מחקרי או חומרי עזר — העדף מקורות לפני כתיבה. אם צריך שער איכות ניהולי מפורש בסוף, מותר להוסיף manager-review כשלב נפרד.\nפרופיל מטלה אלגוריתמי שמחייב אותך לבחור pipeline לפי המשימה:\n${autopilotProfileJson}\nסוכנים זמינים כרגע:\n${availableAgents}\nמודלים זמינים כרגע:\n${availableProviders}`,
       {
         providerOverride: managerProvider,
         preferredProviders: managerProvider ? [managerProvider] : preferredProviders,
@@ -3269,6 +3906,7 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
       agentLabel: managerAgent?.name || 'מנהל עבודה',
       orderedAgents: normalizedOrderedAgents.map((agent) => agent.name),
       outputPreview: trimLogText(parsedPlan.summary || ''),
+      executionStyle: String(parsedPlan.executionStyle || fallbackPlan.executionStyle || '').trim(),
     });
 
     const resolvedFinalReviewer = resolveFinalManagerReviewAgent(enabledAgents);
@@ -3277,58 +3915,86 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
     const dynamicStageGoals = { ...(parsedPlan.goals || {}) };
     const normalizedStageLabels = {};
     const normalizedStageProviders = {};
+    const normalizedStageModels = {};
+    const normalizedStageInstructions = {};
     normalizedOrderedAgents.forEach((agent) => {
-      const roleKey = isManagerReviewAgent(agent) ? 'manager-review' : getAgentRoleKey(agent);
-      const specializedRoleKey = isVisualResearchAgent(agent)
-        ? 'researcher-visual'
-        : isDocumentDesignerAgent(agent)
-          ? 'document-designer'
-          : roleKey;
-      const resolvedStageLabel = parsedPlan?.roleLabels?.[agent.id]
-        || parsedPlan?.roleLabels?.[agent.name]
-        || parsedPlan?.roleLabels?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.roleLabels?.[specializedRoleKey]
-        || (specializedRoleKey === roleKey ? parsedPlan?.roleLabels?.[roleKey] : '')
-        || parsedPlan?.stageLabels?.[agent.id]
-        || parsedPlan?.stageLabels?.[agent.name]
-        || parsedPlan?.stageLabels?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.stageLabels?.[specializedRoleKey]
-        || (specializedRoleKey === roleKey ? parsedPlan?.stageLabels?.[roleKey] : '')
-        || '';
+      const roleKeys = getStagePlanRoleKeys(agent);
+      const resolvedStageLabel = resolveStagePlanString({
+        ...(parsedPlan?.roleLabels || {}),
+        ...(parsedPlan?.stageLabels || {}),
+      }, agent);
       if (resolvedStageLabel) normalizedStageLabels[agent.id] = resolvedStageLabel;
 
-      const resolvedStageProvider = parsedPlan?.providers?.[agent.id]
-        || parsedPlan?.providers?.[agent.name]
-        || parsedPlan?.providers?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.providers?.[specializedRoleKey]
-        || (specializedRoleKey === roleKey ? parsedPlan?.providers?.[roleKey] : '')
-        || parsedPlan?.stageProviders?.[agent.id]
-        || parsedPlan?.stageProviders?.[agent.name]
-        || parsedPlan?.stageProviders?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.stageProviders?.[specializedRoleKey]
-        || (specializedRoleKey === roleKey ? parsedPlan?.stageProviders?.[roleKey] : '')
-        || '';
+      const resolvedStageProvider = resolveStagePlanString({
+        ...(parsedPlan?.providers || {}),
+        ...(parsedPlan?.stageProviders || {}),
+      }, agent);
       if (resolvedStageProvider) normalizedStageProviders[agent.id] = resolvedStageProvider;
 
-      const resolvedGoal = parsedPlan?.goals?.[agent.id]
-        || parsedPlan?.goals?.[agent.name]
-        || parsedPlan?.goals?.[String(agent.id || '').toLowerCase()]
-        || parsedPlan?.goals?.[specializedRoleKey]
-        || (specializedRoleKey === roleKey ? parsedPlan?.goals?.[roleKey] : '')
-        || '';
-      if (resolvedGoal) dynamicStageGoals[agent.id] = structureOptOut && roleKey === 'designer'
+      const resolvedGoal = resolveStagePlanString(parsedPlan?.goals || {}, agent);
+      if (resolvedGoal) dynamicStageGoals[agent.id] = structureOptOut && roleKeys.includes('designer')
         && !isDocumentDesignerAgent(agent)
         ? 'אל תוסיף מבנה חדש. אם כבר יש במסמך כותרות או פרקים, רק שמור על עקביות ובהירות בלי להרחיב אותם.'
         : resolvedGoal;
+
+      const resolvedStageModel = resolveStagePlanString({
+        ...(parsedPlan?.models || {}),
+        ...(parsedPlan?.stageModels || {}),
+      }, agent);
+      if (resolvedStageModel) normalizedStageModels[agent.id] = resolvedStageModel;
+
+      const resolvedStageInstruction = resolveStagePlanString({
+        ...(parsedPlan?.stageInstructions || {}),
+        ...(parsedPlan?.instructions || {}),
+      }, agent);
+      if (resolvedStageInstruction) normalizedStageInstructions[agent.id] = resolvedStageInstruction;
     });
+
+    const executionStyle = AUTOPILOT_EXECUTION_STYLE_OPTIONS.has(String(parsedPlan?.executionStyle || '').trim())
+      ? String(parsedPlan.executionStyle).trim()
+      : fallbackPlan.executionStyle;
+    const derivedRoundBudget = getAutopilotRoundBudgetForExecutionStyle(executionStyle, autopilotTaskProfile);
+    const parsedRoundBudget = (parsedPlan?.roundBudget && typeof parsedPlan.roundBudget === 'object')
+      ? parsedPlan.roundBudget
+      : ((parsedPlan?.rounds && typeof parsedPlan.rounds === 'object') ? parsedPlan.rounds : {});
+    const normalizedRoundBudget = {
+      minPerAgent: clampAutopilotRoundCount(parsedRoundBudget?.minPerAgent ?? parsedRoundBudget?.min, derivedRoundBudget.minPerAgent),
+      maxPerAgent: clampAutopilotRoundCount(parsedRoundBudget?.maxPerAgent ?? parsedRoundBudget?.max, derivedRoundBudget.maxPerAgent),
+      finalManagerPasses: clampAutopilotRoundCount(
+        parsedRoundBudget?.finalManagerPasses ?? parsedRoundBudget?.finalReviewPasses,
+        derivedRoundBudget.finalManagerPasses,
+        AUTOPILOT_MAX_FINAL_REVIEW_PASSES,
+      ),
+    };
+    normalizedRoundBudget.maxPerAgent = Math.max(normalizedRoundBudget.minPerAgent, normalizedRoundBudget.maxPerAgent);
 
     return {
       ...fallbackPlan,
       summary: String(parsedPlan.summary || fallbackPlan.summary || '').trim(),
       orderedAgents: normalizedOrderedAgents,
       stageGoals: { ...fallbackPlan.stageGoals, ...dynamicStageGoals },
-      stageLabels: normalizedStageLabels,
-      stageProviders: normalizedStageProviders,
+      stageLabels: {
+        ...(parsedPlan?.roleLabels || {}),
+        ...(parsedPlan?.stageLabels || {}),
+        ...normalizedStageLabels,
+      },
+      stageProviders: {
+        ...(parsedPlan?.providers || {}),
+        ...(parsedPlan?.stageProviders || {}),
+        ...normalizedStageProviders,
+      },
+      stageModels: {
+        ...(parsedPlan?.models || {}),
+        ...(parsedPlan?.stageModels || {}),
+        ...normalizedStageModels,
+      },
+      stageInstructions: {
+        ...(parsedPlan?.stageInstructions || {}),
+        ...(parsedPlan?.instructions || {}),
+        ...normalizedStageInstructions,
+      },
+      executionStyle,
+      roundBudget: normalizedRoundBudget,
       needsFinalManagerReview: !alreadyEndsWithManagerReview && (typeof parsedPlan.needsFinalManagerReview === 'boolean'
         ? parsedPlan.needsFinalManagerReview
         : fallbackPlan.needsFinalManagerReview),
@@ -4472,6 +5138,8 @@ export const DEFAULT_APP_MEMORY = {
   lastSelectedSkillId: 'none',
   lastSelectedAgentId: '',
   lastResolvedSkillLabel: '',
+  lastVerifiedSourceQuery: '',
+  lastVerifiedSourceWorkspaceId: '',
   updatedAt: '',
 };
 
@@ -4687,6 +5355,39 @@ export const getAppMemory = () => {
   };
 };
 
+const getLastVerifiedSourceQuery = ({ workspaceId = '' } = {}) => {
+  const current = getAppMemory();
+  const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  if (String(current.lastVerifiedSourceWorkspaceId || '').trim() !== safeWorkspaceId) return '';
+  return String(current.lastVerifiedSourceQuery || '').trim();
+};
+
+const hasRecentVerifiedSourceFollowUpContext = ({ workspaceId = '', maxAgeMs = RECENT_VERIFIED_SOURCE_FOLLOW_UP_WINDOW_MS } = {}) => {
+  const current = getAppMemory();
+  const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  if (String(current.lastVerifiedSourceWorkspaceId || '').trim() !== safeWorkspaceId) return false;
+  const recentSourceReply = [...(Array.isArray(current.recentChats) ? current.recentChats : [])]
+    .reverse()
+    .find((item) => VERIFIED_SOURCE_REPLY_PATTERN.test(String(item?.replyPreview || '').trim()));
+  if (!recentSourceReply?.ts) return false;
+  const recentTs = Date.parse(recentSourceReply.ts);
+  if (!Number.isFinite(recentTs)) return false;
+  const ageMs = Date.now() - recentTs;
+  return ageMs >= 0 && ageMs <= maxAgeMs;
+};
+
+const rememberVerifiedSourceQuery = ({ query = '', workspaceId = '' } = {}) => {
+  const safeQuery = String(query || '').trim();
+  if (!safeQuery) return getAppMemory();
+  const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
+  const current = getAppMemory();
+  return saveAppMemory({
+    ...current,
+    lastVerifiedSourceQuery: trimLogText(safeQuery, 420),
+    lastVerifiedSourceWorkspaceId: safeWorkspaceId,
+  });
+};
+
 export const saveAppMemory = (memory = {}) => {
   const current = getAppMemory();
   const next = {
@@ -4708,14 +5409,28 @@ export const clearSidebarChatHistory = ({ workspaceId = '', clearAll = false } =
   const legacyKey = 'wordai_sidebar_messages';
   const activeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const scopedKey = `${legacyKey}:${activeWorkspaceId}`;
+  const currentMemory = getAppMemory();
 
   if (clearAll) {
     Object.keys(localStorage)
       .filter((key) => key === legacyKey || key.startsWith(`${legacyKey}:`))
       .forEach((key) => localStorage.removeItem(key));
+    saveAppMemory({
+      ...currentMemory,
+      recentChats: [],
+      lastVerifiedSourceQuery: '',
+      lastVerifiedSourceWorkspaceId: '',
+    });
   } else {
     localStorage.removeItem(scopedKey);
     localStorage.removeItem(legacyKey);
+    if (String(currentMemory.lastVerifiedSourceWorkspaceId || '').trim() === activeWorkspaceId) {
+      saveAppMemory({
+        ...currentMemory,
+        lastVerifiedSourceQuery: '',
+        lastVerifiedSourceWorkspaceId: '',
+      });
+    }
   }
 
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
@@ -4889,7 +5604,7 @@ export const getLatestAgentRunSummary = (automation = getWorkspaceAutomation(), 
     || ['skipAutomation', 'providerOverride', 'noActiveAgents'].includes(String(initialRequestLog?.automationSkipReason || '').trim());
   const hasApiAttempt = runLogs.some((log) => ['request-start', 'provider-start', 'attempt-start', 'multi-model-start'].includes(log.type));
   const hasApiSuccess = runLogs.some((log) => ['attempt-success', 'multi-model-success', 'workflow-success'].includes(log.type));
-  const managerRequired = !runSkippedAutomation && automation?.enabled !== false && ['manager-auto', 'circular-team'].includes(runWorkflowMode) && automation?.autopilotEnabled !== false;
+  const managerRequired = !runSkippedAutomation && automation?.enabled !== false && AUTOPILOT_MANAGER_WORKFLOW_MODES.has(runWorkflowMode) && automation?.autopilotEnabled !== false;
   const managerSuccess = runLogs.some((log) => log.type === 'manager-plan-success');
   const managerFailure = runLogs.some((log) => log.type === 'manager-plan-fallback' || (log.type === 'stage-error' && /מנהל|manager/i.test(`${log.agentLabel || ''} ${log.agentId || ''}`)));
   const lastError = [...runLogs].reverse().find((log) => log.state === 'error')?.errorMessage || '';
@@ -5215,6 +5930,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     : getProviderConfig();
   const taggedRouting = extractTaggedModelRouting(userPrompt);
   const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
+  const assistantBehavior = getAssistantBehavior();
   const structureConstraintText = String(options.structureConstraintText || cleanUserPrompt).trim() || cleanUserPrompt;
   const strictProviderOverride = options.strictProviderOverride === true && Boolean(options.providerOverride);
   const taggedProviders = strictProviderOverride ? [] : normalizeProviderIds(taggedRouting.taggedProviders, '');
@@ -5238,7 +5954,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     throw new Error('אין ספק AI זמין בתוך ה-pool שנבחר.');
   }
   const taggedProviderInPool = taggedProviders.find((providerId) => configuredSelectedProviders.includes(providerId));
-  const activeProvider = strictProviderOverride
+  let activeProvider = strictProviderOverride
     ? options.providerOverride
     : options.providerOverride
     || (preferredProviders.length
@@ -5247,13 +5963,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     || configuredSelectedProviders[0]
     || selectedProviders[0]
     || cfg.active;
-  const taggedModelOverride = strictProviderOverride
-    ? ''
-    : taggedRouting.providerModels?.[activeProvider]
-    || (preferredProviders.length ? '' : taggedRouting.taggedModel);
-  const modelOverride = options.modelOverride || taggedModelOverride || '';
   const skipSkillSelection = options.skipSkillSelection === true;
-  const skipAutomationPrompt = options.skipAutomationPrompt === true;
+  const skipAutomationPrompt = options.skipAutomationPrompt === true || options.skipAutomation === true;
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
     omitStructuralHints: omitPersonalStyleStructureHints,
@@ -5274,7 +5985,42 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     });
   const activeSkill = skillResolution.skill;
   const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason, activeSkill ? skillsConfig.skills?.[activeSkill.id] : null);
+  const sourceGroundingRequired = shouldUseStrictSourceGrounding({
+    userPrompt: cleanUserPrompt,
+    documentContext,
+    extraSystemPrompt,
+    skillId: activeSkill?.id || options.skillId || '',
+  });
+  const sourceAutoRouteEnabled = assistantBehavior.autoRouteSourceRequests !== false;
+  const requestedProvider = activeProvider;
+  const sourceRequestAutoRouted = sourceAutoRouteEnabled
+    && sourceGroundingRequired
+    && !strictProviderOverride
+    && activeProvider !== 'perplexity'
+    && isProviderConfiguredForUse('perplexity', cfg);
+  if (sourceRequestAutoRouted) {
+    activeProvider = 'perplexity';
+  }
+  const taggedModelOverride = strictProviderOverride
+    ? ''
+    : taggedRouting.providerModels?.[activeProvider]
+    || (preferredProviders.length ? '' : taggedRouting.taggedModel);
+  const modelOverride = sourceRequestAutoRouted ? (taggedModelOverride || '') : (options.modelOverride || taggedModelOverride || '');
+  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !strictProviderOverride && isProviderConfiguredForUse('perplexity', cfg)
+    ? normalizeProviderIds(['perplexity', ...automationPreferredProviders], '')
+    : automationPreferredProviders;
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
+  const strictSourceGroundingEnabled = true;
+  const providerSupportsSourceGrounding = sourceGroundingRequired && isSourceGroundingProvider(activeProvider);
+  const sourceGroundingAllowedUrls = new Set([
+    ...extractUrlSetFromText(cleanUserPrompt),
+    ...extractUrlSetFromText(extraSystemPrompt),
+    ...extractUrlSetFromText(documentContext),
+  ]);
+  const sourceGroundingPrompt = buildSourceGroundingPrompt({
+    enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
+    providerSupportsGrounding: providerSupportsSourceGrounding,
+  });
   const appMemoryPrompt = options.includeAppMemory === false ? '' : buildAppMemoryInstructions(getAppMemory());
   const automation = getWorkspaceAutomation();
   const onStatus = options.onStatus;
@@ -5318,22 +6064,105 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     workflowMode: automation.workflowMode,
     ...extra,
   });
-  const rememberSuccessfulReply = (replyText = '') => {
-    const normalizedReply = normalizeProviderTextResponse(replyText, activeProvider);
+  const rememberSuccessfulReply = (replyText = '', responseOptions = {}) => {
+    const responseProvider = String(responseOptions.providerId || activeProvider || '').trim() || activeProvider;
+    const providerSupportsGroundingForReply = typeof responseOptions.providerSupportsGroundingOverride === 'boolean'
+      ? responseOptions.providerSupportsGroundingOverride
+      : providerSupportsSourceGrounding;
+    const normalizedReply = normalizeProviderTextResponse(replyText, responseProvider);
+    const safeReplyText = sanitizeSourceGroundingResponse(normalizedReply.text, {
+      enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
+      providerSupportsGrounding: providerSupportsGroundingForReply,
+      allowedUrls: responseOptions.allowedUrls || sourceGroundingAllowedUrls,
+    });
+    const safeReply = safeReplyText === normalizedReply.text
+      ? normalizedReply
+      : {
+          ...normalizedReply,
+          text: safeReplyText,
+        };
     if (options.shouldPersistMemory === false) {
-      return includeCompletionMetadata ? normalizedReply : normalizedReply.text;
+      return includeCompletionMetadata ? safeReply : safeReply.text;
     }
     try {
       rememberConversationTurn({
         userPrompt: cleanUserPrompt,
-        reply: normalizedReply.text,
+        reply: safeReply.text,
         agentLabel,
         skillId: activeSkill?.id || '',
         skillLabel: activeSkill?.label || '',
       });
     } catch {}
-    return includeCompletionMetadata ? normalizedReply : normalizedReply.text;
+    return includeCompletionMetadata ? safeReply : safeReply.text;
   };
+  const shouldShortCircuitToVerifiedSources = strictSourceGroundingEnabled
+    && sourceGroundingRequired
+    && options.skipAutomation !== true
+    && isSourceOnlyGroundingRequest({
+      userPrompt: cleanUserPrompt,
+      extraSystemPrompt,
+      skillId: activeSkill?.id || options.skillId || '',
+    });
+  if (shouldShortCircuitToVerifiedSources) {
+    logEvent('verified-source-retrieval-start', 'מפעיל אחזור מאומת למקורות לפני יצירת תשובה', {
+      state: 'running',
+      provider: activeProvider,
+    });
+    emitStatus(onStatus, {
+      state: 'running',
+      progress: 18,
+      runId,
+      provider: activeProvider,
+      model: resolvedModel,
+      agentLabel,
+      message: 'מאתר מקורות מאומתים',
+    });
+    const verifiedSourceReply = await resolveVerifiedSourceReply({
+      userPrompt: cleanUserPrompt,
+      documentContext,
+      extraSystemPrompt,
+      skillId: activeSkill?.id || options.skillId || '',
+      isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+      cfg,
+      timeoutMs,
+    });
+    if (verifiedSourceReply?.text) {
+      if (verifiedSourceReply.query) {
+        try {
+          rememberVerifiedSourceQuery({
+            query: verifiedSourceReply.query,
+            workspaceId: verifiedSourceReply.workspaceId || activeWorkspaceId,
+          });
+        } catch {}
+      }
+      const isFailure = verifiedSourceReply.text.includes(SOURCE_GROUNDING_FAILURE_TOKEN);
+      logEvent(
+        isFailure ? 'verified-source-retrieval-blocked' : 'verified-source-retrieval-success',
+        isFailure ? 'בקשת המקורות נחסמה כי לא נמצאו תוצאות מאומתות' : 'הוחזרו מקורות מאומתים בלבד',
+        {
+          state: isFailure ? 'error' : 'success',
+          provider: verifiedSourceReply.providerId || activeProvider,
+          model: verifiedSourceReply.model || resolvedModel,
+          outputPreview: trimLogText(verifiedSourceReply.text),
+          errorMessage: verifiedSourceReply.error?.message || '',
+        },
+      );
+      return rememberSuccessfulReply({
+        text: verifiedSourceReply.text,
+        completion: {
+          provider: verifiedSourceReply.providerId || activeProvider,
+          model: verifiedSourceReply.model || resolvedModel,
+        },
+      }, {
+        providerId: verifiedSourceReply.providerId || activeProvider,
+        providerSupportsGroundingOverride: true,
+        allowedUrls: new Set([
+          ...sourceGroundingAllowedUrls,
+          ...Array.from(verifiedSourceReply.urls || []),
+        ]),
+      });
+    }
+  }
   const preserveFullDocumentContext = options.preserveFullDocumentContext === true;
   const promptDocumentContext = preserveFullDocumentContext
     ? String(documentContext || '')
@@ -5346,7 +6175,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -5368,6 +6197,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     taggedProviders,
     taggedModel: taggedRouting.taggedModel || '',
     multiModelEnabled: cfg.multiModelEnabled === true,
+    requestedProvider,
+    sourceGroundingRequired,
+    sourceRequestAutoRouted,
     skillId: activeSkill?.id || '',
     skillLabel: activeSkill?.label || '',
     skillReason: skillResolution.reason,
@@ -5388,7 +6220,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         automation,
         cfg,
         selectedProviders,
-        preferredProviders: automationPreferredProviders,
+        preferredProviders: sourceAwareAutomationPreferredProviders,
         runId,
         logEvent,
         onStatus,
@@ -5397,15 +6229,31 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       });
 
       const orderedAgents = executionPlan?.orderedAgents?.length ? executionPlan.orderedAgents : enabledAgents;
-      const allowCircularWorkflow = automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false;
+      const plannedRoundBudget = executionPlan?.roundBudget && typeof executionPlan.roundBudget === 'object'
+        ? executionPlan.roundBudget
+        : {};
+      const plannedMinRounds = clampAutopilotRoundCount(plannedRoundBudget?.minPerAgent, 1);
+      const plannedMaxRounds = clampAutopilotRoundCount(plannedRoundBudget?.maxPerAgent, plannedMinRounds);
+      const plannedFinalManagerPasses = clampAutopilotRoundCount(
+        plannedRoundBudget?.finalManagerPasses,
+        1,
+        AUTOPILOT_MAX_FINAL_REVIEW_PASSES,
+      );
+      const autopilotPlannerEnabled = automation?.autopilotEnabled !== false;
+      const autopilotWantsMultiPass = autopilotPlannerEnabled && automation.workflowMode === 'autopilot-full' && (plannedMinRounds > 1 || plannedMaxRounds > 1);
+      const allowCircularWorkflow = (automation.workflowMode === 'circular-team' && automation.circularWorkflowEnabled !== false) || autopilotWantsMultiPass;
       const decisionMode = getDecisionMode(automation, enabledAgents);
       const allowDecisionRevisits = allowCircularWorkflow || decisionMode === 'manager';
       const skillsConfig = getSkillsConfig();
       const requestedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(options.additionalReviewRounds || 0)));
       const baseMaxRoundsPerAgent = allowCircularWorkflow ? getCircularRoundLimit(automation) : (allowDecisionRevisits ? 2 : 1);
-      const maxRoundsPerAgent = baseMaxRoundsPerAgent;
-      const maxFinalManagerReviewPasses = baseMaxRoundsPerAgent + requestedAdditionalReviewRounds;
-      const minRoundsPerAgent = allowCircularWorkflow ? Math.min(maxRoundsPerAgent, getCircularMinRoundLimit(automation)) : 1;
+      const maxRoundsPerAgent = autopilotPlannerEnabled && automation.workflowMode === 'autopilot-full'
+        ? Math.max(plannedMinRounds, plannedMaxRounds)
+        : baseMaxRoundsPerAgent;
+      const maxFinalManagerReviewPasses = ((autopilotPlannerEnabled && automation.workflowMode === 'autopilot-full') ? plannedFinalManagerPasses : baseMaxRoundsPerAgent) + requestedAdditionalReviewRounds;
+      const minRoundsPerAgent = allowCircularWorkflow
+        ? Math.min(maxRoundsPerAgent, (autopilotPlannerEnabled && automation.workflowMode === 'autopilot-full') ? plannedMinRounds : getCircularMinRoundLimit(automation))
+        : 1;
       const maxAdditionalReviewStages = requestedAdditionalReviewRounds * Math.max(2, enabledAgents.length);
       const maxStageCount = Math.max(orderedAgents.length, orderedAgents.length * maxRoundsPerAgent) + maxAdditionalReviewStages;
       const agentRunCounts = {};
@@ -5427,6 +6275,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         maxRoundsPerAgent,
         minRoundsPerAgent,
         decisionMode,
+        executionStyle: executionPlan?.executionStyle || '',
       });
 
       let stagedOutput = '';
@@ -5467,19 +6316,25 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           || executionPlan?.stageLabels?.[String(stageAgent.id || '').toLowerCase()]
           || executionPlan?.stageLabels?.[stageRoutingKey]
           || stageAgent.name;
-          const allowedStageProviders = getConfiguredProviderPool(cfg, automationPreferredProviders);
+          const stageInstruction = resolveStagePlanString(executionPlan?.stageInstructions || {}, stageAgent);
+          const allowedStageProviders = getConfiguredProviderPool(cfg, sourceAwareAutomationPreferredProviders);
           const normalizedRequestedProvider = resolveExplicitProviderCandidate([
             executionPlan?.stageProviders?.[stageAgent.id],
             executionPlan?.stageProviders?.[stageAgent.name],
             executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
             executionPlan?.stageProviders?.[stageRoutingKey],
           ], allowedStageProviders, cfg);
-          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, automationPreferredProviders);
-          const stageRequestedModel = stageAgent.model || taggedRouting.providerModels?.[stageProvider] || getModelNameForProvider(stageProvider, cfg, modelOverride);
+          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, sourceAwareAutomationPreferredProviders);
+          const plannedStageModel = resolveStagePlanString(executionPlan?.stageModels || {}, stageAgent);
+          const rawStageRequestedModel = plannedStageModel || stageAgent.model || taggedRouting.providerModels?.[stageProvider] || getModelNameForProvider(stageProvider, cfg, modelOverride);
+          const stageRequestedModel = stageProvider && rawStageRequestedModel && !isProviderModelChoiceCompatible(stageProvider, rawStageRequestedModel, cfg)
+            ? ''
+            : normalizeProviderModelName(stageProvider, rawStageRequestedModel);
           const stageDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
           const stagePrompt = buildStagePrompt({
           cleanUserPrompt,
           stageGoal,
+          stageInstruction,
           stageAgent,
           stagedOutput,
           batonNotes,
@@ -5511,12 +6366,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 
           try {
           const stageSystemPrompt = isManagerReviewAgent(stageAgent)
-            ? `${stageAgent.prompt}\nבשלב ביקורת ניהולית DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, פערים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא.\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`
-            : `${stageAgent.prompt}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`;
+            ? `${stageAgent.prompt}${stageInstruction ? `\nהנחיית AUTOPILOT משלימה לשלב:\n${stageInstruction}` : ''}\nבשלב ביקורת ניהולית DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, פערים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא.\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`
+            : `${stageAgent.prompt}${stageInstruction ? `\nהנחיית AUTOPILOT משלימה לשלב:\n${stageInstruction}` : ''}\nהחזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`;
           const previousStageOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
           const stageReply = await chatWithActiveProvider(stagePrompt, stageDocumentContext, stageSystemPrompt, {
             providerOverride: stageProvider,
-            preferredProviders: stageProvider ? [stageProvider] : automationPreferredProviders,
+            preferredProviders: stageProvider ? [stageProvider] : sourceAwareAutomationPreferredProviders,
             strictProviderOverride: true,
             modelOverride: stageRequestedModel || '',
             includeCompletionMetadata: true,
@@ -5799,7 +6654,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         }
         finalManagerReviewPasses = nextFinalManagerReviewPass;
         const managerRoleKey = isManagerReviewAgent(managerAgent) ? 'manager-review' : getAgentRoleKey(managerAgent);
-        const allowedReviewProviders = getConfiguredProviderPool(cfg, automationPreferredProviders);
+        const managerReviewGoal = executionPlan?.stageGoals?.['manager-review']
+          || resolveStagePlanString(executionPlan?.stageGoals || {}, managerAgent)
+          || DEFAULT_MANAGER_REVIEW_GOAL;
+        const managerReviewInstruction = executionPlan?.stageInstructions?.['manager-review']
+          || resolveStagePlanString(executionPlan?.stageInstructions || {}, managerAgent);
+        const allowedReviewProviders = getConfiguredProviderPool(cfg, sourceAwareAutomationPreferredProviders);
         const normalizedReviewProvider = resolveExplicitProviderCandidate([
           executionPlan?.stageProviders?.['manager-review'],
           executionPlan?.stageProviders?.[managerAgent.id],
@@ -5807,12 +6667,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
           executionPlan?.stageProviders?.[managerRoleKey],
         ], allowedReviewProviders, cfg);
-        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, automationPreferredProviders);
-        const reviewRequestedModel = managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || getModelNameForProvider(reviewProvider, cfg, modelOverride);
+        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, sourceAwareAutomationPreferredProviders);
+        const plannedReviewModel = executionPlan?.stageModels?.['manager-review']
+          || resolveStagePlanString(executionPlan?.stageModels || {}, managerAgent);
+        const rawReviewRequestedModel = plannedReviewModel || managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || getModelNameForProvider(reviewProvider, cfg, modelOverride);
+        const reviewRequestedModel = reviewProvider && rawReviewRequestedModel && !isProviderModelChoiceCompatible(reviewProvider, rawReviewRequestedModel, cfg)
+          ? ''
+          : normalizeProviderModelName(reviewProvider, rawReviewRequestedModel);
         const reviewDocumentContext = buildWorkflowStageDocumentContext(documentContext, stagedOutput);
         const reviewPrompt = buildStagePrompt({
           cleanUserPrompt,
-          stageGoal: 'בצע סקירה סופית כמנהל עבודה. ודא שהמסמך עומד בדרישות, שהכותב נשען על החומרים, ושאין פערים לוגיים או ניסוחיים. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST.',
+          stageGoal: managerReviewGoal,
+          stageInstruction: managerReviewInstruction,
           stageAgent: managerAgent,
           stagedOutput,
           batonNotes,
@@ -5826,9 +6692,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         });
 
         const previousManagerOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
-        const managerReply = await chatWithActiveProvider(reviewPrompt, reviewDocumentContext, `${managerAgent.prompt}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
+        const managerReply = await chatWithActiveProvider(reviewPrompt, reviewDocumentContext, `${managerAgent.prompt}${managerReviewInstruction ? `\nהנחיית AUTOPILOT משלימה לשלב:\n${managerReviewInstruction}` : ''}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
           providerOverride: reviewProvider,
-          preferredProviders: reviewProvider ? [reviewProvider] : automationPreferredProviders,
+          preferredProviders: reviewProvider ? [reviewProvider] : sourceAwareAutomationPreferredProviders,
           strictProviderOverride: true,
           modelOverride: reviewRequestedModel || '',
           includeCompletionMetadata: true,
@@ -6099,7 +6965,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     }
   }
 
-  if (selectedProviders.length > 1 && !options.providerOverride && !options.skipMultiModel) {
+  if (selectedProviders.length > 1 && !options.providerOverride && !options.skipMultiModel && !sourceGroundingRequired) {
     const providerNames = getProviderLabelMap(cfg);
     const skippedProviders = selectedProviders.filter((providerId) => !isProviderConfiguredForUse(providerId, cfg));
     const runnableProviders = selectedProviders.filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
