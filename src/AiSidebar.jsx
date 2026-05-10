@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, saveWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName } from "./services/aiService";
+import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
 const CONTEXT_PROMPTS = [
@@ -169,6 +170,8 @@ const QUICK_PROMPTS = [
     color: 'linear-gradient(135deg, #14B8A6 0%, #0F766E 100%)' },
 ];
 
+const CLASSIC_TASKPANE_AGENT_IDS = ['fix', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
+
 const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
 const getChatMemoryStorageKey = (workspaceId = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
@@ -301,7 +304,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {} }) {
+export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
   const [tab, setTab] = useState('chat');
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
@@ -337,6 +340,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
   const localContext = selectedText || currentBlockText;
   const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
+  const sidebarPreset = String(assistantBehavior?.sidebarPreset || 'word-taskpane').trim() || 'word-taskpane';
+  const useClassicTaskpaneShell = sidebarPreset === 'word-taskpane';
   const visibleActions = MODERN_QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
   const selectionActions = visibleActions.filter((action) => action.sel);
   const generationActions = visibleActions.filter((action) => !action.sel);
@@ -851,7 +856,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     }
   };
 
-  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'צ׳אט ישיר' }) => {
+  const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'צ׳אט ישיר' }, runtimeOptions = {}) => {
     const pendingMentionSelection = pendingMentionSelectionRef.current;
     const hasPendingMentionSelection = Boolean(pendingMentionSelection.agentId || pendingMentionSelection.skillId);
     const originalText = (customPrompt || input).trim();
@@ -861,7 +866,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     let txt = originalText;
     let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
-    let forcedAgent = workspaceAutomationEnabled ? activeAgent : null;
+    const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
+    let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection ? activeAgent : null;
     let disabledSkillRequested = false;
     let ignoredAgentRouting = false;
     let usedDraftAgentMention = false;
@@ -903,7 +909,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       break;
     }
 
-    if (workspaceAutomationEnabled && !usedDraftAgentMention && pendingMentionSelection.agentId) {
+    if (workspaceAutomationEnabled && !bypassFixedAgentSelection && !usedDraftAgentMention && pendingMentionSelection.agentId) {
       const queuedAgent = roleAgents.find((agent) => agent.id === pendingMentionSelection.agentId) || null;
       if (queuedAgent) {
         forcedAgent = queuedAgent;
@@ -963,9 +969,14 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
     appendPromptHistory(originalText);
 
-    const directProviderId = activeProviderChoice?.id || '';
-    const hasExplicitProviderSelection = Boolean(directProviderId);
-    const explicitProviderModel = hasExplicitProviderSelection ? resolvedSelectedProviderModel : '';
+    const runtimeProviderOverride = String(runtimeOptions.providerOverride || '').trim();
+    const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
+    const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true;
+    const directProviderId = runtimeProviderOverride || activeProviderChoice?.id || '';
+    const hasExplicitProviderSelection = runtimeStrictProviderOverride ? Boolean(runtimeProviderOverride) : Boolean(directProviderId);
+    const explicitProviderModel = runtimeProviderOverride
+      ? runtimeModelOverride
+      : (hasExplicitProviderSelection ? resolvedSelectedProviderModel : '');
     clearPendingMentionSelection();
 
     if (forcedAgent) {
@@ -1080,8 +1091,138 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       return;
     }
     setTab('chat');
-    send(`${action.prompt}${selectedText ? `:\n\n"${selectedText}"` : ''}`);
+    const promptText = `${action.prompt}${selectedText ? `:\n\n"${selectedText}"` : ''}`;
+    setInput(promptText);
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(promptText.length, promptText.length);
+      }
+    }, 50);
   };
+
+  const buildClassicTaskpanePrompt = (agentId) => {
+    const targetText = selectedText || currentBlockText;
+    switch (agentId) {
+      case 'fix':
+        return targetText
+          ? `תקן את הטקסט הבא מבחינת כתיב, דקדוק וניסוח:\n\n"${targetText}"`
+          : 'תקן את הפסקה או המסמך הנוכחי מבחינת כתיב, דקדוק וניסוח.';
+      case 'humanize':
+        return targetText
+          ? `שכתב את הטקסט הבא בסגנון אנושי וטבעי יותר:\n\n"${targetText}"`
+          : 'שכתב את ההקשר הפעיל בסגנון אנושי וטבעי יותר.';
+      case 'sources':
+        return targetText
+          ? `מצא מקורות, כתבות או מאמרים מאומתים עבור הטקסט הבא. אל תמציא URLs או כותרות:\n\n"${targetText}"`
+          : 'מצא מקורות, כתבות או מאמרים מאומתים עבור הטענה או הנושא המרכזי במסמך. אל תמציא URLs או כותרות.';
+      case 'lecturer':
+        return targetText
+          ? `בדוק את הטקסט הבא כמו מרצה אקדמי ותן ביקורת ישימה וקצרה:\n\n"${targetText}"`
+          : 'בדוק את המסמך או הטיוטה הפעילה כמו מרצה אקדמי ותן ביקורת ישימה וקצרה.';
+      case 'continue':
+        return targetText
+          ? `המשך לכתוב מהנקודה שבה הטקסט הבא נעצר:\n\n"${targetText}"`
+          : 'המשך לכתוב מהנקודה שבה המסמך הנוכחי נעצר.';
+      case 'summary':
+        return targetText
+          ? `סכם את הטקסט הבא:\n\n"${targetText}"`
+          : 'סכם את ההקשר הפעיל בקצרה.';
+      case 'academic':
+        return targetText
+          ? `שכתב את הטקסט הבא בסגנון אקדמי:\n\n"${targetText}"`
+          : 'שכתב את ההקשר הפעיל בסגנון אקדמי.';
+      default:
+        return '';
+    }
+  };
+
+  const buildClassicTaskpaneSelection = (agentConfig) => {
+    const preferredProviderId = String(agentConfig?.sidebarSelection?.providerId || agentConfig?.route || '').trim();
+    if (!preferredProviderId) return null;
+    const configuredChoice = configuredProviderChoices.find((choice) => choice.id === preferredProviderId) || null;
+    if (!configuredChoice) {
+      return {
+        available: false,
+        selection: null,
+        providerId: preferredProviderId,
+        providerLabel: preferredProviderId,
+        reason: `הפעולה הזו דורשת את ${preferredProviderId}, אבל הספק הזה לא מוגדר כרגע.`,
+      };
+    }
+    const preferredModel = String(agentConfig?.sidebarSelection?.model || '').trim();
+    const nextModelChoices = getProviderModelChoices(preferredProviderId, providerConfig, preferredModel ? [preferredModel] : []);
+    const resolvedModel = preferredModel
+      ? normalizeProviderModelName(preferredProviderId, preferredModel)
+      : (nextModelChoices[0] || '');
+    return {
+      available: true,
+      selection: {
+        providerId: preferredProviderId,
+        model: resolvedModel,
+      },
+      providerId: preferredProviderId,
+      providerLabel: configuredChoice.label || preferredProviderId,
+      reason: '',
+    };
+  };
+
+  const runClassicTaskpaneAgent = (agentId) => {
+    const agentConfig = AGENTS_CONFIG[agentId];
+    const prompt = buildClassicTaskpanePrompt(agentId);
+    if (!agentConfig || !prompt) return;
+    const providerState = buildClassicTaskpaneSelection(agentConfig);
+    if (providerState && providerState.available === false) {
+      clearPendingMentionSelection();
+      setTab('chat');
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: `לא ניתן להריץ את ${agentConfig.label || 'הפעולה'} כרגע. ${providerState.reason}`,
+        error: true,
+      }]);
+      return;
+    }
+    const runtimeSelection = providerState?.selection || null;
+    clearPendingMentionSelection();
+    setTab('chat');
+    if (runtimeSelection?.providerId) {
+      setSelectedProviderId(runtimeSelection.providerId);
+      setSelectedProviderModel(runtimeSelection.model || '');
+      setSelectedAgentId('');
+    }
+    
+    setDraftInput(prompt, { preservePendingMention: true });
+    pendingMentionSelectionRef.current = {
+      agentId: agentId,
+      skillId: ''
+    };
+    preservePendingMentionRef.current = true;
+    
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(prompt.length, prompt.length);
+      }
+    }, 50);
+  };
+
+  const classicTaskpaneAgents = CLASSIC_TASKPANE_AGENT_IDS
+    .map((agentId) => {
+      const config = AGENTS_CONFIG[agentId] || {};
+      const providerState = buildClassicTaskpaneSelection(config);
+      return {
+        id: agentId,
+        ...config,
+        providerAvailable: providerState ? providerState.available !== false : true,
+        unavailableReason: providerState?.available === false ? providerState.reason : '',
+      };
+    })
+    .filter((agent) => agent.label);
+  const canSendCurrentInput = !loading && Boolean(input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId);
+  const selectionPreviewText = localContext
+    ? (contextPreview || contextSourceText.replace(/\s+/g, ' ').slice(0, 96))
+    : 'לא נבחר טקסט — ה-AI קורא את כל המסמך';
+  const selectionBadge = selectedText ? 'טקסט נבחר' : currentBlockText ? 'פסקה פעילה' : 'מסמך מלא';
 
   // Modern styling functions
   const modernMessageBubble = (isUser, message) => ({
@@ -1177,6 +1318,355 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     color: 'white',
     outline: 'none',
   };
+
+  if (useClassicTaskpaneShell) {
+    return (
+      <div style={{ ...getShellStyle(mode, compactMode), background: '#F3F2F1', fontFamily: '"Segoe UI", Tahoma, sans-serif' }} dir="rtl">
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#F3F2F1' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 8px', background: '#0078D4', color: 'white', flexShrink: 0 }}>
+            <div style={{ fontSize: '1rem', fontWeight: 600, letterSpacing: '0.3px' }}>✍️ Word AI</div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => onOpenSettingsTab('personal')}
+                title="סגנון אישי"
+                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
+              >
+                🎨
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab((prev) => prev === 'settings' ? 'chat' : 'settings')}
+                title="הגדרות"
+                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
+              >
+                ⚙️
+              </button>
+              {mode === 'sidebar' && (
+                <button
+                  type="button"
+                  onClick={onToggleCompact}
+                  title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
+                  style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
+                >
+                  {compactMode ? '⤢' : '⤡'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                title="סגור"
+                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#FFFFFF', borderBottom: '1px solid #EDEBE9', flexShrink: 0 }}>
+            <span style={{ fontSize: 12 }}>📄</span>
+            <div style={{ flex: 1, fontSize: 12, color: localContext ? '#242424' : '#605E5C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectionPreviewText}
+            </div>
+            <span style={{ fontSize: 10, background: '#E8F1FB', color: '#0F4C81', padding: '4px 8px', borderRadius: 999, fontWeight: 700, whiteSpace: 'nowrap' }}>
+              {selectionBadge}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, padding: '8px 12px', background: '#FAF9F8', borderBottom: '1px solid #EDEBE9', flexShrink: 0, alignItems: 'stretch' }}>
+            <div style={{ flex: 1, display: 'grid', gap: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 6 }}>
+                <select
+                  value={selectedProviderId || 'default'}
+                  onChange={(e) => {
+                    clearPendingMentionSelection();
+                    setSelectedProviderId(e.target.value);
+                    setSelectedAgentId('');
+                  }}
+                  disabled={isSettingsLocked}
+                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...lockedControlStyle }}
+                >
+                  <option value="default">ברירת מחדל</option>
+                  {configuredProviderChoices.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={activeProviderChoice ? resolvedSelectedProviderModel : ''}
+                  onChange={(e) => {
+                    clearPendingMentionSelection();
+                    setSelectedProviderModel(e.target.value);
+                  }}
+                  disabled={isSettingsLocked || !activeProviderChoice || !providerModelChoices.length}
+                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...lockedControlStyle }}
+                >
+                  {activeProviderChoice ? providerModelChoices.map((modelId) => (
+                    <option key={modelId} value={modelId}>
+                      {modelId}
+                    </option>
+                  )) : <option value="">מודל מההגדרות</option>}
+                </select>
+              </div>
+              <div style={{ padding: '0 2px', fontSize: 11, color: '#605E5C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {`סוכן פעיל: ${effectiveAgentSummary} • ${effectiveProviderSummary}`}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (tab === 'settings') {
+                  setTab('chat');
+                  return;
+                }
+                clearConversation();
+              }}
+              disabled={loading}
+              style={{ background: 'transparent', border: '1px solid #D1D5DB', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer', color: '#323130', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
+            >
+              {tab === 'settings' ? 'חזרה לצ׳אט' : '+ שיחה חדשה'}
+            </button>
+          </div>
+
+            {tab === 'settings' ? (
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#F8FAFC' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', marginBottom: 4 }}>⚙️ הגדרות השיחה בצד</div>
+                  <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.6 }}>
+                    ההגדרות כאן משפיעות רק על החלונית הימנית. הן לא מחליפות את מסך ההגדרות המלא של האפליקציה, ולא פותחות את תפריט הקובץ בדרך.
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, fontWeight: 600, color: '#111827' }}>
+                    <span>🏢 מצב סביבת עבודה</span>
+                    <span style={{ color: workspaceAutomationEnabled ? '#166534' : '#92400E' }}>
+                      {workspaceAutomationEnabled ? 'פעילה' : 'כבויה'}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.6 }}>
+                    זהו סטטוס קריאה בלבד. שינוי מצב סביבת העבודה מתבצע ממסכי ההגדרות של הסביבה, לא מהחלונית המקומית הזו.
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>⚙️ סקיל פעיל</div>
+                  <select
+                    value={selectedSkillId}
+                    onChange={(e) => {
+                      clearPendingMentionSelection();
+                      setSelectedSkillId(e.target.value);
+                    }}
+                    disabled={isSettingsLocked}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
+                  >
+                    <option value="none">בחירה אוטומטית</option>
+                    {skillCatalog.map((skill) => {
+                      const mode = skillsConfig.skills?.[skill.id]?.mode || 'manual';
+                      return (
+                        <option key={skill.id} value={skill.id} disabled={mode === 'off'}>
+                          {skill.label}{mode === 'auto' ? ' · אוטומטי' : mode === 'off' ? ' · כבוי' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>🧩 סוכן קבוע</div>
+                  <select
+                    value={selectedAgentId}
+                    onChange={(e) => {
+                      clearPendingMentionSelection();
+                      setSelectedAgentId(e.target.value);
+                    }}
+                    disabled={isSettingsLocked || !workspaceAutomationEnabled}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
+                  >
+                    <option value="">ללא סוכן קבוע · צ׳אט ישיר</option>
+                    {roleAgents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        @{agent.id} · {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {messages.map((msg, index) => (
+                  <div key={`${msg.role}-${index}`} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
+                    <div style={{ ...bbl(msg.role === 'user', compactMode), ...(msg.error ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' } : {}) }}>
+                      {msg.content}
+                    </div>
+                    {msg.role === 'assistant' && !msg.error && onInsert && (
+                      <button
+                        type="button"
+                        onClick={() => onInsert(msg.content)}
+                        style={{ marginTop: 6, padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
+                      >
+                        הוסף למסמך
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {loading && (
+                  <div style={{ alignSelf: 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
+                    <div style={{ ...bbl(false, compactMode), display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 14 }}>⏳</span>
+                      <span>{progressStatusLabel}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+          <div style={{ padding: '8px 12px 10px', background: '#FFFFFF', borderTop: '1px solid #EDEBE9', flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+              {classicTaskpaneAgents.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  onClick={() => runClassicTaskpaneAgent(agent.id)}
+                  title={agent.unavailableReason || agent.label}
+                  disabled={loading || agent.providerAvailable === false}
+                  style={{ padding: '7px 10px', background: '#FFFFFF', border: '1px solid #D1D5DB', borderRadius: 999, fontSize: 12, fontWeight: 600, color: '#323130', cursor: loading || agent.providerAvailable === false ? 'not-allowed' : 'pointer', opacity: loading || agent.providerAvailable === false ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                >
+                  {agent.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ padding: '6px 12px 2px', color: '#605E5C', fontSize: '0.74rem', textAlign: 'center', borderTop: '1px solid #EDEBE9', background: '#FAF9F8', margin: '0 -12px 8px' }}>
+              ⌨️ Enter לשליחה, Shift+Enter לשורה חדשה, @ לסוכנים ו-/ לסקילים
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => onOpenSettingsTab('onboarding')}
+                style={{ padding: '8px 10px', background: '#FFFFFF', border: '1px solid #C8B84A', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#7A6010', cursor: 'pointer', whiteSpace: 'nowrap', height: 40 }}
+              >
+                📎 הנחיות
+              </button>
+
+              <div style={{ flex: 1, position: 'relative' }}>
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => {
+                    if (promptHistoryIndex !== -1) {
+                      setPromptHistoryIndex(-1);
+                      setPreNavigationDraft('');
+                    }
+                    setDraftInput(e.target.value);
+                    updateMentionMenu(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                  }}
+                  onClick={(e) => updateMentionMenu(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
+                  onBlur={() => setTimeout(() => closeMentionMenu(), 120)}
+                  onKeyDown={(e) => {
+                    if (mentionMenu.open && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+                      e.preventDefault();
+                      if (e.key === 'Escape') {
+                        closeMentionMenu();
+                        return;
+                      }
+                      if (e.key === 'ArrowDown') {
+                        setMentionMenu((prev) => ({ ...prev, activeIndex: Math.min(prev.activeIndex + 1, prev.items.length - 1) }));
+                        return;
+                      }
+                      if (e.key === 'ArrowUp') {
+                        setMentionMenu((prev) => ({ ...prev, activeIndex: Math.max(prev.activeIndex - 1, 0) }));
+                        return;
+                      }
+                      const choice = mentionMenu.items[mentionMenu.activeIndex] || mentionMenu.items[0];
+                      if (choice) applyMentionChoice(choice);
+                      return;
+                    }
+                    const selectionStart = e.currentTarget.selectionStart ?? 0;
+                    const selectionEnd = e.currentTarget.selectionEnd ?? selectionStart;
+                    const hasSelection = selectionStart !== selectionEnd;
+                    const caretAtStart = selectionStart === 0 && selectionEnd === 0;
+                    const caretAtEnd = selectionStart === e.currentTarget.value.length && selectionEnd === e.currentTarget.value.length;
+
+                    if (e.key === 'ArrowUp' && !hasSelection && caretAtStart) {
+                      const moved = navigatePromptHistory('up');
+                      if (moved) {
+                        e.preventDefault();
+                        return;
+                      }
+                    }
+
+                    if (e.key === 'ArrowDown') {
+                      const canNavigateDown = !hasSelection && (promptHistoryIndex !== -1 || caretAtEnd);
+                      if (canNavigateDown) {
+                        const moved = navigatePromptHistory('down');
+                        if (moved) {
+                          e.preventDefault();
+                          return;
+                        }
+                      }
+                    }
+
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  placeholder="שאל כל דבר — עריכה, ניסוח, מחקר, מקורות..."
+                  rows={2}
+                  disabled={loading}
+                  style={{ width: '100%', minHeight: 44, maxHeight: 120, resize: 'vertical', padding: '9px 12px', border: '1px solid #C8C6C4', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, background: 'white', direction: 'rtl' }}
+                />
+
+                {mentionMenu.open && (
+                  <div style={{ position: 'absolute', right: 0, left: 0, bottom: 'calc(100% + 8px)', background: '#111827', border: '1px solid #334155', borderRadius: 10, overflow: 'hidden', boxShadow: '0 18px 36px rgba(15,23,42,0.22)', zIndex: 30 }}>
+                    <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: '#E5E7EB', background: '#1F2937' }}>
+                      {mentionMenu.type === 'agent' ? '🤖 סוכנים זמינים' : '⚡ סקילים זמינים'}
+                    </div>
+                    {mentionMenu.items.map((item, index) => (
+                      <button
+                        key={`${item.type}-${item.id}`}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyMentionChoice(item);
+                        }}
+                        style={{ width: '100%', textAlign: 'right', border: 'none', borderTop: index === 0 ? 'none' : '1px solid #334155', background: index === mentionMenu.activeIndex ? '#1E3A8A' : 'transparent', padding: '10px 12px', cursor: 'pointer' }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'white' }}>
+                          {mentionMenu.type === 'agent' ? '@' : '/'}{item.id}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#CBD5E1', marginTop: 2 }}>{item.label}</div>
+                        <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>{item.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => send()}
+                disabled={!canSendCurrentInput}
+                title="שלח"
+                style={{ width: 42, height: 42, border: 'none', borderRadius: 8, background: canSendCurrentInput ? '#0078D4' : '#CBD5E1', color: 'white', cursor: canSendCurrentInput ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+              >
+                {loading ? '…' : '➤'}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 8, fontSize: 11, color: '#605E5C' }}>
+              {loading ? progressStatusLabel : `מוכן • ${effectiveAgentSummary}`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -2156,7 +2646,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
           </div>
 
           <div style={controlCardStyle}>
-            <label
+            <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -2167,36 +2657,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 borderRadius: 14,
                 border: '1px solid rgba(148, 163, 184, 0.22)',
                 background: workspaceAutomationEnabled ? 'rgba(59, 130, 246, 0.08)' : 'rgba(15, 23, 42, 0.12)',
-                cursor: isSettingsLocked ? 'not-allowed' : 'pointer',
-                opacity: isSettingsLocked ? 0.7 : 1,
               }}
             >
               <span style={{ display: 'grid', gap: 3 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#E2E8F0' }}>🏢 סביבת עבודה</span>
                 <span style={{ fontSize: 11, color: 'rgba(226, 232, 240, 0.72)', lineHeight: 1.5 }}>
-                  כשמכבים, הצ׳אט חוזר למסלול ישיר עם מנוע ברירת המחדל.
+                  מצב קריאה בלבד. שינוי ההפעלה של סביבת העבודה נשאר במסכי ההגדרות הכלליים.
                 </span>
               </span>
-              <input
-                type="checkbox"
-                checked={workspaceAutomationEnabled}
-                disabled={isSettingsLocked}
-                onChange={(e) => {
-                  clearPendingMentionSelection();
-                  const enabled = e.target.checked;
-                  const nextAutomation = saveWorkspaceAutomation({
-                    ...workspaceAutomation,
-                    enabled,
-                  });
-                  setWorkspaceAutomation(nextAutomation);
-                  if (!enabled) {
-                    setSelectedProviderId('default');
-                    setSelectedAgentId('');
-                  }
-                }}
-                style={{ width: 16, height: 16, accentColor: '#60A5FA', cursor: isSettingsLocked ? 'not-allowed' : 'pointer' }}
-              />
-            </label>
+              <span style={{ fontSize: 12, fontWeight: 700, color: workspaceAutomationEnabled ? '#BFDBFE' : '#FCD34D' }}>
+                {workspaceAutomationEnabled ? 'פעילה' : 'כבויה'}
+              </span>
+            </div>
 
             <div style={controlLabelStyle}>🛰️ ספק לשיחה</div>
             <div style={controlHelperStyle}>
@@ -2665,7 +3137,13 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                     key={index}
                     onClick={() => {
                       setTab('chat');
-                      send(prompt.text);
+                      setInput(prompt.text);
+                      setTimeout(() => {
+                        if (inputRef.current) {
+                          inputRef.current.focus();
+                          inputRef.current.setSelectionRange(prompt.text.length, prompt.text.length);
+                        }
+                      }, 50);
                     }}
                     style={{
                       display: 'flex',
