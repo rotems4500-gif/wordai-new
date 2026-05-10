@@ -336,6 +336,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [requestSnapshot, setRequestSnapshot] = useState(null);
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
+  const activeClassicAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
