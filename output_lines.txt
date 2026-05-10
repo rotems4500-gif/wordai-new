@@ -1,0 +1,29 @@
+
+  
+>     setCurrentFilePath('');
+    persistActiveTemplateId(templateId);
+      applyDocumentStyleToEditor(documentStyle, editor);
+>     setCurrentFilePath(String(payload.filePath || ''));
+      persistActiveTemplateId('blank');
+            setStartScreenInstructionsResetToken((prev) => prev + 1);
+>           setCurrentFilePath('');
+            persistActiveTemplateId('blank');
+            if (!result?.canceled && result?.filePath) {
+>             setCurrentFilePath(String(result.filePath));
+              saveDocumentHistory({
+            if (!result?.canceled) {
+>             setCurrentFilePath(String(result.filePath || ''));
+              persistLocalCache(html);
+            const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
+>           if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
+            break;
+                      activeEditor.commands.clearContent();
+>                     setCurrentFilePath('');
+                      persistActiveTemplateId('blank');
+                    runStartTransition((activeEditor) => {
+>                     setCurrentFilePath('');
+                      persistActiveTemplateId(templateId || 'blank');
+                      if (savedDraft) activeEditor.commands.setContent(savedDraft);
+>                     setCurrentFilePath('');
+                      setActiveTemplateId(getPersistedActiveTemplateId());
+

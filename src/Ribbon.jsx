@@ -486,6 +486,25 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
         </div>
       );
 
+      case 'helpMenu': return (
+        <div ref={dropRef} style={{ ...ms, padding: '8px 0', minWidth: '220px' }}>
+          {[
+            { id: 'checkUpdates', label: 'בדוק עדכונים', icon: 'ph-arrows-clockwise' },
+            { id: 'guideUser', label: 'מדריך למשתמש', icon: 'ph-book-open' },
+            { id: 'guideAPIKeys', label: 'מדריך מפתחות API', icon: 'ph-key' },
+            { id: 'tsDocs', label: 'פתרון תקלות - יצירת מסמך', icon: 'ph-wrench' },
+            { id: 'tsAPI', label: 'פתרון תקלות - API', icon: 'ph-plugs-connected' },
+            { id: 'shortcuts', label: 'קיצורי מקלדת', icon: 'ph-keyboard' },
+            { id: 'about', label: 'אודות', icon: 'ph-info' },
+          ].map(opt => (
+            <button key={opt.id} className="r-btn" style={{ width: '100%', justifyContent: 'start', padding: '8px 16px', borderRadius: 0, gap: '8px' }}
+              onClick={() => { onCommand('openHelp', opt.id); closeDrop(); }}>
+              <i className={`ph-fill ${opt.icon} text-gray-600`}></i> <span style={{ fontWeight: '500', fontSize: '13px' }}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      );
+
       default: return null;
     }
   };
@@ -503,6 +522,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "review" ? "" : "review")}>סקירה</li>
           <li className={`tab-btn ${activeTab === "detector" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "detector" ? "" : "detector")}>זיהוי AI</li>
             <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "view" ? "" : "view")}>תצוגה</li>
+            <li className="tab-btn" onClick={(e) => openDrop('helpMenu', e)}>עזרה <i className="ph-bold ph-caret-down" style={{fontSize:'10px', marginLeft:'4px'}}></i></li>
             <li className="tab-btn" style={{ color: "var(--word-blue)", fontWeight: "bold" }} onClick={() => onToggleTaskpane()} title={`קיצור: ${shortcuts.toggleAssistant || 'Ctrl+Shift+A'}`}>WordFlow AI</li>
         </ul>
 

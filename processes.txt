@@ -1,0 +1,19 @@
+
+Id                : 14592
+ProcessName       : node
+Path              : C:\Program Files\nodejs\node.exe
+CPU               : 0.515625
+StartTime         : 10/05/2026 08:08:24
+ParentProcessName : 
+WorkingSetSize    : 
+PrivateMemorySize : 64024576
+
+Id                : 31128
+ProcessName       : node
+Path              : C:\Program Files\nodejs\node.exe
+CPU               : 110.640625
+StartTime         : 10/05/2026 08:08:34
+ParentProcessName : 
+WorkingSetSize    : 
+PrivateMemorySize : 859590656
+

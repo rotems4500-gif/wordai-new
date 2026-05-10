@@ -8,6 +8,7 @@ import TopBar from './TopBar';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
+import HelpModal from './HelpModal';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
@@ -1153,6 +1154,8 @@ function App() {
 
   const [editor, setEditor] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [helpModalOpen, setHelpModalOpen] = React.useState(false);
+  const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
   const [wordCount, setWordCount] = React.useState(0);
   const [pageCount, setPageCount] = React.useState(1);
   const [zoom, setZoom] = React.useState(100);
@@ -1171,6 +1174,7 @@ function App() {
   const [documentStyle, setDocumentStyle] = React.useState(() => localStorage.getItem('wordai_document_style') || 'academic');
   const [activeTemplateId, setActiveTemplateId] = React.useState(() => getPersistedActiveTemplateId());
   const [pendingStartupDocument, setPendingStartupDocument] = React.useState(HAS_PENDING_STARTUP_DOCUMENT);
+  const [isAiStreaming, setIsAiStreaming] = React.useState(false);
   const [showStartScreen, setShowStartScreen] = React.useState(() => {
     if (HAS_PENDING_STARTUP_DOCUMENT) return false;
     if (isLegacyHomeEnabled()) return true;
@@ -1180,6 +1184,7 @@ function App() {
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [startTransitionPhase, setStartTransitionPhase] = React.useState('idle');
   const [currentFilePath, setCurrentFilePath] = React.useState('');
+  const [activeDocumentSessionId, setActiveDocumentSessionId] = React.useState(() => crypto.randomUUID());
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
   const [liveGeneration, setLiveGeneration] = React.useState({
@@ -1212,6 +1217,7 @@ function App() {
   const activeWorkspaceIdRef = React.useRef(getActiveWorkspaceId());
   const workspaceEpochRef = React.useRef(0);
   const activeGenerationRequestIdRef = React.useRef(0);
+  const streamingPos = React.useRef(null);
   const lastLiveGenerationShellRef = React.useRef({ runId: '', html: '' });
   const lastLiveGenerationPlaceholderRef = React.useRef({ runId: '', html: '' });
   const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
@@ -1363,6 +1369,28 @@ function App() {
     && workspaceEpochRef.current === request.workspaceEpoch
     && getActiveWorkspaceId() === request.workspaceId
   );
+
+  const handleStreamStart = React.useCallback(() => {
+    if (!editor) return;
+    setIsAiStreaming(true);
+    editor.setEditable(false);
+    streamingPos.current = editor.state.selection.to;
+  }, [editor]);
+
+  const handleStreamChunk = React.useCallback((chunk) => {
+    if (!editor || streamingPos.current === null) return;
+    editor.view.dispatch(editor.state.tr.insertText(chunk, streamingPos.current));
+    streamingPos.current += chunk.length;
+  }, [editor]);
+
+  const handleStreamEnd = React.useCallback(() => {
+    if (editor) {
+      editor.setEditable(true);
+    }
+    setIsAiStreaming(false);
+    streamingPos.current = null;
+  }, [editor]);
+
   const [activeFormats, setActiveFormats] = React.useState({
     bold: false,
     italic: false,
@@ -3173,10 +3201,24 @@ function App() {
 
   const handleCommand = async (cmd, value) => {
     const safeCommands = ['zoom','exportHTML','exportText','focusMode','toggleWatermark',
-      'setPageColor','togglePageBorders','toggleRuler','toggleGrid','formatPainter','openFile','openCopyleaksSettings'];
+      'setPageColor','togglePageBorders','toggleRuler','toggleGrid','formatPainter','openFile','openCopyleaksSettings','openHelp'];
     if (!editor && !safeCommands.includes(cmd)) return;
 
     switch (cmd) {
+      case 'openHelp':
+        if (value === 'checkUpdates') {
+          if (window.desktopApp?.checkForAppUpdates) {
+             window.desktopApp.checkForAppUpdates();
+          } else {
+             // Fallback
+             setFileMenuTargetTab('updates');
+             setFileMenuOpen(true);
+          }
+        } else {
+          setHelpModalTopic(value);
+          setHelpModalOpen(true);
+        }
+        break;
       case 'bold': editor.chain().focus().toggleBold().run(); break;
       case 'italic': editor.chain().focus().toggleItalic().run(); break;
       case 'underline': editor.chain().focus().toggleUnderline?.().run(); break;
@@ -4277,15 +4319,25 @@ function App() {
               <AiSidebar
                 mode="sidebar"
                 compactMode={sidebarCompact}
+                activeDocumentSessionId={activeDocumentSessionId}
+                currentFilePath={currentFilePath}
                 onToggleCompact={() => setSidebarCompact((prev) => !prev)}
                 reason={assistantTrigger}
                 documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
                 selectedText={selectedText}
                 currentBlockText={currentBlockText}
+                assistantBehavior={assistantBehavior}
+                onOpenSettingsTab={(targetTab) => {
+                  setFileMenuTargetTab(targetTab || 'assistant');
+                  setFileMenuOpen(true);
+                }}
                 wordPreferences={wordPreferences}
                 onInsert={(text) => {
                   if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
                 }}
+                onStreamStart={handleStreamStart}
+                onStreamChunk={handleStreamChunk}
+                onStreamEnd={handleStreamEnd}
                 onClose={closeAssistantPopup}
               />
             )}
@@ -4974,6 +5026,14 @@ function App() {
           onWordPreferencesChange={setWordPreferences}
           lastGenerationAction={lastGenerationAction}
           liveGeneration={liveGeneration}
+        />
+      )}
+
+      {helpModalOpen && (
+        <HelpModal
+          isOpen={helpModalOpen}
+          onClose={() => setHelpModalOpen(false)}
+          topic={helpModalTopic}
         />
       )}
     </div>

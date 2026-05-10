@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
+import { chatWithActiveProvider, streamWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
+import { readInstructionFile } from "./services/workspaceLearningService";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
@@ -173,20 +174,22 @@ const QUICK_PROMPTS = [
 const CLASSIC_TASKPANE_AGENT_IDS = ['fix', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
 
 const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
-const getChatMemoryStorageKey = (workspaceId = '') => {
+const getChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
-  return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}`;
+  const resolvedFilePathKey = String(documentId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
 };
 
 const PROMPT_HISTORY_STORAGE_KEY = 'wordai_sidebar_prompt_history';
 const PROMPT_HISTORY_LIMIT = 100;
-const getPromptHistoryStorageKey = (workspaceId = '') => {
+const getPromptHistoryStorageKey = (workspaceId = '', filePath = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
-  return `${PROMPT_HISTORY_STORAGE_KEY}:${resolvedWorkspaceId}`;
+  const resolvedFilePathKey = String(filePath || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `${PROMPT_HISTORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
 };
 
-const getSavedPromptHistory = (workspaceId = '') => {
-  const storageKey = getPromptHistoryStorageKey(workspaceId);
+const getSavedPromptHistory = (workspaceId = '', filePath = '') => {
+  const storageKey = getPromptHistoryStorageKey(workspaceId, filePath);
   try {
     const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
     if (!Array.isArray(parsed)) return [];
@@ -207,8 +210,8 @@ const getDefaultMessages = () => ([
   }
 ]);
 
-const getSavedMessages = (workspaceId = '') => {
-  const storageKey = getChatMemoryStorageKey(workspaceId);
+const getSavedMessages = (workspaceId = '', filePath = '') => {
+  const storageKey = getChatMemoryStorageKey(workspaceId, filePath);
   try {
     const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
     if (Array.isArray(parsed) && parsed.length) return parsed.slice(-60);
@@ -304,19 +307,22 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, onInsert, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', onInsert, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
+  const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const [tab, setTab] = useState('chat');
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
-  const [messages, setMessages] = useState(() => getSavedMessages(getWorkspaceAutomation().activeWorkspaceId));
+  const [messages, setMessages] = useState(() => getSavedMessages(getWorkspaceAutomation().activeWorkspaceId, effectiveDocId));
   const [input, setInput] = useState('');
-  const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistory(getWorkspaceAutomation().activeWorkspaceId));
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistory(getWorkspaceAutomation().activeWorkspaceId, effectiveDocId));
   const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
   const [preNavigationDraft, setPreNavigationDraft] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeAgentStatus, setActiveAgentStatus] = useState(() => ({ ...IDLE_AGENT_STATUS }));
   const [agentProgressMap, setAgentProgressMap] = useState({});
+    const [activeClassicAgentId, setActiveClassicAgentId] = useState(null);
   const [showLogs, setShowLogs] = useState(false);
   const [debugLogs, setDebugLogs] = useState(() => {
     const initialAutomation = getWorkspaceAutomation();
@@ -332,6 +338,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const activeWorkspaceIdRef = useRef(String(getWorkspaceAutomation().activeWorkspaceId || ''));
   const pendingMentionSelectionRef = useRef({ ...EMPTY_PENDING_MENTION_SELECTION });
   const preservePendingMentionRef = useRef(false);
@@ -461,6 +468,27 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     if (!preservePendingMention && !preservePendingMentionRef.current) clearPendingMentionSelection();
     setInput(nextValue);
   }, [clearPendingMentionSelection]);
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = '';
+    
+    try {
+      const extractedText = await readInstructionFile(file);
+      if (!String(extractedText).trim()) {
+        window.alert('לא הצלחתי לקרוא תוכן מתוך קובץ זה.');
+        return;
+      }
+      setAttachedFiles((prev) => [...prev, { name: file.name, text: extractedText }]);
+      setTimeout(() => {
+        if (inputRef.current) inputRef.current.focus();
+      }, 50);
+    } catch (err) {
+      console.error(err);
+      window.alert('שגיאה בעת קריאת הקובץ.');
+    }
+  };
 
   const navigatePromptHistory = useCallback((direction) => {
     if (!promptHistory.length) return false;
@@ -608,8 +636,8 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
       activeWorkspaceIdRef.current = nextWorkspaceId;
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
-      setMessages(getSavedMessages(nextAutomation.activeWorkspaceId));
-      setPromptHistory(getSavedPromptHistory(nextAutomation.activeWorkspaceId));
+      setMessages(getSavedMessages(nextAutomation.activeWorkspaceId, effectiveDocId));
+      setPromptHistory(getSavedPromptHistory(nextAutomation.activeWorkspaceId, effectiveDocId));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
       if (shouldResetWorkspaceState) {
         beginRequestCycle();
@@ -629,13 +657,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', syncWorkspace);
     return () => window.removeEventListener('wordai-workspace-changed', syncWorkspace);
-  }, [beginRequestCycle, clearPendingMentionSelection]);
+  }, [beginRequestCycle, clearPendingMentionSelection, effectiveDocId]);
+
+  useEffect(() => {
+    setMessages(getSavedMessages(workspaceAutomation.activeWorkspaceId, effectiveDocId));
+    setPromptHistory(getSavedPromptHistory(workspaceAutomation.activeWorkspaceId, effectiveDocId));
+  }, [effectiveDocId, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(getPromptHistoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(promptHistory.slice(-PROMPT_HISTORY_LIMIT)));
+      localStorage.setItem(getPromptHistoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId), JSON.stringify(promptHistory.slice(-PROMPT_HISTORY_LIMIT)));
     } catch {}
-  }, [promptHistory, workspaceAutomation.activeWorkspaceId]);
+  }, [promptHistory, workspaceAutomation.activeWorkspaceId, effectiveDocId]);
 
   useEffect(() => {
     setAgentProgressMap((prev) => {
@@ -687,7 +720,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
 
   useEffect(() => {
     try {
-      localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId), JSON.stringify(messages.slice(-60)));
+      localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId), JSON.stringify(messages.slice(-60)));
       saveAppMemory({
         ...getAppMemory(),
         sidebarProviderId: selectedProviderId || 'default',
@@ -769,7 +802,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const clearConversation = useCallback(() => {
     beginRequestCycle();
     try {
-      localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId));
+      localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId));
     } catch {}
     clearPendingMentionSelection();
     setMessages(getDefaultMessages());
@@ -859,14 +892,40 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
   const send = async (customPrompt, extraSystemPrompt = '', agentMeta = { id: 'assistant-main', name: 'צ׳אט ישיר' }, runtimeOptions = {}) => {
     const pendingMentionSelection = pendingMentionSelectionRef.current;
     const hasPendingMentionSelection = Boolean(pendingMentionSelection.agentId || pendingMentionSelection.skillId);
-    const originalText = (customPrompt || input).trim();
-    if ((!originalText && !hasPendingMentionSelection) || loading) return;
+    let originalText = (customPrompt || input).trim();
+    if ((!originalText && !hasPendingMentionSelection && attachedFiles.length === 0) || loading) return;
+    
+    if (attachedFiles.length > 0) {
+      const attachmentsText = attachedFiles.map(f => `[קובץ מצורף: ${f.name}]\n${f.text}`).join('\n\n');
+      originalText = `${attachmentsText}\n\n${originalText}`.trim();
+      if (!customPrompt) setAttachedFiles([]);
+    }
+    
     if (!customPrompt) setInput('');
     closeMentionMenu();
 
     let txt = originalText;
     let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
-    const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
+    let finalExtraSystemPrompt = extraSystemPrompt;
+      let finalProviderId = selectedProviderId;
+      let finalProviderModel = selectedProviderModel;
+      const cAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
+      
+      if (cAgent) {
+        if (cAgent.systemCtx) {
+           finalExtraSystemPrompt += '\n\n' + cAgent.systemCtx;
+        }
+        if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
+           const fallbackSelection = buildClassicTaskpaneSelection(cAgent);
+           if (fallbackSelection && fallbackSelection.selection) {
+              finalProviderId = fallbackSelection.selection.providerId || finalProviderId;
+              finalProviderModel = fallbackSelection.selection.model || finalProviderModel;
+           }
+        }
+      }
+      
+      const configuredProvider = getProviderConfig(finalProviderId) || { providerId: 'default' };
+      const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
     let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection ? activeAgent : null;
     let disabledSkillRequested = false;
     let ignoredAgentRouting = false;
@@ -1008,8 +1067,12 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
     const requestCycle = beginRequestCycle();
     setLoading(true);
     updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
+    
+    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+
     try {
-      const reply = await chatWithActiveProvider(txt, ctx, extraSystemPrompt, {
+      if (typeof onStreamStart === 'function') onStreamStart();
+      await streamWithActiveProvider(txt, ctx, extraSystemPrompt, {
         agentLabel: directAgentName,
         skillId: manualSkillId,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
@@ -1019,6 +1082,18 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         skipAutomation: true,
         skipAutomationPrompt: true,
         skipMultiModel: hasExplicitProviderSelection,
+        onChunk: (chunkText) => {
+          if (!isCurrentRequestCycle(requestCycle)) return;
+          if (typeof onStreamChunk === 'function') onStreamChunk(chunkText);
+          setMessages((prev) => {
+            const newMsg = [...prev];
+            newMsg[newMsg.length - 1] = {
+              ...newMsg[newMsg.length - 1],
+              content: newMsg[newMsg.length - 1].content + chunkText
+            };
+            return newMsg;
+          });
+        },
         onSkillResolved: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
           const skill = payload?.skill;
@@ -1038,13 +1113,13 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
         },
       });
       if (!isCurrentRequestCycle(requestCycle)) return;
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
       if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
+      if (typeof onStreamEnd === 'function') onStreamEnd();
       if (!isCurrentRequestCycle(requestCycle)) return;
       setLoading(false);
       setRequestSnapshot(null);
@@ -1560,30 +1635,70 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                 <button
                   key={agent.id}
                   type="button"
-                  onClick={() => runClassicTaskpaneAgent(agent.id)}
+                  onClick={() => toggleClassicTaskpaneAgent(agent.id)}
                   title={agent.unavailableReason || agent.label}
                   disabled={loading || agent.providerAvailable === false}
-                  style={{ padding: '7px 10px', background: '#FFFFFF', border: '1px solid #D1D5DB', borderRadius: 999, fontSize: 12, fontWeight: 600, color: '#323130', cursor: loading || agent.providerAvailable === false ? 'not-allowed' : 'pointer', opacity: loading || agent.providerAvailable === false ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                  style={{ padding: '7px 10px', background: activeClassicAgentId === agent.id ? '#0F766E' : '#FFFFFF', border: '1px solid #D1D5DB', borderRadius: 999, fontSize: 12, fontWeight: 600, color: activeClassicAgentId === agent.id ? '#FFFFFF' : '#323130', cursor: loading || agent.providerAvailable === false ? 'not-allowed' : 'pointer', opacity: loading || agent.providerAvailable === false ? 0.55 : 1, whiteSpace: 'nowrap' }}
                 >
                   {agent.label}
                 </button>
               ))}
             </div>
 
-            <div style={{ padding: '6px 12px 2px', color: '#605E5C', fontSize: '0.74rem', textAlign: 'center', borderTop: '1px solid #EDEBE9', background: '#FAF9F8', margin: '0 -12px 8px' }}>
+            {activeClassicAgent && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: '#F0FDFA', border: '1px solid #0D9488', borderRadius: 8, margin: '8px 0', color: '#0F766E', fontSize: 13, fontWeight: 600 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  ✅ סוכן פעיל: {activeClassicAgent.label}
+                </div>
+                <button type="button" onClick={() => setActiveClassicAgentId(null)} style={{ background: 'transparent', border: 'none', color: '#0F766E', cursor: 'pointer', fontSize: 14 }}>✕</button>
+              </div>
+            )}
+              <div style={{ padding: '6px 12px 2px', color: '#605E5C', fontSize: '0.74rem', textAlign: 'center', borderTop: '1px solid #EDEBE9', background: '#FAF9F8', margin: '0 -12px 8px' }}>
               ⌨️ Enter לשליחה, Shift+Enter לשורה חדשה, @ לסוכנים ו-/ לסקילים
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => onOpenSettingsTab('onboarding')}
-                style={{ padding: '8px 10px', background: '#FFFFFF', border: '1px solid #C8B84A', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#7A6010', cursor: 'pointer', whiteSpace: 'nowrap', height: 40 }}
-              >
-                📎 הנחיות
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => onOpenSettingsTab('onboarding')}
+                  title="הגדרות סביבת עבודה והנחיות"
+                  style={{ padding: '4px 10px', background: '#FFFFFF', border: '1px solid #C8B84A', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#7A6010', cursor: 'pointer', whiteSpace: 'nowrap', height: 26, width: '100%' }}
+                >
+                  ⚙️ הנחיות
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="העלאת קובץ כהקשר לצ'אט"
+                  style={{ padding: '4px 10px', background: '#F3F4F6', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#4B5563', cursor: 'pointer', whiteSpace: 'nowrap', height: 26, width: '100%' }}
+                >
+                  📎 צירוף קובץ
+                </button>
+                <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".docx,.txt,.md,.pdf,.json" onChange={handleFileUpload} />
+              </div>
 
               <div style={{ flex: 1, position: 'relative' }}>
+                {attachedFiles.map((file, idx) => (
+                  <div key={idx} style={{
+                    marginBottom: 8,
+                    padding: '6px 12px',
+                    fontSize: 12,
+                    color: '#065F46',
+                    background: '#ECFDF5',
+                    border: '1px solid #10B981',
+                    borderRadius: 12,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    <span>✅ מסמך צורף: {file.name}</span>
+                    <button 
+                      onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== idx))}
+                      style={{ background: 'none', border: 'none', color: '#065F46', cursor: 'pointer', fontSize: 14 }}
+                    >✕</button>
+                  </div>
+                ))}
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -1646,7 +1761,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                       send();
                     }
                   }}
-                  placeholder="שאל כל דבר — עריכה, ניסוח, מחקר, מקורות..."
+                  placeholder={activeClassicAgent ? activeClassicAgent.placeholder : "שאל כל דבר — עריכה, ניסוח, מקורות..."}
                   rows={2}
                   disabled={loading}
                   style={{ width: '100%', minHeight: 44, maxHeight: 120, resize: 'vertical', padding: '9px 12px', border: '1px solid #C8C6C4', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, background: 'white', direction: 'rtl' }}
@@ -2438,7 +2553,7 @@ export default function AiSidebar({ onClose, documentContext, onInsert, selected
                     send();
                   }
                 }}
-                placeholder="💬 כתוב בחופשיות... @ לסוכנים, / לסקילים"
+                placeholder={activeClassicAgent ? activeClassicAgent.placeholder : "💬 כתוב בחופשיות... @ לסוכנים, / לסקילים"}
                 style={{
                   flex: 1,
                   resize: 'none',

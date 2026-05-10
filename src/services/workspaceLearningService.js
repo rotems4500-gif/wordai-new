@@ -10,6 +10,8 @@ import {
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const HOME_INSTRUCTIONS_KEY = 'wordai_home_instructions';
+const HOME_INSTRUCTION_FILE_TEXT_KEY = 'wordai_home_instruction_file_text';
+const HOME_INSTRUCTION_FILE_NAME_KEY = 'wordai_home_instruction_file_name';
 const PAST_DOCS_INDEX_URL = 'PAST-DOC/index.json';
 const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
@@ -738,6 +740,32 @@ export function saveHomeInstructions(value = '') {
   const clean = String(value || '').trim();
   localStorage.setItem(HOME_INSTRUCTIONS_KEY, clean);
   syncPersistedAppSettings();
+}
+
+export function getHomeInstructionFileText() {
+  return String(localStorage.getItem(HOME_INSTRUCTION_FILE_TEXT_KEY) || '');
+}
+
+export function saveHomeInstructionFileText(value = '') {
+  const clean = String(value || '').trim();
+  if (!clean) {
+    localStorage.removeItem(HOME_INSTRUCTION_FILE_TEXT_KEY);
+  } else {
+    localStorage.setItem(HOME_INSTRUCTION_FILE_TEXT_KEY, clean);
+  }
+}
+
+export function getHomeInstructionFileName() {
+  return String(localStorage.getItem(HOME_INSTRUCTION_FILE_NAME_KEY) || '');
+}
+
+export function saveHomeInstructionFileName(value = '') {
+  const clean = String(value || '').trim();
+  if (!clean) {
+    localStorage.removeItem(HOME_INSTRUCTION_FILE_NAME_KEY);
+  } else {
+    localStorage.setItem(HOME_INSTRUCTION_FILE_NAME_KEY, clean);
+  }
 }
 
 function dominantCategoryFromItems(items = []) {

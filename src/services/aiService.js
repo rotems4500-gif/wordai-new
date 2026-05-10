@@ -7654,6 +7654,160 @@ export const chefModeDecideNextStep = async (userResponses = [], selectedModel =
 // Legacy alias
 export const chatWithAi = chatWithActiveProvider;
 
+export const streamOpenAI_API = async (baseUrl, apiKey, model, messages, signal, options = {}) => {
+  const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: true });
+  
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    signal,
+    body: bodyStr,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`API Error (${res.status}): ${txt.slice(0, 300)}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let fullText = '';
+  let buffer = '';
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunkStr = decoder.decode(value, { stream: true });
+    buffer += chunkStr;
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.startsWith('data: ') && line !== 'data: [DONE]' && line !== 'data: [DONE]\\r') {
+        try {
+          const data = JSON.parse(line.slice(6));
+          const text = data.choices?.[0]?.delta?.content || '';
+          if (text) {
+            fullText += text;
+            if (options.onChunk) {
+              options.onChunk(fullText);
+            }
+          }
+        } catch(e) {}
+      }
+    }
+  }
+  return fullText;
+};
+
+export const streamWithActiveProvider = async (userPrompt, documentContext = '', extraSystemPrompt = '', options = {}) => {
+  const cfg = options.providerConfigOverride && typeof options.providerConfigOverride === 'object'
+    ? normalizeProviderConfig(options.providerConfigOverride)
+    : getProviderConfig();
+  const taggedRouting = extractTaggedModelRouting(userPrompt);
+  const cleanUserPrompt = taggedRouting.cleanText || String(userPrompt || '').trim();
+  const strictProviderOverride = options.strictProviderOverride === true && Boolean(options.providerOverride);
+  const taggedProviders = strictProviderOverride ? [] : normalizeProviderIds(taggedRouting.taggedProviders, '');
+  const preferredProviders = strictProviderOverride ? [] : normalizeProviderIds(options.preferredProviders, '');
+  const constrainedProviders = strictProviderOverride
+    ? [options.providerOverride]
+    : preferredProviders.length
+      ? preferredProviders
+      : taggedProviders;
+  const selectedProviders = constrainedProviders.length
+    ? constrainedProviders
+    : strictProviderOverride
+      ? [options.providerOverride]
+      : getSelectedProviderIds(cfg, options.skipMultiModel === true);
+      
+  const configuredSelectedProviders = selectedProviders
+    .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+  if (constrainedProviders.length && !configuredSelectedProviders.length) {
+    throw new Error('אין ספק AI זמין בתוך ה-pool שנבחר.');
+  }
+  const taggedProviderInPool = taggedProviders.find((providerId) => configuredSelectedProviders.includes(providerId));
+  let activeProvider = strictProviderOverride
+    ? options.providerOverride
+    : options.providerOverride
+    || (preferredProviders.length
+      ? taggedProviderInPool
+      : (taggedProviders.length ? taggedProviderInPool : ''))
+    || configuredSelectedProviders[0]
+    || selectedProviders[0]
+    || cfg.active;
+
+  const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
+  const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
+    omitStructuralHints: omitPersonalStyleStructureHints,
+    requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+    templateId: String(options.templateId || '').trim(),
+    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+  });
+  const sharedInstructions = getSharedAgentInstructions();
+  const automation = getWorkspaceAutomation();
+  const skipAutomationPrompt = options.skipAutomationPrompt === true || options.skipAutomation === true;
+  const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt });
+
+  const taggedModelOverride = strictProviderOverride
+    ? ''
+    : taggedRouting.providerModels?.[activeProvider]
+    || (preferredProviders.length ? '' : taggedRouting.taggedModel);
+  const modelOverride = options.modelOverride || taggedModelOverride || '';
+  const resolvedModel = getModelNameForProvider(activeProvider, cfg, modelOverride);
+
+  const preserveFullDocumentContext = options.preserveFullDocumentContext === true;
+  const promptDocumentContext = preserveFullDocumentContext
+    ? String(documentContext || '')
+    : buildPromptDocumentContext(documentContext);
+
+  const sysPrompt = `אתה העוזר החכם של מעבד התמלילים "WordFlow AI".
+ענה תמיד בעברית, קצר, ברור ומעשי.
+הנח שהמשתמש נמצא באמצע כתיבה, ולכן גם שאלות קצרות כמו "נראה ארוך אה?", "יש מקור לזה?" או "תחדד לי" מתייחסות לפסקה או לטקסט שבהקשר המצורף.
+אם מבקשים קיצור/הארכה/שכתוב — תן ישירות נוסח מוצע שאפשר להדביק.
+אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
+עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר.
+כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר.
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}`;
+
+  const messages = [
+    { role: 'system', content: sysPrompt },
+    { role: 'user', content: cleanUserPrompt },
+  ];
+
+  const signal = options.signal;
+
+  switch (activeProvider) {
+    case 'openai': {
+      if (!cfg.openai.key) throw new Error('מפתח OpenAI לא הוגדר');
+      return streamOpenAI_API('https://api.openai.com/v1', cfg.openai.key, resolvedModel, messages, signal, options);
+    }
+    case 'groq': {
+      if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר');
+      return streamOpenAI_API('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, messages, signal, options);
+    }
+    case 'perplexity': {
+      if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר');
+      return streamOpenAI_API('https://api.perplexity.ai', cfg.perplexity.key, resolvedModel, messages, signal, options);
+    }
+    case 'ollama': {
+      const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
+      return streamOpenAI_API(ollamaUrl, '', resolvedModel, messages, signal, options);
+    }
+    case 'custom': {
+      const { baseUrl, key } = cfg.custom;
+      if (!baseUrl) throw new Error('מנוע מותאם אישית לא מוגדר במלואו');
+      return streamOpenAI_API(baseUrl, key, resolvedModel, messages, signal, options);
+    }
+    // gemini and claude streaming would need different mapping, or could reuse if we add openai compat layer for them.
+    // Assuming gemini stream handles elsewhere or falls back to chatWithActiveProvider if not supported
+    default:
+      throw new Error(`ספק ${activeProvider} אינו נתמך כרגע בסטרימינג.`);
+  }
+};
+
+
 // ═══════════════════════════════════════
 // בדיקת תקינות ספק — שולח הודעה קצרה ובודק תשובה
 // ═══════════════════════════════════════

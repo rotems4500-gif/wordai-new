@@ -3,6 +3,10 @@ import { GeneratingOverlay } from './WordFlowAnimations';
 import ChefModeDialog from './ChefModeDialog';
 import {
   getHomeInstructions,
+  saveHomeInstructionFileText,
+  getHomeInstructionFileText,
+  saveHomeInstructionFileName,
+  getHomeInstructionFileName,
   getWorkspaceTemplateCards,
   loadPastDocsIndex,
   loadProjectMaterials,
@@ -16,7 +20,7 @@ import {
   getHelperMaterialAcceptList,
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -122,12 +126,68 @@ const buildStartScreenRevealStyle = (delayMs = 0) => ({
 });
 
 const WORKFLOW_LABELS = {
-  'manager-auto': 'מנהל אוטומטי בוחר מסלול',
+  'autopilot-full': 'Auto Pilot מלא עם preflight',
+  'manager-auto': 'Auto Pilot דינמי',
   'circular-team': 'סביבה מעגלית',
   'manager-pipeline': 'מנהל ← מקורות ← מבנה ← כתיבה ← ליטוש',
   'design-first': 'מבנה קודם',
   'research-first': 'חקר קודם',
   'custom-order': 'סדר מותאם אישית',
+};
+
+const AUTOPILOT_DISABLED_WORKFLOW_LABELS = {
+  'autopilot-full': 'סדר סוכנים מוגדר',
+  'manager-auto': 'סדר סוכנים מוגדר',
+  'circular-team': 'סביבה מעגלית',
+};
+
+const getWorkflowModeDisplayLabel = (workflowMode = '', autopilotEnabled = true) => {
+  const normalizedWorkflowMode = String(workflowMode || '').trim() || 'manager-auto';
+  const baseLabel = WORKFLOW_LABELS[normalizedWorkflowMode] || normalizedWorkflowMode;
+  return autopilotEnabled === false
+    ? AUTOPILOT_DISABLED_WORKFLOW_LABELS[normalizedWorkflowMode] || baseLabel
+    : baseLabel;
+};
+
+const getWorkspaceModeLabel = (workspace = {}) => {
+  const workflowMode = String(workspace?.workflowMode || '').trim() || 'manager-auto';
+  const baseLabel = getWorkflowModeDisplayLabel(workflowMode, workspace?.autopilotEnabled !== false);
+  if (workspace?.autopilotEnabled === false) {
+    return `${baseLabel} · Auto Pilot כבוי`;
+  }
+  return baseLabel;
+};
+
+const getManagedWorkflowCoreRoleKey = (agent = {}) => {
+  const value = `${agent?.id || ''} ${agent?.name || ''}`;
+  if (/manager|מנהל/i.test(value) && !/review|בדיק/i.test(value)) return 'manager';
+  if (/research|source|חוקר|מקורות/i.test(value)) return 'researcher';
+  if (/design|designer|structure|outline|מעצב|מבנה/i.test(value)) return 'designer';
+  if (/writer|draft|כותב/i.test(value)) return 'writer';
+  if (/proof|proofreader|review|editor|מגיה|ליטוש|הגהה|בודק/i.test(value)) return 'proofreader';
+  return '';
+};
+
+const hasManagedWorkflowCoreTeam = (agents = []) => {
+  const roles = new Set((Array.isArray(agents) ? agents : [])
+    .filter((agent) => agent && agent.enabled !== false)
+    .map((agent) => getManagedWorkflowCoreRoleKey(agent))
+    .filter(Boolean));
+  return ['manager', 'researcher', 'designer', 'writer', 'proofreader'].every((role) => roles.has(role));
+};
+
+const mergeMissingManagedWorkflowRoles = (agents = [], presetId = 'content-studio') => {
+  const currentAgents = Array.isArray(agents) ? agents : [];
+  const existingRoles = new Set(currentAgents
+    .filter((agent) => agent && agent.enabled !== false)
+    .map((agent) => getManagedWorkflowCoreRoleKey(agent))
+    .filter(Boolean));
+  const fallbackTeam = buildWorkspaceAgentPreset(presetId).filter((agent) => agent && agent.enabled !== false);
+  const missingAgents = fallbackTeam.filter((agent) => {
+    const roleKey = getManagedWorkflowCoreRoleKey(agent);
+    return roleKey && !existingRoles.has(roleKey);
+  });
+  return missingAgents.length ? [...currentAgents, ...missingAgents] : currentAgents;
 };
 
 const NO_WORKSPACE_OPTION_VALUE = '__no-workspace__';
@@ -321,7 +381,11 @@ const plainTextToHtml = (text = '') => {
     .join('');
 };
 
-const getDraftTitleFromFileName = (name = '') => String(name || '').replace(/\.[^.]+$/, '').trim() || 'טיוטת בסיס';
+const getDraftTitleFromFileName = (name = '') => String(name || '')
+  .replace(/\.[^.]+$/, '')
+  .replace(/_/g, ' ')
+  .replace(/-/g, ' ')
+  .trim() || 'טיוטת בסיס';
 
 const getAcceptedFileExtensions = (acceptList = '') => new Set(
   String(acceptList || '')
@@ -413,7 +477,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [uploading, setUploading] = useState(false);
   const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
   const [activeDropZone, setActiveDropZone] = useState('');
-  const [instructionFileName, setInstructionFileName] = useState('');
+  const [instructionFileName, setInstructionFileName] = useState(() => (instructionsResetToken > 0 ? '' : (typeof getHomeInstructionFileName === 'function' ? getHomeInstructionFileName() : '')));
   const [baseDraft, setBaseDraft] = useState(null);
   const [loadedWorkspace, setLoadedWorkspace] = useState(null);
   const [uploadKind, setUploadKind] = useState('general');
@@ -425,6 +489,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [circularWorkflowEnabled, setCircularWorkflowEnabled] = useState(true);
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
   const workspaceBypassActive = currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE;
+  const workflowSelectorCurrentLabel = getWorkflowModeDisplayLabel(actualWorkflowMode, autopilotEnabled);
+  const workflowSelectorSummary = autopilotEnabled === false
+    ? `${workflowSelectorCurrentLabel} · Auto Pilot כבוי`
+    : workflowSelectorCurrentLabel;
+  const displayedQuickWorkflowMode = autopilotEnabled === false && ['autopilot-full', 'manager-auto'].includes(quickWorkflowMode)
+    ? '__keep-current__'
+    : quickWorkflowMode;
 
   const directProviderChoices = React.useMemo(() => {
     const configuredChoices = getConfiguredProviderChoices(providerConfigState);
@@ -498,6 +569,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setInstructions('');
     setInstructionFileName('');
     if (typeof saveHomeInstructions === 'function') saveHomeInstructions('');
+    if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText('');
+    if (typeof saveHomeInstructionFileName === 'function') saveHomeInstructionFileName('');
     onInstructionsResetConsumed?.();
   }, [instructionsResetToken, onInstructionsResetConsumed]);
 
@@ -621,9 +694,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setCurrentWorkspaceId(automation?.workspaceBypassEnabled ? NO_WORKSPACE_OPTION_VALUE : (automation?.activeWorkspaceId || 'default-content-studio'));
     setAutopilotEnabled(automation?.autopilotEnabled !== false);
     setActualWorkflowMode(nextWorkflowMode);
-    setQuickWorkflowMode(['circular-team', 'custom-order'].includes(nextWorkflowMode) ? nextWorkflowMode : '__keep-current__');
+    setQuickWorkflowMode(['autopilot-full', 'manager-auto', 'circular-team', 'custom-order'].includes(nextWorkflowMode) ? nextWorkflowMode : '__keep-current__');
     setCircularWorkflowEnabled(automation?.circularWorkflowEnabled !== false);
     setCircularMaxRounds(Math.max(1, Math.min(4, Number(automation?.circularMaxRounds) || 2)));
+    if (automation?.workspaceBypassEnabled !== true && automation?.autopilotEnabled !== false && ['autopilot-full', 'manager-auto', 'circular-team'].includes(nextWorkflowMode)) {
+      ensureManagedWorkflowTeam(nextWorkflowMode);
+    }
   };
 
   const persistAutomationUpdates = (updates = {}) => {
@@ -634,6 +710,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
     const nextAutomation = saveWorkspaceAutomation(updates);
     applyAutomationSnapshot(nextAutomation);
+  };
+
+  const ensureManagedWorkflowTeam = (nextMode = '') => {
+    if (!['autopilot-full', 'manager-auto', 'circular-team'].includes(String(nextMode || '').trim())) return;
+    if (typeof getOrderedRoleAgents !== 'function' || typeof getRoleAgents !== 'function' || typeof saveRoleAgents !== 'function' || typeof buildWorkspaceAgentPreset !== 'function') return;
+
+    const currentAutomation = typeof getWorkspaceAutomation === 'function' ? getWorkspaceAutomation() : {};
+    const currentAgents = getOrderedRoleAgents(nextMode);
+    if (hasManagedWorkflowCoreTeam(currentAgents)) return;
+
+    const nextAgents = mergeMissingManagedWorkflowRoles(getRoleAgents(), currentAutomation?.preset || 'content-studio');
+    saveRoleAgents(nextAgents);
   };
 
   useEffect(() => {
@@ -647,6 +735,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const nextWorkspacesList = Object.values(library).map((ws) => ({
           id: ws.id,
           name: ws.name,
+          workflowMode: ws?.automation?.workflowMode || ws?.workflowMode || 'manager-auto',
+          autopilotEnabled: ws?.automation?.autopilotEnabled ?? ws?.autopilotEnabled ?? true,
           providerSummary: summarizeWorkspaceProviders(ws.agents),
         }));
         setWorkspacesList(nextWorkspacesList);
@@ -721,14 +811,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         window.alert('לא הצלחתי לקרוא תוכן מתוך קובץ ההנחיות.');
         return;
       }
-      const labeledText = 'קובץ הנחיות: ' + file.name + '\n' + String(extracted).trim();
-      setInstructions((prev) => {
-        const currentInstructions = String(prev || '').trim();
-        const nextInstructions = currentInstructions ? currentInstructions + '\n\n---\n' + labeledText : labeledText;
-        if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
-        return nextInstructions;
-      });
       setInstructionFileName(file.name);
+      if (typeof saveHomeInstructionFileName === 'function') saveHomeInstructionFileName(file.name);
+      if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText(String(extracted).trim());
     } catch (error) {
       console.error(error);
       window.alert(formatInstructionFileUploadError(error));
@@ -906,11 +991,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   };
 
   const handleWorkflowModeChange = (event) => {
-    const nextMode = event.target.value === 'custom-order' ? 'custom-order' : 'circular-team';
+    const nextMode = String(event.target.value || '').trim();
+    if (!nextMode || nextMode === '__keep-current__') return;
+    const nextAutopilotEnabled = ['autopilot-full', 'manager-auto'].includes(nextMode) ? true : autopilotEnabled;
     setQuickWorkflowMode(nextMode);
     setActualWorkflowMode(nextMode);
+    setAutopilotEnabled(nextAutopilotEnabled);
+    ensureManagedWorkflowTeam(nextMode);
     persistAutomationUpdates({
       workflowMode: nextMode,
+      autopilotEnabled: nextAutopilotEnabled,
       circularWorkflowEnabled: nextMode === 'circular-team' ? circularWorkflowEnabled : false,
     });
   };
@@ -1323,7 +1413,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                      </option>
                      {workspacesList.map(workspace => (
                        <option key={workspace.id} value={workspace.id} className="bg-gray-800 text-white">
-                         {workspace.name} · {workspace.providerSummary}
+                         {workspace.name} · {getWorkspaceModeLabel(workspace)}
                        </option>
                      ))}
                    </select>
@@ -1334,9 +1424,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                         onChange={handleAutopilotToggle}
                         disabled={workspaceBypassActive}
                         className="checkbox checkbox-xs border-violet-200 rounded bg-white/20"
-                        aria-label="הפעל אוטופיילוט"
+                        aria-label="הפעל Auto Pilot"
                       />
-                      הפעל אוטופיילוט
+                      הפעל Auto Pilot
                     </label>
                  </div>
                </div>
@@ -1415,12 +1505,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    <div className="text-white font-semibold text-sm">🔁 הגדרות זרימת עבודה מהירה</div>
                  </div>
                  <select
-                   value={quickWorkflowMode}
+                   value={displayedQuickWorkflowMode}
                    onChange={handleWorkflowModeChange}
                    disabled={workspaceBypassActive}
                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
                  >
-                   <option value="__keep-current__" className="bg-slate-900 text-white" disabled>השאר מצב קיים: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}</option>
+                   <option value="__keep-current__" className="bg-slate-900 text-white" disabled>השאר מצב קיים: {workflowSelectorSummary}</option>
+                    <option value="autopilot-full" className="bg-slate-900 text-white">Auto Pilot מלא</option>
+                    <option value="manager-auto" className="bg-slate-900 text-white">Auto Pilot דינמי</option>
                    <option value="circular-team" className="bg-slate-900 text-white">סביבה מעגלית</option>
                    <option value="custom-order" className="bg-slate-900 text-white">סדר ידני</option>
                  </select>
@@ -1452,7 +1544,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  ) : quickWorkflowMode === 'custom-order' ? (
                    <div className="mt-3 text-[11px] text-white/70">במצב סדר ידני, המערכת תרוץ לפי סדר הסוכנים שהגדרת בסביבת העבודה.</div>
                  ) : (
-                   <div className="mt-3 text-[11px] text-white/70">מצב העבודה הנוכחי נשמר כפי שהוגדר בסביבת העבודה: {WORKFLOW_LABELS[actualWorkflowMode] || actualWorkflowMode}.</div>
+                   <div className="mt-3 text-[11px] text-white/70">מצב העבודה הנוכחי נשמר כפי שהוגדר בסביבת העבודה: {workflowSelectorSummary}.</div>
                  )}
                </div>
 
@@ -1471,7 +1563,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
                    <div className="text-amber-200/80 text-xs">
                      {loadedWorkspace?.workflowMode === 'custom-order' || loadedWorkspace?.autopilotEnabled === false
-                       ? ((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')
+                       ? `${((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')}${loadedWorkspace?.autopilotEnabled === false ? ' · Auto Pilot כבוי' : ''}`
                        : (WORKFLOW_LABELS[loadedWorkspace?.workflowMode] || loadedWorkspace?.workflowMode || 'manager-auto')}
                    </div>
                    <div className="text-amber-200/60 text-[10px] mt-1">

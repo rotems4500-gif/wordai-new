@@ -4,6 +4,7 @@ import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListIn
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
+  DEFAULT_ASSISTANT_BEHAVIOR,
   DEFAULT_PERSONAL_STYLE,
   DEFAULT_PROVIDER_CONFIG,
   DEFAULT_WORKSPACE_AUTOMATION,
@@ -3110,12 +3111,22 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
     return nextLibrary;
   };
 
-  const formatWorkflowLabel = (workflowMode = '') => {
-    if (workflowMode === 'manager-auto') return 'AUTOPILOT דינמי';
-    if (workflowMode === 'circular-team') return 'צוות מעגלי';
-    if (workflowMode === 'custom-order') return 'סדר מותאם';
-    if (workflowMode === 'manager-pipeline') return 'Pipeline מנוהל';
-    return workflowMode || 'ברירת מחדל';
+  const formatWorkflowLabel = (automation = {}) => {
+    const workflowMode = String(automation?.workflowMode || '').trim();
+    const autopilotEnabled = automation?.autopilotEnabled !== false;
+    let baseLabel = workflowMode || 'ברירת מחדל';
+    if (workflowMode === 'autopilot-full') baseLabel = 'AUTOPILOT מלא';
+    if (workflowMode === 'manager-auto') baseLabel = 'AUTOPILOT דינמי';
+    if (workflowMode === 'circular-team') baseLabel = 'צוות מעגלי';
+    if (workflowMode === 'custom-order') baseLabel = 'סדר מותאם';
+    if (workflowMode === 'manager-pipeline') baseLabel = 'Pipeline מנוהל';
+    if (!autopilotEnabled) {
+      if (workflowMode === 'autopilot-full' || workflowMode === 'manager-auto') {
+        return 'סדר סוכנים מוגדר · Auto Pilot כבוי';
+      }
+      return `${baseLabel} · Auto Pilot כבוי`;
+    }
+    return baseLabel;
   };
 
   useEffect(() => {
@@ -3429,7 +3440,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <strong style={{ color: '#111827', display: 'block' }}>{ws.name || ws.id}</strong>
                     <div style={{ color: '#6B7280', marginTop: 4 }}>
-                      {formatWorkflowLabel(ws?.automation?.workflowMode)} · {(Array.isArray(ws?.agents) ? ws.agents.length : 0)} סוכנים
+                      {formatWorkflowLabel(ws?.automation)} · {(Array.isArray(ws?.agents) ? ws.agents.length : 0)} סוכנים
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -3479,7 +3490,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
               <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{previewWorkspace.name || previewWorkspace.id}</div>
-                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{formatWorkflowLabel(previewWorkspace?.automation?.workflowMode)}</div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{formatWorkflowLabel(previewWorkspace?.automation)}</div>
                 </div>
                 <button type="button" onClick={() => setPreviewWorkspaceId('')} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
               </div>
@@ -3610,15 +3621,13 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
   const deprecatedPresetIds = new Set(['gemini-studio', 'claude-studio', 'perplexity-studio']);
   const managerIndex = agents.findIndex((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
   const managerAgent = managerIndex >= 0 ? agents[managerIndex] : null;
-  const isManagerWorkflow = ['manager-auto', 'circular-team'].includes(automation?.workflowMode);
+  const isManagerWorkflow = ['autopilot-full', 'manager-auto', 'circular-team'].includes(automation?.workflowMode);
   const isAutopilotManagerMode = isManagerWorkflow && automation?.autopilotEnabled !== false;
   const bypassActive = automation?.workspaceBypassEnabled === true;
   const visiblePresetEntries = Object.entries(presets).filter(([presetId]) => (
     !deprecatedPresetIds.has(presetId) || presetId === (automation?.preset || 'content-studio')
   ));
-  const selectedWorkflowMode = automation?.workflowMode === 'manager-auto'
-    ? 'circular-team'
-    : (automation?.workflowMode || 'manager-pipeline');
+  const selectedWorkflowMode = automation?.workflowMode || 'manager-pipeline';
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState(automation?.workspaceName || '');
 
   useEffect(() => {
@@ -3736,7 +3745,9 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
         <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
           {isAutopilotManagerMode
-            ? 'במצב הזה כל סוכן מדווח מה הושלם ומה עדיין חסר, ומנהל הצוות הוא זה שמחליט על הצעד הבא.'
+            ? automation?.workflowMode === 'autopilot-full'
+              ? 'במצב הזה מתבצעת קריאת preflight: מנהל הצוות בוחר דינמית סוכנים, ספקים, מודלים, הנחיות שלב ומספר סבבים לפני ההרצה עצמה.'
+              : 'במצב הזה כל סוכן מדווח מה הושלם ומה עדיין חסר, ומנהל הצוות הוא זה שמחליט על הצעד הבא.'
             : 'במצב הזה כל סוכן עדיין מדווח מה חסר, אבל ההמשך נקבע לפי כללים וסקילים פעילים ולא על ידי מנהל מרכזי.'}
         </div>
       </div>
@@ -3775,26 +3786,21 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 setAutomation(prev => ({
                   ...prev,
                   workflowMode: nextMode,
+                  autopilotEnabled: ['autopilot-full', 'manager-auto'].includes(nextMode) ? true : prev.autopilotEnabled,
                   preset: nextMode === 'custom-order' ? 'custom-workspace' : prev.preset,
                   circularWorkflowEnabled: nextMode === 'circular-team' ? true : false,
                 }));
-                if (nextMode === 'circular-team') {
+                if (['autopilot-full', 'manager-auto', 'circular-team'].includes(nextMode)) {
                   setAgents((prev) => {
-                    const hasManager = prev.some((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
-                    const hasAdditionalRoles = prev.some((agent) => !/manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
-                    if (hasManager && hasAdditionalRoles) return prev;
-                    const fallbackTeam = buildWorkspaceAgentPreset(automation?.preset || 'content-studio');
-                    const currentManager = prev.find((agent) => /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`));
-                    return fallbackTeam.map((agent) => (
-                      /manager|מנהל/i.test(`${agent?.id || ''} ${agent?.name || ''}`) && currentManager
-                        ? { ...agent, ...currentManager }
-                        : agent
-                    ));
+                    if (hasManagedWorkflowCoreTeam(prev)) return prev;
+                    return mergeMissingManagedWorkflowRoles(prev, automation?.preset || 'content-studio');
                   });
                 }
               }}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
+              <option value="autopilot-full">אוטופיילוט מלא — preflight בוחר הכל</option>
+              <option value="manager-auto">אוטופיילוט דינמי — מנהל בוחר סדר ותפקידים</option>
               <option value="circular-team">סביבה מעגלית — שיפור בסבבים</option>
               <option value="manager-pipeline">מצב רגיל — כללים וסקילים מובילים</option>
               <option value="design-first">מבנה קודם</option>
@@ -3871,11 +3877,15 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 checked={automation?.autopilotEnabled !== false}
                 onChange={(e) => setAutomation(prev => ({ ...prev, autopilotEnabled: e.target.checked }))}
               />
-              AUTOPILOT מלא — קבע תפקידים, סדר ומודל באופן אוטומטי
+              הפעל תכנון דינמי של מנהל AI
             </label>
-            כשהאפשרות פעילה, מנהל העבודה מחליט לבד מי צריך לעבוד, באיזה סדר, ואיזה תפקיד זמני יהיה לכל שלב.
+            {automation?.workflowMode === 'autopilot-full'
+              ? 'כשהאפשרות פעילה, מנהל העבודה מבצע קריאת preflight ובוחר לבד מי צריך לעבוד, באיזה סדר, עם איזה ספק או מודל, אילו הנחיות stage-level נדרשות וכמה סבבים להקצות.'
+              : 'כשהאפשרות פעילה, מנהל העבודה מחליט לבד מי צריך לעבוד, באיזה סדר, ואיזה תפקיד זמני יהיה לכל שלב.'}
             <div style={{ marginTop: 6, color: '#334155' }}>
-              במצב מעגלי, אם מתגלים פערים, הסוכן הכותב או סוכנים אחרים יכולים לחזור לעוד סבב שיפור.
+              {automation?.workflowMode === 'autopilot-full'
+                ? 'האלגוריתם לא חייב למחזר אותו pipeline לכל מטלה, ולכן הוא יכול גם לבחור מסלול קצר, עמוק או מרובה-בדיקות לפי סוג המשימה.'
+                : 'במצב מעגלי, אם מתגלים פערים, הסוכן הכותב או סוכנים אחרים יכולים לחזור לעוד סבב שיפור.'}
             </div>
             {automation?.workflowMode === 'circular-team' && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
@@ -4469,6 +4479,11 @@ const DEVELOPER_PROVIDER_OPTIONS = [
   ['custom', 'Custom API'],
 ];
 
+const SIDEBAR_PRESET_OPTIONS = [
+  ['word-taskpane', 'Taskpane קלאסי (Word Add-in)'],
+  ['modern', 'Sidebar מודרני'],
+];
+
 const downloadTextAsFile = (filename = 'wordflow-debug.json', text = '') => {
   try {
     const blob = new Blob([String(text || '')], { type: 'application/json;charset=utf-8' });
@@ -4496,10 +4511,44 @@ const DEV_QUICK_ACTION_LABELS = {
 };
 
 const WORKFLOW_MODE_OPTIONS = [
+  ['autopilot-full', 'Autopilot Full — preflight בוחר סוכנים, ספקים, מודלים וסבבים'],
   ['manager-auto', 'Manager Auto — מנהל AI מחליט על סדר הסוכנים'],
   ['circular-team', 'Circular Team — סבבי ביקורת מרובים'],
+  ['manager-pipeline', 'Manager Pipeline — pipeline קבוע עם מנהל'],
   ['custom-order', 'Custom Order — הסוכנים רצים לפי הסדר שהגדרת'],
 ];
+
+const getManagedWorkflowCoreRoleKey = (agent = {}) => {
+  const value = `${agent?.id || ''} ${agent?.name || ''}`;
+  if (/manager|מנהל/i.test(value) && !/review|בדיק/i.test(value)) return 'manager';
+  if (/research|source|חוקר|מקורות/i.test(value)) return 'researcher';
+  if (/design|designer|structure|outline|מעצב|מבנה/i.test(value)) return 'designer';
+  if (/writer|draft|כותב/i.test(value)) return 'writer';
+  if (/proof|proofreader|review|editor|מגיה|ליטוש|הגהה|בודק/i.test(value)) return 'proofreader';
+  return '';
+};
+
+const hasManagedWorkflowCoreTeam = (agents = []) => {
+  const roles = new Set((Array.isArray(agents) ? agents : [])
+    .filter((agent) => agent && agent.enabled !== false)
+    .map((agent) => getManagedWorkflowCoreRoleKey(agent))
+    .filter(Boolean));
+  return ['manager', 'researcher', 'designer', 'writer', 'proofreader'].every((role) => roles.has(role));
+};
+
+const mergeMissingManagedWorkflowRoles = (agents = [], presetId = 'content-studio') => {
+  const currentAgents = Array.isArray(agents) ? agents : [];
+  const existingRoles = new Set(currentAgents
+    .filter((agent) => agent && agent.enabled !== false)
+    .map((agent) => getManagedWorkflowCoreRoleKey(agent))
+    .filter(Boolean));
+  const fallbackTeam = buildWorkspaceAgentPreset(presetId).filter((agent) => agent && agent.enabled !== false);
+  const missingAgents = fallbackTeam.filter((agent) => {
+    const roleKey = getManagedWorkflowCoreRoleKey(agent);
+    return roleKey && !existingRoles.has(roleKey);
+  });
+  return missingAgents.length ? [...currentAgents, ...missingAgents] : currentAgents;
+};
 
 const buildGenerationInspectorMaterialSummary = (item = {}, index = 0) => {
   const previewText = String(item?.previewText || '').trim();
@@ -4731,7 +4780,7 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
   );
 }
 
-function DeveloperSettings({ config, setConfig, automation, setAutomation, assistantBehavior, setAssistantBehavior, wordPrefs, setWordPrefs, lastGenerationAction, liveGeneration }) {
+function DeveloperSettings({ config, setConfig, automation, setAutomation, setAgents, assistantBehavior, setAssistantBehavior, wordPrefs, setWordPrefs, lastGenerationAction, liveGeneration }) {
   const activeWorkspaceId = automation?.activeWorkspaceId || 'default-content-studio';
   const activeProviderId = String(config?.active || 'gemini').trim() || 'gemini';
   const activeProviderModel = String(config?.[activeProviderId]?.model || '').trim();
@@ -4740,6 +4789,12 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
   const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
   const defaultProviderId = DEFAULT_PROVIDER_CONFIG.active;
   const defaultProviderModel = DEFAULT_PROVIDER_CONFIG?.[defaultProviderId]?.model || '';
+  const sidebarPreset = String(assistantBehavior?.sidebarPreset || DEFAULT_ASSISTANT_BEHAVIOR.sidebarPreset || 'word-taskpane').trim() || 'word-taskpane';
+  const sourceRoutingEnabled = assistantBehavior?.autoRouteSourceRequests !== false;
+  const sourceGroundingEnabled = true;
+  const perplexityConfigured = isProviderConfigured(config, 'perplexity');
+  const scholarConfigured = isProviderConfigured(config, 'scholar');
+  const verifiedRetrievalConfigured = perplexityConfigured || scholarConfigured;
 
   // Connection test state
   const [connTest, setConnTest] = useState({ status: 'idle', result: null, elapsed: null });
@@ -4768,7 +4823,12 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
   const [appMemory, setAppMemory] = useState(() => getAppMemory());
   const [chatCleared, setChatCleared] = useState(false);
   const handleClearAppMemory = () => { clearAppMemory(); setAppMemory(getAppMemory()); };
-  const handleClearChatHistory = () => { clearSidebarChatHistory({ clearAll: true }); setChatCleared(true); setTimeout(() => setChatCleared(false), 3000); };
+  const handleClearChatHistory = () => {
+    clearSidebarChatHistory({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', clearAll: false });
+    setAppMemory(getAppMemory());
+    setChatCleared(true);
+    setTimeout(() => setChatCleared(false), 3000);
+  };
 
   const resetDeveloperDefaults = () => {
     setConfig((prev) => {
@@ -4800,6 +4860,12 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
       requestTimeoutMs: DEFAULT_WORKSPACE_AUTOMATION.requestTimeoutMs,
       appendAgentNotesToOutput: DEFAULT_WORKSPACE_AUTOMATION.appendAgentNotesToOutput,
       agentNotesInstruction: DEFAULT_WORKSPACE_AUTOMATION.agentNotesInstruction,
+    }));
+    setAssistantBehavior((prev) => ({
+      ...prev,
+      sidebarPreset: DEFAULT_ASSISTANT_BEHAVIOR.sidebarPreset,
+      autoRouteSourceRequests: DEFAULT_ASSISTANT_BEHAVIOR.autoRouteSourceRequests,
+      strictSourceGrounding: DEFAULT_ASSISTANT_BEHAVIOR.strictSourceGrounding,
     }));
   };
 
@@ -4840,7 +4906,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7, flex: '1 1 320px' }}>
-          אזור מרוכז למשתמש מתקדם: שליטה מהירה על provider/model פעיל, timeout במילישניות, נספח הערות סוכנים, וכלי debug בסיסיים בלי לטייל בין כמה טאבים.
+          אזור מרוכז למשתמש מתקדם: שליטה מהירה על provider/model פעיל, shell של חלונית הצ׳אט, guardrails למחקר ומקורות, timeout במילישניות, ו-debug בסיסי בלי לטייל בין כמה טאבים.
         </p>
         <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
           <button
@@ -4850,7 +4916,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
             Reset to defaults
           </button>
           <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
-            מחזיר provider/model, timeout ונספח הערות סוכנים לברירת המחדל. מפתחות API לא נמחקים.
+            מחזיר provider/model, preset חלונית, כללי מקורות, timeout ונספח הערות סוכנים לברירת המחדל. מפתחות API לא נמחקים.
           </div>
         </div>
       </div>
@@ -4909,6 +4975,63 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
                 style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, direction: 'ltr', background: 'white' }}
               />
             </label>
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Chat Pane Shell & Grounding</div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+            כאן בוחרים איזה shell המשתמש רואה בתוך ה-sidebar, ואיך בקשות למקורות מטופלות כדי לצמצם הזיות, URLs שבורים והמצאת כתבות.
+          </div>
+
+          <div style={{ display: 'grid', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>Preset לחלונית הצ׳אט</span>
+              <select
+                value={sidebarPreset}
+                onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, sidebarPreset: e.target.value }))}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+              >
+                {SIDEBAR_PRESET_OPTIONS.map(([presetId, label]) => (
+                  <option key={presetId} value={presetId}>{label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#1F2937', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                style={{ marginTop: 2, flexShrink: 0 }}
+                checked={sourceRoutingEnabled}
+                onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, autoRouteSourceRequests: e.target.checked }))}
+              />
+              <span style={{ lineHeight: 1.5 }}>
+                Source Auto-Route: בבקשות שמשלבות כתיבה עם מקורות, שלבי המחקר ינותבו ל-Perplexity כשאפשר גם אם ספק אחר פעיל. בקשות מקורות בלבד עדיין נשארות תחת Verified Sources Only.
+              </span>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#1F2937', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                style={{ marginTop: 2, flexShrink: 0 }}
+                checked={sourceGroundingEnabled}
+                readOnly
+                disabled
+              />
+              <span style={{ lineHeight: 1.5 }}>
+                Verified Sources Only: תמיד פעיל. בקשות למקורות, ציטוטים ולינקים יחזירו רק תוצאות אחזור מאומתות או חסימה מפורשת עם NO_VERIFIED_SOURCES_FOUND.
+              </span>
+            </label>
+          </div>
+
+          <div style={{ fontSize: 11, color: verifiedRetrievalConfigured ? '#475569' : '#B45309', lineHeight: 1.6, marginTop: 10 }}>
+            {perplexityConfigured && scholarConfigured
+              ? 'Perplexity ו-SerpAPI Scholar מוגדרים: Perplexity זמין למחקר כללי ולבקשות משולבות, ו-Scholar זמין לבקשות מקורות אקדמיים מאומתים.'
+              : perplexityConfigured
+                ? 'Perplexity מוגדר, לכן Auto-Route יכול לעבור למסלול מחקר עם אינטרנט אמיתי כשנדרשים מקורות.'
+                : scholarConfigured
+                  ? 'Perplexity לא מוגדר, אבל SerpAPI Scholar כן מוגדר. לכן בקשות מקורות אקדמיים מאומתים עדיין זמינות במסלול source-only, בעוד שבקשות משולבות או מקורות כלליים ללא אחזור מאומת ייחסמו.'
+                  : 'Perplexity ו-SerpAPI Scholar עדיין לא מוגדרים. האכיפה עדיין פעילה, ולכן בקשות למקורות יחזירו חסימה מפורשת עד שיוגדר ספק אחזור מאומת.'}
           </div>
         </div>
 
@@ -5098,7 +5221,21 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, assis
               <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מצב Workflow</span>
               <select
                 value={automation?.workflowMode || 'manager-auto'}
-                onChange={(e) => setAutomation((prev) => ({ ...prev, workflowMode: e.target.value }))}
+                onChange={(e) => {
+                  const nextMode = e.target.value;
+                  setAutomation((prev) => ({
+                    ...prev,
+                    workflowMode: nextMode,
+                    autopilotEnabled: ['autopilot-full', 'manager-auto'].includes(nextMode) ? true : prev.autopilotEnabled,
+                    circularWorkflowEnabled: nextMode === 'circular-team' ? true : prev.circularWorkflowEnabled,
+                  }));
+                  if (['autopilot-full', 'manager-auto', 'circular-team'].includes(nextMode)) {
+                    setAgents((prev) => {
+                      if (hasManagedWorkflowCoreTeam(prev)) return prev;
+                      return mergeMissingManagedWorkflowRoles(prev, automation?.preset || 'content-studio');
+                    });
+                  }
+                }}
                 style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
               >
                 {WORKFLOW_MODE_OPTIONS.map(([val, label]) => (
@@ -5277,6 +5414,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
+  const openedDirectlyInSettings = Boolean(initialSettingsTab);
   const onboardingSessionActiveRef = useRef(initialSettingsTab === 'onboarding');
   const [config, setConfig] = useState(getProviderConfig);
   const [shortcutsState, setShortcutsState] = useState(shortcuts || getShortcutsConfig());
@@ -5517,6 +5655,10 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const closeSettingsPanel = () => {
     maybePostponeOnboardingSession();
     setSettingsSearchQuery('');
+    if (openedDirectlyInSettings) {
+      onClose();
+      return;
+    }
     setActivePanel('main');
   };
 
@@ -5792,7 +5934,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
                     />
                   )}
-                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />}
+                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} setAgents={setRoleAgents} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />}
                   {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
                   {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
                   {settingsTab === 'onboarding'  && (
