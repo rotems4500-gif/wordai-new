@@ -3756,7 +3756,7 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageInstruction = 
     stageGoal ? `יעד השלב הנוכחי:\n${stageGoal}` : '',
     stageInstruction ? `הנחיית AUTOPILOT לשלב הנוכחי:\n${stageInstruction}` : '',
     revisitReason ? `למה הוחזרת עכשיו לסבב נוסף:\n${revisitReason}` : '',
-    collectAgentNotes && agentNotesInstruction ? `הנחיה מחייבת לנספח הערות סוכנים בסוף המסמך:\n${agentNotesInstruction}\nבסוף השלב, הוסף ב-CHECKLIST נקודות קצרות שמסבירות מה בוצע ומה נשאר.` : '',
+    collectAgentNotes && agentNotesInstruction ? `הנחיה פנימית לגבי הערות סוכנים: המערכת בונה נספח באופן אוטומטי מתוך ה-HANDOFF / MISSING / CHECKLIST בבלוק המטא שלך. אזהרה: אל תכתוב את ההערות בשום פנים ואופן בתוך המסמך עצמו (DELIVERABLE)! שלב אותן בבלוקי המטא בהתאם להנחיה הבאה:\n${agentNotesInstruction}` : '',
     `אתה פועל בשלב ${index + 1} מתוך ${total}${roundIndex > 0 ? ` • סבב חוזר ${roundIndex + 1}` : ''}.`,
     'שמור על דיוק ועל רצף עם מה שכבר נעשה. אם חסר מידע, אל תמציא.',
     'אל תוסיף מבוא, סיכום, כותרות קבועות או פרקים חדשים אלא אם בקשת המשתמש או המסמך הקיים דורשים זאת במפורש.',
@@ -5183,8 +5183,20 @@ const isAgentNotesAppendixOnlyArtifact = (value = '') => {
   const normalizedValue = String(value || '').trim();
   if (!normalizedValue) return false;
   if (/^\s*<div[^>]*data-agent-notes\s*=\s*["']true["'][^>]*>/i.test(normalizedValue)) return true;
-  return /^(?:<[^>]+>\s*){0,3}נספח\s+הערות\s+סוכנים(?:\s|<|$)/i.test(normalizedValue)
-    || /^(?:<[^>]+>\s*){0,3}<h2>\s*נספח\s+הערות\s+סוכנים\s*<\/h2>/i.test(normalizedValue);
+  
+  const appendixPatterns = [
+    /^(?:<[^>]+>\s*){0,4}(?:להלן|הנה|מצורף|בסוף|[\*\-#_]+|במידה ו|לבקשתך)?\s*נספח\s+(?:הערות|הערת)\s+(?:סוכנים|מנהל|הסוכנים)/i,
+    /^(?:<[^>]+>\s*){0,4}<h[1-6]>\s*(?:להלן|הנה|מצורף|בסוף)?\s*נספח\s+(?:הערות|הערת)\s+(?:סוכנים|מנהל|הסוכנים)/i
+  ];
+  if (appendixPatterns.some(pattern => pattern.test(normalizedValue))) return true;
+
+  if (normalizedValue.length < 2500 && /(?:נספח\s+(?:הערות|הערת)\s+(?:סוכנים|מנהל)|סיכום\s+מנהל\s+העבודה|הערות\s+לפי\s+סוכן)/i.test(normalizedValue)) {
+    if (/^\s*(<[^>]+>)*\s*(?:הנה|להלן|מצורף|_+|#+|נספח|הערות)/i.test(normalizedValue)) {
+       return true;
+    }
+  }
+
+  return false;
 };
 
 const shouldPreservePriorDocumentFromStageArtifact = ({
