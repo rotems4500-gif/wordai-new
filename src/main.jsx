@@ -3571,7 +3571,7 @@ function App() {
         if (window.confirm('האם למחוק את תוכן המסמך הנוכחי ולפתוח מסמך חדש?')) {
           const shouldShowStartExperience = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
           clearDraftReviewState();
-          editor.chain().focus().clearContent().run();
+          editor.commands.clearContent();
           clearPersistedDraftCache();
           saveHomeInstructions('');
           setStartScreenInstructionsResetToken((prev) => prev + 1);
@@ -3579,7 +3579,11 @@ function App() {
           persistActiveTemplateId('blank');
           syncPersistedAppSettings();
           setActiveTemplateId('blank');
-          setShowStartScreen(shouldShowStartExperience);
+          if (shouldShowStartExperience) {
+            openHomeSafely();
+          } else {
+            setShowStartScreen(false);
+          }
         }
         break;
       }
