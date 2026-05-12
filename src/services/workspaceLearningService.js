@@ -2029,7 +2029,12 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
           ...(continuationProvider ? {
             providerOverride: continuationProvider,
             strictProviderOverride: true,
-          } : {}),
+          } : requestOptions.providerOverride ? {
+            providerOverride: requestOptions.providerOverride,
+            strictProviderOverride: true,
+          } : {
+            preferredProviders: requestOptions.preferredProviders || [],
+          }),
           ...(continuationModel ? { modelOverride: continuationModel } : {}),
         },
       );
