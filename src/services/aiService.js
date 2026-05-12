@@ -710,8 +710,8 @@ const EMPTY_PROVIDER_RUNTIME_CAPABILITIES = Object.freeze({
 });
 const PROVIDER_RUNTIME_CAPABILITIES = Object.freeze({
   gemini: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
+    [DIRECT_INTERNET_ACCESS_CAPABILITY]: true,
+    [INTERNET_BACKED_SOURCE_CAPABILITY]: true,
   }),
   openai: Object.freeze({
     [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
@@ -7767,7 +7767,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const key = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
         if (!key) throw new Error('מפתח Gemini לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         const genAI = new GoogleGenerativeAI(key);
-        const mdl = genAI.getGenerativeModel({ model: resolvedModel });
+        const geminiModelConfig = { model: resolvedModel };
+        if (providerSupportsSourceGrounding) {
+          geminiModelConfig.tools = [{ googleSearch: {} }];
+        }
+        const mdl = genAI.getGenerativeModel(geminiModelConfig);
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
         return finalizeProviderTextResponse({
           text: result.response.text(),
