@@ -32,6 +32,8 @@ const GENERATED_HTML_CONTINUATION_GAP = '\n\n[... קוצר אמצע ההקשר �
 const TRUNCATED_RESPONSE_MARKER_PATTERN = /\[\.\.\.\s*(?:הושמט|קוצר)[^\]]*\]/i;
 const HTML_TAG_TOKEN_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z0-9-]+)\b[^>]*?>/gi;
 const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+const EMPTY_REFERENCE_SECTION_HEADING_PATTERN = /^(?:מקורות|רשימת\s+מקורות|ביבליוגרפיה|אסמכתאות|references|bibliography)$/i;
+const EXPLICIT_REFERENCE_SECTION_REQUEST_PATTERN = /(?:(?:פרק|סעיף|כותר(?:ת|ת\s+משנה)|section|heading|outline|שלד|מבנה).{0,32}(?:מקורות|ביבליוגרפיה|references|bibliography)|(?:מקורות|ביבליוגרפיה|references|bibliography).{0,32}(?:ריק|למילוי|placeholder|שלד|בהמשך|אחר\s+כך|ידני))/i;
 
 const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'csv', 'tsv', 'rtf', 'xml', 'yml', 'yaml', 'log', 'svg', 'docx']);
 const DESKTOP_EXTRACTION_EXTENSIONS = new Set(['pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
@@ -43,6 +45,7 @@ const INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpe
 const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv,.rtf,.xml';
 const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
+const ACADEMIC_EXISTING_HTML_STRONG_SIGNAL_PATTERN = /(אקדמ|סמינר|ביבליוגרפ|apa|mla|peer[-\s]?reviewed|סקיר(?:ת)?\s+ספרות|literature\s+review|מאמר\s+אקדמי|מחקר\s+אקדמי)/i;
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
 export const MATERIAL_UPLOAD_PRESETS = {
   general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
@@ -95,6 +98,25 @@ function normalizeMaterialPreviewStatus(value = '') {
 function isLikelyAcademicDocumentRequest({ prompt = '', instructions = '', templateId = 'blank' } = {}) {
   if (String(templateId || '').trim().toLowerCase() === 'academic') return true;
   return ACADEMIC_REQUEST_SIGNAL_PATTERN.test([prompt, instructions].filter(Boolean).join('\n'));
+}
+
+function hasStrongAcademicExistingHtmlSignal(value = '') {
+  return ACADEMIC_EXISTING_HTML_STRONG_SIGNAL_PATTERN.test(String(value || ''));
+}
+
+function shouldPreserveExplicitReferenceSection({ prompt = '', instructions = '', html = '' } = {}) {
+  const requestText = [prompt, instructions].filter(Boolean).join('\n');
+  if (EXPLICIT_REFERENCE_SECTION_REQUEST_PATTERN.test(requestText)) return true;
+
+  const headingPattern = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  let match = headingPattern.exec(String(html || ''));
+  while (match) {
+    const normalizedHeading = stripHtmlTags(String(match[2] || '')).replace(/\s+/g, ' ').trim();
+    if (EMPTY_REFERENCE_SECTION_HEADING_PATTERN.test(normalizedHeading)) return true;
+    match = headingPattern.exec(String(html || ''));
+  }
+
+  return false;
 }
 
 function normalizeMaterialExtractionStatus(value = '') {
@@ -498,6 +520,17 @@ const WORKSPACE_TEMPLATE_LIBRARY = [
   { id: 'proposal', title: 'הצעה', subtitle: 'מטרות, מהלך ותוצרים' },
   { id: 'letter', title: 'מכתב רשמי', subtitle: 'פתיחה, גוף וסיום' },
 ];
+
+function buildAcademicArgumentationInstructions({ preserveExplicitReferenceSection = false } = {}) {
+  return [
+    'כאשר מדובר בעבודה אקדמית והמשתמש לא ביקש אחרת, ברירת המחדל היא חיבור בפסקאות רציפות שמפתחות טיעון ולא outline מפורק עם תתי-כותרות רבות.',
+    'אל תהפוך את גוף העבודה לרשימות bullets, לתוויות מודגשות בסגנון "נקודה מרכזית:" או לתת-כותרת קצרה לכל טענה, אלא אם זו דרישת מבנה מפורשת.',
+    'העדף מעברים טבעיים ומילות קישור בתוך הפסקאות כדי לקדם את הדיון והטיעון.',
+    'אם קיימים בחומרי העזר, בהקשר או בתוכן שכבר סופק שמות חוקרים, דוחות, מאמרים או מקורות רלוונטיים, שלב אותם בגוף הפסקאות כחלק מהטיעון.',
+    preserveExplicitReferenceSection ? '' : 'אל תיצור פרק "מקורות" או "ביבליוגרפיה" אם אין לך פריטים ממשיים למלא בו.',
+    'אם אין מקור קונקרטי בחומר הקיים, אל תמציא ציטוט, מחבר, DOI או רשומה ביבליוגרפית.',
+  ].filter(Boolean).join('\n');
+}
 
 function readJsonFromStorage(key, fallback) {
   try {
@@ -2663,12 +2696,34 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
+function stripEmptyReferenceSections(html = '', options = {}) {
+  const source = String(html || '').trim();
+  if (!source) return source;
+  if (options.preserveExplicitSection === true) return source;
+
+  return source.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>([\s\S]*?)(?=<h[1-6]\b|$)/gi, (match, level, headingText, bodyHtml, offset, fullSource) => {
+    const normalizedHeading = stripHtmlTags(String(headingText || '')).replace(/\s+/g, ' ').trim();
+    if (!EMPTY_REFERENCE_SECTION_HEADING_PATTERN.test(normalizedHeading)) return match;
+
+    const normalizedBody = stripHtmlTags(String(bodyHtml || ''))
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/[\s\-–—,:;•·*()[\]{}]+/g, '')
+      .trim();
+    const trailingHtml = String(fullSource || '').slice(Number(offset || 0) + match.length);
+    const immediateNextHeadingLevel = Number((/^\s*<h([1-6])\b/i.exec(trailingHtml) || [])[1] || 0);
+    const hasNestedSubheadings = immediateNextHeadingLevel > Number(level || 0);
+
+    return (normalizedBody || hasNestedSubheadings) ? match : '';
+  }).replace(/(?:\s*\n){3,}/g, '\n\n').trim();
+}
+
 export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
   const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: cleanPrompt, instructions: cleanInstructions, templateId });
+  const preserveExplicitReferenceSection = shouldPreserveExplicitReferenceSection({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
   const automation = getWorkspaceAutomation();
@@ -2682,6 +2737,9 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     automation,
     directStructureLock: structurePolicy.directStructureLock,
   });
+  const academicArgumentationInstructions = isAcademicTask && !structurePolicy.directStructureLock
+    ? buildAcademicArgumentationInstructions({ preserveExplicitReferenceSection })
+    : '';
   const documentRunLabel = getDocumentRunLabel({
     automation,
     selectedModel,
@@ -2782,7 +2840,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     const userPrompt = userRequestSections.join('\n\n');
-    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`;
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${academicArgumentationInstructions ? `\nכללי כתיבה אקדמית מחייבים כברירת מחדל:\n${academicArgumentationInstructions}` : ''}${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`;
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt,
@@ -2803,21 +2861,24 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       : repairedResponse.replace(/<[^>]+>/g, '').trim().length >= 10
         ? repairedResponse
         : cleanedResponse;
+    const normalizedFinalResponse = isAcademicTask
+      ? stripEmptyReferenceSections(finalResponse, { preserveExplicitSection: preserveExplicitReferenceSection })
+      : finalResponse;
 
-    if (!finalResponse || (usedStructurePolicyRepair ? !repairedResponseHasMeaningfulContent : stripHtmlTags(finalResponse).length < 10)) {
+    if (!normalizedFinalResponse || (usedStructurePolicyRepair ? !repairedResponseHasMeaningfulContent : stripHtmlTags(normalizedFinalResponse).length < 10)) {
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
     }
 
-    ensureCompleteGeneratedHtmlResponse(finalResponse, 'יצירת המסמך');
+    ensureCompleteGeneratedHtmlResponse(normalizedFinalResponse, 'יצירת המסמך');
 
-    if (finalResponse !== cleanedResponse) {
+    if (normalizedFinalResponse !== cleanedResponse) {
       logAgentDebugEvent({
         type: 'doc-generation-structure-repair',
         state: 'success',
         runId,
         agentLabel: documentRunLabel,
         message: 'בוצע תיקון ממוקד למסמך כדי לכבד נעילת מבנה מפורשת של המשתמש',
-        outputChars: finalResponse.length,
+        outputChars: normalizedFinalResponse.length,
         ...requestLogContext,
       });
     }
@@ -2828,13 +2889,13 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       runId,
       agentLabel: documentRunLabel,
       message: 'המסמך נוצר בהצלחה דרך ה-API',
-      outputChars: finalResponse.length,
+      outputChars: normalizedFinalResponse.length,
       ...requestLogContext,
     });
 
     return returnMeta
-      ? { html: finalResponse, usedFallback: false, runId, errorMessage: '', title }
-      : finalResponse;
+      ? { html: normalizedFinalResponse, usedFallback: false, runId, errorMessage: '', title }
+      : normalizedFinalResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-generation-api-error',
@@ -2954,7 +3015,10 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
-  const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: originalPrompt, instructions: cleanFeedback, templateId });
+  const htmlAcademicSignals = stripHtmlTags(cleanHtml).slice(0, 1200);
+  const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: originalPrompt, instructions: cleanFeedback, templateId })
+    || hasStrongAcademicExistingHtmlSignal(htmlAcademicSignals);
+  const preserveExplicitReferenceSection = shouldPreserveExplicitReferenceSection({ prompt: originalPrompt, instructions: cleanFeedback, html: cleanHtml });
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
   if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
 
@@ -2992,9 +3056,12 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
   }
 
   const revisionPreservationContract = 'חוזה מחייב לעדכון: החזר תמיד את המסמך המלא מתחילתו ועד סופו, גם אם התיקון נוגע רק בפסקה אחת. אסור להחזיר רק fragment, רק קטע מתוקן, או רק את ההמשך החסר. ברירת המחדל היא שימור: כל חלק שלא התבקש להשתנות צריך להישאר באותה משמעות, באותו סדר ובאותו מבנה; אם אין סיבה חזקה לשנות ניסוח קיים, השאר אותו כפי שהוא.';
+  const academicArgumentationInstructions = isAcademicTask
+    ? buildAcademicArgumentationInstructions({ preserveExplicitReferenceSection })
+    : '';
   const systemPrompt = shouldUseWorkflowAutomation
-    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`
-    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`;
+    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${academicArgumentationInstructions ? `\nכללי כתיבה אקדמית מחייבים כברירת מחדל:\n${academicArgumentationInstructions}` : ''}${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`
+    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${academicArgumentationInstructions ? `\nכללי כתיבה אקדמית מחייבים כברירת מחדל:\n${academicArgumentationInstructions}` : ''}${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`;
 
   try {
     logAgentDebugEvent({
@@ -3072,9 +3139,12 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     });
 
     const validatedResponse = ensureCompleteGeneratedHtmlResponse(cleanedResponse, 'עדכון המסמך');
+    const normalizedRevisionResponse = isAcademicTask
+      ? stripEmptyReferenceSections(validatedResponse, { preserveExplicitSection: preserveExplicitReferenceSection })
+      : validatedResponse;
     const suspiciousRevisionIssue = findSuspiciousRevisionOutputIssue({
       existingHtml: cleanHtml,
-      revisedHtml: validatedResponse,
+      revisedHtml: normalizedRevisionResponse,
       feedback: cleanFeedback,
     });
     if (suspiciousRevisionIssue) {
@@ -3087,13 +3157,13 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       runId,
       agentLabel: documentUpdateLabel,
       message: shouldUseWorkflowAutomation ? 'המסמך עודכן לפי המשוב דרך workflow' : 'המסמך עודכן ישירות לפי המשוב',
-      outputChars: validatedResponse.length,
+      outputChars: normalizedRevisionResponse.length,
       ...requestLogContext,
     });
 
     return returnMeta
-      ? { html: validatedResponse, usedFallback: false, runId, errorMessage: '' }
-      : validatedResponse;
+      ? { html: normalizedRevisionResponse, usedFallback: false, runId, errorMessage: '' }
+      : normalizedRevisionResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-feedback-fallback',

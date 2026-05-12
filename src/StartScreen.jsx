@@ -463,8 +463,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [directProviderTestStatus, setDirectProviderTestStatus] = useState('idle');
   const [directProviderTestMessage, setDirectProviderTestMessage] = useState('');
   const previousDirectProviderIdRef = useRef('');
-  
-  const profile = getPersonalStyleProfile();
+  const [profile, setProfile] = useState(() => getPersonalStyleProfile());
   const onboardingDone = Boolean(profile?.onboardingCompletedAt);
 
   const fileInputRef = useRef(null);
@@ -573,6 +572,20 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (typeof saveHomeInstructionFileName === 'function') saveHomeInstructionFileName('');
     onInstructionsResetConsumed?.();
   }, [instructionsResetToken, onInstructionsResetConsumed]);
+
+  useEffect(() => {
+    const refreshProfileState = () => setProfile(getPersonalStyleProfile());
+    refreshProfileState();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('focus', refreshProfileState);
+    window.addEventListener('wordai-settings-hydrated', refreshProfileState);
+    window.addEventListener('wordai-personal-style-updated', refreshProfileState);
+    return () => {
+      window.removeEventListener('focus', refreshProfileState);
+      window.removeEventListener('wordai-settings-hydrated', refreshProfileState);
+      window.removeEventListener('wordai-personal-style-updated', refreshProfileState);
+    };
+  }, []);
 
   useEffect(() => {
     const refreshProviderConfig = () => setProviderConfigState(getProviderConfig());

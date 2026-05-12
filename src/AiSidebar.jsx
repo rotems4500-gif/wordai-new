@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, streamWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
@@ -870,8 +870,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         skillId: runtimeOptions.skillId || '',
         autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
         providerOverride: runtimeOptions.providerOverride || '',
+        preferredProviders: runtimeOptions.preferredProviders || [],
         modelOverride: runtimeOptions.modelOverride || '',
         strictProviderOverride: runtimeOptions.strictProviderOverride === true,
+        extraSystemPrompt: runtimeOptions.extraSystemPrompt || '',
       });
       if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
@@ -907,26 +909,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     let txt = originalText;
     let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
-    let finalExtraSystemPrompt = extraSystemPrompt;
-      let finalProviderId = selectedProviderId;
-      let finalProviderModel = selectedProviderModel;
-      const cAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
-      
-      if (cAgent) {
-        if (cAgent.systemCtx) {
-           finalExtraSystemPrompt += '\n\n' + cAgent.systemCtx;
-        }
-        if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
-           const fallbackSelection = buildClassicTaskpaneSelection(cAgent);
-           if (fallbackSelection && fallbackSelection.selection) {
-              finalProviderId = fallbackSelection.selection.providerId || finalProviderId;
-              finalProviderModel = fallbackSelection.selection.model || finalProviderModel;
-           }
-        }
-      }
-      
-      const configuredProvider = getProviderConfig(finalProviderId) || { providerId: 'default' };
-      const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
+    let finalExtraSystemPrompt = String(extraSystemPrompt || '');
+    let finalProviderId = selectedProviderId;
+    let finalProviderModel = resolvedSelectedProviderModel;
+    const cAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
+    const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
     let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection ? activeAgent : null;
     let disabledSkillRequested = false;
     let ignoredAgentRouting = false;
@@ -1027,16 +1014,58 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
 
+    if (cAgent && !forcedAgent) {
+      if (cAgent.systemCtx) {
+        finalExtraSystemPrompt = [finalExtraSystemPrompt, cAgent.systemCtx].filter(Boolean).join('\n\n');
+      }
+      if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
+        const fallbackSelection = buildClassicTaskpaneSelection(cAgent);
+        if (fallbackSelection && fallbackSelection.selection) {
+          finalProviderId = fallbackSelection.selection.providerId || finalProviderId;
+          finalProviderModel = fallbackSelection.selection.model || finalProviderModel;
+        }
+      }
+    }
+
+    const finalPinnedProviderId = finalProviderId && finalProviderId !== 'default' ? finalProviderId : '';
+    const finalProviderChoice = finalPinnedProviderId
+      ? configuredProviderChoices.find((choice) => choice.id === finalPinnedProviderId) || null
+      : null;
+    const finalProviderModelChoices = finalProviderChoice
+      ? getProviderModelChoices(finalProviderChoice.id, providerConfig)
+      : [];
+    const normalizedFinalProviderModel = finalProviderChoice
+      ? normalizeProviderModelName(finalProviderChoice.id, String(finalProviderModel || '').trim())
+      : String(finalProviderModel || '').trim();
+    const resolvedFinalProviderModel = finalProviderChoice
+      ? (finalProviderModelChoices.includes(normalizedFinalProviderModel)
+        ? normalizedFinalProviderModel
+        : (finalProviderModelChoices[0] || ''))
+      : '';
+    const finalProviderLabel = finalProviderChoice?.label || activeProviderLabel;
+    const finalProviderSummary = finalProviderChoice
+      ? [finalProviderLabel, resolvedFinalProviderModel].filter(Boolean).join(' · ')
+      : activeProviderSummary;
+
     appendPromptHistory(originalText);
 
     const runtimeProviderOverride = String(runtimeOptions.providerOverride || '').trim();
     const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
     const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true;
-    const directProviderId = runtimeProviderOverride || activeProviderChoice?.id || '';
-    const hasExplicitProviderSelection = runtimeStrictProviderOverride ? Boolean(runtimeProviderOverride) : Boolean(directProviderId);
-    const explicitProviderModel = runtimeProviderOverride
+    const hasStrictRuntimeProviderOverride = runtimeStrictProviderOverride && Boolean(runtimeProviderOverride);
+    const preferredProviderId = hasStrictRuntimeProviderOverride
+      ? ''
+      : (runtimeProviderOverride || finalPinnedProviderId);
+    const preferredProviders = preferredProviderId ? [preferredProviderId] : [];
+    const directProviderId = hasStrictRuntimeProviderOverride ? runtimeProviderOverride : '';
+    const hasPinnedProviderPreference = hasStrictRuntimeProviderOverride || preferredProviders.length > 0;
+    const explicitProviderModel = hasStrictRuntimeProviderOverride
       ? runtimeModelOverride
-      : (hasExplicitProviderSelection ? resolvedSelectedProviderModel : '');
+      : (runtimeProviderOverride
+        ? runtimeModelOverride
+        : (preferredProviderId ? resolvedFinalProviderModel : ''));
+    const requestProviderLabel = runtimeProviderOverride ? activeProviderLabel : finalProviderLabel;
+    const requestProviderSummary = runtimeProviderOverride ? activeProviderSummary : finalProviderSummary;
     clearPendingMentionSelection();
 
     if (forcedAgent) {
@@ -1045,10 +1074,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         skillLabel: runtimeSkillLabel,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
         persistSelection: !usedDraftAgentMention && !usedQueuedAgentMention,
-        providerLabel: activeProviderSummary,
+        providerLabel: requestProviderSummary,
         providerOverride: directProviderId,
+        preferredProviders,
         modelOverride: explicitProviderModel,
-        strictProviderOverride: hasExplicitProviderSelection,
+        strictProviderOverride: hasStrictRuntimeProviderOverride,
+        extraSystemPrompt: finalExtraSystemPrompt,
         scopeLabel: contextScopeLabel,
         contextPreview,
       });
@@ -1056,10 +1087,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
 
     const ctx = buildContext();
-    const directAgentName = hasExplicitProviderSelection ? `${agentMeta.name} · ${activeProviderLabel}` : agentMeta.name;
+    const directAgentName = hasPinnedProviderPreference ? `${agentMeta.name} · ${requestProviderLabel}` : agentMeta.name;
     setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
     setRequestSnapshot({
-      providerLabel: hasExplicitProviderSelection ? activeProviderLabel : activeProviderSummary,
+      providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
       agentLabel: directAgentName,
       skillLabel: runtimeSkillLabel,
       scopeLabel: contextScopeLabel,
@@ -1072,29 +1103,17 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
     try {
-      if (typeof onStreamStart === 'function') onStreamStart();
-      await streamWithActiveProvider(txt, ctx, extraSystemPrompt, {
+      const reply = await chatWithActiveProvider(txt, ctx, finalExtraSystemPrompt, {
         agentLabel: directAgentName,
         skillId: manualSkillId,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
         providerOverride: directProviderId,
+        preferredProviders,
         modelOverride: explicitProviderModel,
-        strictProviderOverride: hasExplicitProviderSelection,
+        strictProviderOverride: hasStrictRuntimeProviderOverride,
         skipAutomation: true,
         skipAutomationPrompt: true,
-        skipMultiModel: hasExplicitProviderSelection,
-        onChunk: (chunkText) => {
-          if (!isCurrentRequestCycle(requestCycle)) return;
-          if (typeof onStreamChunk === 'function') onStreamChunk(chunkText);
-          setMessages((prev) => {
-            const newMsg = [...prev];
-            newMsg[newMsg.length - 1] = {
-              ...newMsg[newMsg.length - 1],
-              content: newMsg[newMsg.length - 1].content + chunkText
-            };
-            return newMsg;
-          });
-        },
+        skipMultiModel: hasPinnedProviderPreference,
         onSkillResolved: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
           const skill = payload?.skill;
@@ -1114,13 +1133,28 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         },
       });
       if (!isCurrentRequestCycle(requestCycle)) return;
+      setMessages((prev) => {
+        const newMsg = [...prev];
+        newMsg[newMsg.length - 1] = {
+          ...newMsg[newMsg.length - 1],
+          content: String(reply || ''),
+        };
+        return newMsg;
+      });
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
       if (!isCurrentRequestCycle(requestCycle)) return;
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
+      setMessages((prev) => {
+        const newMsg = [...prev];
+        newMsg[newMsg.length - 1] = {
+          ...newMsg[newMsg.length - 1],
+          content: `❌ ${err.message}`,
+          error: true,
+        };
+        return newMsg;
+      });
       updateAgentStatus(agentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
-      if (typeof onStreamEnd === 'function') onStreamEnd();
       if (!isCurrentRequestCycle(requestCycle)) return;
       setLoading(false);
       setRequestSnapshot(null);
@@ -1142,16 +1176,17 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         : currentBlockText
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
-    const directProviderId = activeProviderChoice?.id || '';
-    const hasExplicitProviderSelection = Boolean(directProviderId);
-    const explicitProviderModel = hasExplicitProviderSelection ? resolvedSelectedProviderModel : '';
+    const preferredProviderId = activeProviderChoice?.id || '';
+    const preferredProviders = preferredProviderId ? [preferredProviderId] : [];
+    const explicitProviderModel = preferredProviderId ? resolvedSelectedProviderModel : '';
     await executeRoleAgentTask(agent, task, {
       skillId: selectedSkillId === 'none' ? '' : selectedSkillId,
       autoUseDefaultSkill: selectedSkillId === 'none',
       providerLabel: activeProviderSummary,
-      providerOverride: directProviderId,
+      providerOverride: '',
+      preferredProviders,
       modelOverride: explicitProviderModel,
-      strictProviderOverride: hasExplicitProviderSelection,
+      strictProviderOverride: false,
       scopeLabel: contextScopeLabel,
       contextPreview,
     });
@@ -1273,13 +1308,17 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       skillId: ''
     };
     preservePendingMentionRef.current = true;
-    
+
     setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
         inputRef.current.setSelectionRange(prompt.length, prompt.length);
       }
     }, 50);
+  };
+
+  const toggleClassicTaskpaneAgent = (agentId) => {
+    setActiveClassicAgentId((currentAgentId) => (currentAgentId === agentId ? null : agentId));
   };
 
   const classicTaskpaneAgents = CLASSIC_TASKPANE_AGENT_IDS

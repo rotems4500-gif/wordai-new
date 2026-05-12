@@ -11,7 +11,7 @@ import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
 import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
 import { downloadBrowserDocx } from './services/browserDocxExport';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
@@ -455,6 +455,31 @@ const normalizeTrackedEditorHtml = (html = '') => String(html || '')
   .replace(/>\s+</g, '><')
   .trim();
 
+const LIVE_GENERATION_TIMEOUT_STATE = 'timeout';
+
+const isLiveGenerationFailureState = (state = '') => (
+  state === 'error' || state === LIVE_GENERATION_TIMEOUT_STATE
+);
+
+const classifyLiveGenerationTerminalState = (error, {
+  errorPrompt = 'אירעה שגיאה בתהליך',
+  timeoutPrompt = 'הבקשה ארכה יותר מדי זמן וההרצה הופסקה',
+  fallbackAlertMessage = '',
+  fallbackTimeoutAlertMessage = '',
+} = {}) => {
+  const isTimeout = isAiRequestTimeoutError(error);
+  const errorMessage = String(error?.message || '').trim();
+
+  return {
+    state: isTimeout ? LIVE_GENERATION_TIMEOUT_STATE : 'error',
+    prompt: isTimeout ? timeoutPrompt : errorPrompt,
+    errorMessage,
+    alertMessage: errorMessage || (isTimeout
+      ? (fallbackTimeoutAlertMessage || timeoutPrompt)
+      : (fallbackAlertMessage || errorPrompt)),
+  };
+};
+
 const getLiveGenerationStateMeta = (state = 'running') => {
   if (state === 'success') {
     return {
@@ -474,6 +499,16 @@ const getLiveGenerationStateMeta = (state = 'running') => {
       tone: '#B45309',
       background: '#FFFBEB',
       border: '#FCD34D',
+    };
+  }
+  if (state === LIVE_GENERATION_TIMEOUT_STATE) {
+    return {
+      label: 'פג זמן ההמתנה',
+      title: 'זמן ההמתנה פג',
+      description: 'הספק לא החזיר תשובה בזמן. אפשר לנסות שוב או להפעיל מחדש מהשלב שנכשל.',
+      tone: '#C2410C',
+      background: '#FFF7ED',
+      border: '#FDBA74',
     };
   }
   if (state === 'error') {
@@ -580,12 +615,15 @@ const isLiveGenerationShellHtml = (html = '', runId = '') => {
   return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
 };
 
-const buildLiveGenerationErrorPlaceholder = ({ titleText = 'מסמך חדש', runId = '' } = {}) => {
+const buildLiveGenerationErrorPlaceholder = ({ titleText = 'מסמך חדש', runId = '', state = 'error' } = {}) => {
   const safeRunId = escHtml(runId);
+  const placeholderMessage = state === LIVE_GENERATION_TIMEOUT_STATE
+    ? 'הבקשה ארכה יותר מדי זמן וההרצה הופסקה. אפשר לנסות שוב.'
+    : 'אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.';
   return `
   <div ${LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER} data-wordai-live-generation-run-id="${safeRunId}">
     <h1>${escHtml(titleText || 'מסמך חדש')}</h1>
-    <p>אירעה שגיאה בזמן יצירת המסמך. אפשר לנסות שוב.</p>
+    <p>${escHtml(placeholderMessage)}</p>
   </div>
 `;
 };
@@ -1871,7 +1909,7 @@ function App() {
       ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
       : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
   const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
-  const failedGenerationStage = liveGeneration.state === 'error'
+  const failedGenerationStage = isLiveGenerationFailureState(liveGeneration.state)
     ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
     : null;
   const activeWorkspaceAgents = lastGenerationAction?.workspaceId === currentWorkspaceId && liveGeneration.workspaceId === currentWorkspaceId
@@ -1888,7 +1926,7 @@ function App() {
     [failedGenerationStage?.model, failedStageAgentRecord?.model].filter(Boolean),
   );
   const canRetryFailedGeneration = Boolean(
-    liveGeneration.state === 'error'
+    isLiveGenerationFailureState(liveGeneration.state)
     && failedGenerationStage?.id
     && failedStageAgentRecord
     && lastGenerationAction?.payload
@@ -2603,7 +2641,11 @@ function App() {
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
       const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
-      setLiveGeneration((prev) => ({ ...prev, active: true, state: 'error', prompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה', summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      const terminalState = classifyLiveGenerationTerminalState(error, {
+        errorPrompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה',
+        timeoutPrompt: hasBaseDraft ? 'עדכון טיוטת הבסיס הופסק כי הבקשה ארכה יותר מדי זמן' : 'יצירת המסמך הופסקה כי הבקשה ארכה יותר מדי זמן',
+      });
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: terminalState.state, prompt: terminalState.prompt, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
       setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
         ...prev,
         inspector: {
@@ -2613,8 +2655,8 @@ function App() {
           routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
           routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
           usedFallback: false,
-          errorMessage: String(error?.message || latestSummary?.lastError || '').trim(),
-          liveState: 'error',
+          errorMessage: terminalState.errorMessage || String(latestSummary?.lastError || '').trim(),
+          liveState: terminalState.state,
           routeResolved: generationRoute,
         },
       }));
@@ -2627,6 +2669,7 @@ function App() {
         const errorPlaceholder = buildLiveGenerationErrorPlaceholder({
           titleText: generationLabel,
           runId: generationRequest.runId,
+          state: terminalState.state,
         });
         editor.commands.setContent(errorPlaceholder);
         lastLiveGenerationPlaceholderRef.current = {
@@ -2811,10 +2854,16 @@ function App() {
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
       const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
+      const terminalState = classifyLiveGenerationTerminalState(error, {
+        errorPrompt: 'עדכון המסמך נכשל',
+        timeoutPrompt: 'עדכון המסמך הופסק כי הבקשה ארכה יותר מדי זמן',
+        fallbackAlertMessage: 'לא הצלחתי לעדכן את המסמך לפי המשוב.',
+        fallbackTimeoutAlertMessage: 'עדכון המסמך נעצר כי הבקשה ארכה יותר מדי זמן.',
+      });
       setLiveGeneration({
         active: true,
-        state: 'error',
-        prompt: 'עדכון המסמך נכשל',
+        state: terminalState.state,
+        prompt: terminalState.prompt,
         summary: latestSummary,
         logs: latestLogs,
         runId: generationRequest.runId,
@@ -2829,12 +2878,12 @@ function App() {
           routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
           routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
           usedFallback: false,
-          errorMessage: String(error?.message || '').trim(),
-          liveState: 'error',
+          errorMessage: terminalState.errorMessage,
+          liveState: terminalState.state,
           routeResolved: 'reviseDocumentWithFeedback',
         },
       }));
-      alert(error?.message || 'לא הצלחתי לעדכן את המסמך לפי המשוב.');
+      alert(terminalState.alertMessage);
     }
 
     return true;
@@ -2997,6 +3046,12 @@ function App() {
         return true;
       }
 
+      const terminalState = classifyLiveGenerationTerminalState(error, {
+        errorPrompt: 'הכנת המלצות העריכה נכשלה',
+        timeoutPrompt: 'הכנת המלצות העריכה הופסקה כי הבקשה ארכה יותר מדי זמן',
+        fallbackAlertMessage: 'לא הצלחתי להכין המלצות עריכה למסמך.',
+        fallbackTimeoutAlertMessage: 'הכנת המלצות העריכה נעצרה כי הבקשה ארכה יותר מדי זמן.',
+      });
       setFeedbackSurvey({
         ...surveySnapshot,
         open: true,
@@ -3008,8 +3063,8 @@ function App() {
       });
       setLiveGeneration({
         active: true,
-        state: 'error',
-        prompt: 'הכנת המלצות העריכה נכשלה',
+        state: terminalState.state,
+        prompt: terminalState.prompt,
         summary: getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId),
         logs: getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId }),
         runId: generationRequest.runId,
@@ -3020,12 +3075,12 @@ function App() {
         inspector: {
           ...(prev?.inspector || {}),
           usedFallback: false,
-          errorMessage: String(error?.message || '').trim(),
-          liveState: 'error',
+          errorMessage: terminalState.errorMessage,
+          liveState: terminalState.state,
           routeResolved: 'reviewDocumentRecommendations',
         },
       }));
-      alert(error?.message || 'לא הצלחתי להכין המלצות עריכה למסמך.');
+      alert(terminalState.alertMessage);
     }
 
     return true;
@@ -4103,6 +4158,17 @@ function App() {
     && (liveGeneration.state === 'success' || liveGeneration.state === 'warning');
   const shouldShowProgressOnlyPanel = liveGeneration.active
     && (liveGeneration.state === 'running' || feedbackSurvey.open || hasPendingUserApproval);
+  const liveGenerationStateMeta = getLiveGenerationStateMeta(liveGeneration.state);
+  const liveGenerationHasFailureState = isLiveGenerationFailureState(liveGeneration.state);
+  const liveGenerationBadgeClassName = liveGeneration.state === 'success'
+    ? 'bg-emerald-100 text-emerald-700'
+    : liveGeneration.state === 'warning'
+      ? 'bg-amber-100 text-amber-700'
+      : liveGeneration.state === LIVE_GENERATION_TIMEOUT_STATE
+        ? 'bg-orange-100 text-orange-700'
+        : liveGenerationHasFailureState
+          ? 'bg-red-100 text-red-700'
+          : 'bg-blue-100 text-blue-700';
   const progressLogs = Array.isArray(liveGeneration.logs) ? liveGeneration.logs : [];
   const feedbackReviewSuggestions = Array.isArray(feedbackSurvey.reviewResult?.suggestions)
     ? feedbackSurvey.reviewResult.suggestions
@@ -4179,12 +4245,12 @@ function App() {
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="min-w-0">
                       <div className="text-base font-bold text-slate-900">
-                        {liveGeneration.state === 'success' ? 'המסמך מוכן' : liveGeneration.state === 'warning' ? 'המסמך מוכן לבדיקה' : liveGeneration.state === 'error' ? 'אירעה שגיאה בתהליך' : 'יוצר מסמך עכשיו'}
+                        {liveGenerationStateMeta.title}
                       </div>
                       <div className="text-xs text-slate-600 mt-1 truncate">{liveGeneration.prompt || 'מעבד את הבקשה שלך...'}</div>
                     </div>
-                    <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${liveGeneration.state === 'success' ? 'bg-emerald-100 text-emerald-700' : liveGeneration.state === 'warning' ? 'bg-amber-100 text-amber-700' : liveGeneration.state === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                      {liveGeneration.state === 'success' ? 'הושלם' : liveGeneration.state === 'warning' ? 'ממתין לאישור' : liveGeneration.state === 'error' ? 'שגיאה' : 'בתהליך'}
+                    <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${liveGenerationBadgeClassName}`}>
+                      {liveGenerationStateMeta.label}
                     </div>
                   </div>
 
@@ -4205,20 +4271,22 @@ function App() {
                       <OneAxisAirHockeyGame title="Arcade בזמן שהצוות עובד" compact allowPopup />
                     )}
 
-                      {(liveGeneration.state === 'running' || liveGeneration.state === 'error') && (
-                      <div className={`mt-3 rounded-xl border p-3 ${liveGeneration.state === 'running' ? 'border-amber-200 bg-amber-50/80' : 'border-slate-200 bg-slate-50/80'}`}>
+                      {(liveGeneration.state === 'running' || liveGenerationHasFailureState) && (
+                      <div className={`mt-3 rounded-xl border p-3 ${liveGeneration.state === 'running' ? 'border-amber-200 bg-amber-50/80' : liveGeneration.state === LIVE_GENERATION_TIMEOUT_STATE ? 'border-orange-200 bg-orange-50/80' : 'border-slate-200 bg-slate-50/80'}`}>
                         <div className="flex items-center justify-between gap-3">
                           <div className="text-[11px] leading-4 text-slate-700">
                             {liveGeneration.state === 'running'
                               ? 'אם ההרצה נראית תקועה, אפשר לנקות את המצב ולהתחיל מחדש.'
-                              : 'אפשר לסגור את מצב השגיאה ולחזור לעבודה.'}
+                              : liveGeneration.state === LIVE_GENERATION_TIMEOUT_STATE
+                                ? 'הספק לא החזיר תשובה בזמן. אפשר לנקות את המצב ולנסות שוב, או לשחזר מהשלב שנכשל.'
+                                : 'אפשר לסגור את מצב השגיאה ולחזור לעבודה.'}
                           </div>
                           <button
                             type="button"
                             className="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
                             onClick={clearDraftReviewState}
                           >
-                            {liveGeneration.state === 'running' ? 'שחרר מצב תקוע' : 'נקה מצב שגיאה'}
+                            {liveGeneration.state === 'running' ? 'שחרר מצב תקוע' : liveGeneration.state === LIVE_GENERATION_TIMEOUT_STATE ? 'נקה מצב timeout' : 'נקה מצב שגיאה'}
                           </button>
                         </div>
                       </div>

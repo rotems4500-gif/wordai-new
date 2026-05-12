@@ -586,6 +586,12 @@ const mergePersonalStyleForSave = (draft = {}) => {
   }));
 };
 
+const buildComparablePersonalStyleProfile = (profile = {}) => {
+  const normalizedProfile = mergePersonalStyleForSave(profile);
+  const { last_updated: _lastUpdated, ...comparableProfile } = normalizedProfile || {};
+  return comparableProfile;
+};
+
 const STYLE_TRAINING_QUESTIONS = [
   {
     id: 'tone',
@@ -5422,6 +5428,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [wordPrefsState, setWordPrefsState] = useState(wordPreferences || getWordPreferences());
   const [personalStyleState, setPersonalStyleState] = useState(getPersonalStyleProfile());
   const personalStyleStateRef = useRef(getPersonalStyleProfile());
+  const skipNextPersonalStylePersistRef = useRef(false);
   const [sharedInstructionsState, setSharedInstructionsState] = useState(getSharedAgentInstructions());
   const [skillsState, setSkillsState] = useState(getSkillsConfig());
   const [roleAgents, setRoleAgents] = useState(getRoleAgents());
@@ -5573,14 +5580,22 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   useEffect(() => {
     const syncProfile = () => {
-      setPersonalStyleState((prev) => {
-        const next = mergePersonalStyleForSave(prev);
-        return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
-      });
+      const nextProfile = getPersonalStyleProfile();
+      const currentProfile = buildComparablePersonalStyleProfile(personalStyleStateRef.current || {});
+      const comparableNextProfile = buildComparablePersonalStyleProfile(nextProfile);
+      if (JSON.stringify(currentProfile) === JSON.stringify(comparableNextProfile)) return;
+      skipNextPersonalStylePersistRef.current = true;
+      personalStyleStateRef.current = nextProfile;
+      setPersonalStyleState(nextProfile);
     };
 
+    syncProfile();
     window.addEventListener('wordai-personal-style-updated', syncProfile);
-    return () => window.removeEventListener('wordai-personal-style-updated', syncProfile);
+    window.addEventListener('wordai-settings-hydrated', syncProfile);
+    return () => {
+      window.removeEventListener('wordai-personal-style-updated', syncProfile);
+      window.removeEventListener('wordai-settings-hydrated', syncProfile);
+    };
   }, []);
 
   useEffect(() => {
@@ -5603,6 +5618,12 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     }
 
     const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
+    const shouldSkipPersonalStylePersist = skipNextPersonalStylePersistRef.current;
+    const persistedComparableProfile = buildComparablePersonalStyleProfile(getPersonalStyleProfile());
+    const nextComparableProfile = buildComparablePersonalStyleProfile(normalizedPersonalStyle);
+    const shouldPersistPersonalStyle = !shouldSkipPersonalStylePersist
+      && JSON.stringify(persistedComparableProfile) !== JSON.stringify(nextComparableProfile);
+    skipNextPersonalStylePersistRef.current = false;
 
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);
@@ -5611,7 +5632,9 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
-    savePersonalStyleProfile(normalizedPersonalStyle);
+    if (shouldPersistPersonalStyle) {
+      savePersonalStyleProfile(normalizedPersonalStyle);
+    }
     saveSharedAgentInstructions(sharedInstructionsState);
     saveSkillsConfig(skillsState);
     saveRoleAgents(roleAgents);
