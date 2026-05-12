@@ -6590,15 +6590,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const requestedProvider = activeProvider;
   const activeProviderCanServeInternetSourceWork = isProviderConfiguredForUse(activeProvider, cfg)
     && isProviderInternetBackedSourceCapable(activeProvider);
+  const hasExplicitProviderSelection = strictProviderOverride || preferredProviders.length > 0;
   const sourceRequestAutoRouted = sourceAutoRouteEnabled
     && internetBackedSourceWorkRequired
-    && !strictProviderOverride
+    && !hasExplicitProviderSelection
     && !activeProviderCanServeInternetSourceWork
     && configuredInternetSourceProviders.length;
   if (sourceRequestAutoRouted) {
     activeProvider = configuredInternetSourceProviders[0];
   }
-  if (internetBackedSourceWorkRequired && !activeProviderCanServeInternetSourceWork && !sourceRequestAutoRouted && !shouldShortCircuitToVerifiedSources) {
+  if (internetBackedSourceWorkRequired && !activeProviderCanServeInternetSourceWork && !sourceRequestAutoRouted && !hasExplicitProviderSelection && !shouldShortCircuitToVerifiedSources) {
     throw new Error(buildInternetBackedSourceProviderError({
       subjectLabel: 'הבקשה הנוכחית',
       requestedProviderId: requestedProvider || activeProvider,
