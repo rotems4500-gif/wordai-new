@@ -275,11 +275,14 @@ const isDisallowedDomain = (domain = '') => {
 
 const buildValidationEvidence = (article = {}, sources = [], rawText = '') => {
   const sourceEvidence = [
-    article?.title,
-    article?.sourceName,
-    article?.url,
     ...(Array.isArray(sources)
-      ? sources.flatMap((source) => [source?.title, source?.domain, source?.url, source?.summary, source?.snippet])
+      ? sources.flatMap((source) => [source?.title, source?.domain, source?.url, source?.summary, source?.snippet, source?.year])
+      : []),
+  ].filter(Boolean).join(' ');
+
+  const yearEvidence = [
+    ...(Array.isArray(sources)
+      ? sources.flatMap((source) => [source?.title, source?.summary, source?.snippet, source?.year])
       : []),
   ].filter(Boolean).join(' ');
 
@@ -287,6 +290,7 @@ const buildValidationEvidence = (article = {}, sources = [], rawText = '') => {
 
   return {
     sourceEvidence,
+    yearEvidence,
     modelEvidence,
     combinedEvidence: [sourceEvidence, modelEvidence].filter(Boolean).join(' '),
   };
@@ -302,7 +306,7 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
 
   const sourceDomain = extractDomainFromUrl(normalizedUrl) || String(article?.sourceName || '').trim();
   const evidence = buildValidationEvidence(article, sources, rawText);
-  const normalizedCombinedEvidence = normalizeText(evidence.combinedEvidence);
+  const normalizedSourceEvidence = normalizeText(evidence.sourceEvidence);
 
   if (queryMeta?.expectsNewsArticle) {
     if (isDisallowedDomain(sourceDomain) || hasAnyHint(normalizedUrlPath, DISALLOWED_PATH_HINTS) || hasAnyHint(evidence.sourceEvidence, DISALLOWED_TEXT_HINTS)) {
@@ -315,13 +319,13 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
   }
 
   if (Array.isArray(queryMeta?.years) && queryMeta.years.length > 0) {
-    const hasAllRequestedYears = queryMeta.years.every((year) => evidence.combinedEvidence.includes(year));
+    const sourceEvidenceYears = extractYears(evidence.yearEvidence);
+    const hasAllRequestedYears = queryMeta.years.every((year) => sourceEvidenceYears.includes(year));
 
     if (!hasAllRequestedYears) {
       return `לא נמצאה התאמה מפורשת לשנה המבוקשת: ${queryMeta.years.join(', ')}.`;
     }
 
-    const sourceEvidenceYears = extractYears(evidence.sourceEvidence);
     const conflictingSourceYears = sourceEvidenceYears.filter((year) => !queryMeta.years.includes(year));
 
     if (sourceEvidenceYears.length > 0 && conflictingSourceYears.length > 0 && !queryMeta.years.every((year) => sourceEvidenceYears.includes(year))) {
@@ -331,8 +335,8 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
 
   if (Array.isArray(queryMeta?.focusTokens) && queryMeta.focusTokens.length > 0) {
     const normalizedFocusPhrase = normalizeText(queryMeta.focusPhrase);
-    const hasExactFocusPhrase = normalizedFocusPhrase && normalizedCombinedEvidence.includes(normalizedFocusPhrase);
-    const matchedTokens = queryMeta.focusTokens.filter((token) => normalizedCombinedEvidence.includes(token));
+    const hasExactFocusPhrase = normalizedFocusPhrase && normalizedSourceEvidence.includes(normalizedFocusPhrase);
+    const matchedTokens = queryMeta.focusTokens.filter((token) => normalizedSourceEvidence.includes(token));
 
     if (!hasExactFocusPhrase && matchedTokens.length < queryMeta.focusTokens.length) {
       return `הכתבה שנמצאה לא נאמנה מספיק לשם או לנושא המבוקש: "${queryMeta.focusPhrase}".`;

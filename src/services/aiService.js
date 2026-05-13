@@ -2766,6 +2766,7 @@ const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model =
 };
 
 const VERIFIED_ARTICLE_GEMINI_MODEL = 'gemini-2.5-pro';
+const VERIFIED_ARTICLE_PROVIDER_IDS = ['gemini', 'perplexity'];
 
 const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta = analyzeArticleQuery(query)) => {
   const normalizedProvider = String(provider || 'gemini').trim().toLowerCase();
@@ -2961,16 +2962,20 @@ const finalizeVerifiedArticleRetrieval = ({
 
   const groundedParsedSource = findVerifiedArticleSourceByUrl(sources, article?.url);
   const primarySource = groundedParsedSource || selectPrimaryVerifiedArticleSource(sources, article);
-  const normalizedArticleUrl = normalizeArticleUrl(primarySource?.url || groundedParsedSource?.url || '');
-  const normalizedArticle = {
-    title: String(article?.title || primarySource?.title || 'לא זוהתה כותרת').trim(),
-    summary: String(article?.summary || rawText || '').trim(),
-    sourceName: String(article?.sourceName || primarySource?.summary || extractArticleDomainFromUrl(primarySource?.url) || '').trim(),
-    whyRelevant: String(article?.whyRelevant || '').trim(),
+  if (!primarySource) {
+    return buildVerifiedArticleNoMatch({ reason: 'לא התקבל מקור מאומת לכתבה עצמה.', providerId, model });
+  }
+
+  const normalizedArticleUrl = normalizeArticleUrl(primarySource?.url || '');
+  const groundedArticle = {
+    title: String(primarySource?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
+    summary: String(primarySource?.snippet || '').trim(),
+    sourceName: String(primarySource?.summary || extractArticleDomainFromUrl(primarySource?.url) || '').trim(),
+    whyRelevant: '',
     url: normalizedArticleUrl,
   };
 
-  const validationError = validateArticleCandidate(queryMeta, normalizedArticle, sources, rawText);
+  const validationError = validateArticleCandidate(queryMeta, groundedArticle, [primarySource], '');
   if (validationError) {
     return buildVerifiedArticleNoMatch({ reason: validationError, providerId, model });
   }
@@ -2978,7 +2983,7 @@ const finalizeVerifiedArticleRetrieval = ({
   return {
     matchStatus: 'match',
     noMatchReason: '',
-    results: [buildVerifiedArticleResultItem(normalizedArticle, providerId)],
+    results: [buildVerifiedArticleResultItem(groundedArticle, providerId)],
     providerId,
     model,
   };
@@ -2990,6 +2995,28 @@ const resolveVerifiedArticleGeminiModel = (cfg = DEFAULT_PROVIDER_CONFIG) => {
     return VERIFIED_ARTICLE_GEMINI_MODEL;
   }
   return configuredModel;
+};
+
+const getPreferredVerifiedArticleProviderIds = ({ cfg = DEFAULT_PROVIDER_CONFIG, preferredProviderId = '' } = {}) => {
+  const normalizedPreferredProvider = String(preferredProviderId || '').trim().toLowerCase();
+
+  if (VERIFIED_ARTICLE_PROVIDER_IDS.includes(normalizedPreferredProvider) && isProviderConfiguredForUse(normalizedPreferredProvider, cfg)) {
+    return [normalizedPreferredProvider];
+  }
+
+  if (normalizedPreferredProvider === 'gemini') {
+    return [];
+  }
+
+  const selectedProviders = getSelectedProviderIds(cfg)
+    .filter((providerId) => VERIFIED_ARTICLE_PROVIDER_IDS.includes(providerId))
+    .filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
+
+  if (selectedProviders.length) {
+    return selectedProviders;
+  }
+
+  return VERIFIED_ARTICLE_PROVIDER_IDS.filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
 };
 
 const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = VERIFIED_ARTICLE_GEMINI_MODEL } = {}) => {
@@ -3136,40 +3163,44 @@ const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', a
   ].filter(Boolean).join('\n\n');
 };
 
-const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '' } = {}) => {
+const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '', preferredProviderId = '' } = {}) => {
   const baseQuery = String(query || '').trim();
   const fallbackQuery = buildNewsSiteBiasedArticleQuery(baseQuery, queryMeta);
   const searchQueries = fallbackQuery && fallbackQuery !== baseQuery ? [baseQuery, fallbackQuery] : [baseQuery];
+  const preferredProviderIds = getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId });
   const attempts = [];
 
-  if (String(cfg?.gemini?.key || '').trim()) {
-    const geminiModel = resolveVerifiedArticleGeminiModel(cfg);
-    attempts.push({
-      providerId: 'gemini-article-search',
-      model: geminiModel,
-      run: (searchQuery = baseQuery) => fetchGeminiVerifiedArticleSource({
-        query: searchQuery,
-        queryMeta,
-        apiKey: cfg.gemini.key,
+  preferredProviderIds.forEach((providerId) => {
+    if (providerId === 'gemini') {
+      const geminiModel = resolveVerifiedArticleGeminiModel(cfg);
+      attempts.push({
+        providerId: 'gemini-article-search',
         model: geminiModel,
-      }),
-    });
-  }
+        run: (searchQuery = baseQuery) => fetchGeminiVerifiedArticleSource({
+          query: searchQuery,
+          queryMeta,
+          apiKey: cfg.gemini.key,
+          model: geminiModel,
+        }),
+      });
+      return;
+    }
 
-  if (String(cfg?.perplexity?.key || '').trim()) {
-    attempts.push({
-      providerId: 'perplexity-article-search',
-      model: String(cfg?.perplexity?.model || '').trim() || 'sonar-pro',
-      run: (searchQuery = baseQuery, signal) => fetchPerplexityVerifiedArticleSource({
-        query: searchQuery,
-        queryMeta,
-        apiKey: cfg.perplexity.key,
-        model: cfg.perplexity.model,
-        signal,
-        timeoutMs,
-      }),
-    });
-  }
+    if (providerId === 'perplexity') {
+      attempts.push({
+        providerId: 'perplexity-article-search',
+        model: String(cfg?.perplexity?.model || '').trim() || 'sonar-pro',
+        run: (searchQuery = baseQuery, signal) => fetchPerplexityVerifiedArticleSource({
+          query: searchQuery,
+          queryMeta,
+          apiKey: cfg.perplexity.key,
+          model: cfg.perplexity.model,
+          signal,
+          timeoutMs,
+        }),
+      });
+    }
+  });
 
   if (!attempts.length || !queryMeta.expectsNewsArticle || !baseQuery) {
     return {
@@ -3236,6 +3267,7 @@ const resolveVerifiedSourceReply = async ({
   isAcademicTask,
   cfg = DEFAULT_PROVIDER_CONFIG,
   timeoutMs = 0,
+  preferredProviderId = '',
 } = {}) => {
   const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const query = extractVerifiedSourceQuery({
@@ -3258,6 +3290,7 @@ const resolveVerifiedSourceReply = async ({
       cfg,
       timeoutMs,
       workspaceId,
+      preferredProviderId,
     });
   }
 
@@ -6613,16 +6646,34 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       skillId: activeSkill?.id || options.skillId || '',
     });
   if (shouldShortCircuitToVerifiedSources) {
+    const verifiedSourceStartQuery = extractVerifiedSourceQuery({
+      userPrompt: cleanUserPrompt,
+      documentContext,
+      fallbackQuery: getLastVerifiedSourceQuery({ workspaceId: activeWorkspaceId }),
+      workspaceId: activeWorkspaceId,
+    });
+    const verifiedSourceStartsWithArticleRetrieval = analyzeArticleQuery(verifiedSourceStartQuery).expectsNewsArticle;
+    const verifiedSourceStartProvider = verifiedSourceStartsWithArticleRetrieval
+      ? (getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId: requestedProvider })[0] || activeProvider)
+      : activeProvider;
+    const verifiedSourceStartModel = verifiedSourceStartsWithArticleRetrieval
+      ? (verifiedSourceStartProvider === 'gemini'
+          ? resolveVerifiedArticleGeminiModel(cfg)
+          : verifiedSourceStartProvider === 'perplexity'
+            ? String(cfg?.perplexity?.model || '').trim() || 'sonar-pro'
+            : resolvedModel)
+      : resolvedModel;
     logEvent('verified-source-retrieval-start', 'מפעיל אחזור מאומת למקורות לפני יצירת תשובה', {
       state: 'running',
-      provider: activeProvider,
+      provider: verifiedSourceStartProvider,
+      model: verifiedSourceStartModel,
     });
     emitStatus(onStatus, {
       state: 'running',
       progress: 18,
       runId,
-      provider: activeProvider,
-      model: resolvedModel,
+      provider: verifiedSourceStartProvider,
+      model: verifiedSourceStartModel,
       agentLabel,
       message: 'מאתר מקורות מאומתים',
     });
@@ -6634,6 +6685,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
       cfg,
       timeoutMs,
+      preferredProviderId: requestedProvider,
     });
     if (verifiedSourceReply?.text) {
       if (verifiedSourceReply.query) {

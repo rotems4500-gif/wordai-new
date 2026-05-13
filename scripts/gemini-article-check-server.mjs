@@ -567,6 +567,9 @@ function dedupeSources(sources) {
       title: String(source?.title || '').trim(),
       url,
       domain: String(source?.domain || '').trim(),
+      snippet: String(source?.snippet || '').trim(),
+      summary: String(source?.summary || '').trim(),
+      year: String(source?.year || '').trim(),
     });
   }
 
@@ -590,16 +593,26 @@ function extractGroundingSources(response) {
       title: web?.title || web?.displayName || '',
       url: web?.uri || web?.url || '',
       domain: web?.domain || '',
+      snippet: '',
+      summary: web?.domain || '',
+      year: '',
     });
   }
 
   return dedupeSources(sources);
 }
 
+function extractSourceYear(text) {
+  const match = String(text || '').match(/\b(?:19|20)\d{2}\b/);
+  return match?.[0] || '';
+}
+
 function normalizePerplexitySearchResult(source) {
   const url = normalizeUrl(source?.url || source?.link || '');
   const title = String(source?.title || '').trim();
+  const snippet = String(source?.snippet || '').trim();
   const sourceLabel = String(source?.source || '').trim();
+  const dateLabel = String(source?.date || source?.last_updated || '').trim();
 
   if (!url && !title) {
     return null;
@@ -609,6 +622,9 @@ function normalizePerplexitySearchResult(source) {
     title,
     url,
     domain: sourceLabel || extractDomainFromUrl(url),
+    snippet,
+    summary: [sourceLabel, dateLabel].filter(Boolean).join(' | '),
+    year: extractSourceYear(dateLabel),
   };
 }
 
@@ -623,6 +639,9 @@ function normalizePerplexityCitation(source) {
     title: '',
     url,
     domain: extractDomainFromUrl(url),
+    snippet: '',
+    summary: '',
+    year: '',
   };
 }
 
@@ -703,25 +722,14 @@ function selectPrimarySource(sources, parsed) {
   return [...sources].sort((left, right) => scoreSource(right, parsed) - scoreSource(left, parsed))[0] || null;
 }
 
-function ensureSourceListHasParsedUrl(sources, parsed, parsedUrl) {
-  if (!parsedUrl) {
-    return sources;
+function findSourceByUrl(sources, url) {
+  const normalizedUrl = normalizeUrl(url);
+
+  if (!normalizedUrl) {
+    return null;
   }
 
-  const alreadyPresent = sources.some((source) => normalizeUrl(source?.url) === parsedUrl);
-
-  if (alreadyPresent) {
-    return sources;
-  }
-
-  return [
-    {
-      title: String(parsed?.title || parsed?.sourceName || parsedUrl).trim(),
-      url: parsedUrl,
-      domain: String(parsed?.sourceName || '').trim(),
-    },
-    ...sources,
-  ];
+  return (Array.isArray(sources) ? sources : []).find((source) => normalizeUrl(source?.url) === normalizedUrl) || null;
 }
 
 async function resolveCanonicalUrl(url) {
@@ -801,23 +809,36 @@ function buildNoMatchResult(result, reason) {
   };
 }
 
+function buildGroundedArticle(primarySource) {
+  const normalizedArticleUrl = normalizeUrl(primarySource?.url || '');
+
+  return {
+    title: String(primarySource?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
+    summary: String(primarySource?.snippet || '').trim(),
+    sourceName: String(primarySource?.summary || extractDomainFromUrl(primarySource?.url) || '').trim(),
+    whyRelevant: '',
+    url: normalizedArticleUrl,
+  };
+}
+
 function finalizeArticleResult(result) {
   const queryMeta = result.queryMeta || analyzeQuery(result.originalQuery || result.query);
-  const article = {
-    title: String(result.article?.title || 'לא זוהתה כותרת').trim(),
-    summary: String(result.article?.summary || result.rawText || '').trim(),
-    sourceName: String(result.article?.sourceName || '').trim(),
-    whyRelevant: String(result.article?.whyRelevant || '').trim(),
-    url: normalizeUrl(result.article?.url),
-  };
   const requestedMatchStatus = normalizeMatchStatus(result.rawMatchStatus);
   const requestedNoMatchReason = String(result.rawNoMatchReason || '').trim();
 
   if (requestedMatchStatus === 'no-match') {
-    return buildNoMatchResult({ ...result, article }, requestedNoMatchReason);
+    return buildNoMatchResult(result, requestedNoMatchReason);
   }
 
-  const validationError = validateArticleCandidate(queryMeta, article, result.sources, result.rawText);
+  const groundedParsedSource = findSourceByUrl(result.sources, result.article?.url);
+  const primarySource = groundedParsedSource || selectPrimarySource(result.sources, result.article);
+
+  if (!primarySource) {
+    return buildNoMatchResult(result, 'לא התקבל מקור מאומת לכתבה עצמה.');
+  }
+
+  const article = buildGroundedArticle(primarySource);
+  const validationError = validateArticleCandidate(queryMeta, article, [primarySource], '');
 
   if (validationError) {
     return buildNoMatchResult({ ...result, article }, validationError);
@@ -834,6 +855,37 @@ function finalizeArticleResult(result) {
     sources: result.sources,
     rawText: result.rawText,
   };
+}
+
+async function fetchArticleWithStrategy({
+  query = '',
+  provider = DEFAULT_PROVIDER,
+  modelOverride = '',
+  queryMeta = null,
+  fetchGeminiImpl = fetchGeminiArticle,
+  fetchPerplexityImpl = fetchPerplexityArticle,
+} = {}) {
+  const normalizedProvider = normalizeProvider(provider);
+  const trimmedQuery = String(query || '').trim();
+  const resolvedQueryMeta = queryMeta || {
+    ...analyzeQuery(trimmedQuery),
+    originalQuery: trimmedQuery,
+  };
+  const fallbackQuery = buildNewsSiteBiasedArticleQuery(trimmedQuery, resolvedQueryMeta);
+  const searchQueries = fallbackQuery && fallbackQuery !== trimmedQuery ? [trimmedQuery, fallbackQuery] : [trimmedQuery];
+  let lastResult = null;
+
+  for (const searchQuery of searchQueries) {
+    lastResult = normalizedProvider === 'perplexity'
+      ? await fetchPerplexityImpl(searchQuery, modelOverride, resolvedQueryMeta)
+      : await fetchGeminiImpl(searchQuery, modelOverride, resolvedQueryMeta);
+
+    if (lastResult?.matchStatus === 'match') {
+      return lastResult;
+    }
+  }
+
+  return lastResult;
 }
 
 function isAllowedOrigin(origin) {
@@ -872,8 +924,8 @@ async function fetchGeminiArticle(query, modelOverride = '', queryMeta = analyze
   const response = result.response;
   const rawText = String(response?.text?.() || '').trim();
   const parsed = parseLooseJson(rawText);
-  const parsedUrl = await resolveCanonicalUrl(parsed?.url);
-  const sources = ensureSourceListHasParsedUrl(extractGroundingSources(response), parsed, parsedUrl);
+  const parsedUrl = normalizeUrl(parsed?.url);
+  const sources = extractGroundingSources(response);
   const primarySource = selectPrimarySource(sources, parsed);
   const canonicalPrimaryUrl = await resolveCanonicalUrl(primarySource?.url);
   const normalizedSources = sources.map((source) => {
@@ -901,7 +953,7 @@ async function fetchGeminiArticle(query, modelOverride = '', queryMeta = analyze
       summary: String(parsed.summary || rawText || '').trim(),
       sourceName: String(parsed.sourceName || primarySource?.domain || '').trim(),
       whyRelevant: String(parsed.whyRelevant || '').trim(),
-      url: canonicalPrimaryUrl || parsedUrl,
+      url: parsedUrl || canonicalPrimaryUrl,
     },
     sources: normalizedSources,
     rawText,
@@ -953,8 +1005,8 @@ async function fetchPerplexityArticle(query, modelOverride = '', queryMeta = ana
   const payload = await response.json();
   const rawText = extractOpenAiMessageText(payload?.choices?.[0]?.message?.content);
   const parsed = parseLooseJson(rawText);
-  const parsedUrl = await resolveCanonicalUrl(parsed?.url || extractUrlFromText(rawText));
-  const sources = ensureSourceListHasParsedUrl(extractPerplexitySources(payload), parsed, parsedUrl);
+  const parsedUrl = normalizeUrl(parsed?.url || extractUrlFromText(rawText));
+  const sources = extractPerplexitySources(payload);
   const primarySource = selectPrimarySource(sources, parsed);
   const canonicalPrimaryUrl = await resolveCanonicalUrl(primarySource?.url);
   const normalizedSources = sources.map((source) => {
@@ -982,7 +1034,7 @@ async function fetchPerplexityArticle(query, modelOverride = '', queryMeta = ana
       summary: String(parsed.summary || rawText || '').trim(),
       sourceName: String(parsed.sourceName || primarySource?.domain || '').trim(),
       whyRelevant: String(parsed.whyRelevant || '').trim(),
-      url: canonicalPrimaryUrl || parsedUrl,
+      url: parsedUrl || canonicalPrimaryUrl,
     },
     sources: normalizedSources,
     rawText,
@@ -990,27 +1042,16 @@ async function fetchPerplexityArticle(query, modelOverride = '', queryMeta = ana
 }
 
 async function fetchArticle(query, provider = DEFAULT_PROVIDER, modelOverride = '') {
-  const normalizedProvider = normalizeProvider(provider);
   const trimmedQuery = String(query || '').trim();
-  const queryMeta = {
+  return fetchArticleWithStrategy({
+    query: trimmedQuery,
+    provider,
+    modelOverride,
+    queryMeta: {
     ...analyzeQuery(trimmedQuery),
     originalQuery: trimmedQuery,
-  };
-  const fallbackQuery = buildNewsSiteBiasedArticleQuery(trimmedQuery, queryMeta);
-  const searchQueries = fallbackQuery && fallbackQuery !== trimmedQuery ? [trimmedQuery, fallbackQuery] : [trimmedQuery];
-  let lastResult = null;
-
-  for (const searchQuery of searchQueries) {
-    lastResult = normalizedProvider === 'perplexity'
-      ? await fetchPerplexityArticle(searchQuery, modelOverride, queryMeta)
-      : await fetchGeminiArticle(searchQuery, modelOverride, queryMeta);
-
-    if (lastResult?.matchStatus === 'match') {
-      return lastResult;
-    }
-  }
-
-  return lastResult;
+    },
+  });
 }
 
 function sendJson(res, statusCode, payload, origin = '') {
@@ -1195,7 +1236,20 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  ? path.resolve(process.argv[1]) === __filename
+  : false;
+
+export {
+  buildGroundedArticle,
+  extractPerplexitySources,
+  fetchArticleWithStrategy,
+  finalizeArticleResult,
+};
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
