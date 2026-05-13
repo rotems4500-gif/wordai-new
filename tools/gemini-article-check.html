@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Article Check</title>
+    <style>
+      :root {
+        --bg: #f3efe5;
+        --card: rgba(255, 252, 247, 0.88);
+        --text: #1f1f1a;
+        --muted: #6b665d;
+        --accent: #0e6b5c;
+        --accent-strong: #09473d;
+        --border: rgba(31, 31, 26, 0.12);
+        --shadow: 0 18px 50px rgba(37, 30, 17, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", Arial, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top right, rgba(14, 107, 92, 0.18), transparent 28%),
+          radial-gradient(circle at left bottom, rgba(199, 140, 36, 0.12), transparent 24%),
+          linear-gradient(135deg, #efe7d5 0%, #f8f5ef 46%, #e8ece7 100%);
+        padding: 24px;
+      }
+
+      .shell {
+        max-width: 980px;
+        margin: 0 auto;
+        display: grid;
+        gap: 18px;
+      }
+
+      .hero,
+      .panel,
+      .result-card,
+      .sources-card {
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: var(--card);
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        padding: 28px;
+      }
+
+      .hero h1 {
+        margin: 0 0 8px;
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p {
+        margin: 0;
+        max-width: 680px;
+        font-size: 1.05rem;
+        color: var(--muted);
+      }
+
+      .panel {
+        padding: 22px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 10px;
+        font-weight: 700;
+      }
+
+      .controls {
+        display: grid;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border-radius: 18px;
+        border: 1px solid rgba(31, 31, 26, 0.14);
+        padding: 16px;
+        font: inherit;
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--text);
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: 2px solid rgba(14, 107, 92, 0.24);
+        border-color: rgba(14, 107, 92, 0.3);
+      }
+
+      .actions {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        color: white;
+        padding: 12px 20px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.65;
+        cursor: wait;
+      }
+
+      .hint,
+      .status,
+      .meta,
+      .empty {
+        color: var(--muted);
+      }
+
+      .status[data-state="error"] {
+        color: #9b1c1c;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: 1.5fr 1fr;
+      }
+
+      .result-card,
+      .sources-card {
+        padding: 22px;
+      }
+
+      .result-card h2,
+      .sources-card h2 {
+        margin: 0 0 12px;
+        font-size: 1.25rem;
+      }
+
+      .article-title {
+        margin: 0 0 10px;
+        font-size: 1.5rem;
+      }
+
+      .article-summary,
+      .article-why {
+        margin: 0 0 14px;
+        line-height: 1.7;
+      }
+
+      .article-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--accent-strong);
+        font-weight: 700;
+      }
+
+      .sources-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .sources-list a {
+        color: var(--accent-strong);
+        font-weight: 600;
+      }
+
+      .meta {
+        margin-top: 12px;
+        font-size: 0.95rem;
+      }
+
+      @media (max-width: 800px) {
+        body {
+          padding: 16px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero,
+        .panel,
+        .result-card,
+        .sources-card {
+          border-radius: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <h1>בדיקת כתבה מקומית</h1>
+        <p>
+          הדף שולח בקשה לשרת מקומי שמושך את המפתח מהאחסון של האפליקציה,
+          עובד עם Gemini או Perplexity, ומחזיר כתבה, תקציר, ומקורות לבדיקה.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="controls">
+          <div>
+            <label for="provider">ספק</label>
+            <select id="provider">
+              <option value="gemini">Gemini</option>
+              <option value="perplexity">Perplexity</option>
+            </select>
+          </div>
+
+          <div id="geminiModelField">
+            <label for="model">מודל Gemini אופציונלי</label>
+            <input
+              id="model"
+              type="text"
+              list="geminiModelOptions"
+              placeholder="השאר ריק כדי להשתמש במודל השמור או בברירת המחדל"
+              autocomplete="off"
+            />
+            <datalist id="geminiModelOptions">
+              <option value="gemini-2.5-pro"></option>
+              <option value="gemini-3.1-pro-preview"></option>
+              <option value="gemini-3-flash-preview"></option>
+            </datalist>
+          </div>
+
+        <label for="query">מה לבקש?</label>
+        <textarea id="query" placeholder="למשל: תביא לי כתבה אמינה על רגולציית AI באירופה מהימים האחרונים"></textarea>
+        </div>
+        <div class="actions">
+          <button id="submitButton" type="button">הבא כתבה</button>
+          <span class="hint">אחרי הפעלת השרת פתח את הכתובת שהודפסה במסוף, ואז השתמש בדף הזה דרך השרת המקומי.</span>
+        </div>
+        <p class="status" id="statusText">מוכן לבדיקה.</p>
+      </section>
+
+      <section class="grid">
+        <article class="result-card">
+          <h2>כתבה נבחרת</h2>
+          <div id="resultEmpty" class="empty">עדיין לא התקבלה כתבה.</div>
+          <div id="resultContent" hidden>
+            <h3 class="article-title" id="articleTitle"></h3>
+            <p class="article-summary" id="articleSummary"></p>
+            <p class="article-why" id="articleWhy"></p>
+            <a class="article-link" id="articleLink" href="#" target="_blank" rel="noreferrer">פתח את הכתבה</a>
+            <div class="meta" id="articleMeta"></div>
+          </div>
+        </article>
+
+        <aside class="sources-card">
+          <h2>קישורי grounding</h2>
+          <ul class="sources-list" id="sourcesList"></ul>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const API_BASE = '';
+      const providerInput = document.getElementById('provider');
+      const geminiModelField = document.getElementById('geminiModelField');
+      const modelInput = document.getElementById('model');
+      const queryInput = document.getElementById('query');
+      const submitButton = document.getElementById('submitButton');
+      const statusText = document.getElementById('statusText');
+      const resultEmpty = document.getElementById('resultEmpty');
+      const resultContent = document.getElementById('resultContent');
+      const articleTitle = document.getElementById('articleTitle');
+      const articleSummary = document.getElementById('articleSummary');
+      const articleWhy = document.getElementById('articleWhy');
+      const articleLink = document.getElementById('articleLink');
+      const articleMeta = document.getElementById('articleMeta');
+      const sourcesList = document.getElementById('sourcesList');
+
+      queryInput.value = 'תביא לי כתבה אמינה ועדכנית על רגולציית AI באירופה עם מקור ברור';
+
+      function syncModelField() {
+        const isGemini = providerInput.value === 'gemini';
+        geminiModelField.hidden = !isGemini;
+        modelInput.disabled = !isGemini;
+      }
+
+      function setStatus(message, state) {
+        statusText.textContent = message;
+        statusText.dataset.state = state || 'idle';
+      }
+
+      if (window.location.protocol === 'file:') {
+        submitButton.disabled = true;
+        setStatus('מטעמי אבטחה פתח את הדף דרך השרת המקומי שהודפס במסוף, לא ישירות מהקובץ.', 'error');
+      }
+
+      function renderSources(sources) {
+        sourcesList.innerHTML = '';
+
+        if (!Array.isArray(sources) || sources.length === 0) {
+          const item = document.createElement('li');
+          item.textContent = 'לא התקבלו קישורים נוספים.';
+          item.className = 'empty';
+          sourcesList.appendChild(item);
+          return;
+        }
+
+        for (const source of sources) {
+          const item = document.createElement('li');
+          const link = document.createElement('a');
+          link.href = source.url;
+          link.target = '_blank';
+          link.rel = 'noreferrer';
+          link.textContent = source.title || source.url;
+          item.appendChild(link);
+
+          if (source.domain) {
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = source.domain;
+            item.appendChild(meta);
+          }
+
+          sourcesList.appendChild(item);
+        }
+      }
+
+      function renderResult(payload) {
+        const article = payload.article || {};
+        const isNoMatch = payload.matchStatus === 'no-match';
+        resultEmpty.hidden = true;
+        resultContent.hidden = false;
+        articleTitle.textContent = isNoMatch ? 'לא נמצאה כתבה מתאימה' : article.title || 'לא זוהתה כותרת';
+        articleSummary.textContent = isNoMatch
+          ? payload.noMatchReason || article.summary || 'לא נמצאה כתבה תואמת מספיק.'
+          : article.summary || 'לא התקבל תקציר.';
+        articleWhy.textContent = isNoMatch ? '' : article.whyRelevant || '';
+        articleLink.href = article.url || '#';
+        articleLink.textContent = article.url
+          ? 'פתח את הכתבה'
+          : isNoMatch
+            ? 'אין קישור כי לא נמצאה התאמה מספקת'
+            : 'לא התקבל קישור';
+        articleLink.style.pointerEvents = article.url ? 'auto' : 'none';
+        articleMeta.textContent = [
+          payload.matchStatus ? `סטטוס: ${payload.matchStatus}` : '',
+          payload.provider ? `ספק: ${payload.provider}` : '',
+          article.sourceName ? `מקור: ${article.sourceName}` : '',
+          payload.model ? `מודל: ${payload.model}` : '',
+          payload.credentialSource ? `מפתח נטען מ: ${payload.credentialSource}` : '',
+        ].filter(Boolean).join(' | ');
+        renderSources(payload.sources || []);
+      }
+
+      async function requestArticle() {
+        const query = queryInput.value.trim();
+        const provider = providerInput.value;
+        const model = provider === 'gemini' ? modelInput.value.trim() : '';
+
+        if (!query) {
+          setStatus('צריך לכתוב בקשה לפני השליחה.', 'error');
+          return;
+        }
+
+        submitButton.disabled = true;
+        setStatus(`שולח בקשה ל-${provider}${model ? ` עם ${model}` : ''}...`, 'loading');
+
+        try {
+          const response = await fetch(`${API_BASE}/api/article`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              query,
+              provider,
+              ...(model ? { model } : {}),
+            }),
+          });
+
+          const payload = await response.json();
+
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.error || 'הבקשה נכשלה.');
+          }
+
+          renderResult(payload);
+          setStatus(
+            payload.matchStatus === 'no-match'
+              ? 'לא נמצאה כתבה תואמת מספיק. בדוק את הסיבה ואת קישורי ה-grounding.'
+              : 'הכתבה התקבלה. אפשר לבדוק את התקציר ואת הקישור.',
+            payload.matchStatus === 'no-match' ? 'error' : 'success',
+          );
+        } catch (error) {
+          resultEmpty.hidden = false;
+          resultContent.hidden = true;
+          renderSources([]);
+          setStatus(error instanceof Error ? error.message : 'אירעה שגיאה לא צפויה.', 'error');
+        } finally {
+          submitButton.disabled = false;
+        }
+      }
+
+      syncModelField();
+      providerInput.addEventListener('change', syncModelField);
+      submitButton.addEventListener('click', requestArticle);
+      queryInput.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          requestArticle();
+        }
+      });
+    </script>
+  </body>
+</html>

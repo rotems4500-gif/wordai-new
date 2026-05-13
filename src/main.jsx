@@ -9,6 +9,7 @@ import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
+import SpssSyntaxStudio from './SpssSyntaxStudio';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
@@ -83,6 +84,10 @@ const START_SCREEN_TRANSITION_PARTICLES = [
   { id: 'k', size: 13, left: '50%', top: '50%', angle: '286deg', distance: '294px', delay: getStartScreenTransitionDelayMs(16), color: '#FFFFFF' },
   { id: 'l', size: 15, left: '50%', top: '50%', angle: '324deg', distance: '332px', delay: getStartScreenTransitionDelayMs(28), color: '#FDE68A' },
 ];
+
+const isCanceledImportedDocumentPayload = (payload = null) => (
+  payload?.canceled === true || payload?.cancelled === true
+);
 
 function StartScreenTransitionOverlay() {
   return (
@@ -1191,6 +1196,7 @@ function App() {
   }, [applyHydratedSettingsState]);
 
   const [editor, setEditor] = React.useState(null);
+  const [appMode, setAppMode] = React.useState('word');
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
@@ -1260,6 +1266,7 @@ function App() {
   const lastLiveGenerationPlaceholderRef = React.useRef({ runId: '', html: '' });
   const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
   const pendingImportRef = React.useRef(null);
+  const pendingImportOriginModeRef = React.useRef(null);
   const startTransitionTimerRef = React.useRef(null);
   const startTransitionRunIdRef = React.useRef(0);
   const pendingStartTransitionFocusRef = React.useRef('start');
@@ -1868,6 +1875,13 @@ function App() {
     });
   }, []);
 
+  React.useEffect(() => {
+    if (appMode !== 'spss') return;
+    closeInputDialog(null);
+    setCopyleaksDetector((prev) => (prev.open ? { ...prev, open: false } : prev));
+    setFeedbackSurvey((prev) => (prev.open ? { ...prev, open: false } : prev));
+  }, [appMode, closeInputDialog]);
+
   const openHomeSafely = React.useCallback(() => {
     cancelStartTransition();
 
@@ -1882,8 +1896,11 @@ function App() {
 
     closeInputDialog(null);
     setFeedbackSurvey((prev) => (prev.open ? { ...prev, open: false } : prev));
+    if (appMode === 'spss') {
+      setAppMode('word');
+    }
     setShowStartScreen(true);
-  }, [cancelStartTransition, closeInputDialog]);
+  }, [appMode, cancelStartTransition, closeInputDialog]);
 
   const approveFeedbackSurvey = React.useCallback(() => {
     setFeedbackSurvey((prev) => ({
@@ -2138,6 +2155,10 @@ function App() {
 
   React.useEffect(() => {
     const handler = (e) => {
+      if (appMode === 'spss') {
+        return;
+      }
+
       if (matchShortcut(e, shortcuts.toggleAssistant)) {
         e.preventDefault();
         setAssistantTrigger('manual');
@@ -2161,7 +2182,13 @@ function App() {
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [shortcuts, editor]);
+  }, [shortcuts, editor, appMode]);
+
+  React.useEffect(() => {
+    if (appMode !== 'spss') return;
+    setFileMenuOpen(false);
+    setFileMenuTargetTab(null);
+  }, [appMode]);
 
   React.useEffect(() => {
     const isInputDialogVisible = inputDialog.open;
@@ -3105,16 +3132,46 @@ function App() {
     return baseElement?.closest?.('p, h1, h2, h3, h4, h5, h6, blockquote, li, ul, ol') || null;
   }, []);
 
+  const finalizePendingImportedDocument = React.useCallback(({ rollbackToSpss = false } = {}) => {
+    pendingImportRef.current = null;
+    setPendingStartupDocument(false);
+    const startedFromSpss = pendingImportOriginModeRef.current === 'spss';
+    pendingImportOriginModeRef.current = null;
+    if (rollbackToSpss && startedFromSpss) {
+      setAppMode('spss');
+    }
+  }, []);
+
+  const queuePendingImportedDocument = React.useCallback((payload = {}) => {
+    if (isCanceledImportedDocumentPayload(payload)) {
+      return;
+    }
+    pendingImportRef.current = payload;
+    setPendingStartupDocument(true);
+    if (appMode === 'spss') {
+      pendingImportOriginModeRef.current = 'spss';
+      setAppMode('word');
+    }
+  }, [appMode]);
+
   const applyImportedDocument = React.useCallback((payload = {}) => {
+    if (isCanceledImportedDocumentPayload(payload)) {
+      finalizePendingImportedDocument({ rollbackToSpss: true });
+      return;
+    }
+    if (appMode === 'spss') {
+      queuePendingImportedDocument(payload);
+      return;
+    }
     if (!editor) return;
     if (payload?.ok === false || payload?.error) {
-      setPendingStartupDocument(false);
+      finalizePendingImportedDocument({ rollbackToSpss: true });
       alert(payload?.error || 'לא ניתן לפתוח את הקובץ שנבחר.');
       return;
     }
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
     if (!confirmReplaceCurrentDocument()) {
-      setPendingStartupDocument(false);
+      finalizePendingImportedDocument({ rollbackToSpss: true });
       return;
     }
 
@@ -3138,12 +3195,12 @@ function App() {
       source: 'opened-file',
     });
     persistLocalCache(importedHtml);
-    setPendingStartupDocument(false);
+    finalizePendingImportedDocument();
     initializedDocRef.current = true;
     setLastEditorActivityAt(Date.now());
     setShowStartScreen(false);
     focusEditorSoon('start');
-  }, [editor, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle]);
+  }, [editor, appMode, queuePendingImportedDocument, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle, finalizePendingImportedDocument]);
 
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenExternalDocument) return;
@@ -3151,18 +3208,28 @@ function App() {
       if (window.desktopApp?.consumePendingOpenDocument) {
         Promise.resolve(window.desktopApp.consumePendingOpenDocument()).catch(() => {});
       }
+      if (isCanceledImportedDocumentPayload(payload)) {
+        finalizePendingImportedDocument({ rollbackToSpss: true });
+        return;
+      }
+      if (appMode === 'spss') {
+        queuePendingImportedDocument(payload);
+        return;
+      }
       if (!editor) {
-        setPendingStartupDocument(true);
-        pendingImportRef.current = payload;
+        queuePendingImportedDocument(payload);
         return;
       }
       applyImportedDocument(payload);
     });
-  }, [editor, applyImportedDocument]);
+  }, [editor, applyImportedDocument, appMode, queuePendingImportedDocument, finalizePendingImportedDocument]);
 
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenSettings) return;
     return window.desktopApp.onOpenSettings((payload) => {
+      if (appMode === 'spss') {
+        return;
+      }
       if (window.desktopApp?.consumePendingOpenSettings) {
         Promise.resolve(window.desktopApp.consumePendingOpenSettings()).catch(() => {});
       }
@@ -3170,28 +3237,33 @@ function App() {
       setFileMenuTargetTab(tab);
       setFileMenuOpen(true);
     });
-  }, []);
+  }, [appMode]);
 
   React.useEffect(() => {
     if (!editor) return;
 
     const applyPending = async () => {
-      if (pendingImportRef.current) {
+      if (appMode === 'spss') {
+        if (pendingImportRef.current || pendingStartupDocument) {
+          setPendingStartupDocument(true);
+        }
+        return;
+      } else if (pendingImportRef.current) {
         const payload = pendingImportRef.current;
         pendingImportRef.current = null;
         applyImportedDocument(payload);
       } else if (window.desktopApp?.consumePendingOpenDocument) {
         const payload = await window.desktopApp.consumePendingOpenDocument();
-        if (payload && !payload.canceled) {
+        if (payload && !isCanceledImportedDocumentPayload(payload)) {
           applyImportedDocument(payload);
         } else {
-          setPendingStartupDocument(false);
+          finalizePendingImportedDocument({ rollbackToSpss: true });
         }
       } else {
-        setPendingStartupDocument(false);
+        finalizePendingImportedDocument({ rollbackToSpss: true });
       }
 
-      if (window.desktopApp?.consumePendingOpenSettings) {
+      if (appMode !== 'spss' && window.desktopApp?.consumePendingOpenSettings) {
         const payload = await window.desktopApp.consumePendingOpenSettings();
         if (payload?.tab) {
           setFileMenuTargetTab(payload.tab);
@@ -3201,7 +3273,7 @@ function App() {
     };
 
     applyPending();
-  }, [editor, applyImportedDocument]);
+  }, [editor, applyImportedDocument, appMode, pendingStartupDocument, finalizePendingImportedDocument]);
 
   React.useEffect(() => {
     if (!fileMenuOpen) return;
@@ -4179,9 +4251,10 @@ function App() {
     && hasMeaningfulEditorContent(editor);
   const isStartTransitionRunning = startTransitionPhase === 'running';
   const prefersReducedMotion = getPrefersReducedMotion();
-  const isInputDialogVisible = inputDialog.open;
-  const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen;
-  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
+  const isSpssMode = appMode === 'spss';
+  const isInputDialogVisible = inputDialog.open && !isSpssMode;
+  const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && !isSpssMode;
+  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen && !isSpssMode;
   const copyleaksConfig = normalizeCopyleaksConfig(getProviderConfig().copyleaks);
   const copyleaksTextStats = getCopyleaksTextStats(copyleaksDetector.text);
   const copyleaksValidationMessage = getCopyleaksValidationMessage(copyleaksDetector.text);
@@ -4209,32 +4282,40 @@ function App() {
         onHome={openHomeSafely}
         onOpenDraftRecommendations={openDraftRecommendations}
         draftRecommendationsDisabled={!canOpenDraftRecommendations}
+        appMode={appMode}
+        onModeChange={setAppMode}
       />
-      <Ribbon
-        onCommand={handleCommand}
-        documentStyle={documentStyle}
-        onToggleTaskpane={() => {
-          setAssistantTrigger('manual');
-          setSidebarOpen((v) => {
-            const next = !v;
-            if (next) setSidebarCompact(false);
-            return next;
-          });
-          setLastEditorActivityAt(Date.now());
-        }}
-        zoom={zoom}
-        onOpenFileMenu={() => {
-          setFileMenuTargetTab(null);
-          setFileMenuOpen(true);
-        }}
-        formatPainterActive={formatPainterActive}
-        activeFormats={activeFormats}
-        shortcuts={shortcuts}
-        assistantOpen={sidebarOpen}
-      />
+      {!isSpssMode && (
+        <Ribbon
+          onCommand={handleCommand}
+          documentStyle={documentStyle}
+          onToggleTaskpane={() => {
+            setAssistantTrigger('manual');
+            setSidebarOpen((v) => {
+              const next = !v;
+              if (next) setSidebarCompact(false);
+              return next;
+            });
+            setLastEditorActivityAt(Date.now());
+          }}
+          zoom={zoom}
+          onOpenFileMenu={() => {
+            setFileMenuTargetTab(null);
+            setFileMenuOpen(true);
+          }}
+          formatPainterActive={formatPainterActive}
+          activeFormats={activeFormats}
+          shortcuts={shortcuts}
+          assistantOpen={sidebarOpen}
+        />
+      )}
       
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
-        {!showStartScreen && sidebarOpen && (
+        <div className="min-w-0 flex-1" style={{ display: isSpssMode ? 'flex' : 'none' }}>
+          <SpssSyntaxStudio />
+        </div>
+
+        {!isSpssMode && !showStartScreen && sidebarOpen && (
           <aside
             className="order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden"
             style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
@@ -4420,6 +4501,7 @@ function App() {
           id="editor-wrapper"
           className="flex flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative"
           style={{
+            display: isSpssMode ? 'none' : undefined,
             opacity: shouldHideEditorWrapper ? 0 : 1,
             transform: prefersReducedMotion
               ? 'none'
@@ -4430,8 +4512,8 @@ function App() {
               : 'opacity 320ms ease-out, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease-out',
             pointerEvents: shouldHideEditorWrapper ? 'none' : 'auto',
           }}
-          aria-hidden={shouldHideEditorWrapper}
-          inert={shouldHideEditorWrapper ? true : undefined}
+          aria-hidden={shouldHideEditorWrapper || isSpssMode}
+          inert={shouldHideEditorWrapper || isSpssMode ? true : undefined}
         >
           {isInputDialogVisible && (
             <div
@@ -4957,7 +5039,7 @@ function App() {
 
         </div>
 
-        {showStartScreen && (
+        {!isSpssMode && showStartScreen && (
           <div
             className="absolute inset-0 z-30 overflow-y-auto"
             style={{
@@ -5053,7 +5135,7 @@ function App() {
         )}
 
         {/* עט קסמים צף */}
-        {!showStartScreen && <MagicWand
+        {!isSpssMode && !showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
           escapeBlocked={fileMenuOpen || isInputDialogVisible || isCopyleaksDetectorVisible || isFeedbackSurveyVisible || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
@@ -5065,22 +5147,36 @@ function App() {
           }}
         />}
 
-        {isStartTransitionRunning && <StartScreenTransitionOverlay />}
+        {!isSpssMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}
       </main>
       <footer id="status-bar" className="h-6 bg-[#2B579A] text-white flex items-center justify-between px-4 text-[11px] shrink-0 z-30">
-        <div className="flex items-center gap-4">
-          <span>עמוד 1 מתוך {pageCount}</span>
-          <span>{wordCount} מילים</span>
-          <span><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span>מצב הדפסה</span>
-          <span>{zoom}%</span>
-        </div>
+        {isSpssMode ? (
+          <>
+            <div className="flex items-center gap-4">
+              <span>SPSS Syntax Studio פעיל</span>
+              <span><i className="ph ph-shield-check text-green-300"></i> רק metadata טוקניזי נשלח ל-AI</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span>Tutor mode נשלט מתוך הסטודיו</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-4">
+              <span>עמוד 1 מתוך {pageCount}</span>
+              <span>{wordCount} מילים</span>
+              <span><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span>מצב הדפסה</span>
+              <span>{zoom}%</span>
+            </div>
+          </>
+        )}
       </footer>
 
       {/* File Menu Backstage */}
-      {fileMenuOpen && (
+      {!isSpssMode && fileMenuOpen && (
         <FileMenu
           initialSettingsTab={fileMenuTargetTab}
           updateCheckToken={updateCheckToken}

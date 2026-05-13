@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DOMSerializer } from "@tiptap/pm/model";
 import { AGENTS_CONFIG } from "../agentConfig";
+import { analyzeQuery as analyzeArticleQuery, buildNewsSiteBiasedArticleQuery, extractDomainFromUrl as extractArticleDomainFromUrl, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, validateArticleCandidate } from "./articleSourceValidation";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 
 // Personal style seed – loaded at runtime from disk, not bundled
@@ -702,52 +703,6 @@ function getLightSystemResearchAgents() {
 export const DEFAULT_ROLE_AGENTS = getDefaultRoleAgents();
 
 const KNOWN_PROVIDER_IDS = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom'];
-const DIRECT_INTERNET_ACCESS_CAPABILITY = 'directInternetAccess';
-const INTERNET_BACKED_SOURCE_CAPABILITY = 'internetBackedSourceRetrieval';
-const EMPTY_PROVIDER_RUNTIME_CAPABILITIES = Object.freeze({
-  [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-  [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-});
-const PROVIDER_RUNTIME_CAPABILITIES = Object.freeze({
-  gemini: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: true,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: true,
-  }),
-  openai: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-  }),
-  claude: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-  }),
-  groq: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-  }),
-  perplexity: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: true,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: true,
-  }),
-  ollama: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-  }),
-  custom: Object.freeze({
-    [DIRECT_INTERNET_ACCESS_CAPABILITY]: false,
-    [INTERNET_BACKED_SOURCE_CAPABILITY]: false,
-  }),
-});
-const getProviderRuntimeCapabilities = (providerId = '') => (
-  PROVIDER_RUNTIME_CAPABILITIES[String(providerId || '').trim()] || EMPTY_PROVIDER_RUNTIME_CAPABILITIES
-);
-const providerHasRuntimeCapability = (providerId = '', capability = '') => Boolean(
-  getProviderRuntimeCapabilities(providerId)[String(capability || '').trim()]
-);
-const getProviderIdsWithRuntimeCapability = (capability = '') => KNOWN_PROVIDER_IDS
-  .filter((providerId) => providerHasRuntimeCapability(providerId, capability));
-const isProviderWithDirectInternetAccess = (providerId = '') => providerHasRuntimeCapability(providerId, DIRECT_INTERNET_ACCESS_CAPABILITY);
-const isProviderInternetBackedSourceCapable = (providerId = '') => providerHasRuntimeCapability(providerId, INTERNET_BACKED_SOURCE_CAPABILITY);
 const KNOWN_SKILL_IDS = SKILL_LIBRARY.map((skill) => skill.id);
 const PROVIDER_TAG_PATTERNS = [
   { provider: 'gemini', regex: /(^|\s)@(?:gemini|גימיני)(?::([^\s@]+))?/gi },
@@ -1227,19 +1182,11 @@ export const getPersonalStyleProfile = () => normalizePersonalStyleProfile(
 
 export const savePersonalStyleProfile = (profile) => {
   const normalizedProfile = normalizePersonalStyleProfile(profile);
-  const persistedProfile = {
+  localStorage.setItem('wordai_personal_style', JSON.stringify({
     ...DEFAULT_PERSONAL_STYLE,
     ...normalizedProfile,
     last_updated: new Date().toISOString(),
-  };
-  localStorage.setItem('wordai_personal_style', JSON.stringify({
-    ...persistedProfile,
   }));
-  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('wordai-personal-style-updated', {
-      detail: { profile: persistedProfile },
-    }));
-  }
   syncPersistedAppSettings();
 };
 
@@ -2471,194 +2418,48 @@ const buildResponseModePrompt = ({ strictFormatting = false } = {}) => {
 
 const SOURCE_GROUNDING_FAILURE_TOKEN = 'NO_VERIFIED_SOURCES_FOUND';
 const SOURCE_REQUEST_PATTERN = /(doi|scholar|peer[-\s]?reviewed|fact[\s-]?check|בדוק\s+עובדות|בדיקת\s+עובדות|מקור(?:ות)?\s+אקדמ(?:י(?:ים)?)?)/i;
-const SOURCE_GROUNDING_PROVIDER_IDS = new Set(getProviderIdsWithRuntimeCapability(INTERNET_BACKED_SOURCE_CAPABILITY));
-const VERIFIED_SOURCE_SHORT_CIRCUIT_SKILL_IDS = new Set(['source-hunter']);
+const SOURCE_GROUNDING_PROVIDER_IDS = new Set(['perplexity']);
+const INTERNET_BACKED_SOURCE_PROVIDER_IDS = new Set(['gemini', 'perplexity']);
+const SOURCE_GROUNDING_SKILL_IDS = new Set(['source-hunter', 'citation-weaver']);
 const SOURCE_GROUNDING_URL_REGEX = /https?:\/\/[^\s<>()]+/gi;
 const VERIFIED_SOURCE_RESULT_LIMIT = 5;
 const GENERIC_SOURCE_QUERY_PATTERN = /^(?:יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|doi)\??|מקור(?:ות)?\??|sources?\??|citations?\??|references?\??|links?\??|לינק(?:ים)?\??|קישור(?:ים)?\??)$/i;
 const NON_SOURCE_REQUEST_PATTERN = /(source\s+code|קוד\s+מקור|reference\s+letter|recommendation\s+letter|מכתב\s+המלצה|תקן(?:י)?\s+(?:את\s+)?(?:ה-)?url|fix\s+(?:the\s+)?url|replace\s+(?:the\s+)?url|update\s+(?:the\s+)?url)/i;
 const SOURCE_FOLLOW_UP_PATTERN = /^(?:עוד|תן\s+עוד|תביא\s+עוד|עוד\s+\d+|עוד\s+שניים|עוד\s+שלושה|כאלה|כזה|similar\s+ones|same\s+kind|more|more\s+sources|another\s+two|add\s+more|תוסיף\s+עוד)/i;
 const SOURCE_EXPLICIT_FOLLOW_UP_PATTERN = /^(?:עוד(?:\s+\d+|\s+שניים|\s+שלושה)?\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תן\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תביא\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|more\s+(?:sources?|references?|citations?|links?)|another\s+\d*\s*(?:sources?|references?|citations?|links?)|add\s+more\s+(?:sources?|references?|citations?|links?))/i;
-const SOURCE_DISCOVERY_ACTION_PATTERN = /(חפש|חיפוש|מצא|תן(?:י)?|תביא|להביא|הבא|שלח|צריך|צריכה|צריכים|מבקש|מבקשת|אסוף|אתר|תאתר|הוסף|צרף|שלב|show|give|bring|need|find|send|collect|locate|provide|include|attach|add)/i;
+const SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN = /(?:\s+ו|\b(?:and\s+then|then)\b|(?:ואז|אחר\s+כך|לאחר\s+מכן))\s*(?:סכם|תסכם|סיכום|תקציר|הסבר|תסביר|הסבר קצר|הסבר\s+קצר|ניתוח|נתח|תנתח|כתוב|תכתוב|נסח|תנסח|טיוטה|ערוך|תערוך|summari[sz]e|summary|brief\s+summary|explain|explanation|analy[sz]e|analysis|write|draft)/i;
+const SOURCE_DISCOVERY_ACTION_PATTERN = /(חפש|חיפוש|מצא|תן(?:י)?|תביא|הבא|שלח|צריך|צריכה|צריכים|מבקש|מבקשת|אסוף|אתר|תאתר|הוסף|צרף|שלב|show|give|need|find|send|collect|locate|provide|include|attach|add)/i;
 const SOURCE_DISCOVERY_TARGET_PATTERN = /(לינק(?:ים)?|links?|קישור(?:ים)?|urls?|מאמר(?:ים)?(?:\s+אקדמ(?:י(?:ים)?)?)?|כתבה(?:ות)?|papers?|sources?|references?|citations?|journal(?:s)?(?:\s+articles?)?|מקור(?:ות)?)/i;
-const DIRECT_SOURCE_DISCOVERY_PATTERN = /(יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|doi|לינק(?:ים)?|link|קישור(?:ים)?|url)|מצא\s+מקור(?:ות)?|מצא\s+מאמר(?:ים)?|מצא\s+כתבה(?:ות)?|(?:תן|הבא|להביא)\s+(?:לי\s+)?(?:מקור(?:ות)?|מחקר(?:ים)?|מאמר(?:ים)?|כתבה(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|links?)|need\s+(?:sources?|references?|citations?|links?)|find\s+(?:sources?|references?|citations?|links?)|bring(?:\s+me)?\s+(?:(?:an?\s+)?article(?:s)?|sources?|references?|citations?|links?))/i;
+const DIRECT_SOURCE_DISCOVERY_PATTERN = /(יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|doi|לינק(?:ים)?|link|קישור(?:ים)?|url)|מצא\s+מקור(?:ות)?|מצא\s+מאמר(?:ים)?|מצא\s+כתבה(?:ות)?|תן\s+לי\s+(?:מקור(?:ות)?|מאמר(?:ים)?|כתבה(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|links?)|need\s+(?:sources?|references?|citations?|links?)|find\s+(?:sources?|references?|citations?|links?))/i;
 const SOURCE_TRANSFORM_REQUEST_PATTERN = /(סדר|ארגן|עצב|format|reformat|תקן|fix|שכתב|rewrite|שמור|keep|preserve|המר|convert|עדכן|update|ערוך|edit).*(?:ביבליוגרפ|reference(?:\s+list)?|citation(?:s)?|ציטוט(?:ים)?|references?)/i;
 const FACT_CHECK_REQUEST_PATTERN = /(fact[\s-]?check|בדוק\s+עובדות|בדיקת\s+עובדות)/i;
-const INTERNET_BACKED_SOURCE_AGENT_PATTERN = /^(?:source[-\s]?hunter|researcher-academic|researcher-general|researcher-visual|visual[-\s]?research|חוקר\s+מקורות|חוקר\s+אקדמי|חוקר\s+לא\s+אקדמי|חוקר\s+חזותי|מחקר\s+מקורות|חקר\s+חזותי)$/i;
-const INTERNET_BACKED_SOURCE_DISCOVERY_PATTERN = /(fact[\s-]?check|בדוק\s+עובדות|בדיקת\s+עובדות|source\s+(?:verification|discovery|research)|verify(?:ing)?\s+(?:sources?|citations?|references?|links?|urls?|facts?)|check\s+(?:sources?|citations?|references?|links?|urls?|facts?)|cross[-\s]?check|אימות\s+מקורות|בדוק(?:י)?\s+(?:אם\s+)?(?:המקורות|הציטוטים|הקישורים|הלינקים)\s+(?:קיימים|נכונים|מאומתים)?|(?:מקורות?|ציטוט(?:ים)?|קישורים?|לינקים?).*(?:קיימ(?:ים|ות)|נכונ(?:ים|ות)|מאומת(?:ים|ות))|חפש(?:ו)?\s+(?:ברשת|באינטרנט)|חיפוש\s+(?:ברשת|באינטרנט)|חקור(?:\s+את\s+)?(?:הרשת|האינטרנט)|search(?:\s+the)?\s+(?:web|internet)|web\s+research|browse\s+(?:the\s+web|online)|look\s+up(?:\s+online)?|find\s+(?:online\s+)?(?:sources?|references?|citations?|links?|articles?|papers?|journals?)|locate\s+(?:sources?|references?|citations?|links?)|visual\s+research)/i;
-const EXPLICIT_LOOKUP_OR_VERIFICATION_ACTION_PATTERN = /(חפש|חיפוש|מצא|תאתר|אתר|בדוק|בדיקה|חקור|research|search|find|locate|verify|check|cross[-\s]?check|look\s+up|lookup|browse)/i;
-const INTERNET_LOOKUP_ACTION_PATTERN = /(חפש|חיפוש|מצא|תאתר|אתר|אסוף|בדוק|בדיקה|תן|תביא|הבא|search|find|locate|look\s+up|lookup|browse|check|verify|cross[-\s]?check|research)/i;
-const INTERNET_LOOKUP_TARGET_PATTERN = /(web|internet|online|ברשת|באינטרנט|youtube|vimeo|screenshots?|walkthroughs?|demos?|videos?|וידאו|סרטו(?:ן|נים)|צילום(?:י)?\s+מסך)/i;
 const SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN = /((כתוב|נסח|draft|write|compose|generate|צור|בנה|הכן|prepare|summari[sz]e|סכם|analy[sz]e|נתח|rewrite|שכתב|ערוך|edit).*(סקיר|literature|review|פסקה|paragraph|section|פרק|essay|paper|עבודה|מאמר|מסמך|outline|מבנה|טיוטה|draft|מבוא|introduction|abstract|סיכום|מסקנה))|((סקיר(?:ת)?\s+ספרות|literature\s+review|essay|paper|עבודה|מאמר|מסמך).*(?:מקור|citation|reference|doi|scholar))/i;
-const SOURCE_ONLY_DELIVERABLE_REQUEST_PATTERN = /(כתוב|נסח|draft|write|compose|generate|צור|בנה|create|prepare|סכם|summari[sz]e|נתח|analy[sz]e|rewrite|שכתב|ערוך|edit|fix|תקן|polish|humanize|expand|shorten|format|reformat|convert|המר|organize|ארגן|arrange|סדר|translate|תרגם|סקיר(?:ת)?\s+ספרות|literature\s+review|essay|paper|report|document|outline|draft|abstract|introduction|paragraph|section|פסקה|פרק|סיכום|מסמך|עבודה|מאמר|מבוא|טיוטה|מייל|email|letter|מכתב)/i;
-const SOURCE_RETRIEVAL_FOLLOW_ON_ACTION_PATTERN = /(סכם|summari[sz]e|הסבר|explain|כתוב|write|נסח|draft|נתח|analy[sz]e)/i;
-const SOURCE_RETRIEVAL_FOLLOW_ON_CONJUNCTION_PATTERN = /(?:\s+ו|\band\b)\s*(?:סכם|summari[sz]e|הסבר|explain|כתוב|write|נסח|draft|נתח|analy[sz]e)/i;
-const SOURCE_RETRIEVAL_FOLLOW_ON_SEPARATOR_PATTERN = /(?:[,;:.]\s*|\b(?:then|and\s+then)\b\s*|(?:ואז|אחר\s+כך|לאחר\s+מכן)\s*)(?:סכם|summari[sz]e|הסבר|explain|כתוב|write|נסח|draft|נתח|analy[sz]e)/i;
-const SOURCE_RETRIEVAL_FORMAT_PATTERN = /(?:בפורמט|format)\s+(?:apa|mla|chicago|harvard)/i;
-const SOURCE_RETRIEVAL_PER_ITEM_SCOPE_PATTERN = /(כל\s+(?:אחד|מקור|מאמר)|each\s+(?:one|source|paper)|במשפט|בשתי\s+שורות|one\s+sentence|two\s+lines?)/i;
-const NON_TOPICAL_SOURCE_QUERY_PATTERN = /^(?:hi|hello|hey|thanks?|thank\s+you|ok(?:ay)?|שלום|היי|תודה|אוק(?:יי)?|בסדר)\b/i;
-const SOURCE_CITATION_REQUIREMENT_PATTERN = /(citation(?:s)?|references?(?:\s+list)?|doi|scholar|links?|urls?|bibliograph(?:y|ies)|לינק(?:ים)?|קישור(?:ים)?|רשימת\s+מקורות|מקורות\s+(?:אקדמ(?:י(?:ים)?)?|מאומתים?|ל(?:עבודה|מחקר|סקירה|מאמר|מסמך|ציטוט))|(?:עם|כולל(?:ת)?|שלב|הוסף)\s+(?:לפחות\s+)?(?:\d+\s+)?מקורות?|ביבליוגרפ(?:יה|י)|ציטוט(?:ים)?|(?:academic|scholarly|verified|real)\s+sources?|sources?(?!\s+of\b)\s+(?:for|to\s+cite|list|references?))/i;
-const SOURCE_REFERENCE_NOUN_PATTERN = /(?:\bcitation(?:s)?\b|\breferences?(?:\s+list)?\b|\bsources?\b|\blinks?\b|\burls?\b|\bbibliograph(?:y|ies)\b|\bdoi\b|\bpapers?\b|\barticles?\b|\bjournals?(?:\s+articles?)?\b|\bpeer[-\s]?reviewed(?:\s+(?:papers?|articles?|journals?|studies?))?\b|\bliterature\s+review\b|לינק(?:ים)?|קישור(?:ים)?|רשימת\s+מקורות|מקורות?|ביבליוגרפ(?:יה|י)|ציטוט(?:ים)?|מאמר(?:ים)?|כתבה(?:ות)?|כתב(?:י)?\s+עת|סקיר(?:ת)?\s+ספרות)/i;
-const PROVIDED_SOURCE_ENRICHMENT_COMPLETION_ACTION_PATTERN = /(השלם|השלימי|השלימו|להשלים|complete|fill\s+in|supply)/i;
-const PROVIDED_SOURCE_ENRICHMENT_ADD_ACTION_PATTERN = /(הוסף|תוסיף|להוסיף|append|add)/i;
-const PROVIDED_SOURCE_ENRICHMENT_MISSING_PATTERN = /(חסר(?:ים|ות)?|missing)/i;
-const PROVIDED_SOURCE_ENRICHMENT_TARGET_PATTERN = /(?:doi|dois|links?|urls?|לינק(?:ים)?|קישור(?:ים)?)/i;
-const STRONG_PROVIDED_SOURCE_MARKER_PATTERN = /(?:\balready\b|\bprovided\b|\bsupplied\b|\bgiven\b|\bgave(?:\s+you)?\b|\bcollected\b|\bgathered\b|\battached\b|\bincluded\b|\bfollowing\b|\bbelow\b|שכבר|סופק(?:ו|ה)?|שסופק(?:ו|ה)?|סיפק(?:תי|ת|תם|נו)|שסיפק(?:תי|ת|תם|נו)|נת(?:תי|ת|תם|נו)|שנת(?:תי|ת|תם|נו)|הובא(?:ו)?|שהובא(?:ו)?|נאספ(?:ו|ה)|שנאספ(?:ו|ה)|מצורפ(?:ים|ות|ת)?|שמצורפ(?:ים|ות|ת)?|להלן|למטה|שלמטה|בהמשך|שבהמשך)/i;
-const WEAK_EXISTING_SOURCE_MARKER_PATTERN = /(?:\bexisting\b|קיים|קיימת|קיימים|קיימות)/i;
 const HEBREW_TEXT_PATTERN = /[\u0590-\u05FF]/;
 const DOI_PATTERN = /\b10\.\d{4,9}\/[\-._;()/:A-Z0-9]+\b/i;
 const RECENT_VERIFIED_SOURCE_FOLLOW_UP_WINDOW_MS = 30 * 60 * 1000;
 const VERIFIED_SOURCE_REPLY_PATTERN = /(NO_VERIFIED_SOURCES_FOUND|מקורות(?:\s+אקדמיים)?\s+מאומתים בלבד|verified\s+sources?)/i;
 
-const PROVIDED_SOURCE_CLAUSE_BREAK_PATTERN = /[\r\n.!?;:]/;
-const WEAK_SOURCE_CONNECTOR_TOKEN_PATTERN = /^(?:the|a|an|this|that|these|those|my|your|our|their|his|her|ה|של|שלי|שלך|שלו|שלה|שלנו|שלהם|שלהן)$/i;
-
-const getPatternMatches = (text, pattern) => {
-  const matches = [];
-  const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-  let match = globalPattern.exec(text);
-  while (match) {
-    matches.push({
-      index: match.index,
-      end: match.index + match[0].length,
-    });
-    if (match[0].length === 0) {
-      globalPattern.lastIndex += 1;
-    }
-    match = globalPattern.exec(text);
-  }
-  return matches;
-};
-
-const hasNearbyPatternPair = (text, firstMatches, secondMatches, { maxGap, maxGapTokens, tokenPattern } = {}) => {
-  const getGapDetails = (firstMatch, secondMatch) => {
-    const [leftMatch, rightMatch] = firstMatch.index <= secondMatch.index
-      ? [firstMatch, secondMatch]
-      : [secondMatch, firstMatch];
-    const gapText = text.slice(leftMatch.end, rightMatch.index);
-    const gapTokens = gapText.match(/[A-Za-z0-9\u0590-\u05FF]+/g) || [];
-    return {
-      gapText,
-      gapTokens,
-    };
-  };
-
-  return firstMatches.some((firstMatch) => secondMatches.some((secondMatch) => {
-    const { gapText, gapTokens } = getGapDetails(firstMatch, secondMatch);
-    if (gapText.length > maxGap) return false;
-    if (PROVIDED_SOURCE_CLAUSE_BREAK_PATTERN.test(gapText)) return false;
-    if (typeof maxGapTokens === 'number' && gapTokens.length > maxGapTokens) return false;
-    if (tokenPattern && gapTokens.some((token) => !tokenPattern.test(token))) return false;
-    return true;
-  }));
-};
-
-const hasProvidedSourceReferenceContext = (value = '') => {
-  const text = String(value || '').trim();
-  if (!text) return false;
-  const sourceMatches = getPatternMatches(text, SOURCE_REFERENCE_NOUN_PATTERN);
-  if (!sourceMatches.length) return false;
-
-  const strongMarkerMatches = getPatternMatches(text, STRONG_PROVIDED_SOURCE_MARKER_PATTERN);
-  if (strongMarkerMatches.length && hasNearbyPatternPair(text, sourceMatches, strongMarkerMatches, { maxGap: 48, maxGapTokens: 6 })) {
-    return true;
-  }
-
-  const weakMarkerMatches = getPatternMatches(text, WEAK_EXISTING_SOURCE_MARKER_PATTERN);
-  if (!weakMarkerMatches.length) return false;
-
-  return hasNearbyPatternPair(text, sourceMatches, weakMarkerMatches, {
-    maxGap: 6,
-    maxGapTokens: 1,
-    tokenPattern: WEAK_SOURCE_CONNECTOR_TOKEN_PATTERN,
-  });
-};
-
-const hasProvidedSourceEnrichmentLookupIntent = (value = '') => {
-  const text = String(value || '').trim();
-  if (!text) return false;
-  const hasCompletionAction = PROVIDED_SOURCE_ENRICHMENT_COMPLETION_ACTION_PATTERN.test(text);
-  const hasMissingAddAction = PROVIDED_SOURCE_ENRICHMENT_ADD_ACTION_PATTERN.test(text)
-    && PROVIDED_SOURCE_ENRICHMENT_MISSING_PATTERN.test(text);
-  return hasProvidedSourceReferenceContext(text)
-    && PROVIDED_SOURCE_ENRICHMENT_TARGET_PATTERN.test(text)
-    && (hasCompletionAction || hasMissingAddAction);
-};
-
-const hasExplicitSourceLookupOrVerificationIntent = (value = '') => {
-  const text = String(value || '').trim();
-  if (!text) return false;
-  return hasProvidedSourceEnrichmentLookupIntent(text)
-    || FACT_CHECK_REQUEST_PATTERN.test(text)
-    || INTERNET_BACKED_SOURCE_DISCOVERY_PATTERN.test(text)
-    || ((SOURCE_CITATION_REQUIREMENT_PATTERN.test(text) || SOURCE_DISCOVERY_TARGET_PATTERN.test(text) || INTERNET_LOOKUP_TARGET_PATTERN.test(text))
-      && EXPLICIT_LOOKUP_OR_VERIFICATION_ACTION_PATTERN.test(text));
-};
-
-function hasSourceDiscoveryOrVerificationSignal(value = '') {
-  const text = String(value || '').trim();
-  if (!text) return false;
-  if (hasProvidedSourceReferenceContext(text) && !hasExplicitSourceLookupOrVerificationIntent(text)) return false;
-  return hasProvidedSourceEnrichmentLookupIntent(text)
-    || INTERNET_BACKED_SOURCE_DISCOVERY_PATTERN.test(text)
-    || FACT_CHECK_REQUEST_PATTERN.test(text)
-    || DIRECT_SOURCE_DISCOVERY_PATTERN.test(text)
-    || (SOURCE_DISCOVERY_ACTION_PATTERN.test(text) && SOURCE_DISCOVERY_TARGET_PATTERN.test(text))
-    || (INTERNET_LOOKUP_ACTION_PATTERN.test(text) && INTERNET_LOOKUP_TARGET_PATTERN.test(text));
-}
-
-function isPureSourceTransformRequest(value = '') {
-  const text = String(value || '').trim();
-  return Boolean(text)
-    && SOURCE_TRANSFORM_REQUEST_PATTERN.test(text)
-    && !hasSourceDiscoveryOrVerificationSignal(text);
-}
-
-const hasSourceTransformRequirement = (value = '') => SOURCE_TRANSFORM_REQUEST_PATTERN.test(String(value || '').trim());
-
 const isExplicitSourceRequest = (value = '') => {
   const text = String(value || '').trim();
   if (!text || NON_SOURCE_REQUEST_PATTERN.test(text)) return false;
-  if (hasProvidedSourceReferenceContext(text) && !hasExplicitSourceLookupOrVerificationIntent(text)) return false;
-  if (isPureSourceTransformRequest(text)) return false;
+  if (SOURCE_TRANSFORM_REQUEST_PATTERN.test(text)) return false;
   return GENERIC_SOURCE_QUERY_PATTERN.test(text)
-    || hasProvidedSourceEnrichmentLookupIntent(text)
     || DIRECT_SOURCE_DISCOVERY_PATTERN.test(text)
     || SOURCE_REQUEST_PATTERN.test(text)
     || (SOURCE_DISCOVERY_ACTION_PATTERN.test(text) && SOURCE_DISCOVERY_TARGET_PATTERN.test(text));
 };
 
-const hasDeliverableSourceRequirement = (value = '') => {
-  const text = String(value || '').trim();
-  if (!text || NON_SOURCE_REQUEST_PATTERN.test(text)) return false;
-  if (hasProvidedSourceReferenceContext(text) && !hasExplicitSourceLookupOrVerificationIntent(text)) return false;
-  if (isPureSourceTransformRequest(text)) return false;
-  return SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(text)
-    && (SOURCE_REQUEST_PATTERN.test(text)
-      || DIRECT_SOURCE_DISCOVERY_PATTERN.test(text)
-      || SOURCE_CITATION_REQUIREMENT_PATTERN.test(text));
-};
+const hasSourceRetrievalFollowOnWork = (value = '') => SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN.test(String(value || '').trim());
 
-const hasSourceRetrievalWithDownstreamWorkRequirement = (value = '') => {
-  const text = String(value || '').trim();
-  if (!text || NON_SOURCE_REQUEST_PATTERN.test(text)) return false;
-  if (!isExplicitSourceRequest(text) && !SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(text)) return false;
-  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(text) || hasSourceTransformRequirement(text)) return true;
-  if (SOURCE_RETRIEVAL_FORMAT_PATTERN.test(text)) return true;
-  if (SOURCE_RETRIEVAL_PER_ITEM_SCOPE_PATTERN.test(text)) return true;
-  if (!SOURCE_RETRIEVAL_FOLLOW_ON_ACTION_PATTERN.test(text)) return false;
-  return SOURCE_RETRIEVAL_FOLLOW_ON_CONJUNCTION_PATTERN.test(text)
-    || SOURCE_RETRIEVAL_FOLLOW_ON_SEPARATOR_PATTERN.test(text);
-};
-
-const isPotentialVerifiedSourceFollowUp = (value = '') => {
-  const text = String(value || '').trim();
-  return Boolean(text) && (SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(text) || SOURCE_FOLLOW_UP_PATTERN.test(text));
-};
-
-const hasVerifiedSourceFollowUpRequirement = (userPrompt = '') => {
-  const normalizedUserPrompt = String(userPrompt || '').trim();
-  if (!isPotentialVerifiedSourceFollowUp(normalizedUserPrompt)) return false;
+const shouldUseStrictSourceGrounding = ({ userPrompt = '', documentContext = '', extraSystemPrompt = '', skillId = '' } = {}) => {
+  if (SOURCE_GROUNDING_SKILL_IDS.has(String(skillId || '').trim())) return true;
+  const combined = [userPrompt, extraSystemPrompt]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  if (!combined) return false;
+  if (isExplicitSourceRequest(combined)) return true;
+  if (!(SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(String(userPrompt || '').trim()) || SOURCE_FOLLOW_UP_PATTERN.test(String(userPrompt || '').trim()))) return false;
   try {
     const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
     return Boolean(getLastVerifiedSourceQuery({ workspaceId }) && hasRecentVerifiedSourceFollowUpContext({ workspaceId }));
@@ -2667,261 +2468,42 @@ const hasVerifiedSourceFollowUpRequirement = (userPrompt = '') => {
   }
 };
 
-const hasSkillBasedSourceGroundingRequirement = ({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) => {
-  const normalizedSkillId = String(skillId || '').trim().toLowerCase();
-  if (normalizedSkillId !== 'citation-weaver') return false;
+const shouldUseInternetBackedSourceWork = ({ userPrompt = '', extraSystemPrompt = '' } = {}) => {
   const combined = [userPrompt, extraSystemPrompt]
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join('\n');
   if (!combined) return false;
-  if (isPureSourceTransformRequest(combined)) return false;
-  if (hasProvidedSourceReferenceContext(combined) && !hasExplicitSourceLookupOrVerificationIntent(combined)) return false;
-  return true;
-};
-
-const hasGroundingRelatedSourceWorkRequirement = ({ userPrompt = '', extraSystemPrompt = '', skillId = '', includeRecentFollowUp = true } = {}) => {
-  const normalizedUserPrompt = String(userPrompt || '').trim();
-  const combined = [normalizedUserPrompt, extraSystemPrompt]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (combined) {
-    if (isExplicitSourceRequest(combined)) return true;
-    if (hasDeliverableSourceRequirement(combined)) return true;
-  }
-  if (hasSkillBasedSourceGroundingRequirement({
-    userPrompt: normalizedUserPrompt,
-    extraSystemPrompt,
-    skillId,
-  })) return true;
-  if (!includeRecentFollowUp) return false;
-  return hasVerifiedSourceFollowUpRequirement(normalizedUserPrompt);
-};
-
-function hasSourceHunterSourceOnlyShortcut({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) {
-  const normalizedSkillId = String(skillId || '').trim().toLowerCase();
-  if (!VERIFIED_SOURCE_SHORT_CIRCUIT_SKILL_IDS.has(normalizedSkillId)) return false;
-  const normalizedPrompt = normalizeSourceSearchText(userPrompt);
-  const combined = [normalizedPrompt, extraSystemPrompt]
-    .map((value) => normalizeSourceSearchText(value))
-    .filter(Boolean)
-    .join('\n');
-  if (!normalizedPrompt || NON_TOPICAL_SOURCE_QUERY_PATTERN.test(normalizedPrompt)) return false;
-  if (SOURCE_FOLLOW_UP_PATTERN.test(normalizedPrompt)) return false;
   if (NON_SOURCE_REQUEST_PATTERN.test(combined)) return false;
-  if (FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
-  if (hasSourceTransformRequirement(combined)) return false;
-  if (SOURCE_ONLY_DELIVERABLE_REQUEST_PATTERN.test(normalizedPrompt)) return false;
-  const hasClearlySourceQueryLikePrompt = /^(?:(?:עוד\s+\d+|\d+\s+|another\s+\d+\s+)?(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|sources?|references?|citations?|links?|papers?|journals?)\b|(?:doi|scholar)\b)/i.test(normalizedPrompt);
-  return isExplicitSourceRequest(normalizedPrompt)
-    || hasSourceDiscoveryOrVerificationSignal(normalizedPrompt)
-    || hasClearlySourceQueryLikePrompt;
-}
-
-const hasExplicitSourceDiscoveryOrVerificationIntent = (...values) => {
-  const combined = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (!combined) return false;
-  if (NON_SOURCE_REQUEST_PATTERN.test(combined) && !FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  if (isPureSourceTransformRequest(combined)) return false;
-  return hasSourceDiscoveryOrVerificationSignal(combined);
-};
-
-const hasExplicitInternetLookupIntent = (...values) => {
-  const combined = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (!combined) return false;
-  if (NON_SOURCE_REQUEST_PATTERN.test(combined) && !FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  return hasProvidedSourceEnrichmentLookupIntent(combined)
-    || INTERNET_BACKED_SOURCE_DISCOVERY_PATTERN.test(combined)
-    || (INTERNET_LOOKUP_ACTION_PATTERN.test(combined) && INTERNET_LOOKUP_TARGET_PATTERN.test(combined));
-};
-
-const hasInternetBackedSourceWorkSignal = (...values) => {
-  const combined = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (!combined) return false;
-  if (NON_SOURCE_REQUEST_PATTERN.test(combined) && !FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  const hasExplicitLookupSignal = hasProvidedSourceEnrichmentLookupIntent(combined)
-    || INTERNET_BACKED_SOURCE_DISCOVERY_PATTERN.test(combined)
-    || ((SOURCE_CITATION_REQUIREMENT_PATTERN.test(combined) || SOURCE_DISCOVERY_TARGET_PATTERN.test(combined))
-      && EXPLICIT_LOOKUP_OR_VERIFICATION_ACTION_PATTERN.test(combined))
-    || (INTERNET_LOOKUP_TARGET_PATTERN.test(combined) && EXPLICIT_LOOKUP_OR_VERIFICATION_ACTION_PATTERN.test(combined));
-  if ((isPureSourceTransformRequest(combined) || hasProvidedSourceReferenceContext(combined)) && !hasExplicitLookupSignal) return false;
-  return hasExplicitLookupSignal;
-};
-
-const hasStageScopedInternetBackedSourceWorkSignal = (...values) => {
-  const combined = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (!combined) return false;
-  if (NON_SOURCE_REQUEST_PATTERN.test(combined) && !FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  if (isPureSourceTransformRequest(combined)) return false;
-
-  const hasProvidedSourceContext = hasProvidedSourceReferenceContext(combined);
-  if (hasProvidedSourceContext) {
-    return hasProvidedSourceEnrichmentLookupIntent(combined)
-      || FACT_CHECK_REQUEST_PATTERN.test(combined)
-      || DIRECT_SOURCE_DISCOVERY_PATTERN.test(combined)
-      || (INTERNET_LOOKUP_ACTION_PATTERN.test(combined) && INTERNET_LOOKUP_TARGET_PATTERN.test(combined));
-  }
-
+  if (SOURCE_TRANSFORM_REQUEST_PATTERN.test(combined)) return false;
   return FACT_CHECK_REQUEST_PATTERN.test(combined)
-    || DIRECT_SOURCE_DISCOVERY_PATTERN.test(combined)
-    || (SOURCE_DISCOVERY_ACTION_PATTERN.test(combined) && SOURCE_DISCOVERY_TARGET_PATTERN.test(combined))
-    || (INTERNET_LOOKUP_ACTION_PATTERN.test(combined) && INTERNET_LOOKUP_TARGET_PATTERN.test(combined));
-};
-
-const isInherentInternetBackedSourceAgent = (agent = null) => {
-  if (!agent || typeof agent !== 'object') return false;
-  return [agent.id, agent.name]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .some((value) => INTERNET_BACKED_SOURCE_AGENT_PATTERN.test(value));
-};
-
-const requiresInternetBackedSourceWork = ({
-  agent = null,
-  skillId = '',
-  stageGoal = '',
-  stageInstruction = '',
-  stageLabel = '',
-  userPrompt = '',
-  extraSystemPrompt = '',
-  includeRequestSignals = true,
-} = {}) => {
-  const stageScopedSourceWorkRequired = hasStageScopedInternetBackedSourceWorkSignal(
-    stageGoal,
-    stageInstruction,
-    stageLabel,
-  );
-
-  if (isInherentInternetBackedSourceAgent(agent)) return true;
-  if (stageScopedSourceWorkRequired) return true;
-  if (!includeRequestSignals) return false;
-  if (hasGroundingRelatedSourceWorkRequirement({
-    userPrompt,
-    extraSystemPrompt,
-    skillId,
-  })) return true;
-  return hasExplicitInternetLookupIntent(userPrompt, extraSystemPrompt);
-};
-
-const shouldUseStrictSourceGrounding = ({ userPrompt = '', documentContext = '', extraSystemPrompt = '', skillId = '' } = {}) => {
-  return hasGroundingRelatedSourceWorkRequirement({
-    userPrompt,
-    extraSystemPrompt,
-    skillId,
-  });
+    || hasSourceRetrievalFollowOnWork(combined)
+    || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined);
 };
 
 const isSourceOnlyGroundingRequest = ({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) => {
   const normalizedPrompt = String(userPrompt || '').trim();
-  const normalizedSkillId = String(skillId || '').trim();
   const combined = [normalizedPrompt, extraSystemPrompt]
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join('\n');
 
-  const isSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(normalizedPrompt) || hasVerifiedSourceFollowUpRequirement(normalizedPrompt);
-  const skillShortcutEligible = hasSourceHunterSourceOnlyShortcut({
-    userPrompt: normalizedPrompt,
-    extraSystemPrompt,
-    skillId: normalizedSkillId,
-  });
-  if (!combined && !skillShortcutEligible) return false;
-  if (FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  if (hasSourceRetrievalWithDownstreamWorkRequirement(combined)) return false;
-  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
-  if (hasSourceTransformRequirement(combined)) return false;
   if (!combined) return false;
-  if (isExplicitSourceRequest(combined) || isSourceFollowUp) return true;
-  return skillShortcutEligible;
-};
 
-const buildInternalRequestSourceClassification = (internetBackedSourceWorkRequired = false) => ({
-  sourceGroundingRequired: internetBackedSourceWorkRequired,
-  internetBackedSourceWorkRequired,
-  sourceOnlyGroundingRequest: false,
-  sourceHunterSourceOnlyShortcut: false,
-});
-
-const resolveRequestSourceClassification = ({ userPrompt = '', documentContext = '', extraSystemPrompt = '', skillId = '', overrides = null } = {}) => {
-  const normalizedOverrides = overrides && typeof overrides === 'object' ? overrides : null;
-  const sourceGroundingRequired = typeof normalizedOverrides?.sourceGroundingRequired === 'boolean'
-    ? normalizedOverrides.sourceGroundingRequired
-    : shouldUseStrictSourceGrounding({
-      userPrompt,
-      documentContext,
-      extraSystemPrompt,
-      skillId,
-    });
-  const internetBackedSourceWorkRequired = typeof normalizedOverrides?.internetBackedSourceWorkRequired === 'boolean'
-    ? normalizedOverrides.internetBackedSourceWorkRequired
-    : requiresInternetBackedSourceWork({
-      userPrompt,
-      extraSystemPrompt,
-      skillId,
-    });
-  const sourceOnlyGroundingRequest = typeof normalizedOverrides?.sourceOnlyGroundingRequest === 'boolean'
-    ? normalizedOverrides.sourceOnlyGroundingRequest
-    : isSourceOnlyGroundingRequest({
-      userPrompt,
-      extraSystemPrompt,
-      skillId,
-    });
-  const sourceHunterSourceOnlyShortcut = typeof normalizedOverrides?.sourceHunterSourceOnlyShortcut === 'boolean'
-    ? normalizedOverrides.sourceHunterSourceOnlyShortcut
-    : hasSourceHunterSourceOnlyShortcut({
-      userPrompt,
-      extraSystemPrompt,
-      skillId,
-    });
-
-  return {
-    sourceGroundingRequired,
-    internetBackedSourceWorkRequired,
-    sourceOnlyGroundingRequest,
-    sourceHunterSourceOnlyShortcut,
-  };
+  const isSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(normalizedPrompt) || SOURCE_FOLLOW_UP_PATTERN.test(normalizedPrompt);
+  if (!isExplicitSourceRequest(combined) && !isSourceFollowUp) return false;
+  if (FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
+  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
+  if (hasSourceRetrievalFollowOnWork(combined)) return false;
+  return true;
 };
 
 const isSourceGroundingProvider = (providerId = '') => SOURCE_GROUNDING_PROVIDER_IDS.has(String(providerId || '').trim());
-
-const normalizeSourceGroundingUrl = (value = '') => String(value || '')
-  .trim()
-  .replace(/[)\],.;:'"]+$/g, '');
-
-const mergeSourceGroundingUrls = (...groups) => {
-  const merged = new Set();
-  groups.forEach((group) => {
-    if (!group) return;
-    const values = group instanceof Set
-      ? Array.from(group)
-      : Array.isArray(group)
-        ? group
-        : [group];
-    values.forEach((value) => {
-      const normalizedUrl = normalizeSourceGroundingUrl(value);
-      if (normalizedUrl) merged.add(normalizedUrl);
-    });
-  });
-  return merged;
-};
+const supportsInternetBackedSourceRetrieval = (providerId = '') => INTERNET_BACKED_SOURCE_PROVIDER_IDS.has(String(providerId || '').trim());
 
 const extractUrlSetFromText = (value = '') => {
   const matches = String(value || '').match(SOURCE_GROUNDING_URL_REGEX) || [];
-  return mergeSourceGroundingUrls(matches);
+  return new Set(matches.map((url) => String(url || '').trim()).filter(Boolean));
 };
 
 const buildSourceGroundingPrompt = ({ enforce = false, providerSupportsGrounding = false } = {}) => {
@@ -2945,23 +2527,18 @@ const buildSourceGroundingPrompt = ({ enforce = false, providerSupportsGrounding
 
 const sanitizeSourceGroundingResponse = (text = '', { enforce = false, providerSupportsGrounding = false, allowedUrls = new Set() } = {}) => {
   const normalizedText = String(text || '').trim();
-  if (!normalizedText || !enforce) return normalizedText;
-  const allowedUrlSet = mergeSourceGroundingUrls(allowedUrls);
+  if (!normalizedText || !enforce || providerSupportsGrounding) return normalizedText;
+  const allowedUrlSet = allowedUrls instanceof Set
+    ? allowedUrls
+    : new Set(Array.isArray(allowedUrls) ? allowedUrls : []);
   const responseUrls = normalizedText.match(SOURCE_GROUNDING_URL_REGEX) || [];
   if (!responseUrls.length) return normalizedText;
-  const disallowedUrls = responseUrls.filter((url) => !allowedUrlSet.has(normalizeSourceGroundingUrl(url)));
+  const disallowedUrls = responseUrls.filter((url) => !allowedUrlSet.has(String(url || '').trim()));
   if (!disallowedUrls.length) return normalizedText;
-  const disallowedUrlSet = new Set(disallowedUrls.map((url) => normalizeSourceGroundingUrl(url)).filter(Boolean));
+  const disallowedUrlSet = new Set(disallowedUrls.map((url) => String(url || '').trim()).filter(Boolean));
   const strippedText = normalizedText
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (match, label, url) => (
-      disallowedUrlSet.has(normalizeSourceGroundingUrl(url)) ? '' : match
-    ))
-    .replace(/<a\b[^>]*href=["'](https?:\/\/[^"']+)["'][^>]*>[\s\S]*?<\/a>/gi, (match, url) => (
-      disallowedUrlSet.has(normalizeSourceGroundingUrl(url)) ? '' : match
-    ))
-    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (disallowedUrlSet.has(normalizeSourceGroundingUrl(url)) ? '' : url))
-    .replace(/^.*(?:קישור|לינק|url)\s*:\s*$/gim, '')
-    .replace(/\[([^\]]+)\]\(\s*\)/g, '')
+    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (disallowedUrlSet.has(String(url || '').trim()) ? '' : url))
+    .replace(/\[([^\]]+)\]\(\s*\)/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -3090,29 +2667,6 @@ const normalizePerplexityCitationSource = (url = '') => {
   };
 };
 
-const extractAllowedGroundingUrlsFromCompletion = (completion = {}) => {
-  if (!completion || typeof completion !== 'object' || Array.isArray(completion)) return [];
-  const searchResults = Array.isArray(completion.searchResults)
-    ? completion.searchResults
-    : Array.isArray(completion.search_results)
-      ? completion.search_results
-      : [];
-  const citations = Array.isArray(completion.citations) ? completion.citations : [];
-  const evidenceUrls = [
-    ...searchResults
-      .map(normalizePerplexityVerifiedSource)
-      .filter(Boolean)
-      .map((item) => item.url),
-    ...citations
-      .map((citation) => normalizePerplexityCitationSource(
-        typeof citation === 'string' ? citation : (citation?.url || citation?.link || '')
-      ))
-      .filter(Boolean)
-      .map((item) => item.url),
-  ];
-  return Array.from(mergeSourceGroundingUrls(completion.allowedUrls, evidenceUrls));
-};
-
 const requestJsonOverHttp = async ({ url, method = 'GET', headers = {}, body = '', signal, timeoutMs = 0 } = {}) => {
   const desktopResult = await proxyDesktopHttpRequest({ url, method, headers, body, timeoutMs }, signal);
   if (desktopResult) {
@@ -3211,15 +2765,343 @@ const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model =
   return dedupeVerifiedSourceResults(citations).slice(0, limit);
 };
 
-const buildVerifiedSourceFailureMessage = ({ query = '', providerAvailable = false, academic = false } = {}) => {
+const VERIFIED_ARTICLE_GEMINI_MODEL = 'gemini-2.5-pro';
+
+const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta = analyzeArticleQuery(query)) => {
+  const normalizedProvider = String(provider || 'gemini').trim().toLowerCase();
+  const searchInstruction = normalizedProvider === 'perplexity'
+    ? 'מצא כתבת web אמיתית אחת שמתאימה לבקשה הבאה, והסתמך רק על מידע שניתן לעגן בחיפוש web המובנה של Perplexity.'
+    : 'מצא כתבת web אמיתית אחת שמתאימה לבקשה הבאה, והסתמך רק על מידע שניתן לעגן בחיפוש Google המובנה.';
+
+  return [
+    searchInstruction,
+    'אל תמציא URL ואל תמציא מקור.',
+    queryMeta.expectsNewsArticle
+      ? 'אם הבקשה מבקשת "כתבה", החזר רק כתבת חדשות עיתונאית מאתר חדשות. אל תחזיר הודעה רשמית, הודעה לעיתונות, עמוד של מכון מחקר, מאמר ניתוח או דעה, בלוג, פוסט חברתי, וידאו או דף קטגוריה.'
+      : 'החזר רק עמוד כתבה יחיד, לא דף בית ולא דף קטגוריה.',
+    queryMeta.years.length > 0
+      ? `אם צוינה שנה, הכתבה חייבת להתאים בדיוק לשנה הזאת: ${queryMeta.years.join(', ')}. אל תחליף לשנה סמוכה.`
+      : 'אם לא נמצאה התאמה נאמנה מספיק, החזר no-match במקום מקור קרוב-אבל-שגוי.',
+    queryMeta.focusPhrase
+      ? `היה נאמן בדיוק לשם או לנושא הזה: "${queryMeta.focusPhrase}". אם המקור לא מתייחס אליו במפורש, החזר no-match.`
+      : 'אל תחליף אירוע, גוף, דוח או נושא בשם אחר גם אם הוא קשור חלקית.',
+    'אם אין כתבה תואמת מספיק, החזר matchStatus="no-match" עם noMatchReason ברור, והשאר את title/url/summary/sourceName/whyRelevant ריקים.',
+    'החזר JSON בלבד במבנה הבא:',
+    '{',
+    '  "matchStatus": "match או no-match",',
+    '  "noMatchReason": "הסבר קצר אם לא נמצא, אחרת מחרוזת ריקה",',
+    '  "title": "כותרת הכתבה",',
+    '  "url": "הקישור הישיר לכתבה, או מחרוזת ריקה אם לא נמצא",',
+    '  "summary": "תקציר תמציתי של 2-4 משפטים, או מחרוזת ריקה אם לא נמצא",',
+    '  "sourceName": "שם האתר או המקור",',
+    '  "whyRelevant": "למה הכתבה הזאת מתאימה לבקשה, או מחרוזת ריקה אם לא נמצא"',
+    '}',
+    '',
+    `הבקשה: ${query}`,
+  ].join('\n');
+};
+
+const stripVerifiedArticleCodeFence = (text = '') => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed.startsWith('```')) return trimmed;
+  return trimmed.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '').trim();
+};
+
+const parseVerifiedArticleJson = (text = '') => {
+  const cleaned = stripVerifiedArticleCodeFence(text);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) return {};
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      return {};
+    }
+  }
+};
+
+const normalizeVerifiedArticleMatchStatus = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (normalized === 'match') return 'match';
+  if (normalized === 'no-match' || normalized === 'no match' || normalized === 'nomatch') return 'no-match';
+  return '';
+};
+
+const extractOpenAiMessageText = (message = '') => {
+  if (typeof message === 'string') return message.trim();
+  if (!Array.isArray(message)) return '';
+  return message
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      return String(part?.text || '').trim();
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+};
+
+const normalizeGeminiVerifiedArticleSource = (raw = {}) => {
+  const title = normalizeSourceSearchText(raw?.title || raw?.displayName || '');
+  const url = normalizeArticleUrl(raw?.uri || raw?.url || '');
+  const domain = normalizeSourceSearchText(raw?.domain || extractArticleDomainFromUrl(url));
+  if (!title && !url) return null;
+  return {
+    title,
+    url,
+    snippet: '',
+    summary: domain,
+    authors: [],
+    year: '',
+    citedBy: null,
+    doi: extractDoiFromSource(url),
+    providerId: 'gemini-article-search',
+  };
+};
+
+const extractGeminiVerifiedArticleSources = (response = {}) => {
+  const groundingMetadata = response?.candidates?.[0]?.groundingMetadata;
+  const sources = Array.isArray(groundingMetadata?.groundingChunks)
+    ? groundingMetadata.groundingChunks
+      .map((chunk) => normalizeGeminiVerifiedArticleSource(chunk?.web || chunk?.retrievedContext || chunk))
+      .filter(Boolean)
+    : [];
+  return dedupeVerifiedSourceResults(sources).slice(0, VERIFIED_SOURCE_RESULT_LIMIT);
+};
+
+const extractGeminiGroundingUrlsFromResponse = (response = {}) => extractGeminiVerifiedArticleSources(response)
+  .map((item) => String(item?.url || '').trim())
+  .filter(Boolean);
+
+const extractPerplexityVerifiedArticleSources = (payload = {}) => {
+  const searchResults = Array.isArray(payload?.search_results)
+    ? payload.search_results.map(normalizePerplexityVerifiedSource).filter(Boolean)
+    : [];
+  if (searchResults.length) {
+    return dedupeVerifiedSourceResults(searchResults).slice(0, VERIFIED_SOURCE_RESULT_LIMIT);
+  }
+  const citations = Array.isArray(payload?.citations)
+    ? payload.citations.map(normalizePerplexityCitationSource).filter(Boolean)
+    : [];
+  return dedupeVerifiedSourceResults(citations).slice(0, VERIFIED_SOURCE_RESULT_LIMIT);
+};
+
+const scoreVerifiedArticleSource = (source = {}, parsed = {}) => {
+  const sourceTitle = normalizeArticleText(source?.title || '');
+  const sourceDomain = normalizeArticleText(source?.summary || extractArticleDomainFromUrl(source?.url) || '');
+  const targetTitle = normalizeArticleText(parsed?.title || '');
+  const targetSource = normalizeArticleText(parsed?.sourceName || '');
+  let score = 0;
+
+  if (targetTitle && sourceTitle) {
+    if (sourceTitle.includes(targetTitle) || targetTitle.includes(sourceTitle)) {
+      score += 6;
+    } else {
+      const overlap = targetTitle
+        .split(' ')
+        .filter((token) => token.length > 3 && sourceTitle.includes(token)).length;
+      score += overlap;
+    }
+  }
+
+  if (targetSource && (sourceDomain.includes(targetSource) || sourceTitle.includes(targetSource))) {
+    score += 4;
+  }
+
+  return score;
+};
+
+const selectPrimaryVerifiedArticleSource = (sources = [], parsed = {}) => {
+  if (!Array.isArray(sources) || !sources.length) return null;
+  return [...sources].sort((left, right) => scoreVerifiedArticleSource(right, parsed) - scoreVerifiedArticleSource(left, parsed))[0] || null;
+};
+
+const findVerifiedArticleSourceByUrl = (sources = [], url = '') => {
+  const normalizedUrl = normalizeArticleUrl(url);
+  if (!normalizedUrl) return null;
+  return (Array.isArray(sources) ? sources : []).find((source) => normalizeArticleUrl(source?.url) === normalizedUrl) || null;
+};
+
+const buildVerifiedArticleResultItem = (article = {}, providerId = '') => ({
+  title: String(article?.title || article?.url || 'כתבה מאומתת').trim(),
+  url: normalizeArticleUrl(article?.url),
+  snippet: [String(article?.summary || '').trim(), String(article?.whyRelevant || '').trim()].filter(Boolean).join(' | '),
+  summary: String(article?.sourceName || '').trim(),
+  authors: [],
+  year: '',
+  citedBy: null,
+  doi: extractDoiFromSource(article?.url),
+  providerId,
+});
+
+const buildVerifiedArticleNoMatch = ({ reason = '', providerId = '', model = '' } = {}) => ({
+  matchStatus: 'no-match',
+  noMatchReason: String(reason || 'לא נמצאה כתבה תואמת מספיק לבקשה.').trim(),
+  results: [],
+  providerId,
+  model,
+});
+
+const finalizeVerifiedArticleRetrieval = ({
+  query = '',
+  queryMeta = analyzeArticleQuery(query),
+  providerId = '',
+  model = '',
+  rawText = '',
+  rawMatchStatus = '',
+  rawNoMatchReason = '',
+  article = {},
+  sources = [],
+} = {}) => {
+  if (normalizeVerifiedArticleMatchStatus(rawMatchStatus) === 'no-match') {
+    return buildVerifiedArticleNoMatch({ reason: rawNoMatchReason, providerId, model });
+  }
+
+  const groundedParsedSource = findVerifiedArticleSourceByUrl(sources, article?.url);
+  const primarySource = groundedParsedSource || selectPrimaryVerifiedArticleSource(sources, article);
+  const normalizedArticleUrl = normalizeArticleUrl(primarySource?.url || groundedParsedSource?.url || '');
+  const normalizedArticle = {
+    title: String(article?.title || primarySource?.title || 'לא זוהתה כותרת').trim(),
+    summary: String(article?.summary || rawText || '').trim(),
+    sourceName: String(article?.sourceName || primarySource?.summary || extractArticleDomainFromUrl(primarySource?.url) || '').trim(),
+    whyRelevant: String(article?.whyRelevant || '').trim(),
+    url: normalizedArticleUrl,
+  };
+
+  const validationError = validateArticleCandidate(queryMeta, normalizedArticle, sources, rawText);
+  if (validationError) {
+    return buildVerifiedArticleNoMatch({ reason: validationError, providerId, model });
+  }
+
+  return {
+    matchStatus: 'match',
+    noMatchReason: '',
+    results: [buildVerifiedArticleResultItem(normalizedArticle, providerId)],
+    providerId,
+    model,
+  };
+};
+
+const resolveVerifiedArticleGeminiModel = (cfg = DEFAULT_PROVIDER_CONFIG) => {
+  const configuredModel = String(cfg?.gemini?.model || '').trim();
+  if (!configuredModel || configuredModel === DEFAULT_PROVIDER_CONFIG.gemini.model) {
+    return VERIFIED_ARTICLE_GEMINI_MODEL;
+  }
+  return configuredModel;
+};
+
+const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = VERIFIED_ARTICLE_GEMINI_MODEL } = {}) => {
+  const safeQuery = String(query || '').trim();
+  const safeApiKey = String(apiKey || '').trim();
+  if (!safeQuery || !safeApiKey) return buildVerifiedArticleNoMatch({ providerId: 'gemini-article-search', model });
+
+  const genAI = new GoogleGenerativeAI(safeApiKey);
+  const generativeModel = genAI.getGenerativeModel({
+    model: String(model || '').trim() || VERIFIED_ARTICLE_GEMINI_MODEL,
+    tools: [{ googleSearch: {} }],
+  });
+
+  const result = await generativeModel.generateContent(buildVerifiedArticlePrompt(safeQuery, 'gemini', queryMeta));
+  const response = result.response;
+  const rawText = String(response?.text?.() || '').trim();
+  const parsed = parseVerifiedArticleJson(rawText);
+  const sources = extractGeminiVerifiedArticleSources(response);
+
+  return finalizeVerifiedArticleRetrieval({
+    query: safeQuery,
+    queryMeta,
+    providerId: 'gemini-article-search',
+    model: String(model || '').trim() || VERIFIED_ARTICLE_GEMINI_MODEL,
+    rawText,
+    rawMatchStatus: parsed?.matchStatus,
+    rawNoMatchReason: parsed?.noMatchReason,
+    article: {
+      title: String(parsed?.title || '').trim(),
+      summary: String(parsed?.summary || '').trim(),
+      sourceName: String(parsed?.sourceName || '').trim(),
+      whyRelevant: String(parsed?.whyRelevant || '').trim(),
+      url: normalizeArticleUrl(parsed?.url),
+    },
+    sources,
+  });
+};
+
+const fetchPerplexityVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = 'sonar-pro', signal, timeoutMs = 0 } = {}) => {
+  const safeQuery = String(query || '').trim();
+  const safeApiKey = String(apiKey || '').trim();
+  if (!safeQuery || !safeApiKey) return buildVerifiedArticleNoMatch({ providerId: 'perplexity-article-search', model });
+
+  const data = await requestJsonOverHttp({
+    url: 'https://api.perplexity.ai/chat/completions',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${safeApiKey}`,
+    },
+    body: JSON.stringify({
+      model: String(model || '').trim() || 'sonar-pro',
+      messages: [
+        {
+          role: 'system',
+          content: 'Return JSON only. Prefer one grounded journalistic news article from a news site when the request asks for a כתבה. Reject official press releases, institute analysis pages, blogs, social posts, videos, and category pages. If no sufficiently matching article exists, return matchStatus=no-match.',
+        },
+        {
+          role: 'user',
+          content: buildVerifiedArticlePrompt(safeQuery, 'perplexity', queryMeta),
+        },
+      ],
+      max_tokens: 600,
+      temperature: 0,
+      stream: false,
+      disable_search: false,
+      web_search_options: {
+        search_mode: 'web',
+      },
+      return_related_questions: false,
+    }),
+    signal,
+    timeoutMs,
+  });
+
+  const rawText = extractOpenAiMessageText(data?.choices?.[0]?.message?.content);
+  const parsed = parseVerifiedArticleJson(rawText);
+  const sources = extractPerplexityVerifiedArticleSources(data);
+
+  return finalizeVerifiedArticleRetrieval({
+    query: safeQuery,
+    queryMeta,
+    providerId: 'perplexity-article-search',
+    model: String(model || '').trim() || 'sonar-pro',
+    rawText,
+    rawMatchStatus: parsed?.matchStatus,
+    rawNoMatchReason: parsed?.noMatchReason,
+    article: {
+      title: String(parsed?.title || '').trim(),
+      summary: String(parsed?.summary || '').trim(),
+      sourceName: String(parsed?.sourceName || '').trim(),
+      whyRelevant: String(parsed?.whyRelevant || '').trim(),
+      url: normalizeArticleUrl(parsed?.url),
+    },
+    sources,
+  });
+};
+
+const buildVerifiedSourceFailureMessage = ({ query = '', providerAvailable = false, academic = false, articleRequest = false, noMatchReason = '' } = {}) => {
   const lines = [SOURCE_GROUNDING_FAILURE_TOKEN];
-  lines.push(providerAvailable
-    ? (academic
-      ? 'לא נמצאו מקורות אקדמיים מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.'
-      : 'לא נמצאו מקורות מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.')
-    : (academic
-      ? 'אין כרגע ספק אחזור מאומת למקורות אקדמיים. הגדר SerpAPI או Perplexity academic כדי לקבל מקורות אמיתיים.'
-      : 'אין כרגע ספק אחזור מאומת למקורות. הגדר Perplexity או SerpAPI כדי לקבל תוצאות אמיתיות.'));
+  lines.push(articleRequest
+    ? (providerAvailable
+      ? 'לא נמצאה כתבת חדשות עיתונאית תואמת לשאילתה, ולכן לא החזרתי מקור קרוב-אבל-שגוי.'
+      : 'אין כרגע ספק אחזור מאומת לכתבות חדשות. הגדר Gemini או Perplexity כדי לקבל כתבה אמיתית או no-match ברור.')
+    : (providerAvailable
+      ? (academic
+        ? 'לא נמצאו מקורות אקדמיים מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.'
+        : 'לא נמצאו מקורות מאומתים לשאילתה, ולכן לא יצרתי מקורות על סמך המודל.')
+      : (academic
+        ? 'אין כרגע ספק אחזור מאומת למקורות אקדמיים. הגדר SerpAPI או Perplexity academic כדי לקבל מקורות אמיתיים.'
+        : 'אין כרגע ספק אחזור מאומת למקורות. הגדר Perplexity או SerpAPI כדי לקבל תוצאות אמיתיות.')));
+  if (noMatchReason) lines.push(`סיבת אי-ההתאמה: ${noMatchReason}`);
   if (query) lines.push(`שאילתת החיפוש שנבדקה: ${query}`);
   return lines.join('\n\n');
 };
@@ -3236,16 +3118,114 @@ const formatVerifiedSourceItem = (item = {}, index = 0) => {
   return lines.join('\n');
 };
 
-const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', academic = false } = {}) => {
+const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', academic = false, articleRequest = false } = {}) => {
   const providerLabel = providerId === 'serpapi-scholar'
     ? 'Google Scholar / SerpAPI'
-    : 'Perplexity Search';
+    : providerId === 'gemini-article-search'
+      ? 'Gemini + Google Search'
+      : 'Perplexity Search';
   return [
-    `${academic ? 'מקורות אקדמיים' : 'מקורות'} מאומתים בלבד${query ? ` עבור: ${query}` : ''}`,
-    `הוחזרו רק פריטים שאותרו ישירות דרך ${providerLabel}, בלי השלמה חופשית של המודל.`,
+    `${academic ? 'מקורות אקדמיים' : articleRequest ? 'כתבה מאומתת' : 'מקורות'} בלבד${query ? ` עבור: ${query}` : ''}`,
+    articleRequest
+      ? `הוחזרה רק כתבת חדשות עיתונאית שאותרה ישירות דרך ${providerLabel}. אם לא הייתה התאמה נאמנה מספיק, הוחזר no-match.`
+      : `הוחזרו רק פריטים שאותרו ישירות דרך ${providerLabel}, בלי השלמה חופשית של המודל.`,
     ...results.map((item, index) => formatVerifiedSourceItem(item, index)),
-    'לא הוספתי מקורות שלא הופיעו בתוצאות האחזור.',
+    articleRequest
+      ? 'לא הוחזרה כתבה שלא הופיעה בפועל בתוצאות האחזור או שלא עמדה בכללי ההתאמה.'
+      : 'לא הוספתי מקורות שלא הופיעו בתוצאות האחזור.',
   ].filter(Boolean).join('\n\n');
+};
+
+const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '' } = {}) => {
+  const baseQuery = String(query || '').trim();
+  const fallbackQuery = buildNewsSiteBiasedArticleQuery(baseQuery, queryMeta);
+  const searchQueries = fallbackQuery && fallbackQuery !== baseQuery ? [baseQuery, fallbackQuery] : [baseQuery];
+  const attempts = [];
+
+  if (String(cfg?.gemini?.key || '').trim()) {
+    const geminiModel = resolveVerifiedArticleGeminiModel(cfg);
+    attempts.push({
+      providerId: 'gemini-article-search',
+      model: geminiModel,
+      run: (searchQuery = baseQuery) => fetchGeminiVerifiedArticleSource({
+        query: searchQuery,
+        queryMeta,
+        apiKey: cfg.gemini.key,
+        model: geminiModel,
+      }),
+    });
+  }
+
+  if (String(cfg?.perplexity?.key || '').trim()) {
+    attempts.push({
+      providerId: 'perplexity-article-search',
+      model: String(cfg?.perplexity?.model || '').trim() || 'sonar-pro',
+      run: (searchQuery = baseQuery, signal) => fetchPerplexityVerifiedArticleSource({
+        query: searchQuery,
+        queryMeta,
+        apiKey: cfg.perplexity.key,
+        model: cfg.perplexity.model,
+        signal,
+        timeoutMs,
+      }),
+    });
+  }
+
+  if (!attempts.length || !queryMeta.expectsNewsArticle || !baseQuery) {
+    return {
+      text: buildVerifiedSourceFailureMessage({ query: baseQuery, providerAvailable: false, articleRequest: true }),
+      providerId: 'verified-source-block',
+      model: '',
+      urls: new Set(),
+      query: baseQuery,
+      workspaceId,
+      academic: false,
+    };
+  }
+
+  let lastError = null;
+  let lastNoMatchReason = '';
+  for (const attempt of attempts) {
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    try {
+      for (const searchQuery of searchQueries) {
+        const result = await withTimeout(attempt.run(searchQuery, abortController?.signal), timeoutMs, () => abortController?.abort());
+        const results = Array.isArray(result?.results) ? result.results : [];
+        if (results.length) {
+          return {
+            text: buildVerifiedSourceReply({ query: baseQuery, results, providerId: attempt.providerId, articleRequest: true }),
+            providerId: attempt.providerId,
+            model: attempt.model,
+            urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+            query: baseQuery,
+            workspaceId,
+            academic: false,
+          };
+        }
+        if (result?.matchStatus === 'no-match' && result.noMatchReason) {
+          lastNoMatchReason = String(result.noMatchReason || '').trim();
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return {
+    text: buildVerifiedSourceFailureMessage({
+      query: baseQuery,
+      providerAvailable: attempts.length > 0,
+      articleRequest: true,
+      noMatchReason: lastNoMatchReason,
+    }),
+    providerId: 'verified-source-block',
+    model: lastError ? 'retrieval-failed' : '',
+    urls: new Set(),
+    query: baseQuery,
+    workspaceId,
+    academic: false,
+    error: lastError,
+  };
 };
 
 const resolveVerifiedSourceReply = async ({
@@ -3258,19 +3238,28 @@ const resolveVerifiedSourceReply = async ({
   timeoutMs = 0,
 } = {}) => {
   const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
-  const normalizedPrompt = normalizeSourceSearchText(userPrompt);
   const query = extractVerifiedSourceQuery({
     userPrompt,
     documentContext,
     fallbackQuery: getLastVerifiedSourceQuery({ workspaceId }),
     workspaceId,
   });
-  const academicSignal = ACADEMIC_SOURCE_SIGNAL_PATTERN.test([userPrompt, extraSystemPrompt, documentContext].filter(Boolean).join('\n'));
+  const normalizedSkillId = String(skillId || '').trim().toLowerCase();
   const academic = typeof isAcademicTask === 'boolean'
     ? isAcademicTask
-    : academicSignal || (isPotentialVerifiedSourceFollowUp(normalizedPrompt)
-      && hasRecentVerifiedSourceFollowUpContext({ workspaceId })
-      && isRememberedVerifiedSourceAcademic({ workspaceId }));
+    : (SOURCE_GROUNDING_SKILL_IDS.has(normalizedSkillId)
+      || ACADEMIC_SOURCE_SIGNAL_PATTERN.test([userPrompt, extraSystemPrompt, documentContext, normalizedSkillId].filter(Boolean).join('\n')));
+  const articleQueryMeta = analyzeArticleQuery(query);
+
+  if (!academic && articleQueryMeta.expectsNewsArticle) {
+    return resolveVerifiedArticleSourceReply({
+      query,
+      queryMeta: articleQueryMeta,
+      cfg,
+      timeoutMs,
+      workspaceId,
+    });
+  }
 
   const attempts = [];
   if (academic && String(cfg?.scholar?.provider || '').trim() === 'serpapi' && String(cfg?.scholar?.key || '').trim()) {
@@ -3433,32 +3422,6 @@ const getConfiguredProviderPool = (cfg = null, preferredProviders = []) => {
   return configured;
 };
 
-const getConfiguredProvidersByRuntimeCapability = (cfg = null, capability = '', preferredProviders = []) => {
-  const requestedCapability = String(capability || '').trim();
-  if (!requestedCapability) return getConfiguredProviderPool(cfg, preferredProviders);
-  return getConfiguredProviderPool(cfg, preferredProviders)
-    .filter((providerId) => providerHasRuntimeCapability(providerId, requestedCapability));
-};
-
-const buildInternetBackedSourceProviderError = ({ subjectLabel = 'הבקשה הזו', requestedProviderId = '', configuredProviderIds = [], cfg = null } = {}) => {
-  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
-  const providerLabelMap = getProviderLabelMap(safeCfg);
-  const availableProviders = normalizeProviderIds(configuredProviderIds, '')
-    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg) && isProviderInternetBackedSourceCapable(providerId));
-  const availableLabels = availableProviders
-    .map((providerId) => providerLabelMap[providerId] || providerId)
-    .join(', ');
-  const requestedLabel = String(requestedProviderId || '').trim()
-    ? (providerLabelMap[String(requestedProviderId || '').trim()] || String(requestedProviderId || '').trim())
-    : '';
-
-  if (availableLabels) {
-    return `${subjectLabel} מחייבת חיפוש או אימות מקורות דרך provider עם גישה ישירה לאינטרנט. ${requestedLabel ? `${requestedLabel} לא מחווט לכך באפליקציה הזו. ` : ''}בחר provider מתאים: ${availableLabels}.`;
-  }
-
-  return `${subjectLabel} מחייבת חיפוש או אימות מקורות דרך provider עם גישה ישירה לאינטרנט, אבל אין כרגע provider כזה מוגדר באפליקציה הזו. כרגע רק Perplexity מחווט כאן לאחזור מקורות אמיתי.`;
-};
-
 const isManagerReviewAgent = (agent = {}) => /manager.*review|review.*manager|מנהל.*בדיק|בדיק.*מנהל/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 const isDocumentDesignerAgent = (agent = {}) => /(document-designer|מעצב מסמך|סגנון אישי|human)/i.test(`${String(agent?.id || '')} ${String(agent?.name || '')}`);
 
@@ -3515,45 +3478,27 @@ export const isProviderModelChoiceCompatible = (providerId = '', modelName = '',
   return !inferredProvider || inferredProvider === safeProvider;
 };
 
-const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = [], options = {}) => {
+const chooseProviderForAgent = (agent = {}, cfg = null, preferredProviders = []) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const requestedPool = normalizeProviderIds(preferredProviders, '');
-  const sourceWorkRequired = options?.sourceWorkRequired === true || (
-    options?.sourceWorkRequired !== false
-    && requiresInternetBackedSourceWork({
-      agent,
-      stageGoal: options?.stageGoal || '',
-      stageInstruction: options?.stageInstruction || '',
-      stageLabel: options?.stageLabel || '',
-      userPrompt: options?.userPrompt || '',
-      extraSystemPrompt: options?.extraSystemPrompt || '',
-      includeRequestSignals: options?.includeRequestSignals !== false,
-    })
-  );
-  const filterProviderPool = (providerIds = []) => providerIds
-    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg))
-    .filter((providerId) => !sourceWorkRequired || isProviderInternetBackedSourceCapable(providerId));
-  const routingPool = filterProviderPool(requestedPool);
+  const routingPool = requestedPool
+    .filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
   const explicitProvider = String(agent?.provider || '').trim();
   if (explicitProvider) {
-    const explicitProviderAllowed = isProviderConfiguredForUse(explicitProvider, safeCfg)
-      && (!sourceWorkRequired || isProviderInternetBackedSourceCapable(explicitProvider))
-      && (!requestedPool.length || routingPool.includes(explicitProvider));
-    if (explicitProviderAllowed) return explicitProvider;
-    if (requestedPool.length && !routingPool.length) return '';
+    if (!isProviderConfiguredForUse(explicitProvider, safeCfg)) return '';
+    if (routingPool.length && !routingPool.includes(explicitProvider)) return '';
+    return explicitProvider;
   }
 
   const roleKey = getAgentRoleKey(agent);
   if (requestedPool.length && !routingPool.length) return '';
   const pool = routingPool.length
     ? routingPool
-    : filterProviderPool(getSelectedProviderIds(safeCfg));
+    : getSelectedProviderIds(safeCfg).filter((providerId) => isProviderConfiguredForUse(providerId, safeCfg));
   if (!pool.length) return '';
   const inferredProvider = inferProviderFromModelHint(agent?.model || '', pool, safeCfg);
   if (inferredProvider) return inferredProvider;
-  const preferences = sourceWorkRequired
-    ? getProviderIdsWithRuntimeCapability(INTERNET_BACKED_SOURCE_CAPABILITY)
-    : roleKey === 'researcher'
+  const preferences = roleKey === 'researcher'
     ? ['perplexity', 'gemini', 'openai', 'claude', 'groq', 'custom', 'ollama']
     : roleKey === 'proofreader'
       ? ['claude', 'openai', 'gemini', 'groq', 'custom', 'ollama', 'perplexity']
@@ -3684,16 +3629,18 @@ const hasExplicitVisualResearchNeed = (text = '') => {
     || (VISUAL_RESEARCH_WEAK_SIGNAL_PATTERN.test(value) && VISUAL_RESEARCH_WEAK_REQUEST_SIGNAL_PATTERN.test(value));
 };
 const hasVisualResearchGapInContext = (text = '') => /(פער(?:ים)?\s+חזותי(?:ים)?|חסר(?:ים)?\s+(?:חומר(?:י|ים)?\s+חזותי(?:ים)?|מקור(?:ות)?\s+חזותי(?:ים)?|צילום(?:י)?\s+מסך|screenshots?|סרטו(?:ן|נים)|וידאו|diagram|diagrams|תרשים|תרשימים)|missing\s+visual|need\s+visual|need\s+screenshots?|need\s+video)/i.test(String(text || ''));
-const shouldEnforceConcreteAcademicResearch = (agent = {}, { isAcademicTask = false } = {}) => {
+const shouldEnforceConcreteAcademicResearch = (agent = {}, { academicResearchRequested = false, isAcademicTask = false } = {}) => {
   const stableAgentId = String(agent?.id || '').trim().toLowerCase();
-  if (/^researcher-academic$/.test(stableAgentId)) return true;
-  return isAcademicTask && /^(researcher|source-hunter|citation-weaver)$/.test(stableAgentId);
+  if (academicResearchRequested && /^(researcher|researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId)) return true;
+  if (/^(researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId)) return true;
+  return isAcademicTask && /^(researcher|researcher-academic|source-hunter|citation-weaver)$/.test(stableAgentId);
 };
 
 const buildHeuristicStageGoals = ({ orderedAgents = [], activeSkill = null, isAcademic = false, structureOptOut = false } = {}) => {
   const skillId = String(activeSkill?.id || '').trim().toLowerCase();
   const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
   const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
+  const skillRequiresAcademicResearch = ['source-hunter', 'citation-weaver'].includes(skillId);
   const stageGoals = {};
 
   orderedAgents.forEach((agent) => {
@@ -3731,6 +3678,7 @@ const buildHeuristicStageGoals = ({ orderedAgents = [], activeSkill = null, isAc
 
     if (roleKey === 'researcher') {
       const requiresConcreteSources = shouldEnforceConcreteAcademicResearch(agent, {
+        academicResearchRequested: skillRequiresAcademicResearch,
         isAcademicTask: isAcademic,
       });
       stageGoals[agent.id] = requiresConcreteSources
@@ -3790,7 +3738,7 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
     || hasExplicitVisualResearchNeed(documentContext)
     || hasVisualResearchGapInContext(documentContext);
   const disablesResearch = /(בלי מקורות|ללא מקורות|לא נדרשים מקורות|בלי מקור|ללא מקור|no sources|without sources)/i.test(combined);
-  const skillPrefersResearch = ['draft-from-materials'].includes(skillId);
+  const skillPrefersResearch = ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId);
   const skillPrefersStructure = ['academic-structure', 'template-autopilot'].includes(skillId);
   const skillPrefersPolish = ['consistency-checker', 'final-submission', 'style-guardian'].includes(skillId);
   const needsResearch = !disablesResearch && (skillPrefersResearch || isAcademic || /(reference|references|citation|source|sources|literature|journal)/i.test(combined));
@@ -3937,7 +3885,7 @@ const buildAutopilotTaskProfile = ({ userPrompt = '', documentContext = '', stru
     || hasVisualResearchGapInContext(documentContext);
   const disablesResearch = /(בלי מקורות|ללא מקורות|לא נדרשים מקורות|בלי מקור|ללא מקור|no sources|without sources)/i.test(combined);
   const needsResearch = !disablesResearch && (
-    ['draft-from-materials'].includes(skillId)
+    ['source-hunter', 'citation-weaver', 'draft-from-materials'].includes(skillId)
     || isAcademic
     || isExplicitSourceRequest(requestText)
     || /(research|מחקר|literature|peer[-\s]?reviewed|evidence|evidence-based)/i.test(combined)
@@ -4357,7 +4305,7 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
   const autopilotProfileJson = JSON.stringify(autopilotTaskProfile, null, 2);
   const planningSchemaText = isFullAutopilot
     ? 'החזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","executionStyle":"lean|balanced|deep","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"stageInstructions":{"writer":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי"},"providers":{"researcher-academic":"perplexity"},"models":{"writer":"gpt-4o"},"roundBudget":{"minPerAgent":1,"maxPerAgent":3,"finalManagerPasses":2},"needsFinalManagerReview":true}.'
-    : 'החזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"perplexity","manager-review":"gemini"},"needsFinalManagerReview":false}.';
+    : 'החזר JSON בלבד וללא טקסט נוסף במבנה הזה: {"summary":"...","order":["manager","researcher-academic","researcher-general","researcher-visual","writer","document-designer","lecturer-review","manager-review"],"goals":{"manager":"...","manager-review":"..."},"roleLabels":{"researcher-academic":"חוקר אקדמי","researcher-general":"חוקר משלים","researcher-visual":"חוקר חזותי","writer":"כותב תוכן","manager-review":"מנהל מסכם"},"providers":{"researcher-academic":"perplexity","researcher-visual":"gemini","manager-review":"gemini"},"needsFinalManagerReview":false}.';
 
   try {
     logEvent('manager-plan-start', 'מנהל העבודה בונה תכנית ביצוע דינמית', {
@@ -4375,8 +4323,6 @@ const planWithManagerIfNeeded = async ({ cleanUserPrompt, documentContext, struc
       {
         providerOverride: managerProvider,
         preferredProviders: managerProvider ? [managerProvider] : preferredProviders,
-        requestSourceClassification: buildInternalRequestSourceClassification(false),
-        skipVerifiedSourceShortCircuit: true,
         strictProviderOverride: true,
         modelOverride: effectiveManagerModelOverride,
         preserveFullDocumentContext,
@@ -4652,10 +4598,6 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.tonePreferences?.length) parts.push(`טון כתיבה מועדף: ${profile.tonePreferences.join(', ')}`);
   if (profile.sentenceLengthPreference) parts.push(`אורך משפטים מועדף: ${profile.sentenceLengthPreference}`);
   if (profile.paragraphLengthPreference) parts.push(`אורך פסקאות מועדף: ${profile.paragraphLengthPreference}`);
-  if (includeAcademicContext && !omitStructuralHints) {
-    parts.push('כשמדובר בעבודה אקדמית והמשתמש לא ביקש מבנה אחר, ברירת המחדל היא פסקאות רציפות שמפתחות טיעון ולא outline מפורק עם תתי-כותרות רבות.');
-    parts.push('יש לקדם את הטיעון באמצעות מעברים טבעיים ומילות קישור בתוך הפסקאות, ולא באמצעות תוויות מודגשות קצרות או כותרות-מיני על כל נקודה.');
-  }
   if (profile.alwaysRules) parts.push(`כללים שחייבים להישמר בכל תוצר: ${String(profile.alwaysRules).trim()}`);
   if (profile.avoidRules) parts.push(`יש להימנע במיוחד מהדברים הבאים: ${String(profile.avoidRules).trim()}`);
   if (profile.greetingStyle) parts.push(`אם מתאים לפתוח את הטקסט בברכה, העדף את הסגנון: ${String(profile.greetingStyle).trim()}`);
@@ -4669,9 +4611,9 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     parts.push('המשתמש ביקש שהמערכת תישען בעיקר על ההעדפות שהגדיר ידנית, בלי הרחבה אוטומטית מעבר להן.');
   } else {
     if (profile.learnedSentencePatterns?.length) parts.push(`דפוסי כתיבה שנלמדו: ${profile.learnedSentencePatterns.join(', ')}`);
-    if (profile.preferredConnectors?.length) parts.push(`שלב בפועל מחברי טקסט טבעיים שהמשתמש נוטה להשתמש בהם, למשל: ${profile.preferredConnectors.join(', ')}`);
-    if (profile.preferredSentenceOpeners?.length) parts.push(`שלב לאורך הטקסט גם פתיחות משפט או פסקה אופייניות כגון: ${profile.preferredSentenceOpeners.join(', ')}`);
-    if (profile.toneDescriptors?.length) parts.push(`שמור על מאפייני הטון שנלמדו מהכתיבה: ${profile.toneDescriptors.join(', ')}`);
+    if (profile.preferredConnectors?.length) parts.push(`מחברי טקסט שחוזרים אצל המשתמש: ${profile.preferredConnectors.join(', ')}`);
+    if (profile.preferredSentenceOpeners?.length) parts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.join(', ')}`);
+    if (profile.toneDescriptors?.length) parts.push(`מאפייני טון שנלמדו: ${profile.toneDescriptors.join(', ')}`);
     if (profile.learnedVocabulary?.length) parts.push(`מונחים שנלמדו מהכתיבה שלך: ${profile.learnedVocabulary.slice(0, 14).join(', ')}`);
     if (profile.learnedPhrases?.length) parts.push(`צירופים אופייניים שנלמדו: ${profile.learnedPhrases.slice(0, 8).join(', ')}`);
     if (fingerprint.avgSentenceWords) parts.push(`ממוצע מילים למשפט: ${fingerprint.avgSentenceWords}`);
@@ -5615,6 +5557,7 @@ export const isAiRequestTimeoutError = (error) => (
   Boolean(error?.isTimeout)
   || String(error?.code || '').trim().toUpperCase() === AI_REQUEST_TIMEOUT_ERROR_CODE
   || String(error?.name || '').trim() === 'TimeoutError'
+  || /הבקשה\s+ארכה\s+יותר\s+מדי/.test(String(error?.message || ''))
 );
 
 const buildAiRequestTimeoutError = (timeoutMs) => {
@@ -5633,22 +5576,14 @@ const withTimeout = async (promise, timeoutMs, onTimeout) => {
   if (!Number.isFinite(safeTimeoutMs) || safeTimeoutMs <= 0) return promise;
 
   let timerId = null;
-  let timeoutTriggered = false;
   let timeoutError = null;
-  const guardedPromise = Promise.resolve(promise).catch((error) => {
-    if (timeoutTriggered && String(error?.name || '').trim() === 'AbortError') {
-      throw timeoutError || buildAiRequestTimeoutError(safeTimeoutMs);
-    }
-    throw error;
-  });
   try {
     return await Promise.race([
-      guardedPromise,
+      promise,
       new Promise((_, reject) => {
         timerId = window.setTimeout(() => {
-          timeoutTriggered = true;
-          timeoutError = buildAiRequestTimeoutError(safeTimeoutMs);
           try { onTimeout?.(); } catch {}
+          timeoutError = buildAiRequestTimeoutError(safeTimeoutMs);
           reject(timeoutError);
         }, safeTimeoutMs);
       }),
@@ -5686,7 +5621,6 @@ export const DEFAULT_APP_MEMORY = {
   lastSelectedAgentId: '',
   lastResolvedSkillLabel: '',
   lastVerifiedSourceQuery: '',
-  lastVerifiedSourceRetrievalMode: '',
   lastVerifiedSourceWorkspaceId: '',
   updatedAt: '',
 };
@@ -5922,20 +5856,6 @@ const getLastVerifiedSourceQuery = ({ workspaceId = '' } = {}) => {
   return String(current.lastVerifiedSourceQuery || '').trim();
 };
 
-const getLastVerifiedSourceRetrievalMode = ({ workspaceId = '' } = {}) => {
-  const current = getAppMemory();
-  const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
-  if (String(current.lastVerifiedSourceWorkspaceId || '').trim() !== safeWorkspaceId) return '';
-  const retrievalMode = String(current.lastVerifiedSourceRetrievalMode || '').trim().toLowerCase();
-  return retrievalMode === 'academic' || retrievalMode === 'web' ? retrievalMode : '';
-};
-
-const isRememberedVerifiedSourceAcademic = ({ workspaceId = '' } = {}) => {
-  const retrievalMode = getLastVerifiedSourceRetrievalMode({ workspaceId });
-  if (retrievalMode) return retrievalMode === 'academic';
-  return ACADEMIC_SOURCE_SIGNAL_PATTERN.test(getLastVerifiedSourceQuery({ workspaceId }));
-};
-
 const hasRecentVerifiedSourceFollowUpContext = ({ workspaceId = '', maxAgeMs = RECENT_VERIFIED_SOURCE_FOLLOW_UP_WINDOW_MS } = {}) => {
   const current = getAppMemory();
   const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
@@ -5950,7 +5870,7 @@ const hasRecentVerifiedSourceFollowUpContext = ({ workspaceId = '', maxAgeMs = R
   return ageMs >= 0 && ageMs <= maxAgeMs;
 };
 
-const rememberVerifiedSourceQuery = ({ query = '', workspaceId = '', academic = false } = {}) => {
+const rememberVerifiedSourceQuery = ({ query = '', workspaceId = '' } = {}) => {
   const safeQuery = String(query || '').trim();
   if (!safeQuery) return getAppMemory();
   const safeWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
@@ -5958,7 +5878,6 @@ const rememberVerifiedSourceQuery = ({ query = '', workspaceId = '', academic = 
   return saveAppMemory({
     ...current,
     lastVerifiedSourceQuery: trimLogText(safeQuery, 420),
-    lastVerifiedSourceRetrievalMode: academic ? 'academic' : 'web',
     lastVerifiedSourceWorkspaceId: safeWorkspaceId,
   });
 };
@@ -5994,7 +5913,6 @@ export const clearSidebarChatHistory = ({ workspaceId = '', clearAll = false } =
       ...currentMemory,
       recentChats: [],
       lastVerifiedSourceQuery: '',
-      lastVerifiedSourceRetrievalMode: '',
       lastVerifiedSourceWorkspaceId: '',
     });
   } else {
@@ -6004,7 +5922,6 @@ export const clearSidebarChatHistory = ({ workspaceId = '', clearAll = false } =
       saveAppMemory({
         ...currentMemory,
         lastVerifiedSourceQuery: '',
-        lastVerifiedSourceRetrievalMode: '',
         lastVerifiedSourceWorkspaceId: '',
       });
     }
@@ -6358,7 +6275,9 @@ const normalizeProviderCompletionPayload = (completion = {}, provider = '') => {
   const reason = normalizeCompletionMetadataValue(completion.reason) || finishReason || stopReason;
   const providerId = normalizeCompletionMetadataValue(completion.provider) || normalizeCompletionMetadataValue(provider);
   const model = normalizeCompletionMetadataValue(completion.model);
-  const allowedUrls = extractAllowedGroundingUrlsFromCompletion(completion);
+  const allowedUrls = Array.isArray(completion.allowedUrls)
+    ? completion.allowedUrls.map((url) => String(url || '').trim()).filter(Boolean)
+    : [];
   const normalized = {
     ...(reason ? { reason } : {}),
     ...(finishReason ? { finishReason } : {}),
@@ -6396,8 +6315,6 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
     text: data.choices?.[0]?.message?.content || '',
     completion: {
       finishReason: data.choices?.[0]?.finish_reason || '',
-      ...(Array.isArray(data?.citations) ? { citations: data.citations } : {}),
-      ...(Array.isArray(data?.search_results) ? { searchResults: data.search_results } : {}),
     },
   }, '', includeCompletionMetadata);
 
@@ -6545,7 +6462,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     || selectedProviders[0]
     || cfg.active;
   const skipSkillSelection = options.skipSkillSelection === true;
-  const skipVerifiedSourceShortCircuit = options.skipVerifiedSourceShortCircuit === true;
   const skipAutomationPrompt = options.skipAutomationPrompt === true || options.skipAutomation === true;
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
@@ -6567,56 +6483,38 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     });
   const activeSkill = skillResolution.skill;
   const skillPrompt = buildSkillSystemPrompt(activeSkill, skillResolution.reason, activeSkill ? skillsConfig.skills?.[activeSkill.id] : null);
-  const requestSourceClassification = resolveRequestSourceClassification({
+  const sourceGroundingRequired = shouldUseStrictSourceGrounding({
     userPrompt: cleanUserPrompt,
     documentContext,
     extraSystemPrompt,
     skillId: activeSkill?.id || options.skillId || '',
-    overrides: options.requestSourceClassification,
   });
-  const {
-    sourceGroundingRequired,
-    internetBackedSourceWorkRequired,
-    sourceOnlyGroundingRequest,
-    sourceHunterSourceOnlyShortcut,
-  } = requestSourceClassification;
-  const strictSourceGroundingEnabled = true;
-  const shouldShortCircuitToVerifiedSources = strictSourceGroundingEnabled
-    && !skipVerifiedSourceShortCircuit
-    && sourceOnlyGroundingRequest
-    && (sourceGroundingRequired || sourceHunterSourceOnlyShortcut);
-  const configuredInternetSourceProviders = getConfiguredProvidersByRuntimeCapability(cfg, INTERNET_BACKED_SOURCE_CAPABILITY);
+  const internetBackedSourceWorkRequired = sourceGroundingRequired || shouldUseInternetBackedSourceWork({
+    userPrompt: cleanUserPrompt,
+    extraSystemPrompt,
+  });
   const sourceAutoRouteEnabled = assistantBehavior.autoRouteSourceRequests !== false;
   const requestedProvider = activeProvider;
-  const activeProviderCanServeInternetSourceWork = isProviderConfiguredForUse(activeProvider, cfg)
-    && isProviderInternetBackedSourceCapable(activeProvider);
-  const hasExplicitProviderSelection = strictProviderOverride || preferredProviders.length > 0;
   const sourceRequestAutoRouted = sourceAutoRouteEnabled
-    && internetBackedSourceWorkRequired
-    && !hasExplicitProviderSelection
-    && !activeProviderCanServeInternetSourceWork
-    && configuredInternetSourceProviders.length;
+    && sourceGroundingRequired
+    && !strictProviderOverride
+    && activeProvider !== 'perplexity'
+    && isProviderConfiguredForUse('perplexity', cfg);
   if (sourceRequestAutoRouted) {
-    activeProvider = configuredInternetSourceProviders[0];
-  }
-  if (internetBackedSourceWorkRequired && !activeProviderCanServeInternetSourceWork && !sourceRequestAutoRouted && !hasExplicitProviderSelection && !shouldShortCircuitToVerifiedSources) {
-    throw new Error(buildInternetBackedSourceProviderError({
-      subjectLabel: 'הבקשה הנוכחית',
-      requestedProviderId: requestedProvider || activeProvider,
-      configuredProviderIds: configuredInternetSourceProviders,
-      cfg,
-    }));
+    activeProvider = 'perplexity';
   }
   const taggedModelOverride = strictProviderOverride
     ? ''
     : taggedRouting.providerModels?.[activeProvider]
     || (preferredProviders.length ? '' : taggedRouting.taggedModel);
   const modelOverride = sourceRequestAutoRouted ? (taggedModelOverride || '') : (options.modelOverride || taggedModelOverride || '');
-  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && internetBackedSourceWorkRequired && !strictProviderOverride && configuredInternetSourceProviders.length
-    ? configuredInternetSourceProviders
+  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !strictProviderOverride && isProviderConfiguredForUse('perplexity', cfg)
+    ? normalizeProviderIds(['perplexity', ...automationPreferredProviders], '')
     : automationPreferredProviders;
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
+  const strictSourceGroundingEnabled = true;
   const providerSupportsSourceGrounding = sourceGroundingRequired && isSourceGroundingProvider(activeProvider);
+  const providerSupportsGeminiInternetBackedSourceTools = internetBackedSourceWorkRequired && supportsInternetBackedSourceRetrieval(activeProvider);
   const sourceGroundingAllowedUrls = new Set([
     ...extractUrlSetFromText(cleanUserPrompt),
     ...extractUrlSetFromText(extraSystemPrompt),
@@ -6632,7 +6530,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const agentLabel = options.agentLabel || 'הסוכן הראשי';
   const agentName = options.agentName || agentLabel;
   const includeCompletionMetadata = options.includeCompletionMetadata === true;
-  const captureCompletionMetadata = includeCompletionMetadata || (strictSourceGroundingEnabled && sourceGroundingRequired);
+  const preserveProviderCompletionMetadata = includeCompletionMetadata || (strictSourceGroundingEnabled && sourceGroundingRequired);
   const requestTimeoutMs = Number(automation.requestTimeoutMs);
   const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
     ? Math.max(10000, Math.round(requestTimeoutMs))
@@ -6676,15 +6574,15 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       ? responseOptions.providerSupportsGroundingOverride
       : providerSupportsSourceGrounding;
     const normalizedReply = normalizeProviderTextResponse(replyText, responseProvider);
-    const allowedUrlsForReply = mergeSourceGroundingUrls(
-      sourceGroundingAllowedUrls,
-      responseOptions.allowedUrls,
-      normalizedReply.completion?.allowedUrls,
-    );
+    const allowedUrls = new Set([
+      ...Array.from(sourceGroundingAllowedUrls || []),
+      ...Array.from(responseOptions.allowedUrls || []),
+      ...Array.from(normalizedReply.completion?.allowedUrls || []),
+    ].map((url) => String(url || '').trim()).filter(Boolean));
     const safeReplyText = sanitizeSourceGroundingResponse(normalizedReply.text, {
       enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
       providerSupportsGrounding: providerSupportsGroundingForReply,
-      allowedUrls: allowedUrlsForReply,
+      allowedUrls,
     });
     const safeReply = safeReplyText === normalizedReply.text
       ? normalizedReply
@@ -6706,6 +6604,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     } catch {}
     return includeCompletionMetadata ? safeReply : safeReply.text;
   };
+  const shouldShortCircuitToVerifiedSources = strictSourceGroundingEnabled
+    && sourceGroundingRequired
+    && options.skipAutomation !== true
+    && isSourceOnlyGroundingRequest({
+      userPrompt: cleanUserPrompt,
+      extraSystemPrompt,
+      skillId: activeSkill?.id || options.skillId || '',
+    });
   if (shouldShortCircuitToVerifiedSources) {
     logEvent('verified-source-retrieval-start', 'מפעיל אחזור מאומת למקורות לפני יצירת תשובה', {
       state: 'running',
@@ -6734,7 +6640,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         try {
           rememberVerifiedSourceQuery({
             query: verifiedSourceReply.query,
-            academic: verifiedSourceReply.academic === true,
             workspaceId: verifiedSourceReply.workspaceId || activeWorkspaceId,
           });
         } catch {}
@@ -6824,7 +6729,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         automation,
         cfg,
         selectedProviders,
-        preferredProviders: automationPreferredProviders,
+        preferredProviders: sourceAwareAutomationPreferredProviders,
         runId,
         logEvent,
         onStatus,
@@ -6921,39 +6826,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           || executionPlan?.stageLabels?.[stageRoutingKey]
           || stageAgent.name;
           const stageInstruction = resolveStagePlanString(executionPlan?.stageInstructions || {}, stageAgent);
-          const stageRequiresInternetBackedSourceWork = requiresInternetBackedSourceWork({
-            agent: stageAgent,
-            stageGoal,
-            stageInstruction,
-            stageLabel,
-            includeRequestSignals: false,
-          });
-          const stagePreferredProviders = stageRequiresInternetBackedSourceWork
-            ? configuredInternetSourceProviders
-            : automationPreferredProviders;
-          const allowedStageProviders = stageRequiresInternetBackedSourceWork
-            ? configuredInternetSourceProviders
-            : getConfiguredProviderPool(cfg, stagePreferredProviders);
+          const allowedStageProviders = getConfiguredProviderPool(cfg, sourceAwareAutomationPreferredProviders);
           const normalizedRequestedProvider = resolveExplicitProviderCandidate([
             executionPlan?.stageProviders?.[stageAgent.id],
             executionPlan?.stageProviders?.[stageAgent.name],
             executionPlan?.stageProviders?.[String(stageAgent.id || '').toLowerCase()],
             executionPlan?.stageProviders?.[stageRoutingKey],
           ], allowedStageProviders, cfg);
-          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, stagePreferredProviders, {
-            stageGoal,
-            stageInstruction,
-            stageLabel,
-            includeRequestSignals: false,
-            sourceWorkRequired: stageRequiresInternetBackedSourceWork,
-          });
-          if (stageRequiresInternetBackedSourceWork && !stageProvider) {
-            throw new Error(buildInternetBackedSourceProviderError({
-              subjectLabel: `השלב "${stageLabel || stageAgent.name || stageAgent.id}"`,
-              configuredProviderIds: configuredInternetSourceProviders,
-              cfg,
-            }));
-          }
+          const stageProvider = normalizedRequestedProvider || chooseProviderForAgent(stageAgent, cfg, sourceAwareAutomationPreferredProviders);
           const plannedStageModel = resolveStagePlanString(executionPlan?.stageModels || {}, stageAgent);
           const rawStageRequestedModel = plannedStageModel || stageAgent.model || taggedRouting.providerModels?.[stageProvider] || getModelNameForProvider(stageProvider, cfg, modelOverride);
           const stageRequestedModel = stageProvider && rawStageRequestedModel && !isProviderModelChoiceCompatible(stageProvider, rawStageRequestedModel, cfg)
@@ -7000,9 +6880,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           const previousStageOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
           const stageReply = await chatWithActiveProvider(stagePrompt, stageDocumentContext, stageSystemPrompt, {
             providerOverride: stageProvider,
-            preferredProviders: stageProvider ? [stageProvider] : stagePreferredProviders,
-            requestSourceClassification: buildInternalRequestSourceClassification(stageRequiresInternetBackedSourceWork),
-            skipVerifiedSourceShortCircuit: true,
+            preferredProviders: stageProvider ? [stageProvider] : sourceAwareAutomationPreferredProviders,
             strictProviderOverride: true,
             modelOverride: stageRequestedModel || '',
             includeCompletionMetadata: true,
@@ -7290,19 +7168,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           || DEFAULT_MANAGER_REVIEW_GOAL;
         const managerReviewInstruction = executionPlan?.stageInstructions?.['manager-review']
           || resolveStagePlanString(executionPlan?.stageInstructions || {}, managerAgent);
-        const reviewRequiresInternetBackedSourceWork = requiresInternetBackedSourceWork({
-          agent: managerAgent,
-          stageGoal: managerReviewGoal,
-          stageInstruction: managerReviewInstruction,
-          stageLabel: managerAgent.name,
-          includeRequestSignals: false,
-        });
-        const reviewPreferredProviders = reviewRequiresInternetBackedSourceWork
-          ? configuredInternetSourceProviders
-          : automationPreferredProviders;
-        const allowedReviewProviders = reviewRequiresInternetBackedSourceWork
-          ? configuredInternetSourceProviders
-          : getConfiguredProviderPool(cfg, reviewPreferredProviders);
+        const allowedReviewProviders = getConfiguredProviderPool(cfg, sourceAwareAutomationPreferredProviders);
         const normalizedReviewProvider = resolveExplicitProviderCandidate([
           executionPlan?.stageProviders?.['manager-review'],
           executionPlan?.stageProviders?.[managerAgent.id],
@@ -7310,20 +7176,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           executionPlan?.stageProviders?.[String(managerAgent.id || '').toLowerCase()],
           executionPlan?.stageProviders?.[managerRoleKey],
         ], allowedReviewProviders, cfg);
-        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, reviewPreferredProviders, {
-          stageGoal: managerReviewGoal,
-          stageInstruction: managerReviewInstruction,
-          stageLabel: managerAgent.name,
-          includeRequestSignals: false,
-          sourceWorkRequired: reviewRequiresInternetBackedSourceWork,
-        });
-        if (reviewRequiresInternetBackedSourceWork && !reviewProvider) {
-          throw new Error(buildInternetBackedSourceProviderError({
-            subjectLabel: `השלב "${managerAgent.name || 'manager-review'}"`,
-            configuredProviderIds: configuredInternetSourceProviders,
-            cfg,
-          }));
-        }
+        const reviewProvider = normalizedReviewProvider || chooseProviderForAgent(managerAgent, cfg, sourceAwareAutomationPreferredProviders);
         const plannedReviewModel = executionPlan?.stageModels?.['manager-review']
           || resolveStagePlanString(executionPlan?.stageModels || {}, managerAgent);
         const rawReviewRequestedModel = plannedReviewModel || managerAgent.model || taggedRouting.providerModels?.[reviewProvider] || getModelNameForProvider(reviewProvider, cfg, modelOverride);
@@ -7350,9 +7203,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const previousManagerOutput = resolveDocumentPreservationCandidate(stagedOutput, seededDocumentOutput);
         const managerReply = await chatWithActiveProvider(reviewPrompt, reviewDocumentContext, `${managerAgent.prompt}${managerReviewInstruction ? `\nהנחיית AUTOPILOT משלימה לשלב:\n${managerReviewInstruction}` : ''}\nזהו שלב בדיקה סופי לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד. הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או לבקש REVISIT, אל תחזיר פסקת מטא במקום המסמך המלא. החזר בתבנית DELIVERABLE / HANDOFF / MISSING / DECISION / CHECKLIST בלבד.`, {
           providerOverride: reviewProvider,
-          preferredProviders: reviewProvider ? [reviewProvider] : reviewPreferredProviders,
-          requestSourceClassification: buildInternalRequestSourceClassification(reviewRequiresInternetBackedSourceWork),
-          skipVerifiedSourceShortCircuit: true,
+          preferredProviders: reviewProvider ? [reviewProvider] : sourceAwareAutomationPreferredProviders,
           strictProviderOverride: true,
           modelOverride: reviewRequestedModel || '',
           includeCompletionMetadata: true,
@@ -7623,7 +7474,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     }
   }
 
-  if (selectedProviders.length > 1 && !options.providerOverride && !options.skipMultiModel && !sourceGroundingRequired && !internetBackedSourceWorkRequired) {
+  if (selectedProviders.length > 1 && !options.providerOverride && !options.skipMultiModel && !sourceGroundingRequired) {
     const providerNames = getProviderLabelMap(cfg);
     const skippedProviders = selectedProviders.filter((providerId) => !isProviderConfiguredForUse(providerId, cfg));
     const runnableProviders = selectedProviders.filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
@@ -7768,36 +7619,36 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         const key = cfg.gemini.key || localStorage.getItem("GEMINI_API_KEY") || "";
         if (!key) throw new Error('מפתח Gemini לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         const genAI = new GoogleGenerativeAI(key);
-        const geminiModelConfig = { model: resolvedModel };
-        if (providerSupportsSourceGrounding) {
-          geminiModelConfig.tools = [{ googleSearch: {} }];
-        }
+        const geminiModelConfig = providerSupportsGeminiInternetBackedSourceTools
+          ? { model: resolvedModel, tools: [{ googleSearch: {} }] }
+          : { model: resolvedModel };
         const mdl = genAI.getGenerativeModel(geminiModelConfig);
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
         return finalizeProviderTextResponse({
           text: result.response.text(),
           completion: {
             finishReason: result.response?.candidates?.[0]?.finishReason || '',
+            allowedUrls: extractGeminiGroundingUrlsFromResponse(result.response),
           },
-        }, activeProvider, captureCompletionMetadata);
+        }, activeProvider, preserveProviderCompletionMetadata);
       }
       case 'openai': {
         if (!cfg.openai.key) throw new Error('מפתח OpenAI לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: captureCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: captureCompletionMetadata });
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: captureCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
@@ -7808,14 +7659,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: captureCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: captureCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       case 'custom': {
         const { baseUrl, key, model, name } = cfg.custom;
@@ -7826,7 +7677,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: captureCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
       }
       default:
         throw new Error('ספק AI לא ידוע');
@@ -7840,12 +7691,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   });
   emitStatus(onStatus, { state: 'running', progress: 12, runId, provider: activeProvider, model: resolvedModel, agentLabel, message: 'מתחיל עיבוד' });
   let lastError = null;
-  const fallbackProviderHints = constrainedProviders.length || selectedProviders.length > 1 ? selectedProviders : [];
-  const fallbackPool = internetBackedSourceWorkRequired
-    ? getConfiguredProvidersByRuntimeCapability(cfg, INTERNET_BACKED_SOURCE_CAPABILITY, fallbackProviderHints)
-    : (fallbackProviderHints.length
-      ? getConfiguredProviderPool(cfg, fallbackProviderHints)
-      : getConfiguredProviderPool(cfg));
+  const fallbackPool = constrainedProviders.length || selectedProviders.length > 1
+    ? getConfiguredProviderPool(cfg, selectedProviders)
+    : getConfiguredProviderPool(cfg);
   const hasPinnedSingleTaggedProvider = !preferredProviders.length && taggedProviders.length === 1;
   const allowCrossProviderFallback = !disableFallback
     && !hasPinnedSingleTaggedProvider
@@ -8050,24 +7898,21 @@ export const chatWithRoleAgent = async (agent, userPrompt, documentContext = '',
   if (!agent?.prompt) throw new Error('לסוכן התפקידי אין הנחיה שמורה');
   const cfg = getProviderConfig();
   const selectedProviders = getSelectedProviderIds(cfg);
-  const preferredProviders = normalizeProviderIds(runtimeOptions.preferredProviders, '');
   const explicitProviderOverride = String(runtimeOptions.providerOverride || '').trim();
   const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
-  const extraSystemPrompt = String(runtimeOptions.extraSystemPrompt || '').trim();
   const agentModelOverride = String(agent.model || '').trim();
   const requestedModelOverride = runtimeModelOverride || agentModelOverride;
   const strictProviderOverride = runtimeOptions.strictProviderOverride === true && Boolean(explicitProviderOverride);
   const providerOverride = strictProviderOverride
     ? explicitProviderOverride
-    : (preferredProviders.length ? '' : chooseProviderForAgent(agent, cfg, selectedProviders));
+    : chooseProviderForAgent(agent, cfg, selectedProviders);
   const modelOverride = providerOverride && requestedModelOverride && !isProviderModelChoiceCompatible(providerOverride, requestedModelOverride, cfg)
     ? ''
     : requestedModelOverride;
-  const combinedSystemPrompt = [agent.prompt, extraSystemPrompt].filter(Boolean).join('\n\n');
-  return chatWithActiveProvider(userPrompt, documentContext, combinedSystemPrompt, {
+  return chatWithActiveProvider(userPrompt, documentContext, agent.prompt, {
     providerOverride,
     strictProviderOverride,
-    preferredProviders: preferredProviders.length ? preferredProviders : selectedProviders,
+    preferredProviders: selectedProviders,
     modelOverride,
     agentLabel: agent.name || 'סוכן תפקידי',
     agentName: agent.name || 'סוכן תפקידי',
