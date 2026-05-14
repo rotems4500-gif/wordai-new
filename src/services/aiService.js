@@ -2767,7 +2767,9 @@ const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model =
 
 const VERIFIED_ARTICLE_GEMINI_MODEL = 'gemini-2.5-pro';
 const VERIFIED_ARTICLE_PROVIDER_IDS = ['gemini', 'perplexity'];
-// Capped at 5: balances UX (enough results to be useful) with API cost and grounding-chunk availability.
+// Capped at 5: a single grounding call from Gemini or Perplexity typically returns up to 5 search-result
+// chunks, so requesting more would require additional API calls with diminishing returns. This also
+// keeps API costs and response times reasonable.
 const MAX_REQUESTED_ARTICLE_COUNT = 5;
 const ARTICLE_COUNT_NUMERIC_PATTERN = /\b(\d+)\s+כתבות?\b/;
 const ARTICLE_COUNT_WORD_MAP = { שתי: 2, שניים: 2, שלוש: 3, שלושה: 3, ארבע: 4, ארבעה: 4, חמש: 5, חמישה: 5 };
@@ -3288,12 +3290,12 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
   for (const attempt of attempts) {
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     try {
-      let collectedResults = [];
+      const collectedResults = [];
+      const seenUrls = new Set();
       for (const searchQuery of searchQueries) {
-        const excludeUrls = collectedResults.map((item) => String(item?.url || '').trim()).filter(Boolean);
+        const excludeUrls = Array.from(seenUrls);
         const result = await withTimeout(attempt.run(searchQuery, abortController?.signal, excludeUrls), timeoutMs, () => abortController?.abort());
         const batchResults = Array.isArray(result?.results) ? result.results : [];
-        const seenUrls = new Set(collectedResults.map((item) => String(item?.url || '').trim()).filter(Boolean));
         for (const item of batchResults) {
           const url = String(item?.url || '').trim();
           if (url && !seenUrls.has(url)) {
