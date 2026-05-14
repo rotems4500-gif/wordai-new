@@ -247,6 +247,97 @@ const bbl = (isUser, compactMode = false) => ({
 
 const actBtn = { padding: '8px 6px', border: '1px solid #E1DFDD', borderRadius: 10, background: 'white', cursor: 'pointer', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: '#323130', transition: 'all 0.12s' };
 
+const CLOSING_LINK_DELIMITERS = {
+  ')': '(',
+  ']': '[',
+  '}': '{',
+};
+
+const TRAILING_LINK_WRAPPER_PATTERN = /[>"'“”‘’«»]+$/;
+
+const countCharacter = (value = '', character = '') => Array.from(String(value || '')).reduce(
+  (count, currentCharacter) => (currentCharacter === character ? count + 1 : count),
+  0,
+);
+
+const splitTrailingLinkPunctuation = (value = '') => {
+  let linkText = String(value || '');
+  let trailingPunctuation = '';
+
+  while (linkText) {
+    const alwaysStripMatch = linkText.match(/[.,;:!?]+$/);
+    if (alwaysStripMatch) {
+      trailingPunctuation = `${alwaysStripMatch[0]}${trailingPunctuation}`;
+      linkText = linkText.slice(0, -alwaysStripMatch[0].length);
+      continue;
+    }
+
+    const wrapperMatch = linkText.match(TRAILING_LINK_WRAPPER_PATTERN);
+    if (wrapperMatch) {
+      trailingPunctuation = `${wrapperMatch[0]}${trailingPunctuation}`;
+      linkText = linkText.slice(0, -wrapperMatch[0].length);
+      continue;
+    }
+
+    const trailingCharacter = linkText[linkText.length - 1];
+    const openingCharacter = CLOSING_LINK_DELIMITERS[trailingCharacter];
+    if (!openingCharacter) break;
+
+    const openingCount = countCharacter(linkText, openingCharacter);
+    const closingCount = countCharacter(linkText, trailingCharacter);
+    if (closingCount <= openingCount) break;
+
+    trailingPunctuation = `${trailingCharacter}${trailingPunctuation}`;
+    linkText = linkText.slice(0, -1);
+  }
+
+  return { linkText, trailingPunctuation };
+};
+
+const normalizeAutoLinkHref = (value = '') => {
+  const normalizedValue = String(value || '').trim();
+  if (!/^(?:https?:\/\/|www\.)/i.test(normalizedValue)) return '';
+
+  const candidateHref = /^https?:\/\//i.test(normalizedValue) ? normalizedValue : `https://${normalizedValue}`;
+
+  try {
+    const parsedUrl = new URL(candidateHref);
+    const hostname = String(parsedUrl.hostname || '').trim();
+    if (!/^https?:$/i.test(parsedUrl.protocol)) return '';
+    if (!hostname || hostname === 'www' || hostname === 'www.' || /(^\.|\.$|\.\.)/.test(hostname)) return '';
+    return parsedUrl.toString();
+  } catch {
+    return '';
+  }
+};
+
+const renderChatMessageContent = (text = '') => {
+  const value = String(text || '');
+  const parts = value.split(/((?:https?:\/\/|www\.)[^\s]+)/gi);
+
+  return parts.map((part, index) => {
+    const rawPart = String(part || '');
+    if (!rawPart.trim()) return <React.Fragment key={index}>{part}</React.Fragment>;
+    if (!/^(?:https?:\/\/|www\.)/i.test(rawPart)) return <React.Fragment key={index}>{part}</React.Fragment>;
+
+    const { linkText, trailingPunctuation } = splitTrailingLinkPunctuation(rawPart);
+    if (!linkText) return <React.Fragment key={index}>{part}</React.Fragment>;
+
+    const href = normalizeAutoLinkHref(linkText);
+    if (!href) return <React.Fragment key={index}>{part}</React.Fragment>;
+
+    return (
+      <React.Fragment key={index}>
+        <a href={href} target="_blank" rel="noreferrer"
+          style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>
+          {linkText}
+        </a>
+        {trailingPunctuation}
+      </React.Fragment>
+    );
+  });
+};
+
 const getShellStyle = (mode, compactMode = false) => ({
   width: mode === 'sidebar' ? '100%' : (compactMode ? 390 : 430),
   background: mode === 'sidebar' ? '#F8FAFC' : 'linear-gradient(180deg,#FFFFFF 0%,#FBFDFF 100%)',
@@ -1107,6 +1198,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         agentLabel: directAgentName,
         skillId: manualSkillId,
         autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        directChat: true,
         providerOverride: directProviderId,
         preferredProviders,
         modelOverride: explicitProviderModel,
@@ -1644,7 +1736,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 {messages.map((msg, index) => (
                   <div key={`${msg.role}-${index}`} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
                     <div style={{ ...bbl(msg.role === 'user', compactMode), ...(msg.error ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' } : {}) }}>
-                      {msg.content}
+                      {renderChatMessageContent(msg.content)}
                     </div>
                     {msg.role === 'assistant' && !msg.error && onInsert && (
                       <button
@@ -2411,7 +2503,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     e.currentTarget.style.transform = 'scale(1)';
                   }}
                 >
-                  {msg.content}
+                  {renderChatMessageContent(msg.content)}
                   
                   {/* Floating particles effect for user messages */}
                   {msg.role === 'user' && (

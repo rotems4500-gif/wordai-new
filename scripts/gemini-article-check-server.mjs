@@ -433,6 +433,63 @@ function normalizeUrl(value) {
   }
 }
 
+const TRACKING_PARAM_KEYS = new Set([
+  'fbclid',
+  'gclid',
+  'gclsrc',
+  'dclid',
+  'msclkid',
+  'igshid',
+  'mc_cid',
+  'mc_eid',
+  '_hsenc',
+  '_hsmi',
+]);
+
+function canonicalizeArticleUrl(value) {
+  const rawUrl = String(value || '').trim();
+
+  if (!rawUrl) {
+    return '';
+  }
+
+  const normalizedUrl = normalizeUrl(/^www\./i.test(rawUrl) ? `https://${rawUrl}` : rawUrl);
+
+  if (!normalizedUrl) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    parsed.hash = '';
+
+    if ((parsed.protocol === 'https:' && parsed.port === '443') || (parsed.protocol === 'http:' && parsed.port === '80')) {
+      parsed.port = '';
+    }
+
+    Array.from(parsed.searchParams.keys()).forEach((key) => {
+      const normalizedKey = String(key || '').trim().toLowerCase();
+
+      if (!normalizedKey) {
+        return;
+      }
+
+      if (/^utm_/i.test(normalizedKey) || TRACKING_PARAM_KEYS.has(normalizedKey)) {
+        parsed.searchParams.delete(key);
+      }
+    });
+
+    if (typeof parsed.searchParams.sort === 'function') {
+      parsed.searchParams.sort();
+    }
+
+    parsed.pathname = (parsed.pathname || '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+    return parsed.toString();
+  } catch {
+    return normalizedUrl;
+  }
+}
+
 function extractDomainFromUrl(value) {
   const url = normalizeUrl(value);
 
@@ -714,22 +771,76 @@ function scoreSource(source, parsed) {
   return score;
 }
 
+function buildSourceTitleDomainSignature(source) {
+  const title = normalizeText(source?.title || '');
+  const domain = normalizeText(extractDomainFromUrl(source?.url) || source?.domain || source?.summary || '');
+
+  if (!title && !domain) {
+    return '';
+  }
+
+  return `${domain}::${title}`;
+}
+
+function areEquivalentSourceCandidates(sources) {
+  const candidates = (Array.isArray(sources) ? sources : []).filter((source) => source && typeof source === 'object');
+
+  if (candidates.length < 2) {
+    return true;
+  }
+
+  const reference = candidates[0];
+  const referenceUrl = canonicalizeArticleUrl(reference?.url);
+  const referenceSignature = buildSourceTitleDomainSignature(reference);
+
+  return candidates.slice(1).every((candidate) => {
+    const candidateUrl = canonicalizeArticleUrl(candidate?.url);
+
+    if (referenceUrl && candidateUrl && referenceUrl === candidateUrl) {
+      return true;
+    }
+
+    const candidateSignature = buildSourceTitleDomainSignature(candidate);
+    return Boolean(referenceSignature) && referenceSignature === candidateSignature;
+  });
+}
+
 function selectPrimarySource(sources, parsed) {
   if (!Array.isArray(sources) || sources.length === 0) {
     return null;
   }
 
-  return [...sources].sort((left, right) => scoreSource(right, parsed) - scoreSource(left, parsed))[0] || null;
+  const scoredSources = sources
+    .map((source, index) => ({
+      source,
+      score: scoreSource(source, parsed),
+      index,
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const bestMatch = scoredSources[0] || null;
+  const secondBestMatch = scoredSources[1] || null;
+
+  if (!bestMatch || bestMatch.score <= 0) {
+    return null;
+  }
+
+  const topTiedMatches = scoredSources.filter((entry) => entry.score === bestMatch.score);
+
+  if (topTiedMatches.length > 1 && !areEquivalentSourceCandidates(topTiedMatches.map((entry) => entry.source))) {
+    return null;
+  }
+
+  return bestMatch.source || null;
 }
 
 function findSourceByUrl(sources, url) {
-  const normalizedUrl = normalizeUrl(url);
+  const normalizedUrl = canonicalizeArticleUrl(url);
 
   if (!normalizedUrl) {
     return null;
   }
 
-  return (Array.isArray(sources) ? sources : []).find((source) => normalizeUrl(source?.url) === normalizedUrl) || null;
+  return (Array.isArray(sources) ? sources : []).find((source) => canonicalizeArticleUrl(source?.url) === normalizedUrl) || null;
 }
 
 async function resolveCanonicalUrl(url) {

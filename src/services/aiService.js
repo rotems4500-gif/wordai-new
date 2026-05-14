@@ -2421,13 +2421,14 @@ const SOURCE_REQUEST_PATTERN = /(doi|scholar|peer[-\s]?reviewed|fact[\s-]?check|
 const SOURCE_GROUNDING_PROVIDER_IDS = new Set(['perplexity']);
 const INTERNET_BACKED_SOURCE_PROVIDER_IDS = new Set(['gemini', 'perplexity']);
 const SOURCE_GROUNDING_SKILL_IDS = new Set(['source-hunter', 'citation-weaver']);
-const SOURCE_GROUNDING_URL_REGEX = /https?:\/\/[^\s<>()]+/gi;
+const SOURCE_GROUNDING_URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 const VERIFIED_SOURCE_RESULT_LIMIT = 5;
 const GENERIC_SOURCE_QUERY_PATTERN = /^(?:יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|doi)\??|מקור(?:ות)?\??|sources?\??|citations?\??|references?\??|links?\??|לינק(?:ים)?\??|קישור(?:ים)?\??)$/i;
 const NON_SOURCE_REQUEST_PATTERN = /(source\s+code|קוד\s+מקור|reference\s+letter|recommendation\s+letter|מכתב\s+המלצה|תקן(?:י)?\s+(?:את\s+)?(?:ה-)?url|fix\s+(?:the\s+)?url|replace\s+(?:the\s+)?url|update\s+(?:the\s+)?url)/i;
 const SOURCE_FOLLOW_UP_PATTERN = /^(?:עוד|תן\s+עוד|תביא\s+עוד|עוד\s+\d+|עוד\s+שניים|עוד\s+שלושה|כאלה|כזה|similar\s+ones|same\s+kind|more|more\s+sources|another\s+two|add\s+more|תוסיף\s+עוד)/i;
 const SOURCE_EXPLICIT_FOLLOW_UP_PATTERN = /^(?:עוד(?:\s+\d+|\s+שניים|\s+שלושה)?\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תן\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|תביא\s+עוד\s+(?:מקורות?|מאמרים?|כתבות?|קישורים?|לינקים?|references?|sources?|citations?|links?)|more\s+(?:sources?|references?|citations?|links?)|another\s+\d*\s*(?:sources?|references?|citations?|links?)|add\s+more\s+(?:sources?|references?|citations?|links?))/i;
-const SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN = /(?:\s+ו|\b(?:and\s+then|then)\b|(?:ואז|אחר\s+כך|לאחר\s+מכן))\s*(?:סכם|תסכם|סיכום|תקציר|הסבר|תסביר|הסבר קצר|הסבר\s+קצר|ניתוח|נתח|תנתח|כתוב|תכתוב|נסח|תנסח|טיוטה|ערוך|תערוך|summari[sz]e|summary|brief\s+summary|explain|explanation|analy[sz]e|analysis|write|draft)/i;
+const SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN = /(?:\b(?:and\s+then|then)\b|(?:ואז|ואחר\s+כך|אחר\s+כך|ולאחר\s+מכן|לאחר\s+מכן))\s*(?:סכם|תסכם|סיכום|תקציר|הסבר|תסביר|הסבר קצר|הסבר\s+קצר|ניתוח|נתח|תנתח|כתוב|תכתוב|נסח|תנסח|טיוטה|ערוך|תערוך|summari[sz]e|summary|brief\s+summary|explain|explanation|analy[sz]e|analysis|write|draft)/i;
+const SOURCE_RETRIEVAL_DIRECT_CHAT_LIGHT_DELIVERABLE_TAIL_PATTERN = /\s+(?:and\s+|ו)(?:כתוב|תכתוב|נסח|תנסח|סכם|תסכם|הסבר|תסביר|נתח|תנתח|write|draft|summari[sz]e|explain|analy[sz]e)\s+(?:לי\s+|a\s+|an\s+)?(?:פסקה(?:\s+קצרה)?|תקציר(?:\s+קצר)?|סיכום(?:\s+קצר)?|הסבר(?:\s+קצר)?|ניתוח(?:\s+קצר)?|כמה\s+משפטים|paragraph|short\s+paragraph|brief\s+summary|short\s+summary|summary|brief\s+explanation|short\s+explanation|brief\s+analysis|short\s+analysis)\b/i;
 const SOURCE_DISCOVERY_ACTION_PATTERN = /(חפש|חיפוש|מצא|תן(?:י)?|תביא|הבא|שלח|צריך|צריכה|צריכים|מבקש|מבקשת|אסוף|אתר|תאתר|הוסף|צרף|שלב|show|give|need|find|send|collect|locate|provide|include|attach|add)/i;
 const SOURCE_DISCOVERY_TARGET_PATTERN = /(לינק(?:ים)?|links?|קישור(?:ים)?|urls?|מאמר(?:ים)?(?:\s+אקדמ(?:י(?:ים)?)?)?|כתבה(?:ות)?|papers?|sources?|references?|citations?|journal(?:s)?(?:\s+articles?)?|מקור(?:ות)?)/i;
 const DIRECT_SOURCE_DISCOVERY_PATTERN = /(יש\s+(?:לזה\s+)?(?:מקור(?:ות)?|doi|לינק(?:ים)?|link|קישור(?:ים)?|url)|מצא\s+מקור(?:ות)?|מצא\s+מאמר(?:ים)?|מצא\s+כתבה(?:ות)?|תן\s+לי\s+(?:מקור(?:ות)?|מאמר(?:ים)?|כתבה(?:ות)?|קישור(?:ים)?|לינק(?:ים)?|links?)|need\s+(?:sources?|references?|citations?|links?)|find\s+(?:sources?|references?|citations?|links?))/i;
@@ -2481,7 +2482,7 @@ const shouldUseInternetBackedSourceWork = ({ userPrompt = '', extraSystemPrompt 
     || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined);
 };
 
-const isSourceOnlyGroundingRequest = ({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) => {
+const isSourceOnlyGroundingRequest = ({ userPrompt = '', extraSystemPrompt = '', skillId = '', allowFollowOnWork = false } = {}) => {
   const normalizedPrompt = String(userPrompt || '').trim();
   const combined = [normalizedPrompt, extraSystemPrompt]
     .map((value) => String(value || '').trim())
@@ -2493,8 +2494,8 @@ const isSourceOnlyGroundingRequest = ({ userPrompt = '', extraSystemPrompt = '',
   const isSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(normalizedPrompt) || SOURCE_FOLLOW_UP_PATTERN.test(normalizedPrompt);
   if (!isExplicitSourceRequest(combined) && !isSourceFollowUp) return false;
   if (FACT_CHECK_REQUEST_PATTERN.test(combined)) return false;
-  if (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
-  if (hasSourceRetrievalFollowOnWork(combined)) return false;
+  if (!allowFollowOnWork && SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined)) return false;
+  if (!allowFollowOnWork && hasSourceRetrievalFollowOnWork(combined)) return false;
   return true;
 };
 
@@ -2525,19 +2526,30 @@ const buildSourceGroundingPrompt = ({ enforce = false, providerSupportsGrounding
   ].join('\n');
 };
 
+const buildVerifiedSourceFollowOnGroundingPrompt = (verifiedSourceText = '') => {
+  const normalizedSourceText = String(verifiedSourceText || '').trim();
+  if (!normalizedSourceText) return '';
+
+  return [
+    'לפני המענה בוצע אחזור של מקורות מאומתים עבור הבקשה.',
+    'הסתמך רק על המקורות המאומתים שמופיעים להלן כדי לבצע את משימת ההמשך הקלה שהמשתמש ביקש.',
+    'אסור להוסיף או להמציא URL, DOI, מקור, כותרת, גוף מפרסם או כתבה שלא מופיעים במפורש ברשימה הזו.',
+    'אם המקורות המאומתים לא מספיקים כדי להשלים את משימת ההמשך, אמור זאת במפורש.',
+    normalizedSourceText,
+  ].join('\n');
+};
+
 const sanitizeSourceGroundingResponse = (text = '', { enforce = false, providerSupportsGrounding = false, allowedUrls = new Set() } = {}) => {
   const normalizedText = String(text || '').trim();
   if (!normalizedText || !enforce || providerSupportsGrounding) return normalizedText;
-  const allowedUrlSet = allowedUrls instanceof Set
-    ? allowedUrls
-    : new Set(Array.isArray(allowedUrls) ? allowedUrls : []);
+  const allowedUrlSet = buildVerifiedSourceAllowedUrlSet(allowedUrls);
   const responseUrls = normalizedText.match(SOURCE_GROUNDING_URL_REGEX) || [];
   if (!responseUrls.length) return normalizedText;
-  const disallowedUrls = responseUrls.filter((url) => !allowedUrlSet.has(String(url || '').trim()));
+  const disallowedUrls = responseUrls.filter((url) => !hasVerifiedSourceAllowedUrl(allowedUrlSet, url));
   if (!disallowedUrls.length) return normalizedText;
-  const disallowedUrlSet = new Set(disallowedUrls.map((url) => String(url || '').trim()).filter(Boolean));
+  const disallowedUrlSet = buildVerifiedSourceAllowedUrlSet(disallowedUrls);
   const strippedText = normalizedText
-    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (disallowedUrlSet.has(String(url || '').trim()) ? '' : url))
+    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (hasVerifiedSourceAllowedUrl(disallowedUrlSet, url) ? '' : url))
     .replace(/\[([^\]]+)\]\(\s*\)/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -2551,21 +2563,46 @@ const normalizeSourceSearchText = (value = '') => stripHtmlTags(value)
   .replace(/\s+/g, ' ')
   .trim();
 
-const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = '', fallbackQuery = '', workspaceId = '' } = {}) => {
+const stripSourceRetrievalFollowOnTail = (value = '', { includeDirectChatLightDeliverable = false } = {}) => {
+  const normalizedValue = normalizeSourceSearchText(value);
+  const followOnPatterns = [SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN];
+  if (includeDirectChatLightDeliverable) {
+    followOnPatterns.push(SOURCE_RETRIEVAL_DIRECT_CHAT_LIGHT_DELIVERABLE_TAIL_PATTERN);
+  }
+
+  let followOnStartIndex = -1;
+  for (const pattern of followOnPatterns) {
+    const match = normalizedValue.match(pattern);
+    if (!match || typeof match.index !== 'number') continue;
+    if (followOnStartIndex === -1 || match.index < followOnStartIndex) {
+      followOnStartIndex = match.index;
+    }
+  }
+
+  if (followOnStartIndex === -1) return normalizedValue;
+  return normalizeSourceSearchText(normalizedValue.slice(0, followOnStartIndex));
+};
+
+const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = '', fallbackQuery = '', workspaceId = '', stripFollowOnWork = false } = {}) => {
   const promptText = normalizeSourceSearchText(userPrompt);
   const contextText = normalizeSourceSearchText(documentContext);
   const fallbackText = normalizeSourceSearchText(fallbackQuery);
   const explicitSourceFollowUp = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(promptText);
   const genericSourceFollowUp = !explicitSourceFollowUp && SOURCE_FOLLOW_UP_PATTERN.test(promptText);
-  const followUpTail = explicitSourceFollowUp
+  const rawFollowUpTail = explicitSourceFollowUp
     ? normalizeSourceSearchText(promptText.replace(SOURCE_EXPLICIT_FOLLOW_UP_PATTERN, ''))
     : genericSourceFollowUp
       ? normalizeSourceSearchText(promptText.replace(SOURCE_FOLLOW_UP_PATTERN, ''))
       : '';
+  const followUpTail = stripFollowOnWork
+    ? stripSourceRetrievalFollowOnTail(rawFollowUpTail, { includeDirectChatLightDeliverable: true })
+    : rawFollowUpTail;
   if ((explicitSourceFollowUp || genericSourceFollowUp) && fallbackText && hasRecentVerifiedSourceFollowUpContext({ workspaceId }) && !followUpTail) {
     return String(fallbackText || '').slice(0, 420).trim();
   }
-  const effectivePromptText = followUpTail || promptText;
+  const effectivePromptText = stripFollowOnWork
+    ? stripSourceRetrievalFollowOnTail(followUpTail || promptText, { includeDirectChatLightDeliverable: true })
+    : (followUpTail || promptText);
   const promptNeedsContext = !effectivePromptText || effectivePromptText.length < 28 || GENERIC_SOURCE_QUERY_PATTERN.test(effectivePromptText);
   const merged = promptNeedsContext && contextText
     ? [effectivePromptText, contextText].filter(Boolean).join(' ')
@@ -2583,8 +2620,89 @@ const extractDoiFromSource = (value = '') => {
   return match ? String(match[0] || '').replace(/[),.;]+$/, '') : '';
 };
 
+const VERIFIED_SOURCE_TRACKING_PARAM_KEYS = new Set([
+  'fbclid',
+  'gclid',
+  'gclsrc',
+  'dclid',
+  'msclkid',
+  'igshid',
+  'mc_cid',
+  'mc_eid',
+  '_hsenc',
+  '_hsmi',
+]);
+
+const canonicalizeVerifiedSourceUrl = (value = '') => {
+  const rawUrl = String(value || '').trim();
+  if (!rawUrl) return '';
+
+  const normalizedUrl = normalizeArticleUrl(/^www\./i.test(rawUrl) ? `https://${rawUrl}` : rawUrl);
+  if (!normalizedUrl) return '';
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    parsed.hash = '';
+    if ((parsed.protocol === 'https:' && parsed.port === '443') || (parsed.protocol === 'http:' && parsed.port === '80')) {
+      parsed.port = '';
+    }
+    Array.from(parsed.searchParams.keys()).forEach((key) => {
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      if (!normalizedKey) return;
+      if (/^utm_/i.test(normalizedKey) || VERIFIED_SOURCE_TRACKING_PARAM_KEYS.has(normalizedKey)) {
+        parsed.searchParams.delete(key);
+      }
+    });
+    if (typeof parsed.searchParams.sort === 'function') parsed.searchParams.sort();
+    parsed.pathname = (parsed.pathname || '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+    return parsed.toString();
+  } catch {
+    return normalizedUrl;
+  }
+};
+
+const normalizeVerifiedSourceAllowedUrl = (value = '') => canonicalizeVerifiedSourceUrl(value) || String(value || '').trim();
+
+const buildVerifiedSourceAllowedUrlSet = (values = []) => {
+  const items = values instanceof Set
+    ? Array.from(values)
+    : Array.isArray(values)
+      ? values
+      : [];
+  return new Set(items.map((url) => normalizeVerifiedSourceAllowedUrl(url)).filter(Boolean));
+};
+
+const hasVerifiedSourceAllowedUrl = (allowedUrls = new Set(), value = '') => {
+  const normalizedUrl = normalizeVerifiedSourceAllowedUrl(value);
+  return Boolean(normalizedUrl) && allowedUrls.has(normalizedUrl);
+};
+
+const buildVerifiedSourceTitleDomainSignature = (source = {}) => {
+  const title = normalizeArticleText(source?.title || '');
+  const domain = normalizeArticleText(extractArticleDomainFromUrl(source?.url) || source?.summary || '');
+  if (!title && !domain) return '';
+  return `${domain}::${title}`;
+};
+
+const areEquivalentVerifiedSourceCandidates = (sources = []) => {
+  const candidates = (Array.isArray(sources) ? sources : []).filter((source) => source && typeof source === 'object');
+  if (candidates.length < 2) return true;
+
+  const reference = candidates[0];
+  const referenceUrl = canonicalizeVerifiedSourceUrl(reference?.url);
+  const referenceSignature = buildVerifiedSourceTitleDomainSignature(reference);
+
+  return candidates.slice(1).every((candidate) => {
+    const candidateUrl = canonicalizeVerifiedSourceUrl(candidate?.url);
+    if (referenceUrl && candidateUrl && referenceUrl === candidateUrl) return true;
+
+    const candidateSignature = buildVerifiedSourceTitleDomainSignature(candidate);
+    return Boolean(referenceSignature) && referenceSignature === candidateSignature;
+  });
+};
+
 const buildVerifiedSourceKey = (item = {}) => {
-  const url = String(item?.url || '').trim().toLowerCase();
+  const url = canonicalizeVerifiedSourceUrl(item?.url || '') || String(item?.url || '').trim().toLowerCase();
   const title = String(item?.title || '').trim().toLowerCase();
   return `${url}::${title}`;
 };
@@ -2916,13 +3034,24 @@ const scoreVerifiedArticleSource = (source = {}, parsed = {}) => {
 
 const selectPrimaryVerifiedArticleSource = (sources = [], parsed = {}) => {
   if (!Array.isArray(sources) || !sources.length) return null;
-  return [...sources].sort((left, right) => scoreVerifiedArticleSource(right, parsed) - scoreVerifiedArticleSource(left, parsed))[0] || null;
+  const scoredSources = sources
+    .map((source, index) => ({
+      source,
+      score: scoreVerifiedArticleSource(source, parsed),
+      index,
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const bestMatch = scoredSources[0] || null;
+  if (!bestMatch || bestMatch.score <= 0) return null;
+  const topTiedMatches = scoredSources.filter((entry) => entry.score === bestMatch.score);
+  if (topTiedMatches.length > 1 && !areEquivalentVerifiedSourceCandidates(topTiedMatches.map((entry) => entry.source))) return null;
+  return bestMatch.source || null;
 };
 
 const findVerifiedArticleSourceByUrl = (sources = [], url = '') => {
-  const normalizedUrl = normalizeArticleUrl(url);
+  const normalizedUrl = canonicalizeVerifiedSourceUrl(url);
   if (!normalizedUrl) return null;
-  return (Array.isArray(sources) ? sources : []).find((source) => normalizeArticleUrl(source?.url) === normalizedUrl) || null;
+  return (Array.isArray(sources) ? sources : []).find((source) => canonicalizeVerifiedSourceUrl(source?.url) === normalizedUrl) || null;
 };
 
 const buildVerifiedArticleResultItem = (article = {}, providerId = '') => ({
@@ -3268,6 +3397,7 @@ const resolveVerifiedSourceReply = async ({
   cfg = DEFAULT_PROVIDER_CONFIG,
   timeoutMs = 0,
   preferredProviderId = '',
+  stripFollowOnWork = false,
 } = {}) => {
   const workspaceId = String(getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const query = extractVerifiedSourceQuery({
@@ -3275,6 +3405,7 @@ const resolveVerifiedSourceReply = async ({
     documentContext,
     fallbackQuery: getLastVerifiedSourceQuery({ workspaceId }),
     workspaceId,
+    stripFollowOnWork,
   });
   const normalizedSkillId = String(skillId || '').trim().toLowerCase();
   const academic = typeof isAcademicTask === 'boolean'
@@ -6308,9 +6439,9 @@ const normalizeProviderCompletionPayload = (completion = {}, provider = '') => {
   const reason = normalizeCompletionMetadataValue(completion.reason) || finishReason || stopReason;
   const providerId = normalizeCompletionMetadataValue(completion.provider) || normalizeCompletionMetadataValue(provider);
   const model = normalizeCompletionMetadataValue(completion.model);
-  const allowedUrls = Array.isArray(completion.allowedUrls)
-    ? completion.allowedUrls.map((url) => String(url || '').trim()).filter(Boolean)
-    : [];
+  const allowedUrls = Array.from(buildVerifiedSourceAllowedUrlSet(
+    Array.isArray(completion.allowedUrls) ? completion.allowedUrls : []
+  ));
   const normalized = {
     ...(reason ? { reason } : {}),
     ...(finishReason ? { finishReason } : {}),
@@ -6340,10 +6471,19 @@ const finalizeProviderTextResponse = (response = '', provider = '', includeCompl
 
 export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, signal, options = {}) => {
   const includeCompletionMetadata = options.includeCompletionMetadata === true;
+  const requestBodyExtras = options.requestBodyExtras && typeof options.requestBodyExtras === 'object' && !Array.isArray(options.requestBodyExtras)
+    ? options.requestBodyExtras
+    : null;
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-  const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: false });
+  const bodyStr = JSON.stringify({
+    model,
+    messages,
+    max_tokens: 4096,
+    stream: false,
+    ...(requestBodyExtras || {}),
+  });
   const buildResponse = (data = {}) => finalizeProviderTextResponse({
     text: data.choices?.[0]?.message?.content || '',
     completion: {
@@ -6496,6 +6636,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     || cfg.active;
   const skipSkillSelection = options.skipSkillSelection === true;
   const skipAutomationPrompt = options.skipAutomationPrompt === true || options.skipAutomation === true;
+  const directChatRequest = options.directChat === true;
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
     omitStructuralHints: omitPersonalStyleStructureHints,
@@ -6522,6 +6663,21 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     extraSystemPrompt,
     skillId: activeSkill?.id || options.skillId || '',
   });
+  const strictSourceGroundingEnabled = true;
+  const directChatSourceFollowOnRequested = hasSourceRetrievalFollowOnWork(cleanUserPrompt)
+    || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(cleanUserPrompt);
+  const shouldRetrieveVerifiedSourcesFirst = strictSourceGroundingEnabled
+    && sourceGroundingRequired
+    && (options.skipAutomation !== true || directChatRequest)
+    && isSourceOnlyGroundingRequest({
+      userPrompt: cleanUserPrompt,
+      extraSystemPrompt,
+      skillId: activeSkill?.id || options.skillId || '',
+      allowFollowOnWork: directChatRequest,
+    });
+  const shouldGroundDirectChatWithVerifiedSources = shouldRetrieveVerifiedSourcesFirst
+    && directChatRequest
+    && directChatSourceFollowOnRequested;
   const internetBackedSourceWorkRequired = sourceGroundingRequired || shouldUseInternetBackedSourceWork({
     userPrompt: cleanUserPrompt,
     extraSystemPrompt,
@@ -6530,6 +6686,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const requestedProvider = activeProvider;
   const sourceRequestAutoRouted = sourceAutoRouteEnabled
     && sourceGroundingRequired
+    && !shouldGroundDirectChatWithVerifiedSources
     && !strictProviderOverride
     && activeProvider !== 'perplexity'
     && isProviderConfiguredForUse('perplexity', cfg);
@@ -6541,18 +6698,20 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     : taggedRouting.providerModels?.[activeProvider]
     || (preferredProviders.length ? '' : taggedRouting.taggedModel);
   const modelOverride = sourceRequestAutoRouted ? (taggedModelOverride || '') : (options.modelOverride || taggedModelOverride || '');
-  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !strictProviderOverride && isProviderConfiguredForUse('perplexity', cfg)
+  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !shouldGroundDirectChatWithVerifiedSources && !strictProviderOverride && isProviderConfiguredForUse('perplexity', cfg)
     ? normalizeProviderIds(['perplexity', ...automationPreferredProviders], '')
     : automationPreferredProviders;
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
-  const strictSourceGroundingEnabled = true;
   const providerSupportsSourceGrounding = sourceGroundingRequired && isSourceGroundingProvider(activeProvider);
-  const providerSupportsGeminiInternetBackedSourceTools = internetBackedSourceWorkRequired && supportsInternetBackedSourceRetrieval(activeProvider);
-  const sourceGroundingAllowedUrls = new Set([
+  let providerSupportsGeminiInternetBackedSourceTools = internetBackedSourceWorkRequired && supportsInternetBackedSourceRetrieval(activeProvider);
+  let sourceGroundingAllowedUrls = buildVerifiedSourceAllowedUrlSet([
     ...extractUrlSetFromText(cleanUserPrompt),
     ...extractUrlSetFromText(extraSystemPrompt),
     ...extractUrlSetFromText(documentContext),
   ]);
+  let verifiedSourceFollowOnAllowedUrls = new Set();
+  let verifiedSourceFollowOnGroundingPrompt = '';
+  let verifiedSourceFollowOnLocked = false;
   const sourceGroundingPrompt = buildSourceGroundingPrompt({
     enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
     providerSupportsGrounding: providerSupportsSourceGrounding,
@@ -6603,26 +6762,40 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   });
   const rememberSuccessfulReply = (replyText = '', responseOptions = {}) => {
     const responseProvider = String(responseOptions.providerId || activeProvider || '').trim() || activeProvider;
-    const providerSupportsGroundingForReply = typeof responseOptions.providerSupportsGroundingOverride === 'boolean'
-      ? responseOptions.providerSupportsGroundingOverride
-      : providerSupportsSourceGrounding;
     const normalizedReply = normalizeProviderTextResponse(replyText, responseProvider);
-    const allowedUrls = new Set([
-      ...Array.from(sourceGroundingAllowedUrls || []),
-      ...Array.from(responseOptions.allowedUrls || []),
-      ...Array.from(normalizedReply.completion?.allowedUrls || []),
-    ].map((url) => String(url || '').trim()).filter(Boolean));
+    const lockedAllowedUrls = buildVerifiedSourceAllowedUrlSet(verifiedSourceFollowOnAllowedUrls);
+    const allowedUrls = verifiedSourceFollowOnLocked
+      ? lockedAllowedUrls
+      : buildVerifiedSourceAllowedUrlSet([
+          ...Array.from(sourceGroundingAllowedUrls || []),
+          ...Array.from(responseOptions.allowedUrls || []),
+          ...Array.from(normalizedReply.completion?.allowedUrls || []),
+        ]);
+    const providerSupportsGroundingForReply = verifiedSourceFollowOnLocked
+      ? false
+      : (typeof responseOptions.providerSupportsGroundingOverride === 'boolean'
+          ? responseOptions.providerSupportsGroundingOverride
+          : providerSupportsSourceGrounding);
     const safeReplyText = sanitizeSourceGroundingResponse(normalizedReply.text, {
       enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
       providerSupportsGrounding: providerSupportsGroundingForReply,
       allowedUrls,
     });
-    const safeReply = safeReplyText === normalizedReply.text
+    let safeReply = safeReplyText === normalizedReply.text
       ? normalizedReply
       : {
           ...normalizedReply,
           text: safeReplyText,
         };
+    if (verifiedSourceFollowOnLocked && safeReply.completion && typeof safeReply.completion === 'object') {
+      const safeCompletion = { ...safeReply.completion };
+      if (allowedUrls.size) safeCompletion.allowedUrls = Array.from(allowedUrls);
+      else delete safeCompletion.allowedUrls;
+      safeReply = {
+        ...safeReply,
+        completion: safeCompletion,
+      };
+    }
     if (options.shouldPersistMemory === false) {
       return includeCompletionMetadata ? safeReply : safeReply.text;
     }
@@ -6637,20 +6810,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     } catch {}
     return includeCompletionMetadata ? safeReply : safeReply.text;
   };
-  const shouldShortCircuitToVerifiedSources = strictSourceGroundingEnabled
-    && sourceGroundingRequired
-    && options.skipAutomation !== true
-    && isSourceOnlyGroundingRequest({
-      userPrompt: cleanUserPrompt,
-      extraSystemPrompt,
-      skillId: activeSkill?.id || options.skillId || '',
-    });
-  if (shouldShortCircuitToVerifiedSources) {
+  if (shouldRetrieveVerifiedSourcesFirst) {
     const verifiedSourceStartQuery = extractVerifiedSourceQuery({
       userPrompt: cleanUserPrompt,
       documentContext,
       fallbackQuery: getLastVerifiedSourceQuery({ workspaceId: activeWorkspaceId }),
       workspaceId: activeWorkspaceId,
+      stripFollowOnWork: shouldGroundDirectChatWithVerifiedSources,
     });
     const verifiedSourceStartsWithArticleRetrieval = analyzeArticleQuery(verifiedSourceStartQuery).expectsNewsArticle;
     const verifiedSourceStartProvider = verifiedSourceStartsWithArticleRetrieval
@@ -6686,6 +6852,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       cfg,
       timeoutMs,
       preferredProviderId: requestedProvider,
+      stripFollowOnWork: shouldGroundDirectChatWithVerifiedSources,
     });
     if (verifiedSourceReply?.text) {
       if (verifiedSourceReply.query) {
@@ -6697,9 +6864,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         } catch {}
       }
       const isFailure = verifiedSourceReply.text.includes(SOURCE_GROUNDING_FAILURE_TOKEN);
+      const verifiedRetrievalSuccessMessage = shouldGroundDirectChatWithVerifiedSources
+        ? 'נמצאו מקורות מאומתים ונמשיך לתשובת המשך עם grounding על בסיסם בלבד'
+        : 'הוחזרו מקורות מאומתים בלבד';
       logEvent(
         isFailure ? 'verified-source-retrieval-blocked' : 'verified-source-retrieval-success',
-        isFailure ? 'בקשת המקורות נחסמה כי לא נמצאו תוצאות מאומתות' : 'הוחזרו מקורות מאומתים בלבד',
+        isFailure ? 'בקשת המקורות נחסמה כי לא נמצאו תוצאות מאומתות' : verifiedRetrievalSuccessMessage,
         {
           state: isFailure ? 'error' : 'success',
           provider: verifiedSourceReply.providerId || activeProvider,
@@ -6708,20 +6878,31 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           errorMessage: verifiedSourceReply.error?.message || '',
         },
       );
-      return rememberSuccessfulReply({
-        text: verifiedSourceReply.text,
-        completion: {
-          provider: verifiedSourceReply.providerId || activeProvider,
-          model: verifiedSourceReply.model || resolvedModel,
-        },
-      }, {
-        providerId: verifiedSourceReply.providerId || activeProvider,
-        providerSupportsGroundingOverride: true,
-        allowedUrls: new Set([
+      if (shouldGroundDirectChatWithVerifiedSources && !isFailure) {
+        verifiedSourceFollowOnGroundingPrompt = buildVerifiedSourceFollowOnGroundingPrompt(verifiedSourceReply.text);
+        verifiedSourceFollowOnAllowedUrls = buildVerifiedSourceAllowedUrlSet(verifiedSourceReply.urls || []);
+        sourceGroundingAllowedUrls = buildVerifiedSourceAllowedUrlSet([
           ...sourceGroundingAllowedUrls,
-          ...Array.from(verifiedSourceReply.urls || []),
-        ]),
-      });
+          ...Array.from(verifiedSourceFollowOnAllowedUrls),
+        ]);
+        verifiedSourceFollowOnLocked = true;
+        providerSupportsGeminiInternetBackedSourceTools = false;
+      } else {
+        return rememberSuccessfulReply({
+          text: verifiedSourceReply.text,
+          completion: {
+            provider: verifiedSourceReply.providerId || activeProvider,
+            model: verifiedSourceReply.model || resolvedModel,
+          },
+        }, {
+          providerId: verifiedSourceReply.providerId || activeProvider,
+          providerSupportsGroundingOverride: true,
+          allowedUrls: buildVerifiedSourceAllowedUrlSet([
+            ...sourceGroundingAllowedUrls,
+            ...Array.from(verifiedSourceReply.urls || []),
+          ]),
+        });
+      }
     }
   }
   const preserveFullDocumentContext = options.preserveFullDocumentContext === true;
@@ -6736,7 +6917,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -7718,7 +7899,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         return callOpenAICompatible('https://api.perplexity.ai', cfg.perplexity.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        ], signal, {
+          includeCompletionMetadata: preserveProviderCompletionMetadata,
+          ...(verifiedSourceFollowOnLocked ? { requestBodyExtras: { disable_search: true } } : {}),
+        });
       }
       case 'custom': {
         const { baseUrl, key, model, name } = cfg.custom;

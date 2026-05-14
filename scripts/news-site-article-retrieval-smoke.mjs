@@ -193,6 +193,89 @@ await runCase('displayed-verified-fields-stay-grounded-only', async () => {
   assert.equal(result.article.whyRelevant, '');
 });
 
+await runCase('ambiguous-source-fallback-does-not-pick-first-grounded-result', async () => {
+  const query = 'article about Nvidia chips';
+  const sources = extractPerplexitySources({
+    search_results: [
+      {
+        title: 'Nvidia chips demand jumps after AI boom',
+        url: 'https://www.walla.co.il/item/3700011',
+        snippet: 'Demand for Nvidia chips rises after the AI boom.',
+        source: 'Walla',
+        date: '2024-05-01',
+      },
+      {
+        title: 'Nvidia chips demand drops after supply crunch',
+        url: 'https://www.walla.co.il/item/3700099',
+        snippet: 'Nvidia chips demand shifts after a supply crunch.',
+        source: 'Walla',
+        date: '2024-05-02',
+      },
+    ],
+  });
+
+  const result = finalizeArticleResult(buildResultInput({
+    query,
+    queryMeta: buildQueryMeta({
+      focusPhrase: 'Nvidia chips',
+      focusTokens: ['nvidia', 'chips'],
+    }),
+    article: {
+      title: 'Nvidia chips latest article',
+      summary: 'Weak title and source-only matching should stay ambiguous.',
+      sourceName: 'Walla',
+      whyRelevant: 'Weak title and source-only matching should stay ambiguous.',
+      url: '',
+    },
+    sources,
+    rawText: 'Weak title and source-only matching should stay ambiguous.',
+  }));
+
+  assert.equal(result.matchStatus, 'no-match');
+});
+
+await runCase('canonical-equivalent-tied-sources-still-match', async () => {
+  const query = 'article about Nvidia chips';
+  const sources = extractPerplexitySources({
+    search_results: [
+      {
+        title: 'Nvidia chips demand grows',
+        url: 'https://www.reuters.com/technology/nvidia-chips-demand-grows/?utm_source=test',
+        snippet: 'Demand for Nvidia chips rises sharply after the AI boom.',
+        source: 'Reuters',
+        date: '2024-05-01',
+      },
+      {
+        title: 'Nvidia chips demand grows',
+        url: 'https://www.reuters.com/technology/nvidia-chips-demand-grows/',
+        snippet: 'Demand for Nvidia chips rises sharply after the AI boom.',
+        source: 'Reuters',
+        date: '2024-05-01',
+      },
+    ],
+  });
+
+  const result = finalizeArticleResult(buildResultInput({
+    query,
+    queryMeta: buildQueryMeta({
+      focusPhrase: 'Nvidia chips',
+      focusTokens: ['nvidia', 'chips'],
+    }),
+    article: {
+      title: 'Nvidia chips demand grows',
+      summary: 'Equivalent canonical URL ties should still ground to the same article.',
+      sourceName: 'Reuters',
+      whyRelevant: 'Both grounded results point to the same Reuters article.',
+      url: '',
+    },
+    sources,
+    rawText: 'Both grounded results point to the same Reuters article.',
+  }));
+
+  assert.equal(result.matchStatus, 'match');
+  assert.equal(result.article.title, 'Nvidia chips demand grows');
+});
+
 await runCase('explicit-gemini-does-not-fall-through-to-perplexity', async () => {
   let geminiCalls = 0;
   let perplexityCalls = 0;
