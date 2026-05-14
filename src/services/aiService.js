@@ -2767,6 +2767,7 @@ const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model =
 
 const VERIFIED_ARTICLE_GEMINI_MODEL = 'gemini-2.5-pro';
 const VERIFIED_ARTICLE_PROVIDER_IDS = ['gemini', 'perplexity'];
+// Capped at 5: balances UX (enough results to be useful) with API cost and grounding-chunk availability.
 const MAX_REQUESTED_ARTICLE_COUNT = 5;
 const ARTICLE_COUNT_NUMERIC_PATTERN = /\b(\d+)\s+כתבות?\b/;
 const ARTICLE_COUNT_WORD_MAP = { שתי: 2, שניים: 2, שלוש: 3, שלושה: 3, ארבע: 4, ארבעה: 4, חמש: 5, חמישה: 5 };
@@ -2794,6 +2795,9 @@ const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta =
     queryMeta.expectsNewsArticle
       ? 'אם הבקשה מבקשת "כתבה", החזר רק כתבת חדשות עיתונאית מאתר חדשות. אל תחזיר הודעה רשמית, הודעה לעיתונות, עמוד של מכון מחקר, מאמר ניתוח או דעה, בלוג, פוסט חברתי, וידאו או דף קטגוריה.'
       : 'החזר רק עמוד כתבה יחיד, לא דף בית ולא דף קטגוריה.',
+    // Explicit clarification added to prevent AI from misclassifying a named military operation
+    // (מבצע) as a training drill (תרגיל). The two terms are semantically close enough that
+    // some models have returned incorrect descriptions for real Israeli military operations.
     'שים לב: "מבצע" (מבצע צבאי) הוא אירוע אמיתי ולא תרגיל צבאי. "תרגיל" ו"מבצע" הם שני דברים שונים — אל תבלבל ביניהם.',
     queryMeta.years.length > 0
       ? `אם צוינה שנה, הכתבה חייבת להתאים בדיוק לשנה הזאת: ${queryMeta.years.join(', ')}. אל תחליף לשנה סמוכה.`
@@ -2963,6 +2967,22 @@ const buildVerifiedArticleNoMatch = ({ reason = '', providerId = '', model = '' 
   model,
 });
 
+// Shared helper: build and validate a single grounded article from one source object.
+// Returns the validated result item on success, or null if the source fails validation.
+const buildValidatedArticleResultItem = (source, queryMeta, providerId) => {
+  const normalizedArticleUrl = normalizeArticleUrl(source?.url || '');
+  if (!normalizedArticleUrl) return null;
+  const groundedArticle = {
+    title: String(source?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
+    summary: String(source?.snippet || '').trim(),
+    sourceName: String(source?.summary || extractArticleDomainFromUrl(source?.url) || '').trim(),
+    whyRelevant: '',
+    url: normalizedArticleUrl,
+  };
+  const validationError = validateArticleCandidate(queryMeta, groundedArticle, [source], '');
+  return validationError ? null : buildVerifiedArticleResultItem(groundedArticle, providerId);
+};
+
 const finalizeVerifiedArticleRetrieval = ({
   query = '',
   queryMeta = analyzeArticleQuery(query),
@@ -2996,28 +3016,11 @@ const finalizeVerifiedArticleRetrieval = ({
     if (!primarySource) {
       return buildVerifiedArticleNoMatch({ reason: 'לא התקבל מקור מאומת לכתבה עצמה.', providerId, model });
     }
-
-    const normalizedArticleUrl = normalizeArticleUrl(primarySource?.url || '');
-    const groundedArticle = {
-      title: String(primarySource?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
-      summary: String(primarySource?.snippet || '').trim(),
-      sourceName: String(primarySource?.summary || extractArticleDomainFromUrl(primarySource?.url) || '').trim(),
-      whyRelevant: '',
-      url: normalizedArticleUrl,
-    };
-
-    const validationError = validateArticleCandidate(queryMeta, groundedArticle, [primarySource], '');
-    if (validationError) {
-      return buildVerifiedArticleNoMatch({ reason: validationError, providerId, model });
+    const resultItem = buildValidatedArticleResultItem(primarySource, queryMeta, providerId);
+    if (!resultItem) {
+      return buildVerifiedArticleNoMatch({ reason: `הכתבה שנמצאה לא נאמנה מספיק לנושא המבוקש: "${queryMeta.focusPhrase || article?.title || ''}"`, providerId, model });
     }
-
-    return {
-      matchStatus: 'match',
-      noMatchReason: '',
-      results: [buildVerifiedArticleResultItem(groundedArticle, providerId)],
-      providerId,
-      model,
-    };
+    return { matchStatus: 'match', noMatchReason: '', results: [resultItem], providerId, model };
   }
 
   // Multi-result path: validate each grounding source and collect up to resolvedMax valid ones.
@@ -3029,19 +3032,12 @@ const finalizeVerifiedArticleRetrieval = ({
 
   for (const source of sortedSources) {
     if (validResults.length >= resolvedMax) break;
-    const normalizedArticleUrl = normalizeArticleUrl(source?.url || '');
-    if (!normalizedArticleUrl || seenUrls.has(normalizedArticleUrl)) continue;
-    const groundedArticle = {
-      title: String(source?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
-      summary: String(source?.snippet || '').trim(),
-      sourceName: String(source?.summary || extractArticleDomainFromUrl(source?.url) || '').trim(),
-      whyRelevant: '',
-      url: normalizedArticleUrl,
-    };
-    const validationError = validateArticleCandidate(queryMeta, groundedArticle, [source], '');
-    if (!validationError) {
-      validResults.push(buildVerifiedArticleResultItem(groundedArticle, providerId));
-      seenUrls.add(normalizedArticleUrl);
+    const url = normalizeArticleUrl(source?.url || '');
+    if (!url || seenUrls.has(url)) continue;
+    const resultItem = buildValidatedArticleResultItem(source, queryMeta, providerId);
+    if (resultItem) {
+      validResults.push(resultItem);
+      seenUrls.add(url);
     }
   }
 
@@ -3049,13 +3045,7 @@ const finalizeVerifiedArticleRetrieval = ({
     return buildVerifiedArticleNoMatch({ reason: 'לא נמצאו כתבות תואמות מספיק לבקשה.', providerId, model });
   }
 
-  return {
-    matchStatus: 'match',
-    noMatchReason: '',
-    results: validResults,
-    providerId,
-    model,
-  };
+  return { matchStatus: 'match', noMatchReason: '', results: validResults, providerId, model };
 };
 
 const resolveVerifiedArticleGeminiModel = (cfg = DEFAULT_PROVIDER_CONFIG) => {
