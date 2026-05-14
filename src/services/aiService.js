@@ -2767,25 +2767,49 @@ const fetchPerplexityVerifiedSources = async ({ query = '', apiKey = '', model =
 
 const VERIFIED_ARTICLE_GEMINI_MODEL = 'gemini-2.5-pro';
 const VERIFIED_ARTICLE_PROVIDER_IDS = ['gemini', 'perplexity'];
+// Capped at 5: a single grounding call from Gemini or Perplexity typically returns up to 5 search-result
+// chunks, so requesting more would require additional API calls with diminishing returns. This also
+// keeps API costs and response times reasonable.
+const MAX_REQUESTED_ARTICLE_COUNT = 5;
+const ARTICLE_COUNT_NUMERIC_PATTERN = /\b(\d+)\s+כתבות?\b/;
+const ARTICLE_COUNT_WORD_MAP = { שתי: 2, שניים: 2, שלוש: 3, שלושה: 3, ארבע: 4, ארבעה: 4, חמש: 5, חמישה: 5 };
+const ARTICLE_COUNT_WORD_PATTERN = new RegExp(`\\b(${Object.keys(ARTICLE_COUNT_WORD_MAP).join('|')})\\s+כתבות?\\b`);
 
-const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta = analyzeArticleQuery(query)) => {
+const extractRequestedArticleCount = (query = '') => {
+  const text = String(query || '').trim();
+  const numericMatch = text.match(ARTICLE_COUNT_NUMERIC_PATTERN);
+  if (numericMatch) return Math.min(MAX_REQUESTED_ARTICLE_COUNT, Math.max(1, parseInt(numericMatch[1], 10)));
+  const wordMatch = text.match(ARTICLE_COUNT_WORD_PATTERN);
+  if (wordMatch) return Math.min(MAX_REQUESTED_ARTICLE_COUNT, ARTICLE_COUNT_WORD_MAP[wordMatch[1]] || 1);
+  return 1;
+};
+
+const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta = analyzeArticleQuery(query), excludeUrls = []) => {
   const normalizedProvider = String(provider || 'gemini').trim().toLowerCase();
   const searchInstruction = normalizedProvider === 'perplexity'
     ? 'מצא כתבת web אמיתית אחת שמתאימה לבקשה הבאה, והסתמך רק על מידע שניתן לעגן בחיפוש web המובנה של Perplexity.'
     : 'מצא כתבת web אמיתית אחת שמתאימה לבקשה הבאה, והסתמך רק על מידע שניתן לעגן בחיפוש Google המובנה.';
 
+  const safeExcludeUrls = (Array.isArray(excludeUrls) ? excludeUrls : []).map((u) => String(u || '').trim()).filter(Boolean);
   return [
     searchInstruction,
     'אל תמציא URL ואל תמציא מקור.',
     queryMeta.expectsNewsArticle
       ? 'אם הבקשה מבקשת "כתבה", החזר רק כתבת חדשות עיתונאית מאתר חדשות. אל תחזיר הודעה רשמית, הודעה לעיתונות, עמוד של מכון מחקר, מאמר ניתוח או דעה, בלוג, פוסט חברתי, וידאו או דף קטגוריה.'
       : 'החזר רק עמוד כתבה יחיד, לא דף בית ולא דף קטגוריה.',
+    // Explicit clarification added to prevent AI from misclassifying a named military operation
+    // (מבצע) as a training drill (תרגיל). The two terms are semantically close enough that
+    // some models have returned incorrect descriptions for real Israeli military operations.
+    'שים לב: "מבצע" (מבצע צבאי) הוא אירוע אמיתי ולא תרגיל צבאי. "תרגיל" ו"מבצע" הם שני דברים שונים — אל תבלבל ביניהם.',
     queryMeta.years.length > 0
       ? `אם צוינה שנה, הכתבה חייבת להתאים בדיוק לשנה הזאת: ${queryMeta.years.join(', ')}. אל תחליף לשנה סמוכה.`
       : 'אם לא נמצאה התאמה נאמנה מספיק, החזר no-match במקום מקור קרוב-אבל-שגוי.',
     queryMeta.focusPhrase
       ? `היה נאמן בדיוק לשם או לנושא הזה: "${queryMeta.focusPhrase}". אם המקור לא מתייחס אליו במפורש, החזר no-match.`
       : 'אל תחליף אירוע, גוף, דוח או נושא בשם אחר גם אם הוא קשור חלקית.',
+    safeExcludeUrls.length > 0
+      ? `אל תחזיר אף אחד מה-URLs הבאים שכבר נמצאו:\n${safeExcludeUrls.map((u) => `- ${u}`).join('\n')}`
+      : '',
     'אם אין כתבה תואמת מספיק, החזר matchStatus="no-match" עם noMatchReason ברור, והשאר את title/url/summary/sourceName/whyRelevant ריקים.',
     'החזר JSON בלבד במבנה הבא:',
     '{',
@@ -2799,7 +2823,7 @@ const buildVerifiedArticlePrompt = (query = '', provider = 'gemini', queryMeta =
     '}',
     '',
     `הבקשה: ${query}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 };
 
 const stripVerifiedArticleCodeFence = (text = '') => {
@@ -2945,6 +2969,22 @@ const buildVerifiedArticleNoMatch = ({ reason = '', providerId = '', model = '' 
   model,
 });
 
+// Shared helper: build and validate a single grounded article from one source object.
+// Returns the validated result item on success, or null if the source fails validation.
+const buildValidatedArticleResultItem = (source, queryMeta, providerId) => {
+  const normalizedArticleUrl = normalizeArticleUrl(source?.url || '');
+  if (!normalizedArticleUrl) return null;
+  const groundedArticle = {
+    title: String(source?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
+    summary: String(source?.snippet || '').trim(),
+    sourceName: String(source?.summary || extractArticleDomainFromUrl(source?.url) || '').trim(),
+    whyRelevant: '',
+    url: normalizedArticleUrl,
+  };
+  const validationError = validateArticleCandidate(queryMeta, groundedArticle, [source], '');
+  return validationError ? null : buildVerifiedArticleResultItem(groundedArticle, providerId);
+};
+
 const finalizeVerifiedArticleRetrieval = ({
   query = '',
   queryMeta = analyzeArticleQuery(query),
@@ -2955,38 +2995,59 @@ const finalizeVerifiedArticleRetrieval = ({
   rawNoMatchReason = '',
   article = {},
   sources = [],
+  maxResults = 1,
+  excludeUrls = [],
 } = {}) => {
   if (normalizeVerifiedArticleMatchStatus(rawMatchStatus) === 'no-match') {
     return buildVerifiedArticleNoMatch({ reason: rawNoMatchReason, providerId, model });
   }
 
-  const groundedParsedSource = findVerifiedArticleSourceByUrl(sources, article?.url);
-  const primarySource = groundedParsedSource || selectPrimaryVerifiedArticleSource(sources, article);
-  if (!primarySource) {
-    return buildVerifiedArticleNoMatch({ reason: 'לא התקבל מקור מאומת לכתבה עצמה.', providerId, model });
+  const excludeUrlSet = new Set(
+    (Array.isArray(excludeUrls) ? excludeUrls : []).map((u) => normalizeArticleUrl(String(u || '').trim())).filter(Boolean),
+  );
+  const filteredSources = (Array.isArray(sources) ? sources : []).filter((s) => {
+    const url = normalizeArticleUrl(String(s?.url || '').trim());
+    return url && !excludeUrlSet.has(url);
+  });
+
+  const resolvedMax = Math.max(1, Math.min(MAX_REQUESTED_ARTICLE_COUNT, Number(maxResults) || 1));
+
+  if (resolvedMax <= 1) {
+    const groundedParsedSource = findVerifiedArticleSourceByUrl(filteredSources, article?.url);
+    const primarySource = groundedParsedSource || selectPrimaryVerifiedArticleSource(filteredSources, article);
+    if (!primarySource) {
+      return buildVerifiedArticleNoMatch({ reason: 'לא התקבל מקור מאומת לכתבה עצמה.', providerId, model });
+    }
+    const resultItem = buildValidatedArticleResultItem(primarySource, queryMeta, providerId);
+    if (!resultItem) {
+      return buildVerifiedArticleNoMatch({ reason: `הכתבה שנמצאה לא נאמנה מספיק לנושא המבוקש: "${queryMeta.focusPhrase || article?.title || ''}"`, providerId, model });
+    }
+    return { matchStatus: 'match', noMatchReason: '', results: [resultItem], providerId, model };
   }
 
-  const normalizedArticleUrl = normalizeArticleUrl(primarySource?.url || '');
-  const groundedArticle = {
-    title: String(primarySource?.title || normalizedArticleUrl || 'כתבה מאומתת').trim(),
-    summary: String(primarySource?.snippet || '').trim(),
-    sourceName: String(primarySource?.summary || extractArticleDomainFromUrl(primarySource?.url) || '').trim(),
-    whyRelevant: '',
-    url: normalizedArticleUrl,
-  };
+  // Multi-result path: validate each grounding source and collect up to resolvedMax valid ones.
+  const sortedSources = [...filteredSources].sort(
+    (left, right) => scoreVerifiedArticleSource(right, article) - scoreVerifiedArticleSource(left, article),
+  );
+  const validResults = [];
+  const seenUrls = new Set();
 
-  const validationError = validateArticleCandidate(queryMeta, groundedArticle, [primarySource], '');
-  if (validationError) {
-    return buildVerifiedArticleNoMatch({ reason: validationError, providerId, model });
+  for (const source of sortedSources) {
+    if (validResults.length >= resolvedMax) break;
+    const url = normalizeArticleUrl(source?.url || '');
+    if (!url || seenUrls.has(url)) continue;
+    const resultItem = buildValidatedArticleResultItem(source, queryMeta, providerId);
+    if (resultItem) {
+      validResults.push(resultItem);
+      seenUrls.add(url);
+    }
   }
 
-  return {
-    matchStatus: 'match',
-    noMatchReason: '',
-    results: [buildVerifiedArticleResultItem(groundedArticle, providerId)],
-    providerId,
-    model,
-  };
+  if (validResults.length === 0) {
+    return buildVerifiedArticleNoMatch({ reason: 'לא נמצאו כתבות תואמות מספיק לבקשה.', providerId, model });
+  }
+
+  return { matchStatus: 'match', noMatchReason: '', results: validResults, providerId, model };
 };
 
 const resolveVerifiedArticleGeminiModel = (cfg = DEFAULT_PROVIDER_CONFIG) => {
@@ -3019,7 +3080,7 @@ const getPreferredVerifiedArticleProviderIds = ({ cfg = DEFAULT_PROVIDER_CONFIG,
   return VERIFIED_ARTICLE_PROVIDER_IDS.filter((providerId) => isProviderConfiguredForUse(providerId, cfg));
 };
 
-const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = VERIFIED_ARTICLE_GEMINI_MODEL } = {}) => {
+const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = VERIFIED_ARTICLE_GEMINI_MODEL, maxResults = 1, excludeUrls = [] } = {}) => {
   const safeQuery = String(query || '').trim();
   const safeApiKey = String(apiKey || '').trim();
   if (!safeQuery || !safeApiKey) return buildVerifiedArticleNoMatch({ providerId: 'gemini-article-search', model });
@@ -3030,7 +3091,7 @@ const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyz
     tools: [{ googleSearch: {} }],
   });
 
-  const result = await generativeModel.generateContent(buildVerifiedArticlePrompt(safeQuery, 'gemini', queryMeta));
+  const result = await generativeModel.generateContent(buildVerifiedArticlePrompt(safeQuery, 'gemini', queryMeta, excludeUrls));
   const response = result.response;
   const rawText = String(response?.text?.() || '').trim();
   const parsed = parseVerifiedArticleJson(rawText);
@@ -3052,10 +3113,12 @@ const fetchGeminiVerifiedArticleSource = async ({ query = '', queryMeta = analyz
       url: normalizeArticleUrl(parsed?.url),
     },
     sources,
+    maxResults,
+    excludeUrls,
   });
 };
 
-const fetchPerplexityVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = 'sonar-pro', signal, timeoutMs = 0 } = {}) => {
+const fetchPerplexityVerifiedArticleSource = async ({ query = '', queryMeta = analyzeArticleQuery(query), apiKey = '', model = 'sonar-pro', signal, timeoutMs = 0, maxResults = 1, excludeUrls = [] } = {}) => {
   const safeQuery = String(query || '').trim();
   const safeApiKey = String(apiKey || '').trim();
   if (!safeQuery || !safeApiKey) return buildVerifiedArticleNoMatch({ providerId: 'perplexity-article-search', model });
@@ -3076,7 +3139,7 @@ const fetchPerplexityVerifiedArticleSource = async ({ query = '', queryMeta = an
         },
         {
           role: 'user',
-          content: buildVerifiedArticlePrompt(safeQuery, 'perplexity', queryMeta),
+          content: buildVerifiedArticlePrompt(safeQuery, 'perplexity', queryMeta, excludeUrls),
         },
       ],
       max_tokens: 600,
@@ -3112,6 +3175,8 @@ const fetchPerplexityVerifiedArticleSource = async ({ query = '', queryMeta = an
       url: normalizeArticleUrl(parsed?.url),
     },
     sources,
+    maxResults,
+    excludeUrls,
   });
 };
 
@@ -3151,10 +3216,11 @@ const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', a
     : providerId === 'gemini-article-search'
       ? 'Gemini + Google Search'
       : 'Perplexity Search';
+  const multipleArticles = articleRequest && results.length > 1;
   return [
-    `${academic ? 'מקורות אקדמיים' : articleRequest ? 'כתבה מאומתת' : 'מקורות'} בלבד${query ? ` עבור: ${query}` : ''}`,
+    `${academic ? 'מקורות אקדמיים' : articleRequest ? (multipleArticles ? 'כתבות מאומתות' : 'כתבה מאומתת') : 'מקורות'} בלבד${query ? ` עבור: ${query}` : ''}`,
     articleRequest
-      ? `הוחזרה רק כתבת חדשות עיתונאית שאותרה ישירות דרך ${providerLabel}. אם לא הייתה התאמה נאמנה מספיק, הוחזר no-match.`
+      ? `הוחזרו רק כתבות חדשות עיתונאיות שאותרו ישירות דרך ${providerLabel}. אם לא הייתה התאמה נאמנה מספיק, הוחזר no-match.`
       : `הוחזרו רק פריטים שאותרו ישירות דרך ${providerLabel}, בלי השלמה חופשית של המודל.`,
     ...results.map((item, index) => formatVerifiedSourceItem(item, index)),
     articleRequest
@@ -3165,6 +3231,7 @@ const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', a
 
 const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '', preferredProviderId = '' } = {}) => {
   const baseQuery = String(query || '').trim();
+  const requestedCount = extractRequestedArticleCount(baseQuery);
   const fallbackQuery = buildNewsSiteBiasedArticleQuery(baseQuery, queryMeta);
   const searchQueries = fallbackQuery && fallbackQuery !== baseQuery ? [baseQuery, fallbackQuery] : [baseQuery];
   const preferredProviderIds = getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId });
@@ -3176,11 +3243,13 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
       attempts.push({
         providerId: 'gemini-article-search',
         model: geminiModel,
-        run: (searchQuery = baseQuery) => fetchGeminiVerifiedArticleSource({
+        run: (searchQuery = baseQuery, _signal, excludeUrls = []) => fetchGeminiVerifiedArticleSource({
           query: searchQuery,
           queryMeta,
           apiKey: cfg.gemini.key,
           model: geminiModel,
+          maxResults: requestedCount,
+          excludeUrls,
         }),
       });
       return;
@@ -3190,13 +3259,15 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
       attempts.push({
         providerId: 'perplexity-article-search',
         model: String(cfg?.perplexity?.model || '').trim() || 'sonar-pro',
-        run: (searchQuery = baseQuery, signal) => fetchPerplexityVerifiedArticleSource({
+        run: (searchQuery = baseQuery, signal, excludeUrls = []) => fetchPerplexityVerifiedArticleSource({
           query: searchQuery,
           queryMeta,
           apiKey: cfg.perplexity.key,
           model: cfg.perplexity.model,
           signal,
           timeoutMs,
+          maxResults: requestedCount,
+          excludeUrls,
         }),
       });
     }
@@ -3219,23 +3290,35 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
   for (const attempt of attempts) {
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     try {
+      const collectedResults = [];
+      const seenUrls = new Set();
       for (const searchQuery of searchQueries) {
-        const result = await withTimeout(attempt.run(searchQuery, abortController?.signal), timeoutMs, () => abortController?.abort());
-        const results = Array.isArray(result?.results) ? result.results : [];
-        if (results.length) {
-          return {
-            text: buildVerifiedSourceReply({ query: baseQuery, results, providerId: attempt.providerId, articleRequest: true }),
-            providerId: attempt.providerId,
-            model: attempt.model,
-            urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
-            query: baseQuery,
-            workspaceId,
-            academic: false,
-          };
+        const excludeUrls = Array.from(seenUrls);
+        const result = await withTimeout(attempt.run(searchQuery, abortController?.signal, excludeUrls), timeoutMs, () => abortController?.abort());
+        const batchResults = Array.isArray(result?.results) ? result.results : [];
+        for (const item of batchResults) {
+          const url = String(item?.url || '').trim();
+          if (url && !seenUrls.has(url)) {
+            collectedResults.push(item);
+            seenUrls.add(url);
+          }
         }
         if (result?.matchStatus === 'no-match' && result.noMatchReason) {
           lastNoMatchReason = String(result.noMatchReason || '').trim();
         }
+        if (collectedResults.length >= requestedCount) break;
+      }
+      if (collectedResults.length > 0) {
+        const finalResults = collectedResults.slice(0, requestedCount);
+        return {
+          text: buildVerifiedSourceReply({ query: baseQuery, results: finalResults, providerId: attempt.providerId, articleRequest: true }),
+          providerId: attempt.providerId,
+          model: attempt.model,
+          urls: new Set(finalResults.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+          query: baseQuery,
+          workspaceId,
+          academic: false,
+        };
       }
     } catch (error) {
       lastError = error;
@@ -6639,7 +6722,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   };
   const shouldShortCircuitToVerifiedSources = strictSourceGroundingEnabled
     && sourceGroundingRequired
-    && options.skipAutomation !== true
     && isSourceOnlyGroundingRequest({
       userPrompt: cleanUserPrompt,
       extraSystemPrompt,
