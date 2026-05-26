@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
@@ -48,6 +48,7 @@ import {
   getAppMemory,
   clearAppMemory,
   clearSidebarChatHistory,
+  applyPortableProfilePackage,
   buildPortablePrompt,
   applyManualProfileScalarFieldUpdate,
   mergeSyllabusImportPatchIntoProfile,
@@ -153,6 +154,24 @@ const PROVIDER_SETUP_CATALOG = [
       'פתח את perplexity.ai/settings/api.',
       'צור מפתח API והעתק אותו.',
       'הדבק כאן ובחר מודל Sonar מתאים.',
+    ],
+  },
+  {
+    id: 'scholar',
+    label: 'Google Scholar',
+    setupMode: 'builtin',
+    badge: 'אקדמי',
+    keyUrl: 'https://serpapi.com/google-scholar-api',
+    keyCta: 'פתח את SerpAPI (Scholar)',
+    keyHint: 'המפתח משמש לשליפת מאמרים ומקורות אקדמיים דרך SerpAPI.',
+    recommendation: [
+      'מתאים למציאת מקורות אקדמיים מאומתים וציטוטים מתוך Google Scholar.',
+      'בחירה טובה לסטודנטים וחוקרים שצריכים ביבליוגרפיה אמינה.',
+    ],
+    setupSteps: [
+      'פתח את serpapi.com.',
+      'צור חשבון והעתק את ה-API Key.',
+      'הדבק אותו כאן כדי לאפשר חיפוש אקדמי ישיר.',
     ],
   },
   {
@@ -1051,6 +1070,7 @@ function AiSettings({ config, setConfig }) {
             ['openai', 'OpenAI'],
             ['groq', 'Groq'],
             ['perplexity', 'Perplexity'],
+            ['scholar', 'Google Scholar'],
             ['ollama', 'Ollama'],
             ['custom', config.custom?.name || 'Custom'],
           ].map(([providerId, label]) => {
@@ -1242,9 +1262,9 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false}
-        description="אם קיבלת מפתח דרך SerpAPI, אפשר לשמור אותו כאן לשימוש במחקר וחיפוש מקורות. הוצא מפתח מכאן: https://serpapi.com/google-scholar-api">
+        description="מנוע מאמרים ומקורות אקדמיים דרך Google Scholar. שמירת מפתח SerpAPI כאן מאפשרת לבקשות כמו מקורות אקדמיים, bibliography או peer reviewed לעבור למסלול Scholar. הוצא מפתח מכאן: https://serpapi.com/google-scholar-api">
         <FieldRow label="מפתח SerpAPI" type="password" placeholder="your_serpapi_key" value={config.scholar?.key}
-          onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לחיבור חיפושי Google Scholar" />
+          onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לשליפת מאמרים ומקורות אקדמיים מ-Google Scholar במסלול מקורות מאומתים" />
       </ProviderSection>
 
       <ProviderSection title="Copyleaks לזיהוי AI" icon="🛡️" active={false} configured={isProviderConfigured(config, 'copyleaks')} onActivate={() => {}} allowActivate={false}
@@ -1439,8 +1459,11 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
   const [applyState, setApplyState] = useState(''); // '' | 'ok' | 'error'
   const [applyMessage, setApplyMessage] = useState('');
 
-  const portablePrompt = buildPortablePrompt({ sharedInstructions, profile: personalStyle });
-  const analysisPrompt = buildExternalStyleAnalysisPrompt({ profile: personalStyle });
+  const deferredSharedInstructions = useDeferredValue(sharedInstructions);
+  const deferredPersonalStyle = useDeferredValue(personalStyle);
+  const portablePrompt = useMemo(() => buildPortablePrompt({ sharedInstructions: deferredSharedInstructions, profile: deferredPersonalStyle, includePortablePackage: true }), [deferredSharedInstructions, deferredPersonalStyle]);
+  const analysisPrompt = useMemo(() => buildExternalStyleAnalysisPrompt({ profile: deferredPersonalStyle }), [deferredPersonalStyle]);
+  const promptsReady = deferredSharedInstructions === sharedInstructions && deferredPersonalStyle === personalStyle;
 
   const copyText = async (text, label) => {
     try {
@@ -1460,6 +1483,16 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('לא נמצא JSON בפלט.');
       const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed?.kind === 'wordflow-portable-profile') {
+        const imported = applyPortableProfilePackage(parsed);
+        if (!imported?.ok) throw new Error(imported?.error || 'ייבוא החבילה נכשל.');
+        if (setSharedInstructions && typeof parsed.sharedInstructions === 'string') setSharedInstructions(parsed.sharedInstructions);
+        if (setPersonalStyle) setPersonalStyle(getPersonalStyleProfile());
+        setApplyState('ok');
+        setApplyMessage('חבילת WordFlow יובאה בהצלחה במחשב הזה.');
+        setAnalysisOutput('');
+        return;
+      }
       const merged = mergeExternalStyleExtractionIntoProfile(parsed, personalStyle);
       if (setPersonalStyle) setPersonalStyle(merged);
       setApplyState('ok');
@@ -1478,6 +1511,11 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
       <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7 }}>
         כאן מגדירים הנחיות קבועות לכל ספקי AI, ואפשר גם לנתח עבודות קיימות דרך AI חיצוני ולייבא את הממצאים לפרופיל.
       </p>
+      {!promptsReady && (
+        <div style={{ fontSize: 11, color: '#1D4ED8', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '8px 10px' }}>
+          מעדכן את ה-Prompt ברקע...
+        </div>
+      )}
 
       {/* הנחיות משותפות */}
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
@@ -2428,6 +2466,8 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
         return { label: 'Groq', keyValue: providerConfig?.groq?.key || '', placeholder: 'gsk_...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Groq.', acceptsKey: true };
       case 'perplexity':
         return { label: 'Perplexity', keyValue: providerConfig?.perplexity?.key || '', placeholder: 'pplx-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Perplexity.', acceptsKey: true };
+      case 'scholar':
+        return { label: 'Google Scholar', keyValue: providerConfig?.scholar?.key || '', placeholder: 'api_key...', helpText: 'אפשר להדביק כאן את המפתח אליו (SerpAPI), והוא יישמר ישירות.', acceptsKey: true };
       case 'deepseek':
       case 'mistral':
       case 'together':
@@ -2485,7 +2525,7 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       return;
     }
 
-    if (!['gemini', 'openai', 'claude', 'groq', 'perplexity'].includes(resolvedQuickSetupProviderId)) return;
+    if (!['gemini', 'openai', 'claude', 'groq', 'perplexity', 'scholar'].includes(resolvedQuickSetupProviderId)) return;
     const applyBuiltinProviderKey = (prev) => ({
       ...prev,
       [resolvedQuickSetupProviderId]: {
@@ -2694,14 +2734,20 @@ function PersonalStyleSettings({ profile, setProfile }) {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
     setUploading(true);
+    const failedUploads = [];
     try {
       const selectedUploadMeta = getMaterialUploadMeta(uploadKind);
       const uploadedIds = [];
       for (const file of files) {
-        const result = await saveHelperMaterial(file, selectedUploadMeta);
-        if (result?.entry?.id) uploadedIds.push(result.entry.id);
+        try {
+          const result = await saveHelperMaterial(file, selectedUploadMeta);
+          if (result?.entry?.id) uploadedIds.push(result.entry.id);
+        } catch (error) {
+          console.error('Material upload failed:', file?.name, error);
+          failedUploads.push({ name: file?.name || 'קובץ ללא שם', message: error?.message || String(error) });
+        }
       }
-      await syncLearnedStyleFromWorkspace();
+      if (uploadedIds.length) await syncLearnedStyleFromWorkspace();
       setProfile(getPersonalStyleProfile());
       const items = await loadProjectMaterials();
       setRecentMaterials(items.slice(0, 4));
@@ -2710,11 +2756,14 @@ function PersonalStyleSettings({ profile, setProfile }) {
       const problematicUploads = uploadedMaterials
         .map((item) => ({ item, info: getMaterialExtractionStatusInfo(item) }))
         .filter(({ info }) => info.status !== 'success');
-      if (problematicUploads.length) {
+      if (failedUploads.length || problematicUploads.length) {
         window.alert([
-          'חלק מהקבצים נשמרו אבל לא נקראו במלואם:',
+          failedUploads.length ? 'הקבצים הבאים נכשלו בהעלאה ולא נשמרו:' : '',
+          ...failedUploads.map(({ name, message }) => `- ${name}: ${message}`),
+          failedUploads.length && problematicUploads.length ? '' : '',
+          problematicUploads.length ? 'חלק מהקבצים נשמרו אבל לא נקראו במלואם:' : '',
           ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
-        ].join('\n'));
+        ].filter((line) => line !== '').join('\n'));
       }
     } finally {
       setUploading(false);
@@ -3107,6 +3156,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   const [previewWorkspaceId, setPreviewWorkspaceId] = useState('');
   const [editWorkspaceState, setEditWorkspaceState] = useState({ id: '', name: '', sharedGoal: '' });
   const [deepEditWorkspaceState, setDeepEditWorkspaceState] = useState({ id: '', automation: null, agents: [] });
+  const [workspaceDialogStatus, setWorkspaceDialogStatus] = useState({ type: '', message: '' });
 
   const refreshWorkspaceState = () => {
     const nextAutomation = getWorkspaceAutomation();
@@ -3205,6 +3255,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   };
 
   const openEditWorkspace = (workspace) => {
+    setWorkspaceDialogStatus({ type: '', message: '' });
     setEditWorkspaceState({
       id: String(workspace?.id || ''),
       name: String(workspace?.name || workspace?.automation?.workspaceName || '').trim(),
@@ -3239,6 +3290,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   };
 
   const openDeepWorkspaceEdit = (workspaceInput) => {
+    setWorkspaceDialogStatus({ type: '', message: '' });
     const resolvedWorkspace = typeof workspaceInput === 'string'
       ? workspacesLib?.[String(workspaceInput || '').trim()]
       : workspaceInput;
@@ -3271,7 +3323,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       : {};
     const nextName = String(automationDraft.workspaceName || deepEditingWorkspace?.name || '').trim();
     if (!nextName) {
-      window.alert('צריך לתת שם לסביבת העבודה.');
+      setWorkspaceDialogStatus({ type: 'error', message: 'צריך לתת שם לסביבת העבודה.' });
       return;
     }
 
@@ -3285,7 +3337,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       agents: Array.isArray(deepEditWorkspaceState.agents) ? deepEditWorkspaceState.agents : [],
     });
     if (!updated) {
-      window.alert('לא הצלחתי לשמור את העריכה המלאה של סביבת העבודה.');
+      setWorkspaceDialogStatus({ type: 'error', message: 'לא הצלחתי לשמור את העריכה המלאה של סביבת העבודה.' });
       return;
     }
 
@@ -3294,6 +3346,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       setAgents(getRoleAgents());
       setAutomation(getWorkspaceAutomation());
     }
+    setWorkspaceDialogStatus({ type: 'ok', message: 'סביבת העבודה נשמרה. חזרת להגדרות הסוכנים.' });
     closeDeepWorkspaceEdit();
   };
 
@@ -3302,7 +3355,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
     if (!targetId) return;
     const nextName = String(editWorkspaceState.name || '').trim();
     if (!nextName) {
-      window.alert('צריך לתת שם לסביבת העבודה.');
+      setWorkspaceDialogStatus({ type: 'error', message: 'צריך לתת שם לסביבת העבודה.' });
       return;
     }
     const updated = updateWorkspaceById(targetId, {
@@ -3313,10 +3366,11 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       },
     });
     if (!updated) {
-      window.alert('לא הצלחתי לשמור את פרטי סביבת העבודה.');
+      setWorkspaceDialogStatus({ type: 'error', message: 'לא הצלחתי לשמור את פרטי סביבת העבודה.' });
       return;
     }
     refreshWorkspaceState();
+    setWorkspaceDialogStatus({ type: 'ok', message: 'השינויים נשמרו. חזרת להגדרות הסוכנים.' });
     closeEditWorkspace();
   };
 
@@ -3325,6 +3379,11 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 12 }}>
         📦 יצירה ושמירה של סביבות עבודה
       </div>
+      {workspaceDialogStatus.message ? (
+        <div style={{ border: `1px solid ${workspaceDialogStatus.type === 'ok' ? '#86EFAC' : '#FCA5A5'}`, borderRadius: 10, padding: '8px 10px', background: workspaceDialogStatus.type === 'ok' ? '#F0FDF4' : '#FEF2F2', color: workspaceDialogStatus.type === 'ok' ? '#166534' : '#991B1B', fontSize: 11, fontWeight: 700, marginBottom: 10 }}>
+          {workspaceDialogStatus.message}
+        </div>
+      ) : null}
 
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.7 }}>
@@ -3525,6 +3584,12 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                 </div>
               </div>
 
+              {workspaceDialogStatus.message ? (
+                <div style={{ marginTop: 12, border: `1px solid ${workspaceDialogStatus.type === 'ok' ? '#86EFAC' : '#FCA5A5'}`, borderRadius: 10, padding: '8px 10px', background: workspaceDialogStatus.type === 'ok' ? '#F0FDF4' : '#FEF2F2', color: workspaceDialogStatus.type === 'ok' ? '#166534' : '#991B1B', fontSize: 11, fontWeight: 700 }}>
+                  {workspaceDialogStatus.message}
+                </div>
+              ) : null}
+
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => openEditWorkspace(previewWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #DDD6FE', background: '#F5F3FF', color: '#6D28D9', cursor: 'pointer', fontWeight: 700 }}>עריכה בסיסית</button>
                 <button type="button" onClick={() => openDeepWorkspaceEdit(previewWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>פתח עריכה מלאה</button>
@@ -3566,6 +3631,12 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                 </div>
               </div>
 
+              {workspaceDialogStatus.message ? (
+                <div style={{ marginTop: 12, border: `1px solid ${workspaceDialogStatus.type === 'ok' ? '#86EFAC' : '#FCA5A5'}`, borderRadius: 10, padding: '8px 10px', background: workspaceDialogStatus.type === 'ok' ? '#F0FDF4' : '#FEF2F2', color: workspaceDialogStatus.type === 'ok' ? '#166534' : '#991B1B', fontSize: 11, fontWeight: 700 }}>
+                  {workspaceDialogStatus.message}
+                </div>
+              ) : null}
+
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => openDeepWorkspaceEdit(editingWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>פתח עריכה מלאה</button>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -3601,6 +3672,12 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                   config={config}
                 />
               </div>
+
+              {workspaceDialogStatus.message ? (
+                <div style={{ border: `1px solid ${workspaceDialogStatus.type === 'ok' ? '#86EFAC' : '#FCA5A5'}`, borderRadius: 10, padding: '8px 10px', background: workspaceDialogStatus.type === 'ok' ? '#F0FDF4' : '#FEF2F2', color: workspaceDialogStatus.type === 'ok' ? '#166534' : '#991B1B', fontSize: 11, fontWeight: 700 }}>
+                  {workspaceDialogStatus.message}
+                </div>
+              ) : null}
 
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 11, color: '#64748B' }}>
@@ -3655,8 +3732,14 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
       if (i !== index) return agent;
 
       const nextAgent = { ...agent, [field]: value };
-      if (field === 'provider' && !isProviderModelChoiceCompatible(String(value || '').trim(), agent?.model || '', config)) {
-        nextAgent.model = '';
+      if (field === 'provider') {
+        const nextProvider = String(value || '').trim();
+        const modelChoices = getProviderModelChoices(nextProvider, config, [agent?.model]);
+        if (!nextProvider) {
+          nextAgent.model = '';
+        } else if (!isProviderModelChoiceCompatible(nextProvider, agent?.model || '', config)) {
+          nextAgent.model = modelChoices[0] || '';
+        }
       }
 
       return nextAgent;
@@ -4043,6 +4126,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 <option value="claude" disabled={!isProviderConfigured(config, 'claude')}>Claude</option>
                 <option value="groq" disabled={!isProviderConfigured(config, 'groq')}>Groq</option>
                 <option value="perplexity" disabled={!isProviderConfigured(config, 'perplexity')}>Perplexity</option>
+                <option value="scholar" disabled={!isProviderConfigured(config, 'scholar')}>Google Scholar</option>
                 <option value="ollama" disabled={!isProviderConfigured(config, 'ollama')}>Ollama</option>
                 <option value="custom" disabled={!isProviderConfigured(config, 'custom')}>Custom</option>
               </select>
@@ -4067,7 +4151,8 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {agents.map((agent, index) => {
-          const agentModelChoices = getProviderModelChoices(agent.provider, config, [agent.model]);
+          const compatibleAgentModel = agent.provider && isProviderModelChoiceCompatible(agent.provider, agent.model, config) ? agent.model : '';
+          const agentModelChoices = getProviderModelChoices(agent.provider, config, compatibleAgentModel ? [compatibleAgentModel] : []);
           return (
           <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
@@ -4144,7 +4229,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               <div>
                 <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל מועדף לסוכן</div>
                 <select
-                  value={(agent.provider && agentModelChoices.includes(agent.model || '')) ? (agent.model || '') : ''}
+                  value={(agent.provider && compatibleAgentModel && agentModelChoices.includes(compatibleAgentModel)) ? compatibleAgentModel : ''}
                   onChange={(e) => updateAgent(index, 'model', e.target.value)}
                   style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', marginBottom: 6 }}
                 >

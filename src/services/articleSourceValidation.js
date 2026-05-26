@@ -1,7 +1,13 @@
-const ARTICLE_REQUEST_HINTS = ['כתבה', 'כתבות', 'article', 'articles', 'news'];
+const ARTICLE_REQUEST_HINTS = ['כתבה', 'כתבות', 'ידיעה', 'ידיעות', 'חדשה', 'חדשות', 'article', 'articles', 'news'];
 const QUERY_STOP_WORDS = new Set([
   'כתבה',
   'כתבות',
+  'ידיעה',
+  'ידיעות',
+  'חדשה',
+  'חדשות',
+  'מאמר',
+  'מאמרים',
   'article',
   'articles',
   'news',
@@ -11,6 +17,8 @@ const QUERY_STOP_WORDS = new Set([
   'תן',
   'תני',
   'הבא',
+  'מצא',
+  'חפש',
   'לי',
   'על',
   'אודות',
@@ -36,14 +44,26 @@ const QUERY_STOP_WORDS = new Set([
   'הימים',
   'האחרונים',
   'האחרון',
+  'לאחרונה',
+  'מהשבוע',
+  'השבוע',
+  'אירוע',
+  'אירועים',
+  'אתר',
+  'אתרי',
+  'חדשותי',
+  'עיתונאי',
+  'עיתונאית',
   'שנת',
   'בשנת',
   'משנת',
   'השנה',
   'שנה',
 ]);
-const FOCUS_GENERIC_TOKENS = new Set(['מבצע', 'דוח', 'כתבה', 'מאמר', 'article', 'news']);
+const FOCUS_GENERIC_TOKENS = new Set(['מבצע', 'דוח', 'כתבה', 'כתבות', 'ידיעה', 'ידיעות', 'חדשות', 'מאמר', 'מאמרים', 'article', 'articles', 'news']);
 const NEWS_SITE_QUERY_HINTS = ['מאתר חדשות', 'מאתרי חדשות', 'אתר חדשות', 'עיתונאית', 'עיתונאי', 'news site', 'news-site', 'journalistic news', 'journalistic article', 'from a news site'];
+const OPERATION_QUERY_HINTS = ['מבצע', 'operation'];
+const KNOWN_OPERATION_TITLES_REQUIRING_PREFIX = new Set(['שאגת הארי']);
 const KNOWN_NEWS_DOMAIN_HINTS = [
   'ynet.co.il',
   'mako.co.il',
@@ -56,10 +76,15 @@ const KNOWN_NEWS_DOMAIN_HINTS = [
   'calcalist.co.il',
   'israelhayom.co.il',
   'maariv.co.il',
+  '13tv.co.il',
   'kan.org.il',
   'ice.co.il',
   'srugim.co.il',
   'davar1.co.il',
+  'inn.co.il',
+  'israelnationalnews.com',
+  'i24news.tv',
+  '08news.co.il',
   'jpost.com',
   'timesofisrael.com',
   'reuters.com',
@@ -81,6 +106,64 @@ const KNOWN_NEWS_DOMAIN_HINTS = [
   'newsweek.com',
   'axios.com',
   'politico.com',
+];
+const KNOWN_NEWS_SOURCE_LABEL_HINTS = [
+  'ynet',
+  'וויינט',
+  'mako',
+  'n12',
+  'walla',
+  'וואלה',
+  'haaretz',
+  'הארץ',
+  'the marker',
+  'themarker',
+  'globes',
+  'גלובס',
+  'calcalist',
+  'כלכליסט',
+  'israel hayom',
+  'ישראל היום',
+  'maariv',
+  'מעריב',
+  '13tv',
+  'reshet 13',
+  'רשת 13',
+  'ערוץ 13',
+  'חדשות 13',
+  'kan',
+  'כאן',
+  'inn',
+  'israel national news',
+  'ערוץ 7',
+  'ערוץ שבע',
+  'i24news',
+  'i24 news',
+  'חדשות 08',
+  'חדשות אפס שמונה 08',
+  'חדשות אפס שמונה',
+  '08news',
+  'jerusalem post',
+  'jpost',
+  'times of israel',
+  'reuters',
+  'associated press',
+  'ap news',
+  'bbc',
+  'cnn',
+  'new york times',
+  'wall street journal',
+  'washington post',
+  'the guardian',
+  'bloomberg',
+  'financial times',
+  'nbc news',
+  'cbs news',
+  'abc news',
+  'fox news',
+  'newsweek',
+  'axios',
+  'politico',
 ];
 const GENERIC_NEWS_DOMAIN_HINTS = ['news', 'times', 'post', 'journal', 'gazette', 'herald', 'tribune', 'chronicle', 'observer', 'monitor', 'daily', 'wire'];
 const DISALLOWED_DOMAIN_HINTS = [
@@ -106,6 +189,7 @@ const DISALLOWED_DOMAIN_HINTS = [
 ];
 const DISALLOWED_PATH_HINTS = ['press-release', 'news-release', 'official-statement', 'blog', 'analysis', 'opinion', 'commentary', 'white-paper', 'pdf', 'video', 'tweet', 'status', 'post', 'topic', 'topics', 'category', 'categories', 'tag', 'tags'];
 const DISALLOWED_TEXT_HINTS = ['הודעה לעיתונות', 'הודעה רשמית', 'דוברות', 'מאמר דעה', 'פרשנות', 'analysis', 'opinion', 'commentary', 'blog post', 'press release', 'social post', 'פוסט', 'ציוץ'];
+const QUERY_URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 
 export const normalizeUrl = (value = '') => {
   const url = String(value || '').trim();
@@ -157,6 +241,15 @@ export const normalizeText = (value = '') => String(value || '')
 
 export const extractYears = (text = '') => Array.from(new Set(String(text || '').match(/\b(?:19|20)\d{2}\b/g) || []));
 
+const extractSingleDirectUrl = (query = '') => {
+  const matches = String(query || '').match(QUERY_URL_PATTERN) || [];
+  const normalizedMatches = Array.from(new Set(matches.map((rawValue) => {
+    const trimmedValue = String(rawValue || '').trim().replace(/[),.;]+$/g, '');
+    return normalizeUrl(/^www\./i.test(trimmedValue) ? `https://${trimmedValue}` : trimmedValue);
+  }).filter(Boolean)));
+  return normalizedMatches.length === 1 ? normalizedMatches[0] : '';
+};
+
 const extractFocusPhrase = (query = '') => {
   const raw = String(query || '').trim();
 
@@ -188,10 +281,16 @@ const tokenizeFocusText = (text = '') => Array.from(
 export const analyzeQuery = (query = '') => {
   const trimmedQuery = String(query || '').trim();
   const normalizedQuery = normalizeText(trimmedQuery);
+  const exactUrl = extractSingleDirectUrl(trimmedQuery);
   const focusPhrase = extractFocusPhrase(trimmedQuery);
+  const hasArticleHint = ARTICLE_REQUEST_HINTS.some((hint) => normalizedQuery.includes(normalizeText(hint)));
+  const hasNewsSiteHint = NEWS_SITE_QUERY_HINTS.some((hint) => normalizedQuery.includes(normalizeText(hint)));
+  const hasRecentNewsHint = ['מהשבוע', 'השבוע', 'לאחרונה', 'אחרון', 'האחרון', 'אירוע', 'אירועים', 'חדשות', 'ידיעות'].some((hint) => normalizedQuery.includes(normalizeText(hint)));
+  const hasNewsContextArticleHint = /(?:מאמרים?|articles?)/iu.test(trimmedQuery) && (hasNewsSiteHint || hasRecentNewsHint);
 
   return {
-    expectsNewsArticle: ARTICLE_REQUEST_HINTS.some((hint) => normalizedQuery.includes(hint)),
+    expectsNewsArticle: hasArticleHint || hasNewsSiteHint || hasNewsContextArticleHint || Boolean(exactUrl),
+    exactUrl,
     years: extractYears(trimmedQuery),
     focusPhrase,
     focusTokens: tokenizeFocusText(focusPhrase),
@@ -210,8 +309,8 @@ export const buildNewsSiteBiasedArticleQuery = (query = '', queryMeta = analyzeQ
     return '';
   }
 
-  if (/(^|\s)(כתבה|כתבות)(?=\s|$)/u.test(trimmedQuery)) {
-    return trimmedQuery.replace(/(^|\s)(כתבה|כתבות)(?=\s|$)/u, (_, prefix, word) => `${prefix}${word} עיתונאית מאתר חדשות`);
+  if (/(^|\s)(כתבה|כתבות|ידיעה|ידיעות|מאמר|מאמרים)(?=\s|$)/u.test(trimmedQuery)) {
+    return trimmedQuery.replace(/(^|\s)(כתבה|כתבות|ידיעה|ידיעות|מאמר|מאמרים)(?=\s|$)/u, (_, prefix, word) => `${prefix}${word} עיתונאית מאתר חדשות`);
   }
 
   if (/\barticles?\b/i.test(trimmedQuery)) {
@@ -225,6 +324,34 @@ export const buildNewsSiteBiasedArticleQuery = (query = '', queryMeta = analyzeQ
   return /[\u0590-\u05FF]/u.test(trimmedQuery)
     ? `${trimmedQuery} עיתונאית מאתר חדשות`
     : `${trimmedQuery} from a journalistic news site`;
+};
+
+export const buildArticleSearchQueryVariants = (query = '', queryMeta = analyzeQuery(query)) => {
+  const trimmedQuery = String(query || '').trim();
+  if (!trimmedQuery || !queryMeta?.expectsNewsArticle) {
+    return [trimmedQuery].filter(Boolean);
+  }
+
+  const variants = new Set([trimmedQuery]);
+  const newsSiteBiasedQuery = buildNewsSiteBiasedArticleQuery(trimmedQuery, queryMeta);
+  if (newsSiteBiasedQuery) {
+    variants.add(newsSiteBiasedQuery);
+  }
+
+  const focusPhrase = String(queryMeta?.focusPhrase || '').trim();
+  const normalizedFocusPhrase = normalizeText(focusPhrase);
+  const isHebrewFocusPhrase = /[\u0590-\u05FF]/u.test(focusPhrase);
+  const normalizedQuery = normalizeText(trimmedQuery);
+  const hasOperationHint = OPERATION_QUERY_HINTS.some((hint) => normalizedQuery.includes(normalizeText(hint)));
+  const shouldApplyOperationVariants = hasOperationHint || KNOWN_OPERATION_TITLES_REQUIRING_PREFIX.has(normalizedFocusPhrase);
+
+  if (focusPhrase && isHebrewFocusPhrase && shouldApplyOperationVariants && !normalizedFocusPhrase.includes('מבצע')) {
+    variants.add(`מבצע ${focusPhrase}`);
+    variants.add(`כתבה על מבצע ${focusPhrase}`);
+    variants.add(`תביא כתבה על מבצע ${focusPhrase}`);
+  }
+
+  return Array.from(variants).filter(Boolean);
 };
 
 const domainMatchesHint = (domain = '', hint = '') => {
@@ -243,6 +370,29 @@ const hasAnyHint = (text = '', hints = []) => {
   const normalizedText = normalizeText(text);
   return hints.some((hint) => normalizedText.includes(normalizeText(hint)));
 };
+
+const normalizeLooseHintText = (value = '') => normalizeText(value).replace(/[\s.-]+/g, '');
+
+const textContainsHint = (text = '', hint = '') => {
+  const normalizedText = normalizeText(text);
+  const normalizedHint = normalizeText(hint);
+
+  if (!normalizedText || !normalizedHint) {
+    return false;
+  }
+
+  if (normalizedText.includes(normalizedHint)) {
+    return true;
+  }
+
+  if (normalizedHint.includes('.') || normalizedHint.length < 4) {
+    return false;
+  }
+
+  return normalizeLooseHintText(normalizedText).includes(normalizeLooseHintText(normalizedHint));
+};
+
+const hasTextualHint = (text = '', hints = []) => hints.some((hint) => textContainsHint(text, hint));
 
 const isKnownNewsDomain = (domain = '') => {
   const normalizedDomain = String(domain || '').toLowerCase();
@@ -273,7 +423,18 @@ const isDisallowedDomain = (domain = '') => {
   return DISALLOWED_DOMAIN_HINTS.some((hint) => domainMatchesHint(normalizedDomain, hint));
 };
 
+const hasKnownNewsSourceSignal = (text = '') => hasTextualHint(text, KNOWN_NEWS_DOMAIN_HINTS)
+  || hasTextualHint(text, KNOWN_NEWS_SOURCE_LABEL_HINTS);
+
+const hasDisallowedSourceSignal = (text = '') => hasTextualHint(text, DISALLOWED_DOMAIN_HINTS);
+
 const buildValidationEvidence = (article = {}, sources = [], rawText = '') => {
+  const primaryEvidence = [article?.title, article?.sourceName, article?.url, article?.summary, article?.whyRelevant]
+    .filter(Boolean)
+    .join(' ');
+  const primaryYearEvidence = [article?.title, article?.sourceName, article?.summary, article?.whyRelevant]
+    .filter(Boolean)
+    .join(' ');
   const sourceEvidence = [
     ...(Array.isArray(sources)
       ? sources.flatMap((source) => [source?.title, source?.domain, source?.url, source?.summary, source?.snippet, source?.year])
@@ -289,11 +450,32 @@ const buildValidationEvidence = (article = {}, sources = [], rawText = '') => {
   const modelEvidence = [article?.summary, article?.whyRelevant, rawText].filter(Boolean).join(' ');
 
   return {
+    primaryEvidence,
+    primaryYearEvidence,
     sourceEvidence,
     yearEvidence,
     modelEvidence,
     combinedEvidence: [sourceEvidence, modelEvidence].filter(Boolean).join(' '),
   };
+};
+
+const collectKnownNewsDomains = (sourceDomain = '', sources = []) => {
+  const knownDomains = new Set();
+
+  if (isKnownNewsDomain(sourceDomain)) {
+    knownDomains.add(sourceDomain);
+  }
+
+  if (Array.isArray(sources)) {
+    sources.forEach((source) => {
+      const domain = extractDomainFromUrl(String(source?.url || '')) || String(source?.domain || source?.summary || '').trim().toLowerCase();
+      if (domain && isKnownNewsDomain(domain)) {
+        knownDomains.add(domain);
+      }
+    });
+  }
+
+  return knownDomains;
 };
 
 export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article = {}, sources = [], rawText = '') => {
@@ -306,20 +488,25 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
 
   const sourceDomain = extractDomainFromUrl(normalizedUrl) || String(article?.sourceName || '').trim();
   const evidence = buildValidationEvidence(article, sources, rawText);
-  const normalizedSourceEvidence = normalizeText(evidence.sourceEvidence);
+  const normalizedPrimaryEvidence = normalizeText(evidence.primaryEvidence);
 
   if (queryMeta?.expectsNewsArticle) {
-    if (isDisallowedDomain(sourceDomain) || hasAnyHint(normalizedUrlPath, DISALLOWED_PATH_HINTS) || hasAnyHint(evidence.sourceEvidence, DISALLOWED_TEXT_HINTS)) {
+    if (isDisallowedDomain(sourceDomain) || hasDisallowedSourceSignal(evidence.primaryEvidence) || hasAnyHint(normalizedUrlPath, DISALLOWED_PATH_HINTS) || hasAnyHint(evidence.primaryEvidence, DISALLOWED_TEXT_HINTS)) {
       return 'המקור שנמצא אינו כתבת חדשות עיתונאית מאתר חדשות אלא מקור רשמי, מחקרי או חברתי.';
     }
 
-    if (!isLikelyNewsDomain(sourceDomain)) {
+    if (!isLikelyNewsDomain(sourceDomain) && !hasKnownNewsSourceSignal(evidence.primaryEvidence)) {
       return 'לא נמצאה אינדיקציה מספקת שמדובר בכתבת חדשות מאתר חדשות.';
+    }
+
+    const knownNewsDomains = collectKnownNewsDomains(sourceDomain, sources);
+    if (knownNewsDomains.size < 2) {
+      return 'לא נמצא אימות משני דומיינים ייחודיים של אתרי חדשות מוכרים לכתבה זו.';
     }
   }
 
   if (Array.isArray(queryMeta?.years) && queryMeta.years.length > 0) {
-    const sourceEvidenceYears = extractYears(evidence.yearEvidence);
+    const sourceEvidenceYears = extractYears(evidence.primaryYearEvidence);
     const hasAllRequestedYears = queryMeta.years.every((year) => sourceEvidenceYears.includes(year));
 
     if (!hasAllRequestedYears) {
@@ -335,8 +522,8 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
 
   if (Array.isArray(queryMeta?.focusTokens) && queryMeta.focusTokens.length > 0) {
     const normalizedFocusPhrase = normalizeText(queryMeta.focusPhrase);
-    const hasExactFocusPhrase = normalizedFocusPhrase && normalizedSourceEvidence.includes(normalizedFocusPhrase);
-    const matchedTokens = queryMeta.focusTokens.filter((token) => normalizedSourceEvidence.includes(token));
+    const hasExactFocusPhrase = normalizedFocusPhrase && normalizedPrimaryEvidence.includes(normalizedFocusPhrase);
+    const matchedTokens = queryMeta.focusTokens.filter((token) => normalizedPrimaryEvidence.includes(token));
 
     if (!hasExactFocusPhrase && matchedTokens.length < queryMeta.focusTokens.length) {
       return `הכתבה שנמצאה לא נאמנה מספיק לשם או לנושא המבוקש: "${queryMeta.focusPhrase}".`;

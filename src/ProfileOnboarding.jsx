@@ -76,23 +76,21 @@ export default function ProfileOnboarding({
   }, [copyPromptState]);
 
   const nextStep = () => {
-    if (step < 7) {
-      setAnimating(true);
-      setTimeout(() => {
-        setStep((s) => s + 1);
-        setAnimating(false);
-      }, 600);
-    }
+    goToStep(step + 1);
   };
 
   const prevStep = () => {
-    if (step > 1) {
-      setAnimating(true);
-      setTimeout(() => {
-        setStep((s) => s - 1);
-        setAnimating(false);
-      }, 600);
-    }
+    goToStep(step - 1);
+  };
+
+  const goToStep = (targetStep) => {
+    const safeStep = Math.max(1, Math.min(7, Number(targetStep) || 1));
+    if (safeStep === step || animating) return;
+    setAnimating(true);
+    setTimeout(() => {
+      setStep(safeStep);
+      setAnimating(false);
+    }, 250);
   };
 
   const lecturerNamesValue = Array.isArray(profile.lecturerNames) && profile.lecturerNames.length
@@ -263,7 +261,10 @@ export default function ProfileOnboarding({
             <div className="relative flex justify-between">
               {[1, 2, 3, 4, 5, 6, 7].map((s) => (
                 <div key={s} className="flex flex-col items-center">
-                  <div 
+                  <button
+                    type="button"
+                    onClick={() => goToStep(s)}
+                    aria-label={`עבור לשלב ${s}: ${stepTitles[s]}`}
                     className={`relative z-10 w-16 h-16 rounded-full flex items-center justify-center font-bold text-base transition-all duration-700 border-4 ${
                       s <= step 
                         ? 'bg-gradient-to-br from-white to-purple-50 text-purple-700 border-purple-300 shadow-xl transform scale-110' 
@@ -271,11 +272,13 @@ export default function ProfileOnboarding({
                     }`}
                     style={{
                       boxShadow: s <= step ? '0 10px 25px rgba(168, 85, 247, 0.3)' : 'none',
-                      animationDelay: `${s * 0.1}s`
+                      animationDelay: `${s * 0.1}s`,
+                      cursor: animating ? 'default' : 'pointer'
                     }}
+                    disabled={animating}
                   >
                     <span className="text-base">{stepIcons[s]}</span>
-                  </div>
+                  </button>
                   <div className={`mt-2 text-xs font-medium transition-all duration-500 ${
                     s <= step ? 'text-white' : 'text-white/60'
                   }`}>

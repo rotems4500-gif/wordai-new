@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 
 import {
+  analyzeQuery,
+  buildNewsSiteBiasedArticleQuery,
+} from '../src/services/articleSourceValidation.js';
+
+import {
   extractPerplexitySources,
   fetchArticleWithStrategy,
   finalizeArticleResult,
+  finalizeArticleResultWithCanonicalResolution,
 } from './gemini-article-check-server.mjs';
 
 const buildQueryMeta = ({ focusPhrase = '', focusTokens = [], years = [] } = {}) => ({
@@ -162,6 +168,20 @@ await runCase('displayed-verified-fields-stay-grounded-only', async () => {
         source: 'Reuters',
         date: '2024-05-01',
       },
+      {
+        title: 'Nvidia chips demand keeps rising',
+        url: 'https://apnews.com/article/nvidia-chips-demand-keeps-rising',
+        snippet: 'Nvidia chips demand rises sharply in 2024.',
+        source: 'AP News',
+        date: '2024-05-02',
+      },
+      {
+        title: 'Official chip export notice',
+        url: 'https://www.gov.il/en/pages/chip-export-notice',
+        snippet: 'Official notice that should not disqualify the selected news article.',
+        source: 'Gov.il',
+        date: '2024-05-02',
+      },
     ],
   });
 
@@ -252,6 +272,13 @@ await runCase('canonical-equivalent-tied-sources-still-match', async () => {
         source: 'Reuters',
         date: '2024-05-01',
       },
+      {
+        title: 'Nvidia chips demand rises after AI boom',
+        url: 'https://apnews.com/article/nvidia-chips-demand-rises-ai-boom',
+        snippet: 'Demand for Nvidia chips rises sharply after the AI boom.',
+        source: 'AP News',
+        date: '2024-05-02',
+      },
     ],
   });
 
@@ -274,6 +301,84 @@ await runCase('canonical-equivalent-tied-sources-still-match', async () => {
 
   assert.equal(result.matchStatus, 'match');
   assert.equal(result.article.title, 'Nvidia chips demand grows');
+});
+
+await runCase('canonical-url-variants-ground-to-the-same-article', async () => {
+  const query = 'article about Nvidia chips';
+  const canonicalUrl = 'https://www.reuters.com/technology/nvidia-chips-demand-grows/';
+  const input = buildResultInput({
+    query,
+    queryMeta: buildQueryMeta({
+      focusPhrase: 'Nvidia chips',
+      focusTokens: ['nvidia', 'chips'],
+    }),
+    article: {
+      title: 'Nvidia chips Reuters report',
+      summary: 'Only canonical URL reconciliation should identify which Reuters article the parsed URL meant.',
+      sourceName: 'Reuters',
+      whyRelevant: 'The parsed article URL points to a mobile Reuters variant of the intended article.',
+      url: 'https://m.reuters.com/technology/nvidia-chips-demand-grows/?utm_source=test',
+    },
+    sources: extractPerplexitySources({
+      search_results: [
+        {
+          title: 'Nvidia chips demand grows after AI boom',
+          url: canonicalUrl,
+          snippet: 'Demand for Nvidia chips rises sharply after the AI boom.',
+          source: 'Reuters',
+          date: '2024-05-01',
+        },
+        {
+          title: 'Nvidia chips export curbs hit China buyers',
+          url: 'https://www.reuters.com/technology/nvidia-chips-export-curbs-hit-china-buyers/',
+          snippet: 'Export curbs reshape Nvidia chip sales in China.',
+          source: 'Reuters',
+          date: '2024-05-03',
+        },
+        {
+          title: 'Nvidia chips demand grows after AI boom',
+          url: 'https://apnews.com/article/nvidia-chips-demand-grows-ai-boom',
+          snippet: 'Demand for Nvidia chips rises sharply after the AI boom.',
+          source: 'AP News',
+          date: '2024-05-02',
+        },
+      ],
+    }),
+    rawText: 'The parsed article URL points to a mobile Reuters variant of the intended article.',
+  });
+
+  const plainResult = finalizeArticleResult(input);
+  assert.equal(plainResult.matchStatus, 'no-match');
+  assert.equal(plainResult.noMatchReason, 'לא התקבל מקור מאומת לכתבה עצמה.');
+
+  const result = await finalizeArticleResultWithCanonicalResolution(input, {
+    resolveCanonicalUrlImpl: async (url) => {
+      if (String(url).includes('reuters.com/technology/nvidia-chips-demand-grows')) {
+        return canonicalUrl;
+      }
+
+      return url;
+    },
+  });
+
+  assert.equal(result.matchStatus, 'match');
+  assert.equal(result.article.url, canonicalUrl);
+  assert.equal(result.article.title, 'Nvidia chips demand grows after AI boom');
+});
+
+await runCase('hebrew-news-article-intents-are-detected', async () => {
+  const queries = [
+    'מצא כתבה מאתר חדשות על האירוע האחרון מהשבוע',
+    'תן לי 3 כתבות מאתרי חדשות על האירוע האחרון בצפון מהשבוע',
+    'מצא שלוש ידיעות חדשותיות מאתר חדשות על הבחירות לאחרונה',
+    'אני צריך מאמרים מאתרי חדשות על האירוע האחרון עם קישורים',
+  ];
+
+  for (const query of queries) {
+    const meta = analyzeQuery(query);
+    assert.equal(meta.expectsNewsArticle, true, query);
+    assert.match(buildNewsSiteBiasedArticleQuery(query, meta) || query, /אתר(?:י)? חדשות|עיתונאית/u);
+  }
 });
 
 await runCase('explicit-gemini-does-not-fall-through-to-perplexity', async () => {

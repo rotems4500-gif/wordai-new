@@ -13,6 +13,8 @@ import {
   getMaterialExtractionStatusInfo,
   saveHelperMaterial,
   saveHomeInstructions,
+  getRecentDocuments,
+  removeDocumentHistoryByFilePath,
   syncLearnedStyleFromWorkspace,
   readInstructionFile,
   MATERIAL_UPLOAD_PRESETS,
@@ -469,11 +471,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const fileInputRef = useRef(null);
   const baseDraftInputRef = useRef(null);
   const instructionFileInputRef = useRef(null);
-  const [instructions, setInstructions] = useState(() => (instructionsResetToken > 0 ? '' : (typeof getHomeInstructions === 'function' ? getHomeInstructions() : '')));
+  const [instructions, setInstructions] = useState(() => {
+    if (instructionsResetToken > 0) return '';
+    const savedInstructions = typeof getHomeInstructions === 'function' ? getHomeInstructions() : '';
+    if (String(savedInstructions || '').trim()) return savedInstructions;
+    return typeof getHomeInstructionFileText === 'function' ? getHomeInstructionFileText() : '';
+  });
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [materialsFilter, setMaterialsFilter] = useState('all');
   const [uploading, setUploading] = useState(false);
+  // התקדמות העלאה לכל קובץ - מאפשר feedback אמיתי במקום ספינר עיוור
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '' });
   const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
   const [activeDropZone, setActiveDropZone] = useState('');
   const [instructionFileName, setInstructionFileName] = useState(() => (instructionsResetToken > 0 ? '' : (typeof getHomeInstructionFileName === 'function' ? getHomeInstructionFileName() : '')));
@@ -487,6 +496,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [quickWorkflowMode, setQuickWorkflowMode] = useState('circular-team');
   const [circularWorkflowEnabled, setCircularWorkflowEnabled] = useState(true);
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
+  const [recentDocs, setRecentDocs] = useState(() => (typeof getRecentDocuments === 'function' ? getRecentDocuments(8) : []));
+  const canOpenRecentDocs = typeof window !== 'undefined' && typeof window.desktopApp?.openDocumentByPath === 'function';
   const workspaceBypassActive = currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE;
   const workflowSelectorCurrentLabel = getWorkflowModeDisplayLabel(actualWorkflowMode, autopilotEnabled);
   const workflowSelectorSummary = autopilotEnabled === false
@@ -773,13 +784,30 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const processMaterialUploads = async (files = []) => {
     const normalizedFiles = Array.from(files || []).filter(Boolean);
     if (!normalizedFiles.length || uploading) return;
+    // אזהרת קבצים גדולים (מעל 25MB) - מתריע על תהליך ארוך לפני שחוסם UI
+    const LARGE_FILE_THRESHOLD = 25 * 1024 * 1024;
+    const largeFiles = normalizedFiles.filter((file) => (file?.size || 0) > LARGE_FILE_THRESHOLD);
+    if (largeFiles.length) {
+      const sizesText = largeFiles.map((f) => `- ${f.name} (${Math.round((f.size || 0) / (1024 * 1024))}MB)`).join('\n');
+      const proceed = window.confirm(`שמת לב שהקבצים הבאים כבדים מ-25MB ויעלו לאט יותר:\n${sizesText}\n\nלהמשיך?`);
+      if (!proceed) return;
+    }
     setUploading(true);
+    setUploadProgress({ current: 0, total: normalizedFiles.length, fileName: '' });
+    const failedUploads = [];
     try {
       const uploadedIds = [];
-      for (const file of normalizedFiles) {
-        if (typeof saveHelperMaterial === 'function') {
+      for (let i = 0; i < normalizedFiles.length; i += 1) {
+        const file = normalizedFiles[i];
+        setUploadProgress({ current: i + 1, total: normalizedFiles.length, fileName: file?.name || '' });
+        if (typeof saveHelperMaterial !== 'function') break;
+        try {
           const result = await saveHelperMaterial(file, selectedUploadMeta);
           if (result?.entry?.id) uploadedIds.push(result.entry.id);
+        } catch (err) {
+          // נכשל קובץ בודד - לא להפיל את כל הבאצ', לאסוף לדוח סופי
+          console.error('Material upload failed:', file?.name, err);
+          failedUploads.push({ name: file?.name || 'קובץ ללא שם', message: err?.message || String(err) });
         }
       }
       let uploadedMaterials = [];
@@ -795,14 +823,26 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       const problematicUploads = uploadedMaterials
         .map((item) => ({ item, info: getMaterialExtractionStatusInfo(item) }))
         .filter(({ info }) => info.status !== 'success');
-      if (problematicUploads.length) {
-        window.alert([
-          'חלק מהקבצים נשמרו אבל לא נקראו במלואם:',
-          ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
-        ].join('\n'));
+      const messages = [];
+      if (failedUploads.length) {
+        messages.push('הקבצים הבאים נכשלו בהעלאה ולא נשמרו:');
+        failedUploads.forEach(({ name, message }) => messages.push(`- ${name}: ${message}`));
       }
-    } catch(e) { console.error(e); } finally {
+      if (problematicUploads.length) {
+        if (messages.length) messages.push('');
+        messages.push('חלק מהקבצים נשמרו אבל לא נקראו במלואם:');
+        problematicUploads.forEach(({ item, info }) => messages.push(`- ${item.title}: ${info.message}`));
+      }
+      if (messages.length) {
+        window.alert(messages.join('\n'));
+      }
+    } catch (e) {
+      // כשל גלובלי בלתי צפוי - חייב הודעה למשתמש, לא רק console
+      console.error('Material upload pipeline failed:', e);
+      window.alert(`ההעלאה נכשלה: ${e?.message || 'שגיאה לא ידועה'}`);
+    } finally {
       setUploading(false);
+      setUploadProgress({ current: 0, total: 0, fileName: '' });
     }
   };
 
@@ -820,13 +860,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     try {
       let extracted = '';
       if (typeof readInstructionFile === 'function') extracted = await readInstructionFile(file);
-      if (!String(extracted || '').trim()) {
+      const nextInstructions = String(extracted || '').trim();
+      if (!nextInstructions) {
         window.alert('לא הצלחתי לקרוא תוכן מתוך קובץ ההנחיות.');
         return;
       }
+      setInstructions(nextInstructions);
       setInstructionFileName(file.name);
+      if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
       if (typeof saveHomeInstructionFileName === 'function') saveHomeInstructionFileName(file.name);
-      if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText(String(extracted).trim());
+      if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText(nextInstructions);
     } catch (error) {
       console.error(error);
       window.alert(formatInstructionFileUploadError(error));
@@ -1111,6 +1154,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
   };
 
+  const handleOpenRecentDoc = async (doc) => {
+    const filePath = String(doc?.filePath || '').trim();
+    if (!filePath || !canOpenRecentDocs) return;
+    const result = await window.desktopApp.openDocumentByPath(filePath);
+    if (result?.ok === false) {
+      if (/(?:ENOENT|not found|לא נמצא)/i.test(String(result.error || ''))) {
+        setRecentDocs((currentDocs) => currentDocs.filter((entry) => String(entry?.filePath || '').trim() !== filePath));
+        removeDocumentHistoryByFilePath(filePath);
+      }
+      window.alert(result.error || 'לא ניתן לפתוח את הקובץ');
+      return;
+    }
+    await onOpenDocument(result);
+  };
+
   const handleGenerate = async () => {
     if (!hasGenerationInput || isGenerating) return;
 
@@ -1150,8 +1208,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       const result = await chefModeInterview(responses, model);
       const generatedPrompt = String(result?.brief ?? result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
       const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
-      const selectedProviderId = workspaceBypassActive ? String(model || '').trim() : '';
-      const selectedProviderModel = workspaceBypassActive && selectedProviderId === resolvedDirectProviderId
+      const selectedProviderId = String(model || resolvedDirectProviderId || '').trim();
+      const selectedProviderModel = selectedProviderId === resolvedDirectProviderId
         ? resolvedDirectProviderModel
         : '';
       await onGenerateFromPrompt?.({
@@ -1164,6 +1222,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedProviderModel,
         baseDraft,
         additionalReviewRounds: 0,
+        forceDirectMode: true,
+        skipWorkflowAutomation: true,
+        directModeReason: 'chef-final-compose',
       });
       setSelectedModel(undefined);
       setShowChefDialog(false);
@@ -1364,7 +1425,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
                   <div className="text-white font-semibold text-sm">📄 טיוטת בסיס אופציונלית</div>
-                  <div className="text-white/70 text-xs mt-1">בחר מסמך קיים כדי לעדכן או ללטש אותו במקום להתחיל מסמך חדש.</div>
+                  <div className="text-white/70 text-xs mt-1">בחר מסמך קיים כדי לעדכן או ללטש אותו במלואו. חומרי עזר למטה משמשים להקשר בלבד.</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 justify-end">
                   <button
@@ -1592,7 +1653,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
                    <div>
                      <div className="text-white/80 font-medium whitespace-nowrap">📎 קבצים, חומרי עזר והנחיות</div>
-                     <div className="text-white/55 text-[11px] mt-1">ניהול ההנחיות והחומרים למסמך הנוכחי, אחרי הגדרת סביבת העבודה והמסלול.</div>
+                     <div className="text-white/55 text-[11px] mt-1">חומרי עזר נשמרים כהקשר למסמך. כדי לעבוד על מסמך קיים במלואו, השתמש בטיוטת בסיס.</div>
                    </div>
                    {instructionFileName ? (
                      <span className="text-[11px] text-fuchsia-100 bg-fuchsia-500/20 border border-fuchsia-200/30 px-3 py-1 rounded-full">קובץ הנחיות: {instructionFileName}</span>
@@ -1612,7 +1673,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                      onClick={() => fileInputRef.current?.click()}
                      className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
                    >
-                     {uploading ? 'מעלה...' : 'הוסף מסמכי עזר'}
+                     {uploading ? (uploadProgress.total > 1 ? `מעלה ${uploadProgress.current}/${uploadProgress.total}…` : 'מעלה…') : 'הוסף מסמכי עזר'}
+                   </button>
+                   <button
+                     type="button"
+                     onClick={handleSelectBaseDraft}
+                     className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
+                   >
+                     {baseDraft ? 'החלף טיוטת בסיס' : 'בחר טיוטת בסיס'}
                    </button>
                    <input ref={instructionFileInputRef} type="file" accept={instructionFileAcceptList} className="hidden" onChange={handleInstructionFileUpload} />
                    <input ref={fileInputRef} type="file" multiple accept={helperMaterialAcceptList} className="hidden" onChange={handleUpload} />
@@ -1652,13 +1720,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                        <div>
                          <div className="text-white font-semibold text-sm">גרירה ייעודית לחומרי עזר</div>
                          <div className="text-white/65 text-[11px] mt-1">
-                           {activeDropZone === 'materials' ? 'שחרר כאן כדי להעלות את הקבצים למסלול materials.' : 'גרור לכאן PDF, DOCX, TXT, HTML, תמונות או גיליונות נתמכים.'}
+                           {activeDropZone === 'materials' ? 'שחרר כאן כדי להעלות את הקבצים כהקשר בלבד.' : 'גרור לכאן PDF, DOCX, TXT, HTML, תמונות או גיליונות נתמכים. זה לא מחליף טיוטת בסיס.'}
                          </div>
                        </div>
                        <div className={`text-[11px] px-3 py-1 rounded-full border ${activeDropZone === 'materials'
                          ? 'bg-cyan-500/25 text-cyan-50 border-cyan-200/60'
                          : 'bg-white/10 text-white/75 border-white/20'}`}>
-                         {uploading ? 'מעלה...' : 'materials'}
+                         {uploading ? (uploadProgress.total > 1 ? `מעלה ${uploadProgress.current}/${uploadProgress.total}…` : 'מעלה…') : 'materials'}
                        </div>
                      </div>
                    </div>
@@ -1698,7 +1766,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                        onChange={(e) => {
                          const nextInstructions = e.target.value;
                          setInstructions(nextInstructions);
-                         if (!nextInstructions.trim()) setInstructionFileName('');
+                         if (!nextInstructions.trim()) {
+                           setInstructionFileName('');
+                           if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText('');
+                           if (typeof saveHomeInstructionFileName === 'function') saveHomeInstructionFileName('');
+                         }
                          if (typeof saveHomeInstructions === 'function') saveHomeInstructions(nextInstructions);
                        }}
                        placeholder="הנחיות מחייבות למסמך הזה... (למשל: מבנה, סגנון, דרישות, היקף)"
@@ -1822,6 +1894,33 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             <div className="mb-16"></div>
           )}
         </div>
+
+        {/* Recent Documents */}
+        {canOpenRecentDocs && recentDocs.some((doc) => Boolean(String(doc?.filePath || '').trim())) && (
+          <div className={buildStartScreenRevealClassName(mounted, 'mb-8')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
+            <h2 className="text-white/70 text-sm font-semibold uppercase tracking-widest mb-3 text-right">מסמכים אחרונים</h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {recentDocs.filter((doc) => Boolean(String(doc?.filePath || '').trim())).map((doc) => {
+                const savedAt = doc?.savedAt ? new Date(doc.savedAt) : null;
+                const dateLabel = savedAt && !Number.isNaN(savedAt.getTime())
+                  ? savedAt.toLocaleDateString('he-IL', { day: 'numeric', month: 'short' })
+                  : '';
+                return (
+                  <button
+                    key={doc.id}
+                    type="button"
+                    onClick={() => handleOpenRecentDoc(doc)}
+                    title={doc.title || 'מסמך ללא שם'}
+                    className="flex flex-col items-start gap-1 p-3 rounded-xl border text-right transition-all duration-200 bg-white/10 hover:bg-white/20 border-white/20 hover:border-white/35 cursor-pointer hover:scale-[1.02]"
+                  >
+                    <span className="text-white text-xs font-medium leading-snug line-clamp-2 w-full">{doc.title || 'מסמך ללא שם'}</span>
+                    {dateLabel && <span className="text-white/50 text-[10px]">{dateLabel}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Quick Access Bar */}
         <div className={buildStartScreenRevealClassName(mounted, 'bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>

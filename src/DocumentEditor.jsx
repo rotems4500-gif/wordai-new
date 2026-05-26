@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
+import { Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import Underline from "@tiptap/extension-underline";
@@ -23,11 +24,38 @@ import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
 
 const DOC_STYLE_PRESETS = {
-  academic: { fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', width: '21cm', minHeight: '29.7cm', background: '#fffefc', border: '1px solid #dbe3f0' },
-  legal: { fontFamily: "'Times New Roman', 'Miriam Libre', serif", fontSize: '12.5pt', lineHeight: '2', padding: '2.6cm 2.9cm', width: '21cm', minHeight: '29.7cm', background: '#fffefe', border: '1px solid #d1d5db' },
-  business: { fontFamily: "'Segoe UI', 'Assistant', sans-serif", fontSize: '11.5pt', lineHeight: '1.65', padding: '2.4cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #dbeafe' },
-  presentation: { fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '14pt', lineHeight: '1.5', padding: '2cm', width: '21cm', minHeight: '29.7cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', border: '1px solid #c4b5fd' },
+  academic: { fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d6d9de' },
+  legal: { fontFamily: "'Times New Roman', 'Miriam Libre', serif", fontSize: '12.5pt', lineHeight: '1.85', padding: '2.54cm 2.75cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d1d5db' },
+  business: { fontFamily: "'Segoe UI', 'Assistant', sans-serif", fontSize: '12pt', lineHeight: '1.62', padding: '2.45cm 2.54cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #dbe3ee' },
+  presentation: { fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '14pt', lineHeight: '1.48', padding: '2.15cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d8d6e8' },
 };
+
+const normalizeTextDirection = (value) => {
+  const dir = String(value || '').trim().toLowerCase();
+  return ['rtl', 'ltr', 'auto'].includes(dir) ? dir : null;
+};
+
+const TextDirection = Extension.create({
+  name: 'textDirection',
+
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['paragraph', 'heading', 'listItem', 'taskItem', 'tableCell', 'tableHeader'],
+        attributes: {
+          dir: {
+            default: null,
+            parseHTML: (element) => normalizeTextDirection(element.getAttribute('dir')),
+            renderHTML: (attributes) => {
+              const dir = normalizeTextDirection(attributes.dir);
+              return dir ? { dir } : {};
+            },
+          },
+        },
+      },
+    ];
+  },
+});
 
 const getSavedTypographyDefaults = (prefs = {}) => {
   try {
@@ -70,16 +98,25 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
 
     if (currentViewMode === 'print') {
       const pageWidth = dom.dataset.customWidth || preset.width;
-      dom.style.minHeight = dom.dataset.customMinHeight || preset.minHeight;
-      dom.style.padding = dom.dataset.customPadding || preset.padding;
-      dom.style.lineHeight = preset.lineHeight;
+      const pageMinHeight = dom.dataset.customMinHeight || preset.minHeight;
+      const pagePadding = dom.dataset.customPadding || preset.padding;
+      const pageFontSize = savedSize || preset.fontSize;
+      dom.style.setProperty('--wordai-page-width', pageWidth);
+      dom.style.setProperty('--wordai-page-min-height', pageMinHeight);
+      dom.style.setProperty('--wordai-page-padding', pagePadding);
+      dom.style.setProperty('--wordai-page-font-size', pageFontSize);
+      dom.style.setProperty('--wordai-page-line-height', preset.lineHeight);
+      dom.style.minHeight = 'var(--wordai-page-min-height)';
+      dom.style.padding = 'var(--wordai-page-padding)';
+      dom.style.lineHeight = 'var(--wordai-page-line-height)';
       dom.style.background = dom.dataset.customBackground || preset.background;
       dom.style.border = dom.dataset.customBorder || preset.border;
-      dom.style.width = `min(100%, ${pageWidth})`;
-      dom.style.maxWidth = pageWidth;
+      dom.style.width = 'var(--wordai-page-width)';
+      dom.style.maxWidth = 'calc(100vw - 32px)';
       dom.style.marginInline = 'auto';
-      dom.style.fontSize = savedSize || preset.fontSize;
+      dom.style.fontSize = 'var(--wordai-page-font-size)';
       dom.style.fontFamily = savedFont || preset.fontFamily;
+      dom.style.textAlign = 'right';
     } else if (currentViewMode === 'read') {
       dom.style.minHeight = 'auto';
       dom.style.padding = '24px 32px';
@@ -135,6 +172,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
         types: ['heading', 'paragraph'],
         defaultAlignment: 'right',
       }),
+      TextDirection,
       Table.configure({ resizable: true }),
       TableRow,
       TableCell,
@@ -151,8 +189,8 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     content: "<p></p>",
     editorProps: {
       attributes: {
-        class: "bg-white shadow-[0_12px_36px_rgba(15,23,42,0.12)] outline-none text-black relative transition-all duration-300 shrink-0 prose max-w-none text-right rounded-[22px] page-surface",
-        style: "width: min(100%, 21cm); max-width: 21cm; min-height: 29.7cm; padding: 2.54cm; font-size: 12pt; line-height: 1.6; font-family: 'Alef', sans-serif; box-sizing: border-box; overflow-wrap: anywhere;",
+        class: "bg-white shadow-[0_8px_28px_rgba(15,23,42,0.14)] outline-none text-black relative transition-all duration-300 shrink-0 prose max-w-none text-right rounded-[3px] page-surface",
+        style: "width: 21cm; max-width: calc(100vw - 32px); min-height: 29.7cm; padding: var(--wordai-page-padding, 2.54cm); font-size: var(--wordai-page-font-size, 12.5pt); line-height: var(--wordai-page-line-height, 1.72); font-family: 'Alef', sans-serif; box-sizing: border-box; overflow-wrap: break-word; word-break: normal; margin-inline: auto; text-align: right;",
         dir: "rtl",
         spellcheck: 'true',
         autocorrect: 'on',
@@ -217,6 +255,129 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
 
     return { from, to };
   }, [editor]);
+
+  const getStoredAiSuggestionRange = useCallback((attrs = {}) => {
+    const from = Number(attrs?.replacementFrom);
+    const to = Number(attrs?.replacementTo);
+    return Number.isInteger(from) && Number.isInteger(to) && from < to
+      ? { from, to }
+      : null;
+  }, []);
+
+  const getActiveAiSuggestion = useCallback(() => {
+    if (!editor) return null;
+    const markType = editor.state.schema.marks.aiSuggestion;
+    if (!markType) return null;
+
+    const selectionFrom = editor.state.selection.from;
+    const selectionTo = editor.state.selection.to;
+
+    const activeAttrs = editor.getAttributes('aiSuggestion') || {};
+    const suggestionId = String(activeAttrs.suggestionId || '').trim();
+    if (!suggestionId) {
+      const range = getStoredAiSuggestionRange(activeAttrs) || getAiSuggestionRange();
+      if (!range) return null;
+      return {
+        suggestionId: '',
+        attrs: activeAttrs,
+        ranges: [range],
+        union: range,
+      };
+    }
+
+    let resolvedAttrs = Object.keys(activeAttrs).length ? activeAttrs : null;
+    const ranges = [];
+
+    editor.state.doc.descendants((node, pos) => {
+      if (!node.isInline || !Array.isArray(node.marks) || !node.marks.length) return;
+      const matchingMark = node.marks.find(
+        (mark) => mark.type === markType && String(mark.attrs?.suggestionId || '').trim() === suggestionId,
+      );
+      if (!matchingMark) return;
+
+      if (!resolvedAttrs) resolvedAttrs = matchingMark.attrs || {};
+
+      const from = pos;
+      const to = pos + node.nodeSize;
+      const previousRange = ranges[ranges.length - 1];
+      if (previousRange && previousRange.to === from) {
+        previousRange.to = to;
+      } else {
+        ranges.push({ from, to });
+      }
+    });
+
+    const storedRange = getStoredAiSuggestionRange(resolvedAttrs || activeAttrs);
+
+    if (!ranges.length) {
+      const range = storedRange || getAiSuggestionRange();
+      if (!range) return null;
+      return {
+        suggestionId: '',
+        attrs: resolvedAttrs || activeAttrs,
+        ranges: [range],
+        union: range,
+      };
+    }
+
+    const selectionCenter = Math.floor((selectionFrom + selectionTo) / 2);
+    const rangeDistanceFromSelection = (range) => {
+      if (selectionTo < range.from) return range.from - selectionTo;
+      if (selectionFrom > range.to) return selectionFrom - range.to;
+      return 0;
+    };
+
+    const anchorIndexFromStoredRange = storedRange
+      ? ranges.findIndex((range) => range.from < storedRange.to && range.to > storedRange.from)
+      : -1;
+
+    const anchorIndex = anchorIndexFromStoredRange >= 0
+      ? anchorIndexFromStoredRange
+      : ranges.reduce((bestIndex, range, index) => {
+          if (bestIndex === -1) return index;
+
+          const bestRange = ranges[bestIndex];
+          const distance = rangeDistanceFromSelection(range);
+          const bestDistance = rangeDistanceFromSelection(bestRange);
+
+          if (distance !== bestDistance) {
+            return distance < bestDistance ? index : bestIndex;
+          }
+
+          const center = Math.floor((range.from + range.to) / 2);
+          const bestCenter = Math.floor((bestRange.from + bestRange.to) / 2);
+          return Math.abs(center - selectionCenter) < Math.abs(bestCenter - selectionCenter)
+            ? index
+            : bestIndex;
+        }, -1);
+
+    const isLocalClusterGap = (leftRange, rightRange) => {
+      if (!leftRange || !rightRange) return false;
+      if (rightRange.from <= leftRange.to) return true;
+
+      const gapText = editor.state.doc.textBetween(leftRange.to, rightRange.from, '\n', '\n');
+      return !gapText.trim();
+    };
+
+    let clusterStart = anchorIndex;
+    let clusterEnd = anchorIndex;
+
+    while (clusterStart > 0 && isLocalClusterGap(ranges[clusterStart - 1], ranges[clusterStart])) {
+      clusterStart -= 1;
+    }
+    while (clusterEnd < ranges.length - 1 && isLocalClusterGap(ranges[clusterEnd], ranges[clusterEnd + 1])) {
+      clusterEnd += 1;
+    }
+
+    const localRanges = ranges.slice(clusterStart, clusterEnd + 1);
+
+    return {
+      suggestionId,
+      attrs: resolvedAttrs || activeAttrs,
+      ranges: localRanges,
+      union: { from: localRanges[0].from, to: localRanges[localRanges.length - 1].to },
+    };
+  }, [editor, getAiSuggestionRange, getStoredAiSuggestionRange]);
 
   const handleAiAction = async (agentId) => {
     if (!editor) return;
@@ -365,7 +526,20 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
         {editor.isActive("aiSuggestion") && (
           <>
             <button
-              onClick={() => editor.chain().focus().unsetMark("aiSuggestion").run()}
+              onClick={() => {
+                const suggestion = getActiveAiSuggestion();
+                if (!suggestion?.ranges?.length) {
+                  editor.chain().focus().unsetMark("aiSuggestion").run();
+                  return;
+                }
+
+                const chain = editor.chain().focus();
+                suggestion.ranges.forEach((range) => {
+                  chain.setTextSelection(range).unsetMark("aiSuggestion");
+                });
+                const cursorPos = suggestion.union?.to ?? suggestion.ranges[suggestion.ranges.length - 1]?.to ?? editor.state.selection.to;
+                chain.setTextSelection({ from: cursorPos, to: cursorPos }).run();
+              }}
               className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full bg-green-50 text-green-700 hover:bg-green-100"
               title="אשר שינוי AI"
             >
@@ -373,11 +547,12 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
             </button>
             <button
               onClick={() => {
-                const attrs = editor.getAttributes("aiSuggestion");
-                const range = getAiSuggestionRange();
-                const insertAt = range?.from ?? editor.state.selection.from;
-                if (range) {
-                  editor.chain().focus().setTextSelection(range).deleteSelection().run();
+                const suggestion = getActiveAiSuggestion();
+                const attrs = suggestion?.attrs || editor.getAttributes("aiSuggestion");
+                const unionRange = suggestion?.union || getStoredAiSuggestionRange(attrs) || getAiSuggestionRange();
+                const insertAt = unionRange?.from ?? editor.state.selection.from;
+                if (unionRange) {
+                  editor.chain().focus().setTextSelection(unionRange).deleteSelection().run();
                 }
 
                 if (attrs.originalHtml) {

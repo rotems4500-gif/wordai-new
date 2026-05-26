@@ -309,6 +309,14 @@ export default async () => defineConfig({
   server: {
     port: 3001,
     strictPort: true,
-    https: await getHttpsOptions()
+    https: await getHttpsOptions(),
+    proxy: {
+      '/api/local-article-check': {
+        target: 'http://127.0.0.1:4317',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (requestPath) => requestPath.replace(/^\/api\/local-article-check/, ''),
+      },
+    },
   }
 });

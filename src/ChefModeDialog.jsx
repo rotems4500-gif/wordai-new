@@ -1,13 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { chefModeDecideNextStep, chefModeGenerateQuestion } from './services/aiService';
+import { buildSelectedMaterialsContext } from './services/workspaceLearningService';
 
 const MAX_QUESTIONS = 13;
 const MIN_AUTO_STOP_RESPONSES = 5;
+const CHEF_MATERIALS_CONTEXT_MAX_CHARS = 8000;
 
 const CHEF_MODEL_OPTIONS = [
   { value: 'gemini', label: 'Gemini' },
   { value: 'claude', label: 'Claude' },
   { value: 'openai', label: 'OpenAI' },
+  { value: 'scholar', label: 'Google Scholar' },
   { value: 'perplexity', label: 'Perplexity' },
   { value: 'groq', label: 'Groq' },
   { value: 'ollama', label: 'Ollama' },
@@ -29,6 +32,47 @@ const toSafeQuestionCard = (step = 1, payload = {}) => ({
   placeholder: String(payload?.placeholder || '').trim() || 'אפשר גם לכתוב תשובה חופשית כאן...',
 });
 
+const stableChefText = (value = '') => String(value || '').trim();
+
+const hashChefText = (value = '') => {
+  let hash = 2166136261;
+  const text = stableChefText(value);
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return text ? (hash >>> 0).toString(16) : '';
+};
+
+const buildStableSelectedMaterialsKeyParts = (selectedMaterials = []) => (Array.isArray(selectedMaterials) ? selectedMaterials : [])
+  .map((item = {}, index = 0) => ({
+    id: stableChefText(item?.id || item?.file || item?.path || item?.filePath || item?.title || `material-${index + 1}`),
+    title: stableChefText(item?.title),
+    label: stableChefText(item?.label),
+    source: stableChefText(item?.source),
+    file: stableChefText(item?.file),
+    path: stableChefText(item?.path || item?.filePath || item?.sourcePath),
+    type: stableChefText(item?.type),
+    hash: stableChefText(item?.hash || item?.contentHash || item?.previewHash),
+    previewHash: hashChefText(item?.previewText || item?.excerptText || item?.preview || item?.extractedText || item?.content || item?.summary),
+    previewChars: Number.isFinite(Number(item?.previewChars)) ? Number(item.previewChars) : '',
+    canPreviewText: Boolean(item?.canPreviewText),
+    hasPreview: Boolean(item?.hasPreview),
+    previewStatus: stableChefText(item?.previewStatus),
+  }))
+  .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+
+const buildMaterialsContextCacheKey = (selectedMaterials = []) => JSON.stringify(buildStableSelectedMaterialsKeyParts(selectedMaterials));
+
+const buildChefContextKey = ({ prompt = '', templateId = '', instructions = '', selectedMaterials = [] } = {}) => JSON.stringify({
+  prompt: stableChefText(prompt),
+  templateId: stableChefText(templateId),
+  instructions: stableChefText(instructions),
+  selectedMaterials: buildStableSelectedMaterialsKeyParts(selectedMaterials),
+});
+
+const trimChefMaterialsContext = (value = '') => String(value || '').trim().slice(0, CHEF_MATERIALS_CONTEXT_MAX_CHARS);
+
 export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModelChange, selectedModel = 'gemini', chefContext = {}, escapeBlocked = false }) {
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [questionFlow, setQuestionFlow] = useState([]);
@@ -39,9 +83,12 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  const materialsContextCacheRef = useRef({ key: '', promise: null });
+  const chefContextKey = buildChefContextKey(chefContext);
 
   const saveSession = (updatedResponses, updatedQuestion, updatedQuestionFlow, model = localModel) => {
     localStorage.setItem('wordflow_chef_session', JSON.stringify({
+      chefContextKey,
       responses: updatedResponses,
       currentQuestion: updatedQuestion,
       questionFlow: updatedQuestionFlow,
@@ -62,7 +109,28 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     setCustomText(String(existing.freeText || '').trim());
   };
 
+  const prepareChefMaterialsContext = async () => {
+    const selectedMaterials = Array.isArray(chefContext?.selectedMaterials) ? chefContext.selectedMaterials : [];
+    if (!selectedMaterials.length) return '';
+
+    const cacheKey = buildMaterialsContextCacheKey(selectedMaterials);
+    if (!materialsContextCacheRef.current.promise || materialsContextCacheRef.current.key !== cacheKey) {
+      materialsContextCacheRef.current = {
+        key: cacheKey,
+        promise: buildSelectedMaterialsContext(selectedMaterials)
+          .then(trimChefMaterialsContext)
+          .catch((error) => {
+            console.warn('Chef materials preview context failed', error);
+            return '';
+          }),
+      };
+    }
+
+    return materialsContextCacheRef.current.promise;
+  };
+
   const requestDynamicQuestion = async (step, baseResponses, model = localModel) => {
+    const materialsContext = await prepareChefMaterialsContext();
     const payload = await chefModeGenerateQuestion({
       step,
       maxQuestions: MAX_QUESTIONS,
@@ -72,6 +140,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       templateId: chefContext?.templateId,
       instructions: chefContext?.instructions,
       selectedMaterials: chefContext?.selectedMaterials || [],
+      materialsContext,
     });
     return payload;
   };
@@ -79,6 +148,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const canAutoStop = (responsesCount) => Number(responsesCount || 0) >= MIN_AUTO_STOP_RESPONSES;
 
   useEffect(() => {
+    let isMounted = true;
+
     const bootstrap = async () => {
       let loadedResponses = [];
       let loadedQuestionFlow = [];
@@ -89,13 +160,16 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       if (saved) {
         try {
           const data = JSON.parse(saved);
-          loadedResponses = Array.isArray(data.responses) ? data.responses : [];
-          loadedQuestionFlow = Array.isArray(data.questionFlow) ? data.questionFlow : [];
-          loadedCurrentQuestion = Number(data.currentQuestion) || 0;
-          if (data.selectedModel) loadedModel = data.selectedModel;
+          if (data?.chefContextKey === chefContextKey) {
+            loadedResponses = Array.isArray(data.responses) ? data.responses : [];
+            loadedQuestionFlow = Array.isArray(data.questionFlow) ? data.questionFlow : [];
+            loadedCurrentQuestion = Number(data.currentQuestion) || 0;
+            if (data.selectedModel) loadedModel = data.selectedModel;
+          }
         } catch {}
       }
 
+      if (!isMounted) return;
       setResponses(loadedResponses);
       setLocalModel(loadedModel);
 
@@ -103,16 +177,18 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         setIsLoadingQuestion(true);
         try {
           const firstQuestion = await requestDynamicQuestion(1, loadedResponses, loadedModel);
+          if (!isMounted) return;
           if (firstQuestion?.shouldStop && canAutoStop(loadedResponses.length)) {
             if (typeof onStart === 'function') await onStart(loadedResponses, loadedModel);
             return;
           }
           loadedQuestionFlow = [toSafeQuestionCard(1, firstQuestion)];
         } finally {
-          setIsLoadingQuestion(false);
+          if (isMounted) setIsLoadingQuestion(false);
         }
       }
 
+      if (!isMounted) return;
       const safeQuestionIndex = Math.max(0, Math.min(loadedCurrentQuestion, Math.max(loadedQuestionFlow.length - 1, 0)));
       setQuestionFlow(loadedQuestionFlow);
       setCurrentQuestion(safeQuestionIndex);
@@ -122,7 +198,10 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     };
 
     bootstrap();
-  }, []);
+    return () => {
+      isMounted = false;
+    };
+  }, [chefContextKey]);
 
   useEffect(() => {
     const currentCard = questionFlow[currentQuestion];
@@ -148,6 +227,27 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     const clone = [...list];
     clone[idx] = nextResponse;
     return clone;
+  };
+
+  const saveCurrentDraftResponse = (baseResponses = responses, { requireAnswer = false } = {}) => {
+    const current = questionFlow[currentQuestion];
+    if (!current) return baseResponses;
+    const hasAnswer = selectedChoices.length || String(customText || '').trim();
+    if (!hasAnswer && requireAnswer) return baseResponses;
+    if (!hasAnswer) return baseResponses;
+
+    const nextResponse = {
+      question: current.id,
+      questionText: current.question,
+      choices: selectedChoices,
+      freeText: String(customText || '').trim(),
+      answer: normalizeAnswerText(selectedChoices, customText),
+      answeredAt: Date.now(),
+    };
+    const nextResponses = upsertResponse(baseResponses, nextResponse);
+    setResponses(nextResponses);
+    saveSession(nextResponses, currentQuestion, questionFlow, localModel);
+    return nextResponses;
   };
 
   const handleFinish = async (finalResponses) => {
@@ -203,6 +303,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
 
     setIsEvaluating(true);
     try {
+      const materialsContext = await prepareChefMaterialsContext();
       const decision = await chefModeDecideNextStep(newResponses, localModel, {
         currentQuestionId: current.id,
         maxQuestions: MAX_QUESTIONS,
@@ -210,6 +311,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         templateId: chefContext?.templateId,
         instructions: chefContext?.instructions,
         selectedMaterials: chefContext?.selectedMaterials || [],
+        materialsContext,
       });
       if (decision?.shouldStop && canAutoStop(newResponses.length)) {
         await handleFinish(newResponses);
@@ -268,6 +370,24 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     }
   };
 
+  const handleAddQuestion = async () => {
+    if (isSubmitting || isEvaluating || isLoadingQuestion || questionFlow.length >= MAX_QUESTIONS) return;
+
+    const draftResponses = saveCurrentDraftResponse(responses, { requireAnswer: false });
+    setIsLoadingQuestion(true);
+    try {
+      const nextStep = questionFlow.length + 1;
+      const dynamicQuestion = await requestDynamicQuestion(nextStep, draftResponses, localModel);
+      const nextQuestionFlow = [...questionFlow, toSafeQuestionCard(nextStep, dynamicQuestion)];
+      setQuestionFlow(nextQuestionFlow);
+      goToQuestion(nextQuestionFlow.length - 1, draftResponses, nextQuestionFlow);
+    } catch (error) {
+      console.warn('Chef add question fallback', error);
+    } finally {
+      setIsLoadingQuestion(false);
+    }
+  };
+
   const handleBack = () => {
     if (currentQuestion <= 0 || isSubmitting || isEvaluating || isLoadingQuestion) return;
     goToQuestion(currentQuestion - 1, responses, questionFlow);
@@ -298,13 +418,15 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   }, [escapeBlocked, onClose]);
 
   const handleGoToEditor = () => {
-    if (window.confirm('המשך לעורך? ההיסטוריה של הבישול תישמר.')) {
-      onGoToEditor?.();
-    }
+    saveCurrentDraftResponse(responses, { requireAnswer: false });
+    onGoToEditor?.();
   };
 
   const question = questionFlow[currentQuestion] || null;
   const progress = (responses.length / MAX_QUESTIONS) * 100;
+  const hasCurrentDraftAnswer = Boolean(selectedChoices.length || String(customText || '').trim());
+  const currentDraftAlreadySaved = question ? responses.some((item) => item.question === question.id) : false;
+  const effectiveResponseCount = responses.length + (hasCurrentDraftAnswer && !currentDraftAlreadySaved ? 1 : 0);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" dir="rtl">
@@ -427,18 +549,26 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
             </button>
 
             <button
-              onClick={() => handleFinish(responses)}
-              disabled={responses.length < 3 || isSubmitting || isEvaluating || isLoadingQuestion}
+              onClick={() => handleFinish(saveCurrentDraftResponse(responses, { requireAnswer: false }))}
+              disabled={effectiveResponseCount < 3 || isSubmitting || isEvaluating || isLoadingQuestion}
               className="px-6 py-3 rounded-xl font-bold border border-amber-200/40 text-amber-100 hover:bg-amber-300/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               יש מספיק מידע - התחל לכתוב
             </button>
 
             <button
+              onClick={handleAddQuestion}
+              disabled={isSubmitting || isEvaluating || isLoadingQuestion || questionFlow.length >= MAX_QUESTIONS}
+              className="px-6 py-3 rounded-xl font-bold border border-cyan-200/40 text-cyan-100 hover:bg-cyan-300/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              הוסף עוד שאלות
+            </button>
+
+            <button
               onClick={handleGoToEditor}
               className="px-8 py-3 rounded-xl font-bold border border-white/30 text-white/80 hover:bg-white/5 transition-all"
             >
-              📝 לעורך
+              עבור ליצירת מסמך
             </button>
           </div>
 

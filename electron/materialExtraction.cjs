@@ -12,6 +12,7 @@ const SPREADSHEET_COL_LIMIT = 8;
 const OCR_LANGS = ['heb', 'eng'];
 
 let ocrWorkerPromise = null;
+let optionalPdfExtractor = null;
 
 function normalizeExtractedText(value = '') {
   return String(value ?? '')
@@ -36,6 +37,65 @@ function trimToLength(value = '', maxLength = DEFAULT_MAX_LENGTH) {
 
 function decodeTextBuffer(buffer) {
   return trimToLength(Buffer.from(buffer).toString('utf8').replace(/\u0000/g, ''));
+}
+
+function resolveOptionalPdfExtractor() {
+  if (optionalPdfExtractor) return optionalPdfExtractor;
+
+  try {
+    const pdfParse = require('pdf-parse');
+    optionalPdfExtractor = { type: 'pdf-parse', extract: (input) => pdfParse(input) };
+    return optionalPdfExtractor;
+  } catch {}
+
+  const pdfjsCandidates = [
+    'pdfjs-dist/legacy/build/pdf.js',
+    'pdfjs-dist/legacy/build/pdf.cjs',
+    'pdfjs-dist/build/pdf.js',
+  ];
+
+  for (const candidate of pdfjsCandidates) {
+    try {
+      const pdfjs = require(candidate);
+      const api = pdfjs?.getDocument ? pdfjs : pdfjs?.default;
+      if (api?.getDocument) {
+        optionalPdfExtractor = { type: 'pdfjs', extract: api.getDocument.bind(api) };
+        return optionalPdfExtractor;
+      }
+    } catch {}
+  }
+
+  optionalPdfExtractor = { type: 'unavailable' };
+  return optionalPdfExtractor;
+}
+
+async function extractPdfTextFromBuffer(buffer, { maxLength = DEFAULT_MAX_LENGTH } = {}) {
+  const extractor = resolveOptionalPdfExtractor();
+  if (extractor.type === 'pdf-parse') {
+    const result = await extractor.extract(Buffer.from(buffer));
+    const extractedText = trimToLength(result?.text || '', maxLength);
+    if (!extractedText) throw new Error('empty-pdf-text');
+    return extractedText;
+  }
+
+  if (extractor.type === 'pdfjs') {
+    const loadingTask = extractor.extract({ data: new Uint8Array(buffer), disableWorker: true });
+    const pdf = await loadingTask.promise;
+    const pages = [];
+    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
+      const page = await pdf.getPage(pageNo);
+      const content = await page.getTextContent();
+      const pageText = (content.items || []).map((item) => item.str || '').join(' ');
+      if (pageText.trim()) pages.push(pageText.trim());
+      if (pages.join('\n').length >= resolveMaxLength(maxLength)) break;
+    }
+    const extractedText = trimToLength(pages.join('\n'), maxLength);
+    if (!extractedText) throw new Error('empty-pdf-text');
+    return extractedText;
+  }
+
+  console.warn('[materialExtraction] PDF desktop extraction unavailable: no pdf parser dependency is installed.');
+  throw new Error('pdf-desktop-extraction-unavailable');
 }
 
 function decodeXmlEntities(value = '') {
@@ -297,6 +357,10 @@ async function extractMaterialTextFromBuffer({ buffer, fileName = '', maxLength 
     const extractedText = trimToLength(result?.value || '', maxLength);
     if (!extractedText) throw new Error('empty-docx-text');
     return extractedText;
+  }
+
+  if (ext === '.pdf') {
+    return extractPdfTextFromBuffer(buffer, { maxLength });
   }
 
   if (ext === '.pptx') {

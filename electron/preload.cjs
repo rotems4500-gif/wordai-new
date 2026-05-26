@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   extractMaterialText: (payload) => ipcRenderer.invoke('extract-material-text', payload),
   createAppWindow: () => ipcRenderer.invoke('create-app-window'),
   openDocumentDialog: () => ipcRenderer.invoke('open-document-dialog'),
+  // פתיחת מסמך לפי נתיב מוחלט - משמש את "מסמכים אחרונים" במסך הבית
+  openDocumentByPath: (filePath) => ipcRenderer.invoke('open-document-by-path', filePath),
   consumePendingOpenDocument: () => ipcRenderer.invoke('consume-pending-open-document'),
   consumePendingOpenSettings: () => ipcRenderer.invoke('consume-pending-open-settings'),
   saveDocumentDialog: (payload) => ipcRenderer.invoke('save-document-dialog', payload),

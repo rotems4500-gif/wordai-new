@@ -54,6 +54,47 @@ const noticeToneClassMap = {
   info: 'border-slate-200 bg-slate-50 text-slate-700',
 };
 
+const SUPPORTED_DATA_FILE_ACCEPT = '.csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,.tsv,text/tab-separated-values,.txt,text/plain,.sav,application/x-spss-sav';
+const TEXT_TABULAR_EXTENSIONS = new Set(['csv', 'tsv', 'txt']);
+const EXCEL_TABULAR_EXTENSIONS = new Set(['xlsx', 'xls']);
+
+const getFileExtension = (fileName = '') => {
+  const cleanName = String(fileName || '').trim().toLowerCase();
+  const match = cleanName.match(/\.([^.]+)$/);
+  return match?.[1] || '';
+};
+
+const readExcelFileAsCsvText = async (file) => {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const firstSheetName = workbook.SheetNames?.[0] || '';
+  if (!firstSheetName) throw new Error('לא נמצא גיליון בקובץ Excel.');
+
+  const worksheet = workbook.Sheets[firstSheetName];
+  const csvText = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
+  if (!String(csvText || '').trim()) throw new Error('הגיליון הראשון בקובץ Excel ריק.');
+  return csvText;
+};
+
+const readTabularUploadAsText = async (file) => {
+  const extension = getFileExtension(file?.name);
+  const mimeType = String(file?.type || '').toLowerCase();
+
+  if (extension === 'sav') {
+    throw new Error('קובצי SAV אינם נתמכים כרגע. יש לייצא את הקובץ מ-SPSS ל-CSV או XLSX ואז להעלות אותו שוב.');
+  }
+
+  if (TEXT_TABULAR_EXTENSIONS.has(extension) || mimeType.startsWith('text/')) {
+    return file.text();
+  }
+
+  if (EXCEL_TABULAR_EXTENSIONS.has(extension) || mimeType.includes('spreadsheet') || mimeType === 'application/vnd.ms-excel') {
+    return readExcelFileAsCsvText(file);
+  }
+
+  throw new Error('סוג הקובץ לא נתמך. אפשר להעלות CSV, XLSX, XLS, TSV או TXT. קובצי SAV דורשים ייצוא קודם ל-CSV או XLSX.');
+};
+
 export default function SpssSyntaxStudio() {
   const fileInputRef = React.useRef(null);
   const activeUploadRequestIdRef = React.useRef('');
@@ -67,7 +108,7 @@ export default function SpssSyntaxStudio() {
   const [blocks, setBlocks] = React.useState([]);
   const [lastBlockId, setLastBlockId] = React.useState('');
   const [guidance, setGuidance] = React.useState('');
-  const [notice, setNotice] = React.useState({ tone: 'info', text: 'העלה CSV כדי להתחיל לבנות syntax ל-SPSS.' });
+  const [notice, setNotice] = React.useState({ tone: 'info', text: 'העלה CSV, Excel, TSV או TXT כדי להתחיל לבנות syntax ל-SPSS.' });
 
   const suggestions = React.useMemo(() => buildSmartSuggestions(analysis), [analysis]);
   const masterSyntax = React.useMemo(() => buildMasterSyntax(blocks), [blocks]);
@@ -118,11 +159,11 @@ export default function SpssSyntaxStudio() {
     setGuidance('');
     setNotice({
       tone: 'success',
-      text: `נטען ${nextAnalysis.fileName || 'CSV'} עם ${nextAnalysis.rowCount.toLocaleString('he-IL')} שורות ו-${nextAnalysis.columnCount} עמודות. רק metadata טוקניזי יישלח ל-AI.`,
+      text: `נטען ${nextAnalysis.fileName || 'קובץ נתונים'} עם ${nextAnalysis.rowCount.toLocaleString('he-IL')} שורות ו-${nextAnalysis.columnCount} עמודות. רק metadata טוקניזי יישלח ל-AI.`,
     });
   }, []);
 
-  const handleCsvFile = React.useCallback(async (file) => {
+  const handleDataFile = React.useCallback(async (file) => {
     if (!file) return;
     const uploadRequestId = createLocalId();
     activeUploadRequestIdRef.current = uploadRequestId;
@@ -130,7 +171,7 @@ export default function SpssSyntaxStudio() {
     setLoading(false);
 
     try {
-      const content = await file.text();
+      const content = await readTabularUploadAsText(file);
       if (activeUploadRequestIdRef.current !== uploadRequestId) return;
 
       const nextAnalysis = parseCsvText(content, { fileName: file.name });
@@ -140,22 +181,22 @@ export default function SpssSyntaxStudio() {
     } catch (error) {
       if (activeUploadRequestIdRef.current !== uploadRequestId) return;
 
-      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'קריאת ה-CSV נכשלה.' });
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'קריאת קובץ הנתונים נכשלה.' });
     }
   }, [resetForNewDataset]);
 
   const handleFileInputChange = React.useCallback((event) => {
     const file = event.target.files?.[0] || null;
     event.target.value = '';
-    if (file) handleCsvFile(file);
-  }, [handleCsvFile]);
+    if (file) handleDataFile(file);
+  }, [handleDataFile]);
 
   const onDrop = React.useCallback((event) => {
     event.preventDefault();
     setDragActive(false);
     const file = event.dataTransfer?.files?.[0];
-    if (file) handleCsvFile(file);
-  }, [handleCsvFile]);
+    if (file) handleDataFile(file);
+  }, [handleDataFile]);
 
   const onDragEnter = React.useCallback((event) => {
     event.preventDefault();
@@ -218,7 +259,7 @@ export default function SpssSyntaxStudio() {
 
   const onGenerate = React.useCallback(async () => {
     if (!analysis) {
-      const guidanceMessage = 'צריך להעלות CSV לפני יצירת syntax.';
+      const guidanceMessage = 'צריך להעלות קובץ נתונים לפני יצירת syntax.';
       setGuidance(guidanceMessage);
       setNotice({ tone: 'error', text: guidanceMessage });
       return;
@@ -296,7 +337,7 @@ export default function SpssSyntaxStudio() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept={SUPPORTED_DATA_FILE_ACCEPT}
           className="hidden"
           onChange={handleFileInputChange}
         />
@@ -314,7 +355,7 @@ export default function SpssSyntaxStudio() {
               onDrop={onDrop}
             >
               <div className="inline-flex items-center rounded-full bg-[#1F6FEB]/10 px-3 py-1 text-[11px] font-bold text-[#1F6FEB]">SPSS AI</div>
-              <h1 className="mt-4 text-3xl font-bold leading-tight text-slate-900 md:text-[2.5rem]">טען CSV כדי להתחיל לעבוד עם SPSS AI</h1>
+              <h1 className="mt-4 text-3xl font-bold leading-tight text-slate-900 md:text-[2.5rem]">טען קובץ נתונים כדי להתחיל לעבוד עם SPSS AI</h1>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600 md:text-base">
                 המשטח המלא נפתח רק אחרי שיש dataset, כדי לשמור על פוקוס על upload, על הבקשה, ועל התוצאה שבאמת תריץ ב-SPSS.
               </p>
@@ -325,7 +366,7 @@ export default function SpssSyntaxStudio() {
                   className="rounded-2xl bg-[#0066cc] px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
                   onClick={openFilePicker}
                 >
-                  טען קובץ CSV
+                  טען קובץ נתונים
                 </button>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
                   אפשר גם לגרור קובץ ישירות לאזור הזה.
@@ -342,7 +383,7 @@ export default function SpssSyntaxStudio() {
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4">
                   <div className="text-sm font-bold text-slate-900">מה להכין מראש</div>
                   <p className="mt-2 text-sm leading-7 text-slate-600">
-                    ודא שהשורה הראשונה ב-CSV היא שמות משתנים ברורים. אם יש קובץ SAV, ייצא אותו קודם ל-CSV מתוך SPSS.
+                    ודא שהשורה הראשונה בקובץ היא שמות משתנים ברורים. אם יש קובץ SAV, ייצא אותו קודם ל-CSV או XLSX מתוך SPSS.
                   </p>
                 </div>
               </div>
@@ -350,11 +391,11 @@ export default function SpssSyntaxStudio() {
 
             <aside className="space-y-4">
               <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                <div className="text-lg font-bold text-slate-900">איך מייצאים CSV מ-SPSS?</div>
+                <div className="text-lg font-bold text-slate-900">איך מייצאים נתונים מ-SPSS?</div>
                 <ol className="mt-4 space-y-3 pr-5 text-sm leading-7 text-slate-600 list-decimal">
                   <li>פתח את קובץ ה-SAV ב-SPSS.</li>
                   <li>בחר File ואז Save As.</li>
-                  <li>בחר CSV (*.csv) ושמור עם שורת כותרות של שמות המשתנים.</li>
+                  <li>בחר CSV (*.csv) או Excel (*.xlsx) ושמור עם שורת כותרות של שמות המשתנים.</li>
                 </ol>
               </div>
 
@@ -385,7 +426,7 @@ export default function SpssSyntaxStudio() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".csv,text/csv"
+        accept={SUPPORTED_DATA_FILE_ACCEPT}
         className="hidden"
         onChange={handleFileInputChange}
       />
@@ -411,7 +452,7 @@ export default function SpssSyntaxStudio() {
               </label>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]">
-              <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{analysis.fileName || 'CSV נטען'}</span>
+              <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{analysis.fileName || 'קובץ נתונים נטען'}</span>
               <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{analysis.rowCount.toLocaleString('he-IL')} שורות</span>
               <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{analysis.columnCount} עמודות</span>
               <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-700">{analysis.inferenceSampleRowCount} שורות inference</span>
@@ -422,7 +463,7 @@ export default function SpssSyntaxStudio() {
                 className="rounded-2xl bg-[#0066cc] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
                 onClick={openFilePicker}
               >
-                החלף CSV
+                החלף קובץ
               </button>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
                 רק metadata טוקניזי נשלח ל-AI. שורות הדאטה המלאות לא נשלחות החוצה.
@@ -477,7 +518,7 @@ export default function SpssSyntaxStudio() {
                 העמודות עוברות טוקניזציה ל-VAR_n לפני שליחה ל-AI, ואז הסינטקס חוזר לשמות המשתנים הבטוחים שלך לפני תצוגה או ייצוא.
               </div>
               <ol className="space-y-3 pr-5 text-sm leading-7 text-slate-600 list-decimal">
-                <li>פתח את קובץ ה-CSV שלך ב-SPSS וודא ששמות המשתנים תקינים.</li>
+                <li>פתח את קובץ הנתונים שלך ב-SPSS וודא ששמות המשתנים תקינים.</li>
                 <li>העתק את ה-master syntax או הורד קובץ .sps ופתח אותו ב-Syntax Editor של SPSS.</li>
                 <li>הרץ את הבלוקים לפי הסדר ובדוק את Output Viewer עבור טבלאות, boxplots או שגיאות.</li>
               </ol>

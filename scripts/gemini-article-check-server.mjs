@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,7 @@ const LOOPBACK_ORIGINS = new Set([
   `http://127.0.0.1:${DEFAULT_PORT}`,
   `http://localhost:${DEFAULT_PORT}`,
 ]);
+const DEV_LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(?:localhost|127(?:\.\d+){3}|\[::1\])(?::\d+)?$/i;
 const CONFIG_FILE_NAME = 'ai-provider-config.json';
 const LEVELDB_DIRNAME = path.join('Local Storage', 'leveldb');
 const SUPPORTED_PROVIDERS = new Set(['gemini', 'perplexity']);
@@ -140,6 +142,25 @@ const DISALLOWED_DOMAIN_HINTS = [
 ];
 const DISALLOWED_PATH_HINTS = ['press-release', 'news-release', 'official-statement', 'blog', 'analysis', 'opinion', 'commentary', 'white-paper', 'pdf', 'video', 'tweet', 'status', 'post'];
 const DISALLOWED_TEXT_HINTS = ['הודעה לעיתונות', 'הודעה רשמית', 'דוברות', 'מאמר דעה', 'פרשנות', 'analysis', 'opinion', 'commentary', 'blog post', 'press release', 'social post', 'פוסט', 'ציוץ'];
+
+function getHttpsOptions() {
+  try {
+    const certsDir = path.join(os.homedir(), '.office-addin-dev-certs');
+    const keyFile = path.join(certsDir, 'localhost.key');
+    const certFile = path.join(certsDir, 'localhost.crt');
+
+    if (fs.existsSync(keyFile) && fs.existsSync(certFile)) {
+      return {
+        key: fs.readFileSync(keyFile),
+        cert: fs.readFileSync(certFile),
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
 
 function getAppDataRoot() {
   if (process.env.APPDATA) {
@@ -879,6 +900,139 @@ async function resolveCanonicalUrl(url) {
   return normalized;
 }
 
+function createCanonicalUrlResolver(resolveCanonicalUrlImpl = resolveCanonicalUrl) {
+  const cache = new Map();
+
+  return async (url) => {
+    const normalizedUrl = normalizeUrl(url);
+
+    if (!normalizedUrl) {
+      return '';
+    }
+
+    const cacheKey = canonicalizeArticleUrl(normalizedUrl) || normalizedUrl;
+
+    if (cache.has(cacheKey)) {
+      return cache.get(cacheKey);
+    }
+
+    const resolvedUrl = normalizeUrl(await resolveCanonicalUrlImpl(normalizedUrl)) || normalizedUrl;
+    cache.set(cacheKey, resolvedUrl);
+    return resolvedUrl;
+  };
+}
+
+async function prepareSourcesForFinalization({ article = {}, sources = [], resolveCanonicalUrlImpl = resolveCanonicalUrl } = {}) {
+  const safeSources = Array.isArray(sources) ? sources : [];
+  const primarySource = selectPrimarySource(safeSources, article);
+
+  if (!primarySource) {
+    return { article, sources: safeSources };
+  }
+
+  const canonicalPrimaryUrl = normalizeUrl(await resolveCanonicalUrlImpl(primarySource?.url));
+
+  if (!canonicalPrimaryUrl) {
+    return { article, sources: safeSources };
+  }
+
+  return {
+    article: {
+      ...article,
+      url: normalizeUrl(article?.url) || canonicalPrimaryUrl,
+    },
+    sources: safeSources.map((source) => (source?.url === primarySource?.url ? {
+      ...source,
+      url: canonicalPrimaryUrl,
+    } : source)),
+  };
+}
+
+async function reconcileCanonicalUrlMatch({ article = {}, sources = [], resolveCanonicalUrlImpl = resolveCanonicalUrl } = {}) {
+  const safeSources = Array.isArray(sources) ? sources : [];
+  const normalizedArticleUrl = normalizeUrl(article?.url);
+
+  if (!normalizedArticleUrl || findSourceByUrl(safeSources, normalizedArticleUrl)) {
+    return {
+      article: normalizedArticleUrl ? { ...article, url: normalizedArticleUrl } : article,
+      sources: safeSources,
+    };
+  }
+
+  const resolvedArticleUrl = normalizeUrl(await resolveCanonicalUrlImpl(normalizedArticleUrl)) || normalizedArticleUrl;
+  const canonicalArticleUrl = canonicalizeArticleUrl(resolvedArticleUrl);
+
+  if (!canonicalArticleUrl) {
+    return {
+      article: { ...article, url: normalizedArticleUrl },
+      sources: safeSources,
+    };
+  }
+
+  let normalizedSources = safeSources;
+
+  for (let index = 0; index < safeSources.length; index += 1) {
+    const source = normalizedSources[index];
+    const rawSourceUrl = normalizeUrl(source?.url);
+
+    if (!rawSourceUrl) {
+      continue;
+    }
+
+    if (canonicalizeArticleUrl(rawSourceUrl) === canonicalArticleUrl) {
+      return {
+        article: { ...article, url: resolvedArticleUrl },
+        sources: normalizedSources,
+      };
+    }
+
+    const resolvedSourceUrl = normalizeUrl(await resolveCanonicalUrlImpl(rawSourceUrl)) || rawSourceUrl;
+
+    if (resolvedSourceUrl !== rawSourceUrl) {
+      if (normalizedSources === safeSources) {
+        normalizedSources = safeSources.slice();
+      }
+
+      normalizedSources[index] = {
+        ...source,
+        url: resolvedSourceUrl,
+      };
+    }
+
+    if (canonicalizeArticleUrl(resolvedSourceUrl) === canonicalArticleUrl) {
+      return {
+        article: { ...article, url: resolvedArticleUrl },
+        sources: normalizedSources,
+      };
+    }
+  }
+
+  return {
+    article: { ...article, url: resolvedArticleUrl },
+    sources: normalizedSources,
+  };
+}
+
+async function finalizeArticleResultWithCanonicalResolution(result, { resolveCanonicalUrlImpl = resolveCanonicalUrl } = {}) {
+  const cachedResolver = createCanonicalUrlResolver(resolveCanonicalUrlImpl);
+  const { article: preparedArticle, sources: preparedSources } = await prepareSourcesForFinalization({
+    article: result.article,
+    sources: result.sources,
+    resolveCanonicalUrlImpl: cachedResolver,
+  });
+  const { article, sources } = await reconcileCanonicalUrlMatch({
+    article: preparedArticle,
+    sources: preparedSources,
+    resolveCanonicalUrlImpl: cachedResolver,
+  });
+
+  return finalizeArticleResult({
+    ...result,
+    article,
+    sources,
+  });
+}
+
 function buildValidationEvidence(article, sources, rawText) {
   const sourceEvidence = [
     article?.title,
@@ -949,7 +1103,7 @@ function finalizeArticleResult(result) {
   }
 
   const article = buildGroundedArticle(primarySource);
-  const validationError = validateArticleCandidate(queryMeta, article, [primarySource], '');
+  const validationError = validateArticleCandidate(queryMeta, article, result.sources, '');
 
   if (validationError) {
     return buildNoMatchResult({ ...result, article }, validationError);
@@ -1000,7 +1154,7 @@ async function fetchArticleWithStrategy({
 }
 
 function isAllowedOrigin(origin) {
-  return !origin || LOOPBACK_ORIGINS.has(origin);
+  return !origin || LOOPBACK_ORIGINS.has(origin) || DEV_LOOPBACK_ORIGIN_PATTERN.test(origin);
 }
 
 function buildCorsHeaders(origin) {
@@ -1010,7 +1164,7 @@ function buildCorsHeaders(origin) {
     Vary: 'Origin',
   };
 
-  if (origin && LOOPBACK_ORIGINS.has(origin)) {
+  if (origin && isAllowedOrigin(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
   }
 
@@ -1038,19 +1192,8 @@ async function fetchGeminiArticle(query, modelOverride = '', queryMeta = analyze
   const parsedUrl = normalizeUrl(parsed?.url);
   const sources = extractGroundingSources(response);
   const primarySource = selectPrimarySource(sources, parsed);
-  const canonicalPrimaryUrl = await resolveCanonicalUrl(primarySource?.url);
-  const normalizedSources = sources.map((source) => {
-    if (source.url === primarySource?.url && canonicalPrimaryUrl) {
-      return {
-        ...source,
-        url: canonicalPrimaryUrl,
-      };
-    }
 
-    return source;
-  });
-
-  return finalizeArticleResult({
+  return finalizeArticleResultWithCanonicalResolution({
     query: trimmedQuery,
     originalQuery: queryMeta.originalQuery || trimmedQuery,
     queryMeta,
@@ -1064,9 +1207,9 @@ async function fetchGeminiArticle(query, modelOverride = '', queryMeta = analyze
       summary: String(parsed.summary || rawText || '').trim(),
       sourceName: String(parsed.sourceName || primarySource?.domain || '').trim(),
       whyRelevant: String(parsed.whyRelevant || '').trim(),
-      url: parsedUrl || canonicalPrimaryUrl,
+      url: parsedUrl,
     },
-    sources: normalizedSources,
+    sources,
     rawText,
   });
 }
@@ -1119,19 +1262,8 @@ async function fetchPerplexityArticle(query, modelOverride = '', queryMeta = ana
   const parsedUrl = normalizeUrl(parsed?.url || extractUrlFromText(rawText));
   const sources = extractPerplexitySources(payload);
   const primarySource = selectPrimarySource(sources, parsed);
-  const canonicalPrimaryUrl = await resolveCanonicalUrl(primarySource?.url);
-  const normalizedSources = sources.map((source) => {
-    if (source.url === primarySource?.url && canonicalPrimaryUrl) {
-      return {
-        ...source,
-        url: canonicalPrimaryUrl,
-      };
-    }
 
-    return source;
-  });
-
-  return finalizeArticleResult({
+  return finalizeArticleResultWithCanonicalResolution({
     query: trimmedQuery,
     originalQuery: queryMeta.originalQuery || trimmedQuery,
     queryMeta,
@@ -1145,9 +1277,9 @@ async function fetchPerplexityArticle(query, modelOverride = '', queryMeta = ana
       summary: String(parsed.summary || rawText || '').trim(),
       sourceName: String(parsed.sourceName || primarySource?.domain || '').trim(),
       whyRelevant: String(parsed.whyRelevant || '').trim(),
-      url: parsedUrl || canonicalPrimaryUrl,
+      url: parsedUrl,
     },
-    sources: normalizedSources,
+    sources,
     rawText,
   });
 }
@@ -1220,7 +1352,8 @@ async function handleApiArticle(req, res) {
 }
 
 function createServer() {
-  return http.createServer(async (req, res) => {
+  const httpsOptions = getHttpsOptions();
+  const requestListener = async (req, res) => {
     if (!req.url) {
       sendJson(res, 404, { ok: false, error: 'Missing URL.' }, String(req.headers.origin || ''));
       return;
@@ -1277,7 +1410,14 @@ function createServer() {
     }
 
     sendJson(res, 404, { ok: false, error: 'Not found.' }, origin);
-  });
+  };
+
+  return {
+    protocol: httpsOptions ? 'https' : 'http',
+    server: httpsOptions
+      ? https.createServer(httpsOptions, requestListener)
+      : http.createServer(requestListener),
+  };
 }
 
 function parseSelfTestArgs(args) {
@@ -1340,10 +1480,10 @@ async function main() {
     return;
   }
 
-  const server = createServer();
+  const { server, protocol } = createServer();
 
   server.listen(DEFAULT_PORT, '127.0.0.1', () => {
-    console.log(`Article check server is running on http://127.0.0.1:${DEFAULT_PORT}`);
+    console.log(`Article check server is running on ${protocol}://localhost:${DEFAULT_PORT}`);
   });
 }
 
@@ -1356,6 +1496,7 @@ export {
   extractPerplexitySources,
   fetchArticleWithStrategy,
   finalizeArticleResult,
+  finalizeArticleResultWithCanonicalResolution,
 };
 
 if (isDirectExecution) {

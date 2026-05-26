@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, parseStructuredEditBatchResponse } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
@@ -171,32 +171,348 @@ const QUICK_PROMPTS = [
     color: 'linear-gradient(135deg, #14B8A6 0%, #0F766E 100%)' },
 ];
 
-const CLASSIC_TASKPANE_AGENT_IDS = ['fix', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
+const CLASSIC_TASKPANE_AGENT_IDS = ['reviewFix', 'fix', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
 
 const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
+const getDocumentStorageKeySegment = (documentId = '') => {
+  const resolvedDocumentId = String(documentId || '').trim();
+  return resolvedDocumentId ? encodeURIComponent(resolvedDocumentId) : '';
+};
+
+const getLegacyDocumentStorageKeySegment = (documentId = '') => String(documentId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
 const getChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
-  const resolvedFilePathKey = String(documentId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const resolvedFilePathKey = getDocumentStorageKeySegment(documentId);
+  return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
+};
+
+const getLegacyChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
+  const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
+  const resolvedFilePathKey = getLegacyDocumentStorageKeySegment(documentId);
   return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
 };
 
 const PROMPT_HISTORY_STORAGE_KEY = 'wordai_sidebar_prompt_history';
 const PROMPT_HISTORY_LIMIT = 100;
+const COMPOSER_MODES = [
+  { id: 'chat', label: 'צ׳אט' },
+  { id: 'edit', label: 'עריכה' },
+];
+
+const normalizeComposerMode = (value = '') => (String(value || '').trim() === 'edit' ? 'edit' : 'chat');
+
+const buildSidebarConversationHistory = (entries = []) => (Array.isArray(entries) ? entries : [])
+  .filter((entry) => entry && (entry.role === 'user' || entry.role === 'assistant'))
+  .map((entry) => ({
+    role: entry.role,
+    content: String(entry.content || '').trim(),
+  }))
+  .filter((entry) => entry.content);
+const formatSidebarConversationHistory = (entries = []) => buildSidebarConversationHistory(entries)
+  .slice(-12)
+  .map((entry) => `${entry.role === 'assistant' ? 'assistant' : 'user'}: ${entry.content}`)
+  .join('\n\n');
+const documentWideEditPlanPattern = /(?:לפי\s+המיקומים\s+הנכונים|במיקומים\s+הנכונים|על\s+פי\s+המיקומים|בכל\s+המסמך|בכל\s+העבודה|במסמך|בעבודה|המסמך\s+הנוכחי|העבודה\s+הנוכחית|עכשיו\s+במסמך|עכשיו\s+לעבודה).{0,50}(?:תיקונים|הערות|המלצות|שינויים|תקן|תתקן)?|(?:תכניס|הכנס|החל|יישם|תיישם|תשלב|שלב|תטמיע|הטמע|תעדכן|עדכן|תקן|תתקן).{0,50}(?:תיקונים|הערות|המלצות|שינויים|את\s+זה|אותם|אותן|את\s+העבודה|את\s+המסמך|המסמך\s+הנוכחי|העבודה\s+הנוכחית)|(?:תיקונים|המלצות|הערות).{0,24}(?:שביצעת|שביצעתי|שהצעת|שכתבת|שציינת)|(?:תסתכל|תעבור|סקור|בדוק).{0,34}(?:על\s+)?(?:ההערות|המלצות|המסמך|העבודה).{0,38}(?:ותתקן|ותעדכן|ותיישם|במסמך|בעבודה|את\s+המסמך|את\s+העבודה)|(?:את\s+זה|אותם|אותן|כמו\s+שהצעת|כמו\s+שכתבת)/i;
+const NUMBERED_REVIEW_APPLY_INTENT_PATTERN = /(?:^|\s)(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני)\s+(?:לי\s+)?(?:את\s+)?(?:ה)?(?:המלצות|תיקונים|סעיפים|נקודות)?\s*(?:מספר(?:י)?\s*)?(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)(?:\s*(?:,|،|\+|ו|עד|-)\s*(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית))*/iu;
+const NUMBERED_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|בדיקת|תיקונים|בעיות|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
+const NUMBERED_LIST_MARKER_PATTERN = /(?:^|\n)(?:(?:#{1,6}\s*)?(?:\*\*)?\d{1,2}[.)]|[•*-])\s+/u;
+const hasRecentNumberedReviewContext = (entries = []) => buildSidebarConversationHistory(entries)
+  .slice(-8)
+  .some((entry) => {
+    if (entry.role !== 'assistant') return false;
+    const content = String(entry.content || '');
+    return NUMBERED_REVIEW_CONTEXT_PATTERN.test(content);
+  });
+
+const buildDocumentPersistenceIds = (...documentIds) => {
+  const uniqueIds = [...new Set(documentIds.map((value) => String(value || '').trim()).filter(Boolean))];
+  return uniqueIds.length ? uniqueIds : [''];
+};
+
+const normalizeSidebarDocumentSnapshot = (value = '') => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const excerptText = String(value.excerptText || value.excerpt || value.text || value.fullText || '');
+    const fullText = String(value.text || value.fullText || excerptText || '');
+    const outlineText = String(value.outlineText || value.outline || '').trim();
+    const html = String(value.html || value.documentHtml || '').trim();
+    const compactHtmlContext = html ? `HTML מסמך קיים לשימור מבנה ועוגנים:\n${html.slice(0, 4000)}` : '';
+    const fullHtmlContext = html ? `HTML מסמך קיים לשימור מבנה ועוגנים:\n${html.slice(0, 12000)}` : '';
+    const promptContext = [outlineText, excerptText, compactHtmlContext].filter(Boolean).join('\n\n');
+    const fullPromptContext = [outlineText, fullText, fullHtmlContext].filter(Boolean).join('\n\n');
+
+    return {
+      excerptText,
+      fullText,
+      html,
+      outlineText,
+      promptContext,
+      fullPromptContext,
+    };
+  }
+
+  const text = String(value || '');
+  return {
+    excerptText: text,
+    fullText: text,
+    html: '',
+    outlineText: '',
+    promptContext: text,
+    fullPromptContext: text,
+  };
+};
+
+const FOLLOW_UP_DOCUMENT_CREATION_PATTERN = /(?:^|\b)(?:כתוב|כתבי|תכתוב|תכתבי|צור|צרי|תיצור|תיצרי|נסח|נסחי|תנסח|תנסחי|generate|create|write|draft|continue)(?:\s+[^\n]{0,60})?(?:מסמך|טיוטה|מאמר|עבודה|תשובה|טקסט|מסה|essay|paper|document|draft|article)|(?:עכשיו|כעת)\s+(?:כתוב|כתבי|נסח|נסחי|צור|צרי)|(?:המשך|תמשיך|תמשיכי)(?:\s+[^\n]{0,40})?(?:לכתוב|את המסמך|את הטיוטה|עם המסמך|עם הטיוטה)/iu;
+const FOLLOW_UP_SOURCE_GROUNDING_PATTERN = /(?:כתבה|כתבות|ידיעה|ידיעות|article|articles|source|sources|שאלות|שאלה|questions?|הנחיות|brief|בריף|מקור|מקורות)/iu;
+const FOLLOW_UP_SOURCE_CONTEXT_MAX_CHARS = 3600;
+const EXPLICIT_DOCUMENT_WIDE_INTENT_PATTERN = /(?:בכל\s+המסמך|בכל\s+העבודה|לאורך\s+המסמך|המסמך\s+הנוכחי|העבודה\s+הנוכחית|לפי\s+המיקומים\s+הנכונים|במיקומים\s+הנכונים|על\s+פי\s+המיקומים|החל\s+את\s+כל\s+ה(?:תיקונים|ההערות)|יישם\s+את\s+כל\s+ה(?:תיקונים|ההערות)|תסתכל\s+על\s+ההערות\s+ותתקן\s+את\s+ה(?:עבודה|המסמך)|תעבור\s+על\s+ההערות\s+ותעדכן\s+את\s+ה(?:עבודה|המסמך)|בדוק.{0,36}(?:המסמך|העבודה).{0,36}(?:תקן|תתקן))/iu;
+const MAX_SPLIT_CALL_COUNT = 6;
+const SPLIT_CALL_DIRECTIVE_PATTERN = /(?:תחלק|חלק|תפצל|פצל|פרק|תפרק|split|divide|break)\b(?:[^\n]{0,28}?)(?:ל|ל-|ב|ב-|into|to)?\s*(2|3|4|5|6|שתי|שתיים|שני|שניים|שלוש|שלושה|ארבע|ארבעה|חמש|חמישה|שש|שישה|two|three|four|five|six)\s*(?:קריאות|פניות|קריאה|calls?|requests?)(?:\s+(?:רצופות|sequential(?:ly)?))?/iu;
+const SPLIT_CALL_PLANNER_CONTEXT_MAX_CHARS = 5000;
+const SPLIT_CALL_STEP_CONTEXT_MAX_CHARS = 7000;
+const SPLIT_CALL_OUTPUT_CONTEXT_MAX_CHARS = 2200;
+const SPLIT_CALL_OUTPUT_TOTAL_CONTEXT_BUDGET = 5200;
+
+const clampSplitCallCount = (value = 0) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  const normalized = Math.round(numericValue);
+  if (normalized < 2) return 0;
+  return Math.max(2, Math.min(MAX_SPLIT_CALL_COUNT, normalized));
+};
+
+const normalizeRequestedSplitCallCount = (value = '') => {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  if (['6', 'שש', 'שישה', 'six'].includes(normalizedValue)) return 6;
+  if (['5', 'חמש', 'חמישה', 'five'].includes(normalizedValue)) return 5;
+  if (['4', 'ארבע', 'ארבעה', 'four'].includes(normalizedValue)) return 4;
+  if (['3', 'שלוש', 'שלושה', 'three'].includes(normalizedValue)) return 3;
+  if (['2', 'שתי', 'שתיים', 'שני', 'שניים', 'two'].includes(normalizedValue)) return 2;
+  return 0;
+};
+
+const extractSplitCallDirective = (promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!sourceText) return { count: 0, cleanedPrompt: '' };
+
+  const directiveMatch = sourceText.match(SPLIT_CALL_DIRECTIVE_PATTERN);
+  const count = clampSplitCallCount(normalizeRequestedSplitCallCount(directiveMatch?.[1] || ''));
+  if (!count || !directiveMatch) {
+    return { count: 0, cleanedPrompt: sourceText };
+  }
+
+  const matchText = String(directiveMatch[0] || '').trim();
+  const matchIndex = Math.max(0, directiveMatch.index || 0);
+  const matchEnd = matchIndex + matchText.length;
+  const lineStart = sourceText.lastIndexOf('\n', matchIndex - 1) + 1;
+  const nextLineBreak = sourceText.indexOf('\n', matchEnd);
+  const lineEnd = nextLineBreak === -1 ? sourceText.length : nextLineBreak;
+  const matchedLine = sourceText.slice(lineStart, lineEnd).trim();
+  const nearPromptEdge = matchIndex <= 48 || matchEnd >= sourceText.length - 48;
+  const standaloneDirectiveLine = matchedLine === matchText || matchedLine.replace(/[.!?]+$/u, '').trim() === matchText;
+  if (!nearPromptEdge && !standaloneDirectiveLine) {
+    return { count: 0, cleanedPrompt: sourceText };
+  }
+
+  const beforeMatch = sourceText.slice(0, matchIndex).replace(/[ \t]+$/u, '');
+  const afterMatch = sourceText.slice(matchEnd).replace(/^[ \t]+/u, '');
+  const shouldInsertSpace = beforeMatch && afterMatch && !beforeMatch.endsWith('\n') && !afterMatch.startsWith('\n');
+  const cleanedPrompt = `${beforeMatch}${shouldInsertSpace ? ' ' : ''}${afterMatch}`.trim();
+
+  return {
+    count,
+    cleanedPrompt,
+  };
+};
+
+const tryParseJsonPayload = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  const candidates = [
+    text,
+    text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+
+    const objectStart = candidate.indexOf('{');
+    const objectEnd = candidate.lastIndexOf('}');
+    if (objectStart !== -1 && objectEnd > objectStart) {
+      try {
+        return JSON.parse(candidate.slice(objectStart, objectEnd + 1));
+      } catch {}
+    }
+
+    const arrayStart = candidate.indexOf('[');
+    const arrayEnd = candidate.lastIndexOf(']');
+    if (arrayStart !== -1 && arrayEnd > arrayStart) {
+      try {
+        return JSON.parse(candidate.slice(arrayStart, arrayEnd + 1));
+      } catch {}
+    }
+  }
+
+  return null;
+};
+
+const normalizeSplitCallPlan = (payload = null, stepCount = 0) => {
+  const normalizedStepCount = Math.max(0, Math.min(MAX_SPLIT_CALL_COUNT, Number(stepCount) || 0));
+  const rawSteps = Array.isArray(payload?.steps)
+    ? payload.steps
+    : Array.isArray(payload?.calls)
+      ? payload.calls
+      : Array.isArray(payload)
+        ? payload
+        : [];
+
+  const steps = rawSteps
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const title = String(item.title || item.name || item.label || `חלק ${index + 1}`).trim();
+      const instruction = String(item.instruction || item.prompt || item.goal || item.focus || '').trim();
+      if (!instruction) return null;
+      return {
+        title: title || `חלק ${index + 1}`,
+        instruction,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, normalizedStepCount);
+
+  return steps;
+};
+
+const truncateSplitCallOutput = (value = '', maxChars = SPLIT_CALL_OUTPUT_CONTEXT_MAX_CHARS, enforceMinimum = true) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const normalizedMaxChars = Number(maxChars) || SPLIT_CALL_OUTPUT_CONTEXT_MAX_CHARS;
+  const limit = enforceMinimum ? Math.max(200, normalizedMaxChars) : Math.max(1, normalizedMaxChars);
+  return text.length <= limit ? text : `${text.slice(0, limit).trim()}…`;
+};
+
+const buildSplitCallOutputsContext = (outputs = [], totalBudget = SPLIT_CALL_OUTPUT_TOTAL_CONTEXT_BUDGET) => {
+  const normalizedOutputs = Array.isArray(outputs) ? outputs : [];
+  let consumed = 0;
+  return normalizedOutputs.map((item, index) => {
+    const rawContent = String(item?.content || '').trim();
+    const fallbackContent = String(item?.contextExcerpt || '').trim();
+    const preferredContent = rawContent || fallbackContent;
+    const budgetLimit = Number(totalBudget) || SPLIT_CALL_OUTPUT_TOTAL_CONTEXT_BUDGET;
+    const remainingBudget = Math.max(0, budgetLimit - consumed);
+    const remainingItems = Math.max(1, normalizedOutputs.length - index);
+    if (!remainingBudget) return '';
+    const header = `חלק ${index + 1} - ${String(item?.title || `חלק ${index + 1}`).trim()}:\n`;
+    const contentBudget = Math.max(0, Math.floor(remainingBudget / remainingItems) - header.length);
+    if (!contentBudget) return '';
+    const content = preferredContent.length <= contentBudget
+      ? preferredContent
+      : truncateSplitCallOutput(preferredContent, contentBudget, false);
+    const block = `${header}${content}`;
+    consumed += block.length;
+    return block;
+  }).filter(Boolean);
+};
+
+const buildFollowUpSourceGroundingContext = (entries = [], currentPrompt = '') => {
+  if (!FOLLOW_UP_DOCUMENT_CREATION_PATTERN.test(String(currentPrompt || '').trim())) return '';
+
+  const userMessages = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry?.role === 'user')
+    .map((entry) => String(entry.content || '').trim())
+    .filter(Boolean);
+
+  if (!userMessages.length) return '';
+
+  const candidateMessages = [];
+  for (let index = userMessages.length - 1; index >= 0 && candidateMessages.length < 3; index -= 1) {
+    const content = userMessages[index];
+    if (content.length < 80) continue;
+    if (!FOLLOW_UP_SOURCE_GROUNDING_PATTERN.test(content) && content.length < 260) continue;
+    candidateMessages.unshift(content);
+  }
+
+  if (!candidateMessages.length) return '';
+
+  let consumed = 0;
+  const limitedMessages = [];
+  for (const content of candidateMessages) {
+    if (consumed >= FOLLOW_UP_SOURCE_CONTEXT_MAX_CHARS) break;
+    const remaining = FOLLOW_UP_SOURCE_CONTEXT_MAX_CHARS - consumed;
+    const nextContent = content.slice(0, remaining);
+    if (!nextContent.trim()) continue;
+    limitedMessages.push(nextContent);
+    consumed += nextContent.length;
+  }
+
+  if (!limitedMessages.length) return '';
+
+  return [
+    'הקשר מקור מהודעות משתמש קודמות. בבקשת הכתיבה הנוכחית יש להישען עליו במדויק ולא להחליף אותו בהכללה או סיכום חופשי:',
+    ...limitedMessages.map((content, index) => `מקור ${index + 1}:\n${content}`),
+  ].join('\n\n');
+};
+
 const getPromptHistoryStorageKey = (workspaceId = '', filePath = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
-  const resolvedFilePathKey = String(filePath || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const resolvedFilePathKey = getDocumentStorageKeySegment(filePath);
   return `${PROMPT_HISTORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
+};
+
+const getLegacyPromptHistoryStorageKey = (workspaceId = '', filePath = '') => {
+  const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
+  const resolvedFilePathKey = getLegacyDocumentStorageKeySegment(filePath);
+  return `${PROMPT_HISTORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
+};
+
+const readPromptHistoryFromStorage = (storageKey) => {
+  const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .slice(-PROMPT_HISTORY_LIMIT);
+};
+
+const readMessagesFromStorage = (storageKey) => {
+  const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  return Array.isArray(parsed)
+    ? parsed
+        .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
+        .slice(-60)
+    : [];
 };
 
 const getSavedPromptHistory = (workspaceId = '', filePath = '') => {
   const storageKey = getPromptHistoryStorageKey(workspaceId, filePath);
+  const legacyStorageKey = getLegacyPromptHistoryStorageKey(workspaceId, filePath);
   try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((entry) => String(entry || '').trim())
-      .filter(Boolean)
-      .slice(-PROMPT_HISTORY_LIMIT);
+    const savedHistory = readPromptHistoryFromStorage(storageKey);
+    if (savedHistory.length) return savedHistory;
+    if (legacyStorageKey !== storageKey) return readPromptHistoryFromStorage(legacyStorageKey);
+    return [];
+  } catch {
+    return [];
+  }
+};
+
+const getSavedPromptHistoryForDocumentIds = (workspaceId = '', documentIds = []) => {
+  const resolvedDocumentIds = buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds]));
+  try {
+    for (const documentId of resolvedDocumentIds) {
+      const storageKey = getPromptHistoryStorageKey(workspaceId, documentId);
+      const legacyStorageKey = getLegacyPromptHistoryStorageKey(workspaceId, documentId);
+      const savedHistory = readPromptHistoryFromStorage(storageKey);
+      if (savedHistory.length) return savedHistory;
+      if (legacyStorageKey !== storageKey) {
+        const legacyHistory = readPromptHistoryFromStorage(legacyStorageKey);
+        if (legacyHistory.length) return legacyHistory;
+      }
+    }
+    return [];
   } catch {
     return [];
   }
@@ -212,13 +528,21 @@ const getDefaultMessages = () => ([
 
 const getSavedMessages = (workspaceId = '', filePath = '') => {
   const storageKey = getChatMemoryStorageKey(workspaceId, filePath);
+  const legacyStorageKey = getLegacyChatMemoryStorageKey(workspaceId, filePath);
   try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    if (Array.isArray(parsed) && parsed.length) return parsed.slice(-60);
+    const savedMessages = readMessagesFromStorage(storageKey);
+    if (savedMessages.length) return savedMessages;
+
+    if (legacyStorageKey !== storageKey) {
+      const legacyMessages = readMessagesFromStorage(legacyStorageKey);
+      if (legacyMessages.length) return legacyMessages;
+    }
 
     const legacyParsed = JSON.parse(localStorage.getItem(LEGACY_CHAT_MEMORY_STORAGE_KEY) || '[]');
     if (Array.isArray(legacyParsed) && legacyParsed.length) {
-      const migratedMessages = legacyParsed.slice(-60);
+      const migratedMessages = legacyParsed
+        .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
+        .slice(-60);
       localStorage.setItem(storageKey, JSON.stringify(migratedMessages));
       localStorage.removeItem(LEGACY_CHAT_MEMORY_STORAGE_KEY);
       return migratedMessages;
@@ -228,6 +552,55 @@ const getSavedMessages = (workspaceId = '', filePath = '') => {
   } catch {
     return getDefaultMessages();
   }
+};
+
+const getSavedMessagesForDocumentIds = (workspaceId = '', documentIds = []) => {
+  const resolvedDocumentIds = buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds]));
+  try {
+    for (const documentId of resolvedDocumentIds) {
+      const storageKey = getChatMemoryStorageKey(workspaceId, documentId);
+      const legacyStorageKey = getLegacyChatMemoryStorageKey(workspaceId, documentId);
+      const savedMessages = readMessagesFromStorage(storageKey);
+      if (savedMessages.length) return savedMessages;
+      if (legacyStorageKey !== storageKey) {
+        const legacyMessages = readMessagesFromStorage(legacyStorageKey);
+        if (legacyMessages.length) return legacyMessages;
+      }
+    }
+
+    const legacyParsed = JSON.parse(localStorage.getItem(LEGACY_CHAT_MEMORY_STORAGE_KEY) || '[]');
+    if (Array.isArray(legacyParsed) && legacyParsed.length) {
+      const migratedMessages = legacyParsed
+        .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
+        .slice(-60);
+      localStorage.setItem(getChatMemoryStorageKey(workspaceId, resolvedDocumentIds[0] || ''), JSON.stringify(migratedMessages));
+      localStorage.removeItem(LEGACY_CHAT_MEMORY_STORAGE_KEY);
+      return migratedMessages;
+    }
+
+    return getDefaultMessages();
+  } catch {
+    return getDefaultMessages();
+  }
+};
+
+const persistPromptHistoryForDocumentIds = (workspaceId = '', documentIds = [], promptHistory = []) => {
+  const normalizedHistory = (Array.isArray(promptHistory) ? promptHistory : [])
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .slice(-PROMPT_HISTORY_LIMIT);
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    localStorage.setItem(getPromptHistoryStorageKey(workspaceId, documentId), JSON.stringify(normalizedHistory));
+  });
+};
+
+const persistMessagesForDocumentIds = (workspaceId = '', documentIds = [], messages = []) => {
+  const normalizedMessages = (Array.isArray(messages) ? messages : [])
+    .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
+    .slice(-60);
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    localStorage.setItem(getChatMemoryStorageKey(workspaceId, documentId), JSON.stringify(normalizedMessages));
+  });
 };
 
 const bbl = (isUser, compactMode = false) => ({
@@ -385,6 +758,8 @@ const findMentionedSkill = (skills = [], token = '') => {
   });
 };
 
+const shouldAllowEditModeRoutingOverride = ({ runtimeOverride = false } = {}) => runtimeOverride === true;
+
 const EMPTY_MENTION_MENU = { open: false, type: '', query: '', start: 0, end: 0, items: [], activeIndex: 0 };
 const EMPTY_PENDING_MENTION_SELECTION = { agentId: '', skillId: '' };
 const IDLE_AGENT_STATUS = {
@@ -398,15 +773,17 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', onInsert, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', onInsert, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
+  const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
+  const documentPersistenceScopeKey = documentPersistenceIds.join('::');
   const [tab, setTab] = useState('chat');
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
-  const [messages, setMessages] = useState(() => getSavedMessages(getWorkspaceAutomation().activeWorkspaceId, effectiveDocId));
+  const [messages, setMessages] = useState(() => getSavedMessagesForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
-  const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistory(getWorkspaceAutomation().activeWorkspaceId, effectiveDocId));
+  const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistoryForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
   const [preNavigationDraft, setPreNavigationDraft] = useState('');
   const [agentTaskInput, setAgentTaskInput] = useState('');
@@ -423,6 +800,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [selectedProviderModel, setSelectedProviderModel] = useState(() => String(getAppMemory().sidebarProviderModel || '').trim());
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
+  const [configuredSplitCallCount, setConfiguredSplitCallCount] = useState(() => clampSplitCallCount(getAppMemory().sidebarSplitCallCount || 0));
+  const [composerMode, setComposerMode] = useState(() => normalizeComposerMode(getAppMemory().sidebarComposerMode || 'chat'));
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [requestSnapshot, setRequestSnapshot] = useState(null);
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
@@ -435,9 +814,16 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const pendingMentionSelectionRef = useRef({ ...EMPTY_PENDING_MENTION_SELECTION });
   const preservePendingMentionRef = useRef(false);
   const requestCycleRef = useRef(0);
+  const effectiveDocIdRef = useRef(effectiveDocId);
+  const chatPersistenceKeyRef = useRef(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId));
+  const pendingChatPersistenceLoadRef = useRef(null);
+  const isEditComposerMode = composerMode === 'edit';
+  const activeEditTarget = editTarget?.active || null;
 
-  const docCtx = (typeof documentContext === 'function' ? documentContext() : (documentContext || '')).slice(0, 6000);
-  const localContext = selectedText || currentBlockText;
+  const rawDocumentContext = typeof documentContext === 'function' ? documentContext() : (documentContext || '');
+  const documentSnapshot = React.useMemo(() => normalizeSidebarDocumentSnapshot(rawDocumentContext), [rawDocumentContext]);
+  const docCtx = (isEditComposerMode ? documentSnapshot.fullPromptContext : documentSnapshot.promptContext).slice(0, isEditComposerMode ? 32000 : 16000);
+  const localContext = selectedText || currentBlockText || activeEditTarget?.text || '';
   const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
   const sidebarPreset = String(assistantBehavior?.sidebarPreset || 'word-taskpane').trim() || 'word-taskpane';
   const useClassicTaskpaneShell = sidebarPreset === 'word-taskpane';
@@ -463,30 +849,89 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     : '';
   const activeProviderLabel = activeProviderChoice?.label || getActiveProviderName();
   const persistedSidebarProviderModel = activeProviderChoice ? resolvedSelectedProviderModel : String(selectedProviderModel || '').trim();
+  const chatMemoryStorageKey = getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId);
   const activeProviderSummary = activeProviderChoice
     ? [activeProviderLabel, resolvedSelectedProviderModel].filter(Boolean).join(' · ')
-    : `${activeProviderLabel} · ברירת מחדל`;
+    : (configuredProviderChoices.length ? `${activeProviderLabel} · ברירת מחדל` : activeProviderLabel);
+  const effectiveSelectedAgentId = isEditComposerMode ? '' : selectedAgentId;
+  const effectiveSelectedSkillId = isEditComposerMode ? 'none' : selectedSkillId;
+  const inactiveSkillSummaryLabel = isEditComposerMode ? 'ללא סקיל' : 'אוטומטי';
   const activeAgent = workspaceAutomationEnabled
-    ? roleAgents.find((agent) => agent.id === selectedAgentId) || null
+    ? roleAgents.find((agent) => agent.id === effectiveSelectedAgentId) || null
     : null;
-  const activeSkill = selectedSkillId !== 'none'
-    ? skillCatalog.find((skill) => skill.id === selectedSkillId) || null
+  const activeSkill = effectiveSelectedSkillId !== 'none'
+    ? skillCatalog.find((skill) => skill.id === effectiveSelectedSkillId) || null
     : null;
-  const contextScopeLabel = selectedText ? 'טקסט נבחר' : currentBlockText ? 'הפסקה הנוכחית' : 'המסמך כולו';
+    const contextScopeLabel = isEditComposerMode
+      ? (activeEditTarget?.kind === 'section'
+        ? (activeEditTarget.headingText ? `סעיף: ${activeEditTarget.headingText}` : 'סעיף במסמך')
+        : selectedText
+          ? 'טקסט נבחר'
+          : currentBlockText
+            ? 'פסקה פעילה'
+            : documentSnapshot.excerptText
+              ? 'המסמך המלא'
+              : 'יעד עריכה לא נבחר')
+      : (selectedText ? 'טקסט נבחר' : currentBlockText ? 'הפסקה הנוכחית' : 'המסמך כולו');
   const contextSourceText = localContext || '';
   const contextPreview = contextSourceText
     ? `${contextSourceText.replace(/\s+/g, ' ').slice(0, 96)}${contextSourceText.length > 96 ? '…' : ''}`
     : '';
   const effectiveProviderSummary = loading && requestSnapshot?.providerLabel ? requestSnapshot.providerLabel : activeProviderSummary;
   const effectiveAgentSummary = loading && requestSnapshot?.agentLabel ? requestSnapshot.agentLabel : (activeAgent ? activeAgent.name : 'צ׳אט ישיר');
-  const effectiveSkillSummary = loading && requestSnapshot?.skillLabel ? requestSnapshot.skillLabel : (activeSkill ? activeSkill.label : 'אוטומטי');
+  const effectiveSkillSummary = loading && requestSnapshot?.skillLabel ? requestSnapshot.skillLabel : (activeSkill ? activeSkill.label : inactiveSkillSummaryLabel);
+  const composerModeLabel = isEditComposerMode ? 'מצב עריכה' : 'מצב צ׳אט';
+  const composerModeHelpText = isEditComposerMode
+      ? 'עבודה ישירה על הטקסט הנבחר, הפסקה הפעילה או סעיף שמוזכר במפורש בבקשה. בברירת מחדל אין כאן סוכן או סקיל קבועים; לזימון מפורש השתמש ב-@agent או /skill בתחילת הבקשה.'
+    : 'שיחה רציפה עם הקשר קצר מההודעות האחרונות ומהמסמך הפעיל.';
+  const shouldPreserveFullDocumentContext = Boolean(documentSnapshot.fullPromptContext || documentSnapshot.html);
+  const missingEditTargetMessage = 'לא זוהה יעד עריכה זמין. בחר טקסט, מקם את הסמן בפסקה שברצונך לערוך, או הפנה לסעיף בבקשה.';
+  const getPromptResolutionTargets = (resolution) => (
+    Array.isArray(resolution)
+      ? resolution
+      : Array.isArray(resolution?.targets)
+        ? resolution.targets
+        : []
+  );
+  const getPromptResolutionUnresolvedReferences = (resolution) => (
+    Array.isArray(resolution?.unresolvedExplicitReferences)
+      ? resolution.unresolvedExplicitReferences
+      : []
+  );
+  const buildUnresolvedExplicitReferenceMessage = (references = []) => {
+    const referenceLabel = String(
+      references[0]?.locatorLabel
+      || references[0]?.text
+      || references[0]?.locatorText
+      || ''
+    ).trim();
+    const referencePrefix = referenceLabel ? `ההפניה ${referenceLabel}` : 'ההפניה המפורשת';
+    return `${referencePrefix} לא נפתרה באופן יחיד, ולכן עצרתי באופן שמרני לפני עריכה. ציין יעד ייחודי יותר או בחר את האזור ידנית ונסה שוב.`;
+  };
+  const composerModeSystemPrompt = isEditComposerMode
+    ? 'מצב עריכה ישיר: החזר רק את התוכן החלופי המדויק עבור יעד העריכה שסופק. אם היעד דורש יותר מפסקה אחת, מותר להחזיר כמה פסקאות רצופות או HTML בלוקי בטוח בלבד כמו <p>, <ul>, <ol>, <li>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <blockquote> ו-<br>. אל תחזיר מסמך מלא, תגיות <html> או <body>, Markdown, פתיח, הסבר, מרכאות, כותרות מסבירות או הערות מחוץ לתוכן שאמור להיכנס למסמך. אם המשתמש נתן רשימת תיקונים מסודרת וביקש "לפי הסדר" או להתחיל מהראשון, בצע קודם את הסעיף הביצועי הראשון ואל תשאל מאיפה להתחיל.'
+    : '';
+  const buildStructuredEditBatchSystemPrompt = (targets = []) => [
+    composerModeSystemPrompt,
+    'יש כמה יעדי עריכה נפרדים בבקשה אחת. החזר JSON בלבד, ללא Markdown וללא הסברים.',
+    'המבנה המחייב: {"edits":[{"targetId":"...","replacement":"..."}]}',
+    'חובה להחזיר בדיוק ערך אחד לכל targetId שסופק. אסור להמציא targetId, להשמיט יעד, או לאחד יעדים.',
+    'כל replacement הוא התוכן החלופי המדויק לאותו יעד בלבד. מותר להשתמש ב-HTML בלוקי בטוח כמו במצב עריכה רגיל.',
+    `targetIds: ${(Array.isArray(targets) ? targets : []).map((target) => target?.targetId).filter(Boolean).join(', ')}`,
+  ].filter(Boolean).join('\n\n');
+  const composerPlaceholder = activeClassicAgent
+    ? `${activeClassicAgent.placeholder} (${composerModeLabel})`
+    : isEditComposerMode
+      ? 'מצב עריכה: כתוב מה לשכתב, לקצר, לתקן או לחדד בטקסט הנבחר, בפסקה הפעילה או בסעיף שתפנה אליו'
+      : 'מצב צ׳אט: שאל, התייעץ, או המשך שיחה רציפה... @ לסוכנים, / לסקילים';
+  const conversationHistory = buildSidebarConversationHistory(messages);
   const effectiveScopeSummary = loading && requestSnapshot?.scopeLabel ? requestSnapshot.scopeLabel : contextScopeLabel;
   const effectiveContextPreview = loading && requestSnapshot?.contextPreview ? requestSnapshot.contextPreview : contextPreview;
   const isSettingsLocked = loading;
   const progressPercent = Math.min(100, Math.max(Math.round(activeAgentStatus.progress || 0), loading ? 8 : 0));
   const progressTone = activeAgentStatus.state === 'error'
     ? {
-        background: 'rgba(239, 68, 68, 0.2)',
+        background: 'rgba(248, 113, 113, 0.18)',
         border: 'rgba(252, 165, 165, 0.34)',
         color: '#FECACA',
         rail: 'linear-gradient(180deg, #F97316 0%, #EF4444 100%)',
@@ -728,8 +1173,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       activeWorkspaceIdRef.current = nextWorkspaceId;
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
-      setMessages(getSavedMessages(nextAutomation.activeWorkspaceId, effectiveDocId));
-      setPromptHistory(getSavedPromptHistory(nextAutomation.activeWorkspaceId, effectiveDocId));
+      setMessages(getSavedMessagesForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds));
+      setPromptHistory(getSavedPromptHistoryForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
       if (shouldResetWorkspaceState) {
         beginRequestCycle();
@@ -749,18 +1194,39 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     if (typeof window === 'undefined') return undefined;
     window.addEventListener('wordai-workspace-changed', syncWorkspace);
     return () => window.removeEventListener('wordai-workspace-changed', syncWorkspace);
-  }, [beginRequestCycle, clearPendingMentionSelection, effectiveDocId]);
+  }, [beginRequestCycle, clearPendingMentionSelection, documentPersistenceScopeKey]);
 
   useEffect(() => {
-    setMessages(getSavedMessages(workspaceAutomation.activeWorkspaceId, effectiveDocId));
-    setPromptHistory(getSavedPromptHistory(workspaceAutomation.activeWorkspaceId, effectiveDocId));
-  }, [effectiveDocId, workspaceAutomation.activeWorkspaceId]);
+    if (effectiveDocIdRef.current === effectiveDocId) return;
+    effectiveDocIdRef.current = effectiveDocId;
+    beginRequestCycle();
+    setLoading(false);
+    setRequestSnapshot(null);
+    setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
+    setAgentProgressMap({});
+  }, [beginRequestCycle, effectiveDocId]);
+
+  useEffect(() => {
+    if (chatPersistenceKeyRef.current === chatMemoryStorageKey) return;
+    chatPersistenceKeyRef.current = chatMemoryStorageKey;
+    pendingChatPersistenceLoadRef.current = { key: chatMemoryStorageKey, loadedMessages: null };
+  }, [chatMemoryStorageKey]);
+
+  useEffect(() => {
+    const nextMessages = getSavedMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds);
+    const nextPromptHistory = getSavedPromptHistoryForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds);
+    if (pendingChatPersistenceLoadRef.current?.key === chatMemoryStorageKey) {
+      pendingChatPersistenceLoadRef.current = { key: chatMemoryStorageKey, loadedMessages: nextMessages };
+    }
+    setMessages(nextMessages);
+    setPromptHistory(nextPromptHistory);
+  }, [chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(getPromptHistoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId), JSON.stringify(promptHistory.slice(-PROMPT_HISTORY_LIMIT)));
+      persistPromptHistoryForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, promptHistory);
     } catch {}
-  }, [promptHistory, workspaceAutomation.activeWorkspaceId, effectiveDocId]);
+  }, [documentPersistenceScopeKey, promptHistory, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     setAgentProgressMap((prev) => {
@@ -811,18 +1277,25 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   }, [activeProviderChoice, resolvedSelectedProviderModel, selectedProviderModel]);
 
   useEffect(() => {
+    const pendingChatPersistenceLoad = pendingChatPersistenceLoadRef.current;
+    if (pendingChatPersistenceLoad?.key === chatMemoryStorageKey) {
+      if (messages !== pendingChatPersistenceLoad.loadedMessages) return;
+      pendingChatPersistenceLoadRef.current = null;
+    }
     try {
-      localStorage.setItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId), JSON.stringify(messages.slice(-60)));
+      persistMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, messages);
       saveAppMemory({
         ...getAppMemory(),
         sidebarProviderId: selectedProviderId || 'default',
         sidebarProviderModel: persistedSidebarProviderModel || '',
         lastSelectedAgentId: selectedAgentId || '',
         lastSelectedSkillId: selectedSkillId || 'none',
+        sidebarSplitCallCount: configuredSplitCallCount,
+        sidebarComposerMode: composerMode,
         lastResolvedSkillLabel: resolvedSkillLabel || '',
       });
     } catch {}
-  }, [messages, selectedProviderId, persistedSidebarProviderModel, selectedAgentId, selectedSkillId, resolvedSkillLabel, workspaceAutomation.activeWorkspaceId]);
+  }, [messages, selectedProviderId, persistedSidebarProviderModel, selectedAgentId, selectedSkillId, configuredSplitCallCount, composerMode, resolvedSkillLabel, chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (tab !== 'agents' && showLogs) setShowLogs(false);
@@ -860,6 +1333,29 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
   };
 
+  const buildProviderStatusSummary = useCallback((providerId = '', modelName = '') => {
+    const normalizedProviderId = String(providerId || '').trim();
+    if (!normalizedProviderId) return '';
+    const configuredChoice = configuredProviderChoices.find((choice) => choice.id === normalizedProviderId) || null;
+    const providerLabel = configuredChoice?.label || normalizedProviderId;
+    const normalizedModel = modelName
+      ? normalizeProviderModelName(normalizedProviderId, String(modelName || '').trim())
+      : '';
+    return [providerLabel, normalizedModel].filter(Boolean).join(' · ') || providerLabel;
+  }, [configuredProviderChoices]);
+
+  const syncRequestSnapshotProviderFromStatus = useCallback((payload = {}) => {
+    const providerSummary = buildProviderStatusSummary(payload.provider, payload.model);
+    if (!providerSummary) return;
+    setRequestSnapshot((prev) => (prev
+      ? {
+          ...prev,
+          providerLabel: providerSummary,
+        }
+      : prev
+    ));
+  }, [buildProviderStatusSummary]);
+
   const getLogAgentTitle = (log = {}) => {
     const primary = String(log.agentName || log.agentLabel || '').trim() || 'מערכת';
     const secondary = String(log.agentLabel || '').trim();
@@ -894,7 +1390,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const clearConversation = useCallback(() => {
     beginRequestCycle();
     try {
-      localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId));
+      documentPersistenceIds.forEach((documentId) => {
+        localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
+      });
     } catch {}
     clearPendingMentionSelection();
     setMessages(getDefaultMessages());
@@ -908,7 +1406,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
     setAgentProgressMap({});
     setMentionMenu({ ...EMPTY_MENTION_MENU });
-  }, [beginRequestCycle, clearPendingMentionSelection, workspaceAutomation.activeWorkspaceId]);
+  }, [beginRequestCycle, clearPendingMentionSelection, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -923,40 +1421,1398 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
   }, [clearConversation, workspaceAutomation.activeWorkspaceId]);
 
-  const buildContext = () => (
-    selectedText
+  const snapshotEditTarget = useCallback((target) => (
+    target
+      ? {
+          kind: target.kind,
+          from: target.from,
+          to: target.to,
+          text: target.text,
+          before: target.before,
+          after: target.after,
+          targetId: target.targetId,
+          sliceJson: target.sliceJson,
+          normalizedHtml: target.normalizedHtml,
+          headingText: target.headingText,
+          headingLevel: target.headingLevel,
+          sectionIndex: target.sectionIndex,
+          matchKind: target.matchKind,
+          locatorText: target.locatorText,
+          locatorLabel: target.locatorLabel,
+        }
+      : null
+  ), []);
+
+  const snapshotEditTargetState = useCallback((targetState) => ({
+    selection: snapshotEditTarget(targetState?.selection || null),
+    block: snapshotEditTarget(targetState?.block || null),
+    active: snapshotEditTarget(targetState?.active || null),
+  }), [snapshotEditTarget]);
+
+  const hasUsableEditTargetState = useCallback((targetState) => Boolean(
+    targetState?.active?.text?.trim()
+    || targetState?.selection?.text?.trim()
+    || targetState?.block?.text?.trim()
+  ), []);
+
+  const getResolvedEditTargets = useCallback(() => {
+    const liveTargets = typeof getCurrentEditTarget === 'function' ? getCurrentEditTarget() : null;
+    const preferredTargetState = liveTargets && typeof liveTargets === 'object' && hasUsableEditTargetState(liveTargets)
+      ? liveTargets
+      : editTarget;
+    return snapshotEditTargetState(preferredTargetState);
+  }, [getCurrentEditTarget, editTarget, hasUsableEditTargetState, snapshotEditTargetState]);
+
+  const describeEditTargetScope = useCallback((target) => {
+    if (!target?.text?.trim()) return contextScopeLabel;
+    if (target.kind === 'selection') return 'טקסט נבחר';
+    if (target.kind === 'block') return 'פסקה פעילה';
+    if (target.kind === 'section') {
+      return target.headingText ? `סעיף: ${target.headingText}` : 'סעיף במסמך';
+    }
+    return contextScopeLabel;
+  }, [contextScopeLabel]);
+
+  const resolvePromptEditTargetState = useCallback((promptText = '') => {
+    const liveTargets = getResolvedEditTargets();
+    const liveActiveTarget = liveTargets?.active || null;
+    const cleanPrompt = String(promptText || '').trim();
+    if (!isEditComposerMode || !cleanPrompt || typeof resolveEditTargetFromPrompt !== 'function') {
+      return {
+        targetState: liveTargets,
+        activeTarget: liveActiveTarget,
+        scopeLabel: describeEditTargetScope(liveActiveTarget),
+      };
+    }
+
+    const resolvedTarget = snapshotEditTarget(resolveEditTargetFromPrompt(cleanPrompt));
+    const promptResolution = typeof resolveEditTargetsFromPrompt === 'function'
+      ? resolveEditTargetsFromPrompt(cleanPrompt)
+      : null;
+    const unresolvedExplicitReferences = getPromptResolutionUnresolvedReferences(promptResolution);
+    if (unresolvedExplicitReferences.length) {
+      return {
+        targetState: liveTargets,
+        activeTarget: liveActiveTarget,
+        batchTargets: [],
+        hasPromptResolvedTarget: true,
+        scopeLabel: describeEditTargetScope(liveActiveTarget),
+        blockedMessage: buildUnresolvedExplicitReferenceMessage(unresolvedExplicitReferences),
+      };
+    }
+    const resolvedBatchTargets = getPromptResolutionTargets(promptResolution)
+      .map(snapshotEditTarget)
+      .filter((target) => target?.text?.trim());
+    const shouldUseBatchTargets = resolvedBatchTargets.length > 1;
+
+    if (shouldUseBatchTargets) {
+      return {
+        targetState: {
+          ...(liveTargets || { selection: null, block: null, active: null }),
+          active: resolvedBatchTargets[0],
+        },
+        activeTarget: resolvedBatchTargets[0],
+        batchTargets: resolvedBatchTargets,
+        hasPromptResolvedTarget: true,
+        scopeLabel: `${resolvedBatchTargets.length} אזורי עריכה`,
+      };
+    }
+    const shouldUseResolvedTarget = Boolean(
+      resolvedTarget?.text?.trim() && (
+        !liveActiveTarget?.text?.trim()
+        || liveActiveTarget.from !== resolvedTarget.from
+        || liveActiveTarget.to !== resolvedTarget.to
+      )
+    );
+
+    if (!shouldUseResolvedTarget) {
+      return {
+        targetState: liveTargets,
+        activeTarget: liveActiveTarget,
+        hasPromptResolvedTarget: false,
+        scopeLabel: describeEditTargetScope(liveActiveTarget),
+      };
+    }
+
+    return {
+      targetState: {
+        ...(liveTargets || { selection: null, block: null, active: null }),
+        active: resolvedTarget,
+      },
+      activeTarget: resolvedTarget,
+      batchTargets: [],
+      hasPromptResolvedTarget: true,
+      scopeLabel: describeEditTargetScope(resolvedTarget),
+    };
+  }, [describeEditTargetScope, getResolvedEditTargets, isEditComposerMode, resolveEditTargetFromPrompt, resolveEditTargetsFromPrompt, snapshotEditTarget]);
+
+  const shouldUseDocumentWideEditPlan = useCallback((promptText = '', { hasPromptResolvedTarget = false, batchTargets = [], forceDocumentWide = false, activeTarget = null, hasNumberedReviewContext = false } = {}) => {
+    const cleanPrompt = String(promptText || '').trim();
+    if (!isEditComposerMode || !cleanPrompt || typeof onApplyDocumentPlan !== 'function') return false;
+    const hasPromptNumberedReviewContext = NUMBERED_REVIEW_CONTEXT_PATTERN.test(cleanPrompt) && NUMBERED_LIST_MARKER_PATTERN.test(cleanPrompt);
+    if ((hasNumberedReviewContext || hasPromptNumberedReviewContext) && NUMBERED_REVIEW_APPLY_INTENT_PATTERN.test(cleanPrompt)) return true;
+    if (hasPromptResolvedTarget) return false;
+    if ((Array.isArray(batchTargets) ? batchTargets : []).some((target) => target?.text?.trim())) return false;
+    if (!forceDocumentWide && !EXPLICIT_DOCUMENT_WIDE_INTENT_PATTERN.test(cleanPrompt)) return false;
+    return documentWideEditPlanPattern.test(cleanPrompt);
+  }, [isEditComposerMode, onApplyDocumentPlan]);
+
+  const executeDocumentWideEditPlan = async ({
+    userContent = '',
+    promptText = '',
+    providerLabel = activeProviderSummary,
+    providerId = '',
+    providerModel = '',
+    agentId = 'assistant-main',
+    agentLabel = 'צ׳אט ישיר',
+    skillLabel = 'ללא סקיל',
+  } = {}) => {
+    if (typeof onApplyDocumentPlan !== 'function' || loading) return;
+    const requestCycle = beginRequestCycle();
+    const safeUserContent = String(userContent || promptText || '').trim();
+    const safePromptText = String(promptText || '').trim();
+    const safeAgentLabel = String(agentLabel || 'צ׳אט ישיר').trim() || 'צ׳אט ישיר';
+    const requestScopeLabel = 'עריכה מרובת מיקומים במסמך';
+
+    setTab('chat');
+    setRequestSnapshot({
+      providerLabel,
+      agentLabel: safeAgentLabel,
+      skillLabel,
+      scopeLabel: requestScopeLabel,
+      contextPreview,
+    });
+    setMessages((prev) => [...prev, { role: 'user', content: safeUserContent, composerMode }, { role: 'assistant', content: '', composerMode }]);
+    setLoading(true);
+    updateAgentStatus(agentId, safeAgentLabel, { state: 'running', progress: 12, message: 'ממפה את התיקונים למיקומים הנכונים במסמך' });
+
+    try {
+      const applyResult = await onApplyDocumentPlan({
+        promptText: safePromptText,
+        conversationHistoryText: formatSidebarConversationHistory(messages),
+        selectedProviderId: providerId,
+        selectedProviderModel: providerModel,
+        agentType: agentId || 'assistant-main',
+      });
+      if (!isCurrentRequestCycle(requestCycle)) return;
+      const assistantContent = String(applyResult?.message || '').trim() || 'לא התקבלה תשובת החלה מהמסמך.';
+      const documentActionMeta = buildDocumentActionMeta(applyResult, assistantContent, {
+        promptText: safePromptText,
+        providerId,
+        providerModel,
+        agentId,
+        agentLabel: safeAgentLabel,
+      });
+      setMessages((prev) => {
+        const nextMessages = [...prev];
+        nextMessages[nextMessages.length - 1] = {
+          ...nextMessages[nextMessages.length - 1],
+          content: assistantContent,
+          composerMode,
+          ...documentActionMeta,
+        };
+        return nextMessages;
+      });
+      updateAgentStatus(agentId, safeAgentLabel, (applyResult?.ok || applyResult?.partial)
+        ? { state: 'success', progress: 100, message: assistantContent }
+        : { state: 'error', progress: 100, message: assistantContent || 'העריכה לא הוחלה במסמך' });
+    } catch (error) {
+      if (!isCurrentRequestCycle(requestCycle)) return;
+      const errorMessage = error?.message || 'לא הצלחתי למפות את התיקונים למסמך.';
+      setMessages((prev) => {
+        const nextMessages = [...prev];
+        nextMessages[nextMessages.length - 1] = {
+          ...nextMessages[nextMessages.length - 1],
+          content: errorMessage,
+          error: true,
+          composerMode,
+        };
+        return nextMessages;
+      });
+      updateAgentStatus(agentId, safeAgentLabel, { state: 'error', progress: 100, message: errorMessage });
+    } finally {
+      if (!isCurrentRequestCycle(requestCycle)) return;
+      setLoading(false);
+      setRequestSnapshot(null);
+      inputRef.current?.focus();
+    }
+  };
+
+  const buildDocumentActionCompletionPrompt = (message = {}) => {
+    const unresolved = Array.isArray(message?.documentActionUnresolved) ? message.documentActionUnresolved : [];
+    const unresolvedTitles = unresolved
+      .map((item, index) => String(item?.title || item?.suggestionId || `תיקון ${index + 1}`).trim())
+      .filter(Boolean);
+    const originalPrompt = String(message?.documentActionPromptText || '').trim();
+
+    return [
+      'קריאת השלמה לתיקוני בדיקה + תיקון.',
+      'בקריאה הקודמת חלק מהתיקונים הוחלו וחלק נשארו מחוץ למסמך כי לא נמצא להם מיקום ייחודי או כי תקציב הקריאה לא הספיק.',
+      unresolvedTitles.length
+        ? `התמקד רק בתיקונים הבאים שנשארו להשלמה:\n${unresolvedTitles.map((title, index) => `${index + 1}. ${title}`).join('\n')}`
+        : 'התמקד רק בתיקונים שנשארו מחוץ למסמך בקריאה הקודמת.',
+      'בדוק את המסמך הנוכחי אחרי התיקונים שכבר הוחלו. אל תחזור על תיקונים שכבר קיימים במסמך או מסומנים כהצעות AI.',
+      'מותר להחליף טקסט קיים, לאחד כפילויות, למחוק כפילות רעיונית, או להוסיף תוכן חדש לפני/אחרי אזור קיים לפי הצורך.',
+      originalPrompt ? `הבקשה המקורית:\n${originalPrompt}` : '',
+    ].filter(Boolean).join('\n\n');
+  };
+
+  const continueDocumentActionCompletion = async (message = {}) => {
+    if (loading || !message?.documentActionCanContinue) return;
+    const promptText = buildDocumentActionCompletionPrompt(message);
+    if (!promptText.trim()) return;
+
+    await executeDocumentWideEditPlan({
+      userContent: 'השלם את התיקונים שנשארו מחוץ למסמך',
+      promptText,
+      providerLabel: activeProviderSummary,
+      providerId: message.documentActionProviderId || selectedProviderId,
+      providerModel: message.documentActionProviderModel || resolvedSelectedProviderModel,
+      agentId: message.documentActionAgentId || 'reviewFix',
+      agentLabel: `${message.documentActionAgentLabel || 'בדיקה + תיקון'} · השלמה`,
+      skillLabel: 'קריאת השלמה',
+    });
+  };
+
+  const stripComposerModeDirectiveFromSystemPrompt = useCallback((systemPrompt = '') => {
+    const fullPrompt = String(systemPrompt || '').trim();
+    const modePrompt = String(composerModeSystemPrompt || '').trim();
+    if (!fullPrompt || !modePrompt) return fullPrompt;
+    const sanitized = fullPrompt.split(modePrompt).join('').replace(/\n{3,}/g, '\n\n').trim();
+    return sanitized;
+  }, [composerModeSystemPrompt]);
+
+  const runSplitCallWorkflow = async ({
+    splitCallCount = 0,
+    promptText = '',
+    context = '',
+    extraSystemPrompt = '',
+    invokeCall = null,
+    onProgress = () => {},
+  } = {}) => {
+    const normalizedCount = clampSplitCallCount(splitCallCount);
+    const normalizedPrompt = String(promptText || '').trim();
+    if (normalizedCount < 2 || !normalizedPrompt || typeof invokeCall !== 'function') {
+      return invokeCall ? await invokeCall(normalizedPrompt, context, extraSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 }) : '';
+    }
+
+    const baseContext = String(context || '').trim();
+    const plannerContext = baseContext.slice(0, SPLIT_CALL_PLANNER_CONTEXT_MAX_CHARS);
+    const stepBaseContext = baseContext.slice(0, SPLIT_CALL_STEP_CONTEXT_MAX_CHARS);
+    const fallbackSingleCall = () => invokeCall(normalizedPrompt, baseContext, extraSystemPrompt, {
+      phase: 'fallback-single',
+      stepIndex: 1,
+      stepCount: 1,
+    });
+
+    onProgress({ progress: 12, message: `מחלק את הבקשה ל-${normalizedCount} קריאות` });
+    const plannerPrompt = [
+      `חלק את הבקשה הבאה ל-${normalizedCount} קריאות מודל רצופות.`,
+      'החזר JSON בלבד עם מערך steps, וכל step חייב לכלול title ו-instruction.',
+      'אסור להחזיר markdown או הסבר מחוץ ל-JSON.',
+      `בקשה:\n${normalizedPrompt}`,
+    ].join('\n\n');
+    const plannerSystemPrompt = [
+      'אתה מתכנן רצף עבודה רב-שלבי לבקשה עמוסה.',
+      `חובה להחזיר בדיוק ${normalizedCount} steps לא חופפים, בסדר ביצוע הגיוני.`,
+      'כל instruction צריך להיות קצר, מעשי, ולהנחות מה לעשות באותה קריאה בלי לחזור על כל המשימה מחדש.',
+    ].join('\n\n');
+
+    let plannerReply = '';
+    try {
+      plannerReply = await invokeCall(plannerPrompt, plannerContext, plannerSystemPrompt, {
+        phase: 'planner',
+        stepIndex: 0,
+        stepCount: normalizedCount,
+      });
+    } catch {
+      onProgress({ progress: 18, message: 'תכנון הפיצול נכשל, חוזר לקריאה אחת' });
+      return await fallbackSingleCall();
+    }
+    let planSteps = normalizeSplitCallPlan(tryParseJsonPayload(plannerReply), normalizedCount);
+    if (planSteps.length !== normalizedCount) {
+      onProgress({ progress: 16, message: 'מנסה לייצב את תכנית הפיצול' });
+      try {
+        plannerReply = await invokeCall(plannerPrompt, plannerContext, plannerSystemPrompt, {
+          phase: 'planner-retry',
+          stepIndex: 0,
+          stepCount: normalizedCount,
+        });
+      } catch {
+        onProgress({ progress: 18, message: 'תכנון הפיצול לא התייצב, חוזר לקריאה אחת' });
+        return await fallbackSingleCall();
+      }
+      planSteps = normalizeSplitCallPlan(tryParseJsonPayload(plannerReply), normalizedCount);
+    }
+    if (planSteps.length !== normalizedCount) {
+      onProgress({ progress: 18, message: 'תכנית הפיצול לא התייצבה, חוזר לקריאה אחת' });
+      return await fallbackSingleCall();
+    }
+    const stepOutputs = [];
+
+    for (let index = 0; index < planSteps.length; index += 1) {
+      const step = planSteps[index];
+      onProgress({
+        progress: Math.min(82, 18 + Math.round(((index + 1) / Math.max(1, normalizedCount + 1)) * 56)),
+        message: `מבצע חלק ${index + 1} מתוך ${normalizedCount}: ${step.title}`,
+      });
+
+      const previousOutputsContext = stepOutputs.length
+        ? [
+          'תוצרי החלקים שכבר הושלמו:',
+          ...buildSplitCallOutputsContext(stepOutputs),
+        ].join('\n\n')
+        : '';
+      const stepContext = [
+        stepBaseContext,
+        `הבקשה המקורית:\n${normalizedPrompt}`,
+        previousOutputsContext,
+      ].filter(Boolean).join('\n\n');
+      const stepPrompt = [
+        `בצע עכשיו רק את חלק ${index + 1} מתוך ${normalizedCount}.`,
+        `שם החלק: ${step.title}`,
+        `הנחיית החלק: ${step.instruction}`,
+        'החזר את הפלט של החלק הזה בלבד.',
+      ].join('\n\n');
+      let stepReply = '';
+      try {
+        stepReply = await invokeCall(stepPrompt, stepContext, extraSystemPrompt, {
+          phase: 'step',
+          stepIndex: index + 1,
+          stepCount: normalizedCount,
+        });
+        if (!String(stepReply || '').trim()) {
+          throw new Error('empty-step-reply');
+        }
+      } catch {
+        const reducedStepContext = stepBaseContext
+          ? stepBaseContext.slice(0, Math.max(1200, Math.floor(SPLIT_CALL_STEP_CONTEXT_MAX_CHARS / 2)))
+          : '';
+        const fallbackStepContext = [
+          reducedStepContext,
+          `הבקשה המקורית:\n${normalizedPrompt}`,
+          previousOutputsContext,
+        ].filter(Boolean).join('\n\n');
+        try {
+          stepReply = await invokeCall(stepPrompt, fallbackStepContext, extraSystemPrompt, {
+            phase: 'step-retry',
+            stepIndex: index + 1,
+            stepCount: normalizedCount,
+          });
+        } catch {
+          onProgress({ progress: 20, message: 'חלק אחד נכשל, חוזר לקריאה אחת מלאה' });
+          return await fallbackSingleCall();
+        }
+        if (!String(stepReply || '').trim()) {
+          onProgress({ progress: 20, message: 'שלב אחד חזר ריק, חוזר לקריאה אחת מלאה' });
+          return await fallbackSingleCall();
+        }
+      }
+      stepOutputs.push({
+        title: step.title,
+        content: String(stepReply || '').trim(),
+        contextExcerpt: truncateSplitCallOutput(stepReply),
+      });
+    }
+
+    onProgress({ progress: 92, message: 'מאחד את תוצרי הקריאות לתשובה סופית' });
+    const mergeContext = [
+      stepBaseContext,
+      `הבקשה המקורית:\n${normalizedPrompt}`,
+      'תוצרי הקריאות שהושלמו:',
+      ...buildSplitCallOutputsContext(stepOutputs),
+    ].filter(Boolean).join('\n\n');
+    const mergePrompt = [
+      `אחד עכשיו את ${normalizedCount} הקריאות לתשובה סופית אחת למשתמש.`,
+      'שמור על כל המסקנות החשובות בלי לחזור על עצמך.',
+      'אל תזכיר למשתמש את שלבי הפיצול אלא אם זה נחוץ להבנת התשובה.',
+    ].join('\n\n');
+
+    try {
+      const mergeReply = await invokeCall(mergePrompt, mergeContext, extraSystemPrompt, {
+        phase: 'merge',
+        stepIndex: normalizedCount + 1,
+        stepCount: normalizedCount,
+      });
+      if (!String(mergeReply || '').trim()) {
+        throw new Error('empty-merge-reply');
+      }
+      return mergeReply;
+    } catch {
+      onProgress({ progress: 94, message: 'מיזוג הפיצול נכשל, מנסה מיזוג מצומצם יותר' });
+      const reducedMergeContext = [
+        `הבקשה המקורית:\n${normalizedPrompt}`,
+        'תוצרי הקריאות שהושלמו:',
+        ...buildSplitCallOutputsContext(stepOutputs, Math.min(SPLIT_CALL_OUTPUT_TOTAL_CONTEXT_BUDGET, 2600)),
+      ].filter(Boolean).join('\n\n');
+      try {
+        const reducedMergeReply = await invokeCall(mergePrompt, reducedMergeContext, extraSystemPrompt, {
+          phase: 'merge-retry',
+          stepIndex: normalizedCount + 1,
+          stepCount: normalizedCount,
+        });
+        if (!String(reducedMergeReply || '').trim()) {
+          throw new Error('empty-merge-retry-reply');
+        }
+        return reducedMergeReply;
+      } catch {
+        return stepOutputs.map((item) => item.content).filter(Boolean).join('\n\n');
+      }
+    }
+  };
+
+  const runEditMultiCallWorkflow = async ({
+    splitCallCount = 0,
+    promptText = '',
+    context = '',
+    finalSystemPrompt = '',
+    analysisSystemPrompt = '',
+    structuredBatchMode = false,
+    batchTargets = [],
+    invokeCall = null,
+    onProgress = () => {},
+  } = {}) => {
+    const normalizedCount = clampSplitCallCount(splitCallCount);
+    const normalizedPrompt = String(promptText || '').trim();
+    if (normalizedCount < 2 || !normalizedPrompt || typeof invokeCall !== 'function') {
+      return invokeCall ? await invokeCall(normalizedPrompt, context, finalSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 }) : '';
+    }
+
+    const baseContext = String(context || '').trim();
+    const boundedBaseContext = baseContext.slice(0, SPLIT_CALL_STEP_CONTEXT_MAX_CHARS);
+    const reviewSystemPrompt = String(analysisSystemPrompt || '').trim();
+    let latestReviewOutput = '';
+
+    onProgress({ progress: 12, message: `מפעיל ${normalizedCount} קריאות במצב בדיקה ואז עריכה` });
+    for (let passIndex = 0; passIndex < normalizedCount - 1; passIndex += 1) {
+      const stepNumber = passIndex + 1;
+      const progress = Math.min(84, 16 + Math.round((stepNumber / Math.max(1, normalizedCount - 1)) * 56));
+      onProgress({ progress, message: `קריאת בדיקה ${stepNumber} מתוך ${normalizedCount - 1}` });
+
+      const reviewPrompt = passIndex === 0
+        ? [
+          `זו קריאת בדיקה ${stepNumber} מתוך ${normalizedCount - 1} לפני עריכה אוטומטית במסמך.`,
+          `בקשת המשתמש:\n${normalizedPrompt}`,
+          'החזר תכנית תיקון ממוקדת ליעד העריכה בלבד, עם סעיפים ישימים וקצרים. אין צורך בטקסט חלופי מלא בשלב הזה.',
+        ].join('\n\n')
+        : [
+          `זו קריאת בדיקה ${stepNumber} מתוך ${normalizedCount - 1} (איטרציית שיפור).`,
+          `בקשת המשתמש:\n${normalizedPrompt}`,
+          `תכנית הבדיקה הקודמת:\n${truncateSplitCallOutput(latestReviewOutput, 3200, false)}`,
+          'חדד את התכנית, הסר כפילויות, והדגש רק שינויים שצריך ליישם בפועל.',
+        ].join('\n\n');
+      const reviewContext = passIndex === 0
+        ? boundedBaseContext
+        : [
+          boundedBaseContext,
+          `תכנית קודמת (לשיפור):\n${truncateSplitCallOutput(latestReviewOutput, 3200, false)}`,
+        ].filter(Boolean).join('\n\n');
+
+      try {
+        const reviewReply = await invokeCall(reviewPrompt, reviewContext, reviewSystemPrompt, {
+          phase: 'edit-review',
+          stepIndex: stepNumber,
+          stepCount: normalizedCount,
+        });
+        if (String(reviewReply || '').trim()) {
+          latestReviewOutput = String(reviewReply || '').trim();
+        }
+      } catch {
+        // ממשיכים לעריכה הסופית גם אם שלב בדיקה בודד נכשל.
+      }
+    }
+
+    onProgress({ progress: 90, message: 'קריאה אחרונה: מיישם תיקון אוטומטי במסמך' });
+    const finalContext = [
+      boundedBaseContext,
+      latestReviewOutput ? `ממצאי בדיקה פנימית ליישום:\n${truncateSplitCallOutput(latestReviewOutput, 3400, false)}` : '',
+      `בקשת המשתמש המקורית:\n${normalizedPrompt}`,
+    ].filter(Boolean).join('\n\n');
+    const finalPrompt = structuredBatchMode
+      ? [
+        `זו קריאת העריכה המסכמת (${normalizedCount}/${normalizedCount}) ליעדים מרובים.`,
+        'החזר JSON בלבד במבנה: {"edits":[{"targetId":"...","replacement":"..."}]}.',
+        'חובה להחזיר בדיוק replacement אחד לכל targetId שסופק, ללא השמטות וללא יעדים מומצאים.',
+        `targetIds: ${(Array.isArray(batchTargets) ? batchTargets : []).map((target) => target?.targetId).filter(Boolean).join(', ')}`,
+        `בקשת המשתמש:\n${normalizedPrompt}`,
+      ].join('\n\n')
+      : [
+        `זו קריאת העריכה המסכמת (${normalizedCount}/${normalizedCount}).`,
+        'החזר עכשיו רק טקסט חלופי לעריכה עבור יעד העריכה שסופק. בלי הסברים, בלי שאלות הבהרה, ובלי מעטפת JSON.',
+        `בקשת המשתמש:\n${normalizedPrompt}`,
+      ].join('\n\n');
+
+    return await invokeCall(finalPrompt, finalContext, finalSystemPrompt, {
+      phase: 'edit-final',
+      stepIndex: normalizedCount,
+      stepCount: normalizedCount,
+    });
+  };
+
+  const buildEditModeContext = (targetState = null, batchTargets = []) => {
+    const resolvedBatchTargets = (Array.isArray(batchTargets) ? batchTargets : []).filter((target) => target?.text?.trim());
+    if (resolvedBatchTargets.length > 1) {
+      return [
+        'יעדי עריכה מרובים באותה בקשה. החזר replacements לכל targetId בלבד.',
+        ...resolvedBatchTargets.map((target, index) => [
+          `יעד ${index + 1}:`,
+          `targetId: ${target.targetId}`,
+          target.headingText ? `כותרת: ${target.headingText}` : '',
+          target.locatorLabel ? `איתור מפורש: ${target.locatorLabel}` : '',
+          `טקסט להחלפה:\n"${target.text}"`,
+          target.before ? `לפני:\n"${target.before}"` : '',
+          target.after ? `אחרי:\n"${target.after}"` : '',
+        ].filter(Boolean).join('\n')),
+        docCtx,
+      ].filter(Boolean).join('\n\n');
+    }
+
+    const resolvedTargetState = targetState || { block: editTarget?.block || null, active: activeEditTarget };
+    const resolvedActiveTarget = resolvedTargetState?.active || null;
+    const resolvedBlockText = resolvedTargetState?.block?.text || currentBlockText;
+    if (!resolvedActiveTarget?.text) return docCtx;
+    if (resolvedActiveTarget.kind === 'selection') {
+      return [
+        'יעד עריכה: טקסט נבחר',
+        `טקסט להחלפה:\n"${resolvedActiveTarget.text}"`,
+        resolvedActiveTarget.before ? `לפני:\n"${resolvedActiveTarget.before}"` : '',
+        resolvedActiveTarget.after ? `אחרי:\n"${resolvedActiveTarget.after}"` : '',
+        resolvedBlockText ? `פסקה פעילה:\n"${resolvedBlockText}"` : '',
+        docCtx,
+      ].filter(Boolean).join('\n\n');
+    }
+
+    if (resolvedActiveTarget.kind === 'section') {
+      return [
+        resolvedActiveTarget.headingText ? `יעד עריכה: סעיף "${resolvedActiveTarget.headingText}"` : 'יעד עריכה: סעיף במסמך',
+        resolvedActiveTarget.locatorLabel ? `איתור מפורש:\n"${resolvedActiveTarget.locatorLabel}"` : '',
+        `מקטע להחלפה:\n"${resolvedActiveTarget.text}"`,
+        docCtx,
+      ].filter(Boolean).join('\n\n');
+    }
+
+    return [
+      'יעד עריכה: פסקה פעילה',
+      `פסקה להחלפה:\n"${resolvedActiveTarget.text}"`,
+      docCtx,
+    ].filter(Boolean).join('\n\n');
+  };
+
+  const applyEditReply = async (replyText, targetSnapshot, agentType = 'assistant-sidebar-edit') => {
+    if (!isEditComposerMode) return { ok: true, skipped: true, message: '' };
+    if (!targetSnapshot?.text || !String(targetSnapshot.text).trim()) {
+      return { ok: false, message: missingEditTargetMessage };
+    }
+    if (!onApplyEdit) {
+      return { ok: false, message: 'מסלול העריכה למסמך לא זמין כרגע.' };
+    }
+    const metaReplyReason = getNonEditReplyReason(replyText, targetSnapshot);
+    if (metaReplyReason) {
+      return {
+        ok: false,
+        message: `${metaReplyReason} השארתי את התשובה בצ׳אט בלבד ולא החלפתי טקסט במסמך.`,
+      };
+    }
+    return await onApplyEdit({ replacementText: normalizeEditReplacementForApply(replyText, targetSnapshot), target: targetSnapshot, agentType });
+  };
+
+  const normalizeEditReplyText = (value = '') => String(value || '').replace(/\u00A0/g, ' ').trim();
+  const editReplyReplacementKeys = ['replacement', 'replacementText', 'updatedText', 'rewrittenText'];
+  const editReplyOriginalKeys = ['originalText', 'originalHtml'];
+  const editReplyProtocolKeys = [...new Set([...editReplyReplacementKeys, ...editReplyOriginalKeys, 'targetId', 'replacementFrom', 'replacementTo', 'edits', 'replacements'])];
+  const escapeRegExp = (value = '') => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const editReplyProtocolKeyPatternSource = editReplyProtocolKeys.map((key) => escapeRegExp(key)).join('|');
+  const editReplyWrapperKeyPattern = new RegExp(`"(?:${editReplyProtocolKeyPatternSource})"\\s*:`);
+  const editReplyLooseWrapperKeyPattern = new RegExp(`(?:^|[\\[{,]\\s*)(?:"(?:${editReplyProtocolKeyPatternSource})"|'(?:${editReplyProtocolKeyPatternSource})'|(?:${editReplyProtocolKeyPatternSource}))\\s*:`, 'i');
+  const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  const hasOwn = (value, key) => isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, key);
+  const hasAnyOwn = (value, keys) => keys.some((key) => hasOwn(value, key));
+  const hasQuotedJsonLikeKey = (value = '') => /"[^"\n]+"\s*:/.test(String(value || ''));
+  const hasSimpleObjectLiteralKey = (value = '') => /(?:^|[{,\n]\s*)(?:[A-Za-z_$][\w$-]*)\s*:/.test(String(value || ''));
+  const hasStructuredArrayLiteralSignal = (value = '') => /\[[^\]]*(?:\{|\[|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|\b(?:true|false|null|undefined)\b|[A-Za-z_$][\w$]*\s*,)[^\]]*\]/i.test(String(value || ''));
+  const isJsonContainerText = (value = '') => {
+    const text = String(value || '').trim();
+    return (text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'));
+  };
+  const looksLikeStructuredObjectLiteral = (value = '') => {
+    const text = String(value || '').trim();
+    if (!(text.startsWith('{') && text.endsWith('}'))) return false;
+    const inner = text.slice(1, -1).trim();
+    if (!inner) return true;
+    return hasQuotedJsonLikeKey(text) || hasSimpleObjectLiteralKey(text);
+  };
+  const looksLikeStructuredArrayLiteral = (value = '') => {
+    const text = String(value || '').trim();
+    if (!(text.startsWith('[') && text.endsWith(']'))) return false;
+    const inner = text.slice(1, -1).trim();
+    if (!inner) return true;
+    if (hasQuotedJsonLikeKey(inner) || hasSimpleObjectLiteralKey(inner)) return true;
+    if (/[{}\[\]]/.test(inner)) return true;
+    if (/(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/.test(inner)) return true;
+    if (/\b(?:true|false|null|undefined)\b/.test(inner)) return true;
+    if (/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(inner)) return true;
+    if (/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)+$/i.test(inner)) return true;
+    if (/^[A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)*$/.test(inner)) return true;
+    return false;
+  };
+  const looksLikeCodeOrJsonContext = (value = '') => {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    if (/^```[\s\S]*```$/.test(text)) return true;
+    if (looksLikeStructuredObjectLiteral(text) || looksLikeStructuredArrayLiteral(text)) {
+      return true;
+    }
+    let signalCount = 0;
+    if (hasQuotedJsonLikeKey(text)) signalCount += 2;
+    if (hasSimpleObjectLiteralKey(text)) signalCount += 2;
+    if (hasStructuredArrayLiteralSignal(text)) signalCount += 2;
+    if (/\b(?:const|let|var|function|return|if|else|for|while|switch|case|class|import|export|try|catch|async|await)\b/.test(text)) signalCount += 1;
+    if (/=>/.test(text)) signalCount += 1;
+    if (/[{}\[\];]/.test(text)) signalCount += 1;
+    return signalCount >= 3;
+  };
+  const isSimpleReplacementCarrierObject = (value) => {
+    if (!isPlainObject(value)) return false;
+    const keys = Object.keys(value);
+    return keys.length > 0
+      && hasAnyOwn(value, editReplyReplacementKeys)
+      && keys.every((key) => editReplyReplacementKeys.includes(key));
+  };
+  const getSimpleReplacementCarrierPayload = (value) => {
+    if (!isSimpleReplacementCarrierObject(value)) return undefined;
+    const payloadKey = editReplyReplacementKeys.find((key) => hasOwn(value, key));
+    return payloadKey ? value[payloadKey] : undefined;
+  };
+  const getRootReplacementCarrierPayload = (value) => {
+    const directPayload = getSimpleReplacementCarrierPayload(value);
+    if (typeof directPayload !== 'undefined') return directPayload;
+    if (Array.isArray(value) && value.length === 1) {
+      return getSimpleReplacementCarrierPayload(value[0]);
+    }
+    return undefined;
+  };
+  const isClearEditDescriptor = (value) => {
+    if (!isPlainObject(value)) return false;
+    const hasTargetId = hasOwn(value, 'targetId');
+    const hasReplacementValue = hasAnyOwn(value, editReplyReplacementKeys);
+    const hasDiffPair = hasOwn(value, 'replacementFrom') && hasOwn(value, 'replacementTo');
+    const hasOriginalAndReplacement = hasAnyOwn(value, editReplyOriginalKeys) && hasReplacementValue;
+    return (hasTargetId && hasReplacementValue)
+      || hasDiffPair
+      || hasOriginalAndReplacement;
+  };
+  const isClearEditWrapperCollection = (value) => {
+    if (Array.isArray(value)) return value.length > 0 && value.every((item) => isClearEditDescriptor(item));
+    return isClearEditDescriptor(value);
+  };
+  const isExplicitEditWrapperObject = (value) => {
+    if (!isPlainObject(value)) return false;
+    return isClearEditDescriptor(value)
+      || (hasOwn(value, 'edits') && isClearEditWrapperCollection(value.edits))
+      || (hasOwn(value, 'replacements') && isClearEditWrapperCollection(value.replacements));
+  };
+  const getClearEditDescriptorReplacementPayload = (value) => {
+    if (!isClearEditDescriptor(value)) return undefined;
+    const payloadKey = editReplyReplacementKeys.find((key) => hasOwn(value, key));
+    return payloadKey ? value[payloadKey] : undefined;
+  };
+  const getMatchingTargetEditDescriptorPayload = (value, targetSnapshot = null) => {
+    const normalizedTargetId = String(targetSnapshot?.targetId || '').trim();
+    if (!normalizedTargetId || !isClearEditWrapperCollection(value)) return undefined;
+    const descriptors = Array.isArray(value) ? value : [value];
+    const matchingDescriptors = descriptors.filter((item) => String(item?.targetId || '').trim() === normalizedTargetId);
+    if (matchingDescriptors.length !== 1) return undefined;
+    return getClearEditDescriptorReplacementPayload(matchingDescriptors[0]);
+  };
+  const getExplicitEditWrapperDescriptors = (value) => {
+    if (!isPlainObject(value)) return [];
+    if (hasOwn(value, 'edits') && isClearEditWrapperCollection(value.edits)) {
+      return Array.isArray(value.edits) ? value.edits : [value.edits];
+    }
+    if (hasOwn(value, 'replacements') && isClearEditWrapperCollection(value.replacements)) {
+      return Array.isArray(value.replacements) ? value.replacements : [value.replacements];
+    }
+    return [];
+  };
+  const getAllowedExplicitEditWrapperPayload = (value, targetSnapshot = null) => {
+    const descriptors = getExplicitEditWrapperDescriptors(value);
+    if (!descriptors.length) return undefined;
+
+    const normalizedTargetId = String(targetSnapshot?.targetId || '').trim();
+    if (normalizedTargetId) {
+      const matchingDescriptors = descriptors.filter((item) => String(item?.targetId || '').trim() === normalizedTargetId);
+      if (matchingDescriptors.length === 1) {
+        return getClearEditDescriptorReplacementPayload(matchingDescriptors[0]);
+      }
+      if (matchingDescriptors.length > 1) return undefined;
+      if (descriptors.length !== 1) return undefined;
+    } else if (descriptors.length !== 1) {
+      return undefined;
+    }
+
+    const [descriptor] = descriptors;
+    const descriptorTargetId = String(descriptor?.targetId || '').trim();
+    if (normalizedTargetId && descriptorTargetId && descriptorTargetId !== normalizedTargetId) {
+      return undefined;
+    }
+
+    return getClearEditDescriptorReplacementPayload(descriptor);
+  };
+  const getAllowedRootReplacementCarrierPayload = (value, targetSnapshot = null) => {
+    const directPayload = getRootReplacementCarrierPayload(value);
+    const targetLooksLikeCodeOrJson = looksLikeCodeOrJsonContext(targetSnapshot?.text || '');
+    if (!targetLooksLikeCodeOrJson) return directPayload;
+    if (typeof directPayload !== 'undefined') return undefined;
+    const matchingTargetPayload = getMatchingTargetEditDescriptorPayload(value, targetSnapshot);
+    if (typeof matchingTargetPayload !== 'undefined') return matchingTargetPayload;
+    return getAllowedExplicitEditWrapperPayload(value, targetSnapshot);
+  };
+  const hasHtmlOrTagLikeNoise = (value = '') => /<\/?[A-Za-z][^>\n]{0,80}>|<!--|-->|<!DOCTYPE|<\?xml/i.test(String(value || ''));
+  const isConservativeEmbeddedJsonNoise = (prefix = '', suffix = '') => {
+    const trimmedPrefix = String(prefix || '').trim();
+    const trimmedSuffix = String(suffix || '').trim();
+    if (!trimmedPrefix && !trimmedSuffix) return false;
+    if (trimmedPrefix.length > 120 || trimmedSuffix.length > 120) return false;
+    if ((trimmedPrefix.length + trimmedSuffix.length) > 180) return false;
+    const noiseParts = [trimmedPrefix, trimmedSuffix].filter(Boolean);
+    if (noiseParts.some((part) => /[{}\[\]`]/.test(part))) return false;
+    if (noiseParts.some((part) => hasHtmlOrTagLikeNoise(part))) return false;
+    if (noiseParts.some((part) => part.split(/\n+/).filter(Boolean).length > 2)) return false;
+    return true;
+  };
+  const readBalancedJsonContainerAt = (value = '', startIndex = -1) => {
+    const text = String(value || '');
+    if (startIndex < 0 || startIndex >= text.length) return null;
+    const opener = text[startIndex];
+    if (opener !== '{' && opener !== '[') return null;
+    const closingStack = [opener === '{' ? '}' : ']'];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = startIndex + 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') {
+        closingStack.push('}');
+        continue;
+      }
+      if (char === '[') {
+        closingStack.push(']');
+        continue;
+      }
+      if (char === '}' || char === ']') {
+        if (!closingStack.length || char !== closingStack[closingStack.length - 1]) {
+          return null;
+        }
+        closingStack.pop();
+        if (!closingStack.length) {
+          return {
+            candidate: text.slice(startIndex, index + 1),
+            endIndex: index,
+          };
+        }
+      }
+    }
+
+    return null;
+  };
+  const getEmbeddedFencedJsonCandidate = (value = '') => {
+    const text = String(value || '').trim();
+    const fenceMatch = text.match(/^([\s\S]*?)```(?:json|javascript|js)?\s*([\s\S]*?)```([\s\S]*)$/i);
+    if (!fenceMatch) return null;
+    const prefix = String(fenceMatch[1] || '');
+    const suffix = String(fenceMatch[3] || '');
+    if (!isConservativeEmbeddedJsonNoise(prefix, suffix)) return null;
+    if (/```/.test(prefix) || /```/.test(suffix)) return null;
+    const candidate = String(fenceMatch[2] || '').trim();
+    return candidate ? { candidate } : null;
+  };
+  const getConservativeEmbeddedJsonCandidate = (value = '') => {
+    const text = String(value || '').trim();
+    const startMatches = [...text.matchAll(/[\[{]/g)];
+    for (const match of startMatches) {
+      const startIndex = typeof match.index === 'number' ? match.index : -1;
+      if (startIndex < 0) continue;
+      const balancedCandidate = readBalancedJsonContainerAt(text, startIndex);
+      if (!balancedCandidate?.candidate) continue;
+      const prefix = text.slice(0, startIndex);
+      const suffix = text.slice(balancedCandidate.endIndex + 1);
+      if (!isConservativeEmbeddedJsonNoise(prefix, suffix)) continue;
+      return { candidate: balancedCandidate.candidate.trim() };
+    }
+    return null;
+  };
+  const hasLooseEditReplyLiteralKey = (value = '', keys = []) => {
+    if (!keys.length) return false;
+    const keyPatternSource = keys.map((key) => escapeRegExp(key)).join('|');
+    return new RegExp(`(?:^|[\\[{,]\\s*)(?:"(?:${keyPatternSource})"|'(?:${keyPatternSource})'|(?:${keyPatternSource}))\\s*:`, 'i').test(String(value || ''));
+  };
+  const hasLooseEditWrapperLiteralHint = (value = '') => {
+    const text = String(value || '').trim();
+    if (!text || !editReplyLooseWrapperKeyPattern.test(text)) return false;
+    if (hasLooseEditReplyLiteralKey(text, ['edits', 'replacements'])) return true;
+    if (hasLooseEditReplyLiteralKey(text, editReplyReplacementKeys)) return true;
+    return hasLooseEditReplyLiteralKey(text, ['replacementFrom']) && hasLooseEditReplyLiteralKey(text, ['replacementTo']);
+  };
+  const parseJsonContainerCandidate = (normalizedReply = '', candidate = '', extractedFromMixedText = false, wrappedInFence = false) => {
+    const normalizedCandidate = String(candidate || '').trim();
+    const looksLikeJsonContainer = isJsonContainerText(normalizedCandidate);
+    const hasWrapperHint = looksLikeJsonContainer && editReplyWrapperKeyPattern.test(normalizedCandidate);
+    const hasLooseWrapperHint = looksLikeJsonContainer && hasLooseEditWrapperLiteralHint(normalizedCandidate);
+    if (!looksLikeJsonContainer) {
+      return {
+        normalizedReply,
+        looksLikeJsonContainer: false,
+        parsed: null,
+        parsedOk: false,
+        hasWrapperHint: false,
+        hasLooseWrapperHint: false,
+        extractedFromMixedText,
+        wrappedInFence,
+      };
+    }
+
+    try {
+      return {
+        normalizedReply,
+        looksLikeJsonContainer: true,
+        parsed: JSON.parse(normalizedCandidate),
+        parsedOk: true,
+        hasWrapperHint,
+        hasLooseWrapperHint,
+        extractedFromMixedText,
+        wrappedInFence,
+      };
+    } catch {
+      return {
+        normalizedReply,
+        looksLikeJsonContainer: true,
+        parsed: null,
+        parsedOk: false,
+        hasWrapperHint,
+        hasLooseWrapperHint,
+        extractedFromMixedText,
+        wrappedInFence,
+      };
+    }
+  };
+  const parseJsonEditReplyEnvelope = (replyText = '') => {
+    const normalizedReply = normalizeEditReplyText(replyText);
+    if (!normalizedReply) {
+      return {
+        normalizedReply,
+        looksLikeJsonContainer: false,
+        parsed: null,
+        parsedOk: false,
+        hasWrapperHint: false,
+        hasLooseWrapperHint: false,
+        extractedFromMixedText: false,
+        wrappedInFence: false,
+      };
+    }
+
+    const fenceMatch = normalizedReply.match(/^```(?:json|javascript|js)?\s*([\s\S]*?)```$/i);
+    const directCandidate = String(fenceMatch ? fenceMatch[1] : normalizedReply).trim();
+    if (isJsonContainerText(directCandidate)) {
+      return parseJsonContainerCandidate(normalizedReply, directCandidate, false, Boolean(fenceMatch));
+    }
+
+    const embeddedFenceCandidate = getEmbeddedFencedJsonCandidate(normalizedReply);
+    if (embeddedFenceCandidate?.candidate) {
+      return parseJsonContainerCandidate(normalizedReply, embeddedFenceCandidate.candidate, true, true);
+    }
+
+    const embeddedCandidate = getConservativeEmbeddedJsonCandidate(normalizedReply);
+    if (embeddedCandidate?.candidate) {
+      return parseJsonContainerCandidate(normalizedReply, embeddedCandidate.candidate, true);
+    }
+
+    return {
+      normalizedReply,
+      looksLikeJsonContainer: false,
+      parsed: null,
+      parsedOk: false,
+      hasWrapperHint: false,
+        hasLooseWrapperHint: false,
+      extractedFromMixedText: false,
+        wrappedInFence: false,
+    };
+  };
+  const serializeEditReplacementPayload = (value) => {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) || isPlainObject(value)) {
+      try {
+        const serialized = JSON.stringify(value, null, 2);
+        return typeof serialized === 'string' ? serialized : '';
+      } catch {
+        return '';
+      }
+    }
+    if (value == null) return '';
+    return String(value);
+  };
+  const shouldUnwrapRootReplacementCarrier = (parsedReply, targetSnapshot = null) => {
+    if (!parsedReply?.parsedOk) return false;
+    return typeof getAllowedRootReplacementCarrierPayload(parsedReply.parsed, targetSnapshot) !== 'undefined';
+  };
+  const normalizeEditReplacementForApply = (replyText = '', targetSnapshot = null) => {
+    const parsedReply = parseJsonEditReplyEnvelope(replyText);
+    if (!parsedReply.parsedOk) return String(replyText ?? '');
+    if (!shouldUnwrapRootReplacementCarrier(parsedReply, targetSnapshot)) return String(replyText ?? '');
+    const payload = getAllowedRootReplacementCarrierPayload(parsedReply.parsed, targetSnapshot);
+    return serializeEditReplacementPayload(payload);
+  };
+
+  const stripEditReplyMarkup = (value = '') => normalizeEditReplyText(value)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|blockquote|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  const getJsonWrappedEditReplyReason = (replyText = '', targetSnapshot = null) => {
+    const targetLooksLikeCodeOrJson = looksLikeCodeOrJsonContext(targetSnapshot?.text || '');
+    const parsedReply = parseJsonEditReplyEnvelope(replyText);
+    if (!parsedReply.normalizedReply || (!parsedReply.looksLikeJsonContainer && !parsedReply.hasWrapperHint && !parsedReply.hasLooseWrapperHint)) return '';
+    if (parsedReply.hasWrapperHint && !parsedReply.parsedOk) {
+      return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+    }
+    if (!targetLooksLikeCodeOrJson && parsedReply.hasLooseWrapperHint && !parsedReply.parsedOk) {
+      return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+    }
+    if (!parsedReply.looksLikeJsonContainer || !parsedReply.parsedOk) return '';
+
+    const { parsed } = parsedReply;
+    if (targetLooksLikeCodeOrJson) {
+      if (typeof getAllowedRootReplacementCarrierPayload(parsed, targetSnapshot) !== 'undefined') return '';
+      if (isClearEditWrapperCollection(parsed)) {
+        return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+      }
+      if (getExplicitEditWrapperDescriptors(parsed).length > 0) {
+        return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+      }
+      return '';
+    }
+    if (isExplicitEditWrapperObject(parsed)) {
+      return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+    }
+    if (Array.isArray(parsed) && isClearEditWrapperCollection(parsed)) {
+      return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+    }
+    if (typeof getRootReplacementCarrierPayload(parsed) !== 'undefined') {
+      return 'זוהתה מעטפת JSON במקום טקסט חלופי לעריכה.';
+    }
+
+    return '';
+  };
+
+  const getOverscopedEditReplyReason = (replyText = '', targetSnapshot = null) => {
+    if (!isEditComposerMode || !targetSnapshot?.text?.trim()) return '';
+
+    const plainReply = stripEditReplyMarkup(replyText);
+    const compactReply = plainReply.replace(/\s+/g, ' ').trim();
+    const plainTarget = stripEditReplyMarkup(targetSnapshot.text);
+    const compactTarget = plainTarget.replace(/\s+/g, ' ').trim();
+    const compactDocContext = stripEditReplyMarkup(docCtx).replace(/\s+/g, ' ').trim();
+    const targetLength = compactTarget.length;
+    if (!compactReply || !targetLength) return '';
+
+    const replyParagraphs = plainReply.split(/\n\s*\n+/).map((part) => part.trim()).filter(Boolean).length || 1;
+    const targetParagraphs = plainTarget.split(/\n\s*\n+/).map((part) => part.trim()).filter(Boolean).length || 1;
+    const replyLines = plainReply.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    const headingLikeLines = replyLines.filter((line) => /^(?:#{1,6}\s+\S|(?:[0-9]{1,2}(?:\.[0-9]{1,2}){0,2}|[A-Za-zא-ת])[.)]\s+\S|(?:סעיף|פרק|Section|Chapter)\s+\S+)/i.test(line)).length;
+    const broadReplyPhrase = /(?:להלן\s+(?:המסמך|הטקסט)\s+המלא|הנה\s+(?:המסמך|הטקסט|הנוסח)\s+המלא|נוסח\s+מלא|מסמך\s+מלא|שכתוב\s+מלא|full\s+document|entire\s+document|complete\s+rewrite|full\s+rewrite|updated\s+document|rewritten\s+document)/i.test(compactReply);
+    const scopeMultiplier = targetSnapshot.kind === 'section' ? 5 : 3.5;
+    const minBroadLength = targetSnapshot.kind === 'section' ? 2600 : 1400;
+    const overlapSize = compactReply.length >= 480 ? 180 : 120;
+    const echoesDocumentStart = compactReply.length >= overlapSize && compactDocContext.includes(compactReply.slice(0, overlapSize));
+    const echoesDocumentEnd = compactReply.length >= overlapSize && compactDocContext.includes(compactReply.slice(-overlapSize));
+    const wholeDocumentEcho = compactDocContext.length >= 900
+      && compactReply.length >= Math.max(900, Math.floor(targetLength * 2.2))
+      && echoesDocumentStart
+      && echoesDocumentEnd;
+    const clearlyTooBroad = compactReply.length >= Math.max(minBroadLength, Math.floor(targetLength * scopeMultiplier))
+      && (
+        broadReplyPhrase
+        || headingLikeLines >= 2
+        || (replyParagraphs >= Math.max(targetParagraphs + 6, 8) && compactReply.length >= Math.max(2200, Math.floor(targetLength * 4)))
+      );
+
+    if (wholeDocumentEcho) {
+      return 'זוהתה החזרה רחבה מדי של תוכן המסמך במקום החלפה מקומית ליעד העריכה.';
+    }
+
+    return clearlyTooBroad
+      ? 'זוהתה תשובה רחבה מדי ביחס ליעד העריכה המקומי.'
+      : '';
+  };
+
+  const getNonEditReplyReason = (replyText, targetSnapshot = null) => {
+    if (!isEditComposerMode) return '';
+    const normalizedReply = normalizeEditReplyText(replyText);
+    if (!normalizedReply) {
+      return 'לא הוחל שינוי כי המודל לא החזיר טקסט חלופי לעריכה.';
+    }
+
+    const plainReply = stripEditReplyMarkup(normalizedReply);
+    if (!plainReply) {
+      return 'לא הוחל שינוי כי המודל לא החזיר טקסט חלופי לעריכה.';
+    }
+
+    const lines = plainReply.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    const compactReply = lines.join(' ').replace(/\s+/g, ' ').trim();
+    const targetLength = String(targetSnapshot?.text || '').trim().length;
+    let metaScore = 0;
+
+    if (/[?؟]/.test(compactReply)) metaScore += 2;
+    if (/^(?:באיזו|מאיזו|איזה|אילו|האם|כיצד|איפה|מתי|מי|what\b|which\b|where\b|when\b|could you\b|can you\b|would you\b|please\b)/i.test(compactReply)) metaScore += 2;
+    if (/(?:באיזו נקודה תרצה להתחיל|מאיפה תרצה להתחיל|היכן תרצה להתחיל|איזה סעיף תרצה קודם|what would you like me to start with|where should i start|which point should i start with)/i.test(compactReply)) metaScore += 3;
+    if (/(?:חסרים לי|חסר לי|צריך עוד|נדרשים פרטים|אנא פרט|אנא ציין|אנא שלח|אשמח אם תשלח|כדי שאוכל|כדי שאבצע|צריך את הטקסט|please specify|need more details|missing details|share the text|send the text|provide the text)/i.test(compactReply)) metaScore += 2;
+
+    const numberedMetaLines = lines.filter((line) => /^\d+[.)]\s/.test(line) && /(?:\?|אנא|ציין|פרט|הבהר|שלח|need|specify|provide|share)/i.test(line)).length;
+    if (numberedMetaLines >= 2) metaScore += 2;
+    if (lines.length <= 4 && /(?:אנא|אשמח|כדי שאוכל|please|could you|can you|would you)/i.test(compactReply)) metaScore += 1;
+    if (targetLength > 800 && compactReply.length < Math.max(120, Math.min(280, Math.floor(targetLength * 0.2))) && (/[?؟]/.test(compactReply) || /(?:באיזו|כדי שאוכל|אנא|please specify|need more details)/i.test(compactReply))) {
+      metaScore += 2;
+    }
+
+    if (metaScore >= 3) {
+      return 'זוהתה תשובת הבהרה או מטא במקום טקסט חלופי לעריכה.';
+    }
+
+    const jsonReplyReason = getJsonWrappedEditReplyReason(normalizedReply, targetSnapshot);
+    if (jsonReplyReason) return jsonReplyReason;
+
+    const overscopedReplyReason = getOverscopedEditReplyReason(normalizedReply, targetSnapshot);
+    if (overscopedReplyReason) return overscopedReplyReason;
+
+    return '';
+  };
+
+  const validateStructuredBatchEdits = (replyText, batchTargets = []) => {
+    const targets = (Array.isArray(batchTargets) ? batchTargets : []).filter((target) => target?.targetId && target?.text?.trim());
+    const expectedIds = new Set(targets.map((target) => String(target.targetId || '').trim()));
+    const parsedEdits = parseStructuredEditBatchResponse(replyText);
+    const seen = new Set();
+    const validEdits = [];
+    const duplicateIds = [];
+    const metaReplyTargets = [];
+
+    parsedEdits.forEach((edit) => {
+      if (!expectedIds.has(edit.targetId)) return;
+      if (seen.has(edit.targetId)) {
+        duplicateIds.push(edit.targetId);
+        return;
+      }
+      seen.add(edit.targetId);
+      const target = targets.find((item) => item.targetId === edit.targetId) || null;
+      const metaReplyReason = getNonEditReplyReason(edit.replacement, target);
+      if (metaReplyReason) {
+        metaReplyTargets.push({ targetId: edit.targetId, target, reason: metaReplyReason });
+        return;
+      }
+      validEdits.push({
+        targetId: edit.targetId,
+        target,
+        replacementText: normalizeEditReplacementForApply(edit.replacement, target),
+      });
+    });
+
+    const missingTargets = targets.filter((target) => !seen.has(target.targetId));
+    return {
+      validEdits,
+      missingTargets,
+      duplicateIds,
+      metaReplyTargets,
+      complete: targets.length > 0 && validEdits.length === targets.length && duplicateIds.length === 0 && metaReplyTargets.length === 0,
+    };
+  };
+
+  const applyEditBatchReply = async (replyText, batchTargets = [], agentType = 'assistant-sidebar-edit') => {
+    if (!isEditComposerMode) return { ok: true, skipped: true, message: '' };
+    const targets = (Array.isArray(batchTargets) ? batchTargets : []).filter((target) => target?.targetId && target?.text?.trim());
+    if (targets.length <= 1) {
+      return applyEditReply(replyText, targets[0] || null, agentType);
+    }
+
+    if (!onApplyEditBatch) {
+      return { ok: false, message: 'מסלול העריכה המרובה למסמך לא זמין כרגע.' };
+    }
+
+    const batchValidation = validateStructuredBatchEdits(replyText, targets);
+    if (batchValidation.duplicateIds.length) {
+      return { ok: false, message: 'המודל החזיר יעד עריכה כפול. לא החלתִי את הבאץ׳ כדי למנוע החלפה שגויה.' };
+    }
+
+    const fallbackEdits = [];
+    const fallbackErrors = [];
+    const fallbackTargets = [
+      ...batchValidation.missingTargets,
+      ...batchValidation.metaReplyTargets.map((item) => item.target).filter(Boolean),
+    ].filter((target, index, list) => list.findIndex((item) => item?.targetId === target?.targetId) === index);
+
+    for (const target of fallbackTargets) {
+      try {
+        const fallbackPrompt = [
+          'בצע רק את יעד העריכה הבא מתוך בקשת המשתמש המקורית.',
+          `בקשת המשתמש:\n${target.batchPrompt || ''}`,
+          `targetId: ${target.targetId}`,
+          target.headingText ? `כותרת: ${target.headingText}` : '',
+          `טקסט להחלפה:\n"${target.text}"`,
+        ].filter(Boolean).join('\n\n');
+        const fallbackReply = await chatWithActiveProvider(fallbackPrompt, buildEditModeContext({ active: target }, []), composerModeSystemPrompt, {
+          agentLabel: 'Fallback edit target',
+          autoUseDefaultSkill: false,
+          directChat: true,
+          includeAppMemory: false,
+          editModeRequest: true,
+          skipAutomation: true,
+          skipAutomationPrompt: true,
+        });
+        const metaReplyReason = getNonEditReplyReason(fallbackReply, target);
+        if (metaReplyReason) {
+          fallbackErrors.push(`${target.targetId}: ${metaReplyReason}`);
+          continue;
+        }
+        const normalizedFallbackReplacement = normalizeEditReplacementForApply(fallbackReply, target);
+        if (String(normalizedFallbackReplacement || '').trim()) {
+          fallbackEdits.push({ targetId: target.targetId, target, replacementText: normalizedFallbackReplacement });
+        }
+      } catch (error) {
+        fallbackErrors.push(error?.message || 'שגיאת fallback');
+      }
+    }
+
+    const edits = [...batchValidation.validEdits, ...fallbackEdits];
+    const appliedIds = new Set(edits.map((edit) => edit.targetId));
+    const unresolvedCount = targets.filter((target) => !appliedIds.has(target.targetId)).length;
+    if (unresolvedCount > 0) {
+      return {
+        ok: false,
+        message: fallbackErrors.length
+          ? `לא הצלחתי להשלים ${unresolvedCount} יעדי עריכה בבאץ׳. ${fallbackErrors[0]}`
+          : `המודל לא החזיר עריכה תקינה עבור ${unresolvedCount} יעדים, ולכן לא החלתִי את הבאץ׳.`
+      };
+    }
+
+    return await onApplyEditBatch({ edits, agentType });
+  };
+
+  const buildDocumentActionMeta = (applyResult, assistantContent = '', requestMeta = {}) => {
+    if (!applyResult || applyResult.skipped) {
+      return { documentActionStatus: '', documentActionMessage: '' };
+    }
+
+    const documentActionMessage = applyResult.message || (applyResult.ok ? 'העריכה הוחלה במסמך כהצעת AI.' : 'העריכה לא הוחלה במסמך.');
+    const unresolved = Array.isArray(applyResult?.unresolved) ? applyResult.unresolved : [];
+
+    return {
+      documentActionStatus: applyResult.partial ? 'partial' : (applyResult.ok ? 'applied' : 'failed'),
+      documentActionMessage: isSameAssistantMessageText(documentActionMessage, assistantContent)
+        ? ''
+        : documentActionMessage,
+      documentActionUnresolved: unresolved,
+      documentActionCanContinue: Boolean(applyResult.partial && unresolved.length),
+      documentActionPromptText: String(requestMeta?.promptText || '').trim(),
+      documentActionProviderId: String(requestMeta?.providerId || '').trim(),
+      documentActionProviderModel: String(requestMeta?.providerModel || '').trim(),
+      documentActionAgentId: String(requestMeta?.agentId || '').trim(),
+      documentActionAgentLabel: String(requestMeta?.agentLabel || '').trim(),
+    };
+  };
+
+  const renderDocumentActionCompletionButton = (msg, variant = 'light') => {
+    if (!msg?.documentActionCanContinue) return null;
+    const dark = variant === 'dark';
+    return (
+      <button
+        type="button"
+        onClick={() => continueDocumentActionCompletion(msg)}
+        disabled={loading}
+        style={{
+          marginTop: 6,
+          padding: '6px 10px',
+          borderRadius: 999,
+          border: dark ? '1px solid rgba(251, 191, 36, 0.36)' : '1px solid #FBBF24',
+          background: dark ? 'rgba(251, 191, 36, 0.14)' : '#FFFBEB',
+          color: dark ? '#FDE68A' : '#92400E',
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: loading ? 'not-allowed' : 'pointer',
+          opacity: loading ? 0.55 : 1,
+        }}
+      >
+        השלם את התיקונים שנשארו
+      </button>
+    );
+  };
+
+  const buildContext = (targetState = null, batchTargets = [], requestPrompt = '') => {
+    if (isEditComposerMode) return buildEditModeContext(targetState, batchTargets);
+    const followUpSourceGroundingContext = buildFollowUpSourceGroundingContext(messages, requestPrompt);
+    const baseContext = selectedText
       ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
       : currentBlockText
         ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
-        : docCtx
-  );
+        : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
+    return followUpSourceGroundingContext
+      ? [followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n')
+      : baseContext;
+  };
+  const normalizeAssistantMessageText = (value) => String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const isSameAssistantMessageText = (left, right) => {
+    const normalizedLeft = normalizeAssistantMessageText(left);
+    const normalizedRight = normalizeAssistantMessageText(right);
+    return Boolean(normalizedLeft) && normalizedLeft === normalizedRight;
+  };
+
+  const appendAssistantMessage = (content, extra = {}, options = {}) => {
+    const nextMessage = {
+      role: 'assistant',
+      content: String(content ?? ''),
+      ...extra,
+    };
+
+    setMessages((prev) => {
+      if (options.dedupeConsecutive !== false) {
+        const lastMessage = prev[prev.length - 1];
+        if (
+          lastMessage?.role === 'assistant' &&
+          isSameAssistantMessageText(lastMessage.content, nextMessage.content) &&
+          Boolean(lastMessage.error) === Boolean(nextMessage.error) &&
+          String(lastMessage.composerMode || '') === String(nextMessage.composerMode || '')
+        ) {
+          return prev;
+        }
+      }
+
+      return [...prev, nextMessage];
+    });
+  };
+
+  const appendBlockedEditExchange = (userContent, assistantContent, userExtra = {}, assistantExtra = {}) => {
+    const normalizedUserContent = String(userContent ?? '').trim();
+    const nextAssistantMessage = {
+      role: 'assistant',
+      content: String(assistantContent ?? ''),
+      ...assistantExtra,
+    };
+
+    setMessages((prev) => {
+      const nextMessages = normalizedUserContent
+        ? [...prev, { role: 'user', content: normalizedUserContent, ...userExtra }]
+        : [...prev];
+      nextMessages.push(nextAssistantMessage);
+      return nextMessages;
+    });
+  };
 
   const executeRoleAgentTask = async (agent, task, runtimeOptions = {}) => {
     if (!agent?.prompt || loading) return;
-    const requestCycle = beginRequestCycle();
-    const ctx = buildContext();
+    const requestedSplitCallCount = clampSplitCallCount(runtimeOptions.splitCallCount);
+    const effectiveTask = requestedSplitCallCount >= 2
+      ? String(runtimeOptions.splitCallPrompt || task || '').trim()
+      : task;
+    const resolvedEditRequest = isEditComposerMode ? resolvePromptEditTargetState(effectiveTask) : null;
+    const requestEditTargets = resolvedEditRequest?.targetState || null;
+    const requestEditTarget = resolvedEditRequest?.activeTarget || null;
+    const requestEditBatchTargets = resolvedEditRequest?.batchTargets || [];
+    const hasPromptResolvedTarget = resolvedEditRequest?.hasPromptResolvedTarget === true;
+    const requestScopeLabel = isEditComposerMode
+      ? (resolvedEditRequest?.scopeLabel || contextScopeLabel)
+      : (runtimeOptions.scopeLabel || contextScopeLabel);
+    if (isEditComposerMode && resolvedEditRequest?.blockedMessage) {
+      setTab('chat');
+      appendBlockedEditExchange(`🧩 ${agent.name}: ${task}`, resolvedEditRequest.blockedMessage, {
+        composerMode,
+      }, {
+        error: true,
+        composerMode,
+      });
+      return;
+    }
     const requestedSkill = runtimeOptions.skillId
       ? skillCatalog.find((skill) => skill.id === runtimeOptions.skillId) || null
       : null;
-    const runtimeSkillLabel = runtimeOptions.skillLabel || (requestedSkill ? requestedSkill.label : runtimeOptions.autoUseDefaultSkill === false ? 'ללא סקיל' : 'אוטומטי');
+    const runtimeSkillLabel = runtimeOptions.skillLabel || (requestedSkill ? requestedSkill.label : (runtimeOptions.autoUseDefaultSkill === false || isEditComposerMode) ? 'ללא סקיל' : 'אוטומטי');
     const safeAgentLabel = typeof agent.name === 'string' ? agent.name : (agent.name?.label || agent.name?.he || agent.id || 'סוכן');
+    if (shouldUseDocumentWideEditPlan(effectiveTask, {
+      hasPromptResolvedTarget,
+      batchTargets: requestEditBatchTargets,
+      activeTarget: requestEditTarget,
+      hasNumberedReviewContext: hasRecentNumberedReviewContext(messages),
+    })) {
+      await executeDocumentWideEditPlan({
+        userContent: `🧩 ${agent.name}: ${task}`,
+        promptText: task,
+        providerLabel: runtimeOptions.providerLabel || activeProviderSummary,
+        providerId: runtimeOptions.providerOverride || '',
+        providerModel: runtimeOptions.modelOverride || '',
+        agentId: agent.id || 'assistant-role',
+        agentLabel: safeAgentLabel,
+        skillLabel: runtimeSkillLabel,
+      });
+      return;
+    }
+    if (isEditComposerMode && !requestEditTarget?.text?.trim()) {
+      setTab('chat');
+      appendBlockedEditExchange(`🧩 ${agent.name}: ${task}`, missingEditTargetMessage, {
+        composerMode,
+      }, {
+        error: true,
+        composerMode,
+      });
+      return;
+    }
+    const requestCycle = beginRequestCycle();
+    const ctx = buildContext(requestEditTargets, requestEditBatchTargets, effectiveTask);
+    const requestExtraSystemPrompt = [requestEditBatchTargets.length > 1 ? buildStructuredEditBatchSystemPrompt(requestEditBatchTargets) : composerModeSystemPrompt, String(runtimeOptions.extraSystemPrompt || '').trim()]
+      .filter(Boolean)
+      .join('\n\n');
+    const requestAnalysisSystemPrompt = stripComposerModeDirectiveFromSystemPrompt(requestExtraSystemPrompt);
     setTab('chat');
     if (runtimeOptions.persistSelection !== false) setSelectedAgentId(agent.id);
     setRequestSnapshot({
       providerLabel: runtimeOptions.providerLabel || activeProviderSummary,
       agentLabel: safeAgentLabel,
       skillLabel: runtimeSkillLabel,
-      scopeLabel: runtimeOptions.scopeLabel || contextScopeLabel,
+      scopeLabel: requestScopeLabel,
       contextPreview: runtimeOptions.contextPreview || contextPreview,
     });
-    setMessages((prev) => [...prev, { role: 'user', content: `🧩 ${agent.name}: ${task}` }]);
+    setMessages((prev) => [...prev, { role: 'user', content: `🧩 ${agent.name}: ${task}`, composerMode }]);
     setLoading(true);
     updateAgentStatus(agent.id, safeAgentLabel, { state: 'running', progress: 10, message: 'הסוכן התחיל לעבוד' });
     try {
-      const reply = await chatWithRoleAgent(agent, task, ctx, {
+      const invokeRoleAgentCall = async (nextPrompt, nextContext, nextSystemPrompt, phaseMeta = {}) => await chatWithRoleAgent(agent, nextPrompt, nextContext, {
         onStatus: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
           updateAgentStatus(agent.id, safeAgentLabel, payload);
+          syncRequestSnapshotProviderFromStatus(payload);
         },
         skillId: runtimeOptions.skillId || '',
         autoUseDefaultSkill: runtimeOptions.autoUseDefaultSkill !== false,
@@ -964,16 +2820,63 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         preferredProviders: runtimeOptions.preferredProviders || [],
         modelOverride: runtimeOptions.modelOverride || '',
         strictProviderOverride: runtimeOptions.strictProviderOverride === true,
-        extraSystemPrompt: runtimeOptions.extraSystemPrompt || '',
+        extraSystemPrompt: nextSystemPrompt,
+        conversationHistory,
+        includeAppMemory: !isEditComposerMode,
+        editModeRequest: isEditComposerMode,
+        allowEditModeRoutingOverride: runtimeOptions.editModeExplicitRouting === true,
+        editModeExplicitSkillInvocation: runtimeOptions.editModeExplicitSkillInvocation === true,
+        preserveFullDocumentContext: shouldPreserveFullDocumentContext,
+        documentFallbackHtml: documentSnapshot.html,
+        ...phaseMeta,
       });
+      const reply = requestedSplitCallCount >= 2
+        ? await (isEditComposerMode
+          ? runEditMultiCallWorkflow({
+            splitCallCount: requestedSplitCallCount,
+            promptText: effectiveTask,
+            context: ctx,
+            finalSystemPrompt: requestExtraSystemPrompt,
+            analysisSystemPrompt: requestAnalysisSystemPrompt,
+            structuredBatchMode: requestEditBatchTargets.length > 1,
+            batchTargets: requestEditBatchTargets,
+            invokeCall: invokeRoleAgentCall,
+            onProgress: (payload) => {
+              if (!isCurrentRequestCycle(requestCycle)) return;
+              updateAgentStatus(agent.id, safeAgentLabel, { state: 'running', ...payload });
+            },
+          })
+          : runSplitCallWorkflow({
+            splitCallCount: requestedSplitCallCount,
+            promptText: effectiveTask,
+            context: ctx,
+            extraSystemPrompt: requestExtraSystemPrompt,
+            invokeCall: invokeRoleAgentCall,
+            onProgress: (payload) => {
+              if (!isCurrentRequestCycle(requestCycle)) return;
+              updateAgentStatus(agent.id, safeAgentLabel, { state: 'running', ...payload });
+            },
+          }))
+        : await invokeRoleAgentCall(effectiveTask, ctx, requestExtraSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 });
       if (!isCurrentRequestCycle(requestCycle)) return;
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
+      const applyResult = requestEditBatchTargets.length > 1
+        ? await applyEditBatchReply(reply, requestEditBatchTargets.map((target) => ({ ...target, batchPrompt: task })), agent.id || 'assistant-role')
+        : await applyEditReply(reply, requestEditTarget, agent.id || 'assistant-role');
+      const documentActionMeta = buildDocumentActionMeta(applyResult, reply);
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: reply,
+        composerMode,
+        ...documentActionMeta,
+      }]);
       setDraftInput('');
       setAgentTaskInput('');
-      updateAgentStatus(agent.id, safeAgentLabel, { state: 'success', progress: 100, message: 'סיים בהצלחה' });
+      updateAgentStatus(agent.id, safeAgentLabel, applyResult && !applyResult.skipped && !applyResult.ok
+        ? { state: 'error', progress: 100, message: documentActionMeta.documentActionMessage || 'העריכה לא הוחלה במסמך' }
+        : { state: 'success', progress: 100, message: 'סיים בהצלחה' });
     } catch (err) {
       if (!isCurrentRequestCycle(requestCycle)) return;
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${err.message}`, error: true }]);
+      appendAssistantMessage(`❌ ${err.message}`, { error: true, composerMode });
       updateAgentStatus(agent.id, safeAgentLabel, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
       if (!isCurrentRequestCycle(requestCycle)) return;
@@ -999,13 +2902,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     closeMentionMenu();
 
     let txt = originalText;
-    let manualSkillId = selectedSkillId === 'none' ? '' : selectedSkillId;
-    let finalExtraSystemPrompt = String(extraSystemPrompt || '');
+    let manualSkillId = isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId);
+    let finalExtraSystemPrompt = [composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
+      .filter(Boolean)
+      .join('\n\n');
     let finalProviderId = selectedProviderId;
     let finalProviderModel = resolvedSelectedProviderModel;
     const cAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
     const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
-    let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection ? activeAgent : null;
+    let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection && !isEditComposerMode ? activeAgent : null;
     let disabledSkillRequested = false;
     let ignoredAgentRouting = false;
     let usedDraftAgentMention = false;
@@ -1047,6 +2952,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       break;
     }
 
+    const splitCallDirective = extractSplitCallDirective(txt);
+    const classicDefaultSplitCallCount = clampSplitCallCount(cAgent?.defaultSplitCallCount || 0);
+    const requestedSplitCallCount = splitCallDirective.count >= 2
+      ? splitCallDirective.count
+      : (classicDefaultSplitCallCount || configuredSplitCallCount);
+    txt = splitCallDirective.cleanedPrompt;
+
     if (workspaceAutomationEnabled && !bypassFixedAgentSelection && !usedDraftAgentMention && pendingMentionSelection.agentId) {
       const queuedAgent = roleAgents.find((agent) => agent.id === pendingMentionSelection.agentId) || null;
       if (queuedAgent) {
@@ -1069,12 +2981,21 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       }
     }
 
+    const editModeExplicitRouting = isEditComposerMode && shouldAllowEditModeRoutingOverride({
+      runtimeOverride: runtimeOptions.editModeExplicitRouting === true,
+    });
+    const editModeExplicitSkillInvocation = isEditComposerMode && Boolean(
+      runtimeOptions.editModeExplicitSkillInvocation === true
+      || usedDraftSkillMention
+      || usedQueuedSkillMention
+    );
+
     const requestedSkill = manualSkillId
       ? skillCatalog.find((skill) => skill.id === manualSkillId) || null
       : null;
     const runtimeSkillLabel = requestedSkill
       ? requestedSkill.label
-      : disabledSkillRequested
+      : disabledSkillRequested || (isEditComposerMode && !editModeExplicitSkillInvocation)
         ? 'ללא סקיל'
         : 'אוטומטי';
 
@@ -1105,6 +3026,26 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
 
+    const resolvedEditRequest = isEditComposerMode ? resolvePromptEditTargetState(txt) : null;
+    const requestEditTargets = resolvedEditRequest?.targetState || null;
+    const requestEditTarget = resolvedEditRequest?.activeTarget || null;
+    const requestEditBatchTargets = resolvedEditRequest?.batchTargets || [];
+    const hasPromptResolvedTarget = resolvedEditRequest?.hasPromptResolvedTarget === true;
+    const requestScopeLabel = isEditComposerMode
+      ? (resolvedEditRequest?.scopeLabel || contextScopeLabel)
+      : contextScopeLabel;
+    if (isEditComposerMode && resolvedEditRequest?.blockedMessage) {
+      appendPromptHistory(originalText);
+      clearPendingMentionSelection();
+      appendBlockedEditExchange(originalText, resolvedEditRequest.blockedMessage, {
+        composerMode,
+      }, {
+        error: true,
+        composerMode,
+      });
+      inputRef.current?.focus();
+      return;
+    }
     if (cAgent && !forcedAgent) {
       if (cAgent.systemCtx) {
         finalExtraSystemPrompt = [finalExtraSystemPrompt, cAgent.systemCtx].filter(Boolean).join('\n\n');
@@ -1159,11 +3100,42 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const requestProviderSummary = runtimeProviderOverride ? activeProviderSummary : finalProviderSummary;
     clearPendingMentionSelection();
 
+    if (shouldUseDocumentWideEditPlan(txt, {
+      hasPromptResolvedTarget,
+      batchTargets: requestEditBatchTargets,
+      forceDocumentWide: Boolean(cAgent?.forceDocumentWideWhenNoTarget && !requestEditTarget?.text?.trim()),
+      activeTarget: requestEditTarget,
+      hasNumberedReviewContext: hasRecentNumberedReviewContext(messages),
+    })) {
+      await executeDocumentWideEditPlan({
+        userContent: originalText,
+        promptText: txt,
+        providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
+        providerId: preferredProviderId || directProviderId,
+        providerModel: explicitProviderModel,
+        agentId: agentMeta.id || 'assistant-main',
+        agentLabel: hasPinnedProviderPreference ? `${agentMeta.name} · ${requestProviderLabel}` : agentMeta.name,
+        skillLabel: runtimeSkillLabel,
+      });
+      return;
+    }
+
+    if (isEditComposerMode && !requestEditTarget?.text?.trim()) {
+      appendBlockedEditExchange(originalText, missingEditTargetMessage, {
+        composerMode,
+      }, {
+        error: true,
+        composerMode,
+      });
+      inputRef.current?.focus();
+      return;
+    }
+
     if (forcedAgent) {
       await executeRoleAgentTask(forcedAgent, txt, {
         skillId: manualSkillId,
         skillLabel: runtimeSkillLabel,
-        autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        autoUseDefaultSkill: disabledSkillRequested ? false : (isEditComposerMode ? false : !manualSkillId),
         persistSelection: !usedDraftAgentMention && !usedQueuedAgentMention,
         providerLabel: requestProviderSummary,
         providerOverride: directProviderId,
@@ -1173,39 +3145,51 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         extraSystemPrompt: finalExtraSystemPrompt,
         scopeLabel: contextScopeLabel,
         contextPreview,
+        editModeExplicitRouting,
+        editModeExplicitSkillInvocation,
+        splitCallCount: requestedSplitCallCount,
+        splitCallPrompt: txt,
       });
       return;
     }
 
-    const ctx = buildContext();
+    const ctx = buildContext(requestEditTargets, requestEditBatchTargets, txt);
     const directAgentName = hasPinnedProviderPreference ? `${agentMeta.name} · ${requestProviderLabel}` : agentMeta.name;
-    setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
+    setMessages((prev) => [...prev, { role: 'user', content: originalText, composerMode }]);
     setRequestSnapshot({
       providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
       agentLabel: directAgentName,
       skillLabel: runtimeSkillLabel,
-      scopeLabel: contextScopeLabel,
+      scopeLabel: requestScopeLabel,
       contextPreview,
     });
     const requestCycle = beginRequestCycle();
     setLoading(true);
     updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+    setMessages((prev) => [...prev, { role: 'assistant', content: '', composerMode }]);
 
     try {
-      const reply = await chatWithActiveProvider(txt, ctx, finalExtraSystemPrompt, {
+      const invokeDirectCall = async (nextPrompt, nextContext, nextSystemPrompt, phaseMeta = {}) => await chatWithActiveProvider(nextPrompt, nextContext, nextSystemPrompt, {
         agentLabel: directAgentName,
         skillId: manualSkillId,
-        autoUseDefaultSkill: disabledSkillRequested ? false : !manualSkillId,
+        autoUseDefaultSkill: disabledSkillRequested ? false : (isEditComposerMode ? false : !manualSkillId),
         directChat: true,
+        conversationHistory,
+        includeAppMemory: !isEditComposerMode,
         providerOverride: directProviderId,
         preferredProviders,
         modelOverride: explicitProviderModel,
         strictProviderOverride: hasStrictRuntimeProviderOverride,
+        editModeRequest: isEditComposerMode,
+        allowEditModeRoutingOverride: editModeExplicitRouting,
+        editModeExplicitSkillInvocation,
         skipAutomation: true,
         skipAutomationPrompt: true,
-        skipMultiModel: hasPinnedProviderPreference,
+        skipMultiModel: hasPinnedProviderPreference || requestedSplitCallCount >= 2,
+        preserveFullDocumentContext: shouldPreserveFullDocumentContext,
+        documentFallbackHtml: documentSnapshot.html,
+        ...phaseMeta,
         onSkillResolved: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
           const skill = payload?.skill;
@@ -1222,18 +3206,59 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         onStatus: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
           updateAgentStatus(agentMeta.id, directAgentName, payload);
+          syncRequestSnapshotProviderFromStatus(payload);
         },
       });
+      const directSystemPrompt = requestEditBatchTargets.length > 1
+        ? [buildStructuredEditBatchSystemPrompt(requestEditBatchTargets), finalExtraSystemPrompt].filter(Boolean).join('\n\n')
+        : finalExtraSystemPrompt;
+      const directAnalysisSystemPrompt = stripComposerModeDirectiveFromSystemPrompt(directSystemPrompt);
+      const reply = requestedSplitCallCount >= 2
+        ? await (isEditComposerMode
+          ? runEditMultiCallWorkflow({
+            splitCallCount: requestedSplitCallCount,
+            promptText: txt,
+            context: ctx,
+            finalSystemPrompt: directSystemPrompt,
+            analysisSystemPrompt: directAnalysisSystemPrompt,
+            structuredBatchMode: requestEditBatchTargets.length > 1,
+            batchTargets: requestEditBatchTargets,
+            invokeCall: invokeDirectCall,
+            onProgress: (payload) => {
+              if (!isCurrentRequestCycle(requestCycle)) return;
+              updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', ...payload });
+            },
+          })
+          : runSplitCallWorkflow({
+            splitCallCount: requestedSplitCallCount,
+            promptText: txt,
+            context: ctx,
+            extraSystemPrompt: directSystemPrompt,
+            invokeCall: invokeDirectCall,
+            onProgress: (payload) => {
+              if (!isCurrentRequestCycle(requestCycle)) return;
+              updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', ...payload });
+            },
+          }))
+        : await invokeDirectCall(txt, ctx, directSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 });
       if (!isCurrentRequestCycle(requestCycle)) return;
+      const applyResult = requestEditBatchTargets.length > 1
+        ? await applyEditBatchReply(reply, requestEditBatchTargets.map((target) => ({ ...target, batchPrompt: txt })), agentMeta.id || 'assistant-main')
+        : await applyEditReply(reply, requestEditTarget, agentMeta.id || 'assistant-main');
+      const documentActionMeta = buildDocumentActionMeta(applyResult, reply);
       setMessages((prev) => {
         const newMsg = [...prev];
         newMsg[newMsg.length - 1] = {
           ...newMsg[newMsg.length - 1],
           content: String(reply || ''),
+          composerMode,
+          ...documentActionMeta,
         };
         return newMsg;
       });
-      updateAgentStatus(agentMeta.id, directAgentName, { state: 'success', progress: 100, message: 'הושלם' });
+      updateAgentStatus(agentMeta.id, directAgentName, applyResult && !applyResult.skipped && !applyResult.ok
+        ? { state: 'error', progress: 100, message: documentActionMeta.documentActionMessage || 'העריכה לא הוחלה במסמך' }
+        : { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
       if (!isCurrentRequestCycle(requestCycle)) return;
       setMessages((prev) => {
@@ -1242,6 +3267,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           ...newMsg[newMsg.length - 1],
           content: `❌ ${err.message}`,
           error: true,
+          composerMode,
         };
         return newMsg;
       });
@@ -1261,8 +3287,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
     const customTask = String(agentTaskInput || '').trim();
-    const task = customTask
-      ? `${customTask}${selectedText ? `\n\nטקסט רלוונטי:\n"${selectedText}"` : ''}${currentBlockText && !selectedText ? `\n\nפסקה רלוונטית:\n"${currentBlockText}"` : ''}`
+    const rawRoleAgentPrompt = customTask || String(input || '').trim();
+    const splitDirective = extractSplitCallDirective(rawRoleAgentPrompt);
+    const effectiveSplitCallCount = splitDirective.count >= 2 ? splitDirective.count : configuredSplitCallCount;
+    const effectiveCustomTask = customTask
+      ? (effectiveSplitCallCount >= 2 ? splitDirective.cleanedPrompt.trim() : customTask)
+      : '';
+    const task = effectiveCustomTask
+      ? `${effectiveCustomTask}${selectedText ? `\n\nטקסט רלוונטי:\n"${selectedText}"` : ''}${currentBlockText && !selectedText ? `\n\nפסקה רלוונטית:\n"${currentBlockText}"` : ''}`
       : selectedText
         ? `עבוד על הטקסט הבא לפי התפקיד שלך:\n\n"${selectedText}"`
         : currentBlockText
@@ -1272,8 +3304,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const preferredProviders = preferredProviderId ? [preferredProviderId] : [];
     const explicitProviderModel = preferredProviderId ? resolvedSelectedProviderModel : '';
     await executeRoleAgentTask(agent, task, {
-      skillId: selectedSkillId === 'none' ? '' : selectedSkillId,
-      autoUseDefaultSkill: selectedSkillId === 'none',
+      skillId: isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId),
+      autoUseDefaultSkill: isEditComposerMode ? false : selectedSkillId === 'none',
+      persistSelection: !isEditComposerMode,
       providerLabel: activeProviderSummary,
       providerOverride: '',
       preferredProviders,
@@ -1281,6 +3314,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       strictProviderOverride: false,
       scopeLabel: contextScopeLabel,
       contextPreview,
+      editModeExplicitRouting: false,
+      editModeExplicitSkillInvocation: false,
+      splitCallCount: effectiveSplitCallCount,
+      splitCallPrompt: effectiveSplitCallCount >= 2 ? (splitDirective.cleanedPrompt.trim() || task) : task,
     });
   };
 
@@ -1307,6 +3344,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const buildClassicTaskpanePrompt = (agentId) => {
     const targetText = selectedText || currentBlockText;
     switch (agentId) {
+      case 'reviewFix':
+        return targetText
+          ? `בדוק את הטקסט הבא ואז תקן אותו אוטומטית מבחינת ניסוח, בהירות, זרימה, כתיב ודקדוק:\n\n"${targetText}"`
+          : 'בדוק את כל המסמך הנוכחי ואז תקן אותו אוטומטית בכל המסמך מבחינת ניסוח, בהירות, זרימה, כתיב ודקדוק.';
       case 'fix':
         return targetText
           ? `תקן את הטקסט הבא מבחינת כתיב, דקדוק וניסוח:\n\n"${targetText}"`
@@ -1430,6 +3471,52 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     ? (contextPreview || contextSourceText.replace(/\s+/g, ' ').slice(0, 96))
     : 'לא נבחר טקסט — ה-AI קורא את כל המסמך';
   const selectionBadge = selectedText ? 'טקסט נבחר' : currentBlockText ? 'פסקה פעילה' : 'מסמך מלא';
+
+  const renderComposerModeToggle = (variant = 'classic') => {
+    const isModern = variant === 'modern';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: isModern ? 12 : 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: isModern ? 'rgba(255,255,255,0.82)' : '#4B5563' }}>
+            מצב כתיבה
+          </span>
+          {COMPOSER_MODES.map((modeOption) => {
+            const active = composerMode === modeOption.id;
+            return (
+              <button
+                key={modeOption.id}
+                type="button"
+                onClick={() => setComposerMode(modeOption.id)}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 999,
+                  border: active
+                    ? (isModern ? '1px solid rgba(96, 165, 250, 0.62)' : '1px solid #38BDF8')
+                    : (isModern ? '1px solid rgba(255,255,255,0.14)' : '1px solid #D1D5DB'),
+                  background: active
+                    ? (isModern ? 'rgba(59, 130, 246, 0.26)' : '#E0F2FE')
+                    : (isModern ? 'rgba(255,255,255,0.08)' : '#FFFFFF'),
+                  color: active
+                    ? (isModern ? '#FFFFFF' : '#0F172A')
+                    : (isModern ? 'rgba(255,255,255,0.78)' : '#4B5563'),
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: loading ? 'default' : 'pointer',
+                  opacity: loading ? 0.72 : 1,
+                }}
+                disabled={loading}
+              >
+                {modeOption.label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: isModern ? 'rgba(255,255,255,0.66)' : '#6B7280' }}>
+          {composerModeHelpText}
+        </div>
+      </div>
+    );
+  };
 
   // Modern styling functions
   const modernMessageBubble = (isUser, message) => ({
@@ -1691,12 +3778,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>⚙️ סקיל פעיל</div>
                   <select
-                    value={selectedSkillId}
+                    value={isEditComposerMode ? 'none' : selectedSkillId}
                     onChange={(e) => {
                       clearPendingMentionSelection();
                       setSelectedSkillId(e.target.value);
                     }}
-                    disabled={isSettingsLocked}
+                    disabled={isSettingsLocked || isEditComposerMode}
                     style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
                   >
                     <option value="none">בחירה אוטומטית</option>
@@ -1714,12 +3801,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>🧩 סוכן קבוע</div>
                   <select
-                    value={selectedAgentId}
+                    value={isEditComposerMode ? '' : selectedAgentId}
                     onChange={(e) => {
                       clearPendingMentionSelection();
                       setSelectedAgentId(e.target.value);
                     }}
-                    disabled={isSettingsLocked || !workspaceAutomationEnabled}
+                    disabled={isSettingsLocked || !workspaceAutomationEnabled || isEditComposerMode}
                     style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
                   >
                     <option value="">ללא סוכן קבוע · צ׳אט ישיר</option>
@@ -1733,22 +3820,37 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               </div>
             ) : (
               <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {messages.map((msg, index) => (
-                  <div key={`${msg.role}-${index}`} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
-                    <div style={{ ...bbl(msg.role === 'user', compactMode), ...(msg.error ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' } : {}) }}>
-                      {renderChatMessageContent(msg.content)}
+                {messages.map((msg, index) => {
+                  const isEditMessage = normalizeComposerMode(msg.composerMode || '') === 'edit';
+                  const documentActionTone = msg.documentActionStatus === 'failed'
+                    ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' }
+                    : msg.documentActionStatus === 'partial'
+                      ? { background: '#FFFBEB', border: '1px solid #FDE68A', color: '#B45309' }
+                      : { background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857' };
+
+                  return (
+                    <div key={`${msg.role}-${index}`} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
+                      <div style={{ ...bbl(msg.role === 'user', compactMode), ...(msg.error ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' } : {}) }}>
+                        {renderChatMessageContent(msg.content)}
+                      </div>
+                      {msg.documentActionMessage && (
+                        <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, fontSize: 11, lineHeight: 1.5, ...documentActionTone }}>
+                          {msg.documentActionMessage}
+                        </div>
+                      )}
+                      {renderDocumentActionCompletionButton(msg, 'light')}
+                      {msg.role === 'assistant' && !msg.error && !isEditMessage && onInsert && (
+                        <button
+                          type="button"
+                          onClick={() => onInsert(msg.content)}
+                          style={{ marginTop: 6, padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
+                        >
+                          הוסף למסמך
+                        </button>
+                      )}
                     </div>
-                    {msg.role === 'assistant' && !msg.error && onInsert && (
-                      <button
-                        type="button"
-                        onClick={() => onInsert(msg.content)}
-                        style={{ marginTop: 6, padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
-                      >
-                        הוסף למסמך
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
 
                 {loading && (
                   <div style={{ alignSelf: 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
@@ -1811,6 +3913,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               </div>
 
               <div style={{ flex: 1, position: 'relative' }}>
+                {renderComposerModeToggle('classic')}
                 {attachedFiles.map((file, idx) => (
                   <div key={idx} style={{
                     marginBottom: 8,
@@ -1893,9 +3996,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                       send();
                     }
                   }}
-                  placeholder={activeClassicAgent ? activeClassicAgent.placeholder : "שאל כל דבר — עריכה, ניסוח, מקורות..."}
+                  placeholder={composerPlaceholder}
                   rows={2}
-                  disabled={loading}
                   style={{ width: '100%', minHeight: 44, maxHeight: 120, resize: 'vertical', padding: '9px 12px', border: '1px solid #C8C6C4', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, background: 'white', direction: 'rtl' }}
                 />
 
@@ -1937,7 +4039,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             </div>
 
             <div style={{ marginTop: 8, fontSize: 11, color: '#605E5C' }}>
-              {loading ? progressStatusLabel : `מוכן • ${effectiveAgentSummary}`}
+              {loading ? progressStatusLabel : `מוכן • ${effectiveAgentSummary} • ${composerModeLabel}`}
             </div>
           </div>
         </div>
@@ -2536,7 +4638,38 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   )}
                 </div>
                 
-                {msg.role === 'assistant' && !msg.error && onInsert && (
+                {msg.documentActionMessage && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      marginTop: 6,
+                      padding: '6px 12px',
+                      borderRadius: 12,
+                      color: msg.documentActionStatus === 'failed' ? '#FCA5A5' : '#BBF7D0',
+                      color: msg.documentActionStatus === 'failed'
+                        ? '#FCA5A5'
+                        : msg.documentActionStatus === 'partial'
+                          ? '#FCD34D'
+                          : '#BBF7D0',
+                      background: msg.documentActionStatus === 'failed'
+                        ? 'rgba(127, 29, 29, 0.32)'
+                        : msg.documentActionStatus === 'partial'
+                          ? 'rgba(120, 53, 15, 0.28)'
+                          : 'rgba(6, 78, 59, 0.24)',
+                      border: msg.documentActionStatus === 'failed'
+                        ? '1px solid rgba(248, 113, 113, 0.22)'
+                        : msg.documentActionStatus === 'partial'
+                          ? '1px solid rgba(251, 191, 36, 0.24)'
+                          : '1px solid rgba(52, 211, 153, 0.22)',
+                    }}
+                  >
+                    {msg.documentActionMessage}
+                  </div>
+                )}
+                {renderDocumentActionCompletionButton(msg, 'dark')}
+
+                {msg.role === 'assistant' && !msg.error && normalizeComposerMode(msg.composerMode || '') !== 'edit' && onInsert && (
                   <button 
                     onClick={() => onInsert(msg.content)}
                     style={{
@@ -2560,7 +4693,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                       e.currentTarget.style.transform = 'translateY(0)';
                     }}
                   >
-                    ➕ הוסף למסמך
+                    הוסף למסמך
                   </button>
                 )}
               </div>
@@ -2615,6 +4748,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 📌 {contextScopeLabel}: "{contextPreview}"
               </div>
             )}
+
+            {renderComposerModeToggle('modern')}
 
             {/* Input Container */}
             <div style={{ 
@@ -2685,7 +4820,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     send();
                   }
                 }}
-                placeholder={activeClassicAgent ? activeClassicAgent.placeholder : "💬 כתוב בחופשיות... @ לסוכנים, / לסקילים"}
+                placeholder={composerPlaceholder}
                 style={{
                   flex: 1,
                   resize: 'none',
@@ -2717,7 +4852,6 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     closeMentionMenu();
                   }, 120);
                 }}
-                disabled={loading}
               />
 
               {/* Mention Menu */}
@@ -3001,17 +5135,47 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           </div>
 
           <div style={controlCardStyle}>
-            <div style={controlLabelStyle}>⚙️ סקיל פעיל</div>
+            <div style={controlLabelStyle}>🔁 מספר קריאות רצופות</div>
             <div style={controlHelperStyle}>
-              אפשר להשאיר בחירה אוטומטית, לקבע סקיל ידני, או לזמן זמנית מתוך הקלט עם `/skill`.
+              אפשר להגדיר כמה קריאות מודל יישלחו לכל בקשה במסך הזה (2-6). במצב עריכה הקריאות הראשונות משמשות לבדיקה פנימית, והקריאה האחרונה מבצעת עריכה אוטומטית במסמך.
             </div>
             <select
-              value={selectedSkillId}
+              value={configuredSplitCallCount || 0}
+              onChange={(e) => {
+                const nextValue = clampSplitCallCount(Number(e.target.value) || 0);
+                setConfiguredSplitCallCount(nextValue);
+              }}
+              disabled={isSettingsLocked}
+              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+            >
+              <option value={0} style={{ color: '#1F2937' }}>
+                קריאה אחת (ללא פיצול)
+              </option>
+              {Array.from({ length: MAX_SPLIT_CALL_COUNT - 1 }, (_, index) => index + 2).map((count) => (
+                <option key={count} value={count} style={{ color: '#1F2937' }}>
+                  {count} קריאות רצופות
+                </option>
+              ))}
+            </select>
+            <div style={{ ...controlHelperStyle, marginTop: 8 }}>
+              טיפ: אפשר לעקוף זמנית מהקלט עצמו עם נוסח כמו "פצל ל-3 קריאות".
+            </div>
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={controlLabelStyle}>⚙️ סקיל פעיל</div>
+            <div style={controlHelperStyle}>
+              {isEditComposerMode
+                ? 'במצב עריכה אין סקיל קבוע כברירת מחדל. רק `/skill` מפורש בתחילת הבקשה יופעל לשליחה הנוכחית.'
+                : 'אפשר להשאיר בחירה אוטומטית, לקבע סקיל ידני, או לזמן זמנית מתוך הקלט עם `/skill`.'}
+            </div>
+            <select
+              value={isEditComposerMode ? 'none' : selectedSkillId}
               onChange={(e) => {
                 clearPendingMentionSelection();
                 setSelectedSkillId(e.target.value);
               }}
-              disabled={isSettingsLocked}
+              disabled={isSettingsLocked || isEditComposerMode}
               style={{ ...controlSelectStyle, ...lockedControlStyle }}
             >
               <option value="none" style={{ color: '#1F2937' }}>
@@ -3031,16 +5195,18 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           <div style={controlCardStyle}>
             <div style={controlLabelStyle}>🤖 סוכן נבחר</div>
             <div style={controlHelperStyle}>
-              בחירה כאן מפנה את ההודעות הבאות לסוכן עד שמחליפים אותו. `@agent` מתוך הצ׳אט נשאר חד־פעמי לשליחה הנוכחית בלבד.
+              {isEditComposerMode
+                ? 'במצב עריכה אין סוכן קבוע כברירת מחדל. לזימון חד-פעמי השתמש ב-`@agent` בתחילת הבקשה.'
+                : 'בחירה כאן מפנה את ההודעות הבאות לסוכן עד שמחליפים אותו. `@agent` מתוך הצ׳אט נשאר חד־פעמי לשליחה הנוכחית בלבד.'}
               {!workspaceAutomationEnabled ? ' כרגע סביבת העבודה כבויה, לכן הבחירה הזו נעולה והודעות נשלחות ישירות.' : ''}
             </div>
             <select
-              value={selectedAgentId}
+              value={isEditComposerMode ? '' : selectedAgentId}
               onChange={(e) => {
                 clearPendingMentionSelection();
                 setSelectedAgentId(e.target.value);
               }}
-              disabled={isSettingsLocked || !workspaceAutomationEnabled}
+              disabled={isSettingsLocked || !workspaceAutomationEnabled || isEditComposerMode}
               style={{ ...controlSelectStyle, ...lockedControlStyle }}
             >
               <option value="" style={{ color: '#1F2937' }}>

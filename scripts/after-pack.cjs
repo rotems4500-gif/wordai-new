@@ -4,7 +4,6 @@ const path = require('path');
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'win32') return;
 
-  const rcedit = require('rcedit');
   const projectDir = String(context.packager?.projectDir || process.cwd());
   const productFilename = String(context.packager?.appInfo?.productFilename || 'WordFlow AI').trim();
   const exePath = path.join(context.appOutDir, `${productFilename}.exe`);
@@ -32,6 +31,11 @@ module.exports = async function afterPack(context) {
     console.log(`[afterPack] copied OCR language data to: ${ocrTargetDir}`);
   }
 
-  await rcedit(exePath, { icon: iconPath });
-  console.log(`[afterPack] updated Windows executable icon: ${exePath}`);
+  try {
+    const rcedit = require('rcedit');
+    await rcedit(exePath, { icon: iconPath });
+    console.log(`[afterPack] updated Windows executable icon: ${exePath}`);
+  } catch (error) {
+    console.warn(`[afterPack] skipped Windows executable icon update: ${error?.message || error}`);
+  }
 };

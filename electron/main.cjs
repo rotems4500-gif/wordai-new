@@ -292,7 +292,16 @@ function escapeHtml(value = '') {
 }
 
 function sanitizeFileName(name = 'document') {
-  return String(name || 'document').replace(/[\\/:*?"<>|]/g, '_').trim() || 'document';
+  const normalized = String(name || 'document')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[\u0000-\u001f\u0080-\u009f]/g, ' ')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '');
+
+  if (!normalized) return 'document';
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(normalized) ? `${normalized}_` : normalized;
 }
 
 function plainTextToHtml(text = '') {
@@ -312,6 +321,22 @@ function decodeHtmlEntities(value = '') {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
+}
+
+function htmlToPlainText(value = '') {
+  return decodeHtmlEntities(
+    String(value || '')
+      .replace(/<!doctype[^>]*>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<(head|script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<(br|hr)\s*\/?>/gi, '\n')
+      .replace(/<\/(address|article|aside|blockquote|div|dl|fieldset|figcaption|figure|footer|form|h[1-6]|header|li|main|nav|ol|p|pre|section|table|tr|ul)\s*>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+  )
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 const DOCX_DEFAULT_FONT = 'Arial';
@@ -837,6 +862,7 @@ function wrapHtmlDocument(html = '', title = 'WordFlow AI Document', exportOptio
 async function readDocumentPayload(filePath) {
   const resolvedPath = path.resolve(filePath);
   const ext = path.extname(resolvedPath).toLowerCase();
+  const isHtmlMarkup = (value = '') => /<(html|body|p|h1|h2|h3|div|span|br|ul|ol|li)\b/i.test(String(value || ''));
 
   try {
     let rawText = '';
@@ -848,18 +874,18 @@ async function readDocumentPayload(filePath) {
       rawText = String(result.value || '').replace(/<[^>]+>/g, ' ');
     } else if (ext === '.doc') {
       const raw = fs.readFileSync(resolvedPath, 'utf8');
-      rawText = raw;
-      if (/<(html|body|p|h1|h2|h3|div|span|br|ul|ol|li)\b/i.test(raw)) {
+      const containsHtmlMarkup = isHtmlMarkup(raw);
+      rawText = containsHtmlMarkup ? htmlToPlainText(raw) : raw;
+      if (containsHtmlMarkup) {
         html = raw;
       } else {
         html = `<h1>${escapeHtml(path.basename(resolvedPath))}</h1><p>קובץ DOC ישן לא נתמך ישירות. מומלץ לשמור אותו כ-DOCX או HTML ואז לפתוח כאן.</p>`;
       }
     } else {
       const raw = fs.readFileSync(resolvedPath, 'utf8');
-      rawText = raw;
-      html = /<(html|body|p|h1|h2|h3|div|span|br|ul|ol|li)\b/i.test(raw)
-        ? raw
-        : plainTextToHtml(raw);
+      const containsHtmlMarkup = isHtmlMarkup(raw);
+      rawText = containsHtmlMarkup ? htmlToPlainText(raw) : raw;
+      html = containsHtmlMarkup ? raw : plainTextToHtml(raw);
     }
 
     return {
@@ -1389,6 +1415,21 @@ ipcMain.handle('open-document-dialog', async (event) => {
   return readDocumentPayload(result.filePaths[0]);
 });
 
+// פתיחת מסמך לפי נתיב מוחלט (נשלח ממסך "מסמכים אחרונים")
+// מאמת שהקובץ קיים, מחזיר { canceled: true } או שגיאה ידידותית כשלא
+ipcMain.handle('open-document-by-path', async (_event, rawPath) => {
+  const filePath = String(rawPath || '').trim();
+  if (!filePath) return { canceled: true };
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, error: `הקובץ לא נמצא: ${filePath}` };
+    }
+    return await readDocumentPayload(filePath);
+  } catch (err) {
+    return { ok: false, error: err?.message || 'לא ניתן לפתוח את הקובץ' };
+  }
+});
+
 ipcMain.handle('save-document-dialog', async (event, payload = {}) => {
   const ownerWindow = getSenderWindow(event) || getUsableMainWindow();
   if (!ownerWindow) return { canceled: true };
@@ -1505,8 +1546,9 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
     const buffer = fs.readFileSync(filePath);
     const ext = path.extname(safeName).toLowerCase();
     let extractedText = '';
+    let extractedTextError = '';
 
-    if (['.docx', '.pptx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json', '.csv', '.tsv', '.rtf', '.xml', '.yml', '.yaml', '.log', '.svg'].includes(ext)) {
+    if (['.docx', '.pdf', '.pptx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.md', '.markdown', '.html', '.htm', '.json', '.csv', '.tsv', '.rtf', '.xml', '.yml', '.yaml', '.log', '.svg'].includes(ext)) {
       try {
         extractedText = await extractMaterialTextFromBuffer({
           buffer,
@@ -1515,7 +1557,9 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
           ocrCacheDir: getMaterialsOcrCacheDir(),
           ocrDataDir: getMaterialsOcrDataDir(),
         });
-      } catch {
+      } catch (error) {
+        extractedTextError = error?.message || 'material-extraction-failed';
+        console.warn('[materialExtraction] read-local-material extraction failed:', safeName, extractedTextError);
         extractedText = '';
       }
     }
@@ -1525,6 +1569,7 @@ ipcMain.handle('read-local-material', async (_event, fileName = '') => {
       file: safeName,
       dataBase64: buffer.toString('base64'),
       extractedText,
+      extractedTextError,
     };
   } catch (error) {
     return { ok: false, error: error?.message || 'Read failed' };
@@ -1666,6 +1711,7 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
       'api.together.xyz',
       'openrouter.ai',
       'api.x.ai',
+      'serpapi.com',
     ]);
     const ALLOWED_LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
     const ALLOWED_LOCAL_PORTS = new Set([11434, 1234]);

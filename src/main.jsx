@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { DOMSerializer } from '@tiptap/pm/model';
 import '../tailwind.css';
 import DocumentEditor from './DocumentEditor';
 import Ribbon from './Ribbon';
@@ -12,16 +13,16 @@ import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace } from './services/aiService';
-import { buildTemplateSkeleton, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
+import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
 import { downloadBrowserDocx } from './services/browserDocxExport';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
 
 const DOCUMENT_STYLE_PRESETS = {
-  academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12pt', lineHeight: '1.9', padding: '2.8cm', maxWidth: '21cm', background: '#fffefc', textAlign: 'right' },
-  legal: { label: 'משפטי', fontFamily: "'Times New Roman', 'Miriam Libre', serif", fontSize: '12.5pt', lineHeight: '2', padding: '2.6cm 2.9cm', maxWidth: '21cm', background: '#fffefe', textAlign: 'justify' },
-  business: { label: 'עסקי', fontFamily: "'Segoe UI', 'Assistant', sans-serif", fontSize: '11.5pt', lineHeight: '1.65', padding: '2.4cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'right' },
-  presentation: { label: 'מצגת', fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '15pt', lineHeight: '1.5', padding: '1.8cm', maxWidth: '25cm', background: 'linear-gradient(180deg,#ffffff 0%,#f8fbff 100%)', textAlign: 'center' },
+  academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'right' },
+  legal: { label: 'משפטי', fontFamily: "'Times New Roman', 'Miriam Libre', serif", fontSize: '12.5pt', lineHeight: '1.85', padding: '2.54cm 2.75cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'justify' },
+  business: { label: 'עסקי', fontFamily: "'Segoe UI', 'Assistant', sans-serif", fontSize: '12pt', lineHeight: '1.62', padding: '2.45cm 2.54cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'right' },
+  presentation: { label: 'מצגת', fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '14pt', lineHeight: '1.48', padding: '2.15cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'center' },
 };
 
 const GENERATION_LABEL_FALLBACKS = {
@@ -36,6 +37,1336 @@ const GENERATION_LABEL_FALLBACKS = {
 };
 
 const MAGIC_WAND_SELECTION_CONTEXT_SIDE = 420;
+const STRUCTURAL_EDIT_CUE_PATTERN = /\b(?:section|heading|chapter|part|anchor)\b|(?:פרק|סעיף|כותרת|חלק|עוגן)/iu;
+const STRUCTURAL_EDIT_HASH_ANCHOR_PATTERN = /(^|[\s(])#([^\s#"“”״'`.,:;!?()\[\]{}]{3,80})/u;
+const STRUCTURAL_EDIT_QUOTED_TEXT_PATTERN = /["“״]([^"\n“”״]{3,160})["”״]/gu;
+const BLOCK_EDIT_QUOTED_REFERENCE_PATTERN = /(?:^|[\s(,])(?:the\s+)?(?:paragraph|part|segment|פסקה|הפסקה|קטע|הקטע)\s*["“״]([^"\n“”״]{3,160})["”״]/gu;
+const BLOCK_EDIT_STARTS_WITH_REFERENCE_PATTERN = /(?:^|[\s(,])(?:the\s+)?(?:paragraph|part|segment|פסקה|הפסקה|קטע|הקטע)\s+(?:that\s+starts?\s+with|starting\s+with|שמתחיל(?:ה)?\s+ב)\s*["“״]([^"\n“”״]{3,160})["”״]/gu;
+const QUOTED_REFERENCE_CONTEXT_SIDE = 36;
+const LOCAL_QUOTED_STRUCTURAL_CUE_PATTERN = /\b(?:section|heading|chapter|part|anchor)\b|(?:פרק|סעיף|כותרת|חלק|עוגן)/iu;
+const LOCAL_QUOTED_BLOCK_CUE_PATTERN = /\b(?:paragraph|part|segment|sentence|text|line|wording|phrase)\b|(?:פסקה|קטע|משפט|טקסט|שורה|ניסוח|ביטוי|מילים)/iu;
+const LOCAL_QUOTED_EDIT_VERB_PATTERN = /\b(?:fix|edit|rewrite|improve|replace|shorten|expand|update|revise)\b|(?:תקן|תתקן|שפר|תשפר|שכתב|תשכתב|החלף|תחליף|קצר|תקצר|הרחב|תרחיב|עדכן|תעדכן|מחק|תמחק|חדד|תחדד|שנה|תשנה)/iu;
+const MIN_PROMPT_BLOCK_LOCATOR_LENGTH = 8;
+const MIN_IMPLICIT_HEADING_MATCH_LENGTH = 4;
+const MIN_CANDIDATE_BLOCK_TEXT_LENGTH = 12;
+const REVIEW_ACTION_PLAN_EDIT_LIMIT = 24;
+
+const ENGLISH_STRUCTURAL_ORDINALS = {
+  first: 1,
+  second: 2,
+  third: 3,
+  fourth: 4,
+  fifth: 5,
+  sixth: 6,
+  seventh: 7,
+  eighth: 8,
+  ninth: 9,
+  tenth: 10,
+};
+
+const HEBREW_STRUCTURAL_ORDINALS = {
+  ראשון: 1,
+  ראשונה: 1,
+  שני: 2,
+  שנייה: 2,
+  שלישי: 3,
+  שלישית: 3,
+  רביעי: 4,
+  רביעית: 4,
+  חמישי: 5,
+  חמישית: 5,
+  שישי: 6,
+  שישית: 6,
+  שביעי: 7,
+  שביעית: 7,
+  שמיני: 8,
+  שמינית: 8,
+  תשיעי: 9,
+  תשיעית: 9,
+  עשירי: 10,
+  עשירית: 10,
+};
+
+const EMPTY_EDIT_TARGET = {
+  selection: null,
+  block: null,
+  active: null,
+};
+
+const UNRESOLVED_EXPLICIT_QUOTED_BLOCK_MATCH_KIND = 'unresolved-explicit-quoted-block';
+const BLOCKING_QUOTED_BLOCK_REFERENCE_KINDS = new Set(['quoted-block', 'block-starts-with']);
+
+const isBlockingQuotedBlockReference = (matchKind = '') => BLOCKING_QUOTED_BLOCK_REFERENCE_KINDS.has(String(matchKind || '').trim());
+
+const buildStableEditTargetId = ({
+  kind = 'target',
+  from = 0,
+  to = 0,
+  sectionIndex = '',
+  headingText = '',
+  locatorText = '',
+} = {}) => {
+  const normalizedLabel = normalizeStructuralEditText(headingText || locatorText)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return [kind || 'target', Number(from) || 0, Number(to) || 0, sectionIndex || '', normalizedLabel || 'region']
+    .filter((part) => part !== '')
+    .join(':');
+};
+
+const buildCanonicalEditRegionKey = ({ kind = '', from = null, to = null } = {}) => {
+  const normalizedKind = String(kind || '').trim();
+  const normalizedFrom = Number(from);
+  const normalizedTo = Number(to);
+  if (!normalizedKind || !Number.isInteger(normalizedFrom) || !Number.isInteger(normalizedTo) || normalizedFrom >= normalizedTo) {
+    return '';
+  }
+  return `${normalizedKind}:${normalizedFrom}:${normalizedTo}`;
+};
+
+const resolveNumericEditRange = ({ from = null, to = null } = {}) => {
+  const normalizedFrom = Number(from);
+  const normalizedTo = Number(to);
+  if (!Number.isInteger(normalizedFrom) || !Number.isInteger(normalizedTo) || normalizedFrom >= normalizedTo) {
+    return null;
+  }
+  return { from: normalizedFrom, to: normalizedTo };
+};
+
+const normalizeStructuralEditText = (value = '') => String(value || '')
+  .normalize('NFKC')
+  .replace(/[“”״]/g, '"')
+  .replace(/[‘’׳]/g, "'")
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLocaleLowerCase();
+
+const hasQuotedReferenceCue = (sourceText = '', matchIndex = 0, matchLength = 0, { requireStructuralCue = false } = {}) => {
+  const safeSource = String(sourceText || '');
+  const start = Math.max(0, Number(matchIndex) - QUOTED_REFERENCE_CONTEXT_SIDE);
+  const end = Math.min(safeSource.length, Number(matchIndex) + Math.max(0, Number(matchLength)) + QUOTED_REFERENCE_CONTEXT_SIDE);
+  const localWindow = safeSource.slice(start, end);
+
+  if (requireStructuralCue) {
+    return LOCAL_QUOTED_STRUCTURAL_CUE_PATTERN.test(localWindow);
+  }
+
+  return LOCAL_QUOTED_BLOCK_CUE_PATTERN.test(localWindow) || LOCAL_QUOTED_EDIT_VERB_PATTERN.test(localWindow);
+};
+
+const escapeStructuralEditRegex = (value = '') => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeEditTargetHtml = (value = '') => String(value || '')
+  .replace(/>\s+</g, '><')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const collectQuotedStructuralAnchors = (promptText = '', { requireLocalStructuralCue = false, requireLocalEditCue = false } = {}) => {
+  const matches = [];
+  const seen = new Set();
+  const sourceText = String(promptText || '');
+
+  STRUCTURAL_EDIT_QUOTED_TEXT_PATTERN.lastIndex = 0;
+  let match = STRUCTURAL_EDIT_QUOTED_TEXT_PATTERN.exec(sourceText);
+  while (match) {
+    const text = String(match[1] || '').trim();
+    const normalized = normalizeStructuralEditText(text);
+    const matchIndex = typeof match.index === 'number' ? match.index : 0;
+    const matchLength = String(match[0] || '').length;
+    const hasRequiredCue = requireLocalStructuralCue
+      ? hasQuotedReferenceCue(sourceText, matchIndex, matchLength, { requireStructuralCue: true })
+      : requireLocalEditCue
+        ? hasQuotedReferenceCue(sourceText, matchIndex, matchLength)
+        : true;
+    if (normalized && hasRequiredCue && !seen.has(normalized)) {
+      seen.add(normalized);
+      matches.push({ text, normalized, index: matchIndex });
+    }
+    match = STRUCTURAL_EDIT_QUOTED_TEXT_PATTERN.exec(sourceText);
+  }
+
+  return matches;
+};
+
+const collectHashStructuralAnchors = (promptText = '') => {
+  const matches = [];
+  const seen = new Set();
+  const sourceText = String(promptText || '');
+  const pattern = new RegExp(STRUCTURAL_EDIT_HASH_ANCHOR_PATTERN.source, 'gu');
+
+  let match = pattern.exec(sourceText);
+  while (match) {
+    const text = String(match[2] || '').trim();
+    const normalized = normalizeStructuralEditText(text);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      matches.push({ text, normalized, index: match.index || 0 });
+    }
+    match = pattern.exec(sourceText);
+  }
+
+  return matches;
+};
+
+const collectStructuralOrdinalReferences = (promptText = '') => {
+  const references = [];
+  const seen = new Set();
+  const sourceText = String(promptText || '');
+  const numericPattern = /\b(?:section|chapter|part|heading|פרק|סעיף|כותרת)\s+(\d{1,3})(?!\d)/giu;
+  const englishPattern = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:section|chapter|part|heading)\b/giu;
+  const hebrewPattern = /(?:פרק|סעיף|כותרת)\s+(ה?ראשון|ה?ראשונה|ה?שני|ה?שנייה|ה?שלישי|ה?שלישית|ה?רביעי|ה?רביעית|ה?חמישי|ה?חמישית|ה?שישי|ה?שישית|ה?שביעי|ה?שביעית|ה?שמיני|ה?שמינית|ה?תשיעי|ה?תשיעית|ה?עשירי|ה?עשירית)/gu;
+
+  let match = numericPattern.exec(sourceText);
+  while (match) {
+    const value = Number(match[1]);
+    if (Number.isInteger(value) && value > 0) {
+      const key = `ordinal:${value}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        references.push({ index: value, position: match.index || 0, label: `סעיף ${value}` });
+      }
+    }
+    match = numericPattern.exec(sourceText);
+  }
+
+  match = englishPattern.exec(sourceText);
+  while (match) {
+    const value = ENGLISH_STRUCTURAL_ORDINALS[String(match[1] || '').toLowerCase()] || null;
+    if (value) {
+      const key = `ordinal:${value}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        references.push({ index: value, position: match.index || 0, label: `section ${match[1]}` });
+      }
+    }
+    match = englishPattern.exec(sourceText);
+  }
+
+  match = hebrewPattern.exec(sourceText);
+  while (match) {
+    const normalizedOrdinal = String(match[1] || '').replace(/^ה/, '');
+    const value = HEBREW_STRUCTURAL_ORDINALS[normalizedOrdinal] || null;
+    if (value) {
+      const key = `ordinal:${value}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        references.push({ index: value, position: match.index || 0, label: `סעיף ${match[1]}` });
+      }
+    }
+    match = hebrewPattern.exec(sourceText);
+  }
+
+  return references.sort((left, right) => left.position - right.position);
+};
+
+const parseStructuralOrdinalIndex = (promptText = '') => {
+  const sourceText = String(promptText || '');
+  const numericMatch = sourceText.match(/\b(?:section|chapter|part|heading)\s+(\d{1,3})(?!\d)/iu)
+    || sourceText.match(/(?:פרק|סעיף|כותרת)\s+(\d{1,3})(?!\d)/u);
+  if (numericMatch) {
+    const value = Number(numericMatch[1]);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  const englishMatch = sourceText.toLowerCase().match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:section|chapter|part|heading)\b/);
+  if (englishMatch) {
+    return ENGLISH_STRUCTURAL_ORDINALS[englishMatch[1]] || null;
+  }
+
+  const hebrewMatch = sourceText.match(/(?:פרק|סעיף|כותרת)\s+(ה?ראשון|ה?ראשונה|ה?שני|ה?שנייה|ה?שלישי|ה?שלישית|ה?רביעי|ה?רביעית|ה?חמישי|ה?חמישית|ה?שישי|ה?שישית|ה?שביעי|ה?שביעית|ה?שמיני|ה?שמינית|ה?תשיעי|ה?תשיעית|ה?עשירי|ה?עשירית)/u);
+  if (!hebrewMatch) return null;
+
+  const normalizedOrdinal = String(hebrewMatch[1] || '').replace(/^ה/, '');
+  return HEBREW_STRUCTURAL_ORDINALS[normalizedOrdinal] || null;
+};
+
+const collectHeadingSections = (doc) => {
+  if (!doc?.descendants) return [];
+
+  const headings = [];
+  doc.descendants((node, pos) => {
+    if (node.type?.name !== 'heading') return;
+    const headingText = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!headingText) return;
+
+    headings.push({
+      index: headings.length + 1,
+      pos,
+      level: Number(node.attrs?.level) || 1,
+      headingText,
+      normalizedHeadingText: normalizeStructuralEditText(headingText),
+    });
+  });
+
+  if (!headings.length) return [];
+
+  const primaryLevel = headings.reduce((lowest, heading) => Math.min(lowest, heading.level), headings[0].level);
+  return headings
+    .map((heading, headingIndex) => {
+      let to = doc.content.size;
+      for (let cursor = headingIndex + 1; cursor < headings.length; cursor += 1) {
+        if ((headings[cursor].level || 1) <= heading.level) {
+          to = headings[cursor].pos;
+          break;
+        }
+      }
+
+      if (!Number.isInteger(heading.pos) || !Number.isInteger(to) || heading.pos >= to) return null;
+
+      const sectionText = doc.textBetween(heading.pos, to, ' ');
+      return {
+        ...heading,
+        from: heading.pos,
+        to,
+        sectionText,
+        normalizedSectionText: normalizeStructuralEditText(sectionText),
+        isPrimaryLevel: heading.level === primaryLevel,
+      };
+    })
+    .filter(Boolean);
+};
+
+const SIDEBAR_DOCUMENT_EXCERPT_LIMIT = 16000;
+const SIDEBAR_DOCUMENT_FULL_TEXT_LIMIT = 32000;
+const SIDEBAR_DOCUMENT_HEADING_LIMIT = 24;
+
+const buildSidebarDocumentOutlineText = (sections = []) => {
+  const limitedSections = (Array.isArray(sections) ? sections : []).slice(0, SIDEBAR_DOCUMENT_HEADING_LIMIT);
+  if (!limitedSections.length) return '';
+
+  return [
+    'מפת מסמך:',
+    ...limitedSections.map((section) => `${'  '.repeat(Math.max(0, (Number(section.level) || 1) - 1))}- ${section.headingText}`),
+  ].join('\n');
+};
+
+const buildSidebarDocumentSnapshot = (editorInstance, {
+  excerptLimit = SIDEBAR_DOCUMENT_EXCERPT_LIMIT,
+  fullTextLimit = SIDEBAR_DOCUMENT_FULL_TEXT_LIMIT,
+} = {}) => {
+  if (!editorInstance?.state?.doc) {
+    return {
+      excerptText: '',
+      text: '',
+      html: '',
+      outlineText: '',
+      headings: [],
+      charCount: 0,
+    };
+  }
+
+  const doc = editorInstance.state.doc;
+  const fullText = String(editorInstance.getText?.() || '');
+  const headings = collectHeadingSections(doc)
+    .slice(0, SIDEBAR_DOCUMENT_HEADING_LIMIT)
+    .map((section) => ({
+      index: section.index,
+      level: section.level,
+      headingText: section.headingText,
+    }));
+
+  return {
+    excerptText: fullText.slice(0, Math.max(0, Number(excerptLimit) || SIDEBAR_DOCUMENT_EXCERPT_LIMIT)),
+    text: fullText.slice(0, Math.max(0, Number(fullTextLimit) || SIDEBAR_DOCUMENT_FULL_TEXT_LIMIT)),
+    html: String(editorInstance.getHTML?.() || ''),
+    outlineText: buildSidebarDocumentOutlineText(headings),
+    headings,
+    charCount: fullText.length,
+  };
+};
+
+const hasMeaningfulPromptBlockLocator = (value = '') => normalizeStructuralEditText(value).length >= MIN_PROMPT_BLOCK_LOCATOR_LENGTH;
+
+const collectPromptBlockReferences = (promptText = '', pattern, matchKind) => {
+  const matches = [];
+  const seen = new Set();
+  const sourceText = String(promptText || '');
+  if (!(pattern instanceof RegExp) || !sourceText) return matches;
+
+  pattern.lastIndex = 0;
+  let match = pattern.exec(sourceText);
+  while (match) {
+    const text = String(match[1] || '').trim();
+    const normalized = normalizeStructuralEditText(text);
+    if (hasMeaningfulPromptBlockLocator(normalized) && !seen.has(normalized)) {
+      seen.add(normalized);
+      matches.push({ text, normalized, matchKind });
+    }
+    match = pattern.exec(sourceText);
+  }
+
+  return matches;
+};
+
+const collectQuotedBlockReferences = (promptText = '', { includeFreeQuoted = false } = {}) => {
+  const references = [
+    ...collectPromptBlockReferences(promptText, BLOCK_EDIT_QUOTED_REFERENCE_PATTERN, 'quoted-block'),
+    ...collectPromptBlockReferences(promptText, BLOCK_EDIT_STARTS_WITH_REFERENCE_PATTERN, 'block-starts-with'),
+  ];
+  const hasExplicitBlockReference = references.some((reference) => isBlockingQuotedBlockReference(reference.matchKind));
+
+  if (!includeFreeQuoted || hasExplicitBlockReference) {
+    return references;
+  }
+
+  const seen = new Set(references.map((reference) => reference.normalized));
+  collectQuotedStructuralAnchors(promptText, { requireLocalEditCue: true }).forEach((anchor) => {
+    if (!hasMeaningfulPromptBlockLocator(anchor.normalized) || seen.has(anchor.normalized)) return;
+    seen.add(anchor.normalized);
+    references.push({
+      text: anchor.text,
+      normalized: anchor.normalized,
+      matchKind: 'quoted-block-snippet',
+    });
+  });
+
+  return references;
+};
+
+const collectCandidateTextBlocks = (doc, { minTextLength = MIN_CANDIDATE_BLOCK_TEXT_LENGTH } = {}) => {
+  if (!doc?.descendants) return [];
+
+  const blocks = [];
+  doc.descendants((node, pos, parent, index) => {
+    if (!node?.isTextblock || node.type?.name === 'heading') return;
+
+    const text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+    const normalizedText = normalizeStructuralEditText(text);
+    if (!normalizedText || normalizedText.length < Math.max(1, Number(minTextLength) || 1)) return;
+
+    const from = pos + 1;
+    const to = pos + node.nodeSize - 1;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to) return;
+
+    blocks.push({
+      index: blocks.length + 1,
+      from,
+      to,
+      text,
+      normalizedText,
+      nodeType: node.type?.name || 'textblock',
+      parentNode: parent || null,
+      parentChildIndex: Number.isInteger(index) ? index : -1,
+    });
+  });
+
+  return blocks;
+};
+
+const hasMergeableCandidateBlockGap = (doc, leftBlock, rightBlock) => {
+  if (!doc || !leftBlock || !rightBlock) return false;
+  if (leftBlock.parentNode !== rightBlock.parentNode) return false;
+  if (!Number.isInteger(leftBlock.parentChildIndex) || !Number.isInteger(rightBlock.parentChildIndex)) return false;
+  if (rightBlock.parentChildIndex !== leftBlock.parentChildIndex + 1) return false;
+  if (rightBlock.from <= leftBlock.to) return true;
+  const gapText = doc.textBetween(leftBlock.to, rightBlock.from, '\n', '\n');
+  return !String(gapText || '').trim();
+};
+
+const collectCandidateBlockPassages = (doc, blocks = [], { maxBlocks = 3 } = {}) => {
+  const sourceBlocks = Array.isArray(blocks) ? blocks.filter(Boolean) : [];
+  if (!doc || !sourceBlocks.length) return [];
+
+  const passages = [...sourceBlocks];
+  const seen = new Set(sourceBlocks.map((block) => `${block.from}:${block.to}`));
+  const safeMaxBlocks = Math.max(2, Math.min(12, Number(maxBlocks) || 3));
+
+  for (let startIndex = 0; startIndex < sourceBlocks.length; startIndex += 1) {
+    let endIndex = startIndex;
+    while (endIndex + 1 < sourceBlocks.length && hasMergeableCandidateBlockGap(doc, sourceBlocks[endIndex], sourceBlocks[endIndex + 1])) {
+      endIndex += 1;
+      const blockCount = endIndex - startIndex + 1;
+      if (blockCount > safeMaxBlocks) break;
+
+      const from = sourceBlocks[startIndex].from;
+      const to = sourceBlocks[endIndex].to;
+      const key = `${from}:${to}`;
+      if (seen.has(key)) continue;
+
+      const text = doc.textBetween(from, to, ' ');
+      const normalizedText = normalizeStructuralEditText(text);
+      if (!normalizedText) continue;
+
+      passages.push({
+        index: sourceBlocks[startIndex].index,
+        from,
+        to,
+        text,
+        normalizedText,
+        nodeType: 'block-passage',
+        blockCount,
+      });
+      seen.add(key);
+    }
+  }
+
+  return passages;
+};
+
+const resolveUniqueDocumentMatch = (items = [], predicates = []) => {
+  for (const predicate of predicates) {
+    if (typeof predicate !== 'function') continue;
+    const matches = items.filter(predicate);
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
+};
+
+const buildSectionEditTarget = (doc, section, { includeFingerprint = false, matchKind = '', locatorText = '', locatorLabel = '' } = {}) => {
+  if (!doc || !section) return null;
+
+  const { from, to, sectionText, headingText, level, index } = section;
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || !String(sectionText || '').trim()) {
+    return null;
+  }
+
+  const docEnd = doc.content.size;
+  const target = {
+    kind: 'section',
+    from,
+    to,
+    targetId: buildStableEditTargetId({ kind: 'section', from, to, sectionIndex: index, headingText, locatorText }),
+    text: sectionText,
+    before: doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim(),
+    after: doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim(),
+    headingText,
+    headingLevel: level,
+    sectionIndex: index,
+    matchKind,
+    locatorText,
+    locatorLabel,
+  };
+
+  return includeFingerprint ? { ...target, ...buildEditTargetFingerprint(doc, from, to) } : target;
+};
+
+const dedupeResolvedEditTargets = (targets = []) => {
+  const seen = new Set();
+  return (Array.isArray(targets) ? targets : []).filter((target) => {
+    const regionKey = buildCanonicalEditRegionKey(target);
+    const dedupeKey = regionKey || String(target?.targetId || '').trim();
+    if (!dedupeKey || seen.has(dedupeKey)) return false;
+    seen.add(dedupeKey);
+    return true;
+  });
+};
+
+const hasExplicitStructuralEditReference = (promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!sourceText) return false;
+
+  return STRUCTURAL_EDIT_CUE_PATTERN.test(sourceText)
+    || collectHashStructuralAnchors(sourceText).length > 0;
+};
+
+const resolveExplicitStructuralEditReferences = (doc, promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!sourceText) {
+    return { targets: [], unresolvedReferences: [] };
+  }
+
+  const sections = collectHeadingSections(doc);
+  const primarySections = sections.filter((section) => section.isPrimaryLevel);
+  const hasStructuralCue = STRUCTURAL_EDIT_CUE_PATTERN.test(sourceText);
+  const hashAnchors = collectHashStructuralAnchors(sourceText);
+  const ordinalReferences = collectStructuralOrdinalReferences(sourceText);
+  const quotedAnchors = hasStructuralCue
+    ? collectQuotedStructuralAnchors(sourceText, { requireLocalStructuralCue: true })
+    : [];
+
+  if (!hashAnchors.length && !ordinalReferences.length && !quotedAnchors.length) {
+    return { targets: [], unresolvedReferences: [] };
+  }
+
+  const resolveUniqueSection = (matchers = []) => {
+    for (const matcher of matchers) {
+      const matches = sections.filter(matcher);
+      if (matches.length === 1) {
+        return matches[0];
+      }
+    }
+    return null;
+  };
+  const buildResolvedTarget = (section, metadata = {}) => buildSectionEditTarget(doc, section, {
+    includeFingerprint: true,
+    matchKind: metadata.matchKind || '',
+    locatorText: metadata.locatorText || '',
+    locatorLabel: metadata.locatorLabel || metadata.locatorText || '',
+  });
+  const resolvedTargets = [];
+  const unresolvedReferences = [];
+
+  hashAnchors.forEach((anchor) => {
+    const section = resolveUniqueSection([
+      (item) => item.normalizedHeadingText === anchor.normalized,
+      (item) => item.normalizedHeadingText.includes(anchor.normalized),
+      (item) => item.normalizedSectionText.includes(anchor.normalized),
+    ]);
+    if (!section) {
+      unresolvedReferences.push({
+        matchKind: 'anchor',
+        text: `#${anchor.text}`,
+        locatorText: `#${anchor.text}`,
+        locatorLabel: `עוגן #${anchor.text}`,
+      });
+      return;
+    }
+    resolvedTargets.push(buildResolvedTarget(section, {
+      matchKind: 'anchor',
+      locatorText: `#${anchor.text}`,
+      locatorLabel: `עוגן #${anchor.text}`,
+    }));
+  });
+
+  ordinalReferences.forEach((reference) => {
+    const sectionPool = primarySections.length ? primarySections : sections;
+    const section = sectionPool[reference.index - 1] || null;
+    if (!section) {
+      unresolvedReferences.push({
+        matchKind: 'ordinal',
+        text: reference.label,
+        locatorText: String(reference.index),
+        locatorLabel: reference.label,
+      });
+      return;
+    }
+    resolvedTargets.push(buildResolvedTarget(section, {
+      matchKind: 'ordinal',
+      locatorText: String(reference.index),
+      locatorLabel: reference.label,
+    }));
+  });
+
+  quotedAnchors.forEach((anchor) => {
+    const section = resolveUniqueSection([
+      (item) => item.normalizedHeadingText === anchor.normalized,
+      (item) => item.normalizedSectionText.includes(anchor.normalized),
+    ]);
+    if (!section) {
+      unresolvedReferences.push({
+        matchKind: 'quoted-anchor',
+        text: anchor.text,
+        locatorText: anchor.text,
+        locatorLabel: `"${anchor.text}"`,
+      });
+      return;
+    }
+    resolvedTargets.push(buildResolvedTarget(section, {
+      matchKind: 'quoted-anchor',
+      locatorText: anchor.text,
+      locatorLabel: `"${anchor.text}"`,
+    }));
+  });
+
+  return {
+    targets: dedupeResolvedEditTargets(resolvedTargets),
+    unresolvedReferences,
+  };
+};
+
+const resolveStructuralEditTargets = (doc, promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!doc || !sourceText) return [];
+
+  return resolveExplicitStructuralEditReferences(doc, sourceText).targets;
+};
+
+const resolveStructuralEditTarget = (doc, promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!doc || !sourceText) return null;
+
+  const multiTargets = resolveStructuralEditTargets(doc, sourceText);
+  if (multiTargets.length === 1) {
+    return multiTargets[0];
+  }
+
+  const sections = collectHeadingSections(doc);
+  if (!sections.length) return null;
+
+  const primarySections = sections.filter((section) => section.isPrimaryLevel);
+  const promptNormalized = normalizeStructuralEditText(sourceText);
+  const hasStructuralCue = STRUCTURAL_EDIT_CUE_PATTERN.test(sourceText);
+  const matchUniqueSection = (predicate) => {
+    const matches = sections.filter(predicate);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const buildResolvedTarget = (section, metadata = {}) => buildSectionEditTarget(doc, section, {
+    includeFingerprint: true,
+    matchKind: metadata.matchKind || '',
+    locatorText: metadata.locatorText || '',
+    locatorLabel: metadata.locatorLabel || metadata.locatorText || '',
+  });
+
+  const hashAnchorMatch = sourceText.match(STRUCTURAL_EDIT_HASH_ANCHOR_PATTERN);
+  if (hashAnchorMatch) {
+    const anchorText = String(hashAnchorMatch[2] || '').trim();
+    const normalizedAnchor = normalizeStructuralEditText(anchorText);
+    const section = matchUniqueSection((item) => item.normalizedHeadingText === normalizedAnchor)
+      || matchUniqueSection((item) => item.normalizedHeadingText.includes(normalizedAnchor))
+      || matchUniqueSection((item) => item.normalizedSectionText.includes(normalizedAnchor));
+    if (section) {
+      return buildResolvedTarget(section, {
+        matchKind: 'anchor',
+        locatorText: `#${anchorText}`,
+        locatorLabel: `עוגן #${anchorText}`,
+      });
+    }
+  }
+
+  const ordinalIndex = parseStructuralOrdinalIndex(sourceText);
+  if (ordinalIndex) {
+    const sectionPool = primarySections.length ? primarySections : sections;
+    const section = sectionPool[ordinalIndex - 1] || null;
+    if (section) {
+      return buildResolvedTarget(section, {
+        matchKind: 'ordinal',
+        locatorText: String(ordinalIndex),
+        locatorLabel: `סעיף ${ordinalIndex}`,
+      });
+    }
+  }
+
+  const implicitHeadingMatches = sections.filter((section) => {
+    const normalizedHeading = String(section.normalizedHeadingText || '').trim();
+    if (!normalizedHeading || normalizedHeading.length < MIN_IMPLICIT_HEADING_MATCH_LENGTH) return false;
+    return promptNormalized.includes(normalizedHeading);
+  });
+  if (!hasStructuralCue && implicitHeadingMatches.length === 1) {
+    return buildResolvedTarget(implicitHeadingMatches[0], {
+      matchKind: 'implicit-heading',
+      locatorText: implicitHeadingMatches[0].headingText,
+      locatorLabel: implicitHeadingMatches[0].headingText,
+    });
+  }
+
+  if (!hasStructuralCue) return null;
+
+  const quotedAnchors = collectQuotedStructuralAnchors(sourceText, { requireLocalStructuralCue: true });
+  for (const anchor of quotedAnchors) {
+    const section = matchUniqueSection((item) => item.normalizedHeadingText === anchor.normalized)
+      || matchUniqueSection((item) => item.normalizedSectionText.includes(anchor.normalized));
+    if (section) {
+      return buildResolvedTarget(section, {
+        matchKind: 'quoted-anchor',
+        locatorText: anchor.text,
+        locatorLabel: `"${anchor.text}"`,
+      });
+    }
+  }
+
+  const headingMatches = sections.filter((section) => {
+    if (!section.normalizedHeadingText) return false;
+    const escapedHeading = escapeStructuralEditRegex(section.normalizedHeadingText);
+    const explicitHeadingPattern = new RegExp(
+      `(?:^|\\s)(?:section|heading|chapter|part|פרק|סעיף|כותרת|חלק)(?:\\s+|\\s*[:\\-]\\s*|\\s*"\\s*)${escapedHeading}(?:"|\\s|$)`,
+      'iu'
+    );
+    return explicitHeadingPattern.test(promptNormalized);
+  });
+  if (headingMatches.length === 1) {
+    return buildResolvedTarget(headingMatches[0], {
+      matchKind: 'heading-text',
+      locatorText: headingMatches[0].headingText,
+      locatorLabel: headingMatches[0].headingText,
+    });
+  }
+
+  return null;
+};
+
+const buildEditTargetFingerprint = (doc, from, to) => {
+  if (!doc || !Number.isInteger(from) || !Number.isInteger(to) || from >= to) {
+    return { sliceJson: '', normalizedHtml: '' };
+  }
+
+  const sliceContent = doc.slice(from, to).content;
+  const sliceJson = JSON.stringify(sliceContent.toJSON());
+  if (typeof document === 'undefined') {
+    return { sliceJson, normalizedHtml: '' };
+  }
+
+  const serializer = DOMSerializer.fromSchema(doc.type.schema);
+  const fragment = serializer.serializeFragment(sliceContent);
+  const container = document.createElement('div');
+  container.appendChild(fragment);
+  return {
+    sliceJson,
+    normalizedHtml: normalizeEditTargetHtml(container.innerHTML),
+  };
+};
+
+const buildSelectionEditTarget = (doc, selection, { includeFingerprint = false } = {}) => {
+  if (!doc || !selection || selection.empty) return null;
+  const { from, to } = selection;
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to) return null;
+
+  const docEnd = doc.content.size;
+  const target = {
+    kind: 'selection',
+    from,
+    to,
+    targetId: buildStableEditTargetId({ kind: 'selection', from, to }),
+    text: doc.textBetween(from, to, ' '),
+    before: doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim(),
+    after: doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim(),
+  };
+
+  return includeFingerprint ? { ...target, ...buildEditTargetFingerprint(doc, from, to) } : target;
+};
+
+const buildBlockEditTarget = (doc, selectionOrRange, { includeFingerprint = false, matchKind = '', locatorText = '', locatorLabel = '' } = {}) => {
+  if (!doc || !selectionOrRange) return null;
+
+  let from = Number(selectionOrRange?.from);
+  let to = Number(selectionOrRange?.to);
+
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    const $from = selectionOrRange?.$from;
+    if (!$from?.parent) return null;
+    from = $from.start();
+    to = $from.end();
+  }
+
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to) return null;
+
+  const target = {
+    kind: 'block',
+    from,
+    to,
+    targetId: buildStableEditTargetId({ kind: 'block', from, to, locatorText }),
+    text: doc.textBetween(from, to, ' '),
+    matchKind,
+    locatorText,
+    locatorLabel,
+  };
+
+  return includeFingerprint ? { ...target, ...buildEditTargetFingerprint(doc, from, to) } : target;
+};
+
+const resolveReviewPlanSectionTarget = (doc, { locator = '', originalText = '', title = '' } = {}) => {
+  if (!doc) return null;
+  const sections = collectHeadingSections(doc);
+  if (!sections.length) return null;
+
+  const normalizedLocator = normalizeStructuralEditText(locator);
+  const normalizedOriginalText = normalizeStructuralEditText(originalText);
+  const directSection = normalizedLocator
+    ? resolveUniqueDocumentMatch(sections, [
+      (item) => item.normalizedHeadingText === normalizedLocator,
+      (item) => item.normalizedHeadingText.includes(normalizedLocator),
+      (item) => normalizedLocator.includes(item.normalizedHeadingText),
+    ])
+    : null;
+  const fallbackSection = !directSection && normalizedOriginalText
+    ? resolveUniqueDocumentMatch(sections, [
+      (item) => item.normalizedSectionText.includes(normalizedOriginalText),
+    ])
+    : null;
+  const resolvedSection = directSection || fallbackSection;
+  if (!resolvedSection) return null;
+
+  return buildSectionEditTarget(doc, resolvedSection, {
+    includeFingerprint: true,
+    matchKind: 'review-plan-section',
+    locatorText: locator || title,
+    locatorLabel: locator || title,
+  });
+};
+
+const resolveReviewPlanBlockTarget = (doc, { locator = '', originalText = '', matchStrategy = 'contains', title = '' } = {}, sectionTarget = null) => {
+  if (!doc) return null;
+  const normalizedLocator = normalizeStructuralEditText(locator);
+  const normalizedOriginalText = normalizeStructuralEditText(originalText);
+  const candidateBlocks = collectCandidateTextBlocks(doc, {
+    minTextLength: normalizedOriginalText ? 1 : MIN_CANDIDATE_BLOCK_TEXT_LENGTH,
+  }).filter((block) => {
+    if (!sectionTarget) return true;
+    return block.from >= sectionTarget.from && block.to <= sectionTarget.to;
+  });
+  if (!candidateBlocks.length) return null;
+
+  const candidatePassageMaxBlocks = normalizedOriginalText
+    ? Math.max(4, Math.min(12, Math.ceil(normalizedOriginalText.length / 220)))
+    : 3;
+  const candidatePassages = collectCandidateBlockPassages(doc, candidateBlocks, {
+    maxBlocks: candidatePassageMaxBlocks,
+  });
+  if (!candidatePassages.length) return null;
+  const isSingleBlockCandidate = (item) => !Number.isInteger(item?.blockCount) || Number(item.blockCount) <= 1;
+  const multiBlockCandidates = candidatePassages.filter((item) => !isSingleBlockCandidate(item));
+
+  const orderedMatchers = matchStrategy === 'startsWith'
+    ? [
+      normalizedOriginalText ? (item) => item.normalizedText === normalizedOriginalText : null,
+      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedOriginalText) : null,
+      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedLocator) : null,
+      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedOriginalText) : null,
+      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedLocator) : null,
+    ]
+    : [
+      normalizedOriginalText ? (item) => item.normalizedText === normalizedOriginalText : null,
+      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedOriginalText) : null,
+      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedOriginalText) : null,
+      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedLocator) : null,
+      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedLocator) : null,
+    ];
+  let block = resolveUniqueDocumentMatch(candidatePassages, orderedMatchers.filter(Boolean));
+  if (!block && multiBlockCandidates.length) {
+    const allowMultiBlockFallback = sectionTarget
+      || normalizedOriginalText.length >= 80
+      || normalizedLocator.length >= MIN_PROMPT_BLOCK_LOCATOR_LENGTH;
+    if (allowMultiBlockFallback) {
+    const passageFallbackMatchers = matchStrategy === 'startsWith'
+      ? [
+        normalizedOriginalText ? (item) => item.normalizedText.startsWith(normalizedOriginalText) : null,
+        normalizedLocator ? (item) => item.normalizedText.includes(normalizedLocator) : null,
+      ]
+      : [
+        normalizedOriginalText ? (item) => item.normalizedText.includes(normalizedOriginalText) : null,
+        normalizedLocator ? (item) => item.normalizedText.includes(normalizedLocator) : null,
+      ];
+      block = resolveUniqueDocumentMatch(multiBlockCandidates, passageFallbackMatchers.filter(Boolean));
+    }
+  }
+  if (!block) return null;
+
+  return buildBlockEditTarget(doc, block, {
+    includeFingerprint: true,
+    matchKind: 'review-plan-block',
+    locatorText: locator || originalText || title,
+    locatorLabel: locator || title || originalText,
+  });
+};
+
+const normalizeReviewPlanEditOperation = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['insert_before', 'before', 'prepend'].includes(normalized)) return 'insert_before';
+  if (['insert_after', 'after', 'append', 'add_after', 'add'].includes(normalized)) return 'insert_after';
+  if (['needs_review', 'review', 'manual_review', 'manual'].includes(normalized)) return 'needs_review';
+  return 'replace';
+};
+
+const normalizeReviewPlanTargetConfidence = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!normalized) return '';
+  if (['high', 'גבוה', 'גבוהה', 'strong', 'certain', 'exact'].includes(normalized)) return 'high';
+  if (['low', 'נמוך', 'נמוכה', 'weak', 'uncertain', 'ambiguous'].includes(normalized)) return 'low';
+  return 'medium';
+};
+
+const escapeReviewPlanHtmlText = (value = '') => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const normalizeReviewPlanInsertionHtml = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/<\/?[a-z][^>]*>/i.test(text)) return text;
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeReviewPlanHtmlText(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+};
+
+const serializeReviewPlanTargetHtml = (doc, target = null) => {
+  if (!doc || !target || typeof document === 'undefined') return '';
+  const from = Number(target.from);
+  const to = Number(target.to);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || from < 0 || to > doc.content.size) return '';
+
+  const serializer = DOMSerializer.fromSchema(doc.type.schema);
+  const fragment = serializer.serializeFragment(doc.slice(from, to).content);
+  const container = document.createElement('div');
+  container.appendChild(fragment);
+  return container.innerHTML;
+};
+
+const buildReviewPlanReplacementText = (descriptor = {}, target = null, doc = null) => {
+  const rawReplacement = String(descriptor?.replacement || descriptor?.replacementText || '').trim();
+  if (!rawReplacement || !target?.text) return rawReplacement;
+
+  const operation = normalizeReviewPlanEditOperation(descriptor?.operation || descriptor?.action || descriptor?.placement);
+  const originalHtml = operation === 'replace' ? '' : serializeReviewPlanTargetHtml(doc, target);
+  const insertionHtml = operation === 'replace' ? '' : normalizeReviewPlanInsertionHtml(rawReplacement);
+  if (originalHtml && insertionHtml) {
+    return operation === 'insert_before'
+      ? `${insertionHtml}${originalHtml}`
+      : `${originalHtml}${insertionHtml}`;
+  }
+
+  if (operation === 'insert_before') {
+    return `${rawReplacement}\n\n${String(target.text || '').trimStart()}`.trim();
+  }
+  if (operation === 'insert_after') {
+    return `${String(target.text || '').trimEnd()}\n\n${rawReplacement}`.trim();
+  }
+  return rawReplacement;
+};
+
+const scoreReviewPlanEditForSameTarget = (entry = {}) => {
+  const replacementLength = String(entry?.replacementText || '').trim().length;
+  const reasonLength = String(entry?.reason || '').trim().length;
+  const operationBonus = normalizeReviewPlanEditOperation(entry?.operation) === 'replace' ? 16 : 0;
+  return replacementLength + Math.min(reasonLength, 240) + operationBonus;
+};
+
+const doEditRangesOverlap = (left = null, right = null) => Boolean(
+  left && right && left.from < right.to && right.from < left.to,
+);
+
+const isEditRangeContainedBy = (inner = null, outer = null) => Boolean(
+  inner && outer && inner.from >= outer.from && inner.to <= outer.to,
+);
+
+const scoreReviewPlanEditForOverlap = (entry = {}) => {
+  return scoreReviewPlanEditForSameTarget(entry);
+};
+
+const choosePreferredOverlappingReviewPlanEdit = (left = {}, right = {}) => {
+  const leftRange = resolveNumericEditRange(left?.target);
+  const rightRange = resolveNumericEditRange(right?.target);
+  if (isEditRangeContainedBy(leftRange, rightRange)) return left;
+  if (isEditRangeContainedBy(rightRange, leftRange)) return right;
+  return scoreReviewPlanEditForOverlap(left) >= scoreReviewPlanEditForOverlap(right) ? left : right;
+};
+
+const normalizeReviewPlanVisibleText = (value = '') => String(value || '')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/gi, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const REVIEW_PLAN_COMMON_TERMS = new Set([
+  'של', 'על', 'עם', 'את', 'זה', 'זאת', 'הוא', 'היא', 'הם', 'הן', 'כל', 'לא', 'גם', 'או', 'אם', 'כי', 'כדי', 'בין', 'אשר', 'the', 'and', 'that', 'with', 'from', 'this', 'there', 'were', 'have', 'into', 'their',
+]);
+
+const extractReviewPlanContentTerms = (value = '') => Array.from(new Set(
+  normalizeReviewPlanVisibleText(value)
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]{3,}/gu) || [],
+)).filter((term) => term.length >= 4 && !REVIEW_PLAN_COMMON_TERMS.has(term));
+
+const getReviewPlanReplacementAffinity = (targetText = '', replacementText = '') => {
+  const targetTerms = extractReviewPlanContentTerms(targetText);
+  const replacementTerms = extractReviewPlanContentTerms(replacementText);
+  if (!targetTerms.length || !replacementTerms.length) {
+    return { replacementCoverage: 0, targetCoverage: 0, sharedCount: 0 };
+  }
+
+  const targetSet = new Set(targetTerms);
+  const sharedCount = replacementTerms.filter((term) => targetSet.has(term)).length;
+  return {
+    replacementCoverage: sharedCount / replacementTerms.length,
+    targetCoverage: sharedCount / targetTerms.length,
+    sharedCount,
+  };
+};
+
+const isSuspiciousBroadReviewPlanReplacement = (entry = {}) => {
+  const operation = normalizeReviewPlanEditOperation(entry?.operation);
+  if (operation !== 'replace') return false;
+
+  const targetText = normalizeReviewPlanVisibleText(entry?.target?.text || '');
+  const replacementText = normalizeReviewPlanVisibleText(entry?.replacementText || '');
+  if (targetText.length < 1200) return false;
+  const affinity = getReviewPlanReplacementAffinity(targetText, replacementText);
+  const lowAffinity = affinity.sharedCount < 4 || (affinity.replacementCoverage < 0.22 && affinity.targetCoverage < 0.08);
+  const heavyShrink = replacementText.length < Math.floor(targetText.length * 0.55);
+  const tinyReplacement = replacementText.length < 260;
+  return lowAffinity || ((tinyReplacement || heavyShrink) && (affinity.replacementCoverage < 0.35 || affinity.targetCoverage < 0.12));
+};
+
+const isMediumConfidenceReviewPlanEditTooBroad = (entry = {}) => {
+  if (normalizeReviewPlanTargetConfidence(entry?.targetConfidence) !== 'medium') return false;
+
+  const range = resolveNumericEditRange(entry?.target);
+  const span = range ? range.to - range.from : 0;
+  const targetText = normalizeReviewPlanVisibleText(entry?.target?.text || '');
+  const replacementText = normalizeReviewPlanVisibleText(entry?.replacementText || '');
+  const operation = normalizeReviewPlanEditOperation(entry?.operation);
+  if (operation === 'insert_before' || operation === 'insert_after') {
+    return replacementText.length > 900;
+  }
+
+  return String(entry?.target?.kind || '') === 'section'
+    || span > 1700
+    || targetText.length > 900
+    || replacementText.length > 1100;
+};
+
+const mergeOverlappingReviewPlanEdits = (edits = []) => {
+  const resolved = [];
+  const overlapped = [];
+  (Array.isArray(edits) ? edits : []).forEach((entry) => {
+    const entryRange = resolveNumericEditRange(entry?.target);
+    if (!entryRange) return;
+    const overlappingIndexes = resolved
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => doEditRangesOverlap(entryRange, resolveNumericEditRange(item?.target)));
+
+    if (!overlappingIndexes.length) {
+      resolved.push(entry);
+      return;
+    }
+
+    const candidateLoses = overlappingIndexes.some(({ item }) => choosePreferredOverlappingReviewPlanEdit(item, entry) === item);
+    if (candidateLoses) {
+      overlapped.push({
+        suggestionId: String(entry?.suggestionId || '').trim(),
+        title: String(entry?.title || entry?.target?.locatorLabel || 'תיקון חופף').trim(),
+        overlap: true,
+      });
+      return;
+    }
+
+    let candidate = entry;
+    overlappingIndexes.forEach(({ item }) => {
+      candidate = {
+        ...candidate,
+        title: [candidate.title, item.title].filter(Boolean).join(' + '),
+        reason: [candidate.reason, item.reason].filter(Boolean).join('\n'),
+        mergedOverlapCount: Math.max(1, Number(candidate.mergedOverlapCount || 1)) + Math.max(1, Number(item.mergedOverlapCount || 1)),
+      };
+      overlapped.push({
+        suggestionId: String(item?.suggestionId || '').trim(),
+        title: String(item?.title || item?.target?.locatorLabel || 'תיקון חופף').trim(),
+        overlap: true,
+      });
+    });
+    const indexesToRemove = new Set(overlappingIndexes.map(({ index }) => index));
+    for (let index = resolved.length - 1; index >= 0; index -= 1) {
+      if (indexesToRemove.has(index)) resolved.splice(index, 1);
+    }
+    resolved.push(candidate);
+  });
+  return { resolved, overlapped };
+};
+
+const mergeDuplicateReviewPlanEdits = (edits = []) => {
+  const merged = new Map();
+  (Array.isArray(edits) ? edits : []).forEach((entry) => {
+    const key = buildCanonicalEditRegionKey(entry?.target) || String(entry?.targetId || '').trim();
+    if (!key) return;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, entry);
+      return;
+    }
+
+    const preferred = scoreReviewPlanEditForSameTarget(entry) >= scoreReviewPlanEditForSameTarget(existing) ? entry : existing;
+    const secondary = preferred === entry ? existing : entry;
+    merged.set(key, {
+      ...preferred,
+      title: [preferred.title, secondary.title].filter(Boolean).join(' + '),
+      reason: [preferred.reason, secondary.reason].filter(Boolean).join('\n'),
+      mergedDuplicateCount: Math.max(1, Number(preferred.mergedDuplicateCount || 1)) + Math.max(1, Number(secondary.mergedDuplicateCount || 1)),
+    });
+  });
+  return [...merged.values()];
+};
+
+const resolveReviewActionPlanEdits = (doc, descriptors = []) => {
+  const resolved = [];
+  const unresolved = [];
+
+  (Array.isArray(descriptors) ? descriptors : []).slice(0, REVIEW_ACTION_PLAN_EDIT_LIMIT).forEach((descriptor, index) => {
+    const descriptorTitle = String(descriptor?.title || descriptor?.locator || descriptor?.originalText || `תיקון ${index + 1}`).trim();
+    const suggestionId = String(descriptor?.suggestionId || descriptor?.id || '').trim();
+    const operation = normalizeReviewPlanEditOperation(descriptor?.operation || descriptor?.action || descriptor?.placement);
+    const targetConfidence = normalizeReviewPlanTargetConfidence(descriptor?.targetConfidence || descriptor?.confidence || descriptor?.locationConfidence || descriptor?.mappingConfidence);
+    const rawReplacementText = String(descriptor?.replacement || descriptor?.replacementText || '').trim();
+    if (!rawReplacementText && operation !== 'needs_review' && targetConfidence !== 'low') return;
+
+    const prefersSection = String(descriptor?.targetType || '').trim() === 'section';
+    const sectionTarget = resolveReviewPlanSectionTarget(doc, descriptor || {});
+    const target = prefersSection
+      ? sectionTarget
+      : resolveReviewPlanBlockTarget(doc, descriptor || {}, sectionTarget);
+
+    if (!target?.text?.trim()) {
+      unresolved.push({ suggestionId, title: descriptorTitle });
+      return;
+    }
+
+    if (operation === 'needs_review' || targetConfidence === 'low') {
+      unresolved.push({ suggestionId, title: descriptorTitle, targetConfidence, needsReview: true });
+      return;
+    }
+
+    const replacementText = buildReviewPlanReplacementText({ ...descriptor, replacement: rawReplacementText, operation }, target, doc);
+    if (!replacementText.trim()) return;
+
+    const resolvedEntry = {
+      target,
+      targetId: target.targetId,
+      replacementText,
+      operation,
+      targetConfidence,
+      suggestionId,
+      title: descriptorTitle,
+      reason: String(descriptor?.reason || '').trim(),
+    };
+
+    if (isMediumConfidenceReviewPlanEditTooBroad(resolvedEntry)) {
+      unresolved.push({ suggestionId, title: descriptorTitle, targetConfidence, mediumConfidenceTooBroad: true });
+      return;
+    }
+
+    if (isSuspiciousBroadReviewPlanReplacement(resolvedEntry)) {
+      unresolved.push({ suggestionId, title: descriptorTitle, broadReplacementBlocked: true });
+      return;
+    }
+
+    resolved.push(resolvedEntry);
+  });
+
+  const dedupedResolved = mergeDuplicateReviewPlanEdits(resolved);
+  const overlapMerge = mergeOverlappingReviewPlanEdits(dedupedResolved);
+  return { resolved: overlapMerge.resolved, unresolved: [...unresolved, ...overlapMerge.overlapped] };
+};
+
+const buildBlockedQuotedBlockEditTarget = (referenceText = '') => ({
+  kind: 'blocked-quoted-block',
+  from: 0,
+  to: 0,
+  targetId: 'blocked-quoted-block',
+  text: '__blocked_quoted_block_reference__',
+  before: '',
+  after: '',
+  matchKind: UNRESOLVED_EXPLICIT_QUOTED_BLOCK_MATCH_KIND,
+  locatorText: referenceText,
+  locatorLabel: referenceText ? `"${referenceText}"` : 'הפניה מצוטטת',
+});
+
+const resolveQuotedBlockReferences = (doc, promptText = '', { includeFreeQuoted = false } = {}) => {
+  const sourceText = String(promptText || '').trim();
+  if (!doc || !sourceText) {
+    return { targets: [], unresolvedReferences: [] };
+  }
+
+  const blocks = collectCandidateTextBlocks(doc);
+  if (!blocks.length) {
+    return { targets: [], unresolvedReferences: [] };
+  }
+
+  const references = collectQuotedBlockReferences(sourceText, { includeFreeQuoted });
+  if (!references.length) {
+    return { targets: [], unresolvedReferences: [] };
+  }
+
+  const matchUniqueBlock = (predicate) => {
+    const matches = blocks.filter(predicate);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const buildResolvedTarget = (block, metadata = {}) => buildBlockEditTarget(doc, block, {
+    includeFingerprint: true,
+    matchKind: metadata.matchKind || '',
+    locatorText: metadata.locatorText || '',
+    locatorLabel: metadata.locatorLabel || metadata.locatorText || '',
+  });
+  const resolvedTargets = [];
+  const unresolvedReferences = [];
+
+  references.forEach((reference) => {
+    const block = reference.matchKind === 'block-starts-with'
+      ? matchUniqueBlock((candidate) => candidate.normalizedText.startsWith(reference.normalized))
+      : matchUniqueBlock((candidate) => candidate.normalizedText.includes(reference.normalized));
+    if (!block) {
+      if (isBlockingQuotedBlockReference(reference.matchKind)) {
+        unresolvedReferences.push(reference);
+      }
+      return;
+    }
+    resolvedTargets.push(buildResolvedTarget(block, {
+      matchKind: reference.matchKind,
+      locatorText: reference.text,
+      locatorLabel: reference.matchKind === 'block-starts-with'
+        ? `מתחיל ב־"${reference.text}"`
+        : `"${reference.text}"`,
+    }));
+  });
+
+  return {
+    targets: dedupeResolvedEditTargets(resolvedTargets),
+    unresolvedReferences,
+  };
+};
+
+const resolveBlockEditTargets = (doc, promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  if (!doc || !sourceText) return [];
+
+  return resolveQuotedBlockReferences(doc, sourceText, {
+    includeFreeQuoted: !hasExplicitStructuralEditReference(sourceText),
+  }).targets;
+};
+
+const resolveBlockEditTarget = (doc, promptText = '') => {
+  const sourceText = String(promptText || '').trim();
+  const { targets, unresolvedReferences } = resolveQuotedBlockReferences(doc, sourceText, {
+    includeFreeQuoted: !hasExplicitStructuralEditReference(sourceText),
+  });
+  if (unresolvedReferences.length) {
+    return buildBlockedQuotedBlockEditTarget(unresolvedReferences[0]?.text || '');
+  }
+  return targets.length === 1 ? targets[0] : null;
+};
+
+const buildEditTargetFromState = (editorState, options = {}) => {
+  if (!editorState?.doc || !editorState?.selection) return { ...EMPTY_EDIT_TARGET };
+
+  const selection = buildSelectionEditTarget(editorState.doc, editorState.selection, options);
+  const block = buildBlockEditTarget(editorState.doc, editorState.selection, options);
+
+  return {
+    selection,
+    block,
+    active: selection || block,
+  };
+};
+
+const isEditTargetStillSafe = (editorState, target) => {
+  if (!editorState?.doc || !target) return false;
+
+  const { doc } = editorState;
+  const from = Number(target.from);
+  const to = Number(target.to);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || from < 0 || to > doc.content.size) {
+    return false;
+  }
+
+  if (doc.textBetween(from, to, ' ') !== String(target.text || '')) {
+    return false;
+  }
+
+  const expectedSliceJson = typeof target.sliceJson === 'string' ? target.sliceJson : '';
+  const expectedNormalizedHtml = typeof target.normalizedHtml === 'string' ? target.normalizedHtml : '';
+  if (expectedSliceJson || expectedNormalizedHtml) {
+    const fingerprint = buildEditTargetFingerprint(doc, from, to);
+    if (expectedSliceJson && fingerprint.sliceJson !== expectedSliceJson) {
+      return false;
+    }
+    if (expectedNormalizedHtml && fingerprint.normalizedHtml !== expectedNormalizedHtml) {
+      return false;
+    }
+  }
+
+  if (target.kind === 'selection') {
+    const docEnd = doc.content.size;
+    const before = doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim();
+    const after = doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim();
+    if (before !== String(target.before || '')) return false;
+    if (after !== String(target.after || '')) return false;
+  }
+
+  return true;
+};
 
 const LIVE_GENERATION_SHELL_MARKER = 'data-wordai-live-generation-shell="true"';
 const LIVE_GENERATION_ERROR_PLACEHOLDER_MARKER = 'data-wordai-live-generation-error-placeholder="true"';
@@ -88,6 +1419,13 @@ const START_SCREEN_TRANSITION_PARTICLES = [
 const isCanceledImportedDocumentPayload = (payload = null) => (
   payload?.canceled === true || payload?.cancelled === true
 );
+
+const createDocumentSessionId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 function StartScreenTransitionOverlay() {
   return (
@@ -720,7 +2058,7 @@ const resolveStartScreenGenerationInspectorMeta = ({ summary = null, logs = [] }
   const latestLogs = Array.isArray(logs) ? logs : [];
   const latestStages = Array.isArray(summary?.stages) ? summary.stages : [];
   const requestStartLog = latestLogs.find((log) => log?.type === 'request-start');
-  const lastLogMeta = [...latestLogs].reverse().find(
+  const lastLogMeta = latestLogs.find(
     (log) => String(log?.provider || '').trim() || String(log?.model || '').trim(),
   );
   const lastStageMeta = [...latestStages].reverse().find(
@@ -844,14 +2182,12 @@ const FEEDBACK_OPTION_GROUPS = [
   },
 ];
 
-const FEEDBACK_MAX_REVISION_ROUNDS = 2;
-
 const normalizeFeedbackExecutionMode = (value = '') => (String(value || '').trim() === 'workspace' ? 'workspace' : 'direct');
 
 const normalizeFeedbackRoundIndex = (value = 1) => {
   const parsedValue = Number(value);
   if (!Number.isFinite(parsedValue)) return 1;
-  return Math.min(FEEDBACK_MAX_REVISION_ROUNDS + 1, Math.max(1, Math.floor(parsedValue)));
+  return Math.max(1, Math.floor(parsedValue));
 };
 
 const isFeedbackWorkflowAvailable = () => {
@@ -879,9 +2215,252 @@ const DEFAULT_FEEDBACK_SURVEY = {
   usedFallback: false,
   submitting: false,
   submissionRequestId: null,
+  applyingRecommendations: false,
   reviewResult: null,
   reviewFocus: '',
+  reviewApplySelection: '',
   reviewErrorMessage: '',
+};
+
+const REVIEW_SUGGESTION_NUMBER_WORDS = new Map([
+  ['אחד', 1], ['אחת', 1], ['ראשון', 1], ['ראשונה', 1],
+  ['שניים', 2], ['שתיים', 2], ['שני', 2], ['שנייה', 2],
+  ['שלוש', 3], ['שלישי', 3], ['שלישית', 3],
+  ['ארבע', 4], ['רביעי', 4], ['רביעית', 4],
+  ['חמש', 5], ['חמישה', 5], ['חמישי', 5], ['חמישית', 5],
+  ['שש', 6], ['שישה', 6], ['שישי', 6], ['שישית', 6],
+  ['שבע', 7], ['שבעה', 7], ['שביעי', 7], ['שביעית', 7],
+  ['שמונה', 8], ['שמיני', 8], ['שמינית', 8],
+  ['תשע', 9], ['תשעה', 9], ['תשיעי', 9], ['תשיעית', 9],
+  ['עשר', 10], ['עשרה', 10], ['עשירי', 10], ['עשירית', 10],
+]);
+
+const collectReviewSuggestionNumbers = (value = '', max = 0) => {
+  const numbers = new Set();
+  let invalid = false;
+  const text = String(value || '').trim();
+  if (!text || max <= 0) return { numbers, invalid };
+  if (/(?:^|[^\p{L}\p{N}])[-+]?\d+(?:\.\d+)+(?:$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])[-+]\d+(?:$|[^\p{L}\p{N}])/u.test(text)) {
+    invalid = true;
+  }
+
+  for (const match of text.matchAll(/\b(\d+)\s*(?:-|–|עד|to)\s*(\d+)\b/giu)) {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+    if (start < 1 || start > max || end < 1 || end > max) {
+      invalid = true;
+      continue;
+    }
+    const from = Math.min(start, end);
+    const to = Math.max(start, end);
+    for (let index = from; index <= to; index += 1) numbers.add(index);
+  }
+
+  for (const match of text.matchAll(/(?<![-+.\p{L}\p{N}])\d+(?!\.\d)(?![\p{L}\p{N}])/gu)) {
+    const number = Number(match[0]);
+    if (!Number.isInteger(number)) continue;
+    if (number < 1 || number > max) {
+      invalid = true;
+      continue;
+    }
+    numbers.add(number);
+  }
+
+  text.split(/[\s,.;:]+/u).forEach((token) => {
+    const normalizedToken = token.replace(/^ו/u, '').trim();
+    const number = REVIEW_SUGGESTION_NUMBER_WORDS.get(normalizedToken);
+    if (number && number <= max) numbers.add(number);
+  });
+
+  return { numbers, invalid };
+};
+
+const resolveReviewSuggestionSelection = (selectionText = '', suggestions = []) => {
+  const normalizedSelection = String(selectionText || '').trim();
+  const total = Array.isArray(suggestions) ? suggestions.length : 0;
+  if (!normalizedSelection || !total) {
+    return { suggestions: Array.isArray(suggestions) ? suggestions : [], selectedIndexes: [], excludedIndexes: [], hasExplicitSelection: false, invalid: false };
+  }
+
+  const excludeSplit = normalizedSelection.split(/(?:\b(?:skip|except|without)\b|(?:דלג(?:י)?\s+על|תדלג(?:י)?\s+על|חוץ\s+מ|בלי|ללא))/iu);
+  const includeText = excludeSplit[0] || '';
+  const excludeText = excludeSplit.slice(1).join(' ');
+  const includeResult = collectReviewSuggestionNumbers(includeText, total);
+  const excludeResult = collectReviewSuggestionNumbers(excludeText, total);
+  const includeNumbers = includeResult.numbers;
+  const excludeNumbers = excludeResult.numbers;
+  if (includeResult.invalid || excludeResult.invalid) {
+    return { suggestions: [], selectedIndexes: [], excludedIndexes: [], hasExplicitSelection: true, invalid: true };
+  }
+  if (!includeNumbers.size && !excludeNumbers.size) {
+    return { suggestions: [], selectedIndexes: [], excludedIndexes: [], hasExplicitSelection: true, invalid: true };
+  }
+  const selectedNumbers = includeNumbers.size
+    ? includeNumbers
+    : new Set(Array.from({ length: total }, (_, index) => index + 1));
+  excludeNumbers.forEach((number) => selectedNumbers.delete(number));
+  const selectedIndexes = [...selectedNumbers].sort((left, right) => left - right);
+
+  return {
+    suggestions: selectedIndexes.map((number) => suggestions[number - 1]).filter(Boolean),
+    selectedIndexes,
+    excludedIndexes: [...excludeNumbers].sort((left, right) => left - right),
+    hasExplicitSelection: true,
+    invalid: selectedIndexes.length === 0,
+  };
+};
+
+const SIDEBAR_HISTORY_ENTRY_PATTERN = /(^|\n)(assistant|user):\s*/g;
+const SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN = /^(?:#{1,6}\s*)?(?:\*\*)?(\d{1,2})[.)]\s*(.+?)\s*(?:\*\*)?$/u;
+const SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN = /^[•*-]\s+(.+)$/u;
+const SIDEBAR_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|תיקונים|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
+const SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN = /(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני).{0,42}(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)/iu;
+
+const cleanSidebarSuggestionText = (value = '') => String(value || '')
+  .replace(/^\*+|\*+$/g, '')
+  .replace(/^#+\s*/u, '')
+  .trim();
+
+const parseSidebarConversationEntries = (conversationHistoryText = '') => {
+  const text = String(conversationHistoryText || '');
+  if (!text.trim()) return [];
+  const matches = [...text.matchAll(SIDEBAR_HISTORY_ENTRY_PATTERN)];
+  if (!matches.length) return [];
+
+  return matches.map((match, index) => {
+    const role = String(match[2] || '').trim();
+    const markerStart = match.index + (match[1] ? match[1].length : 0);
+    const contentStart = markerStart + `${role}: `.length;
+    const nextMarker = index + 1 < matches.length
+      ? matches[index + 1].index + (matches[index + 1][1] ? matches[index + 1][1].length : 0)
+      : text.length;
+    return {
+      role,
+      content: text.slice(contentStart, nextMarker).trim(),
+    };
+  }).filter((entry) => entry.role && entry.content);
+};
+
+const extractSidebarReviewSuggestionsFromText = (content = '') => {
+  const hasSidebarSuggestionList = (content = '') => String(content || '')
+    .split(/\r?\n/u)
+    .some((line) => SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN.test(line) || SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN.test(line));
+  if (!SIDEBAR_REVIEW_CONTEXT_PATTERN.test(content) || !hasSidebarSuggestionList(content)) return [];
+
+  const suggestions = [];
+  const hasNumberedList = String(content || '').split(/\r?\n/u).some((line) => SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN.test(line));
+
+  [content].forEach((entryContent) => {
+    const lines = String(entryContent || '').split(/\r?\n/u);
+    let current = null;
+    let bulletNumber = 0;
+    let blockItems = [];
+    let pendingBulletBlockBreak = false;
+    const commitCurrent = () => {
+      if (!current) return;
+      blockItems.push(current);
+      current = null;
+    };
+    const commitBlock = () => {
+      commitCurrent();
+      if (blockItems.length) {
+        suggestions.splice(0, suggestions.length, ...blockItems);
+        blockItems = [];
+      }
+    };
+
+    lines.forEach((rawLine) => {
+      const originalLine = String(rawLine || '');
+      const line = originalLine.trim();
+      if (!line) {
+        if (current) {
+          if (!hasNumberedList) {
+            commitCurrent();
+            pendingBulletBlockBreak = true;
+          } else {
+            current.body.push('');
+          }
+        }
+        return;
+      }
+
+      const markerMatch = originalLine.match(SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN);
+      if (markerMatch) {
+        const nextNumber = Number(markerMatch[1]);
+        if (nextNumber === 1 && (current || blockItems.length)) commitBlock();
+        commitCurrent();
+        pendingBulletBlockBreak = false;
+        bulletNumber = Math.max(bulletNumber, nextNumber);
+        current = {
+          number: nextNumber,
+          title: cleanSidebarSuggestionText(markerMatch[2] || ''),
+          body: [],
+        };
+        return;
+      }
+
+      const bulletMatch = !hasNumberedList && originalLine.match(SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN);
+      if (bulletMatch) {
+        if (pendingBulletBlockBreak && blockItems.length) {
+          commitBlock();
+          bulletNumber = 0;
+        }
+        commitCurrent();
+        pendingBulletBlockBreak = false;
+        bulletNumber += 1;
+        current = {
+          number: bulletNumber,
+          title: cleanSidebarSuggestionText(bulletMatch[1] || ''),
+          body: [],
+        };
+        return;
+      }
+
+      pendingBulletBlockBreak = false;
+      if (current) current.body.push(line);
+    });
+
+    commitBlock();
+  });
+
+  const uniqueByNumber = new Map();
+  suggestions
+    .filter((item) => Number.isInteger(item.number) && item.number > 0)
+    .forEach((item) => {
+      if (!uniqueByNumber.has(item.number)) uniqueByNumber.set(item.number, item);
+    });
+
+  return [...uniqueByNumber.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([number, item]) => {
+      const normalizedBody = item.body.join('\n').trim();
+      return {
+        suggestionId: `sidebar-suggestion-${number}`,
+        title: item.title || `המלצה ${number}`,
+        reason: normalizedBody,
+        suggestedChange: normalizedBody || item.title || `המלצה ${number}`,
+      };
+    });
+};
+
+const extractSidebarReviewSuggestionsFromConversation = (conversationHistoryText = '') => {
+  const entries = parseSidebarConversationEntries(conversationHistoryText);
+  const assistantEntries = entries.filter((entry) => entry.role === 'assistant');
+  const hasSidebarSuggestionList = (content = '') => String(content || '')
+    .split(/\r?\n/u)
+    .some((line) => SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN.test(line) || SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN.test(line));
+  const latestReviewEntry = [...assistantEntries]
+    .reverse()
+    .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content) && hasSidebarSuggestionList(entry.content));
+  if (!latestReviewEntry) return [];
+  return extractSidebarReviewSuggestionsFromText(latestReviewEntry.content);
+};
+
+const getSidebarReviewSelectionText = (promptText = '') => {
+  const lines = String(promptText || '').split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const selectionLine = [...lines].reverse().find((line) => SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN.test(line));
+  return selectionLine || String(promptText || '').trim();
 };
 
 const DEFAULT_INPUT_DIALOG = {
@@ -985,7 +2564,7 @@ const getDraftTitleFromText = (text = '', templateId = 'blank') => {
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   const normalized = String(lines[0] || '')
-    .replace(/^[#*\-\d.)\s]+/, '')
+      .replace(/^(?:#{1,6}\s+|[-*]\s+|\d+[.)]\s+)/, '')
     .trim();
 
   if (!normalized) {
@@ -993,6 +2572,14 @@ const getDraftTitleFromText = (text = '', templateId = 'blank') => {
   }
 
   return normalized.length > 72 ? `${normalized.slice(0, 72).trim()}...` : normalized;
+};
+
+const resolveDocumentHistoryTitle = ({ text = '', filePath = '', templateId = 'blank', fallbackTitle = '' } = {}) => {
+  return getDraftTitleFromFilePath(filePath)
+    || getDraftTitleFromText(text, templateId)
+    || String(fallbackTitle || '').trim()
+    || GENERATION_LABEL_FALLBACKS[templateId]
+    || GENERATION_LABEL_FALLBACKS.blank;
 };
 
 const EXPORT_DOC_STYLES = `<style>
@@ -1004,6 +2591,85 @@ const EXPORT_DOC_STYLES = `<style>
     body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
     body > p:nth-child(5), body > p:nth-child(6) { text-align: center; color: #475569; }
   </style>`;
+
+const EXPORT_TEXTUAL_BLOCK_SELECTOR = [
+  'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'blockquote', 'li', 'td', 'th', 'table', 'div',
+].join(',');
+
+const getClassTextAlign = (element) => {
+  const classes = String(element?.getAttribute?.('class') || '').split(/\s+/).filter(Boolean);
+  if (classes.includes('text-center')) return 'center';
+  if (classes.includes('text-left')) return 'left';
+  if (classes.includes('text-right')) return 'right';
+  if (classes.includes('text-justify')) return 'justify';
+  return '';
+};
+
+const getExplicitTextAlign = (element) => {
+  const styleTextAlign = String(element?.style?.textAlign || '').trim();
+  if (styleTextAlign) return styleTextAlign;
+
+  const alignTextAlign = String(element?.getAttribute?.('align') || '').trim().toLowerCase();
+  if (alignTextAlign) return alignTextAlign;
+
+  return getClassTextAlign(element);
+};
+
+const getListItemChildTextAlign = (element) => {
+  if (!element?.matches?.('li')) return '';
+  const childBlock = element.querySelector(':scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > div');
+  return getExplicitTextAlign(childBlock);
+};
+
+const RTL_STRONG_CHARACTER_RE = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+const LTR_STRONG_CHARACTER_RE = /[A-Za-z\u00C0-\u024F]/;
+
+const getTextDirection = (text = '') => {
+  for (const character of String(text || '')) {
+    if (RTL_STRONG_CHARACTER_RE.test(character)) return 'rtl';
+    if (LTR_STRONG_CHARACTER_RE.test(character)) return 'ltr';
+  }
+  return 'rtl';
+};
+
+const getExportTextDirection = (dir = '', text = '') => {
+  const normalizedDir = String(dir || '').trim().toLowerCase();
+  if (normalizedDir === 'rtl' || normalizedDir === 'ltr') return normalizedDir;
+  if (normalizedDir === 'auto') return getTextDirection(text);
+  return '';
+};
+
+const normalizeDocumentExportHtml = (html = '') => {
+  const source = String(html || '');
+  if (!source.trim() || typeof document === 'undefined') return source;
+
+  const container = document.createElement('div');
+  container.innerHTML = source;
+
+  container.querySelectorAll(EXPORT_TEXTUAL_BLOCK_SELECTOR).forEach((element) => {
+    if (element.matches('[data-type="page-break"], [data-page-break="true"]')) return;
+
+    const textContent = element.textContent || '';
+    const rawDirection = element.getAttribute('dir');
+    const detectedDirection = getTextDirection(textContent);
+    const direction = element.hasAttribute('dir')
+      ? getExportTextDirection(rawDirection, textContent) || detectedDirection
+      : detectedDirection;
+
+    if (!element.hasAttribute('dir') || String(rawDirection || '').trim().toLowerCase() === 'auto') {
+      element.setAttribute('dir', direction);
+    }
+
+    const explicitTextAlign = getExplicitTextAlign(element);
+    if (!element.style.textAlign && !element.getAttribute('align')) {
+      const childTextAlign = getListItemChildTextAlign(element);
+      element.style.textAlign = explicitTextAlign || childTextAlign || (direction === 'ltr' ? 'left' : 'right');
+    }
+  });
+
+  return container.innerHTML;
+};
 
 const isLegacyHomeEnabled = () => {
   try {
@@ -1211,6 +2877,7 @@ function App() {
   const [selectedText, setSelectedText] = React.useState('');
   const [selectionContext, setSelectionContext] = React.useState(null);
   const [currentBlockText, setCurrentBlockText] = React.useState('');
+  const [editTarget, setEditTarget] = React.useState(() => ({ ...EMPTY_EDIT_TARGET }));
   const [trackChanges, setTrackChanges] = React.useState(false);
   const [shortcuts, setShortcuts] = React.useState(getShortcutsConfig());
   const [assistantBehavior, setAssistantBehavior] = React.useState(getAssistantBehavior());
@@ -1228,7 +2895,19 @@ function App() {
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [startTransitionPhase, setStartTransitionPhase] = React.useState('idle');
   const [currentFilePath, setCurrentFilePath] = React.useState('');
-  const [activeDocumentSessionId, setActiveDocumentSessionId] = React.useState(() => crypto.randomUUID());
+  const currentFilePathRef = React.useRef('');
+  const [activeDocumentSessionId, setActiveDocumentSessionId] = React.useState(() => createDocumentSessionId());
+  const resetDocumentInteractionState = React.useCallback(() => {
+    setSelectedText('');
+    setSelectionContext(null);
+    setCurrentBlockText('');
+    setEditTarget({ ...EMPTY_EDIT_TARGET });
+  }, []);
+  const beginDocumentIdentity = React.useCallback((payload = {}) => {
+    setCurrentFilePath(String(payload?.filePath || ''));
+    setActiveDocumentSessionId(createDocumentSessionId());
+    resetDocumentInteractionState();
+  }, [resetDocumentInteractionState]);
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
   const [liveGeneration, setLiveGeneration] = React.useState({
@@ -1283,6 +2962,9 @@ function App() {
     }
     setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
   }, []);
+  React.useEffect(() => {
+    currentFilePathRef.current = currentFilePath;
+  }, [currentFilePath]);
   const triggerDocumentArrival = React.useCallback((tone = 'success') => {
     clearDocumentArrival();
     documentArrivalFrameRef.current = window.requestAnimationFrame(() => {
@@ -1475,12 +3157,20 @@ function App() {
     const savedFont = String(wordPreferences.defaultFontStack || localStorage.getItem('default-font-stack') || wordPreferences.defaultFontFamily || localStorage.getItem('default-font') || '').trim();
     const savedSizeRaw = String(wordPreferences.defaultFontSize || localStorage.getItem('default-size') || '').trim();
     const savedSize = savedSizeRaw && /px|pt|em|rem$/i.test(savedSizeRaw) ? savedSizeRaw : (savedSizeRaw ? `${savedSizeRaw}pt` : '');
+    const pageWidth = dom.dataset.customWidth || preset.maxWidth || '21cm';
+    const pagePadding = dom.dataset.customPadding || preset.padding;
+    const pageFontSize = currentOverride.fontSize || savedSize || preset.fontSize;
     dom.setAttribute('data-doc-style', styleId);
     dom.style.fontFamily = currentOverride.fontFamily || savedFont || preset.fontFamily;
-    dom.style.fontSize = currentOverride.fontSize || savedSize || preset.fontSize;
+    dom.style.setProperty('--wordai-page-width', pageWidth);
+    dom.style.setProperty('--wordai-page-padding', pagePadding);
+    dom.style.setProperty('--wordai-page-font-size', pageFontSize);
+    dom.style.setProperty('--wordai-page-line-height', currentOverride.lineHeight || preset.lineHeight);
+    dom.style.fontSize = dom.dataset.viewMode === 'print' ? 'var(--wordai-page-font-size)' : pageFontSize;
     dom.style.lineHeight = currentOverride.lineHeight || preset.lineHeight;
-    dom.style.padding = dom.dataset.customPadding || preset.padding;
-    dom.style.maxWidth = dom.dataset.viewMode === 'print' ? (dom.dataset.customWidth || preset.maxWidth) : dom.style.maxWidth;
+    dom.style.padding = dom.dataset.viewMode === 'print' ? 'var(--wordai-page-padding)' : pagePadding;
+    dom.style.width = dom.dataset.viewMode === 'print' ? 'var(--wordai-page-width)' : dom.style.width;
+    dom.style.maxWidth = dom.dataset.viewMode === 'print' ? 'calc(100vw - 32px)' : dom.style.maxWidth;
     dom.style.background = dom.dataset.customBackground || preset.background;
     dom.style.textAlign = preset.textAlign;
     dom.style.border = dom.dataset.customBorder || dom.style.border;
@@ -1791,11 +3481,6 @@ function App() {
       reviewErrorMessage: '',
     };
 
-    if (roundIndex > FEEDBACK_MAX_REVISION_ROUNDS) {
-      alert('מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר לרענן המלצות או להמשיך לערוך ידנית.');
-      return;
-    }
-
     if (!selectedOptions.length && !freeText) {
       alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
       return;
@@ -1841,6 +3526,7 @@ function App() {
       phase: 'details',
       reviewResult: null,
       reviewFocus,
+      reviewApplySelection: '',
       reviewErrorMessage: '',
     };
 
@@ -1918,13 +3604,10 @@ function App() {
   const feedbackExecutionMode = normalizeFeedbackExecutionMode(feedbackSurvey.executionMode);
   const effectiveFeedbackExecutionMode = feedbackExecutionMode === 'workspace' && feedbackWorkflowAvailable ? 'workspace' : 'direct';
   const feedbackRoundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
-  const feedbackRoundsExhausted = feedbackRoundIndex > FEEDBACK_MAX_REVISION_ROUNDS;
   const feedbackRevisionPending = feedbackSurvey.submitting && String(liveGeneration.runId || '').startsWith('doc-feedback');
-  const feedbackSubmitLabel = feedbackRoundsExhausted
-    ? 'מוצו סבבי התיקון'
-    : effectiveFeedbackExecutionMode === 'workspace'
-      ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
-      : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
+  const feedbackSubmitLabel = effectiveFeedbackExecutionMode === 'workspace'
+    ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
+    : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
   const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
   const failedGenerationStage = isLiveGenerationFailureState(liveGeneration.state)
     ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
@@ -2273,16 +3956,15 @@ function App() {
       if (frameId) window.cancelAnimationFrame(frameId);
       frameId = window.requestAnimationFrame(() => {
         const { doc, selection } = editor.state;
-        const { from, to, empty } = selection;
-        const selectionText = empty ? '' : doc.textBetween(from, to, ' ');
-        const docEnd = doc.content.size;
-        setSelectedText(selectionText);
-        setSelectionContext(empty ? null : {
-          before: doc.textBetween(Math.max(0, from - MAGIC_WAND_SELECTION_CONTEXT_SIDE), from, ' ').trim(),
-          selection: selectionText,
-          after: doc.textBetween(to, Math.min(docEnd, to + MAGIC_WAND_SELECTION_CONTEXT_SIDE), ' ').trim(),
-        });
-        setCurrentBlockText(editor.state.selection.$from.parent?.textContent || '');
+        const nextEditTarget = buildEditTargetFromState(editor.state);
+        setSelectedText(nextEditTarget.selection?.text || '');
+        setSelectionContext(nextEditTarget.selection ? {
+          before: nextEditTarget.selection.before,
+          selection: nextEditTarget.selection.text,
+          after: nextEditTarget.selection.after,
+        } : null);
+        setCurrentBlockText(nextEditTarget.block?.text || '');
+        setEditTarget(nextEditTarget);
         setLastEditorActivityAt(Date.now());
         if (includePages) {
           let markers = 0;
@@ -2316,6 +3998,400 @@ function App() {
       dom?.removeEventListener('drop', markManualEdit);
     };
   }, [editor, updateActiveFormats]);
+
+  const getCurrentEditTarget = React.useCallback(() => {
+    if (!editor) return { ...EMPTY_EDIT_TARGET };
+    return buildEditTargetFromState(editor.state, { includeFingerprint: true });
+  }, [editor]);
+
+  const resolveEditTargetFromPrompt = React.useCallback((promptText = '') => {
+    if (!editor?.state?.doc) return null;
+    return resolveStructuralEditTarget(editor.state.doc, promptText)
+      || resolveBlockEditTarget(editor.state.doc, promptText);
+  }, [editor]);
+
+  const resolveEditTargetsFromPrompt = React.useCallback((promptText = '') => {
+    if (!editor?.state?.doc) {
+      return { targets: [], unresolvedExplicitReferences: [] };
+    }
+    const hasExplicitStructuralReference = hasExplicitStructuralEditReference(promptText);
+    const structuralResolution = resolveExplicitStructuralEditReferences(editor.state.doc, promptText);
+    const quotedBlockResolution = resolveQuotedBlockReferences(editor.state.doc, promptText, {
+      includeFreeQuoted: !hasExplicitStructuralReference,
+    });
+    const explicitBlockTargets = hasExplicitStructuralReference
+      ? quotedBlockResolution.targets.filter((target) => isBlockingQuotedBlockReference(target?.matchKind))
+      : quotedBlockResolution.targets;
+
+    return {
+      targets: dedupeResolvedEditTargets([...structuralResolution.targets, ...explicitBlockTargets]),
+      unresolvedExplicitReferences: [
+        ...structuralResolution.unresolvedReferences,
+        ...quotedBlockResolution.unresolvedReferences,
+      ],
+    };
+  }, [editor]);
+
+  const handleApplyAssistantEdit = React.useCallback(({ replacementText, target, agentType = 'assistant-sidebar-edit' } = {}) => {
+    if (!editor) {
+      return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
+    }
+
+    const activeTarget = target || getCurrentEditTarget().active;
+    if (!activeTarget?.text || !String(activeTarget.text).trim()) {
+      return { ok: false, message: 'לא זוהה יעד עריכה פעיל. בחר טקסט או מקם את הסמן בפסקה הרלוונטית ונסה שוב.' };
+    }
+
+    if (activeTarget.matchKind === UNRESOLVED_EXPLICIT_QUOTED_BLOCK_MATCH_KIND) {
+      return {
+        ok: false,
+        message: 'זוהתה הפניה מצוטטת שלא נפתרה באופן יחיד, ולכן לא החלתי עריכה על פסקה פעילה. ציין ציטוט ייחודי יותר או בחר את הפסקה ידנית ונסה שוב.',
+      };
+    }
+
+    if (!isEditTargetStillSafe(editor.state, activeTarget)) {
+      return { ok: false, message: 'לא החלתִי את העריכה כי היעד השתנה מאז הבקשה. בחר שוב את הטקסט או הפסקה והרץ את העריכה מחדש.' };
+    }
+
+    let result = null;
+    try {
+      result = applyAiSuggestionToRange(editor, {
+        from: activeTarget.from,
+        to: activeTarget.to,
+        replacementText,
+        agentType,
+      });
+    } catch (error) {
+      return { ok: false, message: error?.message || 'העריכה לא הוחלה במסמך.' };
+    }
+
+    if (!result) {
+      return { ok: false, message: 'המודל לא החזיר טקסט חלופי שניתן להחיל במסמך.' };
+    }
+
+    return { ok: true, message: 'העריכה הוחלה במסמך כהצעת AI. אפשר לאשר או לדחות מתוך המסמך.' };
+  }, [editor]);
+
+  const consolidateAssistantEditBatchEntries = React.useCallback((entries = []) => {
+    const merged = new Map();
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+      const regionKey = buildCanonicalEditRegionKey(entry?.target)
+        || String(entry?.targetId || '').trim()
+        || `${Number(entry?.target?.from)}:${Number(entry?.target?.to)}`;
+      if (!regionKey) return;
+
+      const existing = merged.get(regionKey);
+      if (!existing) {
+        merged.set(regionKey, entry);
+        return;
+      }
+
+      const existingText = String(existing.replacementText || '').trim();
+      const nextText = String(entry.replacementText || '').trim();
+      merged.set(regionKey, nextText.length >= existingText.length ? entry : existing);
+    });
+    return [...merged.values()];
+  }, []);
+
+  const handleApplyAssistantEditBatch = React.useCallback(({ edits = [], agentType = 'assistant-sidebar-edit' } = {}) => {
+    if (!editor) {
+      return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
+    }
+
+    const normalizedEdits = consolidateAssistantEditBatchEntries((Array.isArray(edits) ? edits : [])
+      .map((entry) => ({
+        target: entry?.target || null,
+        replacementText: String(entry?.replacementText || ''),
+        targetId: String(entry?.targetId || entry?.target?.targetId || '').trim(),
+      }))
+      .filter((entry) => entry.target?.text && entry.replacementText.trim() && entry.targetId));
+
+    if (!normalizedEdits.length) {
+      return { ok: false, message: 'לא התקבלו עריכות מרובות תקינות להחלה.' };
+    }
+
+    const targetIds = new Set();
+    const regionKeys = new Set();
+    const numericRanges = [];
+    for (const entry of normalizedEdits) {
+      if (entry.target?.matchKind === UNRESOLVED_EXPLICIT_QUOTED_BLOCK_MATCH_KIND) {
+        return {
+          ok: false,
+          message: 'זוהתה הפניה מצוטטת שלא נפתרה באופן יחיד, ולכן עצרתי לפני החלת העריכות. ציין ציטוט ייחודי יותר או בחר את האזור ידנית.',
+        };
+      }
+
+      const regionKey = buildCanonicalEditRegionKey(entry.target);
+      if (regionKey) {
+        if (regionKeys.has(regionKey)) {
+          return { ok: false, message: 'זוהו יעדי עריכה כפולים לאותו אזור במסמך, ולכן עצרתי לפני שינוי במסמך.' };
+        }
+        regionKeys.add(regionKey);
+      }
+
+      const numericRange = resolveNumericEditRange(entry.target);
+      if (!numericRange) {
+        return { ok: false, message: 'זוהה יעד עריכה עם טווח מספרי לא תקין, ולכן עצרתי לפני שינוי במסמך.' };
+      }
+      const hasOverlappingRange = numericRanges.some((range) => numericRange.from < range.to && range.from < numericRange.to);
+      if (hasOverlappingRange) {
+        return { ok: false, message: 'זוהו יעדי עריכה חופפים או כפולים לפי הטווח המספרי במסמך, ולכן עצרתי לפני שינוי במסמך.' };
+      }
+      numericRanges.push(numericRange);
+
+      if (targetIds.has(entry.targetId)) {
+        return { ok: false, message: 'זוהו יעדי עריכה כפולים בבקשת ההחלה, לכן עצרתי לפני שינוי במסמך.' };
+      }
+      targetIds.add(entry.targetId);
+      if (!isEditTargetStillSafe(editor.state, entry.target)) {
+        return { ok: false, message: 'לא החלתִי את העריכות כי לפחות אחד היעדים השתנה מאז הבקשה. בחר מחדש את האזורים ונסה שוב.' };
+      }
+    }
+
+    const sortedEdits = [...normalizedEdits].sort((left, right) => {
+      if (right.target.from !== left.target.from) return right.target.from - left.target.from;
+      return right.target.to - left.target.to;
+    });
+
+    let applied = [];
+    try {
+      applied = applyAiSuggestionBatchToRanges(editor, sortedEdits, { agentType });
+      if (!applied) {
+        throw new Error('אחת העריכות לא החזירה טקסט חלופי שניתן להחיל במסמך.');
+      }
+    } catch (error) {
+      return { ok: false, message: error?.message || 'העריכות לא הוחלו במסמך.' };
+    }
+
+    return {
+      ok: true,
+      message: applied.length === 1
+        ? 'העריכה הוחלה במסמך כהצעת AI. אפשר לאשר או לדחות מתוך המסמך.'
+        : `הוחלו ${applied.length} עריכות במסמך כהצעות AI נפרדות. אפשר לאשר או לדחות כל אזור מתוך המסמך.`,
+      appliedCount: applied.length,
+      applied,
+    };
+  }, [consolidateAssistantEditBatchEntries, editor]);
+
+  const applyFeedbackReviewSuggestions = React.useCallback(async () => {
+    if (!editor) {
+      alert('העורך לא זמין כרגע לעריכה.');
+      return;
+    }
+    if (feedbackSurvey.submitting || feedbackSurvey.applyingRecommendations) return;
+
+    const reviewSuggestions = Array.isArray(feedbackSurvey.reviewResult?.suggestions)
+      ? feedbackSurvey.reviewResult.suggestions
+      : [];
+    if (!reviewSuggestions.length) {
+      alert('אין כרגע המלצות ישימות להחלה על המסמך.');
+      return;
+    }
+
+    const selectionResult = resolveReviewSuggestionSelection(feedbackSurvey.reviewApplySelection, reviewSuggestions);
+    if (selectionResult.invalid || !selectionResult.suggestions.length) {
+      alert('לא זיהיתי מספרי המלצות תקינים להחלה. אפשר לכתוב למשל: 1,2,3 או 1-3 בלי 2.');
+      return;
+    }
+
+    setFeedbackSurvey((prev) => ({
+      ...prev,
+      applyingRecommendations: true,
+      reviewErrorMessage: '',
+    }));
+
+    try {
+      const generationRequest = beginGenerationRequest('doc-review-apply');
+      const sourceHtmlSnapshot = editor.getHTML?.() || '';
+      const sourceFilePathSnapshot = currentFilePathRef.current;
+      const planResult = await buildDocumentReviewActionPlan({
+        existingHtml: sourceHtmlSnapshot,
+        originalPrompt: feedbackSurvey.prompt,
+        templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+        selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
+        selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+        selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+        selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+        focus: [
+          feedbackSurvey.reviewFocus,
+          selectionResult.hasExplicitSelection
+            ? `החל רק את המלצות מספר ${selectionResult.selectedIndexes.join(', ')}.${selectionResult.excludedIndexes.length ? ` דלג על ${selectionResult.excludedIndexes.join(', ')}.` : ''}`
+            : '',
+        ].filter(Boolean).join('\n'),
+        suggestions: selectionResult.suggestions,
+        returnMeta: true,
+      });
+
+      const currentHtmlSnapshot = editor.getHTML?.() || '';
+      const currentFilePathSnapshot = currentFilePathRef.current;
+      if (!isGenerationRequestCurrent(generationRequest) || sourceHtmlSnapshot !== currentHtmlSnapshot || sourceFilePathSnapshot !== currentFilePathSnapshot) {
+        throw new Error('המסמך השתנה בזמן הכנת התיקונים. רענן את ההמלצות ונסה שוב.');
+      }
+
+      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planResult?.edits || []);
+      if (!resolved.length) {
+        throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות יעדי עריכה ייחודיים מתוך הערות המרצה.');
+      }
+
+      const applyResult = handleApplyAssistantEditBatch({
+        edits: resolved,
+        agentType: 'lecturer-review-apply',
+      });
+      if (!applyResult?.ok) {
+        throw new Error(applyResult?.message || 'לא הצלחתי להחיל את תיקוני המרצה על המסמך.');
+      }
+
+      triggerDocumentArrival(unresolved.length ? 'warning' : 'success');
+      setLiveGeneration((prev) => (prev.active ? { ...prev, active: false } : prev));
+      setFeedbackSurvey((prev) => {
+        if (unresolved.length) {
+          const unresolvedSuggestionIdSet = new Set(unresolved.map((item) => String(item?.suggestionId || '').trim()).filter(Boolean));
+          const unresolvedTitleSet = new Set(unresolved.map((item) => normalizeStructuralEditText(item?.title || '')).filter(Boolean));
+          const remainingSuggestions = (Array.isArray(prev.reviewResult?.suggestions) ? prev.reviewResult.suggestions : []).filter((suggestion, index) => {
+            const suggestionId = String(suggestion?.suggestionId || suggestion?.id || '').trim();
+            if (suggestionId && unresolvedSuggestionIdSet.size) {
+              return unresolvedSuggestionIdSet.has(suggestionId);
+            }
+            const suggestionTitle = normalizeStructuralEditText(
+              suggestion?.title || suggestion?.heading || suggestion?.name || `המלצה ${index + 1}`,
+            );
+            return suggestionTitle && unresolvedTitleSet.has(suggestionTitle);
+          });
+          return {
+            ...prev,
+            applyingRecommendations: false,
+            reviewResult: prev.reviewResult
+              ? {
+                ...prev.reviewResult,
+                summary: remainingSuggestions.length
+                  ? `הוחלו חלק מההמלצות. נשארו ${remainingSuggestions.length} המלצות שדורשות רענון או מיפוי ידני.`
+                  : 'הוחלו חלק מההמלצות. כדי להמשיך עם השאר צריך לרענן את ההמלצות.',
+                suggestions: remainingSuggestions,
+              }
+              : prev.reviewResult,
+            reviewErrorMessage: `לא הצלחתי למקם אוטומטית את ההמלצות הבאות: ${unresolved.map((item) => item?.title || '').filter(Boolean).join(' | ')}`,
+          };
+        }
+
+        return {
+          ...buildFeedbackSurveyStateWithGenerationContext(prev),
+          open: false,
+          phase: 'details',
+          roundIndex: normalizeFeedbackRoundIndex(prev.roundIndex + 1),
+        };
+      });
+
+      const unresolvedMessage = unresolved.length
+        ? ` הוחלו ${resolved.length} תיקונים, אבל ${unresolved.length} המלצות נשארו ללא מיקום ייחודי במסמך.`
+        : '';
+      alert(`${applyResult.message}${unresolvedMessage}`);
+    } catch (error) {
+      setFeedbackSurvey((prev) => ({
+        ...prev,
+        applyingRecommendations: false,
+        reviewErrorMessage: error?.message || 'לא הצלחתי להחיל את המלצות המרצה על המסמך.',
+      }));
+    }
+  }, [activeTemplateId, beginGenerationRequest, editor, feedbackSurvey, handleApplyAssistantEditBatch, isGenerationRequestCurrent]);
+
+  const handleApplyDocumentActionPlan = React.useCallback(async ({
+    promptText = '',
+    conversationHistoryText = '',
+    selectedProviderId = '',
+    selectedProviderModel = '',
+    agentType = 'assistant-sidebar-plan',
+  } = {}) => {
+    if (!editor) {
+      return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
+    }
+
+    const normalizedPrompt = String(promptText || '').trim();
+    const normalizedConversation = String(conversationHistoryText || '').trim();
+    if (!normalizedPrompt && !normalizedConversation) {
+      return { ok: false, message: 'לא קיבלתי מספיק הקשר כדי למפות את התיקונים למסמך.' };
+    }
+
+    const hasSidebarReviewSelectionIntent = SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN.test(normalizedPrompt);
+    const pastedReviewSuggestions = extractSidebarReviewSuggestionsFromText(normalizedPrompt);
+    const sidebarReviewSuggestions = extractSidebarReviewSuggestionsFromConversation(normalizedConversation);
+    const availableReviewSuggestions = pastedReviewSuggestions.length ? pastedReviewSuggestions : sidebarReviewSuggestions;
+    if (hasSidebarReviewSelectionIntent && !availableReviewSuggestions.length) {
+      return { ok: false, message: 'זיהיתי בקשה להחיל המלצות לפי מספרים, אבל לא הצלחתי לחלץ רשימת המלצות ממוספרת מהשיחה או מהטקסט שהודבק. בקש מהמרצה להציג את ההמלצות כרשימה ממוספרת ונסה שוב.' };
+    }
+    const sidebarReviewSelectionText = getSidebarReviewSelectionText(normalizedPrompt);
+    const sidebarReviewSelection = availableReviewSuggestions.length && hasSidebarReviewSelectionIntent
+      ? resolveReviewSuggestionSelection(sidebarReviewSelectionText, availableReviewSuggestions)
+      : null;
+    if (sidebarReviewSelection?.invalid || (sidebarReviewSelection?.hasExplicitSelection && !sidebarReviewSelection.suggestions.length)) {
+      return { ok: false, message: 'לא זיהיתי מספרי המלצות תקינים מהשיחה הקודמת. אפשר לכתוב למשל: תעשה את 1,2,3 או תעשה את 1-3 בלי 2.' };
+    }
+    const selectedSidebarSuggestions = sidebarReviewSelection?.hasExplicitSelection
+      ? sidebarReviewSelection.suggestions
+      : [];
+    const selectedSidebarIndexes = sidebarReviewSelection?.hasExplicitSelection
+      ? sidebarReviewSelection.selectedIndexes
+      : [];
+
+    try {
+      const generationRequest = beginGenerationRequest('sidebar-edit-plan');
+      const sourceHtmlSnapshot = editor.getHTML?.() || '';
+      const sourceFilePathSnapshot = currentFilePathRef.current;
+      const planResult = await buildDocumentReviewActionPlan({
+        existingHtml: sourceHtmlSnapshot,
+        originalPrompt: selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
+        templateId: activeTemplateId || 'blank',
+        selectedProviderId: String(selectedProviderId || '').trim(),
+        selectedProviderModel: String(selectedProviderModel || '').trim(),
+        focus: [
+          selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
+          selectedSidebarIndexes.length
+            ? `המשתמש ביקש להחיל רק את המלצות מספר ${selectedSidebarIndexes.join(', ')} מתוך רשימת המרצה האחרונה. אסור להוסיף תיקונים אחרים.`
+            : '',
+        ].filter(Boolean).join('\n'),
+        feedback: selectedSidebarSuggestions.length
+          ? ''
+          : normalizedConversation ? `הקשר מהשיחה הקודמת וההמלצות שכבר ניתנו:\n${normalizedConversation}` : '',
+        suggestions: selectedSidebarSuggestions,
+        returnMeta: true,
+      });
+
+      const currentHtmlSnapshot = editor.getHTML?.() || '';
+      const currentFilePathSnapshot = currentFilePathRef.current;
+      if (!isGenerationRequestCurrent(generationRequest) || sourceHtmlSnapshot !== currentHtmlSnapshot || sourceFilePathSnapshot !== currentFilePathSnapshot) {
+        throw new Error('המסמך השתנה בזמן שמיפיתי את התיקונים. נסה שוב על הגרסה הנוכחית.');
+      }
+
+      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planResult?.edits || []);
+      if (!resolved.length) {
+        throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות מיקומים ייחודיים לתיקונים שביקשת להחיל.');
+      }
+
+      const applyResult = handleApplyAssistantEditBatch({
+        edits: resolved,
+        agentType,
+      });
+      if (!applyResult?.ok) {
+        throw new Error(applyResult?.message || 'לא הצלחתי להחיל את התיקונים על המסמך.');
+      }
+
+      triggerDocumentArrival(unresolved.length ? 'warning' : 'success');
+      const unresolvedTitles = unresolved.map((item) => item?.title || '').filter(Boolean);
+      return {
+        ...applyResult,
+        ok: unresolvedTitles.length === 0,
+        partial: unresolvedTitles.length > 0,
+        unresolved,
+        message: unresolvedTitles.length
+          ? `${applyResult.message} נשארו ${unresolvedTitles.length} תיקונים שלא מופו אוטומטית: ${unresolvedTitles.join(' | ')}`
+          : applyResult.message,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error?.message || 'לא הצלחתי למפות את התיקונים למיקומים הנכונים במסמך.',
+      };
+    }
+  }, [activeTemplateId, beginGenerationRequest, editor, feedbackSurvey.prompt, handleApplyAssistantEditBatch, isGenerationRequestCurrent, liveGeneration.prompt, triggerDocumentArrival]);
 
   React.useEffect(() => {
     if (editor) applyDocumentStyleToEditor(documentStyle, editor);
@@ -2475,9 +4551,15 @@ function App() {
     const additionalReviewRounds = Math.max(0, Math.min(2, Number(payload.additionalReviewRounds) || 0));
     const suppressDeferredReviewOffer = payload.suppressDeferredReviewOffer === true;
     const forceDirectMode = payload.forceDirectMode === true;
+    const skipWorkflowAutomation = payload.skipWorkflowAutomation === true;
+    const directModeReason = String(payload.directModeReason || '').trim();
     const preserveCurrentDocumentOnError = payload.preserveCurrentDocumentOnError === true;
 
-    setCurrentFilePath('');
+    if (!options.skipConfirmReplace) {
+      beginDocumentIdentity({ filePath: '' });
+    } else {
+      resetDocumentInteractionState();
+    }
   persistActiveTemplateId(templateId);
     syncPersistedAppSettings();
     setActiveTemplateId(templateId);
@@ -2490,9 +4572,10 @@ function App() {
     const generationRequest = beginGenerationRequest('doc');
     const originWorkspaceId = generationRequest.workspaceId;
     const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
+    const shouldReviseBaseDraft = hasBaseDraft && directModeReason !== 'chef-final-compose';
     const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
-    const generationRoute = hasBaseDraft ? 'reviseDocumentWithFeedback' : 'generateDocumentFromPrompt';
-    const revisionRequest = hasBaseDraft
+    const generationRoute = shouldReviseBaseDraft ? 'reviseDocumentWithFeedback' : 'generateDocumentFromPrompt';
+    const revisionRequest = shouldReviseBaseDraft
       ? buildBaseDraftRevisionRequest({
           promptText: prompt,
           instructionsText: instructions,
@@ -2500,15 +4583,15 @@ function App() {
           templateId,
         })
       : null;
-    const inspectorPrompt = hasBaseDraft
+    const inspectorPrompt = shouldReviseBaseDraft
       ? String(revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס').trim()
       : prompt;
-    const inspectorInstructions = hasBaseDraft
+    const inspectorInstructions = shouldReviseBaseDraft
       ? String(revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST).trim()
       : instructions;
     const isKnownDirectStartScreenRoute = String(resolvedAction.workspaceId || '').trim() === '__no-workspace__'
       && Boolean(selectedProviderId);
-    const generationLabel = hasBaseDraft
+    const generationLabel = shouldReviseBaseDraft
       ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
       : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId });
     setLastGenerationAction({
@@ -2524,8 +4607,8 @@ function App() {
         selectedProviderId,
         selectedProviderModel,
         route: generationRoute,
-        routeMode: isKnownDirectStartScreenRoute ? 'direct' : '',
-        routeModeReason: isKnownDirectStartScreenRoute ? 'providerOverride' : '',
+        routeMode: (isKnownDirectStartScreenRoute || forceDirectMode || skipWorkflowAutomation) ? 'direct' : '',
+        routeModeReason: directModeReason || (forceDirectMode ? 'forceDirectMode' : (skipWorkflowAutomation ? 'skipWorkflowAutomation' : (isKnownDirectStartScreenRoute ? 'providerOverride' : ''))),
       }),
     });
     const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
@@ -2562,7 +4645,7 @@ function App() {
     if (!didStartTransition) return false;
 
     try {
-      const result = hasBaseDraft
+      const result = shouldReviseBaseDraft
         ? await reviseDocumentWithFeedback({
             existingHtml: baseDraft.html,
             originalPrompt: revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס',
@@ -2577,11 +4660,11 @@ function App() {
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, runId: generationRequest.runId, returnMeta: true });
-      const resolvedTitle = hasBaseDraft
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, forceDirectMode, skipWorkflowAutomation, directModeReason, runId: generationRequest.runId, returnMeta: true });
+      const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
-      const generated = result?.html || (hasBaseDraft
+      const generated = result?.html || (shouldReviseBaseDraft
         ? String(baseDraft?.html || '').trim() || `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`
         : `<h1>${escHtml(resolvedTitle)}</h1><p>לא נוצר תוכן.</p>`);
       const usedFallback = Boolean(result?.usedFallback);
@@ -2589,6 +4672,8 @@ function App() {
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
       const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
+      const resolvedFeedbackProviderId = resolvedInspectorMeta.requestedProviderId || selectedProviderId;
+      const resolvedFeedbackProviderModel = resolvedInspectorMeta.requestedProviderModel || selectedProviderModel;
 
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
       lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
@@ -2618,8 +4703,8 @@ function App() {
           usedFallback,
           selectedMaterials,
           selectedModel,
-          selectedProviderId,
-          selectedProviderModel,
+          selectedProviderId: resolvedFeedbackProviderId,
+          selectedProviderModel: resolvedFeedbackProviderModel,
         }),
         open: false,
         phase: 'details',
@@ -2647,8 +4732,8 @@ function App() {
             instructions: followUpInstructions,
             selectedMaterials,
             selectedModel,
-            selectedProviderId,
-            selectedProviderModel,
+            selectedProviderId: resolvedFeedbackProviderId,
+            selectedProviderModel: resolvedFeedbackProviderModel,
             baseDraft: {
               html: generated,
               title: resolvedTitle,
@@ -2707,7 +4792,7 @@ function App() {
     }
 
     return true;
-  }, [beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, runStartTransition, triggerDocumentArrival]);
+  }, [beginDocumentIdentity, beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, resetDocumentInteractionState, runStartTransition, triggerDocumentArrival]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -2832,6 +4917,8 @@ function App() {
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
       const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
+      const resolvedFeedbackProviderId = resolvedInspectorMeta.requestedProviderId || selectedProviderId;
+      const resolvedFeedbackProviderModel = resolvedInspectorMeta.requestedProviderModel || selectedProviderModel;
       setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
         ...prev,
         inspector: {
@@ -2854,8 +4941,8 @@ function App() {
           usedFallback,
           selectedMaterials,
           selectedModel,
-          selectedProviderId,
-          selectedProviderModel,
+          selectedProviderId: resolvedFeedbackProviderId,
+          selectedProviderModel: resolvedFeedbackProviderModel,
         }),
         open: false,
         phase: 'details',
@@ -3016,6 +5103,7 @@ function App() {
           submitting: false,
           submissionRequestId: null,
           reviewFocus,
+          reviewApplySelection: '',
           reviewErrorMessage: String(result?.errorMessage || '').trim(),
           reviewResult: {
             summary: String(result?.summary || '').trim(),
@@ -3170,6 +5258,9 @@ function App() {
       return;
     }
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
+    const importedText = String(payload.text || '').trim()
+      || importedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const fallbackTitle = String(payload.title || 'מסמך שנפתח מהמחשב').trim();
     if (!confirmReplaceCurrentDocument()) {
       finalizePendingImportedDocument({ rollbackToSpss: true });
       return;
@@ -3184,15 +5275,21 @@ function App() {
       editor.view.dom.dataset.viewMode = 'print';
     }
     applyDocumentStyleToEditor(documentStyle, editor);
-    setCurrentFilePath(String(payload.filePath || ''));
+    beginDocumentIdentity({ filePath: payload.filePath });
     persistActiveTemplateId('blank');
     syncPersistedAppSettings();
     setActiveTemplateId('blank');
     saveDocumentHistory({
-      title: String(payload.title || 'מסמך שנפתח מהמחשב').trim(),
+      title: resolveDocumentHistoryTitle({
+        text: importedText,
+        filePath: payload.filePath,
+        templateId: activeTemplateId || 'blank',
+        fallbackTitle,
+      }),
       content: importedHtml,
       templateId: 'blank',
       source: 'opened-file',
+      filePath: String(payload.filePath || ''),
     });
     persistLocalCache(importedHtml);
     finalizePendingImportedDocument();
@@ -3200,7 +5297,7 @@ function App() {
     setLastEditorActivityAt(Date.now());
     setShowStartScreen(false);
     focusEditorSoon('start');
-  }, [editor, appMode, queuePendingImportedDocument, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle, finalizePendingImportedDocument]);
+  }, [editor, appMode, activeTemplateId, queuePendingImportedDocument, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle, finalizePendingImportedDocument, beginDocumentIdentity]);
 
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenExternalDocument) return;
@@ -3280,9 +5377,13 @@ function App() {
     setCopyleaksDetector((prev) => (prev.open ? { ...DEFAULT_COPYLEAKS_DETECTOR } : prev));
   }, [fileMenuOpen]);
 
+  const inferCurrentDocumentTitle = React.useCallback((text = '') => {
+    return getDraftTitleFromText(text, activeTemplateId || 'blank');
+  }, [activeTemplateId]);
+
   const buildDesktopSavePayload = React.useCallback((preferredExtension = 'docx') => {
     const currentPreset = DOCUMENT_STYLE_PRESETS[documentStyle] || DOCUMENT_STYLE_PRESETS.academic;
-    const html = editor?.getHTML?.() || '';
+    const html = normalizeDocumentExportHtml(editor?.getHTML?.() || '', { documentStyle });
     const text = editor?.getText?.() || '';
     const fontStack = String(
       wordPreferences.defaultFontStack
@@ -3300,7 +5401,7 @@ function App() {
     ).trim();
 
     return {
-      title: text.trim().slice(0, 60) || 'מסמך',
+      title: inferCurrentDocumentTitle(text),
       html,
       text,
       preferredExtension,
@@ -3312,7 +5413,7 @@ function App() {
         disableProofing: false,
       },
     };
-  }, [documentStyle, editor, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
+  }, [documentStyle, editor, inferCurrentDocumentTitle, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
 
   const downloadBrowserDocxOrAlert = React.useCallback(async (preferredExtension = 'docx') => {
     try {
@@ -3702,7 +5803,7 @@ function App() {
           clearPersistedDraftCache();
           saveHomeInstructions('');
           setStartScreenInstructionsResetToken((prev) => prev + 1);
-          setCurrentFilePath('');
+          beginDocumentIdentity({ filePath: '' });
           persistActiveTemplateId('blank');
           syncPersistedAppSettings();
           setActiveTemplateId('blank');
@@ -3717,6 +5818,7 @@ function App() {
       case 'saveLocal': {
         const html = editor.getHTML();
         const text = editor.getText();
+        const title = inferCurrentDocumentTitle(text);
         persistLocalCache(html);
 
         if (window.desktopApp?.saveDocumentDialog) {
@@ -3730,10 +5832,16 @@ function App() {
           if (!result?.canceled && result?.filePath) {
             setCurrentFilePath(String(result.filePath));
             saveDocumentHistory({
-              title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+              title: resolveDocumentHistoryTitle({
+                text,
+                filePath: result.filePath,
+                templateId: activeTemplateId || 'blank',
+                fallbackTitle: title,
+              }),
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-local',
+              filePath: String(result.filePath || ''),
             });
             alert(canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : `המסמך נשמר בהצלחה ב:\n${result.filePath}`);
           }
@@ -3743,7 +5851,7 @@ function App() {
         const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
         if (browserSaveResult?.handled && !browserSaveResult.canceled) {
           saveDocumentHistory({
-            title: editor.getText().trim().slice(0, 60) || 'מסמך שמור',
+            title,
             content: html,
             templateId: activeTemplateId || 'blank',
             source: 'save-local',
@@ -3775,7 +5883,7 @@ function App() {
       }
       case 'saveAs': {
         const html = editor.getHTML();
-        const title = editor.getText().trim().slice(0, 60) || 'מסמך שמור';
+        const title = inferCurrentDocumentTitle(editor.getText());
 
         if (window.desktopApp?.saveDocumentDialog) {
           const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
@@ -3784,10 +5892,16 @@ function App() {
             setCurrentFilePath(String(result.filePath || ''));
             persistLocalCache(html);
             saveDocumentHistory({
-              title,
+              title: resolveDocumentHistoryTitle({
+                text: editor.getText(),
+                filePath: result.filePath,
+                templateId: activeTemplateId || 'blank',
+                fallbackTitle: title,
+              }),
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-as',
+              filePath: String(result.filePath || ''),
             });
             alert(`המסמך נשמר בהצלחה ב:\n${result.filePath}`);
           }
@@ -3808,8 +5922,7 @@ function App() {
       }
       case 'exportDocx': {
         if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
-          if (!result?.canceled && result?.filePath) setCurrentFilePath(String(result.filePath));
+          await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
           break;
         }
         await downloadBrowserDocxOrAlert('docx');
@@ -3847,7 +5960,7 @@ function App() {
         break;
       }
       case 'exportHTML': {
-        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body>${editor.getHTML()}</body></html>`;
+        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body>${normalizeDocumentExportHtml(editor.getHTML(), { documentStyle })}</body></html>`;
         downloadFile(htmlCtx, 'my-document.html', 'text/html');
         break;
       }
@@ -4245,7 +6358,9 @@ function App() {
   const feedbackReviewSuggestions = Array.isArray(feedbackSurvey.reviewResult?.suggestions)
     ? feedbackSurvey.reviewResult.suggestions
     : [];
+  const feedbackReviewSelection = resolveReviewSuggestionSelection(feedbackSurvey.reviewApplySelection, feedbackReviewSuggestions);
   const feedbackReviewSummary = String(feedbackSurvey.reviewResult?.summary || '').trim();
+  const feedbackReviewApplying = feedbackSurvey.applyingRecommendations === true;
   const canOpenDraftRecommendations = !feedbackSurvey.submitting
     && liveGeneration.state !== 'running'
     && hasMeaningfulEditorContent(editor);
@@ -4476,15 +6591,22 @@ function App() {
                 currentFilePath={currentFilePath}
                 onToggleCompact={() => setSidebarCompact((prev) => !prev)}
                 reason={assistantTrigger}
-                documentContext={() => editor ? editor.getText().slice(0, 9000) : ''}
+                documentContext={() => buildSidebarDocumentSnapshot(editor)}
                 selectedText={selectedText}
                 currentBlockText={currentBlockText}
+                editTarget={editTarget}
+                getCurrentEditTarget={getCurrentEditTarget}
+                resolveEditTargetFromPrompt={resolveEditTargetFromPrompt}
+                resolveEditTargetsFromPrompt={resolveEditTargetsFromPrompt}
                 assistantBehavior={assistantBehavior}
                 onOpenSettingsTab={(targetTab) => {
                   setFileMenuTargetTab(targetTab || 'assistant');
                   setFileMenuOpen(true);
                 }}
                 wordPreferences={wordPreferences}
+                onApplyEdit={handleApplyAssistantEdit}
+                onApplyEditBatch={handleApplyAssistantEditBatch}
+                onApplyDocumentPlan={handleApplyDocumentActionPlan}
                 onInsert={(text) => {
                   if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
                 }}
@@ -4855,7 +6977,11 @@ function App() {
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="text-sm font-bold text-slate-800">
-                        {feedbackSurvey.submitting ? 'בודק ומכין המלצות לעריכת המסמך...' : (feedbackReviewSummary || 'אלו כמה המלצות לעריכה ממוקדת בטיוטה.')}
+                        {feedbackReviewApplying
+                          ? 'ממפה את הערות המרצה ליעדי עריכה ומחיל אותן על המסמך...'
+                          : feedbackSurvey.submitting
+                            ? 'בודק ומכין המלצות לעריכת המסמך...'
+                            : (feedbackReviewSummary || 'אלו כמה המלצות לעריכה ממוקדת בטיוטה.')}
                       </div>
                       <div className="mt-2 text-xs leading-6 text-slate-500 whitespace-pre-wrap">
                         {feedbackSurvey.reviewFocus || 'המיקוד לבדיקה לא הוגדר ולכן נבדקה הטיוטה בכללותה.'}
@@ -4870,15 +6996,17 @@ function App() {
                       </div>
                     )}
 
-                    {feedbackSurvey.submitting ? (
+                    {feedbackSurvey.submitting || feedbackReviewApplying ? (
                       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
-                        ההמלצות נבנות עכשיו לפי המיקוד שביקשת, בלי לשנות עדיין את המסמך עצמו.
+                        {feedbackReviewApplying
+                          ? 'מכין תכנית תיקונים ישימה ומחיל אותה על כמה אזורים במסמך, גם כשהם לא באותה פסקה.'
+                          : 'ההמלצות נבנות עכשיו לפי המיקוד שביקשת, בלי לשנות עדיין את המסמך עצמו.'}
                       </div>
                     ) : feedbackReviewSuggestions.length ? (
                       <div className="space-y-3 max-h-[48vh] overflow-y-auto pr-1">
                         {feedbackReviewSuggestions.map((suggestion, index) => (
                           <div key={`${suggestion.title || 'review'}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-                            <div className="text-base font-bold text-slate-800">{suggestion.title || `המלצה ${index + 1}`}</div>
+                            <div className="text-base font-bold text-slate-800">{index + 1}. {suggestion.title || `המלצה ${index + 1}`}</div>
                             <div className="mt-2 text-sm leading-6 text-slate-600">{suggestion.reason}</div>
                             <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-3">
                               <div className="text-[11px] font-bold tracking-[0.16em] text-slate-400">ניסוח מוצע</div>
@@ -4886,6 +7014,24 @@ function App() {
                             </div>
                           </div>
                         ))}
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                          <label className="text-xs font-bold text-amber-900" htmlFor="review-apply-selection">בחר המלצות להחלה</label>
+                          <input
+                            id="review-apply-selection"
+                            className="mt-2 input input-sm input-bordered w-full bg-white text-sm"
+                            value={feedbackSurvey.reviewApplySelection}
+                            onChange={(event) => setFeedbackSurvey((prev) => ({ ...prev, reviewApplySelection: event.target.value }))}
+                            placeholder="ריק = הכל · לדוגמה: 1,2,3 בלי 4,5"
+                            disabled={feedbackSurvey.submitting || feedbackReviewApplying}
+                          />
+                          <div className="mt-2 text-xs leading-5 text-amber-800">
+                            {feedbackReviewSelection.hasExplicitSelection
+                              ? feedbackReviewSelection.invalid
+                                ? 'לא זוהתה בחירה תקינה.'
+                                : `יוחלו המלצות: ${feedbackReviewSelection.selectedIndexes.join(', ')}${feedbackReviewSelection.excludedIndexes.length ? ` · דילוג: ${feedbackReviewSelection.excludedIndexes.join(', ')}` : ''}`
+                              : 'אם השדה ריק, כל ההמלצות יוחלו.'}
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
@@ -4896,22 +7042,33 @@ function App() {
                     <div className="flex flex-col md:flex-row gap-3 justify-end">
                       <button
                         className="btn btn-ghost"
-                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'details', submitting: false, submissionRequestId: null }))}
-                        disabled={feedbackSurvey.submitting}
+                        onClick={() => setFeedbackSurvey((prev) => ({ ...prev, phase: 'details', submitting: false, submissionRequestId: null, applyingRecommendations: false }))}
+                        disabled={feedbackSurvey.submitting || feedbackReviewApplying}
                       >
                         שנה מיקוד
                       </button>
                       <button
-                        className={`btn btn-outline ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
+                        className={`btn btn-outline ${(feedbackSurvey.submitting || feedbackReviewApplying) ? 'btn-disabled' : ''}`}
                         onClick={requestDocumentRecommendations}
-                        disabled={feedbackSurvey.submitting}
+                        disabled={feedbackSurvey.submitting || feedbackReviewApplying}
                       >
                         {feedbackSurvey.submitting ? 'מכין המלצות...' : 'רענן המלצות'}
                       </button>
                       <button
-                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
+                        className={`btn btn-outline ${(feedbackSurvey.submitting || feedbackReviewApplying || !feedbackReviewSuggestions.length) ? 'btn-disabled' : ''}`}
+                        onClick={applyFeedbackReviewSuggestions}
+                        disabled={feedbackSurvey.submitting || feedbackReviewApplying || !feedbackReviewSuggestions.length}
+                      >
+                        {feedbackReviewApplying
+                          ? 'ממפה ומחיל...'
+                          : feedbackReviewSelection.hasExplicitSelection && !feedbackReviewSelection.invalid
+                            ? `החל ${feedbackReviewSelection.selectedIndexes.length} המלצות`
+                            : 'החל את כל ההמלצות'}
+                      </button>
+                      <button
+                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackReviewApplying) ? 'btn-disabled' : ''}`}
                         onClick={submitDocumentFeedback}
-                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
+                        disabled={feedbackSurvey.submitting || feedbackReviewApplying}
                       >
                         {feedbackSubmitLabel}
                       </button>
@@ -4985,10 +7142,8 @@ function App() {
                           </div>
                         </label>
                       </div>
-                      <div className={`text-xs ${feedbackRoundsExhausted ? 'text-amber-700' : 'text-slate-500'}`}>
-                        {feedbackRoundsExhausted
-                          ? 'מיצית את שני סבבי התיקון הזמינים למסך הזה. אפשר עדיין לרענן המלצות או להמשיך לערוך ידנית.'
-                          : `סבב תיקון ${Math.min(feedbackRoundIndex, FEEDBACK_MAX_REVISION_ROUNDS)} מתוך ${FEEDBACK_MAX_REVISION_ROUNDS}. אחרי הסבב הזה ${feedbackRoundIndex < FEEDBACK_MAX_REVISION_ROUNDS ? 'יישאר עוד סבב אחד מאותו מסך.' : 'לא יישאר סבב נוסף מאותו מסך.'}`}
+                      <div className="text-xs text-slate-500">
+                        {`סבב תיקון ${feedbackRoundIndex}. אפשר להמשיך לבקש סבבי תיקון נוספים מהמסך הזה כל עוד צריך.`}
                       </div>
                     </div>
 
@@ -5008,9 +7163,9 @@ function App() {
                         קבל המלצות בלבד
                       </button>
                       <button
-                        className={`btn btn-primary ${(feedbackSurvey.submitting || feedbackRoundsExhausted) ? 'btn-disabled' : ''}`}
+                        className={`btn btn-primary ${feedbackSurvey.submitting ? 'btn-disabled' : ''}`}
                         onClick={submitDocumentFeedback}
-                        disabled={feedbackSurvey.submitting || feedbackRoundsExhausted}
+                        disabled={feedbackSurvey.submitting}
                       >
                         {feedbackSubmitLabel}
                       </button>
@@ -5077,7 +7232,7 @@ function App() {
                   clearDraftReviewState();
                   runStartTransition((activeEditor) => {
                     activeEditor.commands.clearContent();
-                    setCurrentFilePath('');
+                    beginDocumentIdentity({ filePath: '' });
                     persistActiveTemplateId('blank');
                     syncPersistedAppSettings();
                     setActiveTemplateId('blank');
@@ -5090,7 +7245,7 @@ function App() {
                   clearPersistedDraftCache();
                   clearDraftReviewState();
                   runStartTransition((activeEditor) => {
-                    setCurrentFilePath('');
+                    beginDocumentIdentity({ filePath: '' });
                     persistActiveTemplateId(templateId || 'blank');
                     syncPersistedAppSettings();
                     setActiveTemplateId(templateId || 'blank');
@@ -5107,7 +7262,13 @@ function App() {
                     activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
                   }, 'start');
                 }}
-                onOpenDocument={() => handleCommand('openFile')}
+                onOpenDocument={(payload) => {
+                  if (payload && typeof payload === 'object' && ('html' in payload || 'filePath' in payload || 'ok' in payload || 'error' in payload || 'canceled' in payload)) {
+                    applyImportedDocument(payload);
+                    return;
+                  }
+                  handleCommand('openFile');
+                }}
                 onOpenLastDraft={() => {
                   if (!confirmReplaceCurrentDocument()) return;
                   const savedDraft = wordPreferences.keepLastAutosavedVersion === false
@@ -5116,7 +7277,7 @@ function App() {
                   clearDraftReviewState();
                   runStartTransition((activeEditor) => {
                     if (savedDraft) activeEditor.commands.setContent(savedDraft);
-                    setCurrentFilePath('');
+                    beginDocumentIdentity({ filePath: '' });
                     setActiveTemplateId(getPersistedActiveTemplateId());
                   }, 'end');
                 }}

@@ -26,6 +26,15 @@ const FEEDBACK_CONTEXT_MATERIALS_LIMIT = 1600;
 const FEEDBACK_CONTEXT_HTML_MIN_LIMIT = 3600;
 const FEEDBACK_CONTEXT_HTML_MAX_LIMIT = 5200;
 const FEEDBACK_CONTEXT_HTML_GAP = '\n\n[... קוצר אמצע ה-HTML כדי לשמור גם את ההתחלה וגם את הסוף ...]\n\n';
+const ACTION_PLAN_SECTION_VISIBLE_TARGET = 1500;
+const ACTION_PLAN_SECTION_INDEX_LIMIT = 1600;
+const ACTION_PLAN_SECTION_EXCERPT_LIMIT = 140;
+const ACTION_PLAN_CANDIDATE_SECTION_LIMIT = 12;
+const ACTION_PLAN_BATCH_SECTION_LIMIT = 3;
+const ACTION_PLAN_FOCUSED_SECTION_FALLBACK_LIMIT = 4;
+const ACTION_PLAN_EDIT_BATCH_LIMIT = 8;
+const ACTION_PLAN_TOTAL_EDIT_LIMIT = 24;
+const ACTION_PLAN_SECTION_GAP = '\n\n[... קוצר אמצע האזור כדי לשמור על הקשר מקומי ...]\n\n';
 const GENERATED_HTML_CONTINUATION_CONTEXT_LIMIT = 2200;
 const GENERATED_HTML_CONTINUATION_PARTIAL_LIMIT = 3200;
 const GENERATED_HTML_CONTINUATION_GAP = '\n\n[... קוצר אמצע ההקשר לצורך continuation ...]\n\n';
@@ -43,9 +52,11 @@ const INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpe
 const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv,.rtf,.xml';
 const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
+const LOCAL_FALLBACK_RICH_REQUEST_PATTERN = /(מקור(?:ות)?|ביבליוגרפ|ציטוט|references?|citation|doi|מאמר(?:ים)?|סקיר(?:ת)?\s+ספרות|מחקר|מסמך\s+מלא|מסמך\s+עשיר|מקיף|מעמיק|literature\s+review|comprehensive|rich)/i;
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
+const EXPLICIT_SOURCE_URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 export const MATERIAL_UPLOAD_PRESETS = {
-  general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
+    general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
   'cover-page': { id: 'cover-page', label: 'דף שער לדוגמה', category: 'office', templateId: 'blank', learningHint: 'למד איך המשתמש אוהב לעצב דפי שער, כותרות ראשיות, שדות וזיהוי מוסד.' },
   'template-example': { id: 'template-example', label: 'תבנית מסמך לדוגמה', category: 'office', templateId: 'report', learningHint: 'למד את המבנה, סדר הפרקים והעיצוב שהמשתמש מעדיף למסמכים.' },
   'writing-sample': { id: 'writing-sample', label: 'דוגמת כתיבה אישית', category: 'academic', templateId: 'academic', learningHint: 'למד את הטון, אוצר המילים והניסוח האישי של המשתמש.' },
@@ -78,12 +89,42 @@ export function getSyllabusFileAcceptList() {
     : SYLLABUS_ACCEPT_LIST;
 }
 
+function normalizeExplicitSourceUrl(value = '') {
+  const trimmedValue = String(value || '').trim().replace(/[),.;]+$/g, '');
+  if (!trimmedValue) return '';
+  try {
+    return new URL(/^www\./i.test(trimmedValue) ? `https://${trimmedValue}` : trimmedValue).toString();
+  } catch {
+    return '';
+  }
+}
+
+function resolveExactArticleUrlConstraint({ prompt = '', instructions = '' } = {}) {
+  const matches = [prompt, instructions]
+    .map((value) => String(value || ''))
+    .join('\n')
+    .match(EXPLICIT_SOURCE_URL_PATTERN) || [];
+  const urls = Array.from(new Set(matches.map(normalizeExplicitSourceUrl).filter(Boolean)));
+  return urls.length === 1 ? urls[0] : '';
+}
+
+function buildExactArticleGroundingInstructions(url = '') {
+  const exactArticleUrl = String(url || '').trim();
+  if (!exactArticleUrl) return '';
+  return [
+      `URL מקור מחייב: ${exactArticleUrl}`,
+      'המסמך הזה חייב להיות מקורע לכתבה שב-URL הזה בלבד.',
+      'ענה רק על השאלות והדרישות של המשתמש ביחס לכתבה הזאת.',
+      'אם לא הצלחת לאמת או לגשת לכתבה המדויקת הזאת, החזר HTML קצר שמסביר את המגבלה ואל תעבור לכתבה, אירוע או מקרה דומים.',
+  ].join('\n');
+}
+
 function sanitizeMaterialPreviewText(value = '', maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
   const normalized = String(value ?? '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   return normalized.slice(0, maxLength);
 }
 
@@ -305,8 +346,8 @@ function topMapKeys(map = {}, limit = 8) {
     .map(([key]) => key);
 }
 
-function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureLock = false } = {}) {
-  if (directStructureLock) return false;
+function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureLock = false, forceDirectMode = false, skipWorkflowAutomation = false } = {}) {
+  if (directStructureLock || forceDirectMode || skipWorkflowAutomation) return false;
   const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
   const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
   return automation?.enabled === true
@@ -314,13 +355,13 @@ function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureL
     && hasActiveWorkflowAgents;
 }
 
-function getDocumentRunLabel({ automation = {}, selectedModel = '', selectedProviderId = '', selectedProviderModel = '', directStructureLock = false, shouldUseWorkflowAutomation = null } = {}) {
+function getDocumentRunLabel({ automation = {}, selectedModel = '', selectedProviderId = '', selectedProviderModel = '', directStructureLock = false, forceDirectMode = false, skipWorkflowAutomation = false, shouldUseWorkflowAutomation = null } = {}) {
   const requestedSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   const providerLabel = DOCUMENT_RUN_PROVIDER_LABELS[String(requestedSelection.providerId || '').trim().toLowerCase()] || String(requestedSelection.providerId || '').trim();
   const directLabel = requestedSelection.providerModel ? `${providerLabel || 'יצירה ישירה'} · ${requestedSelection.providerModel}` : (providerLabel || 'יצירה ישירה');
   const useWorkflowAutomation = typeof shouldUseWorkflowAutomation === 'boolean'
     ? shouldUseWorkflowAutomation
-    : shouldUseDocumentWorkflowAutomation({ automation, directStructureLock });
+    : shouldUseDocumentWorkflowAutomation({ automation, directStructureLock, forceDirectMode, skipWorkflowAutomation });
   if (!useWorkflowAutomation) return directLabel;
   if (automation?.workflowMode === 'manager-auto' && automation?.autopilotEnabled !== false) return 'AUTOPILOT';
   return String(automation?.workspaceName || '').trim() || 'צוות העבודה';
@@ -706,12 +747,31 @@ export function getSavedDocsHistory() {
   return readJsonFromStorage(HISTORY_KEY, []);
 }
 
-export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual' }) {
+export function removeDocumentHistoryByFilePath(filePath = '') {
+  const cleanPath = String(filePath || '').trim();
+  if (!cleanPath) return getSavedDocsHistory();
+
+  const current = getSavedDocsHistory();
+  const next = current.filter((item) => String(item?.filePath || '').trim() !== cleanPath);
+  if (next.length === current.length) return current;
+
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+    syncPersistedAppSettings();
+  } catch {
+    return current;
+  }
+
+  return next;
+}
+
+export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual', filePath = '' }) {
   const plainText = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!plainText) return [];
 
   const current = getSavedDocsHistory();
   const entryTitle = String(title || plainText.slice(0, 60) || 'מסמך חדש').trim();
+  const cleanPath = String(filePath || '').trim();
   const entry = {
     id: `${Date.now()}`,
     title: entryTitle,
@@ -720,9 +780,15 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     source,
     category: classifyDocName(entryTitle).category,
     savedAt: new Date().toISOString(),
+    // נתיב הקובץ נשמר רק אם הוא קיים, כדי שמסך הפתיחה יוכל לפתוח מחדש
+    ...(cleanPath ? { filePath: cleanPath } : {}),
   };
 
-  const next = [entry, ...current].slice(0, MAX_HISTORY_ITEMS);
+  // אם יש כבר רשומה עם אותו filePath - מחליפים אותה (מסמך זהה שנפתח/נשמר שוב)
+  const dedup = cleanPath
+    ? current.filter((item) => String(item?.filePath || '').trim() !== cleanPath)
+    : current;
+  const next = [entry, ...dedup].slice(0, MAX_HISTORY_ITEMS);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
     syncPersistedAppSettings();
@@ -730,6 +796,21 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     return current;
   }
   return next;
+}
+
+// מחזיר את 10 המסמכים האחרונים (כולל כאלה ללא filePath, כדי לא להסתיר היסטוריה)
+export function getRecentDocuments(limit = 10) {
+  const history = getSavedDocsHistory();
+  if (!Array.isArray(history) || !history.length) return [];
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 10));
+  // היסטוריה נשמרת כבר בסדר יורד (חדש ראשון), עוד מיון מבטחני לפי savedAt
+  return [...history]
+    .sort((a, b) => {
+      const aTime = Date.parse(a?.savedAt || '') || 0;
+      const bTime = Date.parse(b?.savedAt || '') || 0;
+      return bTime - aTime;
+    })
+    .slice(0, safeLimit);
 }
 
 export function getHomeInstructions() {
@@ -1073,7 +1154,7 @@ async function loadMaterialPreview(material) {
   }
 }
 
-async function buildSelectedMaterialsContext(selectedMaterials = []) {
+export async function buildSelectedMaterialsContext(selectedMaterials = []) {
   if (!Array.isArray(selectedMaterials) || !selectedMaterials.length) return '';
 
   const materialPreviews = await Promise.all(selectedMaterials.map(async (item) => ({
@@ -1235,13 +1316,15 @@ function buildFeedbackDrivenRequestContext({
   const baseSections = [
     `נושא המסמך: ${topicSection || 'לא צוין'}`,
     supportingSection ? `${supportingLabel}:\n${supportingSection}` : '',
-    materialsSection ? `חומרי עזר נלווים:\n${materialsSection}` : '',
   ].filter(Boolean);
+  const materialsBlock = materialsSection ? `חומרי עזר נלווים:\n${materialsSection}` : '';
 
-  const reservedBaseContext = baseSections.join('\n\n');
+  const reservedNonHtmlSections = [...baseSections, materialsBlock].filter(Boolean);
+  const reservedNonHtmlContext = reservedNonHtmlSections.join('\n\n');
+  const htmlSeparatorBudget = reservedNonHtmlSections.length > 0 ? 2 : 0;
   const availableHtmlBudget = Math.max(
     0,
-    FEEDBACK_CONTEXT_TOTAL_LIMIT - reservedBaseContext.length - htmlLabel.length - 4,
+    FEEDBACK_CONTEXT_TOTAL_LIMIT - reservedNonHtmlContext.length - `${htmlLabel}:\n`.length - htmlSeparatorBudget,
   );
   const availableHtmlChars = Math.min(FEEDBACK_CONTEXT_HTML_MAX_LIMIT, availableHtmlBudget);
   const htmlSection = truncateHtml
@@ -1251,7 +1334,8 @@ function buildFeedbackDrivenRequestContext({
   return [
     ...baseSections,
     `${htmlLabel}:\n${htmlSection}`,
-  ].join('\n\n');
+    materialsBlock,
+  ].filter(Boolean).join('\n\n');
 }
 
 function escapeHtml(value = '') {
@@ -1391,7 +1475,11 @@ function resolveGenerationRequestContext({ prompt = '', instructions = '', templ
 function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
   const structurePolicy = detectDocumentStructurePolicy({ prompt, instructions });
   const { title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
+  const safeSelectedMaterials = Array.isArray(selectedMaterials) ? selectedMaterials : [];
   const preferPlainFallback = structurePolicy.noStructure || structurePolicy.flowingText || structurePolicy.followAssignmentSections;
+  const shouldShowRichFallbackWarning = safeSelectedMaterials.length > 0
+    || isLikelyAcademicDocumentRequest({ prompt, instructions, templateId })
+    || LOCAL_FALLBACK_RICH_REQUEST_PATTERN.test([prompt, instructions].filter(Boolean).join('\n'));
   const promptContext = escapeHtml(
     String(prompt || '')
       .replace(LOCAL_STRUCTURE_DIRECTIVE_PATTERN, ' ')
@@ -1412,18 +1500,25 @@ function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
       ${instructions ? '<p>הנחיות המשתמש נשמרו למערכת, אך אינן מודבקות למסמך עצמו.</p>' : ''}
     </div>
   `;
-    const refsList = selectedMaterials.length
-      ? `<ul>${selectedMaterials.map((item) => `<li>${escapeHtml(item.title)}</li>`).join('')}</ul>`
+  const richFallbackWarning = shouldShowRichFallbackWarning
+    ? `
+    <div style="border:1px solid #fde68a;background:#fffbeb;padding:12px 14px;border-radius:10px;margin:10px 0;">
+      <p><strong>בדיקת איכות נדרשת:</strong> הבקשה נראית תלויה במקורות, חומרי עזר או מסמך עשיר. השלד המקומי לא מחליף יצירת AI מלאה ולא מאמת מקורות.</p>
+    </div>
+  `
+    : '';
+    const refsList = safeSelectedMaterials.length
+      ? `<ul>${safeSelectedMaterials.map((item) => `<li>${escapeHtml(item.title)}</li>`).join('')}</ul>`
       : '';
-  const refs = selectedMaterials.length
+  const refs = safeSelectedMaterials.length
       ? `<h2>חומרי עזר שנבחרו</h2>${refsList}`
     : '';
   const renderedRefs = structurePolicy.noHeadings ? refsList : refs;
   const fallbackShell = repairGeneratedHtmlForStructurePolicy(buildFallbackTemplateShell(templateId, title), structurePolicy);
 
   return preferPlainFallback
-    ? `${statusBlock}${fallbackContext ? `<p>${fallbackContext}</p>` : ''}${blankLine(4)}${refsList}`
-    : `${statusBlock}${fallbackShell}${renderedRefs}`;
+    ? `${statusBlock}${richFallbackWarning}${fallbackContext ? `<p>${fallbackContext}</p>` : ''}${blankLine(4)}${refsList}`
+    : `${statusBlock}${richFallbackWarning}${fallbackShell}${renderedRefs}`;
 }
 
 function normalizeGeneratedHtmlResponse(response = '') {
@@ -1432,9 +1527,41 @@ function normalizeGeneratedHtmlResponse(response = '') {
     const extractedHtml = parsedJson && typeof parsedJson.html === 'string'
       ? parsedJson.html.trim()
       : '';
-    const normalized = extractedHtml || stripped;
+    const normalized = normalizeGeneratedHtmlFragmentWrappers(extractedHtml || stripped);
   const convertedPlainText = convertMeaningfulPlainTextToBasicHtml(normalized);
   return convertedPlainText || normalized;
+}
+
+function stripBoundaryDocumentClosingTags(value = '') {
+  let next = String(value || '').trim();
+  if (!next) return '';
+
+  const stripIfUseful = (candidate = '') => {
+    const trimmedCandidate = String(candidate || '').trim();
+    if (!trimmedCandidate) return next;
+    const visibleText = stripHtmlTags(trimmedCandidate);
+    return hasMeaningfulVisibleText(visibleText) ? trimmedCandidate : next;
+  };
+
+  next = stripIfUseful(next.replace(/^(?:<\/(?:body|html)>\s*)+/i, ''));
+  next = stripIfUseful(next.replace(/(?:\s*<\/(?:body|html)>)+$/i, ''));
+  return next;
+}
+
+function normalizeGeneratedHtmlFragmentWrappers(response = '') {
+  let source = String(response || '').trim();
+  if (!source) return '';
+
+  source = source.replace(/^\s*<!doctype\b[^>]*>\s*/i, '').trim();
+  const bodyMatch = source.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    const bodyInnerHtml = String(bodyMatch[1] || '').trim();
+    if (hasMeaningfulVisibleText(stripHtmlTags(bodyInnerHtml))) {
+      source = bodyInnerHtml;
+    }
+  }
+
+  return stripBoundaryDocumentClosingTags(source);
 }
 
 function convertMeaningfulPlainTextToBasicHtml(response = '') {
@@ -1609,7 +1736,7 @@ function discardImplicitTrailingOptionalTags(stack = []) {
 }
 
 function findGeneratedHtmlIntegrityIssue(html = '') {
-  const source = String(html || '').trim();
+  const source = normalizeGeneratedHtmlFragmentWrappers(html);
   if (!source) return 'התקבלה תשובה ריקה';
   if (TRUNCATED_RESPONSE_MARKER_PATTERN.test(source)) {
     return 'התקבל placeholder של קיצור context או תשובה חלקית';
@@ -1690,6 +1817,280 @@ function ensureCompleteGeneratedHtmlResponse(response = '', operationLabel = 'ה
 
 function normalizeDocumentVisibleText(html = '') {
   return stripHtmlTags(normalizeGeneratedHtmlResponse(html)).replace(/\s+/g, ' ').trim();
+}
+
+function extractActionPlanTerms(value = '') {
+  const tokens = String(value || '').match(/[\u0590-\u05FFA-Za-z0-9][\u0590-\u05FFA-Za-z0-9'"׳״-]*/g) || [];
+  return Array.from(new Set(tokens
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= CONTEXT_MATCH_MIN_TERM_LENGTH)
+    .filter((token) => !HEBREW_STOP_WORDS.has(token))
+  )).slice(0, 32);
+}
+
+function resolveActionPlanHtmlRoot(container = null) {
+  let current = container;
+  while (current?.children?.length === 1) {
+    const onlyChild = current.children[0];
+    const tagName = String(onlyChild?.tagName || '').toLowerCase();
+    if (!['div', 'section', 'article', 'main'].includes(tagName)) break;
+    current = onlyChild;
+  }
+  return current;
+}
+
+function splitVisibleTextToActionPlanSections(visibleText = '', maxChars = ACTION_PLAN_SECTION_VISIBLE_TARGET) {
+  const normalized = String(visibleText || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+
+  const chunks = [];
+  let remaining = normalized;
+  while (remaining) {
+    if (remaining.length <= maxChars) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitIndex = remaining.lastIndexOf(' ', maxChars);
+    if (splitIndex < Math.floor(maxChars * 0.55)) splitIndex = maxChars;
+    chunks.push(remaining.slice(0, splitIndex).trim());
+    remaining = remaining.slice(splitIndex).trim();
+  }
+
+  return chunks
+    .map((chunk, index) => ({
+      id: `section-${index + 1}`,
+      order: index + 1,
+      title: chunks.length > 1 ? `אזור ${index + 1}` : 'מסמך',
+      visibleText: chunk,
+      excerpt: truncateContextSectionText(chunk, ACTION_PLAN_SECTION_EXCERPT_LIMIT),
+      explicitHeading: false,
+    }))
+    .filter((section) => section.visibleText);
+}
+
+function buildActionPlanSectionsFromHtml(html = '') {
+  const normalizedHtml = normalizeGeneratedHtmlResponse(html);
+  const fallbackSections = splitVisibleTextToActionPlanSections(normalizeDocumentVisibleText(normalizedHtml));
+  if (typeof DOMParser === 'undefined') return fallbackSections;
+
+  try {
+    const parsed = new DOMParser().parseFromString(`<div>${normalizedHtml}</div>`, 'text/html');
+    const wrapper = parsed.body.firstElementChild || parsed.body;
+    const root = resolveActionPlanHtmlRoot(wrapper) || wrapper;
+    const nodes = Array.from(root.childNodes || []).filter((node) => {
+      const text = String(node?.textContent || '').replace(/\s+/g, ' ').trim();
+      return Boolean(text);
+    });
+    if (!nodes.length) return fallbackSections;
+
+    const sections = [];
+    let currentTitle = 'פתיחה';
+    let currentExplicitHeading = false;
+    let currentPart = 1;
+    let textParts = [];
+
+    const flushCurrent = () => {
+      const visibleText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+      if (!visibleText) {
+        textParts = [];
+        return;
+      }
+      const title = currentPart > 1 ? `${currentTitle} (חלק ${currentPart})` : currentTitle;
+      sections.push({
+        id: `section-${sections.length + 1}`,
+        order: sections.length + 1,
+        title,
+        visibleText,
+        excerpt: truncateContextSectionText(visibleText, ACTION_PLAN_SECTION_EXCERPT_LIMIT),
+        explicitHeading: currentExplicitHeading,
+      });
+      textParts = [];
+    };
+
+    nodes.forEach((node) => {
+      const tagName = node?.nodeType === 1 ? String(node.tagName || '').toLowerCase() : '';
+      const nodeText = String(node?.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!nodeText) return;
+
+      if (/^h[1-6]$/.test(tagName)) {
+        flushCurrent();
+        currentTitle = nodeText;
+        currentExplicitHeading = true;
+        currentPart = 1;
+        textParts = [nodeText];
+        return;
+      }
+
+      textParts.push(nodeText);
+      const currentVisibleText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+      if (currentVisibleText.length >= ACTION_PLAN_SECTION_VISIBLE_TARGET) {
+        flushCurrent();
+        currentPart += 1;
+      }
+    });
+
+    flushCurrent();
+    return sections.length ? sections : fallbackSections;
+  } catch {
+    return fallbackSections;
+  }
+}
+
+function scoreActionPlanSection(section = null, terms = []) {
+  if (!section) return 0;
+  if (!terms.length) return Math.max(1, 12 - Math.min(10, Number(section.order) || 0));
+
+  const normalizedTitle = normalizeReviewSuggestionText(section.title || '').toLowerCase();
+  const normalizedVisibleText = normalizeReviewSuggestionText(section.visibleText || '').toLowerCase();
+  let score = 0;
+
+  terms.forEach((term) => {
+    if (!term) return;
+    if (normalizedTitle.includes(term)) score += 8;
+    if (normalizedVisibleText.includes(term)) score += 3;
+  });
+
+  if (section.explicitHeading) score += 1;
+  return score;
+}
+
+function selectActionPlanCandidateSections(sections = [], rankingText = '') {
+  const sourceSections = Array.isArray(sections) ? sections.filter(Boolean) : [];
+  if (!sourceSections.length) return [];
+
+  const terms = extractActionPlanTerms(rankingText);
+  const scoredSections = sourceSections.map((section) => ({
+    ...section,
+    relevanceScore: scoreActionPlanSection(section, terms),
+  }));
+  const maxSections = Math.min(ACTION_PLAN_CANDIDATE_SECTION_LIMIT, scoredSections.length);
+  const selected = [];
+  const seen = new Set();
+  const addSection = (section) => {
+    if (!section?.id || seen.has(section.id) || selected.length >= maxSections) return;
+    seen.add(section.id);
+    selected.push(section);
+  };
+
+  const reservedAnchorSlots = Math.min(maxSections, scoredSections.length > 1 ? 2 : 1);
+  const rankableSlots = Math.max(0, maxSections - reservedAnchorSlots);
+
+  addSection(scoredSections[0]);
+  [...scoredSections]
+    .sort((left, right) => right.relevanceScore - left.relevanceScore || left.order - right.order)
+    .slice(0, rankableSlots)
+    .forEach(addSection);
+  addSection(scoredSections[scoredSections.length - 1]);
+  scoredSections.forEach(addSection);
+
+  return selected.sort((left, right) => right.relevanceScore - left.relevanceScore || left.order - right.order);
+}
+
+function buildActionPlanSectionIndexText(sections = [], maxChars = ACTION_PLAN_SECTION_INDEX_LIMIT) {
+  const lines = [];
+  let used = 0;
+
+  for (const section of (Array.isArray(sections) ? sections : []).filter(Boolean)) {
+    const line = `- [sectionId=${section.id}] ${section.title}: ${truncateContextSectionText(section.excerpt || section.visibleText || '', 90)}`;
+    const nextUsed = used + (lines.length ? 1 : 0) + line.length;
+    if (nextUsed > maxChars) break;
+    lines.push(line);
+    used = nextUsed;
+  }
+
+  return lines.join('\n');
+}
+
+function buildActionPlanScopedContext({
+  originalPrompt = '',
+  supportingText = '',
+  supportingLabel = 'הערות המרצה והמלצות היישום',
+  materialsText = '',
+  allSections = [],
+  focusedSections = [],
+} = {}) {
+  const topicSection = truncateContextSectionText(originalPrompt || 'לא צוין', FEEDBACK_CONTEXT_TOPIC_LIMIT);
+  const supportingSection = truncateContextSectionText(supportingText, FEEDBACK_CONTEXT_SUPPORTING_LIMIT);
+  const materialsSection = truncateContextSectionText(materialsText, FEEDBACK_CONTEXT_MATERIALS_LIMIT);
+  const sectionIndexText = buildActionPlanSectionIndexText(allSections);
+
+  const baseParts = [
+    `נושא המסמך: ${topicSection || 'לא צוין'}`,
+    supportingSection ? `${supportingLabel}:\n${supportingSection}` : '',
+    sectionIndexText ? `מפת אזורים במסמך:\n${sectionIndexText}` : '',
+    materialsSection ? `חומרי עזר נלווים:\n${materialsSection}` : '',
+  ].filter(Boolean);
+
+  let contextText = baseParts.join('\n\n');
+  const includedSectionIds = [];
+  const orderedFocusedSections = (Array.isArray(focusedSections) ? focusedSections : []).filter(Boolean);
+
+  for (let index = 0; index < orderedFocusedSections.length; index += 1) {
+    const section = orderedFocusedSections[index];
+    const remainingSections = orderedFocusedSections.length - index;
+    const remainingBudget = FEEDBACK_CONTEXT_TOTAL_LIMIT - contextText.length - 2;
+    if (remainingBudget < 260) break;
+
+    const blockBudget = Math.max(240, Math.floor(remainingBudget / Math.max(1, remainingSections)));
+    const header = [`[sectionId=${section.id}]`, `כותרת: ${section.title}`, `תקציר: ${section.excerpt}`].join('\n');
+    const availableTextBudget = Math.max(160, blockBudget - header.length - '\nטקסט גלוי של האזור:\n'.length - 2);
+    const visibleText = truncateContextSectionHeadTail(section.visibleText || '', availableTextBudget, ACTION_PLAN_SECTION_GAP);
+    const block = `${header}\nטקסט גלוי של האזור:\n${visibleText}`;
+    const nextContext = contextText ? `${contextText}\n\n${block}` : block;
+
+    if (nextContext.length > FEEDBACK_CONTEXT_TOTAL_LIMIT) {
+      if (!includedSectionIds.length) {
+        const forcedTextBudget = Math.max(120, FEEDBACK_CONTEXT_TOTAL_LIMIT - contextText.length - header.length - '\n\nטקסט גלוי של האזור:\n'.length - 8);
+        const forcedVisibleText = truncateContextSectionHeadTail(section.visibleText || '', forcedTextBudget, ACTION_PLAN_SECTION_GAP);
+        const forcedBlock = `${header}\nטקסט גלוי של האזור:\n${forcedVisibleText}`;
+        contextText = contextText ? `${contextText}\n\n${forcedBlock}` : forcedBlock;
+        includedSectionIds.push(section.id);
+      }
+      break;
+    }
+
+    contextText = nextContext;
+    includedSectionIds.push(section.id);
+  }
+
+  return {
+    context: contextText,
+    includedSectionIds,
+  };
+}
+
+function mergeReviewActionPlanPayloads(results = []) {
+  const validResults = (Array.isArray(results) ? results : []).filter(Boolean);
+  if (!validResults.length) return null;
+
+  const edits = [];
+  const seen = new Set();
+  validResults.forEach((result) => {
+    (Array.isArray(result.edits) ? result.edits : []).forEach((edit) => {
+      const dedupeKey = [
+        normalizeReviewSuggestionText(edit.suggestionId || ''),
+        normalizeReviewSuggestionText(edit.title || ''),
+        normalizeReviewSuggestionText(edit.targetType || ''),
+        normalizeReviewSuggestionText(edit.locator || ''),
+        normalizeReviewSuggestionText(edit.originalText || ''),
+      ].join('||');
+      if (!dedupeKey || seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      edits.push(edit);
+    });
+  });
+
+  const limitedEdits = edits.slice(0, ACTION_PLAN_TOTAL_EDIT_LIMIT);
+  const summary = limitedEdits.length
+    ? `הוכנה תכנית ל-${limitedEdits.length} תיקונים ישימים במסמך.`
+    : validResults.map((result) => normalizeReviewSuggestionText(result.summary || '')).find(Boolean) || '';
+
+  return {
+    summary,
+    edits: limitedEdits,
+    usedFallback: validResults.every((result) => result.usedFallback === true),
+    errorMessage: validResults.map((result) => String(result.errorMessage || '').trim()).find(Boolean) || '',
+  };
 }
 
 function normalizeDocumentSignature(value = '') {
@@ -1976,12 +2377,16 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
     try {
       const continuationProvider = String(completion?.provider || requestOptions.providerOverride || '').trim();
       const continuationModel = String(completion?.model || requestOptions.modelOverride || '').trim();
+      const continuationRequestOptions = {
+        ...requestOptions,
+        forceVerifiedSourceFollowOn: false,
+      };
       const continuationResponse = await chatWithActiveProvider(
         continuationPrompt,
         buildGeneratedHtmlContinuationContext({ context, partialHtml, integrityIssue: continuationIssue }),
         `${systemPrompt}\n\nהמשך רק את ה-HTML החסר של אותה תשובה. אל תחזור על ההתחלה שכבר התקבלה, אל תכתוב markdown או סימוני קוד, ואל תוסיף הסברים. החזר רק את ההמשך הדרוש כדי שהמסמך יהיה HTML שלם ותקין.`,
         {
-          ...requestOptions,
+          ...continuationRequestOptions,
           includeCompletionMetadata: true,
           expectDocumentOutput: true,
           appendAgentNotesToOutput: requestOptions.appendAgentNotesToOutput === true,
@@ -2104,6 +2509,16 @@ function normalizeReviewSuggestionText(value = '', fallback = '') {
   return text || fallback;
 }
 
+function normalizeReviewReplacementText(value = '', fallback = '') {
+  const text = String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .trim();
+  return text || fallback;
+}
+
 function normalizeReviewSuggestionsPayload(payload = null) {
   if (!payload || typeof payload !== 'object') return null;
 
@@ -2117,12 +2532,14 @@ function normalizeReviewSuggestionsPayload(payload = null) {
     .map((item, index) => {
       if (!item || typeof item !== 'object') return null;
 
+      const suggestionId = normalizeReviewSuggestionText(item.suggestionId || item.id || item.sourceSuggestionId, `suggestion-${index + 1}`);
       const title = normalizeReviewSuggestionText(item.title || item.heading || item.name, `המלצה ${index + 1}`);
       const reason = normalizeReviewSuggestionText(item.reason || item.why || item.rationale);
       const suggestedChange = normalizeReviewSuggestionText(item.suggestedChange || item.change || item.recommendedEdit || item.suggestion);
       if (!reason && !suggestedChange) return null;
 
       return {
+        suggestionId,
         title,
         reason: reason || 'כדאי לחדד את הנקודה הזאת כדי לשפר את הקריאות והדיוק.',
         suggestedChange: suggestedChange || reason,
@@ -2131,6 +2548,20 @@ function normalizeReviewSuggestionsPayload(payload = null) {
     .filter(Boolean)
     .slice(0, 6);
 
+  const usedSuggestionIds = new Set();
+  suggestions.forEach((item, index) => {
+    const fallbackId = `suggestion-${index + 1}`;
+    const baseId = normalizeReviewSuggestionText(item.suggestionId, fallbackId) || fallbackId;
+    let candidateId = baseId;
+    let suffix = 2;
+    while (usedSuggestionIds.has(candidateId)) {
+      candidateId = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+    usedSuggestionIds.add(candidateId);
+    item.suggestionId = candidateId;
+  });
+
   const summary = normalizeReviewSuggestionText(
     payload.summary || payload.overview || payload.message || payload.shortSummary,
     suggestions.length ? 'נמצאו כמה המלצות קצרות לשיפור הטיוטה.' : '',
@@ -2138,6 +2569,97 @@ function normalizeReviewSuggestionsPayload(payload = null) {
 
   if (!summary && !suggestions.length) return null;
   return { summary, suggestions };
+}
+
+function normalizeReviewActionPlanTargetType(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['section', 'heading', 'chapter', 'part'].includes(normalized) ? 'section' : 'block';
+}
+
+function normalizeReviewActionPlanMatchStrategy(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['heading', 'section-heading'].includes(normalized)) return 'heading';
+  if (['startswith', 'starts-with', 'prefix', 'start'].includes(normalized)) return 'startsWith';
+  return 'contains';
+}
+
+function normalizeReviewActionPlanOperation(value = '') {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['insert_before', 'before', 'prepend'].includes(normalized)) return 'insert_before';
+  if (['insert_after', 'after', 'append', 'add_after', 'add'].includes(normalized)) return 'insert_after';
+  if (['needs_review', 'review', 'manual_review', 'manual'].includes(normalized)) return 'needs_review';
+  return 'replace';
+}
+
+function normalizeReviewActionPlanTargetConfidence(value = '') {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!normalized) return '';
+  if (['high', 'גבוה', 'גבוהה', 'strong', 'certain', 'exact'].includes(normalized)) return 'high';
+  if (['low', 'נמוך', 'נמוכה', 'weak', 'uncertain', 'ambiguous'].includes(normalized)) return 'low';
+  return 'medium';
+}
+
+function normalizeReviewActionPlanPayload(payload = null) {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const rawEdits = Array.isArray(payload.edits)
+    ? payload.edits
+    : Array.isArray(payload.actions)
+      ? payload.actions
+      : Array.isArray(payload.replacements)
+        ? payload.replacements
+        : [];
+
+  const edits = rawEdits
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+
+      const title = normalizeReviewSuggestionText(item.title || item.heading || item.name, `תיקון ${index + 1}`);
+      const reason = normalizeReviewSuggestionText(item.reason || item.why || item.rationale);
+      const targetType = normalizeReviewActionPlanTargetType(item.targetType || item.targetKind || item.scope || item.kind);
+      const operation = normalizeReviewActionPlanOperation(item.operation || item.action || item.placement || item.editType);
+      const targetConfidence = normalizeReviewActionPlanTargetConfidence(item.targetConfidence || item.confidence || item.locationConfidence || item.mappingConfidence);
+      const effectiveOperation = targetConfidence === 'low' ? 'needs_review' : operation;
+      const suggestionId = normalizeReviewSuggestionText(item.suggestionId || item.id || item.sourceSuggestionId);
+      const replacement = normalizeReviewReplacementText(item.replacement || item.replacementText || item.updatedText || item.suggestedChange || item.change || item.recommendedEdit);
+      const originalText = normalizeReviewSuggestionText(stripHtmlTags(item.originalText || item.currentText || item.excerpt || item.quote));
+      const locator = normalizeReviewSuggestionText(stripHtmlTags(item.locator || item.targetHint || item.headingText || item.heading || item.section || item.target));
+      if (effectiveOperation !== 'needs_review' && (!replacement || !originalText || !locator)) return null;
+
+      return {
+        suggestionId,
+        title,
+        reason: reason || 'המלצת תיקון שנגזרה מבדיקת המרצה.',
+        replacement,
+        operation: effectiveOperation,
+        targetConfidence,
+        originalText: originalText || title,
+        locator: locator || title,
+        targetType,
+        matchStrategy: normalizeReviewActionPlanMatchStrategy(item.matchStrategy || item.match || item.locatorMode),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, ACTION_PLAN_EDIT_BATCH_LIMIT);
+
+  const summary = normalizeReviewSuggestionText(
+    payload.summary || payload.overview || payload.message || payload.shortSummary,
+    edits.length ? `הוכנה תכנית ל-${edits.length} תיקונים ישימים במסמך.` : '',
+  );
+
+  if (!summary && !edits.length) return null;
+  return { summary, edits };
+}
+
+function buildReviewActionPlanFallback({ focusText = '', errorMessage = '' } = {}) {
+  return {
+    summary: focusText
+      ? 'לא הצלחתי למפות כרגע את הערות המרצה לתכנית תיקונים ישימה על המסמך.'
+      : 'לא הצלחתי למפות כרגע את ההמלצות לתכנית תיקונים ישימה על המסמך.',
+    edits: [],
+    usedFallback: true,
+    errorMessage: String(errorMessage || '').trim(),
+  };
 }
 
 function buildDocumentReviewFallback({ focusText = '', errorMessage = '' } = {}) {
@@ -2663,7 +3185,7 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '' }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
@@ -2671,7 +3193,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: cleanPrompt, instructions: cleanInstructions, templateId });
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
+  const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: cleanPrompt, instructions: cleanInstructions });
+  const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
   const automation = getWorkspaceAutomation();
+  const shouldForceDirectCompose = forceDirectMode === true || skipWorkflowAutomation === true;
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
   const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
@@ -2681,6 +3206,8 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const shouldUseWorkflowAutomation = shouldUseDocumentWorkflowAutomation({
     automation,
     directStructureLock: structurePolicy.directStructureLock,
+    forceDirectMode: shouldForceDirectCompose,
+    skipWorkflowAutomation: shouldForceDirectCompose,
   });
   const documentRunLabel = getDocumentRunLabel({
     automation,
@@ -2688,6 +3215,8 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     selectedProviderId: requestedProviderSelection.providerId,
     selectedProviderModel: requestedProviderSelection.providerModel,
     directStructureLock: structurePolicy.directStructureLock,
+    forceDirectMode: shouldForceDirectCompose,
+    skipWorkflowAutomation: shouldForceDirectCompose,
     shouldUseWorkflowAutomation,
   });
   const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
@@ -2709,7 +3238,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     materialsText = await buildEffectiveMaterialsContext({
       selectedMaterials,
       requestText: [cleanPrompt, cleanInstructions].filter(Boolean).join('\n'),
-      allowAutoSelection: false,
+      allowAutoSelection: !(Array.isArray(selectedMaterials) && selectedMaterials.length),
     });
   } catch (error) {
     logAgentDebugEvent({
@@ -2739,6 +3268,20 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
+    if (shouldForceDirectCompose) {
+      logAgentDebugEvent({
+        type: 'doc-generation-direct-compose',
+        state: 'running',
+        runId,
+        agentLabel: documentRunLabel,
+        message: directModeReason === 'chef-final-compose'
+          ? 'Chef final generation uses direct single-model compose; workflow automation skipped'
+          : 'יצירת המסמך משתמשת במסלול ישיר של מודל יחיד ללא workflow automation',
+        reason: String(directModeReason || 'forceDirectMode').trim(),
+        ...requestLogContext,
+      });
+    }
+
     const suppressVisibleAgentNotes = structurePolicy.noSummary || structurePolicy.directStructureLock;
     const requestOptions = {
       runId,
@@ -2756,18 +3299,29 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         ? String(automation?.agentNotesInstruction || '').trim()
         : '',
     };
-    if (structurePolicy.directStructureLock) {
+    if (structurePolicy.directStructureLock || shouldForceDirectCompose) {
       requestOptions.strictFormatting = true;
       requestOptions.skipAutomation = true;
       requestOptions.skipAutomationPrompt = true;
       requestOptions.skipSkillSelection = true;
       requestOptions.skipMultiModel = true;
-      requestOptions.omitPersonalStyleStructureHints = true;
+      requestOptions.omitPersonalStyleStructureHints = structurePolicy.directStructureLock ? true : requestOptions.omitPersonalStyleStructureHints;
     }
-    if (noActiveWorkflowAutomation) {
+    if (exactArticleUrl) {
+      requestOptions.sourceQueryOverride = exactArticleUrl;
+      requestOptions.blockAssignmentSourceQuery = true;
+      requestOptions.forceVerifiedSourceFollowOn = true;
+      requestOptions.exactSourceUrl = exactArticleUrl;
+      requestOptions.skipAutomation = true;
+      requestOptions.skipAutomationPrompt = true;
+      requestOptions.skipSkillSelection = true;
+      requestOptions.skipMultiModel = true;
+      requestOptions.automationSkipReason = 'exactSourceUrlLock';
+    }
+    if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (requestedProviderSelection.providerId && shouldUseWorkflowAutomation === false) {
+    if (requestedProviderSelection.providerId && (shouldUseWorkflowAutomation === false || exactArticleUrl)) {
       requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
       if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
@@ -2782,7 +3336,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     const userPrompt = userRequestSections.join('\n\n');
-    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}`;
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt,
@@ -2808,7 +3362,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       throw new Error('התקבלה תשובה ריקה או לא שמישה מהמודל');
     }
 
-    ensureCompleteGeneratedHtmlResponse(finalResponse, 'יצירת המסמך');
+    const validatedFinalResponse = ensureCompleteGeneratedHtmlResponse(finalResponse, 'יצירת המסמך');
 
     if (finalResponse !== cleanedResponse) {
       logAgentDebugEvent({
@@ -2828,13 +3382,13 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       runId,
       agentLabel: documentRunLabel,
       message: 'המסמך נוצר בהצלחה דרך ה-API',
-      outputChars: finalResponse.length,
+      outputChars: validatedFinalResponse.length,
       ...requestLogContext,
     });
 
     return returnMeta
-      ? { html: finalResponse, usedFallback: false, runId, errorMessage: '', title }
-      : finalResponse;
+      ? { html: validatedFinalResponse, usedFallback: false, runId, errorMessage: '', title }
+      : validatedFinalResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-generation-api-error',
@@ -2955,6 +3509,8 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
   const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: originalPrompt, instructions: cleanFeedback, templateId });
+  const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: originalPrompt, instructions: cleanFeedback });
+  const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
   if (!cleanHtml) throw new Error('אין מסמך פתוח לעדכון');
   if (!cleanFeedback) throw new Error('צריך לבחור משוב או לכתוב הערה חופשית');
 
@@ -2991,10 +3547,16 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       : cleanHtml;
   }
 
-  const revisionPreservationContract = 'חוזה מחייב לעדכון: החזר תמיד את המסמך המלא מתחילתו ועד סופו, גם אם התיקון נוגע רק בפסקה אחת. אסור להחזיר רק fragment, רק קטע מתוקן, או רק את ההמשך החסר. ברירת המחדל היא שימור: כל חלק שלא התבקש להשתנות צריך להישאר באותה משמעות, באותו סדר ובאותו מבנה; אם אין סיבה חזקה לשנות ניסוח קיים, השאר אותו כפי שהוא.';
+  const wideRevisionRequested = feedbackAllowsWideDocumentRewrite(cleanFeedback);
+  const existingVisibleLength = normalizeDocumentVisibleText(cleanHtml).length;
+  const shouldPreferTargetedRevision = !wideRevisionRequested && existingVisibleLength >= 1800;
+  const targetedRevisionContract = shouldPreferTargetedRevision
+    ? 'המשוב אינו מבקש שכתוב מלא של מסמך ארוך. בצע תיקון מינימלי וממוקד רק במקומות שהמשוב דורש, ואל תבנה את המסמך מחדש. בגלל שהמערכת צריכה להחליף את תוכן העורך, עדיין החזר HTML מלא ותקין של כל המסמך אחרי התיקון, לא fragment.'
+    : 'אם המשוב מבקש שינוי נקודתי, בצע שינוי נקודתי בלבד. אם המשתמש ביקש במפורש שכתוב מלא, מותר לבנות את המסמך מחדש לפי הבקשה.';
+  const revisionPreservationContract = `חוזה מחייב לעדכון: ${targetedRevisionContract} החזר תמיד את המסמך המלא מתחילתו ועד סופו, גם אם התיקון נוגע רק בפסקה אחת. אסור להחזיר רק fragment, רק קטע מתוקן, או רק את ההמשך החסר. ברירת המחדל היא שימור: כל חלק שלא התבקש להשתנות צריך להישאר באותה משמעות, באותו סדר ובאותו מבנה; אם אין סיבה חזקה לשנות ניסוח קיים, השאר אותו כפי שהוא.`;
   const systemPrompt = shouldUseWorkflowAutomation
-    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`
-    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}`;
+    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`
+    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
 
   try {
     logAgentDebugEvent({
@@ -3053,10 +3615,21 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     if (noActiveWorkflowAutomation) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (requestedProviderSelection.providerId && !shouldUseWorkflowAutomation) {
+    if (requestedProviderSelection.providerId && (!shouldUseWorkflowAutomation || exactArticleUrl)) {
       requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
       if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
+    }
+    if (exactArticleUrl) {
+      requestOptions.sourceQueryOverride = exactArticleUrl;
+      requestOptions.exactSourceUrl = exactArticleUrl;
+      requestOptions.forceVerifiedSourceFollowOn = true;
+      requestOptions.blockAssignmentSourceQuery = true;
+      requestOptions.skipAutomation = true;
+      requestOptions.skipAutomationPrompt = true;
+      requestOptions.skipSkillSelection = true;
+      requestOptions.skipMultiModel = true;
+      requestOptions.automationSkipReason = 'exactSourceUrlLock';
     }
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
@@ -3095,18 +3668,22 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       ? { html: validatedResponse, usedFallback: false, runId, errorMessage: '' }
       : validatedResponse;
   } catch (error) {
+    const revisionErrorMessage = error?.message || 'שגיאה לא ידועה';
+    const safeRevisionErrorMessage = /^MISSING\/full-revision-failed/i.test(revisionErrorMessage)
+      ? revisionErrorMessage
+      : `MISSING/full-revision-failed: ${revisionErrorMessage}`;
     logAgentDebugEvent({
       type: 'doc-feedback-fallback',
       state: 'error',
       runId,
       agentLabel: documentUpdateLabel,
       message: shouldUseWorkflowAutomation ? 'עדכון המסמך דרך workflow לא הושלם' : 'העדכון הישיר של המסמך לא הושלם',
-      errorMessage: error?.message || 'שגיאה לא ידועה',
+      errorMessage: safeRevisionErrorMessage,
       ...requestLogContext,
     });
 
     return returnMeta
-      ? { html: cleanHtml, usedFallback: true, runId, errorMessage: error?.message || 'שגיאה לא ידועה' }
+      ? { html: cleanHtml, usedFallback: true, runId, errorMessage: safeRevisionErrorMessage }
       : cleanHtml;
   }
 }
@@ -3115,6 +3692,8 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFocus = [String(focus || '').trim(), String(feedback || '').trim()].filter(Boolean).join('\n\n');
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
+  const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: originalPrompt, instructions: cleanFocus });
+  const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
   if (!cleanHtml) throw new Error('אין מסמך פתוח לבדיקה');
 
   const {
@@ -3154,7 +3733,7 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       : { summary: fallback.summary, suggestions: fallback.suggestions };
   }
 
-  const systemPrompt = `פעל כמבקר טיוטות ישיר של WordFlow AI. החזר המלצות עריכה בלבד, בלי לשכתב את המסמך, בלי להחזיר HTML ובלי לבצע שינוי בפועל. החזר JSON בלבד במבנה הזה: {"summary":"...","suggestions":[{"title":"...","reason":"...","suggestedChange":"..."}]}. summary חייב להיות קצר. suggestions חייבת להכיל בין 3 ל-6 פריטים קצרים, מעשיים ולא חופפים. כל suggestion חייב לכלול title, reason, suggestedChange. אל תחזיר Markdown, הסברים מחוץ ל-JSON או code fences. אם המשתמש נתן מיקוד, תעדף אותו; אחרת בצע סקירה כללית לטיוטה. סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר מפורשים, השתמש בהם רק כהקשר משלים לבדיקה.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד. הן יכולות לכוון את ההמלצות, אך תוכן הטיוטה והמיקוד של המשתמש גוברים עליהן.\n${notes}` : ''}`;
+  const systemPrompt = `פעל כמבקר טיוטות ישיר של WordFlow AI. החזר המלצות עריכה בלבד, בלי לשכתב את המסמך, בלי להחזיר HTML ובלי לבצע שינוי בפועל. החזר JSON בלבד במבנה הזה: {"summary":"...","suggestions":[{"suggestionId":"suggestion-1","title":"...","reason":"...","suggestedChange":"..."}]}. summary חייב להיות קצר. suggestions חייבת להכיל בין 3 ל-6 פריטים קצרים, מעשיים ולא חופפים. כל suggestion חייב לכלול suggestionId, title, reason, suggestedChange. suggestionId חייב להיות יציב וקצר. אל תחזיר Markdown, הסברים מחוץ ל-JSON או code fences. אם המשתמש נתן מיקוד, תעדף אותו; אחרת בצע סקירה כללית לטיוטה. סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר מפורשים, השתמש בהם רק כהקשר משלים לבדיקה.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד. הן יכולות לכוון את ההמלצות, אך תוכן הטיוטה והמיקוד של המשתמש גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
 
   try {
     logAgentDebugEvent({
@@ -3186,6 +3765,17 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       requestOptions.providerOverride = requestedProviderSelection.providerId;
       requestOptions.strictProviderOverride = true;
       if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
+    }
+    if (exactArticleUrl) {
+      requestOptions.sourceQueryOverride = exactArticleUrl;
+      requestOptions.exactSourceUrl = exactArticleUrl;
+      requestOptions.forceVerifiedSourceFollowOn = true;
+      requestOptions.blockAssignmentSourceQuery = true;
+      requestOptions.skipAutomation = true;
+      requestOptions.skipAutomationPrompt = true;
+      requestOptions.skipSkillSelection = true;
+      requestOptions.skipMultiModel = true;
+      requestOptions.automationSkipReason = 'exactSourceUrlLock';
     }
 
     const reviewContext = buildFeedbackDrivenRequestContext({
@@ -3245,6 +3835,282 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
     return returnMeta
       ? { ...fallback, runId }
       : { summary: fallback.summary, suggestions: fallback.suggestions };
+  }
+}
+
+export async function buildDocumentReviewActionPlan({ existingHtml = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false, feedback = '', focus = '', suggestions = [] }) {
+  const cleanHtml = String(existingHtml || '').trim();
+  const cleanFocus = [String(focus || '').trim(), String(feedback || '').trim()].filter(Boolean).join('\n\n');
+  const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: originalPrompt, instructions: cleanFocus });
+  const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
+  const cleanSuggestions = (Array.isArray(suggestions) ? suggestions : [])
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return '';
+      const suggestionId = normalizeReviewSuggestionText(item.suggestionId || item.id || item.sourceSuggestionId, `suggestion-${index + 1}`);
+      const title = normalizeReviewSuggestionText(item.title || item.heading || item.name, `המלצה ${index + 1}`);
+      const reason = normalizeReviewSuggestionText(item.reason || item.why || item.rationale);
+      const suggestedChange = normalizeReviewSuggestionText(item.suggestedChange || item.change || item.recommendedEdit || item.suggestion);
+      return [
+        `${index + 1}. [suggestionId=${suggestionId}] ${title}`,
+        reason ? `למה: ${reason}` : '',
+        suggestedChange ? `מה לשנות: ${suggestedChange}` : '',
+      ].filter(Boolean).join('\n');
+    })
+    .filter(Boolean);
+  const actionInputText = [
+    cleanFocus ? `מיקוד המשתמש/המרצה:\n${cleanFocus}` : '',
+    cleanSuggestions.length ? `המלצות שכבר הופקו לבדיקה:\n${cleanSuggestions.join('\n\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+  const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
+  if (!cleanHtml) throw new Error('אין מסמך פתוח ליישום תיקונים');
+  if (!actionInputText) throw new Error('אין הערות או המלצות למיפוי לתיקונים');
+
+  const {
+    requestWorkspaceId,
+    requestWorkspaceName,
+    requestLogContext,
+    templateGuide,
+    runId,
+    agentLabel: documentReviewLabel,
+    notes,
+    materialsText,
+    preparationError,
+  } = await prepareFeedbackDrivenDocumentContext({
+    originalPrompt,
+    supportingText: actionInputText,
+    templateId,
+    selectedMaterials,
+    allowAutoSelectedMaterials: false,
+    includeLearnedNotes: false,
+    forceDirectMode: true,
+    providedRunId,
+    runIdPrefix: 'doc-review-apply-plan',
+    automatedLabel: 'מיפוי תיקוני מרצה',
+    directLabel: 'מיפוי תיקוני מרצה',
+    preparationErrorType: 'doc-review-apply-plan-preparation-error',
+    preparationErrorMessage: 'שגיאה בשלב הכנת מיפוי תיקוני המרצה לפני קריאת API',
+  });
+
+  if (preparationError) {
+    const fallback = buildReviewActionPlanFallback({
+      focusText: actionInputText,
+      errorMessage: preparationError?.message || 'שגיאה לא ידועה',
+    });
+    return returnMeta ? { ...fallback, runId } : { summary: fallback.summary, edits: fallback.edits };
+  }
+
+  try {
+    logAgentDebugEvent({
+      type: 'doc-review-apply-plan-start',
+      state: 'running',
+      runId,
+      agentLabel: documentReviewLabel,
+      message: 'התחיל מיפוי תיקוני המרצה לתכנית edits ישימה',
+      templateId,
+      selectedMaterialsCount: selectedMaterials.length,
+      ...requestLogContext,
+    });
+
+    const fullContext = buildFeedbackDrivenRequestContext({
+      originalPrompt,
+      supportingText: actionInputText,
+      supportingLabel: 'הערות המרצה והמלצות היישום',
+      materialsText,
+      existingHtml: cleanHtml,
+      htmlLabel: 'המסמך הקיים ב-HTML',
+      truncateHtml: false,
+    });
+    const shouldPreserveFullContext = fullContext.length <= FEEDBACK_CONTEXT_TOTAL_LIMIT;
+    const buildActionPlanSystemPrompt = ({ scopedSections = false } = {}) => {
+      const blockTargetPrompt = scopedSections
+        ? 'targetType=block רק עבור אזור שמופיע במפורש בתוך האזורים הממוקדים שנשלחו. locator צריך להיות snippet ייחודי מתוך הטקסט הגלוי שנשלח, ו-originalText חייב להיות ציטוט רציף ומדויק מתוך אותו אזור. אם אין לך ציטוט גלוי ומדויק לאזור, דלג על ה-edit ואל תנחש טקסט שלא הופיע בהקשר.'
+        : 'targetType=block עבור פסקה, כמה פסקאות רצופות, או קטע מקומי אחד; במקרה כזה locator צריך להיות snippet ייחודי, ו-originalText צריך להיות ציטוט מדויק, רציף ומלא של כל האזור שיוחלף לפני התיקון, לא רק משפט בודד מתוכו.';
+      const scopePrompt = scopedSections
+        ? 'המסמך נשלח כמפת אזורים כללית ובנוסף אזורים ממוקדים בטקסט גלוי. החזר edits רק עבור אזורים שמופיעים בפועל באזורים הממוקדים, והשתמש במפת האזורים רק לצורך ניווט ובחירת locator נכון.'
+        : 'המסמך נשלח במלואו ולכן מותר למפות edits מכל אזור גלוי במסמך.';
+      return `פעל כממפה תיקונים מדויק עבור WordFlow AI. אסור לשכתב מסמך מלא ואסור להחזיר HTML שלם. החזר JSON בלבד במבנה הזה: {"summary":"...","edits":[{"suggestionId":"suggestion-1","title":"...","targetConfidence":"high|medium|low","operation":"replace|insert_before|insert_after|needs_review","targetType":"section|block","locator":"...","matchStrategy":"heading|contains|startsWith","originalText":"...","replacement":"...","reason":"..."}]}.\nכל edit חייב להצביע על מקום אמיתי שקיים כרגע במסמך.\nאם edit נובע מהמלצה קיימת, suggestionId חייב להיות מועתק בדיוק מאותה המלצה.\nהחזר עד 8 edits בלבד. אם כמה בעיות נמצאות באותו אזור, אחד אותן ל-edit יחיד לאותו אזור במקום להחזיר כפילויות.\n` +
+        `${cleanSuggestions.length ? 'יש רשימת המלצות מפורשת לביצוע. החזר edits רק עבור ההמלצות שמופיעות ברשימה הזו, לפי suggestionId שלהן. אסור להוסיף תיקונים, רקע תיאורטי, שינויים סגנוניים או סעיפים שלא מופיעים ברשימת ההמלצות שנשלחה. אם המלצה נבחרת אינה ניתנת למיקום בטוח, החזר אותה כ-needs_review במקום לבצע תיקון אחר.\n' : ''}` +
+        `${scopePrompt}\n` +
+        `שים לב: מגבלת ${ACTION_PLAN_EDIT_BATCH_LIMIT} edits היא לקריאה הנוכחית בלבד, לא למסמך כולו. המערכת תאחד כמה קריאות עד ${ACTION_PLAN_TOTAL_EDIT_LIMIT} תיקונים כאשר צריך יותר תיקונים.\n` +
+        `לפני יצירת edit, בדוק מה כבר קיים באזור כאילו זו בדיקת מרצה: זהה מה חסר, חלש, כפול, לא מדויק או לא ממוקם נכון, ואז החזר את התיקון שמיישם את האבחנה. אם יש כפילות תוכנית או כפילות רעיונית באותו אזור, התייחס אליה כבעיה לתיקון ואחד לנוסח תקין אחד.\n` +
+        `targetConfidence=high רק כשיש ציטוט מדויק או התאמה כמעט מלאה לאזור יחיד. targetConfidence=medium כשיש אזור יחיד סביר לפי כותרת, נושא, מונחים סמוכים או מיקום במסמך אבל אין ציטוט מושלם. targetConfidence=low כשיש כמה אזורים דומים, locator כללי מדי, או שהתיקון דורש שיפוט אנושי; במקרה כזה השתמש operation=needs_review ואל תחזיר replacement אגרסיבי.\n` +
+        `אם targetConfidence=medium, התיקון חייב להיות מקומי וצר: פסקה אחת, משפט, ציטוט, או הוספה קצרה סביב אזור ברור. אסור להחזיר targetType=section רחב או replacement שמחליף כמה פסקאות.\n` +
+        `targetType=section רק אם צריך להחליף סעיף שלם עם כותרת ייחודית; במקרה כזה locator חייב להיות כותרת הסעיף, ו-originalText חייב לכלול excerpt גלוי, רציף ומדויק מתוך גוף הסעיף הקיים לפני התיקון.\n` +
+        `locator ו-originalText חייבים להיות טקסט גלוי בלבד, בלי תגיות HTML, entities, או markup מכל סוג. replacement בלבד יכול להכיל HTML בטוח כשצריך.\n` +
+        `${blockTargetPrompt}\n` +
+        `operation=replace כאשר צריך לשנות, למחוק כפילות, לשכתב, לאחד, להחליף ניסוח או להרחיב אזור קיים. במקרה כזה replacement חייב להיות הטקסט החלופי המלא לאזור הזה בלבד, תוך שמירה על חלקים נכונים שכבר קיימים והוספת מה שחסר.\n` +
+        `כאשר ההמלצה אומרת שחסר סעיף, חסרה תמה, חסרות תת-תמות, חסר כלי ניתוח, חסר מדגם/אוכלוסייה או שיש להוסיף רכיב מבני חדש, העדף operation=insert_before/insert_after ליד הכותרת או הסעיף הקרוב ביותר. אל תחליף תמה קיימת או סעיף קיים רק כדי להכניס רכיב חסר, אלא אם replacement משמר במלואו את כל התוכן הקיים ומוסיף עליו את החסר.\n` +
+        `אל תבחר section גדול או כמה פסקאות כיעד אם התיקון שייך רק לפסקה, משפט, ציטוט, דוגמה או תת-סעיף מקומי. יעד רחב מותר רק כאשר replacement משמר ומתקן את כל האזור הרחב, אחרת דלג על ה-edit.\n` +
+        `operation=insert_before או insert_after רק כאשר צריך להוסיף תוכן חדש סביב אזור קיים בלי לשנות אותו. במקרה כזה replacement צריך להכיל רק את התוכן החדש להוספה, והמערכת תחבר אותו לאזור המקורי.\n` +
+        `אם התיקון דורש הרחבה, השלמת טיעון, הוספת נימוק, דוגמה, מעבר, או פיתוח רעיון חסר, בחר אזור מקומי רציף שמכסה את כל היחידה הרלוונטית והחזר replacement מלא לאותו אזור או insertion ממוקם היטב לפי הצורך. מותר ואף נדרש להחזיר כמה משפטים או כמה פסקאות רצופות כשזה נדרש כדי להשלים את ההנחיה. אל תקצר אוטומטית למשפט אחד.\n` +
+        `אם המלצה כללית מדי ולא בטוחה ליישום אוטומטי, דלג עליה.\n` +
+        `אל תחזיר Markdown, הסברים מחוץ ל-JSON או code fences.\n` +
+        `התייחס להמלצות המרצה כהנחיה מחייבת, אבל שמור על שינויים מינימליים ומדויקים רק ביחס לאזור הנבחר, לא על חשבון תוכן חסר שהמשתמש ביקש להשלים.\n` +
+        `סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר מפורשים, השתמש בהם רק כהקשר משלים למיפוי התיקונים.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
+    };
+
+    const baseRequestOptions = {
+      runId,
+      agentLabel: documentReviewLabel,
+      activeWorkspaceId: requestWorkspaceId,
+      workspaceName: requestWorkspaceName,
+      structureConstraintText: actionInputText,
+      strictFormatting: true,
+      skipAutomation: true,
+      skipAutomationPrompt: true,
+      skipSkillSelection: true,
+      skipMultiModel: true,
+      includeAppMemory: false,
+    };
+    if (requestedProviderSelection.providerId) {
+      baseRequestOptions.providerOverride = requestedProviderSelection.providerId;
+      baseRequestOptions.strictProviderOverride = true;
+      if (requestedProviderSelection.providerModel) baseRequestOptions.modelOverride = requestedProviderSelection.providerModel;
+    }
+    if (exactArticleUrl) {
+      baseRequestOptions.sourceQueryOverride = exactArticleUrl;
+      baseRequestOptions.exactSourceUrl = exactArticleUrl;
+      baseRequestOptions.forceVerifiedSourceFollowOn = true;
+      baseRequestOptions.blockAssignmentSourceQuery = true;
+      baseRequestOptions.automationSkipReason = 'exactSourceUrlLock';
+    }
+
+    const invokeActionPlanCall = async ({ context = '', scopedSections = false, batchLabel = '' } = {}) => {
+      const response = await chatWithActiveProvider(
+        batchLabel
+          ? `מפה את הערות המרצה לתכנית תיקונים ישימה על המסמך הקיים (${batchLabel})`
+          : 'מפה את הערות המרצה לתכנית תיקונים ישימה על המסמך הקיים',
+        context,
+        buildActionPlanSystemPrompt({ scopedSections }),
+        {
+          ...baseRequestOptions,
+          preserveFullDocumentContext: !scopedSections,
+        },
+      );
+
+      if (TRUNCATED_RESPONSE_MARKER_PATTERN.test(String(response || ''))) {
+        throw new Error('התקבלה תכנית תיקונים חלקית או קטועה מהמודל');
+      }
+
+      const parsedResponse = normalizeReviewActionPlanPayload(tryParseJsonObjectResponse(response));
+      if (!parsedResponse) {
+        throw new Error('התקבלה תכנית תיקונים ריקה או לא שמישה');
+      }
+
+      return parsedResponse;
+    };
+
+    const planResults = [];
+    const batchErrors = [];
+    const documentSections = buildActionPlanSectionsFromHtml(cleanHtml);
+    const candidateSections = selectActionPlanCandidateSections(documentSections, actionInputText);
+    const prioritizedSections = candidateSections.length ? candidateSections : documentSections;
+    const shouldUseBatchedPlanning = prioritizedSections.length > ACTION_PLAN_BATCH_SECTION_LIMIT;
+    let planningStrategy = shouldPreserveFullContext && !shouldUseBatchedPlanning
+      ? 'full-single-call'
+      : shouldPreserveFullContext
+        ? 'full-section-batched-calls'
+        : 'scoped-single-call';
+
+    if (shouldPreserveFullContext && !shouldUseBatchedPlanning) {
+      planResults.push(await invokeActionPlanCall({ context: fullContext, scopedSections: false }));
+    } else {
+      if (prioritizedSections.length < documentSections.length) {
+        batchErrors.push(`כוסו באופן ממוקד ${prioritizedSections.length} אזורים מתוך ${documentSections.length} במסמך הארוך; ייתכן שנדרש סבב נוסף לאזורים שלא נכנסו לתיעדוף`);
+      }
+      const scopedSingleCall = buildActionPlanScopedContext({
+        originalPrompt,
+        supportingText: actionInputText,
+        supportingLabel: 'הערות המרצה והמלצות היישום',
+        materialsText,
+        allSections: documentSections,
+        focusedSections: prioritizedSections.slice(0, Math.max(ACTION_PLAN_FOCUSED_SECTION_FALLBACK_LIMIT, prioritizedSections.length)),
+      });
+
+      if (!shouldUseBatchedPlanning && scopedSingleCall.includedSectionIds.length >= prioritizedSections.length) {
+        planResults.push(await invokeActionPlanCall({
+          context: scopedSingleCall.context,
+          scopedSections: true,
+        }));
+      } else {
+        planningStrategy = 'scoped-batched-calls';
+        let remainingSections = [...prioritizedSections];
+        let batchIndex = 0;
+        const maxBatchAttempts = Math.max(1, remainingSections.length);
+
+        while (remainingSections.length && batchIndex < maxBatchAttempts) {
+          batchIndex += 1;
+          const batchContext = buildActionPlanScopedContext({
+            originalPrompt,
+            supportingText: actionInputText,
+            supportingLabel: 'הערות המרצה והמלצות היישום',
+            materialsText,
+            allSections: documentSections,
+            focusedSections: remainingSections.slice(0, ACTION_PLAN_BATCH_SECTION_LIMIT),
+          });
+
+          if (!batchContext.includedSectionIds.length) break;
+
+          try {
+            planResults.push(await invokeActionPlanCall({
+              context: batchContext.context,
+              scopedSections: true,
+              batchLabel: `באץ׳ ${batchIndex}`,
+            }));
+            const includedSet = new Set(batchContext.includedSectionIds);
+            remainingSections = remainingSections.filter((section) => !includedSet.has(section.id));
+          } catch (error) {
+            batchErrors.push(error?.message || `שגיאה בבאץ׳ ${batchIndex}`);
+            break;
+          }
+        }
+
+        if (remainingSections.length) {
+          batchErrors.push(`לא כיסיתי ${remainingSections.length} אזורים נוספים במסמך במסגרת תקציב ההקשר הזמין`);
+        }
+      }
+    }
+
+    const parsedResponse = mergeReviewActionPlanPayloads(planResults);
+    if (!parsedResponse || !Array.isArray(parsedResponse.edits)) {
+      throw new Error(batchErrors[0] || 'התקבלה תכנית תיקונים ריקה או לא שמישה');
+    }
+    if (batchErrors.length) {
+      parsedResponse.errorMessage = batchErrors.join(' | ');
+    }
+
+    logAgentDebugEvent({
+      type: 'doc-review-apply-plan-success',
+      state: batchErrors.length ? 'warning' : 'success',
+      runId,
+      agentLabel: documentReviewLabel,
+      message: 'תכנית תיקוני המרצה הוכנה בהצלחה',
+      planningStrategy,
+      callCount: planResults.length,
+      batchErrors: batchErrors.length,
+      outputChars: JSON.stringify(parsedResponse).length,
+      ...requestLogContext,
+    });
+
+    return returnMeta
+      ? { ...parsedResponse, usedFallback: false, runId, partial: batchErrors.length > 0, errorMessage: parsedResponse.errorMessage || '' }
+      : { ...parsedResponse, partial: batchErrors.length > 0, errorMessage: parsedResponse.errorMessage || '' };
+  } catch (error) {
+    logAgentDebugEvent({
+      type: 'doc-review-apply-plan-fallback',
+      state: 'error',
+      runId,
+      agentLabel: documentReviewLabel,
+      message: 'מיפוי תיקוני המרצה לא הושלם',
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
+    });
+
+    const fallback = buildReviewActionPlanFallback({
+      focusText: actionInputText,
+      errorMessage: error?.message || 'שגיאה לא ידועה',
+    });
+    return returnMeta ? { ...fallback, runId } : { summary: fallback.summary, edits: fallback.edits };
   }
 }
 
