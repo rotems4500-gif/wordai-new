@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, parseStructuredEditBatchResponse } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
@@ -52,31 +52,11 @@ const MODERN_QUICK_ACTIONS = [
     id: 'fix', 
     icon: '✨', 
     label: 'תקן שגיאות', 
-    prompt: 'תקן שגיאות כתיב ודקדוק', 
+    prompt: 'תקן שגיאות כתיב, דקדוק וניסוח בטקסט',
     sel: true,
-    color: 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)',
-    hoverColor: 'linear-gradient(135deg, #F87171 0%, #EF4444 100%)',
-    category: 'edit'
-  },
-  { 
-    id: 'humanize', 
-    icon: '👤', 
-    label: 'הפוך לאנושי', 
-    prompt: 'שכתב בסגנון אנושי וטבעי', 
-    sel: true,
-    color: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
+    color: 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)',
     hoverColor: 'linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%)',
-    category: 'style'
-  },
-  { 
-    id: 'formal', 
-    icon: '🎓', 
-    label: 'פורמלי', 
-    prompt: 'שכתב בסגנון פורמלי ומקצועי', 
-    sel: true,
-    color: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)',
-    hoverColor: 'linear-gradient(135deg, #818CF8 0%, #6366F1 100%)',
-    category: 'style'
+    category: 'transform'
   },
   { 
     id: 'summary', 
@@ -171,9 +151,10 @@ const QUICK_PROMPTS = [
     color: 'linear-gradient(135deg, #14B8A6 0%, #0F766E 100%)' },
 ];
 
-const CLASSIC_TASKPANE_AGENT_IDS = ['reviewFix', 'fix', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
+const CLASSIC_TASKPANE_AGENT_IDS = DEFAULT_SIDEBAR_MODE_IDS;
 
 const LEGACY_CHAT_MEMORY_STORAGE_KEY = 'wordai_sidebar_messages';
+const CHAT_SESSION_ARCHIVE_LIMIT = 30;
 const getDocumentStorageKeySegment = (documentId = '') => {
   const resolvedDocumentId = String(documentId || '').trim();
   return resolvedDocumentId ? encodeURIComponent(resolvedDocumentId) : '';
@@ -186,6 +167,9 @@ const getChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
   const resolvedFilePathKey = getDocumentStorageKeySegment(documentId);
   return `${LEGACY_CHAT_MEMORY_STORAGE_KEY}:${resolvedWorkspaceId}${resolvedFilePathKey ? `:${resolvedFilePathKey}` : ''}`;
 };
+
+const getChatSessionArchiveStorageKey = (workspaceId = '', documentId = '') => `${getChatMemoryStorageKey(workspaceId, documentId)}:sessions`;
+const getActiveChatSessionIdStorageKey = (workspaceId = '', documentId = '') => `${getChatMemoryStorageKey(workspaceId, documentId)}:activeSessionId`;
 
 const getLegacyChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
   const resolvedWorkspaceId = String(workspaceId || getWorkspaceAutomation().activeWorkspaceId || 'default-content-studio').trim() || 'default-content-studio';
@@ -213,7 +197,9 @@ const formatSidebarConversationHistory = (entries = []) => buildSidebarConversat
   .slice(-12)
   .map((entry) => `${entry.role === 'assistant' ? 'assistant' : 'user'}: ${entry.content}`)
   .join('\n\n');
-const documentWideEditPlanPattern = /(?:לפי\s+המיקומים\s+הנכונים|במיקומים\s+הנכונים|על\s+פי\s+המיקומים|בכל\s+המסמך|בכל\s+העבודה|במסמך|בעבודה|המסמך\s+הנוכחי|העבודה\s+הנוכחית|עכשיו\s+במסמך|עכשיו\s+לעבודה).{0,50}(?:תיקונים|הערות|המלצות|שינויים|תקן|תתקן)?|(?:תכניס|הכנס|החל|יישם|תיישם|תשלב|שלב|תטמיע|הטמע|תעדכן|עדכן|תקן|תתקן).{0,50}(?:תיקונים|הערות|המלצות|שינויים|את\s+זה|אותם|אותן|את\s+העבודה|את\s+המסמך|המסמך\s+הנוכחי|העבודה\s+הנוכחית)|(?:תיקונים|המלצות|הערות).{0,24}(?:שביצעת|שביצעתי|שהצעת|שכתבת|שציינת)|(?:תסתכל|תעבור|סקור|בדוק).{0,34}(?:על\s+)?(?:ההערות|המלצות|המסמך|העבודה).{0,38}(?:ותתקן|ותעדכן|ותיישם|במסמך|בעבודה|את\s+המסמך|את\s+העבודה)|(?:את\s+זה|אותם|אותן|כמו\s+שהצעת|כמו\s+שכתבת)/i;
+const documentWideEditPlanPattern = /(?:לפי\s+המיקומים\s+הנכונים|במיקומים\s+הנכונים|על\s+פי\s+המיקומים|בכל\s+המסמך|בכל\s+העבודה|במסמך|בעבודה|המסמך\s+הנוכחי|העבודה\s+הנוכחית|עכשיו\s+במסמך|עכשיו\s+לעבודה).{0,50}(?:תיקונים|הערות|המלצות|שינויים|תקן|תתקן)?|(?:תכניס|הכנס|החל|תחיל|תתחיל|יישם|תיישם|תשלב|שלב|תטמיע|הטמע|תעדכן|עדכן|תקן|תתקן).{0,50}(?:תיקונים|הערות|המלצות|שינויים|את\s+זה|אותם|אותן|את\s+העבודה|את\s+המסמך|המסמך\s+הנוכחי|העבודה\s+הנוכחית)|(?:תיקונים|המלצות|הערות).{0,24}(?:שביצעת|שביצעתי|שהצעת|שכתבת|שציינת)|(?:תסתכל|תעבור|סקור|בדוק).{0,34}(?:על\s+)?(?:ההערות|המלצות|המסמך|העבודה).{0,38}(?:ותתקן|ותעדכן|ותיישם|ותתחיל|במסמך|בעבודה|את\s+המסמך|את\s+העבודה)|(?:את\s+זה|אותם|אותן|כמו\s+שהצעת|כמו\s+שכתבת)/i;
+const TASKPANE_FIX_ANALYSIS_QUESTION_PATTERN = /(?:מה\s+(?:צריך|כדאי|אפשר|יש)\s+ל(?:תקן|שפר|עדכן|יישם)|איך\s+ל(?:תקן|שפר|עדכן|יישם)|איזה\s+(?:תיקונים|שינויים|הערות)|מה\s+(?:ה)?(?:תיקונים|שינויים|הערות))/iu;
+const TASKPANE_FIX_APPLY_INTENT_PATTERN = /(?:^|[\s"'“”])(?:תתחיל|תחיל|התחל|תתחילי|תתקן|תקן|יישם|תיישם|החל|תעדכן|עדכן|תכניס|הכנס)(?:\s+(?:את|עם|לי))?.{0,60}(?:תיקונים|הערות|המלצות|שינויים|את\s+זה|אותם|אותן|מסמך|עבודה)|(?:^|[\s"'“”])(?:תסתכל|תעבור|סקור|בדוק).{0,40}(?:הערות|המלצות|מרצה).{0,50}(?:תתחיל|תתקן|תיישם|תעדכן|תכניס)/iu;
 const NUMBERED_REVIEW_APPLY_INTENT_PATTERN = /(?:^|\s)(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני)\s+(?:לי\s+)?(?:את\s+)?(?:ה)?(?:המלצות|תיקונים|סעיפים|נקודות)?\s*(?:מספר(?:י)?\s*)?(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)(?:\s*(?:,|،|\+|ו|עד|-)\s*(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית))*/iu;
 const NUMBERED_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|בדיקת|תיקונים|בעיות|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
 const NUMBERED_LIST_MARKER_PATTERN = /(?:^|\n)(?:(?:#{1,6}\s*)?(?:\*\*)?\d{1,2}[.)]|[•*-])\s+/u;
@@ -584,6 +570,109 @@ const getSavedMessagesForDocumentIds = (workspaceId = '', documentIds = []) => {
   }
 };
 
+const normalizeMessagesForPersistence = (messages = []) => (Array.isArray(messages) ? messages : [])
+  .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
+  .slice(-60);
+
+const hasMeaningfulChatMessages = (messages = []) => normalizeMessagesForPersistence(messages)
+  .some((entry) => entry.role === 'user' && String(entry.content || '').trim());
+
+const createChatSessionId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const buildChatSessionTitle = (messages = []) => {
+  const meaningfulMessages = normalizeMessagesForPersistence(messages);
+  const source = meaningfulMessages.find((entry) => entry.role === 'user' && String(entry.content || '').trim())
+    || meaningfulMessages.find((entry) => String(entry.content || '').trim())
+    || null;
+  const text = String(source?.content || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (text ? text.slice(0, 64) : 'שיחה ללא כותרת') || 'שיחה ללא כותרת';
+};
+
+const readChatSessionArchive = (storageKey = '') => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((session) => ({
+        id: String(session?.id || '').trim(),
+        title: String(session?.title || '').trim() || 'שיחה ללא כותרת',
+        updatedAt: Number(session?.updatedAt || 0) || Date.now(),
+        messageCount: Number(session?.messageCount || 0) || 0,
+        messages: normalizeMessagesForPersistence(session?.messages || []),
+      }))
+      .filter((session) => session.id && session.messages.length)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, CHAT_SESSION_ARCHIVE_LIMIT);
+  } catch {
+    return [];
+  }
+};
+
+const getSavedChatSessionsForDocumentIds = (workspaceId = '', documentIds = []) => {
+  const resolvedDocumentIds = buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds]));
+  try {
+    for (const documentId of resolvedDocumentIds) {
+      const sessions = readChatSessionArchive(getChatSessionArchiveStorageKey(workspaceId, documentId));
+      if (sessions.length) return sessions;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+};
+
+const getSavedActiveChatSessionIdForDocumentIds = (workspaceId = '', documentIds = []) => {
+  const resolvedDocumentIds = buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds]));
+  try {
+    for (const documentId of resolvedDocumentIds) {
+      const sessionId = String(localStorage.getItem(getActiveChatSessionIdStorageKey(workspaceId, documentId)) || '').trim();
+      if (sessionId) return sessionId;
+    }
+  } catch {}
+  return '';
+};
+
+const saveActiveChatSessionIdForDocumentIds = (workspaceId = '', documentIds = [], sessionId = '') => {
+  const safeSessionId = String(sessionId || '').trim();
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    localStorage.setItem(getActiveChatSessionIdStorageKey(workspaceId, documentId), safeSessionId);
+  });
+};
+
+const upsertChatSessionForDocumentIds = (workspaceId = '', documentIds = [], sessionId = '', messages = []) => {
+  const normalizedMessages = normalizeMessagesForPersistence(messages);
+  const safeSessionId = String(sessionId || '').trim() || createChatSessionId();
+  if (!hasMeaningfulChatMessages(normalizedMessages)) return getSavedChatSessionsForDocumentIds(workspaceId, documentIds);
+  const now = Date.now();
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    const storageKey = getChatSessionArchiveStorageKey(workspaceId, documentId);
+    const sessions = readChatSessionArchive(storageKey).filter((session) => session.id !== safeSessionId);
+    const nextSessions = [{
+      id: safeSessionId,
+      title: buildChatSessionTitle(normalizedMessages),
+      updatedAt: now,
+      messageCount: normalizedMessages.filter((entry) => String(entry.content || '').trim()).length,
+      messages: normalizedMessages,
+    }, ...sessions].slice(0, CHAT_SESSION_ARCHIVE_LIMIT);
+    localStorage.setItem(storageKey, JSON.stringify(nextSessions));
+  });
+  return getSavedChatSessionsForDocumentIds(workspaceId, documentIds);
+};
+
+const deleteChatSessionForDocumentIds = (workspaceId = '', documentIds = [], sessionId = '') => {
+  const safeSessionId = String(sessionId || '').trim();
+  if (!safeSessionId) return getSavedChatSessionsForDocumentIds(workspaceId, documentIds);
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    const storageKey = getChatSessionArchiveStorageKey(workspaceId, documentId);
+    const nextSessions = readChatSessionArchive(storageKey).filter((session) => session.id !== safeSessionId);
+    localStorage.setItem(storageKey, JSON.stringify(nextSessions));
+  });
+  return getSavedChatSessionsForDocumentIds(workspaceId, documentIds);
+};
+
 const persistPromptHistoryForDocumentIds = (workspaceId = '', documentIds = [], promptHistory = []) => {
   const normalizedHistory = (Array.isArray(promptHistory) ? promptHistory : [])
     .map((entry) => String(entry || '').trim())
@@ -595,9 +684,7 @@ const persistPromptHistoryForDocumentIds = (workspaceId = '', documentIds = [], 
 };
 
 const persistMessagesForDocumentIds = (workspaceId = '', documentIds = [], messages = []) => {
-  const normalizedMessages = (Array.isArray(messages) ? messages : [])
-    .filter((entry) => entry && !(entry.role === 'assistant' && !String(entry.content || '').trim()))
-    .slice(-60);
+  const normalizedMessages = normalizeMessagesForPersistence(messages);
   buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
     localStorage.setItem(getChatMemoryStorageKey(workspaceId, documentId), JSON.stringify(normalizedMessages));
   });
@@ -781,6 +868,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
   const [messages, setMessages] = useState(() => getSavedMessagesForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
+  const [activeChatSessionId, setActiveChatSessionId] = useState(() => getSavedActiveChatSessionIdForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds) || createChatSessionId());
+  const [chatSessions, setChatSessions] = useState(() => getSavedChatSessionsForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistoryForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
@@ -806,7 +895,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [requestSnapshot, setRequestSnapshot] = useState(null);
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
-  const activeClassicAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
+  const rawActiveClassicAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -826,6 +915,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const localContext = selectedText || currentBlockText || activeEditTarget?.text || '';
   const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
   const sidebarPreset = String(assistantBehavior?.sidebarPreset || 'word-taskpane').trim() || 'word-taskpane';
+  const sidebarModeSettings = normalizeSidebarModeSettings(assistantBehavior?.sidebarModeSettings);
+  const forceGlobalSidebarProvider = sidebarModeSettings.forceGlobalProvider === true;
   const useClassicTaskpaneShell = sidebarPreset === 'word-taskpane';
   const visibleActions = MODERN_QUICK_ACTIONS.filter((action) => wordPreferences?.aiQuickActions?.[action.id] !== false);
   const selectionActions = visibleActions.filter((action) => action.sel);
@@ -835,13 +926,18 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const providerConfig = getProviderConfig();
   const configuredProviderChoices = getConfiguredProviderChoices(providerConfig);
   const workspaceAutomationEnabled = workspaceAutomation?.enabled === true;
-  const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === selectedProviderId) || null;
+  const globalSidebarProviderChoice = configuredProviderChoices.find((choice) => choice.isDefault) || configuredProviderChoices[0] || null;
+  const effectiveSidebarProviderId = forceGlobalSidebarProvider ? (globalSidebarProviderChoice?.id || 'default') : selectedProviderId;
+  const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === effectiveSidebarProviderId) || null;
   const providerModelChoices = activeProviderChoice
     ? getProviderModelChoices(activeProviderChoice.id, providerConfig)
     : [];
-  const normalizedSelectedProviderModel = activeProviderChoice
-    ? normalizeProviderModelName(activeProviderChoice.id, String(selectedProviderModel || '').trim())
+  const rawSelectedProviderModel = forceGlobalSidebarProvider
+    ? String(providerConfig?.[activeProviderChoice?.id || '']?.model || '').trim()
     : String(selectedProviderModel || '').trim();
+  const normalizedSelectedProviderModel = activeProviderChoice
+    ? normalizeProviderModelName(activeProviderChoice.id, rawSelectedProviderModel)
+    : rawSelectedProviderModel;
   const resolvedSelectedProviderModel = activeProviderChoice
     ? (providerModelChoices.includes(normalizedSelectedProviderModel)
       ? normalizedSelectedProviderModel
@@ -862,6 +958,35 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const activeSkill = effectiveSelectedSkillId !== 'none'
     ? skillCatalog.find((skill) => skill.id === effectiveSelectedSkillId) || null
     : null;
+  const getSidebarModeSetting = useCallback((agentId = '') => sidebarModeSettings.modes.find((mode) => mode.id === agentId) || null, [sidebarModeSettings]);
+  const buildEffectiveClassicAgentConfig = useCallback((agentId = '') => {
+    const base = AGENTS_CONFIG[agentId] || null;
+    if (!base) return null;
+    const modeSetting = getSidebarModeSetting(agentId);
+    const hasModeSetting = Boolean(modeSetting);
+    const modeProviderId = hasModeSetting ? modeSetting.providerId : (base.sidebarSelection?.providerId || base.route || '');
+    const modeModel = hasModeSetting ? modeSetting.model : (base.sidebarSelection?.model || '');
+    const providerId = forceGlobalSidebarProvider
+      ? ''
+      : String(modeProviderId || '').trim();
+    const modelChoices = providerId ? getProviderModelChoices(providerId, providerConfig) : [];
+    const normalizedModeModel = providerId ? normalizeProviderModelName(providerId, String(modeModel || '').trim()) : '';
+    const model = forceGlobalSidebarProvider
+      ? ''
+      : (modelChoices.includes(normalizedModeModel) ? normalizedModeModel : (modelChoices[0] || ''));
+    return {
+      ...base,
+      route: providerId ? base.route : '',
+      label: String(modeSetting?.label || base.label || agentId).trim() || agentId,
+      sidebarSelection: providerId ? { providerId, model } : null,
+    };
+  }, [forceGlobalSidebarProvider, getSidebarModeSetting, providerConfig]);
+  const activeClassicModeEnabled = activeClassicAgentId
+    ? sidebarModeSettings.modes.some((mode) => mode.id === activeClassicAgentId && mode.enabled !== false)
+    : false;
+  const activeClassicAgent = activeClassicAgentId
+    ? (activeClassicModeEnabled ? buildEffectiveClassicAgentConfig(activeClassicAgentId) : null)
+    : rawActiveClassicAgent;
     const contextScopeLabel = isEditComposerMode
       ? (activeEditTarget?.kind === 'section'
         ? (activeEditTarget.headingText ? `סעיף: ${activeEditTarget.headingText}` : 'סעיף במסמך')
@@ -1174,6 +1299,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       setWorkspaceAutomation(nextAutomation);
       setRoleAgents(getOrderedRoleAgents(nextAutomation.workflowMode));
       setMessages(getSavedMessagesForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds));
+      setActiveChatSessionId(getSavedActiveChatSessionIdForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds) || createChatSessionId());
+      setChatSessions(getSavedChatSessionsForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds));
       setPromptHistory(getSavedPromptHistoryForDocumentIds(nextAutomation.activeWorkspaceId, documentPersistenceIds));
       setDebugLogs(getAgentDebugLogs({ workspaceId: nextAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse());
       if (shouldResetWorkspaceState) {
@@ -1215,10 +1342,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   useEffect(() => {
     const nextMessages = getSavedMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds);
     const nextPromptHistory = getSavedPromptHistoryForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds);
+    const nextActiveSessionId = getSavedActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds) || createChatSessionId();
     if (pendingChatPersistenceLoadRef.current?.key === chatMemoryStorageKey) {
       pendingChatPersistenceLoadRef.current = { key: chatMemoryStorageKey, loadedMessages: nextMessages };
     }
     setMessages(nextMessages);
+    setActiveChatSessionId(nextActiveSessionId);
+    setChatSessions(getSavedChatSessionsForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds));
     setPromptHistory(nextPromptHistory);
   }, [chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
@@ -1270,6 +1400,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   }, [selectedSkillId, selectedAgentId, selectedProviderId, skillsConfig, roleAgents, configuredProviderChoices, workspaceAutomationEnabled, clearPendingMentionSelection]);
 
   useEffect(() => {
+    if (!activeClassicAgentId) return;
+    const stillEnabled = sidebarModeSettings.modes.some((mode) => mode.id === activeClassicAgentId && mode.enabled !== false);
+    if (!stillEnabled) setActiveClassicAgentId(null);
+  }, [activeClassicAgentId, sidebarModeSettings]);
+
+  useEffect(() => {
     if (!activeProviderChoice) return;
     if (selectedProviderModel !== resolvedSelectedProviderModel) {
       setSelectedProviderModel(resolvedSelectedProviderModel);
@@ -1284,6 +1420,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
     try {
       persistMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, messages);
+      saveActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, activeChatSessionId);
+      setChatSessions(upsertChatSessionForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, activeChatSessionId, messages));
       saveAppMemory({
         ...getAppMemory(),
         sidebarProviderId: selectedProviderId || 'default',
@@ -1295,7 +1433,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         lastResolvedSkillLabel: resolvedSkillLabel || '',
       });
     } catch {}
-  }, [messages, selectedProviderId, persistedSidebarProviderModel, selectedAgentId, selectedSkillId, configuredSplitCallCount, composerMode, resolvedSkillLabel, chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
+  }, [messages, activeChatSessionId, selectedProviderId, persistedSidebarProviderModel, selectedAgentId, selectedSkillId, configuredSplitCallCount, composerMode, resolvedSkillLabel, chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     if (tab !== 'agents' && showLogs) setShowLogs(false);
@@ -1387,16 +1525,25 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setDebugLogs([]);
   };
 
-  const clearConversation = useCallback(() => {
+  const clearConversation = useCallback((options = {}) => {
+    const clearArchive = options?.clearArchive === true;
     beginRequestCycle();
+    const nextSessionId = createChatSessionId();
     try {
       documentPersistenceIds.forEach((documentId) => {
         localStorage.removeItem(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
+        if (clearArchive) {
+          localStorage.removeItem(getChatSessionArchiveStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
+          localStorage.removeItem(getActiveChatSessionIdStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
+        }
       });
+      saveActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, nextSessionId);
     } catch {}
     clearPendingMentionSelection();
+    setActiveChatSessionId(nextSessionId);
     setMessages(getDefaultMessages());
     setInput('');
+    setTab('chat');
     setPromptHistoryIndex(-1);
     setPreNavigationDraft('');
     setAgentTaskInput('');
@@ -1405,8 +1552,113 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setRequestSnapshot(null);
     setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
     setAgentProgressMap({});
+    if (clearArchive) setChatSessions([]);
     setMentionMenu({ ...EMPTY_MENTION_MENU });
   }, [beginRequestCycle, clearPendingMentionSelection, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
+
+  const loadChatSession = useCallback((session = {}) => {
+    const sessionId = String(session?.id || '').trim();
+    const sessionMessages = normalizeMessagesForPersistence(session?.messages || []);
+    if (!sessionId || !sessionMessages.length || loading) return;
+    beginRequestCycle();
+    try {
+      saveActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, sessionId);
+      persistMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, sessionMessages);
+    } catch {}
+    clearPendingMentionSelection();
+    setActiveChatSessionId(sessionId);
+    setMessages(sessionMessages);
+    setInput('');
+    setPromptHistoryIndex(-1);
+    setPreNavigationDraft('');
+    setAgentTaskInput('');
+    setLoading(false);
+    setRequestSnapshot(null);
+    setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
+    setAgentProgressMap({});
+    setMentionMenu({ ...EMPTY_MENTION_MENU });
+    setTab('chat');
+  }, [beginRequestCycle, clearPendingMentionSelection, documentPersistenceScopeKey, loading, workspaceAutomation.activeWorkspaceId]);
+
+  const deleteArchivedChatSession = useCallback((sessionId = '') => {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || loading) return;
+    const nextSessions = deleteChatSessionForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, safeSessionId);
+    setChatSessions(nextSessions);
+    if (safeSessionId === activeChatSessionId) {
+      clearConversation();
+      setChatSessions(nextSessions);
+    }
+  }, [activeChatSessionId, clearConversation, documentPersistenceScopeKey, loading, workspaceAutomation.activeWorkspaceId]);
+
+  const renderChatHistoryPanel = (variant = 'light') => {
+    const dark = variant === 'dark';
+    const panelBackground = dark ? 'rgba(15, 23, 42, 0.34)' : '#FFFFFF';
+    const textColor = dark ? '#F8FAFC' : '#111827';
+    const mutedColor = dark ? 'rgba(226,232,240,0.72)' : '#64748B';
+    const borderColor = dark ? 'rgba(148, 163, 184, 0.2)' : '#E2E8F0';
+    const itemBackground = dark ? 'rgba(255,255,255,0.06)' : '#F8FAFC';
+
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 12, background: panelBackground, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: textColor }}>שיחות קודמות</div>
+            <div style={{ fontSize: 12, color: mutedColor, marginTop: 3 }}>נשמרות לפי המסמך וסביבת העבודה הפעילים.</div>
+          </div>
+          <button
+            type="button"
+            onClick={clearConversation}
+            disabled={loading}
+            style={{ padding: '7px 12px', borderRadius: 999, border: `1px solid ${dark ? 'rgba(94, 234, 212, 0.28)' : '#99F6E4'}`, background: dark ? 'rgba(20, 184, 166, 0.14)' : '#F0FDFA', color: dark ? '#99F6E4' : '#0F766E', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
+          >
+            + שיחה חדשה
+          </button>
+        </div>
+
+        {!chatSessions.length ? (
+          <div style={{ border: `1px dashed ${borderColor}`, borderRadius: 10, padding: 16, color: mutedColor, fontSize: 13, lineHeight: 1.6, textAlign: 'center' }}>
+            עדיין אין שיחות קודמות למסמך הזה. אחרי שתשלח הודעה, השיחה תופיע כאן אוטומטית.
+          </div>
+        ) : chatSessions.map((session) => {
+          const isActive = session.id === activeChatSessionId;
+          const updatedAt = session.updatedAt ? new Date(session.updatedAt).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '';
+          return (
+            <div key={session.id} style={{ border: `1px solid ${isActive ? (dark ? 'rgba(45, 212, 191, 0.45)' : '#5EEAD4') : borderColor}`, borderRadius: 10, padding: 10, background: isActive ? (dark ? 'rgba(20, 184, 166, 0.13)' : '#F0FDFA') : itemBackground }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ color: textColor, fontSize: 13, fontWeight: 800, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {session.title}
+                  </div>
+                  <div style={{ color: mutedColor, fontSize: 11, marginTop: 4 }}>
+                    {updatedAt}{updatedAt ? ' · ' : ''}{session.messageCount || session.messages?.length || 0} הודעות{isActive ? ' · פתוחה עכשיו' : ''}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => loadChatSession(session)}
+                    disabled={loading || isActive}
+                    style={{ padding: '5px 9px', borderRadius: 7, border: `1px solid ${dark ? 'rgba(191, 219, 254, 0.24)' : '#BFDBFE'}`, background: dark ? 'rgba(59, 130, 246, 0.14)' : '#EFF6FF', color: dark ? '#BFDBFE' : '#1D4ED8', fontSize: 11, fontWeight: 700, cursor: loading || isActive ? 'default' : 'pointer', opacity: loading || isActive ? 0.55 : 1 }}
+                  >
+                    פתח
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteArchivedChatSession(session.id)}
+                    disabled={loading}
+                    style={{ padding: '5px 9px', borderRadius: 7, border: `1px solid ${dark ? 'rgba(248, 113, 113, 0.24)' : '#FECACA'}`, background: dark ? 'rgba(127, 29, 29, 0.18)' : '#FEF2F2', color: dark ? '#FCA5A5' : '#B91C1C', fontSize: 11, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
+                  >
+                    מחק
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1415,7 +1667,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       const shouldClearAll = event?.detail?.clearAll === true;
       const activeWorkspaceId = String(workspaceAutomation.activeWorkspaceId || '').trim();
       if (!shouldClearAll && targetWorkspaceId && targetWorkspaceId !== activeWorkspaceId) return;
-      clearConversation();
+      clearConversation({ clearArchive: shouldClearAll });
     };
     window.addEventListener('wordai-chat-history-cleared', handleReset);
     return () => window.removeEventListener('wordai-chat-history-cleared', handleReset);
@@ -1443,11 +1695,16 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       : null
   ), []);
 
-  const snapshotEditTargetState = useCallback((targetState) => ({
-    selection: snapshotEditTarget(targetState?.selection || null),
-    block: snapshotEditTarget(targetState?.block || null),
-    active: snapshotEditTarget(targetState?.active || null),
-  }), [snapshotEditTarget]);
+  const snapshotEditTargetState = useCallback((targetState) => {
+    const selectionTarget = snapshotEditTarget(targetState?.selection || null);
+    const blockTarget = snapshotEditTarget(targetState?.block || null);
+    const activeTarget = snapshotEditTarget(targetState?.active || null) || selectionTarget || blockTarget;
+    return {
+      selection: selectionTarget,
+      block: blockTarget,
+      active: activeTarget,
+    };
+  }, [snapshotEditTarget]);
 
   const hasUsableEditTargetState = useCallback((targetState) => Boolean(
     targetState?.active?.text?.trim()
@@ -1553,6 +1810,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     if ((hasNumberedReviewContext || hasPromptNumberedReviewContext) && NUMBERED_REVIEW_APPLY_INTENT_PATTERN.test(cleanPrompt)) return true;
     if (hasPromptResolvedTarget) return false;
     if ((Array.isArray(batchTargets) ? batchTargets : []).some((target) => target?.text?.trim())) return false;
+    if (forceDocumentWide && !activeTarget?.text?.trim() && TASKPANE_FIX_APPLY_INTENT_PATTERN.test(cleanPrompt)) return true;
     if (!forceDocumentWide && !EXPLICIT_DOCUMENT_WIDE_INTENT_PATTERN.test(cleanPrompt)) return false;
     return documentWideEditPlanPattern.test(cleanPrompt);
   }, [isEditComposerMode, onApplyDocumentPlan]);
@@ -1641,7 +1899,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const buildDocumentActionCompletionPrompt = (message = {}) => {
     const unresolved = Array.isArray(message?.documentActionUnresolved) ? message.documentActionUnresolved : [];
     const unresolvedTitles = unresolved
-      .map((item, index) => String(item?.title || item?.suggestionId || `תיקון ${index + 1}`).trim())
+      .map((item, index) => [
+        item?.title || item?.suggestionId || `תיקון ${index + 1}`,
+        item?.description || item?.reason || item?.instruction || item?.replacementText || item?.text || '',
+      ].map((part) => String(part || '').trim()).filter(Boolean).join(': '))
       .filter(Boolean);
     const originalPrompt = String(message?.documentActionPromptText || '').trim();
 
@@ -1666,11 +1927,43 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       userContent: 'השלם את התיקונים שנשארו מחוץ למסמך',
       promptText,
       providerLabel: activeProviderSummary,
-      providerId: message.documentActionProviderId || selectedProviderId,
-      providerModel: message.documentActionProviderModel || resolvedSelectedProviderModel,
+      providerId: forceGlobalSidebarProvider ? normalizeProviderOverrideId(effectiveSidebarProviderId) : normalizeProviderOverrideId(message.documentActionProviderId || effectiveSidebarProviderId),
+      providerModel: forceGlobalSidebarProvider ? resolvedSelectedProviderModel : (message.documentActionProviderModel || resolvedSelectedProviderModel),
       agentId: message.documentActionAgentId || 'reviewFix',
       agentLabel: `${message.documentActionAgentLabel || 'בדיקה + תיקון'} · השלמה`,
       skillLabel: 'קריאת השלמה',
+    });
+  };
+
+  const copyMessageToClipboard = async (content = '') => {
+    try {
+      await navigator.clipboard.writeText(String(content || '').trim());
+    } catch {}
+  };
+
+  const normalizeProviderOverrideId = (providerId = '') => {
+    const normalized = String(providerId || '').trim();
+    return normalized && normalized !== 'default' ? normalized : '';
+  };
+
+  const applyChatMessageToDocument = async (message = {}) => {
+    const outputText = String(message?.content || '').trim();
+    if (loading || !outputText || typeof onApplyDocumentPlan !== 'function') return;
+    const promptText = [
+      'החל את פלט הצ׳אט הבא במסמך לפי המיקומים המתאימים. אם צריך, בצע קריאה נוספת כדי למפות את התוכן לפסקאות, סעיפים או מקומות קיימים במסמך.',
+      'מותר להחליף טקסט קיים, להוסיף תוכן חדש לפני/אחרי אזור מתאים, או לפצל את ההחלה לכמה מיקומים. אל תדביק את כל הפלט במקום אחד אם יש מיקומים מדויקים יותר.',
+      `פלט הצ׳אט להחלה:\n${outputText}`,
+    ].join('\n\n');
+
+    await executeDocumentWideEditPlan({
+      userContent: 'החל את התשובה במסמך לפי המיקומים המתאימים',
+      promptText,
+      providerLabel: activeProviderSummary,
+      providerId: forceGlobalSidebarProvider ? normalizeProviderOverrideId(effectiveSidebarProviderId) : normalizeProviderOverrideId(message.documentActionProviderId || effectiveSidebarProviderId),
+      providerModel: forceGlobalSidebarProvider ? resolvedSelectedProviderModel : (message.documentActionProviderModel || resolvedSelectedProviderModel),
+      agentId: message.documentActionAgentId || 'chat-retrofit-apply',
+      agentLabel: 'החלה בדיעבד',
+      skillLabel: 'מיפוי מיקומים',
     });
   };
 
@@ -2586,9 +2879,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           autoUseDefaultSkill: false,
           directChat: true,
           includeAppMemory: false,
+          providerOverride: forceGlobalSidebarProvider ? (activeProviderChoice?.id || '') : '',
+          modelOverride: forceGlobalSidebarProvider ? resolvedSelectedProviderModel : '',
+          strictProviderOverride: forceGlobalSidebarProvider,
           editModeRequest: true,
           skipAutomation: true,
           skipAutomationPrompt: true,
+          skipMultiModel: forceGlobalSidebarProvider,
         });
         const metaReplyReason = getNonEditReplyReason(fallbackReply, target);
         if (metaReplyReason) {
@@ -2679,6 +2976,31 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     return followUpSourceGroundingContext
       ? [followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n')
       : baseContext;
+  };
+
+  const buildHoleFillSourceQueryOverride = (promptText = '') => {
+    const sourceNeedPattern = /(?:חור|חורים|חסר|להשלים|מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|עיתונות|דיין|לשון\s+הרע|ציטוט|אזכור)/i;
+    const genericContextPattern = /^(?:מסמך\s+פעיל|מפת\s+מסמך|טקסט\s+נבחר|פסקה\s+נוכחית)\b/i;
+    const priorSourceListPattern = /(?:^(?:מקורות\s+אקדמיים\s+בלבד|מקורות\s+מאומתים|תוצאות\s+Web\s+מקורקעות|הוחזרו\s+רק\s+פריטים|לא\s+הוספתי\s+מקורות)\b)|(?:^|\n)\s*(?:\d+\.\s+[^\n]{0,160})?(?:פרטי\s+פרסום|קישור|תקציר|מקור):/i;
+    const cleanCandidate = (value = '') => String(value || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/עבור\s+על\s+(?:המסמך\s+הנוכחי|הטקסט\s+הבא|הפסקה\s+או\s+המסמך\s+הנוכחי)[^\n.:]*[.:]?/gi, ' ')
+      .replace(/(?:זהה\s+מה\s+חסר\s+בו|השלם\s+רק\s+את\s+החורים\s+שדורשים\s+מידע\s+מאומת\s+מהרשת|והחזר\s+נוסח\s+מעודכן\s+שמשלב\s+את\s+ההשלמות\s+בתוך\s+(?:הטקסט|המסמך))/gi, ' ')
+      .replace(/(?:קריאת\s+השלמה\s+לתיקוני\s+בדיקה\s*\+\s*תיקון|בקשת\s+המשתמש|התמקד\s+רק\s+בתיקונים\s+הבאים\s+שנשארו\s+להשלמה|בדוק\s+את\s+המסמך\s+הנוכחי[^\n]*)/gi, ' ')
+      .replace(/^[\s\d.):-]+/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const candidates = [
+      promptText,
+      ...messages.slice(-8).reverse().map((message) => message?.content || ''),
+      selectedText,
+      currentBlockText,
+    ]
+      .filter((candidate) => !priorSourceListPattern.test(String(candidate || '')))
+      .map(cleanCandidate)
+      .filter((candidate) => candidate && sourceNeedPattern.test(candidate) && !genericContextPattern.test(candidate) && !priorSourceListPattern.test(candidate));
+    const preferred = candidates.find((candidate) => /(?:מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|ציטוט|אזכור)/i.test(candidate)) || candidates[0] || '';
+    return preferred.slice(0, 320).trim();
   };
   const normalizeAssistantMessageText = (value) => String(value ?? '')
     .replace(/\r\n/g, '\n')
@@ -2906,9 +3228,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     let finalExtraSystemPrompt = [composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
       .filter(Boolean)
       .join('\n\n');
-    let finalProviderId = selectedProviderId;
+    let finalProviderId = effectiveSidebarProviderId;
     let finalProviderModel = resolvedSelectedProviderModel;
-    const cAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
+    const cAgent = activeClassicAgentId && activeClassicModeEnabled ? buildEffectiveClassicAgentConfig(activeClassicAgentId) : null;
     const bypassFixedAgentSelection = runtimeOptions.bypassFixedAgentSelection === true;
     let forcedAgent = workspaceAutomationEnabled && !bypassFixedAgentSelection && !isEditComposerMode ? activeAgent : null;
     let disabledSkillRequested = false;
@@ -2954,6 +3276,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     const splitCallDirective = extractSplitCallDirective(txt);
     const classicDefaultSplitCallCount = clampSplitCallCount(cAgent?.defaultSplitCallCount || 0);
+    const lecturerDirectAgentRequest = activeClassicAgentId === 'lecturer';
     const requestedSplitCallCount = splitCallDirective.count >= 2
       ? splitCallDirective.count
       : (classicDefaultSplitCallCount || configuredSplitCallCount);
@@ -2965,6 +3288,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         forcedAgent = queuedAgent;
         usedQueuedAgentMention = true;
       }
+    }
+
+    if (cAgent && !usedDraftAgentMention && !usedQueuedAgentMention) {
+      forcedAgent = null;
     }
 
     if (!usedDraftSkillMention && pendingMentionSelection.skillId) {
@@ -3047,11 +3374,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
     if (cAgent && !forcedAgent) {
-      if (cAgent.systemCtx) {
-        finalExtraSystemPrompt = [finalExtraSystemPrompt, cAgent.systemCtx].filter(Boolean).join('\n\n');
+      const classicTaskpaneSystemCtx = String(cAgent.taskpaneSystemCtx || cAgent.systemCtx || '').trim();
+      if (classicTaskpaneSystemCtx) {
+        finalExtraSystemPrompt = [finalExtraSystemPrompt, classicTaskpaneSystemCtx].filter(Boolean).join('\n\n');
       }
       if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
-        const fallbackSelection = buildClassicTaskpaneSelection(cAgent);
+        const fallbackSelection = buildClassicTaskpaneSelection(activeClassicAgentId);
         if (fallbackSelection && fallbackSelection.selection) {
           finalProviderId = fallbackSelection.selection.providerId || finalProviderId;
           finalProviderModel = fallbackSelection.selection.model || finalProviderModel;
@@ -3083,16 +3411,19 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     const runtimeProviderOverride = String(runtimeOptions.providerOverride || '').trim();
     const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
-    const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true;
-    const hasStrictRuntimeProviderOverride = runtimeStrictProviderOverride && Boolean(runtimeProviderOverride);
+    const globalLockProviderOverride = forceGlobalSidebarProvider ? finalPinnedProviderId : '';
+    const globalLockModelOverride = forceGlobalSidebarProvider ? resolvedFinalProviderModel : '';
+    const strictProviderId = runtimeProviderOverride || globalLockProviderOverride;
+    const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true || forceGlobalSidebarProvider;
+    const hasStrictRuntimeProviderOverride = runtimeStrictProviderOverride && Boolean(strictProviderId);
     const preferredProviderId = hasStrictRuntimeProviderOverride
       ? ''
       : (runtimeProviderOverride || finalPinnedProviderId);
     const preferredProviders = preferredProviderId ? [preferredProviderId] : [];
-    const directProviderId = hasStrictRuntimeProviderOverride ? runtimeProviderOverride : '';
+    const directProviderId = hasStrictRuntimeProviderOverride ? strictProviderId : '';
     const hasPinnedProviderPreference = hasStrictRuntimeProviderOverride || preferredProviders.length > 0;
     const explicitProviderModel = hasStrictRuntimeProviderOverride
-      ? runtimeModelOverride
+      ? (runtimeModelOverride || globalLockModelOverride)
       : (runtimeProviderOverride
         ? runtimeModelOverride
         : (preferredProviderId ? resolvedFinalProviderModel : ''));
@@ -3100,10 +3431,22 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const requestProviderSummary = runtimeProviderOverride ? activeProviderSummary : finalProviderSummary;
     clearPendingMentionSelection();
 
-    if (shouldUseDocumentWideEditPlan(txt, {
+    const effectiveDirectAgentMeta = (!forcedAgent && cAgent)
+      ? {
+          ...agentMeta,
+          id: String(activeClassicAgentId || agentMeta?.id || 'assistant-main').trim() || 'assistant-main',
+          name: String(cAgent?.label || agentMeta?.name || 'צ׳אט ישיר').trim() || 'צ׳אט ישיר',
+        }
+      : agentMeta;
+    const taskpaneFixApplyIntent = activeClassicAgentId === 'fix'
+      && TASKPANE_FIX_APPLY_INTENT_PATTERN.test(txt)
+      && !TASKPANE_FIX_ANALYSIS_QUESTION_PATTERN.test(txt);
+    const shouldSkipTaskpaneApply = Boolean(cAgent && !forcedAgent && cAgent.taskpaneSkipApply === true && !taskpaneFixApplyIntent);
+
+    if (!shouldSkipTaskpaneApply && shouldUseDocumentWideEditPlan(txt, {
       hasPromptResolvedTarget,
       batchTargets: requestEditBatchTargets,
-      forceDocumentWide: Boolean(cAgent?.forceDocumentWideWhenNoTarget && !requestEditTarget?.text?.trim()),
+      forceDocumentWide: Boolean((taskpaneFixApplyIntent || cAgent?.forceDocumentWideWhenNoTarget) && !requestEditTarget?.text?.trim()),
       activeTarget: requestEditTarget,
       hasNumberedReviewContext: hasRecentNumberedReviewContext(messages),
     })) {
@@ -3113,14 +3456,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
         providerId: preferredProviderId || directProviderId,
         providerModel: explicitProviderModel,
-        agentId: agentMeta.id || 'assistant-main',
-        agentLabel: hasPinnedProviderPreference ? `${agentMeta.name} · ${requestProviderLabel}` : agentMeta.name,
+        agentId: effectiveDirectAgentMeta.id || 'assistant-main',
+        agentLabel: hasPinnedProviderPreference ? `${effectiveDirectAgentMeta.name} · ${requestProviderLabel}` : effectiveDirectAgentMeta.name,
         skillLabel: runtimeSkillLabel,
       });
       return;
     }
 
-    if (isEditComposerMode && !requestEditTarget?.text?.trim()) {
+    if (isEditComposerMode && !shouldSkipTaskpaneApply && !requestEditTarget?.text?.trim()) {
       appendBlockedEditExchange(originalText, missingEditTargetMessage, {
         composerMode,
       }, {
@@ -3154,7 +3497,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
 
     const ctx = buildContext(requestEditTargets, requestEditBatchTargets, txt);
-    const directAgentName = hasPinnedProviderPreference ? `${agentMeta.name} · ${requestProviderLabel}` : agentMeta.name;
+    const holeFillSourceQueryOverride = effectiveDirectAgentMeta.id === 'holeFill'
+      ? buildHoleFillSourceQueryOverride(txt)
+      : '';
+    const directAgentName = hasPinnedProviderPreference ? `${effectiveDirectAgentMeta.name} · ${requestProviderLabel}` : effectiveDirectAgentMeta.name;
     setMessages((prev) => [...prev, { role: 'user', content: originalText, composerMode }]);
     setRequestSnapshot({
       providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
@@ -3165,15 +3511,19 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     });
     const requestCycle = beginRequestCycle();
     setLoading(true);
-    updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
+    updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     
     setMessages((prev) => [...prev, { role: 'assistant', content: '', composerMode }]);
 
     try {
       const invokeDirectCall = async (nextPrompt, nextContext, nextSystemPrompt, phaseMeta = {}) => await chatWithActiveProvider(nextPrompt, nextContext, nextSystemPrompt, {
+        agentId: effectiveDirectAgentMeta.id || '',
         agentLabel: directAgentName,
+        agentName: effectiveDirectAgentMeta.name || directAgentName,
         skillId: manualSkillId,
-        autoUseDefaultSkill: disabledSkillRequested ? false : (isEditComposerMode ? false : !manualSkillId),
+        autoUseDefaultSkill: lecturerDirectAgentRequest ? false : (disabledSkillRequested ? false : (isEditComposerMode ? false : !manualSkillId)),
+        skipSkillSelection: lecturerDirectAgentRequest,
+        forceSuppressResearchRouting: lecturerDirectAgentRequest,
         directChat: true,
         conversationHistory,
         includeAppMemory: !isEditComposerMode,
@@ -3181,6 +3531,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         preferredProviders,
         modelOverride: explicitProviderModel,
         strictProviderOverride: hasStrictRuntimeProviderOverride,
+        sourceQueryOverride: holeFillSourceQueryOverride,
+        sourceQuerySource: holeFillSourceQueryOverride ? 'holeFillContext' : '',
         editModeRequest: isEditComposerMode,
         allowEditModeRoutingOverride: editModeExplicitRouting,
         editModeExplicitSkillInvocation,
@@ -3205,7 +3557,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         },
         onStatus: (payload) => {
           if (!isCurrentRequestCycle(requestCycle)) return;
-          updateAgentStatus(agentMeta.id, directAgentName, payload);
+          updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, payload);
           syncRequestSnapshotProviderFromStatus(payload);
         },
       });
@@ -3213,10 +3565,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         ? [buildStructuredEditBatchSystemPrompt(requestEditBatchTargets), finalExtraSystemPrompt].filter(Boolean).join('\n\n')
         : finalExtraSystemPrompt;
       const directAnalysisSystemPrompt = stripComposerModeDirectiveFromSystemPrompt(directSystemPrompt);
-      const reply = requestedSplitCallCount >= 2
+      const effectiveRequestedSplitCallCount = lecturerDirectAgentRequest ? 0 : requestedSplitCallCount;
+      const reply = effectiveRequestedSplitCallCount >= 2
         ? await (isEditComposerMode
           ? runEditMultiCallWorkflow({
-            splitCallCount: requestedSplitCallCount,
+            splitCallCount: effectiveRequestedSplitCallCount,
             promptText: txt,
             context: ctx,
             finalSystemPrompt: directSystemPrompt,
@@ -3226,25 +3579,27 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             invokeCall: invokeDirectCall,
             onProgress: (payload) => {
               if (!isCurrentRequestCycle(requestCycle)) return;
-              updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', ...payload });
+              updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', ...payload });
             },
           })
           : runSplitCallWorkflow({
-            splitCallCount: requestedSplitCallCount,
+            splitCallCount: effectiveRequestedSplitCallCount,
             promptText: txt,
             context: ctx,
             extraSystemPrompt: directSystemPrompt,
             invokeCall: invokeDirectCall,
             onProgress: (payload) => {
               if (!isCurrentRequestCycle(requestCycle)) return;
-              updateAgentStatus(agentMeta.id, directAgentName, { state: 'running', ...payload });
+              updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', ...payload });
             },
           }))
         : await invokeDirectCall(txt, ctx, directSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 });
       if (!isCurrentRequestCycle(requestCycle)) return;
-      const applyResult = requestEditBatchTargets.length > 1
-        ? await applyEditBatchReply(reply, requestEditBatchTargets.map((target) => ({ ...target, batchPrompt: txt })), agentMeta.id || 'assistant-main')
-        : await applyEditReply(reply, requestEditTarget, agentMeta.id || 'assistant-main');
+      const applyResult = shouldSkipTaskpaneApply
+        ? { ok: true, skipped: true, reason: 'taskpane-analysis-only' }
+        : requestEditBatchTargets.length > 1
+          ? await applyEditBatchReply(reply, requestEditBatchTargets.map((target) => ({ ...target, batchPrompt: txt })), effectiveDirectAgentMeta.id || 'assistant-main')
+          : await applyEditReply(reply, requestEditTarget, effectiveDirectAgentMeta.id || 'assistant-main');
       const documentActionMeta = buildDocumentActionMeta(applyResult, reply);
       setMessages((prev) => {
         const newMsg = [...prev];
@@ -3256,7 +3611,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         };
         return newMsg;
       });
-      updateAgentStatus(agentMeta.id, directAgentName, applyResult && !applyResult.skipped && !applyResult.ok
+      updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, applyResult && !applyResult.skipped && !applyResult.ok
         ? { state: 'error', progress: 100, message: documentActionMeta.documentActionMessage || 'העריכה לא הוחלה במסמך' }
         : { state: 'success', progress: 100, message: 'הושלם' });
     } catch (err) {
@@ -3271,7 +3626,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         };
         return newMsg;
       });
-      updateAgentStatus(agentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
+      updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
       if (!isCurrentRequestCycle(requestCycle)) return;
       setLoading(false);
@@ -3301,17 +3656,17 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           ? `עבוד על הפסקה הנוכחית לפי התפקיד שלך:\n\n"${currentBlockText}"`
           : (input.trim() || 'סייע לי עם המסמך הנוכחי לפי התפקיד שלך.');
     const preferredProviderId = activeProviderChoice?.id || '';
-    const preferredProviders = preferredProviderId ? [preferredProviderId] : [];
+    const preferredProviders = !forceGlobalSidebarProvider && preferredProviderId ? [preferredProviderId] : [];
     const explicitProviderModel = preferredProviderId ? resolvedSelectedProviderModel : '';
     await executeRoleAgentTask(agent, task, {
       skillId: isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId),
       autoUseDefaultSkill: isEditComposerMode ? false : selectedSkillId === 'none',
       persistSelection: !isEditComposerMode,
       providerLabel: activeProviderSummary,
-      providerOverride: '',
+      providerOverride: forceGlobalSidebarProvider ? preferredProviderId : '',
       preferredProviders,
       modelOverride: explicitProviderModel,
-      strictProviderOverride: false,
+      strictProviderOverride: forceGlobalSidebarProvider,
       scopeLabel: contextScopeLabel,
       contextPreview,
       editModeExplicitRouting: false,
@@ -3350,8 +3705,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           : 'בדוק את כל המסמך הנוכחי ואז תקן אותו אוטומטית בכל המסמך מבחינת ניסוח, בהירות, זרימה, כתיב ודקדוק.';
       case 'fix':
         return targetText
-          ? `תקן את הטקסט הבא מבחינת כתיב, דקדוק וניסוח:\n\n"${targetText}"`
-          : 'תקן את הפסקה או המסמך הנוכחי מבחינת כתיב, דקדוק וניסוח.';
+          ? `עבור על הטקסט הבא, ציין תיקונים מיידיים, וכתוב במפורש אילו חורים צריך למלא בהמשך ממסמכים או מהרשת:\n\n"${targetText}"`
+          : 'עבור על הפסקה או המסמך הנוכחי, ציין תיקונים מיידיים, וכתוב במפורש אילו חורים צריך למלא בהמשך ממסמכים או מהרשת.';
+      case 'holeFill':
+        return targetText
+          ? `עבור על הטקסט הבא, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, והחזר נוסח מעודכן שמשלב את ההשלמות בתוך הטקסט:\n\n"${targetText}"`
+          : 'עבור על המסמך הנוכחי, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, והחזר נוסח מעודכן שמשלב את ההשלמות בתוך המסמך.';
       case 'humanize':
         return targetText
           ? `שכתב את הטקסט הבא בסגנון אנושי וטבעי יותר:\n\n"${targetText}"`
@@ -3381,7 +3740,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
   };
 
-  const buildClassicTaskpaneSelection = (agentConfig) => {
+  const buildClassicTaskpaneSelection = (agentId) => {
+    const agentConfig = buildEffectiveClassicAgentConfig(agentId);
+    if (forceGlobalSidebarProvider) return null;
     const preferredProviderId = String(agentConfig?.sidebarSelection?.providerId || agentConfig?.route || '').trim();
     if (!preferredProviderId) return null;
     const configuredChoice = configuredProviderChoices.find((choice) => choice.id === preferredProviderId) || null;
@@ -3412,10 +3773,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   };
 
   const runClassicTaskpaneAgent = (agentId) => {
-    const agentConfig = AGENTS_CONFIG[agentId];
+    const agentConfig = buildEffectiveClassicAgentConfig(agentId);
     const prompt = buildClassicTaskpanePrompt(agentId);
     if (!agentConfig || !prompt) return;
-    const providerState = buildClassicTaskpaneSelection(agentConfig);
+    const providerState = buildClassicTaskpaneSelection(agentId);
     if (providerState && providerState.available === false) {
       clearPendingMentionSelection();
       setTab('chat');
@@ -3429,7 +3790,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const runtimeSelection = providerState?.selection || null;
     clearPendingMentionSelection();
     setTab('chat');
-    if (runtimeSelection?.providerId) {
+    if (!forceGlobalSidebarProvider && runtimeSelection?.providerId) {
       setSelectedProviderId(runtimeSelection.providerId);
       setSelectedProviderModel(runtimeSelection.model || '');
       setSelectedAgentId('');
@@ -3454,10 +3815,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setActiveClassicAgentId((currentAgentId) => (currentAgentId === agentId ? null : agentId));
   };
 
-  const classicTaskpaneAgents = CLASSIC_TASKPANE_AGENT_IDS
-    .map((agentId) => {
-      const config = AGENTS_CONFIG[agentId] || {};
-      const providerState = buildClassicTaskpaneSelection(config);
+  const classicTaskpaneAgents = sidebarModeSettings.modes
+    .filter((modeSetting) => modeSetting.enabled !== false)
+    .map((modeSetting) => {
+      const agentId = modeSetting.id;
+      const config = buildEffectiveClassicAgentConfig(agentId) || {};
+      const providerState = buildClassicTaskpaneSelection(agentId);
       return {
         id: agentId,
         ...config,
@@ -3677,8 +4040,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     setSelectedProviderId(e.target.value);
                     setSelectedAgentId('');
                   }}
-                  disabled={isSettingsLocked}
-                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...lockedControlStyle }}
+                  disabled={isSettingsLocked || forceGlobalSidebarProvider}
+                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
                 >
                   <option value="default">ברירת מחדל</option>
                   {configuredProviderChoices.map((provider) => (
@@ -3693,8 +4056,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     clearPendingMentionSelection();
                     setSelectedProviderModel(e.target.value);
                   }}
-                  disabled={isSettingsLocked || !activeProviderChoice || !providerModelChoices.length}
-                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...lockedControlStyle }}
+                  disabled={isSettingsLocked || forceGlobalSidebarProvider || !activeProviderChoice || !providerModelChoices.length}
+                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
                 >
                   {activeProviderChoice ? providerModelChoices.map((modelId) => (
                     <option key={modelId} value={modelId}>
@@ -3721,6 +4084,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               style={{ background: 'transparent', border: '1px solid #D1D5DB', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer', color: '#323130', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
             >
               {tab === 'settings' ? 'חזרה לצ׳אט' : '+ שיחה חדשה'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab((prev) => prev === 'history' ? 'chat' : 'history')}
+              disabled={loading}
+              style={{ background: tab === 'history' ? '#EFF6FF' : 'transparent', border: '1px solid #D1D5DB', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer', color: tab === 'history' ? '#1D4ED8' : '#323130', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
+            >
+              שיחות קודמות
             </button>
           </div>
 
@@ -3818,6 +4189,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   </select>
                 </div>
               </div>
+            ) : tab === 'history' ? (
+              renderChatHistoryPanel('light')
             ) : (
               <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {messages.map((msg, index) => {
@@ -3839,14 +4212,35 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         </div>
                       )}
                       {renderDocumentActionCompletionButton(msg, 'light')}
-                      {msg.role === 'assistant' && !msg.error && !isEditMessage && onInsert && (
-                        <button
-                          type="button"
-                          onClick={() => onInsert(msg.content)}
-                          style={{ marginTop: 6, padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
-                        >
-                          הוסף למסמך
-                        </button>
+                      {(msg.content || '').trim() && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                          <button
+                            type="button"
+                            onClick={() => copyMessageToClipboard(msg.content)}
+                            style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#4B5563', fontSize: 11, cursor: 'pointer' }}
+                          >
+                            העתק
+                          </button>
+                          {msg.role === 'assistant' && !msg.error && !isEditMessage && onApplyDocumentPlan && (
+                            <button
+                              type="button"
+                              onClick={() => applyChatMessageToDocument(msg)}
+                              disabled={loading}
+                              style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #A7F3D0', background: '#ECFDF5', color: '#047857', fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
+                            >
+                              החל במיקומים
+                            </button>
+                          )}
+                          {msg.role === 'assistant' && !msg.error && !isEditMessage && onInsert && (
+                            <button
+                              type="button"
+                              onClick={() => onInsert(msg.content)}
+                              style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
+                            >
+                              הוסף למסמך
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
@@ -4379,6 +4773,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       }}>
         {[
           ['chat', "💬 צ'אט"],
+          ['history', '🕘 שיחות'],
           ['settings', '⚙️ הגדרות'],
           ['actions', '⚡ פעולות'],
           ['agents', '🧩 סוכנים'],
@@ -4669,32 +5064,35 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 )}
                 {renderDocumentActionCompletionButton(msg, 'dark')}
 
-                {msg.role === 'assistant' && !msg.error && normalizeComposerMode(msg.composerMode || '') !== 'edit' && onInsert && (
-                  <button 
-                    onClick={() => onInsert(msg.content)}
-                    style={{
-                      fontSize: 11,
-                      color: '#A78BFA',
-                      background: 'rgba(139, 92, 246, 0.1)',
-                      border: '1px solid rgba(139, 92, 246, 0.2)',
-                      borderRadius: 12,
-                      padding: '4px 12px',
-                      cursor: 'pointer',
-                      marginTop: 6,
-                      transition: 'all 0.3s ease',
-                      fontWeight: 500,
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(139, 92, 246, 0.2)';
-                      e.currentTarget.style.transform = 'translateY(-1px)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'rgba(139, 92, 246, 0.1)';
-                      e.currentTarget.style.transform = 'translateY(0)';
-                    }}
-                  >
-                    הוסף למסמך
-                  </button>
+                {(msg.content || '').trim() && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => copyMessageToClipboard(msg.content)}
+                      style={{ fontSize: 11, color: '#CBD5E1', background: 'rgba(148, 163, 184, 0.1)', border: '1px solid rgba(148, 163, 184, 0.22)', borderRadius: 12, padding: '4px 12px', cursor: 'pointer', fontWeight: 500 }}
+                    >
+                      העתק
+                    </button>
+                    {msg.role === 'assistant' && !msg.error && normalizeComposerMode(msg.composerMode || '') !== 'edit' && onApplyDocumentPlan && (
+                      <button
+                        type="button"
+                        onClick={() => applyChatMessageToDocument(msg)}
+                        disabled={loading}
+                        style={{ fontSize: 11, color: '#6EE7B7', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.22)', borderRadius: 12, padding: '4px 12px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1, fontWeight: 500 }}
+                      >
+                        החל במיקומים
+                      </button>
+                    )}
+                    {msg.role === 'assistant' && !msg.error && normalizeComposerMode(msg.composerMode || '') !== 'edit' && onInsert && (
+                      <button
+                        type="button"
+                        onClick={() => onInsert(msg.content)}
+                        style={{ fontSize: 11, color: '#A78BFA', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: 12, padding: '4px 12px', cursor: 'pointer', transition: 'all 0.3s ease', fontWeight: 500 }}
+                      >
+                        הוסף למסמך
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -4984,6 +5382,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         </div>
       )}
 
+      {tab === 'history' && renderChatHistoryPanel('dark')}
+
       {/* לשונית הגדרות לשיחה */}
       {tab === 'settings' && (
         <div style={{
@@ -5093,8 +5493,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 setSelectedProviderId(e.target.value);
                 setSelectedAgentId('');
               }}
-              disabled={isSettingsLocked}
-              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+              disabled={isSettingsLocked || forceGlobalSidebarProvider}
+              style={{ ...controlSelectStyle, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
             >
               <option value="default" style={{ color: '#1F2937' }}>
                 ברירת המחדל מההגדרות
@@ -5117,8 +5517,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     clearPendingMentionSelection();
                     setSelectedProviderModel(e.target.value);
                   }}
-                  disabled={isSettingsLocked || !providerModelChoices.length}
-                  style={{ ...controlSelectStyle, ...lockedControlStyle }}
+                  disabled={isSettingsLocked || forceGlobalSidebarProvider || !providerModelChoices.length}
+                  style={{ ...controlSelectStyle, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
                 >
                   {providerModelChoices.map((modelId) => (
                     <option key={modelId} value={modelId} style={{ color: '#1F2937' }}>

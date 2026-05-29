@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DOMParser as ProseMirrorDOMParser, DOMSerializer } from "@tiptap/pm/model";
 import { AGENTS_CONFIG } from "../agentConfig";
 import { analyzeQuery as analyzeArticleQuery, buildArticleSearchQueryVariants, extractDomainFromUrl as extractArticleDomainFromUrl, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, validateArticleCandidate } from "./articleSourceValidation";
+import { fetchBrowserPageSnapshot, isDesktopBrowserRetrievalAvailable } from "./browserRetrievalService";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 
 // Personal style seed – loaded at runtime from disk, not bundled
@@ -32,6 +33,58 @@ export const DEFAULT_PROVIDER_CONFIG = {
   },
 };
 
+export const DEFAULT_SIDEBAR_MODE_IDS = ['reviewFix', 'fix', 'holeFill', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
+
+export const buildDefaultSidebarModeSettings = () => ({
+  forceGlobalProvider: false,
+  modes: DEFAULT_SIDEBAR_MODE_IDS.map((id) => {
+    const agent = AGENTS_CONFIG[id] || {};
+    const selection = agent.sidebarSelection || {};
+    return {
+      id,
+      label: agent.label || id,
+      enabled: true,
+      providerId: selection.providerId || agent.route || '',
+      model: selection.model || '',
+    };
+  }),
+});
+
+export const normalizeSidebarModeSettings = (settings = {}) => {
+  const defaults = buildDefaultSidebarModeSettings();
+  const defaultById = Object.fromEntries(defaults.modes.map((mode) => [mode.id, mode]));
+  const sourceModes = Array.isArray(settings?.modes) ? settings.modes : defaults.modes;
+  const seen = new Set();
+  const modes = sourceModes
+    .map((mode) => {
+      const id = String(mode?.id || '').trim();
+      if (!id || seen.has(id) || !AGENTS_CONFIG[id]) return null;
+      seen.add(id);
+      const fallback = defaultById[id] || {
+        id,
+        label: AGENTS_CONFIG[id]?.label || id,
+        enabled: true,
+        providerId: AGENTS_CONFIG[id]?.sidebarSelection?.providerId || AGENTS_CONFIG[id]?.route || '',
+        model: AGENTS_CONFIG[id]?.sidebarSelection?.model || '',
+      };
+      return {
+        ...fallback,
+        label: String(mode?.label || fallback.label || id).trim() || id,
+        enabled: mode?.enabled !== false,
+        providerId: String(Object.prototype.hasOwnProperty.call(mode || {}, 'providerId') ? mode.providerId : fallback.providerId || '').trim(),
+        model: String(Object.prototype.hasOwnProperty.call(mode || {}, 'model') ? mode.model : fallback.model || '').trim(),
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    ...defaults,
+    ...(settings && typeof settings === 'object' ? settings : {}),
+    forceGlobalProvider: settings?.forceGlobalProvider === true,
+    modes,
+  };
+};
+
 export const DEFAULT_SHORTCUTS = {
   toggleAssistant: 'Ctrl+Shift+A',
   magicWand: 'Ctrl+Space',
@@ -45,6 +98,7 @@ export const DEFAULT_ASSISTANT_BEHAVIOR = {
   sidebarPreset: 'word-taskpane',
   autoRouteSourceRequests: true,
   strictSourceGrounding: true,
+  sidebarModeSettings: buildDefaultSidebarModeSettings(),
 };
 
 export const DEFAULT_WORD_PREFERENCES = {
@@ -1022,13 +1076,21 @@ export const saveShortcutsConfig = (config) => {
   syncPersistedAppSettings();
 };
 
-export const getAssistantBehavior = () => ({
-  ...DEFAULT_ASSISTANT_BEHAVIOR,
-  ...readJsonFromStorage('wordai_assistant_behavior', {}),
-});
+export const getAssistantBehavior = () => {
+  const stored = readJsonFromStorage('wordai_assistant_behavior', {});
+  return {
+    ...DEFAULT_ASSISTANT_BEHAVIOR,
+    ...stored,
+    sidebarModeSettings: normalizeSidebarModeSettings(stored.sidebarModeSettings || DEFAULT_ASSISTANT_BEHAVIOR.sidebarModeSettings),
+  };
+};
 
 export const saveAssistantBehavior = (config) => {
-  localStorage.setItem('wordai_assistant_behavior', JSON.stringify({ ...DEFAULT_ASSISTANT_BEHAVIOR, ...config }));
+  localStorage.setItem('wordai_assistant_behavior', JSON.stringify({
+    ...DEFAULT_ASSISTANT_BEHAVIOR,
+    ...config,
+    sidebarModeSettings: normalizeSidebarModeSettings(config?.sidebarModeSettings || DEFAULT_ASSISTANT_BEHAVIOR.sidebarModeSettings),
+  }));
   syncPersistedAppSettings();
 };
 
@@ -2489,6 +2551,12 @@ const EXPLICIT_GROUNDED_WEB_RESULTS_PATTERN = /(?:(?:חפש|תחפש)\s+(?:בג�
 const CURRENT_INFO_TOPIC_PATTERN = /(שער(?:\s+ה)?(?:דולר|אירו|מטבע)|דולר|אירו|exchange\s+rate|stock\s+price|market\s+price|bitcoin|btc|ethereum|eth|crypto|קריפטו|מזג(?:\s+האוויר)?|weather|temperature|טמפרטורה|כותרות\s+חדשות|headlines?|breaking\s+news|news\s+today|תוצאות?\s+(?:משחק|כדורגל|ספורט)|משחק\s+כדורגל|football\s+(?:score|result|match)|soccer\s+(?:score|result|match)|match\s+(?:score|result))/i;
 const CURRENT_INFO_TIME_SIGNAL_PATTERN = /(היום|כרגע|עכשיו|מעודכן(?:ת)?|בזמן\s+אמת|real[-\s]?time|today|current|currently|latest|live|right\s+now|as\s+of\s+today|up[-\s]?to[-\s]?date)/i;
 const CURRENT_INFO_REQUEST_PATTERN = /(מה(?:ו|י)?\s+(?:שער|מחיר|שווי|מזג(?:\s+האוויר)?|הטמפרטורה|תוצאות?)|כמה\s+(?:עולה|שווה|נסחר(?:ת)?|הטמפרטורה)|תוצאות?\s+(?:משחק|כדורגל|ספורט)|what(?:'s|\s+is)?\s+(?:the\s+)?(?:exchange\s+rate|stock\s+price|market\s+price|weather|temperature|score|result)|how\s+much\s+(?:is|does).*(?:bitcoin|btc|ethereum|eth|the\s+dollar|the\s+euro))/i;
+const DOCUMENT_REVIEW_OR_EDIT_REQUEST_PATTERN = /(?:(?:בדוק|תבדוק|סקור|תסקור|עבור|תעבור|בחן|תבחן|בדיקה|ביקורת|review|check|inspect|evaluate|assess|proofread)(?:\s+[^\n]{0,60})?(?:המסמך|מסמך|העבודה|עבודה|הטיוטה|טיוטה|הטקסט|טקסט|document|draft|paper|essay|text|הערות(?:\s+המרצה|\s+מרצה)?|ביקורת(?:\s+המרצה|\s+מרצה)?|פידבק|feedback|תיקונים?(?:\s+המרצה|\s+של\s+המרצה)?|הנחיות(?:\s+המרצה|\s+של\s+המרצה)?|מרצה(?:\s+אקדמי)?)|(?:תקן|תתקן|שכתב|ערוך|לטש|שפר|תשפר|שפרי|תשפרי|עדכן|תעדכן|יישם|תיישם|edit|rewrite|polish|improve|apply)(?:\s+[^\n]{0,60})?(?:המסמך|מסמך|העבודה|עבודה|הטיוטה|טיוטה|הטקסט|טקסט|document|draft|paper|essay|text|הערות(?:\s+המרצה|\s+מרצה)?|ביקורת(?:\s+המרצה|\s+מרצה)?|פידבק|feedback|תיקונים?(?:\s+המרצה|\s+של\s+המרצה)?|הנחיות(?:\s+המרצה|\s+של\s+המרצה)?|מרצה(?:\s+אקדמי)?))/i;
+const DOCUMENT_REVIEW_REFERENCE_PATTERN = /(?:המסמך|מסמך|העבודה|עבודה|הטיוטה|טיוטה|הטקסט|טקסט|document|draft|paper|essay|text|הערות(?:\s+המרצה|\s+מרצה)?|ביקורת(?:\s+המרצה|\s+מרצה)?|פידבק|feedback|תיקונים?(?:\s+המרצה|\s+של\s+המרצה)?|הנחיות(?:\s+המרצה|\s+של\s+המרצה)?|מרצה(?:\s+אקדמי)?)/i;
+const DOCUMENT_REVIEW_OR_EDIT_ACTION_PATTERN = /(בדוק|תבדוק|סקור|תסקור|עבור|תעבור|בחן|תבחן|בדיקה|ביקורת|review|check|inspect|evaluate|assess|proofread|תקן|תתקן|שכתב|ערוך|לטש|edit|rewrite|polish)/i;
+const HOLE_FILL_DIRECT_CHAT_AGENT_PATTERN = /(?:holefill|hole_fill|hole\s+fill|מילוי\s+חורים)/i;
+const NON_RESEARCH_DIRECT_CHAT_AGENT_IDS = new Set(['lecturer', 'reviewFix', 'fix', 'humanize', 'academic', 'organize', 'textToTable', 'summary', 'continue']);
+const NON_RESEARCH_DIRECT_CHAT_AGENT_PATTERN = /(?:lecturer|reviewfix|review_fix|proofreader|humanizer|academic(?:\s+writer)?|organizer|table(?:\s+extractor)?|summary|continue|בדיקת\s+מרצה|בדיקה\s*\+\s*תיקון|תיקון|האנשה|אקדמי|ארגון|לטבלה|סיכום|המשך)/i;
 const HEBREW_TEXT_PATTERN = /[\u0590-\u05FF]/;
 const DOI_PATTERN = /\b10\.\d{4,9}\/[\-._;()/:A-Z0-9]+\b/i;
 const RECENT_VERIFIED_SOURCE_FOLLOW_UP_WINDOW_MS = 30 * 60 * 1000;
@@ -2514,6 +2582,57 @@ const needsInternetBackedCurrentInfo = (value = '') => {
   return EXPLICIT_WEB_LOOKUP_PATTERN.test(text)
     || (CURRENT_INFO_TOPIC_PATTERN.test(text) && (CURRENT_INFO_TIME_SIGNAL_PATTERN.test(text) || CURRENT_INFO_REQUEST_PATTERN.test(text)));
 };
+
+const extractDirectChatActionInstruction = (value = '') => {
+  const text = String(value || '').replace(/\r/g, '\n').trim();
+  if (!text) return '';
+  const matches = Array.from(text.matchAll(new RegExp(DOCUMENT_REVIEW_OR_EDIT_ACTION_PATTERN.source, 'giu')));
+  if (!matches.length) return text.slice(-900).trim();
+  const lastMatch = matches[matches.length - 1];
+  const startIndex = Math.max(0, Number(lastMatch.index || 0) - 80);
+  return text.slice(startIndex).slice(0, 1200).trim();
+};
+
+const extractDirectChatRoutingInstruction = (value = '') => {
+  const text = String(value || '').replace(/\r/g, '\n').trim();
+  if (!text) return '';
+  const blockQuoteMatch = text.match(/(?:\n\s*\n|:\s*(?:\n\s*)?)(?=["'“”])/u);
+  const prefixOnly = blockQuoteMatch ? text.slice(0, blockQuoteMatch.index).trim() : text;
+  const inlineQuotesStripped = prefixOnly
+    .replace(/["“'][^"'“”\n]{0,240}["”']/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return inlineQuotesStripped || extractDirectChatActionInstruction(prefixOnly || text);
+};
+
+const isDocumentReviewOrEditRequest = ({ userPrompt = '', extraSystemPrompt = '' } = {}) => {
+  const combined = [userPrompt, extraSystemPrompt]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  if (!combined) return false;
+  const actionInstruction = extractDirectChatActionInstruction(combined);
+  if (!DOCUMENT_REVIEW_OR_EDIT_ACTION_PATTERN.test(actionInstruction)) return false;
+  if (!DOCUMENT_REVIEW_OR_EDIT_REQUEST_PATTERN.test(actionInstruction) && !DOCUMENT_REVIEW_REFERENCE_PATTERN.test(actionInstruction)) return false;
+  if (isExplicitSourceRequest(actionInstruction)) return false;
+  if (FACT_CHECK_REQUEST_PATTERN.test(actionInstruction)) return false;
+  if (EXPLICIT_GROUNDED_WEB_RESULTS_PATTERN.test(actionInstruction)) return false;
+  if (needsInternetBackedCurrentInfo(actionInstruction)) return false;
+  return true;
+};
+
+const isNonResearchDirectChatAgent = ({ agentId = '', agentLabel = '', agentName = '' } = {}) => {
+  const normalizedAgentId = String(agentId || '').trim();
+  if (NON_RESEARCH_DIRECT_CHAT_AGENT_IDS.has(normalizedAgentId)) return true;
+  return NON_RESEARCH_DIRECT_CHAT_AGENT_PATTERN.test([agentId, agentLabel, agentName].filter(Boolean).join(' '));
+};
+
+const isLecturerDirectChatAgent = ({ agentId = '', agentLabel = '', agentName = '' } = {}) => {
+  const combined = [agentId, agentLabel, agentName].filter(Boolean).join(' ');
+  return String(agentId || '').trim() === 'lecturer' || /(?:lecturer|בדיקת\s+מרצה|מרצה)/i.test(combined);
+};
+
+const isHoleFillDirectChatAgent = ({ agentId = '', agentLabel = '', agentName = '' } = {}) => HOLE_FILL_DIRECT_CHAT_AGENT_PATTERN.test([agentId, agentLabel, agentName].filter(Boolean).join(' '));
 
 const hasSourceRetrievalFollowOnWork = (value = '') => SOURCE_RETRIEVAL_FOLLOW_ON_PATTERN.test(String(value || '').trim());
 
@@ -3771,6 +3890,27 @@ const fetchVerifiedArticleCanonicalUrlWithTimeout = async (url = '', options = {
   }
 };
 
+const resolveVerifiedArticleCanonicalUrlViaBrowser = async (value = '', { deadlineAt = 0 } = {}) => {
+  const normalizedUrl = normalizeArticleUrl(value);
+  if (!normalizedUrl || !isDesktopBrowserRetrievalAvailable()) return '';
+
+  const timeRemainingMs = getVerifiedArticleCanonicalResolutionTimeRemaining(deadlineAt);
+  const timeoutMs = Math.min(4000, timeRemainingMs);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return '';
+
+  try {
+    const snapshot = await fetchBrowserPageSnapshot(normalizedUrl, {
+      timeoutMs,
+      waitMs: 0,
+      extractText: false,
+      maxTextLength: 1000,
+    });
+    return normalizeArticleUrl(snapshot?.canonicalUrl || snapshot?.finalUrl || '');
+  } catch {
+    return '';
+  }
+};
+
 const resolveVerifiedArticleCanonicalUrl = async (value = '', { deadlineAt = 0 } = {}) => {
   const normalizedUrl = normalizeArticleUrl(value);
   if (!normalizedUrl || typeof fetch !== 'function') return normalizedUrl;
@@ -3795,7 +3935,10 @@ const resolveVerifiedArticleCanonicalUrl = async (value = '', { deadlineAt = 0 }
     }
   };
 
-  return await attemptResolution('HEAD') || await attemptResolution('GET') || normalizedUrl;
+  return await attemptResolution('HEAD')
+    || await attemptResolution('GET')
+    || await resolveVerifiedArticleCanonicalUrlViaBrowser(normalizedUrl, { deadlineAt })
+    || normalizedUrl;
 };
 
 const createVerifiedArticleCanonicalUrlResolver = () => {
@@ -4161,11 +4304,15 @@ const resolveVerifiedArticleGeminiModel = (cfg = DEFAULT_PROVIDER_CONFIG) => {
   return configuredModel;
 };
 
-const getPreferredVerifiedArticleProviderIds = ({ cfg = DEFAULT_PROVIDER_CONFIG, preferredProviderId = '' } = {}) => {
+const getPreferredVerifiedArticleProviderIds = ({ cfg = DEFAULT_PROVIDER_CONFIG, preferredProviderId = '', strictProviderOverride = false } = {}) => {
   const normalizedPreferredProvider = String(preferredProviderId || '').trim().toLowerCase();
 
   if (VERIFIED_ARTICLE_PROVIDER_IDS.includes(normalizedPreferredProvider) && isProviderConfiguredForUse(normalizedPreferredProvider, cfg)) {
     return [normalizedPreferredProvider];
+  }
+
+  if (strictProviderOverride) {
+    return [];
   }
 
   if (normalizedPreferredProvider === 'gemini') {
@@ -4437,11 +4584,11 @@ const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', a
   ].filter(Boolean).join('\n\n');
 };
 
-const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '', preferredProviderId = '', requestedCount = null } = {}) => {
+const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analyzeArticleQuery(query), cfg = DEFAULT_PROVIDER_CONFIG, timeoutMs = 0, workspaceId = '', preferredProviderId = '', strictProviderOverride = false, requestedCount = null } = {}) => {
   const baseQuery = String(query || '').trim();
   const requestedArticleCount = clampRequestedVerifiedArticleCount(requestedCount || extractRequestedArticleCount(baseQuery));
   const searchQueries = buildArticleSearchQueryVariants(baseQuery, queryMeta);
-  const preferredProviderIds = getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId });
+  const preferredProviderIds = getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId, strictProviderOverride });
   const attempts = [];
 
   preferredProviderIds.forEach((providerId) => {
@@ -4478,7 +4625,7 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
     }
   });
 
-  if (queryMeta.expectsNewsArticle && baseQuery && canUseLocalVerifiedArticleBridge()) {
+  if (!strictProviderOverride && queryMeta.expectsNewsArticle && baseQuery && canUseLocalVerifiedArticleBridge()) {
     attempts.push({
       providerId: 'local-verified-article-bridge',
       model: '',
@@ -4559,6 +4706,7 @@ const resolveVerifiedSourceReply = async ({
   cfg = DEFAULT_PROVIDER_CONFIG,
   timeoutMs = 0,
   preferredProviderId = '',
+  strictProviderOverride = false,
   stripFollowOnWork = false,
   logEvent = null,
   assignmentRequirements = null,
@@ -4597,6 +4745,7 @@ const resolveVerifiedSourceReply = async ({
   const scholarKey = String(cfg?.scholar?.key || '').trim();
   const scholarKeyMissing = academic && !scholarKey;
   const emitSourceLog = typeof logEvent === 'function' ? logEvent : null;
+  const normalizedPreferredProviderId = String(preferredProviderId || '').trim().toLowerCase();
 
   if (!query) {
     emitSourceLog?.('verified-source-query-missing', 'אחזור מקורות נחסם: querySource=blocked-assignment missing researchTopic', {
@@ -4634,12 +4783,13 @@ const resolveVerifiedSourceReply = async ({
       timeoutMs,
       workspaceId,
       preferredProviderId,
+      strictProviderOverride,
       requestedCount: requestedSourceLimit,
     });
   }
 
   const attempts = [];
-  if (academic && String(cfg?.scholar?.provider || '').trim() === 'serpapi' && scholarKey) {
+  if (!strictProviderOverride && academic && String(cfg?.scholar?.provider || '').trim() === 'serpapi' && scholarKey) {
     attempts.push({
       providerId: 'serpapi-scholar',
       model: 'google_scholar',
@@ -4654,7 +4804,7 @@ const resolveVerifiedSourceReply = async ({
       endpoint: 'https://serpapi.com/search.json?engine=google_scholar',
     });
   }
-  if (String(cfg?.perplexity?.key || '').trim()) {
+  if ((!strictProviderOverride || normalizedPreferredProviderId === 'perplexity') && String(cfg?.perplexity?.key || '').trim()) {
     attempts.push({
       providerId: 'perplexity-search',
       model: String(cfg?.perplexity?.model || '').trim() || 'sonar',
@@ -5574,7 +5724,9 @@ const buildStageAssignmentRequirementInstruction = (requirements = {}, stageAgen
   const roleInstruction = roleKey === 'manager'
     ? (legalWithoutSources
       ? 'זו מטלת מקרים משפטיים ללא דרישת מקורות מזוהה: אל תכפה שלב חיפוש מקורות; תכנן ניתוח חוקתיות לכל מקרה לפי ההנחיות והחומרים שסופקו.'
-      : 'חלק את העבודה לפי המכסות: תחילה מילוי sample של פריטי תוכן, אחר כך מקורות אקדמיים וציטוטים, ורק אז כתיבה/ביקורת.')
+      : normalized.hasSourceQuotas
+        ? 'חלק את העבודה לפי המכסות: תחילה מלא את המקורות והציטוטים שנדרשו, ורק אחר כך כתיבה וביקורת.'
+        : 'חלק את העבודה לפי ההנחיות המפורשות: תחילה סגור מבנה, אורך, פורמט, שער וכל דרישה טכנית, ורק אם קיימת דרישת מקורות מפורשת עבור למחקר.')
     : isGeneralResearcher
       ? 'בשלב זה העדיפות היא למלא את מכסת פריטי התוכן/כתבות וקטגוריות sourceRequirements שאינן אקדמיות. החזר רשימה ממוספרת עם URL/כותרת/מקור/תרומה, וספור found/required לכל kind.'
       : isAcademicResearcher
@@ -5779,7 +5931,7 @@ const buildHeuristicAgentPlan = (userPrompt = '', documentContext = '', enabledA
   const normalizedRequirements = normalizeAssignmentRequirements(assignmentRequirements || extractAssignmentRequirements({ userPrompt, documentContext, structureConstraintText }));
   const resolvedStructureConstraintText = String(structureConstraintText || userPrompt).trim();
   const skillId = String(activeSkill?.id || '').trim().toLowerCase();
-  const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר|ביבליוגרפ|apa|ציטוט|מקורות|מקור)/i.test(combined);
+  const isAcademic = normalizedRequirements.hasSourceQuotas || isExplicitSourceRequest(combined);
   const needsVisualResearch = hasExplicitVisualResearchNeed(`${userPrompt}\n${resolvedStructureConstraintText}`)
     || hasExplicitVisualResearchNeed(documentContext)
     || hasVisualResearchGapInContext(documentContext);
@@ -5947,7 +6099,7 @@ const buildAutopilotTaskProfile = ({ userPrompt = '', documentContext = '', stru
   const documentContextText = String(documentContext || '').trim();
   const helperFilesPresent = /(חומרי\s+עזר|קובץ\s+עזר|תוכן\s+עזר|helper\s+files?|supporting\s+materials?)/i.test(documentContextText);
   const draftExists = Boolean(documentContextText) && (!helperFilesPresent || /(המסמך\s+הקיים|טיוט|<\s*(?:p|h1|h2|h3|div)\b|current\s+document|existing\s+draft)/i.test(documentContextText));
-  const isAcademic = /(אקדמ|סמינר|עבודה|מחקר|מאמר\s+אקדמי|ביבליוגרפ|apa|ציטוט|מקורות|doi|scholar)/i.test(combined);
+  const isAcademic = assignmentRequirements.hasSourceQuotas || isExplicitSourceRequest(combined);
   const needsVisualResearch = hasExplicitVisualResearchNeed(`${requestText}\n${structureText}`)
     || hasExplicitVisualResearchNeed(documentContext)
     || hasVisualResearchGapInContext(documentContext);
@@ -8804,6 +8956,46 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const allowEditModeRoutingOverride = options.allowEditModeRoutingOverride === true;
   const editModeExplicitSkillInvocation = options.editModeExplicitSkillInvocation === true;
   const suppressResearchRoutingForEditMode = editModeRequest && !allowEditModeRoutingOverride;
+  const directChatRoutingInstruction = extractDirectChatRoutingInstruction(cleanUserPrompt);
+  const lecturerAgentRequest = directChatRequest && isLecturerDirectChatAgent({
+    agentId: options.agentId || '',
+    agentLabel: options.agentLabel || '',
+    agentName: options.agentName || options.agentLabel || '',
+  });
+  const holeFillAgentRequest = directChatRequest && isHoleFillDirectChatAgent({
+    agentId: options.agentId || '',
+    agentLabel: options.agentLabel || '',
+    agentName: options.agentName || options.agentLabel || '',
+  });
+  const directChatSourceFollowUpRequested = SOURCE_EXPLICIT_FOLLOW_UP_PATTERN.test(directChatRoutingInstruction)
+    || SOURCE_FOLLOW_UP_PATTERN.test(directChatRoutingInstruction)
+    || hasSourceRetrievalFollowOnWork(directChatRoutingInstruction)
+    || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(directChatRoutingInstruction);
+  const suppressResearchRoutingForDirectAgent = !suppressResearchRoutingForEditMode
+    && directChatRequest
+    && !holeFillAgentRequest
+    && isNonResearchDirectChatAgent({
+      agentId: options.agentId || '',
+      agentLabel: options.agentLabel || '',
+      agentName: options.agentName || options.agentLabel || '',
+    })
+    && (lecturerAgentRequest || !isExplicitSourceRequest(directChatRoutingInstruction))
+    && (lecturerAgentRequest || !directChatSourceFollowUpRequested)
+    && !FACT_CHECK_REQUEST_PATTERN.test(directChatRoutingInstruction)
+    && !EXPLICIT_GROUNDED_WEB_RESULTS_PATTERN.test(directChatRoutingInstruction)
+    && !needsInternetBackedCurrentInfo(directChatRoutingInstruction);
+  const suppressResearchRoutingForDocumentReview = !suppressResearchRoutingForEditMode
+    && !suppressResearchRoutingForDirectAgent
+    && directChatRequest
+    && !holeFillAgentRequest
+    && isDocumentReviewOrEditRequest({
+      userPrompt: cleanUserPrompt,
+      extraSystemPrompt,
+    });
+  const suppressResearchRouting = options.forceSuppressResearchRouting === true
+    || suppressResearchRoutingForEditMode
+    || suppressResearchRoutingForDirectAgent
+    || suppressResearchRoutingForDocumentReview;
   const sourceQueryOverride = normalizeSourceQueryOverride(options.sourceQueryOverride || options.researchTopic || '');
   const sourceQuerySource = sourceQueryOverride
     ? String(options.sourceQuerySource || (options.researchTopic ? 'researchTopic' : 'override')).trim() || 'override'
@@ -8823,7 +9015,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt });
   const skillsConfig = getSkillsConfig();
-  const skillResolution = (skipSkillSelection || (editModeRequest && !editModeExplicitSkillInvocation))
+  const skillResolution = (skipSkillSelection || (suppressResearchRoutingForDocumentReview && !options.skillId) || (editModeRequest && !editModeExplicitSkillInvocation))
     ? { skill: null, reason: 'skipped' }
     : resolveSkillForRequest({
       userPrompt: cleanUserPrompt,
@@ -8847,7 +9039,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     agentLabel: options.agentLabel || '',
     agentName: options.agentName || '',
   });
-  const sourceFocusedWorkflowAgent = !suppressResearchRoutingForEditMode
+  const sourceFocusedWorkflowAgent = !suppressResearchRouting
     && options.skipAutomation === true
     && !directChatRequest
     && assignmentSourceQuotaRoute.hasSourceQuota
@@ -8859,7 +9051,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       skillId: activeSkill?.id || options.skillId || '',
     });
   const sourceQuotaBypassesSkipAutomation = sourceFocusedWorkflowAgent && options.skipAutomation === true;
-  const promptSourceGroundingRequired = !suppressResearchRoutingForEditMode && shouldUseStrictSourceGrounding({
+  const promptSourceGroundingRequired = !suppressResearchRouting && shouldUseStrictSourceGrounding({
     userPrompt: cleanUserPrompt,
     documentContext,
     extraSystemPrompt,
@@ -8868,11 +9060,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const sourceGroundingRequired = forceVerifiedSourceFollowOn
     || promptSourceGroundingRequired
     || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'strict');
-  const promptGroundedWebResultsRequired = !suppressResearchRoutingForEditMode && !sourceGroundingRequired && shouldUseGroundedWebResults({
+  const promptGroundedWebResultsRequired = !suppressResearchRouting && !sourceGroundingRequired && (holeFillAgentRequest || shouldUseGroundedWebResults({
     userPrompt: cleanUserPrompt,
     extraSystemPrompt,
     skillId: activeSkill?.id || options.skillId || '',
-  });
+  }));
   const groundedWebResultsRequired = !sourceGroundingRequired
     && (promptGroundedWebResultsRequired || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb'));
   const strictSourceGroundingEnabled = true;
@@ -8906,12 +9098,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       && (isGroundedWebResultsOnlyRequest({
         userPrompt: cleanUserPrompt,
         extraSystemPrompt,
-      }) || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb')));
-  const internetBackedSourceWorkRequired = !suppressResearchRoutingForEditMode && (sourceGroundingRequired || groundedWebResultsRequired || shouldUseInternetBackedSourceWork({
+      }) || holeFillAgentRequest || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb')));
+  const internetBackedSourceWorkRequired = !suppressResearchRouting && (sourceGroundingRequired || groundedWebResultsRequired || shouldUseInternetBackedSourceWork({
     userPrompt: cleanUserPrompt,
     extraSystemPrompt,
   }));
-  const sourceAutoRouteEnabled = !suppressResearchRoutingForEditMode && assistantBehavior.autoRouteSourceRequests !== false;
+  const sourceAutoRouteEnabled = !suppressResearchRouting && assistantBehavior.autoRouteSourceRequests !== false;
   const requestedProvider = activeProvider;
   const internetBackedAutoRouteTarget = INTERNET_BACKED_SOURCE_PROVIDER_IDS.has(activeProvider)
     ? activeProvider
@@ -8956,11 +9148,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   let verifiedSourceFollowOnAllowedUrls = new Set();
   let verifiedSourceFollowOnGroundingPrompt = '';
   let verifiedSourceFollowOnLocked = false;
+  let groundedWebResultsContextPrompt = '';
   const sourceGroundingPrompt = buildSourceGroundingPrompt({
     enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
     providerSupportsGrounding: providerSupportsSourceGrounding,
   });
-  const currentInfoWithoutExplicitResults = !suppressResearchRoutingForEditMode
+  const currentInfoWithoutExplicitResults = !suppressResearchRouting
     && needsInternetBackedCurrentInfo([cleanUserPrompt, extraSystemPrompt].filter(Boolean).join('\n'))
     && !isExplicitGroundedWebResultsRequest({
       userPrompt: cleanUserPrompt,
@@ -9123,13 +9316,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       documentContext,
       fallbackQuery: getLastVerifiedSourceQuery({ workspaceId: activeWorkspaceId }),
       workspaceId: activeWorkspaceId,
-      stripFollowOnWork: shouldGroundDirectChatWithVerifiedSources,
+      stripFollowOnWork: shouldUseVerifiedSourceFollowOnGrounding,
       sourceQueryOverride,
       blockAssignmentPromptFallback,
     });
     const verifiedSourceStartsWithArticleRetrieval = analyzeArticleQuery(verifiedSourceStartQuery).expectsNewsArticle;
     const verifiedSourceStartProvider = verifiedSourceStartsWithArticleRetrieval
-      ? (getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId: requestedProvider })[0] || activeProvider)
+      ? (getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId: requestedProvider, strictProviderOverride })[0] || activeProvider)
       : activeProvider;
     const verifiedSourceStartModel = verifiedSourceStartsWithArticleRetrieval
       ? (verifiedSourceStartProvider === 'gemini'
@@ -9161,7 +9354,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       cfg,
       timeoutMs,
       preferredProviderId: requestedProvider,
-      stripFollowOnWork: shouldGroundDirectChatWithVerifiedSources,
+      strictProviderOverride,
+      stripFollowOnWork: shouldUseVerifiedSourceFollowOnGrounding,
       logEvent,
       assignmentRequirements,
       sourceQueryOverride,
@@ -9189,7 +9383,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           ...Array.from(persistedAllowedUrls),
         ]);
       }
-      const verifiedRetrievalSuccessMessage = shouldGroundDirectChatWithVerifiedSources
+      const verifiedRetrievalSuccessMessage = shouldUseVerifiedSourceFollowOnGrounding
         ? 'נמצאו מקורות מאומתים ונמשיך לתשובת המשך עם grounding על בסיסם בלבד'
         : 'הוחזרו מקורות מאומתים בלבד';
       logEvent(
@@ -9205,7 +9399,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           errorMessage: verifiedSourceReply.error?.message || '',
         },
       );
-      if (shouldUseVerifiedSourceFollowOnGrounding && !isFailure) {
+      if ((shouldUseVerifiedSourceFollowOnGrounding || holeFillAgentRequest) && !isFailure) {
         verifiedSourceFollowOnGroundingPrompt = buildVerifiedSourceFollowOnGroundingPrompt(verifiedSourceReply.text);
         verifiedSourceFollowOnAllowedUrls = buildVerifiedSourceAllowedUrlSet(verifiedSourceReply.urls || []);
         sourceGroundingAllowedUrls = buildVerifiedSourceAllowedUrlSet([
@@ -9305,6 +9499,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           errorMessage: groundedWebResultsReply.error?.message || '',
         },
       );
+      if (holeFillAgentRequest && !isFailure) {
+        groundedWebResultsContextPrompt = [
+          'השתמש רק בממצאי ה-Web המקורקעים הבאים כדי למלא חורים במסמך. שלב אותם בטקסט עצמו, אל תחזיר רשימת תוצאות חיפוש ואל תמציא פרטים שלא מופיעים בממצאים.',
+          groundedWebResultsReply.text,
+        ].filter(Boolean).join('\n\n');
+        providerSupportsGeminiInternetBackedSourceTools = false;
+      } else {
       return rememberSuccessfulReply({
         text: groundedWebResultsReply.text,
         completion: {
@@ -9320,6 +9521,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           ...Array.from(groundedWebResultsReply.urls || []),
         ]),
       });
+      }
     }
   }
   const preserveFullDocumentContext = options.preserveFullDocumentContext === true;
@@ -9334,7 +9536,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 

@@ -91,6 +91,57 @@ const WINDOW_CONTEXT_ARGUMENT_PREFIX = '--wordflow-window-context=';
 let devToolsShortcutRegistered = false;
 const activeProxyRequests = new Map();
 const abortedProxyRequests = new Set();
+const BROWSER_RETRIEVAL_ALLOWED_HOSTS = new Set([
+  'gov.il',
+  'knesset.gov.il',
+  'ynet.co.il',
+  'mako.co.il',
+  'n12.co.il',
+  'walla.co.il',
+  'haaretz.co.il',
+  'themarker.com',
+  'themarker.co.il',
+  'globes.co.il',
+  'calcalist.co.il',
+  'israelhayom.co.il',
+  'maariv.co.il',
+  '13tv.co.il',
+  'kan.org.il',
+  'ice.co.il',
+  'srugim.co.il',
+  'davar1.co.il',
+  'inn.co.il',
+  'israelnationalnews.com',
+  'i24news.tv',
+  '08news.co.il',
+  'jpost.com',
+  'timesofisrael.com',
+  'reuters.com',
+  'apnews.com',
+  'bbc.com',
+  'bbc.co.uk',
+  'cnn.com',
+  'nytimes.com',
+  'wsj.com',
+  'washingtonpost.com',
+  'theguardian.com',
+  'bloomberg.com',
+  'financialtimes.com',
+  'ft.com',
+  'nbcnews.com',
+  'cbsnews.com',
+  'abcnews.go.com',
+  'foxnews.com',
+  'newsweek.com',
+  'axios.com',
+  'politico.com',
+]);
+const BROWSER_RETRIEVAL_ALLOWED_SUFFIXES = ['.gov.il', '.gov'];
+const DEFAULT_BROWSER_RETRIEVAL_TIMEOUT_MS = 12000;
+const DEFAULT_BROWSER_RETRIEVAL_WAIT_MS = 1200;
+const MAX_BROWSER_RETRIEVAL_TIMEOUT_MS = 20000;
+const MAX_BROWSER_RETRIEVAL_WAIT_MS = 5000;
+const MAX_BROWSER_RETRIEVAL_TEXT_LENGTH = 24000;
 let latestUpdateState = {
   status: 'idle',
   message: 'מוכן לבדיקת עדכונים',
@@ -265,6 +316,148 @@ function clearWindowState(targetWindow) {
   }
   if (mainWindow === targetWindow) {
     mainWindow = fallbackWindow;
+  }
+}
+
+function isAllowedBrowserRetrievalHost(hostname = '') {
+  const normalizedHost = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+  if (!normalizedHost) return false;
+  if (Array.from(BROWSER_RETRIEVAL_ALLOWED_HOSTS).some((allowedHost) => normalizedHost === allowedHost || normalizedHost.endsWith(`.${allowedHost}`))) return true;
+  return BROWSER_RETRIEVAL_ALLOWED_SUFFIXES.some((suffix) => normalizedHost === suffix.slice(1) || normalizedHost.endsWith(suffix));
+}
+
+function normalizeAllowedBrowserRetrievalUrl(value = '') {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return '';
+
+  try {
+    const parsedUrl = new URL(normalizedValue);
+    if (parsedUrl.protocol !== 'https:') return '';
+    return isAllowedBrowserRetrievalHost(parsedUrl.hostname) ? parsedUrl.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildBrowserSnapshotExtractionScript(maxTextLength = MAX_BROWSER_RETRIEVAL_TEXT_LENGTH, extractText = true) {
+  const safeMaxTextLength = Math.max(1000, Math.min(MAX_BROWSER_RETRIEVAL_TEXT_LENGTH, Number(maxTextLength) || MAX_BROWSER_RETRIEVAL_TEXT_LENGTH));
+  return `(() => {
+    const normalizeText = (value = '') => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const readMetaContent = (selector) => {
+      const node = document.querySelector(selector);
+      return node ? normalizeText(node.getAttribute('content') || '') : '';
+    };
+    const articleNode = document.querySelector('article, main, [role="main"], .article, .article-body, .post-content, .entry-content');
+    const sourceNode = articleNode || document.body;
+    return {
+      finalUrl: window.location.href,
+      canonicalUrl: document.querySelector('link[rel="canonical"]')?.href || '',
+      title: normalizeText(readMetaContent('meta[property="og:title"]') || document.title || ''),
+      description: normalizeText(readMetaContent('meta[name="description"]') || readMetaContent('meta[property="og:description"]')),
+      text: ${extractText ? `normalizeText(sourceNode?.innerText || sourceNode?.textContent || '').slice(0, ${safeMaxTextLength})` : `''`},
+      headings: Array.from(document.querySelectorAll('h1,h2,h3')).slice(0, 8).map((node) => normalizeText(node.textContent || '')).filter(Boolean),
+      htmlLang: document.documentElement?.lang || '',
+    };
+  })();`;
+}
+
+async function fetchBrowserPageSnapshot({ url = '', timeoutMs = 0, waitMs = 0, extractText = true, maxTextLength = MAX_BROWSER_RETRIEVAL_TEXT_LENGTH } = {}) {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl) {
+    return { ok: false, message: 'Missing URL for browser retrieval.' };
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedUrl);
+  } catch {
+    return { ok: false, message: 'Invalid URL for browser retrieval.' };
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    return { ok: false, message: 'Browser retrieval currently supports HTTPS URLs only.' };
+  }
+  if (!isAllowedBrowserRetrievalHost(parsedUrl.hostname)) {
+    return { ok: false, message: `Host is not allowed for browser retrieval: ${parsedUrl.hostname}` };
+  }
+
+  const numericTimeoutMs = Number(timeoutMs);
+  const numericWaitMs = Number(waitMs);
+  const effectiveTimeoutMs = Number.isFinite(numericTimeoutMs) && numericTimeoutMs > 0
+    ? Math.min(MAX_BROWSER_RETRIEVAL_TIMEOUT_MS, Math.max(1, Math.round(numericTimeoutMs)))
+    : DEFAULT_BROWSER_RETRIEVAL_TIMEOUT_MS;
+  const effectiveWaitMs = Number.isFinite(numericWaitMs) && numericWaitMs >= 0
+    ? Math.min(MAX_BROWSER_RETRIEVAL_WAIT_MS, Math.max(0, Math.round(numericWaitMs)))
+    : DEFAULT_BROWSER_RETRIEVAL_WAIT_MS;
+  const retrievalWindow = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: `browser-retrieval:${randomUUID()}`,
+    },
+  });
+
+  try {
+    retrievalWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    const startedAt = Date.now();
+    const runWithDeadline = async (task) => {
+      const remainingMs = effectiveTimeoutMs - (Date.now() - startedAt);
+      if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+        throw new Error('Browser retrieval timed out.');
+      }
+
+      let stepTimeoutHandle = null;
+      try {
+        return await Promise.race([
+          Promise.resolve().then(task),
+          new Promise((_, reject) => {
+            stepTimeoutHandle = setTimeout(() => {
+              try {
+                retrievalWindow.webContents.stop();
+              } catch {}
+              reject(new Error('Browser retrieval timed out.'));
+            }, remainingMs);
+          }),
+        ]);
+      } finally {
+        if (stepTimeoutHandle) clearTimeout(stepTimeoutHandle);
+      }
+    };
+
+    await runWithDeadline(() => retrievalWindow.loadURL(normalizedUrl));
+    if (effectiveWaitMs > 0) {
+      await runWithDeadline(() => new Promise((resolve) => setTimeout(resolve, effectiveWaitMs)));
+    }
+
+    const snapshot = await runWithDeadline(() => retrievalWindow.webContents.executeJavaScript(
+      buildBrowserSnapshotExtractionScript(maxTextLength, extractText),
+      true,
+    ));
+
+    const safeFinalUrl = normalizeAllowedBrowserRetrievalUrl(snapshot?.finalUrl || normalizedUrl);
+    if (!safeFinalUrl) {
+      return { ok: false, message: 'Browser retrieval redirected to a non-allowed host.' };
+    }
+
+    return {
+      ok: true,
+      url: normalizedUrl,
+      finalUrl: safeFinalUrl,
+      canonicalUrl: normalizeAllowedBrowserRetrievalUrl(snapshot?.canonicalUrl || ''),
+      title: String(snapshot?.title || '').trim(),
+      description: String(snapshot?.description || '').trim(),
+      text: String(snapshot?.text || '').trim(),
+      headings: Array.isArray(snapshot?.headings) ? snapshot.headings.map((item) => String(item || '').trim()).filter(Boolean) : [],
+      htmlLang: String(snapshot?.htmlLang || '').trim(),
+    };
+  } catch (error) {
+    return { ok: false, message: error?.message || 'Browser retrieval failed.' };
+  } finally {
+    if (!retrievalWindow.isDestroyed()) retrievalWindow.destroy();
   }
 }
 
@@ -1798,6 +1991,10 @@ ipcMain.handle('proxy-http-request', async (_event, { url, method = 'POST', head
   } catch (err) {
     return { ok: false, status: 0, body: err?.message || 'שגיאת רשת' };
   }
+});
+
+ipcMain.handle('fetch-browser-page-snapshot', async (_event, payload = {}) => {
+  return fetchBrowserPageSnapshot(payload || {});
 });
 
 ipcMain.handle('install-app-update', async () => {

@@ -142,6 +142,57 @@ const normalizeStructuralEditText = (value = '') => String(value || '')
   .trim()
   .toLocaleLowerCase();
 
+const getReviewActionSuggestionId = (suggestion = {}, index = 0) => String(
+  suggestion?.suggestionId
+  || suggestion?.id
+  || suggestion?.sourceSuggestionId
+  || `suggestion-${index + 1}`,
+).trim();
+
+const getReviewActionSuggestionTitle = (suggestion = {}, index = 0) => String(
+  suggestion?.title
+  || suggestion?.heading
+  || suggestion?.name
+  || suggestion?.suggestedChange
+  || suggestion?.suggestion
+  || `המלצה ${index + 1}`,
+).trim();
+
+const collectMissingReviewActionSuggestions = (suggestions = [], edits = []) => {
+  const editSuggestionIds = new Set((Array.isArray(edits) ? edits : [])
+    .map((edit) => normalizeStructuralEditText(edit?.suggestionId || edit?.id || edit?.sourceSuggestionId || ''))
+    .filter(Boolean));
+  const editTitles = new Set((Array.isArray(edits) ? edits : [])
+    .map((edit) => normalizeStructuralEditText(edit?.title || edit?.heading || edit?.name || ''))
+    .filter(Boolean));
+
+  return (Array.isArray(suggestions) ? suggestions : []).filter((suggestion, index) => {
+    const suggestionId = normalizeStructuralEditText(getReviewActionSuggestionId(suggestion, index));
+    if (suggestionId && editSuggestionIds.has(suggestionId)) return false;
+    const suggestionTitle = normalizeStructuralEditText(getReviewActionSuggestionTitle(suggestion, index));
+    return !(suggestionTitle && editTitles.has(suggestionTitle));
+  });
+};
+
+const mergeReviewActionPlanEdits = (...editGroups) => {
+  const merged = [];
+  const seen = new Set();
+  editGroups.flat().forEach((edit) => {
+    if (!edit || typeof edit !== 'object') return;
+    const key = [
+      normalizeStructuralEditText(edit.suggestionId || edit.id || edit.sourceSuggestionId || ''),
+      normalizeStructuralEditText(edit.title || edit.heading || edit.name || ''),
+      normalizeStructuralEditText(edit.targetType || edit.targetKind || edit.scope || edit.kind || ''),
+      normalizeStructuralEditText(edit.locator || edit.targetHint || edit.headingText || edit.heading || edit.section || edit.target || ''),
+      normalizeStructuralEditText(edit.originalText || edit.currentText || edit.excerpt || edit.quote || ''),
+    ].join('||');
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(edit);
+  });
+  return merged;
+};
+
 const hasQuotedReferenceCue = (sourceText = '', matchIndex = 0, matchLength = 0, { requireStructuralCue = false } = {}) => {
   const safeSource = String(sourceText || '');
   const start = Math.max(0, Number(matchIndex) - QUOTED_REFERENCE_CONTEXT_SIDE);
@@ -1228,7 +1279,19 @@ const resolveReviewActionPlanEdits = (doc, descriptors = []) => {
 
   const dedupedResolved = mergeDuplicateReviewPlanEdits(resolved);
   const overlapMerge = mergeOverlappingReviewPlanEdits(dedupedResolved);
-  return { resolved: overlapMerge.resolved, unresolved: [...unresolved, ...overlapMerge.overlapped] };
+  const resolvedSuggestionIds = new Set(
+    overlapMerge.resolved.map((item) => String(item?.suggestionId || '').trim()).filter(Boolean),
+  );
+  const resolvedTitles = new Set(
+    overlapMerge.resolved.map((item) => normalizeStructuralEditText(item?.title || '')).filter(Boolean),
+  );
+  const unresolvedOnly = [...unresolved, ...overlapMerge.overlapped].filter((item) => {
+    const suggestionId = String(item?.suggestionId || '').trim();
+    if (suggestionId) return !resolvedSuggestionIds.has(suggestionId);
+    const title = normalizeStructuralEditText(item?.title || '');
+    return !(title && resolvedTitles.has(title));
+  });
+  return { resolved: overlapMerge.resolved, unresolved: unresolvedOnly };
 };
 
 const buildBlockedQuotedBlockEditTarget = (referenceText = '') => ({
@@ -2316,6 +2379,7 @@ const SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN = /^(?:#{1,6}\s*)?(?:\*\*)?(\d{1,
 const SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN = /^[•*-]\s+(.+)$/u;
 const SIDEBAR_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|תיקונים|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
 const SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN = /(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני).{0,42}(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)/iu;
+const SIDEBAR_REVIEW_APPLY_ALL_INTENT_PATTERN = /(?:תתחיל|תחיל|התחל|תתקן|תקן|תיישם|יישם|תעדכן|עדכן|תטמיע|הטמע|תשלב|שלב|תעבור.{0,30}(?:ותתחיל|ותתקן|ותיישם|ותעדכן)|בהתאם\s+להערות\s+המרצה|על\s+פי\s+הערות\s+המרצה|לפי\s+הערות\s+המרצה|לפי\s+הוראות\s+המרצה|על\s+פי\s+הוראות\s+המרצה)/iu;
 
 const cleanSidebarSuggestionText = (value = '') => String(value || '')
   .replace(/^\*+|\*+$/g, '')
@@ -2455,6 +2519,18 @@ const extractSidebarReviewSuggestionsFromConversation = (conversationHistoryText
     .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content) && hasSidebarSuggestionList(entry.content));
   if (!latestReviewEntry) return [];
   return extractSidebarReviewSuggestionsFromText(latestReviewEntry.content);
+};
+
+const extractSidebarReviewContextFromConversation = (conversationHistoryText = '') => {
+  const entries = parseSidebarConversationEntries(conversationHistoryText);
+  const assistantEntries = entries.filter((entry) => entry.role === 'assistant');
+  const hasSidebarSuggestionList = (content = '') => String(content || '')
+    .split(/\r?\n/u)
+    .some((line) => SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN.test(line) || SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN.test(line));
+  const latestReviewEntry = [...assistantEntries]
+    .reverse()
+    .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content) && hasSidebarSuggestionList(entry.content));
+  return latestReviewEntry?.content ? String(latestReviewEntry.content).trim() : '';
 };
 
 const getSidebarReviewSelectionText = (promptText = '') => {
@@ -4204,7 +4280,7 @@ function App() {
       const generationRequest = beginGenerationRequest('doc-review-apply');
       const sourceHtmlSnapshot = editor.getHTML?.() || '';
       const sourceFilePathSnapshot = currentFilePathRef.current;
-      const planResult = await buildDocumentReviewActionPlan({
+      let planResult = await buildDocumentReviewActionPlan({
         existingHtml: sourceHtmlSnapshot,
         originalPrompt: feedbackSurvey.prompt,
         templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
@@ -4221,6 +4297,37 @@ function App() {
         suggestions: selectionResult.suggestions,
         returnMeta: true,
       });
+      let planEdits = Array.isArray(planResult?.edits) ? planResult.edits : [];
+      let missingPlanSuggestions = collectMissingReviewActionSuggestions(selectionResult.suggestions, planEdits);
+      for (let attemptIndex = 0; missingPlanSuggestions.length && attemptIndex < 2; attemptIndex += 1) {
+        const completionResult = await buildDocumentReviewActionPlan({
+          existingHtml: sourceHtmlSnapshot,
+          originalPrompt: feedbackSurvey.prompt,
+          templateId: feedbackSurvey.templateId || activeTemplateId || 'blank',
+          selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials) ? feedbackSurvey.selectedMaterials.filter(Boolean) : [],
+          selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
+          selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+          selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+          focus: [
+            feedbackSurvey.reviewFocus,
+            `קריאת השלמה ${attemptIndex + 1}: בקריאה הקודמת לא הוחזרה תכנית עבור ${missingPlanSuggestions.length} המלצות. חובה למפות רק את ההמלצות החסרות הבאות, לפי suggestionId, או להחזיר needs_review לכל המלצה שלא ניתן למקם בבטחה.`,
+          ].filter(Boolean).join('\n'),
+          suggestions: missingPlanSuggestions,
+          returnMeta: true,
+        });
+        const completionEdits = Array.isArray(completionResult?.edits) ? completionResult.edits : [];
+        if (!completionEdits.length) break;
+        planEdits = mergeReviewActionPlanEdits(planEdits, completionEdits);
+        planResult = {
+          ...planResult,
+          partial: Boolean(planResult?.partial || completionResult?.partial),
+          errorMessage: [planResult?.errorMessage, completionResult?.errorMessage].map((value) => String(value || '').trim()).filter(Boolean).join(' | '),
+          edits: planEdits,
+        };
+        const nextMissingPlanSuggestions = collectMissingReviewActionSuggestions(selectionResult.suggestions, planEdits);
+        if (nextMissingPlanSuggestions.length >= missingPlanSuggestions.length) break;
+        missingPlanSuggestions = nextMissingPlanSuggestions;
+      }
 
       const currentHtmlSnapshot = editor.getHTML?.() || '';
       const currentFilePathSnapshot = currentFilePathRef.current;
@@ -4228,7 +4335,13 @@ function App() {
         throw new Error('המסמך השתנה בזמן הכנת התיקונים. רענן את ההמלצות ונסה שוב.');
       }
 
-      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planResult?.edits || []);
+      const coverageUnresolved = missingPlanSuggestions.map((suggestion, index) => ({
+        suggestionId: getReviewActionSuggestionId(suggestion, index),
+        title: getReviewActionSuggestionTitle(suggestion, index),
+        missingFromPlan: true,
+      }));
+      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planEdits);
+      const combinedUnresolved = [...unresolved, ...coverageUnresolved];
       if (!resolved.length) {
         throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות יעדי עריכה ייחודיים מתוך הערות המרצה.');
       }
@@ -4241,12 +4354,12 @@ function App() {
         throw new Error(applyResult?.message || 'לא הצלחתי להחיל את תיקוני המרצה על המסמך.');
       }
 
-      triggerDocumentArrival(unresolved.length ? 'warning' : 'success');
+      triggerDocumentArrival(combinedUnresolved.length ? 'warning' : 'success');
       setLiveGeneration((prev) => (prev.active ? { ...prev, active: false } : prev));
       setFeedbackSurvey((prev) => {
-        if (unresolved.length) {
-          const unresolvedSuggestionIdSet = new Set(unresolved.map((item) => String(item?.suggestionId || '').trim()).filter(Boolean));
-          const unresolvedTitleSet = new Set(unresolved.map((item) => normalizeStructuralEditText(item?.title || '')).filter(Boolean));
+        if (combinedUnresolved.length) {
+          const unresolvedSuggestionIdSet = new Set(combinedUnresolved.map((item) => String(item?.suggestionId || '').trim()).filter(Boolean));
+          const unresolvedTitleSet = new Set(combinedUnresolved.map((item) => normalizeStructuralEditText(item?.title || '')).filter(Boolean));
           const remainingSuggestions = (Array.isArray(prev.reviewResult?.suggestions) ? prev.reviewResult.suggestions : []).filter((suggestion, index) => {
             const suggestionId = String(suggestion?.suggestionId || suggestion?.id || '').trim();
             if (suggestionId && unresolvedSuggestionIdSet.size) {
@@ -4269,7 +4382,7 @@ function App() {
                 suggestions: remainingSuggestions,
               }
               : prev.reviewResult,
-            reviewErrorMessage: `לא הצלחתי למקם אוטומטית את ההמלצות הבאות: ${unresolved.map((item) => item?.title || '').filter(Boolean).join(' | ')}`,
+            reviewErrorMessage: `לא הצלחתי למקם אוטומטית את ההמלצות הבאות: ${combinedUnresolved.map((item) => item?.title || '').filter(Boolean).join(' | ')}`,
           };
         }
 
@@ -4281,8 +4394,8 @@ function App() {
         };
       });
 
-      const unresolvedMessage = unresolved.length
-        ? ` הוחלו ${resolved.length} תיקונים, אבל ${unresolved.length} המלצות נשארו ללא מיקום ייחודי במסמך.`
+      const unresolvedMessage = combinedUnresolved.length
+        ? ` הוחלו ${resolved.length} תיקונים, אבל ${combinedUnresolved.length} המלצות נשארו ללא מיקום ייחודי במסמך.`
         : '';
       alert(`${applyResult.message}${unresolvedMessage}`);
     } catch (error) {
@@ -4314,6 +4427,9 @@ function App() {
     const hasSidebarReviewSelectionIntent = SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN.test(normalizedPrompt);
     const pastedReviewSuggestions = extractSidebarReviewSuggestionsFromText(normalizedPrompt);
     const sidebarReviewSuggestions = extractSidebarReviewSuggestionsFromConversation(normalizedConversation);
+    const sidebarReviewContext = pastedReviewSuggestions.length
+      ? normalizedPrompt
+      : extractSidebarReviewContextFromConversation(normalizedConversation);
     const availableReviewSuggestions = pastedReviewSuggestions.length ? pastedReviewSuggestions : sidebarReviewSuggestions;
     if (hasSidebarReviewSelectionIntent && !availableReviewSuggestions.length) {
       return { ok: false, message: 'זיהיתי בקשה להחיל המלצות לפי מספרים, אבל לא הצלחתי לחלץ רשימת המלצות ממוספרת מהשיחה או מהטקסט שהודבק. בקש מהמרצה להציג את ההמלצות כרשימה ממוספרת ונסה שוב.' };
@@ -4325,18 +4441,31 @@ function App() {
     if (sidebarReviewSelection?.invalid || (sidebarReviewSelection?.hasExplicitSelection && !sidebarReviewSelection.suggestions.length)) {
       return { ok: false, message: 'לא זיהיתי מספרי המלצות תקינים מהשיחה הקודמת. אפשר לכתוב למשל: תעשה את 1,2,3 או תעשה את 1-3 בלי 2.' };
     }
+    const shouldApplyAllAvailableReviewSuggestions = availableReviewSuggestions.length > 0
+      && !sidebarReviewSelection?.hasExplicitSelection
+      && SIDEBAR_REVIEW_APPLY_ALL_INTENT_PATTERN.test(normalizedPrompt);
     const selectedSidebarSuggestions = sidebarReviewSelection?.hasExplicitSelection
       ? sidebarReviewSelection.suggestions
-      : [];
+      : shouldApplyAllAvailableReviewSuggestions
+        ? availableReviewSuggestions
+        : [];
     const selectedSidebarIndexes = sidebarReviewSelection?.hasExplicitSelection
       ? sidebarReviewSelection.selectedIndexes
-      : [];
+      : shouldApplyAllAvailableReviewSuggestions
+        ? selectedSidebarSuggestions.map((_, index) => index + 1)
+        : [];
+    const scopedSidebarFeedback = selectedSidebarSuggestions.length
+      ? (sidebarReviewContext
+          ? `הערות המרצה המלאות למיפוי:
+${sidebarReviewContext}`
+          : '')
+      : (availableReviewSuggestions.length > 0 ? '' : normalizedConversation);
 
     try {
       const generationRequest = beginGenerationRequest('sidebar-edit-plan');
       const sourceHtmlSnapshot = editor.getHTML?.() || '';
       const sourceFilePathSnapshot = currentFilePathRef.current;
-      const planResult = await buildDocumentReviewActionPlan({
+      let planResult = await buildDocumentReviewActionPlan({
         existingHtml: sourceHtmlSnapshot,
         originalPrompt: selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
         templateId: activeTemplateId || 'blank',
@@ -4345,15 +4474,48 @@ function App() {
         focus: [
           selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
           selectedSidebarIndexes.length
-            ? `המשתמש ביקש להחיל רק את המלצות מספר ${selectedSidebarIndexes.join(', ')} מתוך רשימת המרצה האחרונה. אסור להוסיף תיקונים אחרים.`
+            ? (sidebarReviewSelection?.hasExplicitSelection
+                ? `המשתמש ביקש להחיל רק את המלצות מספר ${selectedSidebarIndexes.join(', ')} מתוך רשימת המרצה האחרונה. אסור להוסיף תיקונים אחרים.`
+                : `המשתמש ביקש להחיל את כל ${selectedSidebarIndexes.length} המלצות המרצה שחולצו מהשיחה/מהטקסט. אסור להוסיף תיקונים אחרים.`)
             : '',
         ].filter(Boolean).join('\n'),
         feedback: selectedSidebarSuggestions.length
           ? ''
-          : normalizedConversation ? `הקשר מהשיחה הקודמת וההמלצות שכבר ניתנו:\n${normalizedConversation}` : '',
+          : scopedSidebarFeedback ? `הקשר מהשיחה הקודמת וההמלצות שכבר ניתנו:\n${scopedSidebarFeedback}` : '',
         suggestions: selectedSidebarSuggestions,
         returnMeta: true,
       });
+      let planEdits = Array.isArray(planResult?.edits) ? planResult.edits : [];
+      let missingPlanSuggestions = collectMissingReviewActionSuggestions(selectedSidebarSuggestions, planEdits);
+      const maxCoverageAttempts = selectedSidebarSuggestions.length ? 2 : 0;
+      for (let attemptIndex = 0; missingPlanSuggestions.length && attemptIndex < maxCoverageAttempts; attemptIndex += 1) {
+        const completionResult = await buildDocumentReviewActionPlan({
+          existingHtml: sourceHtmlSnapshot,
+          originalPrompt: selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
+          templateId: activeTemplateId || 'blank',
+          selectedProviderId: String(selectedProviderId || '').trim(),
+          selectedProviderModel: String(selectedProviderModel || '').trim(),
+          focus: [
+            selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
+            `קריאת השלמה ${attemptIndex + 1}: בקריאה הקודמת לא הוחזרה תכנית עבור ${missingPlanSuggestions.length} המלצות. חובה למפות רק את ההמלצות החסרות הבאות, לפי suggestionId, או להחזיר needs_review לכל המלצה שלא ניתן למקם בבטחה.`,
+          ].filter(Boolean).join('\n'),
+          feedback: scopedSidebarFeedback ? `הערות המרצה המלאות למיפוי:\n${scopedSidebarFeedback}` : '',
+          suggestions: missingPlanSuggestions,
+          returnMeta: true,
+        });
+        const completionEdits = Array.isArray(completionResult?.edits) ? completionResult.edits : [];
+        if (!completionEdits.length) break;
+        planEdits = mergeReviewActionPlanEdits(planEdits, completionEdits);
+        planResult = {
+          ...planResult,
+          partial: Boolean(planResult?.partial || completionResult?.partial),
+          errorMessage: [planResult?.errorMessage, completionResult?.errorMessage].map((value) => String(value || '').trim()).filter(Boolean).join(' | '),
+          edits: planEdits,
+        };
+        const nextMissingPlanSuggestions = collectMissingReviewActionSuggestions(selectedSidebarSuggestions, planEdits);
+        if (nextMissingPlanSuggestions.length >= missingPlanSuggestions.length) break;
+        missingPlanSuggestions = nextMissingPlanSuggestions;
+      }
 
       const currentHtmlSnapshot = editor.getHTML?.() || '';
       const currentFilePathSnapshot = currentFilePathRef.current;
@@ -4361,7 +4523,13 @@ function App() {
         throw new Error('המסמך השתנה בזמן שמיפיתי את התיקונים. נסה שוב על הגרסה הנוכחית.');
       }
 
-      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planResult?.edits || []);
+      const coverageUnresolved = missingPlanSuggestions.map((suggestion, index) => ({
+        suggestionId: getReviewActionSuggestionId(suggestion, index),
+        title: getReviewActionSuggestionTitle(suggestion, index),
+        missingFromPlan: true,
+      }));
+      const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planEdits);
+      const combinedUnresolved = [...unresolved, ...coverageUnresolved];
       if (!resolved.length) {
         throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות מיקומים ייחודיים לתיקונים שביקשת להחיל.');
       }
@@ -4374,13 +4542,13 @@ function App() {
         throw new Error(applyResult?.message || 'לא הצלחתי להחיל את התיקונים על המסמך.');
       }
 
-      triggerDocumentArrival(unresolved.length ? 'warning' : 'success');
-      const unresolvedTitles = unresolved.map((item) => item?.title || '').filter(Boolean);
+      triggerDocumentArrival(combinedUnresolved.length ? 'warning' : 'success');
+      const unresolvedTitles = combinedUnresolved.map((item) => item?.title || '').filter(Boolean);
       return {
         ...applyResult,
         ok: unresolvedTitles.length === 0,
         partial: unresolvedTitles.length > 0,
-        unresolved,
+        unresolved: combinedUnresolved,
         message: unresolvedTitles.length
           ? `${applyResult.message} נשארו ${unresolvedTitles.length} תיקונים שלא מופו אוטומטית: ${unresolvedTitles.join(' | ')}`
           : applyResult.message,

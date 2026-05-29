@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
 import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
+import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
@@ -8,6 +9,7 @@ import {
   DEFAULT_PERSONAL_STYLE,
   DEFAULT_PROVIDER_CONFIG,
   DEFAULT_WORKSPACE_AUTOMATION,
+  normalizeSidebarModeSettings,
   buildExternalStyleAnalysisPrompt,
   getExternalAnalysisProviderHint,
   getProviderConfig,
@@ -508,6 +510,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   assistant: ['assistant', 'helper', 'behavior', 'tone', 'assistant behavior', 'עוזר'],
   updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
   ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'copyleaks', 'detector', 'detection', 'ai detector', 'ספק', 'מודל', 'מפתח', 'זיהוי ai', 'בדיקת ai'],
+  sidebar: ['sidebar', 'taskpane', 'chat panel', 'modes', 'provider', 'model', 'חלונית', 'צאט', 'צ׳אט', 'מצבים', 'ספק', 'מודל'],
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
   skills: ['skills', 'skill', 'capabilities', 'סקילים'],
   agents: ['agents', 'agent', 'timeout', 'workflow', 'autopilot', 'workspace', 'automation', 'manager', 'retry', 'סוכנים', 'אוטומציה', 'סביבת עבודה'],
@@ -526,7 +529,7 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'AI וצוות עבודה',
-    tabs: [['ai', '🤖 מנועי AI'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
+    tabs: [['ai', '🤖 מנועי AI'], ['sidebar', '💬 חלונית צ׳אט'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
   },
   {
     title: 'כתיבה והתאמה אישית',
@@ -1448,6 +1451,198 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
           style={{ width: 110, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
         />
         <span style={{ marginRight: 8, fontSize: 12, color: '#605E5C' }}>שניות</span>
+      </div>
+    </div>
+  );
+}
+
+function SidebarPanelSettings({ behavior, setBehavior, config }) {
+  const sidebarSettings = normalizeSidebarModeSettings(behavior?.sidebarModeSettings);
+  const selectedModeIds = new Set(sidebarSettings.modes.map((mode) => mode.id));
+  const availableModes = Object.entries(AGENTS_CONFIG)
+    .filter(([id, agent]) => agent?.label && !selectedModeIds.has(id))
+    .map(([id, agent]) => ({ id, label: agent.label || id }));
+  const [modeToAdd, setModeToAdd] = useState(() => availableModes[0]?.id || '');
+
+  useEffect(() => {
+    if (!availableModes.some((mode) => mode.id === modeToAdd)) {
+      setModeToAdd(availableModes[0]?.id || '');
+    }
+  }, [availableModes.map((mode) => mode.id).join('|'), modeToAdd]);
+
+  const commitSettings = (updater) => {
+    setBehavior((prev) => {
+      const current = normalizeSidebarModeSettings(prev?.sidebarModeSettings);
+      const draft = typeof updater === 'function' ? updater(current) : updater;
+      return {
+        ...prev,
+        sidebarModeSettings: normalizeSidebarModeSettings(draft),
+      };
+    });
+  };
+
+  const updateMode = (modeId, patch) => {
+    commitSettings((current) => ({
+      ...current,
+      modes: current.modes.map((mode) => {
+        if (mode.id !== modeId) return mode;
+        const next = { ...mode, ...patch };
+        if (Object.prototype.hasOwnProperty.call(patch, 'providerId')) {
+          const providerId = String(patch.providerId || '').trim();
+          const choices = getProviderModelChoices(providerId, config);
+          next.model = providerId ? (choices.includes(mode.model) ? mode.model : (choices[0] || '')) : '';
+        }
+        return next;
+      }),
+    }));
+  };
+
+  const addMode = () => {
+    const id = String(modeToAdd || '').trim();
+    const agent = AGENTS_CONFIG[id];
+    if (!id || !agent) return;
+    commitSettings((current) => ({
+      ...current,
+      modes: [
+        ...current.modes,
+        {
+          id,
+          label: agent.label || id,
+          enabled: true,
+          providerId: agent.sidebarSelection?.providerId || agent.route || '',
+          model: agent.sidebarSelection?.model || '',
+        },
+      ],
+    }));
+  };
+
+  const removeMode = (modeId) => {
+    commitSettings((current) => ({
+      ...current,
+      modes: current.modes.filter((mode) => mode.id !== modeId),
+    }));
+  };
+
+  const providerOptions = [
+    ['gemini', 'Gemini'],
+    ['openai', 'OpenAI'],
+    ['claude', 'Claude'],
+    ['groq', 'Groq'],
+    ['perplexity', 'Perplexity'],
+    ['ollama', 'Ollama'],
+    ['custom', config?.custom?.name || 'Custom'],
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, padding: '14px', background: '#F8FBFF' }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>
+          <input
+            type="checkbox"
+            checked={sidebarSettings.forceGlobalProvider === true}
+            onChange={(e) => commitSettings((current) => ({ ...current, forceGlobalProvider: e.target.checked }))}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            השתמש תמיד בספק ובמודל הכלליים מהגדרות מנועי AI
+            <span style={{ display: 'block', marginTop: 4, fontSize: 11, color: '#475569', lineHeight: 1.6, fontWeight: 500 }}>
+              כשזה פעיל, כל שליחה מהחלונית מתעלמת מהגדרות מצב, מהבחירה המקומית בחלונית ומניתוב הסוכן, ורצה דרך הספק הפעיל בטאב מנועי AI.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 14, padding: '14px', background: 'white' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>מצבים בחלונית</div>
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>הסדר כאן הוא הסדר שיופיע בשורת הכפתורים של הצ׳אט הקלאסי.</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select
+              value={modeToAdd}
+              onChange={(e) => setModeToAdd(e.target.value)}
+              disabled={!availableModes.length}
+              style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white', minWidth: 180 }}
+            >
+              {availableModes.length ? availableModes.map((mode) => (
+                <option key={mode.id} value={mode.id}>{mode.label}</option>
+              )) : <option value="">כל המצבים כבר נוספו</option>}
+            </select>
+            <button
+              type="button"
+              onClick={addMode}
+              disabled={!modeToAdd}
+              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #93C5FD', background: modeToAdd ? '#EFF6FF' : '#F8FAFC', color: modeToAdd ? '#1D4ED8' : '#94A3B8', cursor: modeToAdd ? 'pointer' : 'default', fontSize: 12, fontWeight: 700 }}
+            >
+              + הוסף מצב
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {sidebarSettings.modes.map((mode, index) => {
+            const providerId = String(mode.providerId || '').trim();
+            const modelChoices = getProviderModelChoices(providerId, config);
+            const configured = providerId ? isProviderConfigured(config, providerId) : true;
+            return (
+              <div key={mode.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '12px', background: mode.enabled === false ? '#F8FAFC' : '#FFFFFF' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(120px, 0.9fr) minmax(160px, 1.1fr) auto', gap: 8, alignItems: 'end' }}>
+                  <label style={{ display: 'grid', gap: 4 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>שם מצב</span>
+                    <input
+                      value={mode.label || ''}
+                      onChange={(e) => updateMode(mode.id, { label: e.target.value })}
+                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 4 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>ספק</span>
+                    <select
+                      value={providerId}
+                      onChange={(e) => updateMode(mode.id, { providerId: e.target.value })}
+                      disabled={sidebarSettings.forceGlobalProvider === true}
+                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true ? '#F8FAFC' : 'white' }}
+                    >
+                      <option value="">ברירת מחדל כללית</option>
+                      {providerOptions.map(([id, label]) => (
+                        <option key={id} value={id}>{label}{!isProviderConfigured(config, id) ? ' · לא מוגדר' : ''}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: 'grid', gap: 4 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>מודל</span>
+                    <select
+                      value={providerId && modelChoices.includes(mode.model) ? mode.model : ''}
+                      onChange={(e) => updateMode(mode.id, { model: e.target.value })}
+                      disabled={sidebarSettings.forceGlobalProvider === true || !providerId || !modelChoices.length}
+                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true || !providerId ? '#F8FAFC' : 'white' }}
+                    >
+                      <option value="">מודל ברירת מחדל של הספק</option>
+                      {modelChoices.map((modelName) => <option key={modelName} value={modelName}>{modelName}</option>)}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removeMode(mode.id)}
+                    style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+                  >
+                    הסר
+                  </button>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+                    <input type="checkbox" checked={mode.enabled !== false} onChange={(e) => updateMode(mode.id, { enabled: e.target.checked })} />
+                    מוצג בחלונית
+                  </label>
+                  <div style={{ fontSize: 10, color: configured ? '#64748B' : '#B45309' }}>
+                    #{index + 1} · {AGENTS_CONFIG[mode.id]?.placeholder || mode.id}{configured ? '' : ' · הספק עדיין לא מוגדר בטאב מנועי AI'}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -6017,6 +6212,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
                   {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+                  {settingsTab === 'sidebar'     && <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />}
                   {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                   {settingsTab === 'agents'      && (

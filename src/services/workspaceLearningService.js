@@ -32,6 +32,7 @@ const ACTION_PLAN_SECTION_EXCERPT_LIMIT = 140;
 const ACTION_PLAN_CANDIDATE_SECTION_LIMIT = 12;
 const ACTION_PLAN_BATCH_SECTION_LIMIT = 3;
 const ACTION_PLAN_FOCUSED_SECTION_FALLBACK_LIMIT = 4;
+const ACTION_PLAN_SUPPORTING_LIMIT = 3200;
 const ACTION_PLAN_EDIT_BATCH_LIMIT = 8;
 const ACTION_PLAN_TOTAL_EDIT_LIMIT = 24;
 const ACTION_PLAN_SECTION_GAP = '\n\n[... קוצר אמצע האזור כדי לשמור על הקשר מקומי ...]\n\n';
@@ -2005,12 +2006,13 @@ function buildActionPlanScopedContext({
   originalPrompt = '',
   supportingText = '',
   supportingLabel = 'הערות המרצה והמלצות היישום',
+  supportingTextMaxLength = FEEDBACK_CONTEXT_SUPPORTING_LIMIT,
   materialsText = '',
   allSections = [],
   focusedSections = [],
 } = {}) {
   const topicSection = truncateContextSectionText(originalPrompt || 'לא צוין', FEEDBACK_CONTEXT_TOPIC_LIMIT);
-  const supportingSection = truncateContextSectionText(supportingText, FEEDBACK_CONTEXT_SUPPORTING_LIMIT);
+  const supportingSection = truncateContextSectionText(supportingText, supportingTextMaxLength);
   const materialsSection = truncateContextSectionText(materialsText, FEEDBACK_CONTEXT_MATERIALS_LIMIT);
   const sectionIndexText = buildActionPlanSectionIndexText(allSections);
 
@@ -2624,7 +2626,8 @@ function normalizeReviewActionPlanPayload(payload = null) {
       const replacement = normalizeReviewReplacementText(item.replacement || item.replacementText || item.updatedText || item.suggestedChange || item.change || item.recommendedEdit);
       const originalText = normalizeReviewSuggestionText(stripHtmlTags(item.originalText || item.currentText || item.excerpt || item.quote));
       const locator = normalizeReviewSuggestionText(stripHtmlTags(item.locator || item.targetHint || item.headingText || item.heading || item.section || item.target));
-      if (effectiveOperation !== 'needs_review' && (!replacement || !originalText || !locator)) return null;
+      const requiresOriginalText = effectiveOperation === 'replace';
+      if (effectiveOperation !== 'needs_review' && (!replacement || !locator || (requiresOriginalText && !originalText))) return null;
 
       return {
         suggestionId,
@@ -2633,7 +2636,7 @@ function normalizeReviewActionPlanPayload(payload = null) {
         replacement,
         operation: effectiveOperation,
         targetConfidence,
-        originalText: originalText || title,
+        originalText: originalText || locator || title,
         locator: locator || title,
         targetType,
         matchStrategy: normalizeReviewActionPlanMatchStrategy(item.matchStrategy || item.match || item.locatorMode),
@@ -3935,13 +3938,13 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
         `לפני יצירת edit, בדוק מה כבר קיים באזור כאילו זו בדיקת מרצה: זהה מה חסר, חלש, כפול, לא מדויק או לא ממוקם נכון, ואז החזר את התיקון שמיישם את האבחנה. אם יש כפילות תוכנית או כפילות רעיונית באותו אזור, התייחס אליה כבעיה לתיקון ואחד לנוסח תקין אחד.\n` +
         `targetConfidence=high רק כשיש ציטוט מדויק או התאמה כמעט מלאה לאזור יחיד. targetConfidence=medium כשיש אזור יחיד סביר לפי כותרת, נושא, מונחים סמוכים או מיקום במסמך אבל אין ציטוט מושלם. targetConfidence=low כשיש כמה אזורים דומים, locator כללי מדי, או שהתיקון דורש שיפוט אנושי; במקרה כזה השתמש operation=needs_review ואל תחזיר replacement אגרסיבי.\n` +
         `אם targetConfidence=medium, התיקון חייב להיות מקומי וצר: פסקה אחת, משפט, ציטוט, או הוספה קצרה סביב אזור ברור. אסור להחזיר targetType=section רחב או replacement שמחליף כמה פסקאות.\n` +
-        `targetType=section רק אם צריך להחליף סעיף שלם עם כותרת ייחודית; במקרה כזה locator חייב להיות כותרת הסעיף, ו-originalText חייב לכלול excerpt גלוי, רציף ומדויק מתוך גוף הסעיף הקיים לפני התיקון.\n` +
+        `targetType=section עבור replace רק אם צריך להחליף סעיף שלם עם כותרת ייחודית; במקרה כזה locator חייב להיות כותרת הסעיף, ו-originalText חייב לכלול excerpt גלוי, רציף ומדויק מתוך גוף הסעיף הקיים לפני התיקון. עבור insert_before/insert_after ליד כותרת או סעיף קיים, מותר ואף רצוי להשתמש ב-targetType=section עם locator שהוא כותרת הסעיף, ו-originalText אופציונלי.\n` +
         `locator ו-originalText חייבים להיות טקסט גלוי בלבד, בלי תגיות HTML, entities, או markup מכל סוג. replacement בלבד יכול להכיל HTML בטוח כשצריך.\n` +
         `${blockTargetPrompt}\n` +
         `operation=replace כאשר צריך לשנות, למחוק כפילות, לשכתב, לאחד, להחליף ניסוח או להרחיב אזור קיים. במקרה כזה replacement חייב להיות הטקסט החלופי המלא לאזור הזה בלבד, תוך שמירה על חלקים נכונים שכבר קיימים והוספת מה שחסר.\n` +
         `כאשר ההמלצה אומרת שחסר סעיף, חסרה תמה, חסרות תת-תמות, חסר כלי ניתוח, חסר מדגם/אוכלוסייה או שיש להוסיף רכיב מבני חדש, העדף operation=insert_before/insert_after ליד הכותרת או הסעיף הקרוב ביותר. אל תחליף תמה קיימת או סעיף קיים רק כדי להכניס רכיב חסר, אלא אם replacement משמר במלואו את כל התוכן הקיים ומוסיף עליו את החסר.\n` +
         `אל תבחר section גדול או כמה פסקאות כיעד אם התיקון שייך רק לפסקה, משפט, ציטוט, דוגמה או תת-סעיף מקומי. יעד רחב מותר רק כאשר replacement משמר ומתקן את כל האזור הרחב, אחרת דלג על ה-edit.\n` +
-        `operation=insert_before או insert_after רק כאשר צריך להוסיף תוכן חדש סביב אזור קיים בלי לשנות אותו. במקרה כזה replacement צריך להכיל רק את התוכן החדש להוספה, והמערכת תחבר אותו לאזור המקורי.\n` +
+        `operation=insert_before או insert_after רק כאשר צריך להוסיף תוכן חדש סביב אזור קיים בלי לשנות אותו. במקרה כזה replacement צריך להכיל רק את התוכן החדש להוספה, locator חייב להצביע על הכותרת/הפסקה שלידה מוסיפים, ו-originalText אופציונלי. המערכת תחבר את ההוספה לאזור המקורי.\n` +
         `אם התיקון דורש הרחבה, השלמת טיעון, הוספת נימוק, דוגמה, מעבר, או פיתוח רעיון חסר, בחר אזור מקומי רציף שמכסה את כל היחידה הרלוונטית והחזר replacement מלא לאותו אזור או insertion ממוקם היטב לפי הצורך. מותר ואף נדרש להחזיר כמה משפטים או כמה פסקאות רצופות כשזה נדרש כדי להשלים את ההנחיה. אל תקצר אוטומטית למשפט אחד.\n` +
         `אם המלצה כללית מדי ולא בטוחה ליישום אוטומטי, דלג עליה.\n` +
         `אל תחזיר Markdown, הסברים מחוץ ל-JSON או code fences.\n` +
@@ -4022,6 +4025,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
         originalPrompt,
         supportingText: actionInputText,
         supportingLabel: 'הערות המרצה והמלצות היישום',
+        supportingTextMaxLength: ACTION_PLAN_SUPPORTING_LIMIT,
         materialsText,
         allSections: documentSections,
         focusedSections: prioritizedSections.slice(0, Math.max(ACTION_PLAN_FOCUSED_SECTION_FALLBACK_LIMIT, prioritizedSections.length)),
@@ -4044,6 +4048,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
             originalPrompt,
             supportingText: actionInputText,
             supportingLabel: 'הערות המרצה והמלצות היישום',
+            supportingTextMaxLength: ACTION_PLAN_SUPPORTING_LIMIT,
             materialsText,
             allSections: documentSections,
             focusedSections: remainingSections.slice(0, ACTION_PLAN_BATCH_SECTION_LIMIT),

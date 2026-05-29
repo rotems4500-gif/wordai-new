@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
   proxyHttpRequest: (payload) => ipcRenderer.invoke('proxy-http-request', payload),
   abortProxyHttpRequest: (requestId) => ipcRenderer.invoke('abort-proxy-http-request', requestId),
+  fetchBrowserPageSnapshot: (payload) => ipcRenderer.invoke('fetch-browser-page-snapshot', payload),
   onAppUpdateStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('app-update-status', listener);
