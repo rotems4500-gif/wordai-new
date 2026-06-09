@@ -11,6 +11,7 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
+import JSZip from 'jszip';
 
 const DOCX_DEFAULT_FONT = 'Arial';
 const DOCX_DEFAULT_LANGUAGE = { value: 'he-IL', eastAsia: 'he-IL', bidirectional: 'he-IL' };
@@ -74,6 +75,13 @@ const resolveDocxParagraphAlignment = (documentStyle = '') => {
   if (normalizedStyle === 'legal') return AlignmentType.JUSTIFIED;
   if (normalizedStyle === 'presentation') return AlignmentType.CENTER;
   return AlignmentType.RIGHT;
+};
+
+const resolveDocxXmlJustification = (alignment = AlignmentType.RIGHT) => {
+  if (alignment === AlignmentType.CENTER) return 'center';
+  if (alignment === AlignmentType.LEFT) return 'left';
+  if (alignment === AlignmentType.JUSTIFIED) return 'both';
+  return 'right';
 };
 
 const resolveDocxExportOptions = ({ html = '', exportOptions = {} } = {}) => {
@@ -176,18 +184,14 @@ const resolveDocxAlignmentValue = (value = '', fallback = AlignmentType.RIGHT, i
 const resolveBlockDocxFormatting = (block = '', typography = {}) => {
   const explicitDirection = readHtmlAttributeValue(block, 'dir') || readInlineCssValue(block, 'direction');
   const alignmentValue = readInlineCssValue(block, 'text-align') || readHtmlAttributeValue(block, 'align');
-  const dominantLtr = !explicitDirection && hasDominantLtrText(block, typography);
-  const fallbackAlignment = !alignmentValue && dominantLtr
+  const explicitLtr = /^ltr$/i.test(String(explicitDirection || '').trim());
+  const fallbackAlignment = !alignmentValue && explicitLtr
     ? AlignmentType.LEFT
     : (typography.alignment || AlignmentType.RIGHT);
   const documentIsRtl = isRtlDocxLanguage(typography.language);
   const bidirectional = explicitDirection
-    ? !/^ltr$/i.test(explicitDirection)
-    : shouldForceRtlBlockFormatting(block, typography)
-      ? true
-      : dominantLtr
-        ? false
-        : documentIsRtl;
+    ? !explicitLtr
+    : documentIsRtl;
   const alignmentDirection = bidirectional;
   return {
     alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, alignmentDirection),
@@ -229,6 +233,66 @@ const createDocxTextRun = (text = '', options = {}, typography = {}) => new Text
   text: String(text || ''),
   ...buildDocxRunStyle(typography, options),
 });
+
+const ensureDocxParagraphProperties = (propertiesXml = '', defaultJustification = 'right') => {
+  let next = String(propertiesXml || '');
+  if (!/<w:bidi\b/i.test(next)) {
+    next = next.replace(/<\/w:pPr>/i, '<w:bidi/></w:pPr>');
+  }
+  if (!/<w:jc\b/i.test(next)) {
+    next = next.replace(/<\/w:pPr>/i, `<w:jc w:val="${defaultJustification}"/></w:pPr>`);
+  }
+  return next;
+};
+
+const forceDocxRtlDocumentXml = (xml = '', defaultJustification = 'right') => String(xml || '')
+  .replace(/<w:p>([\s\S]*?)<\/w:p>/gi, (paragraphXml) => {
+    if (/<w:pPr>[\s\S]*?<\/w:pPr>/i.test(paragraphXml)) {
+      return paragraphXml.replace(/<w:pPr>[\s\S]*?<\/w:pPr>/i, (propertiesXml) => ensureDocxParagraphProperties(propertiesXml, defaultJustification));
+    }
+    return paragraphXml.replace(/<w:p>/i, `<w:p><w:pPr><w:bidi/><w:jc w:val="${defaultJustification}"/></w:pPr>`);
+  })
+  .replace(/<w:rPr>([\s\S]*?)<\/w:rPr>/gi, (runPropertiesXml) => (
+    /<w:rtl\b/i.test(runPropertiesXml)
+      ? runPropertiesXml
+      : runPropertiesXml.replace(/<\/w:rPr>/i, '<w:rtl/></w:rPr>')
+  ))
+  .replace(/<w:r>(?!<w:rPr>)/gi, '<w:r><w:rPr><w:rtl/></w:rPr>');
+
+const forceDocxRtlStylesXml = (xml = '', defaultJustification = 'right') => {
+  let next = String(xml || '');
+  if (/<w:pPrDefault>\s*<w:pPr>[\s\S]*?<\/w:pPr>\s*<\/w:pPrDefault>/i.test(next)) {
+    next = next.replace(/<w:pPrDefault>\s*(<w:pPr>[\s\S]*?<\/w:pPr>)\s*<\/w:pPrDefault>/i, (_match, propertiesXml) => (
+      `<w:pPrDefault>${ensureDocxParagraphProperties(propertiesXml, defaultJustification)}</w:pPrDefault>`
+    ));
+  } else if (/<w:docDefaults>/i.test(next)) {
+    next = next.replace(/<w:docDefaults>/i, `<w:docDefaults><w:pPrDefault><w:pPr><w:bidi/><w:jc w:val="${defaultJustification}"/></w:pPr></w:pPrDefault>`);
+  }
+
+  if (/<w:rPrDefault>\s*<w:rPr>[\s\S]*?<\/w:rPr>\s*<\/w:rPrDefault>/i.test(next)) {
+    next = next.replace(/<w:rPrDefault>\s*(<w:rPr>[\s\S]*?<\/w:rPr>)\s*<\/w:rPrDefault>/i, (_match, runPropertiesXml) => (
+      `<w:rPrDefault>${/<w:rtl\b/i.test(runPropertiesXml) ? runPropertiesXml : runPropertiesXml.replace(/<\/w:rPr>/i, '<w:rtl/></w:rPr>')}</w:rPrDefault>`
+    ));
+  } else if (/<w:docDefaults>/i.test(next)) {
+    next = next.replace(/<w:docDefaults>/i, '<w:docDefaults><w:rPrDefault><w:rPr><w:rtl/></w:rPr></w:rPrDefault>');
+  }
+
+  return next;
+};
+
+const forceDocxRtlBlob = async (blob, typography = {}) => {
+  const defaultJustification = resolveDocxXmlJustification(typography.alignment);
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+  const documentFile = zip.file('word/document.xml');
+  if (documentFile) {
+    zip.file('word/document.xml', forceDocxRtlDocumentXml(await documentFile.async('string'), defaultJustification));
+  }
+  const stylesFile = zip.file('word/styles.xml');
+  if (stylesFile) {
+    zip.file('word/styles.xml', forceDocxRtlStylesXml(await stylesFile.async('string'), defaultJustification));
+  }
+  return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+};
 
 const base64ToUint8Array = (base64 = '') => {
   const binary = atob(String(base64 || ''));
@@ -560,7 +624,7 @@ const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} } = {}) 
     ],
   });
 
-  return Packer.toBlob(doc);
+  return forceDocxRtlBlob(await Packer.toBlob(doc), typography);
 };
 
 const sanitizeDocxFilename = (title = '') => {
@@ -591,6 +655,8 @@ const getBrowserUserAgent = () => {
   return String(navigator.userAgent || '');
 };
 
+const isMobileBrowser = () => /Android|iPhone|iPad|iPod|Mobile/i.test(getBrowserUserAgent());
+
 const isVsCodeEmbeddedBrowser = () => {
   const userAgent = getBrowserUserAgent();
   return userAgent.includes('Code/') && userAgent.includes('Electron/');
@@ -603,11 +669,48 @@ const isPlatformRestrictedFileAccessError = (error) => {
   return /user agent|platform in the current context|current context/i.test(message);
 };
 
-const triggerBrowserDownload = (blob, fileName, saveMode = 'download') => {
+const shareBlobIfSupported = async (blob, fileName) => {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function' || typeof File === 'undefined') {
+    return { handled: false, canceled: false };
+  }
+
+  try {
+    const file = new File([blob], fileName, {
+      type: blob?.type || 'application/octet-stream',
+      lastModified: Date.now(),
+    });
+    const sharePayload = { files: [file], title: fileName };
+
+    if (typeof navigator.canShare === 'function' && !navigator.canShare(sharePayload)) {
+      return { handled: false, canceled: false };
+    }
+
+    await navigator.share(sharePayload);
+    return { handled: true, canceled: false, fileName, saveMode: 'share' };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { handled: true, canceled: true, fileName, saveMode: 'share' };
+    }
+    return { handled: false, canceled: false, error };
+  }
+};
+
+export const saveBlobInBrowser = async (blob, fileName, saveMode = 'download') => {
+  if (isMobileBrowser()) {
+    const shared = await shareBlobIfSupported(blob, fileName);
+    if (shared.handled) return shared;
+  }
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
+  link.rel = 'noopener';
+
+  if (isMobileBrowser()) {
+    link.target = '_blank';
+  }
+
   document.body.appendChild(link);
   link.click();
   window.setTimeout(() => {
@@ -697,7 +800,7 @@ export const downloadBrowserDocx = async ({ title = '', html = '', text = '', ex
     }
 
     if (writeResult.fallbackToDownload) {
-      return triggerBrowserDownload(blob, pickerResult.fileName || fileName, 'download-fallback');
+      return saveBlobInBrowser(blob, pickerResult.fileName || fileName, 'download-fallback');
     }
 
     throw writeResult.error || new Error('Failed to save DOCX file.');
@@ -707,5 +810,5 @@ export const downloadBrowserDocx = async ({ title = '', html = '', text = '', ex
     throw pickerResult.error || new Error('Failed to open save dialog.');
   }
 
-  return triggerBrowserDownload(blob, fileName);
+  return saveBlobInBrowser(blob, fileName);
 };

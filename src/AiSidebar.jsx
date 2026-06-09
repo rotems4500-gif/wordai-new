@@ -202,7 +202,8 @@ const TASKPANE_FIX_ANALYSIS_QUESTION_PATTERN = /(?:מה\s+(?:צריך|כדאי|�
 const TASKPANE_FIX_APPLY_INTENT_PATTERN = /(?:^|[\s"'“”])(?:תתחיל|תחיל|התחל|תתחילי|תתקן|תקן|יישם|תיישם|החל|תעדכן|עדכן|תכניס|הכנס)(?:\s+(?:את|עם|לי))?.{0,60}(?:תיקונים|הערות|המלצות|שינויים|את\s+זה|אותם|אותן|מסמך|עבודה)|(?:^|[\s"'“”])(?:תסתכל|תעבור|סקור|בדוק).{0,40}(?:הערות|המלצות|מרצה).{0,50}(?:תתחיל|תתקן|תיישם|תעדכן|תכניס)/iu;
 const NUMBERED_REVIEW_APPLY_INTENT_PATTERN = /(?:^|\s)(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני)\s+(?:לי\s+)?(?:את\s+)?(?:ה)?(?:המלצות|תיקונים|סעיפים|נקודות)?\s*(?:מספר(?:י)?\s*)?(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)(?:\s*(?:,|،|\+|ו|עד|-)\s*(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית))*/iu;
 const NUMBERED_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|בדיקת|תיקונים|בעיות|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
-const NUMBERED_LIST_MARKER_PATTERN = /(?:^|\n)(?:(?:#{1,6}\s*)?(?:\*\*)?\d{1,2}[.)]|[•*-])\s+/u;
+const NUMBERED_LIST_MARKER_PATTERN = /(?:^|\n)(?:(?:#{1,6}\s*)?(?:\*\*)?(?:\d{1,2}[.)]|(?:המלצה|תיקון|סעיף|נקודה|suggestion|recommendation)\s+\d{1,2}[:.)-])|[•*-])\s+/iu;
+const SOURCE_INTEGRATION_PLAN_PATTERN = /(?:איפה\s+להוסיף|ניסוח\s+קיים|הצעה\s+לשילוב|שילוב\s+(?:הכתבה|עמדת|הסרט|המקור)|טבלה\s+מסכמת|מקורות\s+חדשים|ציטוט|APA|Ynet|mako|מעריב|האגודה\s+לזכויות\s+האזרח|סעיף\s+\d+)/iu;
 const hasRecentNumberedReviewContext = (entries = []) => buildSidebarConversationHistory(entries)
   .slice(-8)
   .some((entry) => {
@@ -860,7 +861,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', onInsert, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {} }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, launchPreset = null }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
@@ -896,6 +897,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const rawActiveClassicAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
+  const launchPresetNonce = Number(launchPreset?.nonce) || 0;
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -912,6 +914,17 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const rawDocumentContext = typeof documentContext === 'function' ? documentContext() : (documentContext || '');
   const documentSnapshot = React.useMemo(() => normalizeSidebarDocumentSnapshot(rawDocumentContext), [rawDocumentContext]);
   const docCtx = (isEditComposerMode ? documentSnapshot.fullPromptContext : documentSnapshot.promptContext).slice(0, isEditComposerMode ? 32000 : 16000);
+  const assignmentBriefText = String(assignmentBrief?.text || '').trim();
+  const assignmentBriefFileName = String(assignmentBrief?.fileName || '').trim();
+  const assignmentBriefContext = assignmentBriefText
+    ? `הוראות מטלה למסמך הפעיל${assignmentBriefFileName ? ` (${assignmentBriefFileName})` : ''}:\n${assignmentBriefText.slice(0, 12000)}`
+    : '';
+  const shouldUseAssignmentBriefForPrompt = useCallback((promptText = '') => {
+    if (!assignmentBriefContext) return false;
+    const normalizedPrompt = String(promptText || '').trim();
+    if (!normalizedPrompt) return false;
+    return /(?:הוראות\s+המטלה|הנחיות\s+המטלה|מסמך\s+ההוראות|קובץ\s+ההוראות|לפי\s+ההוראות|לפי\s+המטלה|בדוק\s+מול\s+ההוראות|תסתכל\s+על\s+ההוראות|תעבור\s+על\s+ההוראות|use\s+the\s+assignment\s+instructions|check\s+against\s+the\s+assignment|look\s+at\s+the\s+instructions)/iu.test(normalizedPrompt);
+  }, [assignmentBriefContext]);
   const localContext = selectedText || currentBlockText || activeEditTarget?.text || '';
   const quickPromptList = compactMode ? CONTEXT_PROMPTS.slice(0, 4) : CONTEXT_PROMPTS;
   const sidebarPreset = String(assistantBehavior?.sidebarPreset || 'word-taskpane').trim() || 'word-taskpane';
@@ -925,6 +938,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const skillsConfig = getSkillsConfig();
   const providerConfig = getProviderConfig();
   const configuredProviderChoices = getConfiguredProviderChoices(providerConfig);
+
+  useEffect(() => {
+    if (tab === 'agents' || tab === 'logs') {
+      setTab('chat');
+    }
+  }, [tab]);
   const workspaceAutomationEnabled = workspaceAutomation?.enabled === true;
   const globalSidebarProviderChoice = configuredProviderChoices.find((choice) => choice.isDefault) || configuredProviderChoices[0] || null;
   const effectiveSidebarProviderId = forceGlobalSidebarProvider ? (globalSidebarProviderChoice?.id || 'default') : selectedProviderId;
@@ -958,6 +977,25 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const activeSkill = effectiveSelectedSkillId !== 'none'
     ? skillCatalog.find((skill) => skill.id === effectiveSelectedSkillId) || null
     : null;
+
+  useEffect(() => {
+    if (mode !== 'popup') return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (mentionMenu.open) {
+        event.preventDefault();
+        closeMentionMenu();
+        return;
+      }
+      event.preventDefault();
+      onClose?.();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [mode, mentionMenu.open, onClose]);
+
   const getSidebarModeSetting = useCallback((agentId = '') => sidebarModeSettings.modes.find((mode) => mode.id === agentId) || null, [sidebarModeSettings]);
   const buildEffectiveClassicAgentConfig = useCallback((agentId = '') => {
     const base = AGENTS_CONFIG[agentId] || null;
@@ -987,6 +1025,27 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const activeClassicAgent = activeClassicAgentId
     ? (activeClassicModeEnabled ? buildEffectiveClassicAgentConfig(activeClassicAgentId) : null)
     : rawActiveClassicAgent;
+  useEffect(() => {
+    if (!launchPresetNonce) return;
+    const presetAgentId = String(launchPreset?.classicAgentId || '').trim();
+    const presetComposerMode = normalizeComposerMode(launchPreset?.composerMode || '');
+    const presetPrompt = String(launchPreset?.prompt || '').trim();
+    if (presetAgentId && AGENTS_CONFIG[presetAgentId]) {
+      setActiveClassicAgentId(presetAgentId);
+      setTab('chat');
+    }
+    setComposerMode(presetComposerMode);
+    if (presetPrompt) {
+      setInput(presetPrompt);
+    }
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      if (presetPrompt && inputRef.current?.setSelectionRange) {
+        const cursorPos = presetPrompt.length;
+        inputRef.current.setSelectionRange(cursorPos, cursorPos);
+      }
+    });
+  }, [launchPresetNonce]);
     const contextScopeLabel = isEditComposerMode
       ? (activeEditTarget?.kind === 'section'
         ? (activeEditTarget.headingText ? `סעיף: ${activeEditTarget.headingText}` : 'סעיף במסמך')
@@ -1033,6 +1092,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const referencePrefix = referenceLabel ? `ההפניה ${referenceLabel}` : 'ההפניה המפורשת';
     return `${referencePrefix} לא נפתרה באופן יחיד, ולכן עצרתי באופן שמרני לפני עריכה. ציין יעד ייחודי יותר או בחר את האזור ידנית ונסה שוב.`;
   };
+  const shouldRouteUnresolvedReferenceToDocumentPlan = (promptText = '') => {
+    const cleanPrompt = String(promptText || '').trim();
+    if (!cleanPrompt || typeof onApplyDocumentPlan !== 'function') return false;
+    if (NUMBERED_REVIEW_CONTEXT_PATTERN.test(cleanPrompt) && (NUMBERED_LIST_MARKER_PATTERN.test(cleanPrompt) || SOURCE_INTEGRATION_PLAN_PATTERN.test(cleanPrompt))) return true;
+    return documentWideEditPlanPattern.test(cleanPrompt) || TASKPANE_FIX_APPLY_INTENT_PATTERN.test(cleanPrompt);
+  };
   const composerModeSystemPrompt = isEditComposerMode
     ? 'מצב עריכה ישיר: החזר רק את התוכן החלופי המדויק עבור יעד העריכה שסופק. אם היעד דורש יותר מפסקה אחת, מותר להחזיר כמה פסקאות רצופות או HTML בלוקי בטוח בלבד כמו <p>, <ul>, <ol>, <li>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <blockquote> ו-<br>. אל תחזיר מסמך מלא, תגיות <html> או <body>, Markdown, פתיח, הסבר, מרכאות, כותרות מסבירות או הערות מחוץ לתוכן שאמור להיכנס למסמך. אם המשתמש נתן רשימת תיקונים מסודרת וביקש "לפי הסדר" או להתחיל מהראשון, בצע קודם את הסעיף הביצועי הראשון ואל תשאל מאיפה להתחיל.'
     : '';
@@ -1048,7 +1113,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     ? `${activeClassicAgent.placeholder} (${composerModeLabel})`
     : isEditComposerMode
       ? 'מצב עריכה: כתוב מה לשכתב, לקצר, לתקן או לחדד בטקסט הנבחר, בפסקה הפעילה או בסעיף שתפנה אליו'
-      : 'מצב צ׳אט: שאל, התייעץ, או המשך שיחה רציפה... @ לסוכנים, / לסקילים';
+      : 'מצב צ׳אט: שאל, התייעץ, או המשך שיחה רציפה... / לסקילים';
   const conversationHistory = buildSidebarConversationHistory(messages);
   const effectiveScopeSummary = loading && requestSnapshot?.scopeLabel ? requestSnapshot.scopeLabel : contextScopeLabel;
   const effectiveContextPreview = loading && requestSnapshot?.contextPreview ? requestSnapshot.contextPreview : contextPreview;
@@ -1217,23 +1282,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
   const updateMentionMenu = (value, cursor = String(value || '').length) => {
     const match = resolveMentionMatch(value, cursor);
-    if (!match) {
+    if (!match || match.trigger === '@') {
       closeMentionMenu();
       return;
     }
 
     const query = normalizeLookup(match.query);
-    const items = (match.trigger === '@'
-      ? (workspaceAutomationEnabled
-          ? roleAgents.map((agent) => ({
-              id: agent.id,
-              label: agent.name,
-              description: 'הפעלת סוכן ייעודי למשימה הזו',
-              insertText: `@${agent.id} `,
-              type: 'agent',
-            }))
-          : [])
-      : skillCatalog
+    const items = skillCatalog
           .filter((skill) => (skillsConfig.skills?.[skill.id]?.mode || 'manual') !== 'off')
           .map((skill) => ({
             id: skill.id,
@@ -1241,13 +1296,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             description: skill.usageHint || skill.description,
             insertText: `/${skill.id} `,
             type: 'skill',
-          })))
+          }))
       .filter((item) => !query || normalizeLookup(item.label).includes(query) || normalizeLookup(item.id).includes(query))
       .slice(0, 6);
 
     setMentionMenu({
       open: items.length > 0,
-      type: match.trigger === '@' ? 'agent' : 'skill',
+      type: 'skill',
       query: match.query,
       start: match.start,
       end: match.end,
@@ -1747,7 +1802,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       ? resolveEditTargetsFromPrompt(cleanPrompt)
       : null;
     const unresolvedExplicitReferences = getPromptResolutionUnresolvedReferences(promptResolution);
-    if (unresolvedExplicitReferences.length) {
+    if (unresolvedExplicitReferences.length && !shouldRouteUnresolvedReferenceToDocumentPlan(cleanPrompt)) {
       return {
         targetState: liveTargets,
         activeTarget: liveActiveTarget,
@@ -1807,6 +1862,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const cleanPrompt = String(promptText || '').trim();
     if (!isEditComposerMode || !cleanPrompt || typeof onApplyDocumentPlan !== 'function') return false;
     const hasPromptNumberedReviewContext = NUMBERED_REVIEW_CONTEXT_PATTERN.test(cleanPrompt) && NUMBERED_LIST_MARKER_PATTERN.test(cleanPrompt);
+    if (SOURCE_INTEGRATION_PLAN_PATTERN.test(cleanPrompt) && /(?:החל|תחיל|יישם|תיישם|תשלב|שלב|הכנס|תכניס|עדכן|תעדכן|תקן|תתקן|בצע|תבצע|תעשה|עשה|תעשי|עשי|שילוב|הוספה)/iu.test(cleanPrompt)) return true;
     if ((hasNumberedReviewContext || hasPromptNumberedReviewContext) && NUMBERED_REVIEW_APPLY_INTENT_PATTERN.test(cleanPrompt)) return true;
     if (hasPromptResolvedTarget) return false;
     if ((Array.isArray(batchTargets) ? batchTargets : []).some((target) => target?.text?.trim())) return false;
@@ -1824,6 +1880,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     agentId = 'assistant-main',
     agentLabel = 'צ׳אט ישיר',
     skillLabel = 'ללא סקיל',
+    fallbackInsertText = '',
   } = {}) => {
     if (typeof onApplyDocumentPlan !== 'function' || loading) return;
     const requestCycle = beginRequestCycle();
@@ -1851,6 +1908,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         selectedProviderId: providerId,
         selectedProviderModel: providerModel,
         agentType: agentId || 'assistant-main',
+        fallbackInsertText,
       });
       if (!isCurrentRequestCycle(requestCycle)) return;
       const assistantContent = String(applyResult?.message || '').trim() || 'לא התקבלה תשובת החלה מהמסמך.';
@@ -1964,6 +2022,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       agentId: message.documentActionAgentId || 'chat-retrofit-apply',
       agentLabel: 'החלה בדיעבד',
       skillLabel: 'מיפוי מיקומים',
+      fallbackInsertText: outputText,
     });
   };
 
@@ -2160,6 +2219,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     context = '',
     finalSystemPrompt = '',
     analysisSystemPrompt = '',
+    workflowKind = '',
     structuredBatchMode = false,
     batchTargets = [],
     invokeCall = null,
@@ -2174,7 +2234,44 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const baseContext = String(context || '').trim();
     const boundedBaseContext = baseContext.slice(0, SPLIT_CALL_STEP_CONTEXT_MAX_CHARS);
     const reviewSystemPrompt = String(analysisSystemPrompt || '').trim();
+    const normalizedWorkflowKind = String(workflowKind || '').trim();
     let latestReviewOutput = '';
+
+    if (normalizedWorkflowKind === 'humanize' && normalizedCount >= 3) {
+      onProgress({ progress: 12, message: 'מנתח קודם את הסגנון האישי והקשר המסמך' });
+      let styleProfile = '';
+      let documentProfile = '';
+      try {
+        styleProfile = String(await invokeCall(
+          'זהה בקצרה את מאפייני הקול האישי, הקצב, אוצר המילים והטון שרצוי לשמר או לחקות. החזר נקודות קצרות בלבד.',
+          boundedBaseContext,
+          reviewSystemPrompt,
+          { phase: 'humanize-style', stepIndex: 1, stepCount: normalizedCount },
+        ) || '').trim();
+      } catch {}
+      onProgress({ progress: 36, message: 'מזקק את מבנה המסמך והכוונה שלו' });
+      try {
+        documentProfile = String(await invokeCall(
+          `זהה בקצרה את מטרת הקטע, המבנה, הטיעון המרכזי ומה אסור לאבד בשכתוב.\n\nבקשת המשתמש:\n${normalizedPrompt}`,
+          boundedBaseContext,
+          reviewSystemPrompt,
+          { phase: 'humanize-document', stepIndex: 2, stepCount: normalizedCount },
+        ) || '').trim();
+      } catch {}
+      onProgress({ progress: 68, message: 'מבצע האנשה מלאה לפי הסגנון והמסמך' });
+      return await invokeCall(
+        [
+          'בצע עכשיו האנשה מלאה ומורגשת לטקסט.',
+          `בקשת המשתמש:\n${normalizedPrompt}`,
+          styleProfile ? `מאפייני סגנון אישיים:\n${truncateSplitCallOutput(styleProfile, 2200, false)}` : '',
+          documentProfile ? `מאפייני מסמך לשימור:\n${truncateSplitCallOutput(documentProfile, 2200, false)}` : '',
+          'החזר רק את הנוסח החדש שאמור להיכנס למסמך, בלי הערות ובלי הסברים.',
+        ].filter(Boolean).join('\n\n'),
+        boundedBaseContext,
+        finalSystemPrompt,
+        { phase: 'humanize-final', stepIndex: normalizedCount, stepCount: normalizedCount },
+      );
+    }
 
     onProgress({ progress: 12, message: `מפעיל ${normalizedCount} קריאות במצב בדיקה ואז עריכה` });
     for (let passIndex = 0; passIndex < normalizedCount - 1; passIndex += 1) {
@@ -2242,10 +2339,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     });
   };
 
-  const buildEditModeContext = (targetState = null, batchTargets = []) => {
+  const buildEditModeContext = (targetState = null, batchTargets = [], requestPrompt = '') => {
+    const contextualAssignmentBrief = shouldUseAssignmentBriefForPrompt(requestPrompt) ? assignmentBriefContext : '';
     const resolvedBatchTargets = (Array.isArray(batchTargets) ? batchTargets : []).filter((target) => target?.text?.trim());
     if (resolvedBatchTargets.length > 1) {
       return [
+        contextualAssignmentBrief,
         'יעדי עריכה מרובים באותה בקשה. החזר replacements לכל targetId בלבד.',
         ...resolvedBatchTargets.map((target, index) => [
           `יעד ${index + 1}:`,
@@ -2263,9 +2362,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const resolvedTargetState = targetState || { block: editTarget?.block || null, active: activeEditTarget };
     const resolvedActiveTarget = resolvedTargetState?.active || null;
     const resolvedBlockText = resolvedTargetState?.block?.text || currentBlockText;
-    if (!resolvedActiveTarget?.text) return docCtx;
+    if (!resolvedActiveTarget?.text) return [contextualAssignmentBrief, docCtx].filter(Boolean).join('\n\n');
     if (resolvedActiveTarget.kind === 'selection') {
       return [
+        contextualAssignmentBrief,
         'יעד עריכה: טקסט נבחר',
         `טקסט להחלפה:\n"${resolvedActiveTarget.text}"`,
         resolvedActiveTarget.before ? `לפני:\n"${resolvedActiveTarget.before}"` : '',
@@ -2277,6 +2377,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     if (resolvedActiveTarget.kind === 'section') {
       return [
+        contextualAssignmentBrief,
         resolvedActiveTarget.headingText ? `יעד עריכה: סעיף "${resolvedActiveTarget.headingText}"` : 'יעד עריכה: סעיף במסמך',
         resolvedActiveTarget.locatorLabel ? `איתור מפורש:\n"${resolvedActiveTarget.locatorLabel}"` : '',
         `מקטע להחלפה:\n"${resolvedActiveTarget.text}"`,
@@ -2285,6 +2386,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
 
     return [
+      contextualAssignmentBrief,
       'יעד עריכה: פסקה פעילה',
       `פסקה להחלפה:\n"${resolvedActiveTarget.text}"`,
       docCtx,
@@ -2966,16 +3068,16 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   };
 
   const buildContext = (targetState = null, batchTargets = [], requestPrompt = '') => {
-    if (isEditComposerMode) return buildEditModeContext(targetState, batchTargets);
+    if (isEditComposerMode) return buildEditModeContext(targetState, batchTargets, requestPrompt);
+    const contextualAssignmentBrief = shouldUseAssignmentBriefForPrompt(requestPrompt) ? assignmentBriefContext : '';
     const followUpSourceGroundingContext = buildFollowUpSourceGroundingContext(messages, requestPrompt);
     const baseContext = selectedText
       ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
       : currentBlockText
         ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
         : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
-    return followUpSourceGroundingContext
-      ? [followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n')
-      : baseContext;
+    const finalContext = [contextualAssignmentBrief, followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n');
+    return finalContext;
   };
 
   const buildHoleFillSourceQueryOverride = (promptText = '') => {
@@ -3001,6 +3103,38 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       .filter((candidate) => candidate && sourceNeedPattern.test(candidate) && !genericContextPattern.test(candidate) && !priorSourceListPattern.test(candidate));
     const preferred = candidates.find((candidate) => /(?:מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|ציטוט|אזכור)/i.test(candidate)) || candidates[0] || '';
     return preferred.slice(0, 320).trim();
+  };
+
+  const buildSourcesQueryOverride = (promptText = '') => {
+    const genericInstructionPattern = /(?:מצא|חפש|אתר|תן|תביא|הבא)\s+(?:לי\s+)?(?:מקורות|כתבות|מאמרים|קישורים|לינקים|sources?|articles?|references?|links?)[^:\n.]*[:.]?/gi;
+    const quotedTextMatch = String(promptText || '').match(/"([^"]{12,1600})"/);
+    const cleanCandidate = (value = '') => String(value || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(genericInstructionPattern, ' ')
+      .replace(/אם\s+(?:הבקשה|נדרש)[^.]*?(?:חדשות|חדשותי)[^.]*[.]?/gi, ' ')
+      .replace(/אחרת\s+העדף[^.]*[.]?/gi, ' ')
+      .replace(/(?:אל\s+תמציא|בלי\s+להמציא|לא\s+להמציא)[^.:\n]*(?:URLs?|כותרות|מקורות|מאמרים|כתבות)?/gi, ' ')
+      .replace(/^(?:טקסט\s+נבחר|פסקה\s+נוכחית|מסמך\s+פעיל)\s*[:：]?/gim, ' ')
+      .replace(/^[\s"'“”״׳:;,.!?()-]+|[\s"'“”״׳:;,.!?()-]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const candidates = [
+      cleanCandidate(quotedTextMatch?.[1] || ''),
+      cleanCandidate(promptText),
+      cleanCandidate(selectedText),
+      cleanCandidate(currentBlockText),
+    ].filter(Boolean);
+    const preferred = candidates.find((candidate) => candidate.length >= 18 && !/^(?:מקורות|כתבות|מאמרים|sources?|articles?)\b/i.test(candidate)) || candidates[0] || '';
+    if (/^(?:עבור\s+)?(?:הטענה|הנושא|המסמך|הטקסט)\b/i.test(preferred)) return '';
+    return preferred.slice(0, 260).trim();
+  };
+
+  const isSourcesNewsRequest = (promptText = '', queryOverride = '') => {
+    const cleanPrompt = String(promptText || '')
+      .replace(/אם\s+הבקשה\s+או\s+הטקסט\s+עוסקים\s+בכתבות\/חדשות[^.]*\./gi, ' ')
+      .replace(/אם\s+נדרש\s+מקור\s+חדשותי[^.;]*[.;]?/gi, ' ');
+    const combined = [cleanPrompt, queryOverride, selectedText, currentBlockText].filter(Boolean).join('\n');
+    return /(?:כתבה|כתבות|ידיעה|ידיעות|כתבת\s+חדשות|אתר(?:י)?\s+חדשות|חדשות|news\s+articles?|articles?\s+from\s+news|news\s+site)/i.test(combined);
   };
   const normalizeAssistantMessageText = (value) => String(value ?? '')
     .replace(/\r\n/g, '\n')
@@ -3500,6 +3634,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const holeFillSourceQueryOverride = effectiveDirectAgentMeta.id === 'holeFill'
       ? buildHoleFillSourceQueryOverride(txt)
       : '';
+    const sourcesQueryOverride = effectiveDirectAgentMeta.id === 'sources'
+      ? buildSourcesQueryOverride(txt)
+      : '';
+    const sourcesNewsRequest = effectiveDirectAgentMeta.id === 'sources'
+      ? isSourcesNewsRequest(txt, sourcesQueryOverride)
+      : false;
     const directAgentName = hasPinnedProviderPreference ? `${effectiveDirectAgentMeta.name} · ${requestProviderLabel}` : effectiveDirectAgentMeta.name;
     setMessages((prev) => [...prev, { role: 'user', content: originalText, composerMode }]);
     setRequestSnapshot({
@@ -3531,8 +3671,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         preferredProviders,
         modelOverride: explicitProviderModel,
         strictProviderOverride: hasStrictRuntimeProviderOverride,
-        sourceQueryOverride: holeFillSourceQueryOverride,
-        sourceQuerySource: holeFillSourceQueryOverride ? 'holeFillContext' : '',
+        sourceQueryOverride: sourcesQueryOverride || holeFillSourceQueryOverride,
+        sourceQuerySource: sourcesQueryOverride ? 'taskpaneSourcesContext' : (holeFillSourceQueryOverride ? 'holeFillContext' : ''),
+        isAcademicTask: effectiveDirectAgentMeta.id === 'sources' && !sourcesNewsRequest,
         editModeRequest: isEditComposerMode,
         allowEditModeRoutingOverride: editModeExplicitRouting,
         editModeExplicitSkillInvocation,
@@ -3565,7 +3706,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         ? [buildStructuredEditBatchSystemPrompt(requestEditBatchTargets), finalExtraSystemPrompt].filter(Boolean).join('\n\n')
         : finalExtraSystemPrompt;
       const directAnalysisSystemPrompt = stripComposerModeDirectiveFromSystemPrompt(directSystemPrompt);
-      const effectiveRequestedSplitCallCount = lecturerDirectAgentRequest ? 0 : requestedSplitCallCount;
+      const effectiveRequestedSplitCallCount = lecturerDirectAgentRequest && !isEditComposerMode ? 0 : requestedSplitCallCount;
       const reply = effectiveRequestedSplitCallCount >= 2
         ? await (isEditComposerMode
           ? runEditMultiCallWorkflow({
@@ -3574,6 +3715,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             context: ctx,
             finalSystemPrompt: directSystemPrompt,
             analysisSystemPrompt: directAnalysisSystemPrompt,
+            workflowKind: effectiveDirectAgentMeta.id || '',
             structuredBatchMode: requestEditBatchTargets.length > 1,
             batchTargets: requestEditBatchTargets,
             invokeCall: invokeDirectCall,
@@ -3701,28 +3843,28 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     switch (agentId) {
       case 'reviewFix':
         return targetText
-          ? `בדוק את הטקסט הבא ואז תקן אותו אוטומטית מבחינת ניסוח, בהירות, זרימה, כתיב ודקדוק:\n\n"${targetText}"`
-          : 'בדוק את כל המסמך הנוכחי ואז תקן אותו אוטומטית בכל המסמך מבחינת ניסוח, בהירות, זרימה, כתיב ודקדוק.';
+          ? `בדוק את הטקסט הבא כמו בודק אקדמי קפדן ואז תקן אותו אוטומטית מבחינת ניסוח, בהירות, זרימה, כתיב, דקדוק ועמידה בדרישות:\n\n"${targetText}"`
+          : 'בדוק את כל המסמך הנוכחי כמו בודק אקדמי קפדן ואז תקן אותו אוטומטית בכל המסמך מבחינת ניסוח, בהירות, זרימה, כתיב, דקדוק ועמידה בדרישות.';
       case 'fix':
         return targetText
           ? `עבור על הטקסט הבא, ציין תיקונים מיידיים, וכתוב במפורש אילו חורים צריך למלא בהמשך ממסמכים או מהרשת:\n\n"${targetText}"`
           : 'עבור על הפסקה או המסמך הנוכחי, ציין תיקונים מיידיים, וכתוב במפורש אילו חורים צריך למלא בהמשך ממסמכים או מהרשת.';
       case 'holeFill':
         return targetText
-          ? `עבור על הטקסט הבא, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, והחזר נוסח מעודכן שמשלב את ההשלמות בתוך הטקסט:\n\n"${targetText}"`
-          : 'עבור על המסמך הנוכחי, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, והחזר נוסח מעודכן שמשלב את ההשלמות בתוך המסמך.';
+          ? `עבור על הטקסט הבא, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, ואם נשארו חורים פתוחים כתוב במפורש אילו ציטוטים, מקורות, כתבות או נתונים עדיין חסרים:\n\n"${targetText}"`
+          : 'עבור על המסמך הנוכחי ועל היסטוריית השיחה, זהה מה חסר בו, השלם רק את החורים שדורשים מידע מאומת מהרשת, ואם נשארו חורים פתוחים כתוב במפורש אילו ציטוטים, מקורות, כתבות או נתונים עדיין חסרים.';
       case 'humanize':
         return targetText
-          ? `שכתב את הטקסט הבא בסגנון אנושי וטבעי יותר:\n\n"${targetText}"`
-          : 'שכתב את ההקשר הפעיל בסגנון אנושי וטבעי יותר.';
+          ? `שכתב את הטקסט הבא כך שיישמע אנושי, אישי וטבעי יותר. שנה את הניסוח בצורה מורגשת, אך שמור על המשמעות והדיוק:\n\n"${targetText}"`
+          : 'שכתב את ההקשר הפעיל כך שיישמע אנושי, אישי וטבעי יותר, עם שינוי מורגש בניסוח ולא רק ליטוש קל.';
       case 'sources':
         return targetText
-          ? `מצא מקורות, כתבות או מאמרים מאומתים עבור הטקסט הבא. אל תמציא URLs או כותרות:\n\n"${targetText}"`
-          : 'מצא מקורות, כתבות או מאמרים מאומתים עבור הטענה או הנושא המרכזי במסמך. אל תמציא URLs או כותרות.';
+          ? `מצא מקורות מאומתים עבור הטקסט הבא. אם הבקשה או הטקסט עוסקים בכתבות/חדשות - החזר כתבות חדשות מאומתות. אחרת העדף מקורות אקדמיים, מאמרים אקדמיים או מחקרים רלוונטיים. אל תמציא URLs או כותרות:\n\n"${targetText}"`
+          : 'מצא מקורות מאומתים עבור הטענה או הנושא המרכזי במסמך. אם נדרש מקור חדשותי - החזר כתבות חדשות מאומתות; אחרת העדף מקורות אקדמיים, מאמרים אקדמיים או מחקרים רלוונטיים. אל תמציא URLs או כותרות.';
       case 'lecturer':
         return targetText
-          ? `בדוק את הטקסט הבא כמו מרצה אקדמי ותן ביקורת ישימה וקצרה:\n\n"${targetText}"`
-          : 'בדוק את המסמך או הטיוטה הפעילה כמו מרצה אקדמי ותן ביקורת ישימה וקצרה.';
+          ? `בדוק את הטקסט הבא כמו מרצה אקדמי. אם אני במצב עריכה, החזר נוסח מתוקן שמיישם את ההערות; אם אי אפשר לתקן בלי מידע חסר, כתוב במפורש אילו חורים נשארו:\n\n"${targetText}"`
+          : 'בדוק את המסמך או הטיוטה הפעילה כמו מרצה אקדמי. אם אני במצב עריכה, החזר נוסח מתוקן שמיישם את ההערות; אם אי אפשר לתקן בלי מידע חסר, כתוב במפורש אילו חורים נשארו.';
       case 'continue':
         return targetText
           ? `המשך לכתוב מהנקודה שבה הטקסט הבא נעצר:\n\n"${targetText}"`
@@ -4030,6 +4172,20 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             </span>
           </div>
 
+          {assignmentBriefText && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#FFF7ED', borderBottom: '1px solid #FDE7C7', flexShrink: 0 }}>
+              <span style={{ fontSize: 12 }}>📝</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#9A3412' }}>
+                  הוראות מטלה זמינות לפי בקשה{assignmentBriefFileName ? ` · ${assignmentBriefFileName}` : ''}
+                </div>
+                <div style={{ fontSize: 11, color: '#7C2D12', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  כתוב למשל: "בדוק גם מול הוראות המטלה" או "תעבוד לפי קובץ ההוראות".
+                </div>
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 8, padding: '8px 12px', background: '#FAF9F8', borderBottom: '1px solid #EDEBE9', flexShrink: 0, alignItems: 'stretch' }}>
             <div style={{ flex: 1, display: 'grid', gap: 6 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 6 }}>
@@ -4105,48 +4261,6 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 </div>
 
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>
-                    <span>🏢 בחירת סביבת עבודה</span>
-                    <span style={{ color: workspaceAutomationEnabled ? '#166534' : '#92400E', fontSize: 11, fontWeight: 600 }}>
-                      {workspaceAutomationEnabled ? 'פעילה' : 'כבויה'}
-                    </span>
-                  </div>
-                  <select
-                    value={workspaceAutomationEnabled ? (workspaceAutomation?.activeWorkspaceId || '') : '__no-workspace__'}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value === '__no-workspace__') {
-                        setWorkspaceBypassEnabled(true);
-                      } else {
-                        switchToWorkspace(value);
-                      }
-                    }}
-                    disabled={isSettingsLocked}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
-                  >
-                    <option value="__no-workspace__">ללא סביבה פעילה (כבויה)</option>
-                    <optgroup label="סביבות מערכת מתוכננות">
-                      {Object.keys(DEFAULT_WORKSPACES_LIBRARY).map((wsId) => (
-                        <option key={wsId} value={wsId}>
-                          {DEFAULT_WORKSPACES_LIBRARY[wsId].name || 'סביבת מערכת'}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="סביבות אישיות">
-                      {Object.values(getWorkspacesLibrary()).map((ws) => {
-                        // Skip if it's already in the default library to avoid duplicates
-                        if (DEFAULT_WORKSPACES_LIBRARY[ws.id]) return null;
-                        return (
-                          <option key={ws.id} value={ws.id}>
-                            {ws.name || ws.workspaceName || 'סביבה ללא שם'}
-                          </option>
-                        );
-                      })}
-                    </optgroup>
-                  </select>
-                </div>
-
-                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>⚙️ סקיל פעיל</div>
                   <select
                     value={isEditComposerMode ? 'none' : selectedSkillId}
@@ -4169,25 +4283,6 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   </select>
                 </div>
 
-                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>🧩 סוכן קבוע</div>
-                  <select
-                    value={isEditComposerMode ? '' : selectedAgentId}
-                    onChange={(e) => {
-                      clearPendingMentionSelection();
-                      setSelectedAgentId(e.target.value);
-                    }}
-                    disabled={isSettingsLocked || !workspaceAutomationEnabled || isEditComposerMode}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', ...lockedControlStyle }}
-                  >
-                    <option value="">ללא סוכן קבוע · צ׳אט ישיר</option>
-                    {roleAgents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        @{agent.id} · {agent.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
               </div>
             ) : tab === 'history' ? (
               renderChatHistoryPanel('light')
@@ -4282,7 +4377,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               </div>
             )}
               <div style={{ padding: '6px 12px 2px', color: '#605E5C', fontSize: '0.74rem', textAlign: 'center', borderTop: '1px solid #EDEBE9', background: '#FAF9F8', margin: '0 -12px 8px' }}>
-              ⌨️ Enter לשליחה, Shift+Enter לשורה חדשה, @ לסוכנים ו-/ לסקילים
+              ⌨️ Enter לשליחה, Shift+Enter לשורה חדשה, / לסקילים
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
@@ -4290,7 +4385,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 <button
                   type="button"
                   onClick={() => onOpenSettingsTab('onboarding')}
-                  title="הגדרות סביבת עבודה והנחיות"
+                  title="הגדרות הנחיות וסגנון"
                   style={{ padding: '4px 10px', background: '#FFFFFF', border: '1px solid #C8B84A', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#7A6010', cursor: 'pointer', whiteSpace: 'nowrap', height: 26, width: '100%' }}
                 >
                   ⚙️ הנחיות
@@ -4398,7 +4493,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 {mentionMenu.open && (
                   <div style={{ position: 'absolute', right: 0, left: 0, bottom: 'calc(100% + 8px)', background: '#111827', border: '1px solid #334155', borderRadius: 10, overflow: 'hidden', boxShadow: '0 18px 36px rgba(15,23,42,0.22)', zIndex: 30 }}>
                     <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: '#E5E7EB', background: '#1F2937' }}>
-                      {mentionMenu.type === 'agent' ? '🤖 סוכנים זמינים' : '⚡ סקילים זמינים'}
+                      ⚡ סקילים זמינים
                     </div>
                     {mentionMenu.items.map((item, index) => (
                       <button
@@ -4411,7 +4506,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         style={{ width: '100%', textAlign: 'right', border: 'none', borderTop: index === 0 ? 'none' : '1px solid #334155', background: index === mentionMenu.activeIndex ? '#1E3A8A' : 'transparent', padding: '10px 12px', cursor: 'pointer' }}
                       >
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'white' }}>
-                          {mentionMenu.type === 'agent' ? '@' : '/'}{item.id}
+                          /{item.id}
                         </div>
                         <div style={{ fontSize: 11, color: '#CBD5E1', marginTop: 2 }}>{item.label}</div>
                         <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>{item.description}</div>
@@ -4775,9 +4870,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           ['chat', "💬 צ'אט"],
           ['history', '🕘 שיחות'],
           ['settings', '⚙️ הגדרות'],
-          ['actions', '⚡ פעולות'],
-          ['agents', '🧩 סוכנים'],
-          ['logs', '📋 לוגים']
+          ['actions', '⚡ פעולות']
         ].map(([id, label]) => (
           <button 
             key={id} 
@@ -5276,7 +5369,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     background: 'rgba(139, 92, 246, 0.2)',
                     borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
                   }}>
-                    {mentionMenu.type === 'agent' ? '🤖 סוכנים זמינים' : '⚡ סקילים זמינים'}
+                    ⚡ סקילים זמינים
                   </div>
                   {mentionMenu.items.map((item, index) => (
                     <button
@@ -5314,7 +5407,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         color: 'white',
                         marginBottom: 4,
                       }}>
-                        {mentionMenu.type === 'agent' ? '@' : '/'}{item.id}
+                        /{item.id}
                       </div>
                       <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)' }}>
                         {item.label}
@@ -5457,34 +5550,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           </div>
 
           <div style={controlCardStyle}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                marginBottom: 12,
-                padding: '10px 12px',
-                borderRadius: 14,
-                border: '1px solid rgba(148, 163, 184, 0.22)',
-                background: workspaceAutomationEnabled ? 'rgba(59, 130, 246, 0.08)' : 'rgba(15, 23, 42, 0.12)',
-              }}
-            >
-              <span style={{ display: 'grid', gap: 3 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#E2E8F0' }}>🏢 סביבת עבודה</span>
-                <span style={{ fontSize: 11, color: 'rgba(226, 232, 240, 0.72)', lineHeight: 1.5 }}>
-                  מצב קריאה בלבד. שינוי ההפעלה של סביבת העבודה נשאר במסכי ההגדרות הכלליים.
-                </span>
-              </span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: workspaceAutomationEnabled ? '#BFDBFE' : '#FCD34D' }}>
-                {workspaceAutomationEnabled ? 'פעילה' : 'כבויה'}
-              </span>
-            </div>
-
             <div style={controlLabelStyle}>🛰️ ספק לשיחה</div>
             <div style={controlHelperStyle}>
-              כאן מגדירים override מקומי ל-sidebar בלבד, גם לצ׳אט הישיר וגם להרצת סוכנים מתוך המסך הזה. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
-              {!workspaceAutomationEnabled ? ' סביבת העבודה כבויה כרגע, ולכן הצ׳אט ירוץ ישירות דרך ברירת המחדל.' : ''}
+              כאן מגדירים override מקומי ל-sidebar בלבד. בחירת ברירת מחדל נשענת על ההגדרות הכלליות שלך.
             </div>
             <select
               value={selectedProviderId || 'default'}
@@ -5593,34 +5661,6 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           </div>
 
           <div style={controlCardStyle}>
-            <div style={controlLabelStyle}>🤖 סוכן נבחר</div>
-            <div style={controlHelperStyle}>
-              {isEditComposerMode
-                ? 'במצב עריכה אין סוכן קבוע כברירת מחדל. לזימון חד-פעמי השתמש ב-`@agent` בתחילת הבקשה.'
-                : 'בחירה כאן מפנה את ההודעות הבאות לסוכן עד שמחליפים אותו. `@agent` מתוך הצ׳אט נשאר חד־פעמי לשליחה הנוכחית בלבד.'}
-              {!workspaceAutomationEnabled ? ' כרגע סביבת העבודה כבויה, לכן הבחירה הזו נעולה והודעות נשלחות ישירות.' : ''}
-            </div>
-            <select
-              value={isEditComposerMode ? '' : selectedAgentId}
-              onChange={(e) => {
-                clearPendingMentionSelection();
-                setSelectedAgentId(e.target.value);
-              }}
-              disabled={isSettingsLocked || !workspaceAutomationEnabled || isEditComposerMode}
-              style={{ ...controlSelectStyle, ...lockedControlStyle }}
-            >
-              <option value="" style={{ color: '#1F2937' }}>
-                ללא סוכן קבוע · צ׳אט ישיר
-              </option>
-              {roleAgents.map((agent) => (
-                <option key={agent.id} value={agent.id} style={{ color: '#1F2937' }}>
-                  @{agent.id} · {agent.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={controlCardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: showQuickPrompts ? 10 : 0 }}>
               <div>
                 <div style={controlLabelStyle}>✨ הצעות מהירות</div>
@@ -5689,7 +5729,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             )}
 
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.56)', lineHeight: 1.6 }}>
-              Enter לשליחה, Shift+Enter לשורה חדשה, @ לסוכנים ו-/ לסקילים בלי לפגוע בזיכרון השיחה או ב-persistence.
+              Enter לשליחה, Shift+Enter לשורה חדשה, ו-/ לסקילים בלי לפגוע בזיכרון השיחה או ב-persistence.
             </div>
           </div>
         </div>

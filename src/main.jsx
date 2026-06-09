@@ -11,12 +11,15 @@ import MagicWand from './MagicWand';
 import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
+import PresentationStudio from './PresentationStudio';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
-import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions } from './services/workspaceLearningService';
-import { downloadBrowserDocx } from './services/browserDocxExport';
+import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
+import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
+import { cloudSignInWithGooglePopup, cloudSignOut, ensureCloudUserProfile, isCloudAvailable, onCloudAuthChange, saveCloudDocument, handleCloudRedirectResult } from './firebase/services';
+import { handleCloudAuthSuccess, initCloudSyncListeners, triggerCloudSync } from './services/cloudSyncManager';
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'right' },
@@ -50,7 +53,6 @@ const MIN_PROMPT_BLOCK_LOCATOR_LENGTH = 8;
 const MIN_IMPLICIT_HEADING_MATCH_LENGTH = 4;
 const MIN_CANDIDATE_BLOCK_TEXT_LENGTH = 12;
 const REVIEW_ACTION_PLAN_EDIT_LIMIT = 24;
-
 const ENGLISH_STRUCTURAL_ORDINALS = {
   first: 1,
   second: 2,
@@ -133,6 +135,50 @@ const resolveNumericEditRange = ({ from = null, to = null } = {}) => {
   }
   return { from: normalizedFrom, to: normalizedTo };
 };
+
+class FileMenuErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[FileMenuErrorBoundary]', error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    const message = String(this.state.error?.message || 'File menu failed to render.').trim();
+    return (
+      <div className="fixed inset-0 z-[999] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+        <div className="w-full max-w-[560px] rounded-[24px] border border-rose-200 bg-white shadow-2xl p-6 text-right">
+          <div className="text-[11px] font-bold tracking-[0.24em] text-rose-500">FILE MENU ERROR</div>
+          <h2 className="mt-2 text-2xl font-extrabold text-slate-900">תפריט הקובץ לא נטען</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            שאר האפליקציה נשארה פעילה. אפשר לסגור את החלון הזה ולהמשיך לעבוד, או לנסות שוב אחרי פתיחה מחדש.
+          </p>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 break-words">
+            {message}
+          </div>
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={this.props.onClose}
+              className="px-5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 font-semibold hover:border-slate-400 hover:text-slate-900 transition-colors"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
 
 const normalizeStructuralEditText = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -925,10 +971,34 @@ const resolveReviewPlanSectionTarget = (doc, { locator = '', originalText = '', 
   });
 };
 
+const buildReviewPlanTextMatchVariants = (value = '') => {
+  const normalized = normalizeStructuralEditText(value);
+  if (!normalized) return [];
+  const variants = new Set([normalized]);
+  const withoutOuterEllipsis = normalized
+    .replace(/^(?:\.{2,}|…)+\s*/u, '')
+    .replace(/\s*(?:\.{2,}|…)+$/u, '')
+    .trim();
+  if (withoutOuterEllipsis) variants.add(withoutOuterEllipsis);
+  normalized
+    .split(/(?:\.{2,}|…)/u)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 24)
+    .forEach((part) => variants.add(part));
+  return [...variants].sort((left, right) => right.length - left.length);
+};
+
 const resolveReviewPlanBlockTarget = (doc, { locator = '', originalText = '', matchStrategy = 'contains', title = '' } = {}, sectionTarget = null) => {
   if (!doc) return null;
   const normalizedLocator = normalizeStructuralEditText(locator);
   const normalizedOriginalText = normalizeStructuralEditText(originalText);
+  const locatorVariants = buildReviewPlanTextMatchVariants(locator);
+  const originalTextVariants = buildReviewPlanTextMatchVariants(originalText);
+  const matchesAnyVariant = (item, variants, mode = 'contains') => {
+    const text = String(item?.normalizedText || '');
+    if (!text || !Array.isArray(variants) || !variants.length) return false;
+    return variants.some((variant) => (mode === 'startsWith' ? text.startsWith(variant) : text.includes(variant)));
+  };
   const candidateBlocks = collectCandidateTextBlocks(doc, {
     minTextLength: normalizedOriginalText ? 1 : MIN_CANDIDATE_BLOCK_TEXT_LENGTH,
   }).filter((block) => {
@@ -950,17 +1020,17 @@ const resolveReviewPlanBlockTarget = (doc, { locator = '', originalText = '', ma
   const orderedMatchers = matchStrategy === 'startsWith'
     ? [
       normalizedOriginalText ? (item) => item.normalizedText === normalizedOriginalText : null,
-      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedOriginalText) : null,
-      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedLocator) : null,
-      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedOriginalText) : null,
-      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedLocator) : null,
+      originalTextVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, originalTextVariants, 'startsWith') : null,
+      locatorVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, locatorVariants, 'startsWith') : null,
+      originalTextVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, originalTextVariants, 'contains') : null,
+      locatorVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, locatorVariants, 'contains') : null,
     ]
     : [
       normalizedOriginalText ? (item) => item.normalizedText === normalizedOriginalText : null,
-      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedOriginalText) : null,
-      normalizedOriginalText ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedOriginalText) : null,
-      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.includes(normalizedLocator) : null,
-      normalizedLocator ? (item) => isSingleBlockCandidate(item) && item.normalizedText.startsWith(normalizedLocator) : null,
+      originalTextVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, originalTextVariants, 'contains') : null,
+      originalTextVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, originalTextVariants, 'startsWith') : null,
+      locatorVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, locatorVariants, 'contains') : null,
+      locatorVariants.length ? (item) => isSingleBlockCandidate(item) && matchesAnyVariant(item, locatorVariants, 'startsWith') : null,
     ];
   let block = resolveUniqueDocumentMatch(candidatePassages, orderedMatchers.filter(Boolean));
   if (!block && multiBlockCandidates.length) {
@@ -970,12 +1040,12 @@ const resolveReviewPlanBlockTarget = (doc, { locator = '', originalText = '', ma
     if (allowMultiBlockFallback) {
     const passageFallbackMatchers = matchStrategy === 'startsWith'
       ? [
-        normalizedOriginalText ? (item) => item.normalizedText.startsWith(normalizedOriginalText) : null,
-        normalizedLocator ? (item) => item.normalizedText.includes(normalizedLocator) : null,
+        originalTextVariants.length ? (item) => matchesAnyVariant(item, originalTextVariants, 'startsWith') : null,
+        locatorVariants.length ? (item) => matchesAnyVariant(item, locatorVariants, 'contains') : null,
       ]
       : [
-        normalizedOriginalText ? (item) => item.normalizedText.includes(normalizedOriginalText) : null,
-        normalizedLocator ? (item) => item.normalizedText.includes(normalizedLocator) : null,
+        originalTextVariants.length ? (item) => matchesAnyVariant(item, originalTextVariants, 'contains') : null,
+        locatorVariants.length ? (item) => matchesAnyVariant(item, locatorVariants, 'contains') : null,
       ];
       block = resolveUniqueDocumentMatch(multiBlockCandidates, passageFallbackMatchers.filter(Boolean));
     }
@@ -2041,6 +2111,140 @@ const isLiveGenerationErrorPlaceholderHtml = (html = '', runId = '') => {
   return markup.includes(`data-wordai-live-generation-run-id="${escHtml(runId)}"`);
 };
 
+const ASSIGNMENT_BRIEF_TITLE_PATTERN = /^(?:שם\s+הקורס|מטלה|עבודה|assignment|task)\b/i;
+const ASSIGNMENT_BRIEF_BULLET_PATTERN = /^([•●▪◦▪■◆★\-\*])\s+(.*)$/u;
+const ASSIGNMENT_BRIEF_NUMBERED_PATTERN = /^(\d{1,2})[.)]\s+(.*)$/u;
+const ASSIGNMENT_BRIEF_HEBREW_ALPHA_PATTERN = /^([א-ת]{1,2})[.)]\s+(.*)$/u;
+const ASSIGNMENT_BRIEF_SUBITEM_PATTERN = /^(?:[oO○◦▪▫■□\-*]|(?:[א-ת]{1,2}|\d{1,2})[.)])\s+(.*)$/u;
+
+const parseAssignmentBriefBlocks = (value = '') => {
+  const lines = String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const blocks = [];
+
+  lines.forEach((line, index) => {
+    const bulletMatch = line.match(ASSIGNMENT_BRIEF_BULLET_PATTERN);
+    const numberedMatch = line.match(ASSIGNMENT_BRIEF_NUMBERED_PATTERN);
+    const hebrewAlphaMatch = line.match(ASSIGNMENT_BRIEF_HEBREW_ALPHA_PATTERN);
+    const previous = blocks[blocks.length - 1] || null;
+
+    if (index === 0 && !bulletMatch && !numberedMatch && (ASSIGNMENT_BRIEF_TITLE_PATTERN.test(line) || line.length <= 140)) {
+      blocks.push({ type: 'title', text: line });
+      return;
+    }
+
+    if (bulletMatch) {
+      blocks.push({ type: 'bullet', marker: bulletMatch[1], text: bulletMatch[2].trim() });
+      return;
+    }
+
+    if (numberedMatch) {
+      blocks.push({ type: 'numbered', marker: numberedMatch[1], text: numberedMatch[2].trim() });
+      return;
+    }
+
+    if (hebrewAlphaMatch) {
+      const isSubitem = previous && (previous.type === 'numbered' || previous.type === 'hebrew-alpha' || previous.type === 'bullet');
+      blocks.push({
+        type: isSubitem ? 'subitem' : 'hebrew-alpha',
+        marker: hebrewAlphaMatch[1],
+        text: hebrewAlphaMatch[2].trim(),
+      });
+      return;
+    }
+
+    if (previous && previous.type === 'numbered' && ASSIGNMENT_BRIEF_SUBITEM_PATTERN.test(line)) {
+      blocks.push({ type: 'subitem', marker: '•', text: line.replace(ASSIGNMENT_BRIEF_SUBITEM_PATTERN, '$1').trim() });
+      return;
+    }
+
+    if (previous && ['bullet', 'numbered', 'hebrew-alpha', 'subitem', 'paragraph'].includes(previous.type)) {
+      previous.text = `${previous.text} ${line}`.replace(/\s+/g, ' ').trim();
+      return;
+    }
+
+    blocks.push({ type: 'paragraph', text: line });
+  });
+
+  return blocks;
+};
+
+const renderAssignmentBriefPreview = (blocks = []) => {
+  if (!Array.isArray(blocks) || !blocks.length) {
+    return (
+      <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/85 px-5 py-8 text-center text-sm text-slate-500">
+        עדיין לא הוזנו הוראות. אפשר לטעון קובץ או לעבור לעריכה ולהדביק טקסט ידנית.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-[24px] border border-amber-200/80 bg-[linear-gradient(180deg,#fffdfa_0%,#ffffff_22%,#fffaf2_100%)] px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
+      <div className="space-y-3">
+        {blocks.map((block, index) => {
+          if (block.type === 'title') {
+            return (
+              <div key={`assignment-brief-title-${index}`} className="border-b border-amber-100 pb-3 text-[1.05rem] font-semibold leading-8 text-slate-900">
+                {block.text}
+              </div>
+            );
+          }
+
+          if (block.type === 'numbered') {
+            return (
+              <div key={`assignment-brief-numbered-${index}`} className="flex items-start gap-3 rounded-[18px] bg-white/88 px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
+                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-bold text-amber-800">
+                  {block.marker}
+                </div>
+                <div className="text-[15px] leading-8 text-slate-700">{block.text}</div>
+              </div>
+            );
+          }
+
+          if (block.type === 'hebrew-alpha') {
+            return (
+              <div key={`assignment-brief-hebrew-alpha-${index}`} className="flex items-start gap-3 rounded-[18px] bg-white/72 px-4 py-3">
+                <div className="mt-0.5 flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-2 text-sm font-bold text-amber-800">
+                  {block.marker}
+                </div>
+                <div className="text-[15px] leading-8 text-slate-700">{block.text}</div>
+              </div>
+            );
+          }
+
+          if (block.type === 'bullet') {
+            return (
+              <div key={`assignment-brief-bullet-${index}`} className="flex items-start gap-3 px-1">
+                <div className="mt-3 h-2.5 w-2.5 shrink-0 rounded-full bg-slate-800" />
+                <div className="text-[15px] leading-8 text-slate-700">{block.text}</div>
+              </div>
+            );
+          }
+
+          if (block.type === 'subitem') {
+            return (
+              <div key={`assignment-brief-subitem-${index}`} className="mr-7 flex items-start gap-3 px-1">
+                <div className="mt-3 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                <div className="text-[15px] leading-8 text-slate-700">{block.text}</div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={`assignment-brief-paragraph-${index}`} className="text-[15px] leading-8 text-slate-700">
+              {block.text}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const buildGenerationLabel = ({ promptText = '', instructionsText = '', templateId = 'blank' } = {}) => {
   const cleanPrompt = String(promptText || '').trim();
   if (cleanPrompt) return cleanPrompt;
@@ -2271,6 +2475,8 @@ const DEFAULT_FEEDBACK_SURVEY = {
   selectedModel: '',
   selectedProviderId: '',
   selectedProviderModel: '',
+  useWorkspaceV2: false,
+  workspaceV2TemplateId: '',
   selectedOptions: [],
   freeText: '',
   executionMode: 'direct',
@@ -2375,11 +2581,11 @@ const resolveReviewSuggestionSelection = (selectionText = '', suggestions = []) 
 };
 
 const SIDEBAR_HISTORY_ENTRY_PATTERN = /(^|\n)(assistant|user):\s*/g;
-const SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN = /^(?:#{1,6}\s*)?(?:\*\*)?(\d{1,2})[.)]\s*(.+?)\s*(?:\*\*)?$/u;
+const SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN = /^(?:#{1,6}\s*)?(?:\*\*)?(?:(\d{1,2})[.)]|(?:המלצה|תיקון|סעיף|נקודה|suggestion|recommendation)\s+(\d{1,2})[:.)-])\s*(.+?)\s*(?:\*\*)?$/iu;
 const SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN = /^[•*-]\s+(.+)$/u;
 const SIDEBAR_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|תיקונים|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
 const SIDEBAR_REVIEW_SELECTION_INTENT_PATTERN = /(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני).{0,42}(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)/iu;
-const SIDEBAR_REVIEW_APPLY_ALL_INTENT_PATTERN = /(?:תתחיל|תחיל|התחל|תתקן|תקן|תיישם|יישם|תעדכן|עדכן|תטמיע|הטמע|תשלב|שלב|תעבור.{0,30}(?:ותתחיל|ותתקן|ותיישם|ותעדכן)|בהתאם\s+להערות\s+המרצה|על\s+פי\s+הערות\s+המרצה|לפי\s+הערות\s+המרצה|לפי\s+הוראות\s+המרצה|על\s+פי\s+הוראות\s+המרצה)/iu;
+const SIDEBAR_REVIEW_APPLY_ALL_INTENT_PATTERN = /(?:תתחיל|תחיל|התחל|תתקן|תקן|תיישם|יישם|תעדכן|עדכן|תטמיע|הטמע|תשלב|שלב|תעבור.{0,30}(?:ותתחיל|ותתקן|ותיישם|ותעדכן)|בהתאם\s+ל(?:הערות|המלצות|תיקונים|הנחיות)(?:\s+המרצה)?|על\s+פי\s+(?:הערות|המלצות|תיקונים|הנחיות)(?:\s+המרצה)?|לפי\s+(?:הערות|המלצות|תיקונים|הנחיות)(?:\s+המרצה)?|כמו\s+ש(?:הצעת|כתבת|ציינת)|את\s+(?:כל\s+)?(?:ההמלצות|התיקונים|ההערות)(?:\s+ש(?:הצעת|כתבת|ציינת))?)/iu;
 
 const cleanSidebarSuggestionText = (value = '') => String(value || '')
   .replace(/^\*+|\*+$/g, '')
@@ -2451,14 +2657,14 @@ const extractSidebarReviewSuggestionsFromText = (content = '') => {
 
       const markerMatch = originalLine.match(SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN);
       if (markerMatch) {
-        const nextNumber = Number(markerMatch[1]);
+        const nextNumber = Number(markerMatch[1] || markerMatch[2]);
         if (nextNumber === 1 && (current || blockItems.length)) commitBlock();
         commitCurrent();
         pendingBulletBlockBreak = false;
         bulletNumber = Math.max(bulletNumber, nextNumber);
         current = {
           number: nextNumber,
-          title: cleanSidebarSuggestionText(markerMatch[2] || ''),
+          title: cleanSidebarSuggestionText(markerMatch[3] || ''),
           body: [],
         };
         return;
@@ -2529,7 +2735,10 @@ const extractSidebarReviewContextFromConversation = (conversationHistoryText = '
     .some((line) => SIDEBAR_NUMBERED_SUGGESTION_LINE_PATTERN.test(line) || SIDEBAR_BULLET_SUGGESTION_LINE_PATTERN.test(line));
   const latestReviewEntry = [...assistantEntries]
     .reverse()
-    .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content) && hasSidebarSuggestionList(entry.content));
+    .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content) && hasSidebarSuggestionList(entry.content))
+    || [...assistantEntries]
+      .reverse()
+      .find((entry) => SIDEBAR_REVIEW_CONTEXT_PATTERN.test(entry.content));
   return latestReviewEntry?.content ? String(latestReviewEntry.content).trim() : '';
 };
 
@@ -2567,6 +2776,7 @@ const DEFAULT_COPYLEAKS_DETECTOR = {
   submitting: false,
   result: null,
   error: '',
+  scoreFlash: null,
 };
 
 const formatCopyleaksPercent = (value) => {
@@ -2673,6 +2883,16 @@ const EXPORT_TEXTUAL_BLOCK_SELECTOR = [
   'blockquote', 'li', 'td', 'th', 'table', 'div',
 ].join(',');
 
+const MAX_IMPORTED_DOCUMENT_HTML_CHARS = 400000;
+const MAX_IMPORTED_DOCUMENT_TEXT_CHARS = 220000;
+
+const getDocumentStyleDefaultTextAlign = (documentStyle = '') => {
+  const normalizedStyle = String(documentStyle || '').trim().toLowerCase();
+  if (normalizedStyle === 'legal') return 'justify';
+  if (normalizedStyle === 'presentation') return 'center';
+  return 'right';
+};
+
 const getClassTextAlign = (element) => {
   const classes = String(element?.getAttribute?.('class') || '').split(/\s+/).filter(Boolean);
   if (classes.includes('text-center')) return 'center';
@@ -2702,11 +2922,22 @@ const RTL_STRONG_CHARACTER_RE = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-
 const LTR_STRONG_CHARACTER_RE = /[A-Za-z\u00C0-\u024F]/;
 
 const getTextDirection = (text = '') => {
-  for (const character of String(text || '')) {
-    if (RTL_STRONG_CHARACTER_RE.test(character)) return 'rtl';
-    if (LTR_STRONG_CHARACTER_RE.test(character)) return 'ltr';
+  const value = String(text || '');
+  let rtlCount = 0;
+  let ltrCount = 0;
+
+  for (const character of value) {
+    if (RTL_STRONG_CHARACTER_RE.test(character)) {
+      rtlCount += 1;
+      continue;
+    }
+    if (LTR_STRONG_CHARACTER_RE.test(character)) {
+      ltrCount += 1;
+    }
   }
-  return 'rtl';
+
+  if (!rtlCount && !ltrCount) return 'rtl';
+  return rtlCount >= ltrCount ? 'rtl' : 'ltr';
 };
 
 const getExportTextDirection = (dir = '', text = '') => {
@@ -2716,22 +2947,22 @@ const getExportTextDirection = (dir = '', text = '') => {
   return '';
 };
 
-const normalizeDocumentExportHtml = (html = '') => {
+const normalizeDocumentExportHtml = (html = '', { documentStyle = 'academic' } = {}) => {
   const source = String(html || '');
   if (!source.trim() || typeof document === 'undefined') return source;
 
   const container = document.createElement('div');
   container.innerHTML = source;
+  const defaultTextAlign = getDocumentStyleDefaultTextAlign(documentStyle);
 
   container.querySelectorAll(EXPORT_TEXTUAL_BLOCK_SELECTOR).forEach((element) => {
     if (element.matches('[data-type="page-break"], [data-page-break="true"]')) return;
 
     const textContent = element.textContent || '';
     const rawDirection = element.getAttribute('dir');
-    const detectedDirection = getTextDirection(textContent);
     const direction = element.hasAttribute('dir')
-      ? getExportTextDirection(rawDirection, textContent) || detectedDirection
-      : detectedDirection;
+      ? getExportTextDirection(rawDirection, textContent) || 'rtl'
+      : 'rtl';
 
     if (!element.hasAttribute('dir') || String(rawDirection || '').trim().toLowerCase() === 'auto') {
       element.setAttribute('dir', direction);
@@ -2740,7 +2971,8 @@ const normalizeDocumentExportHtml = (html = '') => {
     const explicitTextAlign = getExplicitTextAlign(element);
     if (!element.style.textAlign && !element.getAttribute('align')) {
       const childTextAlign = getListItemChildTextAlign(element);
-      element.style.textAlign = explicitTextAlign || childTextAlign || (direction === 'ltr' ? 'left' : 'right');
+      const inferredTextAlign = direction === 'ltr' ? 'left' : defaultTextAlign;
+      element.style.textAlign = explicitTextAlign || childTextAlign || inferredTextAlign;
     }
   });
 
@@ -2761,6 +2993,7 @@ const DOCUMENT_STORAGE_KEYS = Object.freeze({
   autosave: 'wordai_document_autosave',
   autosaveAt: 'wordai_document_autosave_at',
   activeTemplate: 'wordai_active_template',
+  assignmentBrief: 'wordai_document_assignment_brief',
 });
 
 const DESKTOP_WINDOW_CONTEXT = (() => {
@@ -2869,6 +3102,41 @@ const persistActiveTemplateId = (templateId = 'blank') => {
   writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.activeTemplate, templateId || 'blank');
 };
 
+const normalizeAssignmentBrief = (value = {}) => {
+  if (!value || typeof value !== 'object') {
+    return { text: '', fileName: '', sourceLabel: '' };
+  }
+  const text = String(value.text || '').trim();
+  const fileName = String(value.fileName || '').trim();
+  const sourceLabel = String(value.sourceLabel || '').trim();
+  return { text, fileName, sourceLabel };
+};
+
+const getPersistedDocumentAssignmentBrief = () => {
+  const rawValue = readDocumentStorageValue(DOCUMENT_STORAGE_KEYS.assignmentBrief, { fallbackToLegacy: true });
+  if (!rawValue) return normalizeAssignmentBrief();
+  try {
+    return normalizeAssignmentBrief(JSON.parse(rawValue));
+  } catch {
+    return normalizeAssignmentBrief();
+  }
+};
+
+const persistDocumentAssignmentBrief = (value = {}) => {
+  const normalized = normalizeAssignmentBrief(value);
+  if (!normalized.text) {
+    removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.assignmentBrief);
+    return normalizeAssignmentBrief();
+  }
+  writeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.assignmentBrief, JSON.stringify(normalized));
+  return normalized;
+};
+
+const clearPersistedDocumentAssignmentBrief = () => {
+  removeDocumentStorageValue(DOCUMENT_STORAGE_KEYS.assignmentBrief);
+  return normalizeAssignmentBrief();
+};
+
 const getRecentAgentLogs = (limit = 18, filters = {}) => {
   const automation = getWorkspaceAutomation();
   const workspaceId = String(filters.workspaceId || automation?.activeWorkspaceId || 'default-content-studio').trim();
@@ -2937,9 +3205,13 @@ function App() {
     };
   }, [applyHydratedSettingsState]);
 
+  const cloudAvailable = isCloudAvailable();
   const [editor, setEditor] = React.useState(null);
   const [appMode, setAppMode] = React.useState('word');
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
+    typeof window !== 'undefined' ? window.innerWidth <= 900 : false
+  ));
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
   const [wordCount, setWordCount] = React.useState(0);
@@ -2952,6 +3224,7 @@ function App() {
   const [formatPainterActive, setFormatPainterActive] = React.useState(false);
   const [selectedText, setSelectedText] = React.useState('');
   const [selectionContext, setSelectionContext] = React.useState(null);
+  const [assistantAutoPopupBlockedUntil, setAssistantAutoPopupBlockedUntil] = React.useState(0);
   const [currentBlockText, setCurrentBlockText] = React.useState('');
   const [editTarget, setEditTarget] = React.useState(() => ({ ...EMPTY_EDIT_TARGET }));
   const [trackChanges, setTrackChanges] = React.useState(false);
@@ -2969,10 +3242,186 @@ function App() {
   });
   const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
+  const [assignmentBrief, setAssignmentBrief] = React.useState(() => getPersistedDocumentAssignmentBrief());
+  const [assignmentBriefOpen, setAssignmentBriefOpen] = React.useState(false);
+  const [assignmentBriefDraft, setAssignmentBriefDraft] = React.useState(() => getPersistedDocumentAssignmentBrief().text || '');
+  const [assignmentBriefPanelMode, setAssignmentBriefPanelMode] = React.useState(() => (getPersistedDocumentAssignmentBrief().text ? 'preview' : 'edit'));
   const [startTransitionPhase, setStartTransitionPhase] = React.useState('idle');
   const [currentFilePath, setCurrentFilePath] = React.useState('');
   const currentFilePathRef = React.useRef('');
+  const [cloudUser, setCloudUser] = React.useState(null);
+  const [cloudAuthReady, setCloudAuthReady] = React.useState(() => !cloudAvailable);
+  const [currentCloudDocumentId, setCurrentCloudDocumentId] = React.useState('');
+  const currentCloudDocumentIdRef = React.useRef('');
+  const lastCloudSavedHtmlRef = React.useRef('');
+  const deferredInstallPromptRef = React.useRef(null);
+  const [pwaInstallState, setPwaInstallState] = React.useState(() => {
+    const standalone = typeof window !== 'undefined'
+      && (
+        window.matchMedia?.('(display-mode: standalone)')?.matches
+        || window.navigator?.standalone === true
+      );
+    const isDesktopShell = typeof window !== 'undefined' && Boolean(window.desktopApp);
+    return {
+      supported: typeof window !== 'undefined' && !isDesktopShell,
+      installed: standalone || isDesktopShell,
+      canInstall: false,
+      platform: typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : '',
+      statusLabel: standalone || isDesktopShell ? 'כבר מותקן' : 'אפשר להתקין מהדפדפן',
+      instructions: '',
+    };
+  });
+  const [cloudSyncState, setCloudSyncState] = React.useState(() => ({
+    status: 'idle',
+    message: cloudAvailable ? 'לא מחובר לענן' : 'Firebase לא מוגדר',
+    lastSavedAt: '',
+    documentId: '',
+    autosaveEnabled: false,
+  }));
   const [activeDocumentSessionId, setActiveDocumentSessionId] = React.useState(() => createDocumentSessionId());
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia('(max-width: 900px)');
+    const updateViewportMode = () => setIsMobileViewport(mediaQuery.matches);
+    updateViewportMode();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateViewportMode);
+      return () => mediaQuery.removeEventListener('change', updateViewportMode);
+    }
+    mediaQuery.addListener(updateViewportMode);
+    return () => mediaQuery.removeListener(updateViewportMode);
+  }, []);
+
+  const requestPwaInstall = React.useCallback(async () => {
+    const promptEvent = deferredInstallPromptRef.current;
+    if (!promptEvent) {
+      const standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true;
+      setPwaInstallState((prev) => ({
+        ...prev,
+        installed: standalone || prev.installed,
+        canInstall: false,
+        statusLabel: standalone ? 'כבר מותקן' : 'ההתקנה זמינה כרגע רק מתוך דפדפן נתמך',
+      }));
+      return { ok: standalone, reason: standalone ? 'already-installed' : 'not-available' };
+    }
+
+    try {
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice;
+      deferredInstallPromptRef.current = null;
+      const accepted = choice?.outcome === 'accepted';
+      setPwaInstallState((prev) => ({
+        ...prev,
+        canInstall: false,
+        installed: accepted ? true : prev.installed,
+        statusLabel: accepted ? 'ההתקנה אושרה' : 'אפשר לנסות שוב מתוך הדפדפן',
+      }));
+      return { ok: accepted, reason: accepted ? 'accepted' : 'dismissed' };
+    } catch (error) {
+      setPwaInstallState((prev) => ({
+        ...prev,
+        statusLabel: 'לא הצלחתי לפתוח את חלון ההתקנה',
+      }));
+      return { ok: false, reason: error?.message || 'prompt-failed' };
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    if (window.desktopApp) {
+      setPwaInstallState((prev) => ({
+        ...prev,
+        supported: false,
+        installed: true,
+        canInstall: false,
+        statusLabel: 'בתוך אפליקציית הדסקטופ אין צורך בהתקנה נוספת',
+        instructions: 'כדי להתקין לטלפון, פתח את האתר בדפדפן במובייל.',
+      }));
+      return undefined;
+    }
+
+    const ua = String(navigator.userAgent || '');
+    const isIos = /iphone|ipad|ipod/i.test(ua);
+    const isAndroid = /android/i.test(ua);
+    const standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true;
+    const installInstructions = standalone
+      ? 'האפליקציה כבר רצה כיישום מותקן.'
+      : isIos
+        ? 'ב־Safari לחץ על Share ואז על Add to Home Screen.'
+        : isAndroid
+          ? 'ב־Chrome חפש Add to Home Screen או Install App בתפריט הדפדפן.'
+          : 'בדפדפן תומך אפשר להתקין דרך כפתור Install או דרך תפריט הדפדפן.';
+
+    const handleBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      deferredInstallPromptRef.current = event;
+      setPwaInstallState((prev) => ({
+        ...prev,
+        supported: true,
+        installed: false,
+        canInstall: true,
+        platform: ua,
+        statusLabel: 'אפשר להתקין עכשיו למסך הבית',
+        instructions: installInstructions,
+      }));
+    };
+
+    const handleInstalled = () => {
+      deferredInstallPromptRef.current = null;
+      setPwaInstallState((prev) => ({
+        ...prev,
+        supported: true,
+        installed: true,
+        canInstall: false,
+        platform: ua,
+        statusLabel: 'האתר הותקן בהצלחה',
+        instructions: 'אפשר לפתוח אותו עכשיו כמו אפליקציה רגילה ממסך הבית.',
+      }));
+    };
+
+    setPwaInstallState((prev) => ({
+      ...prev,
+      supported: true,
+      installed: standalone,
+      canInstall: false,
+      platform: ua,
+      statusLabel: standalone ? 'כבר מותקן' : 'אפשר להתקין מהדפדפן',
+      instructions: installInstructions,
+    }));
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, [requestPwaInstall]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    if (!('serviceWorker' in navigator) || window.desktopApp) return undefined;
+    const registerServiceWorker = () => {
+      navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
+    };
+    if (document.readyState === 'complete') {
+      registerServiceWorker();
+      return undefined;
+    }
+    window.addEventListener('load', registerServiceWorker, { once: true });
+    return () => window.removeEventListener('load', registerServiceWorker);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const payload = {
+      ...pwaInstallState,
+      install: requestPwaInstall,
+    };
+    window.__wordflowPwaInstall = payload;
+    window.dispatchEvent(new CustomEvent('wordflow:pwa-install-state', { detail: payload }));
+    return undefined;
+  }, [pwaInstallState, requestPwaInstall]);
   const resetDocumentInteractionState = React.useCallback(() => {
     setSelectedText('');
     setSelectionContext(null);
@@ -2981,10 +3430,14 @@ function App() {
   }, []);
   const beginDocumentIdentity = React.useCallback((payload = {}) => {
     setCurrentFilePath(String(payload?.filePath || ''));
+    setCurrentCloudDocumentId(String(payload?.cloudDocumentId || ''));
+    currentCloudDocumentIdRef.current = String(payload?.cloudDocumentId || '');
+    lastCloudSavedHtmlRef.current = '';
     setActiveDocumentSessionId(createDocumentSessionId());
     resetDocumentInteractionState();
   }, [resetDocumentInteractionState]);
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
+  const [lastEditorContentActivityAt, setLastEditorContentActivityAt] = React.useState(0);
   const [lastManualStyleLearningAt, setLastManualStyleLearningAt] = React.useState(0);
   const [liveGeneration, setLiveGeneration] = React.useState({
     active: false,
@@ -3010,6 +3463,7 @@ function App() {
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
   const [copyleaksDetector, setCopyleaksDetector] = React.useState({ ...DEFAULT_COPYLEAKS_DETECTOR });
+  const [assistantLaunchPreset, setAssistantLaunchPreset] = React.useState({ nonce: 0, classicAgentId: '', composerMode: '', prompt: '' });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
   const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [sidebarCompact, setSidebarCompact] = React.useState(() => (typeof window !== 'undefined' ? window.innerWidth < 1180 : false));
@@ -3022,11 +3476,13 @@ function App() {
   const preLiveGenerationSnapshotRef = React.useRef({ runId: '', html: '' });
   const pendingImportRef = React.useRef(null);
   const pendingImportOriginModeRef = React.useRef(null);
+  const assignmentBriefFileInputRef = React.useRef(null);
   const startTransitionTimerRef = React.useRef(null);
   const startTransitionRunIdRef = React.useRef(0);
   const pendingStartTransitionFocusRef = React.useRef('start');
   const documentArrivalTimerRef = React.useRef(null);
   const documentArrivalFrameRef = React.useRef(null);
+  const saveOperationInFlightRef = React.useRef(false);
   const clearDocumentArrival = React.useCallback(() => {
     if (documentArrivalFrameRef.current) {
       window.cancelAnimationFrame(documentArrivalFrameRef.current);
@@ -3039,8 +3495,121 @@ function App() {
     setDocumentArrival((prev) => (prev.active ? { ...prev, active: false } : prev));
   }, []);
   React.useEffect(() => {
+    if (!copyleaksDetector?.scoreFlash) return undefined;
+    const timer = window.setTimeout(() => {
+      setCopyleaksDetector((prev) => (
+        prev?.scoreFlash
+          ? { ...prev, scoreFlash: null }
+          : prev
+      ));
+    }, 1300);
+    return () => window.clearTimeout(timer);
+  }, [copyleaksDetector?.scoreFlash]);
+  React.useEffect(() => {
     currentFilePathRef.current = currentFilePath;
   }, [currentFilePath]);
+  React.useEffect(() => {
+    currentCloudDocumentIdRef.current = currentCloudDocumentId;
+  }, [currentCloudDocumentId]);
+  React.useEffect(() => {
+    if (!cloudAvailable) {
+      setCloudAuthReady(true);
+      return undefined;
+    }
+
+    handleCloudRedirectResult().catch(e => console.error("Redirect recovery error:", e));
+
+    return onCloudAuthChange((nextUser) => {
+      setCloudUser(nextUser || null);
+      setCloudAuthReady(true);
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'idle',
+        message: nextUser
+          ? `מחובר: ${nextUser.displayName || nextUser.email || 'Google'}`
+          : 'לא מחובר לענן',
+        lastSavedAt: nextUser ? prev.lastSavedAt : '',
+        documentId: nextUser ? prev.documentId : '',
+        autosaveEnabled: nextUser ? prev.autosaveEnabled : false,
+      }));
+      if (nextUser) {
+        ensureCloudUserProfile(nextUser).catch((error) => {
+          console.error('Cloud profile sync failed:', error);
+        });
+        handleCloudAuthSuccess(nextUser).catch(e => {
+          console.error('Cloud settings sync failed:', e);
+        });
+      }
+    });
+  }, [cloudAvailable]);
+
+  React.useEffect(() => {
+    if (cloudUser) {
+      return initCloudSyncListeners(cloudUser);
+    }
+  }, [cloudUser]);
+  const refreshAssignmentBrief = React.useCallback(() => {
+    setAssignmentBrief(getPersistedDocumentAssignmentBrief());
+  }, []);
+  const storeAssignmentBrief = React.useCallback((value = {}) => {
+    setAssignmentBrief(persistDocumentAssignmentBrief(value));
+  }, []);
+  const clearAssignmentBrief = React.useCallback(() => {
+    setAssignmentBrief(clearPersistedDocumentAssignmentBrief());
+  }, []);
+  React.useEffect(() => {
+    refreshAssignmentBrief();
+    window.addEventListener('focus', refreshAssignmentBrief);
+    return () => {
+      window.removeEventListener('focus', refreshAssignmentBrief);
+    };
+  }, [refreshAssignmentBrief]);
+  React.useEffect(() => {
+    setAssignmentBriefDraft(assignmentBrief.text || '');
+  }, [assignmentBrief.text]);
+  React.useEffect(() => {
+    setAssignmentBriefPanelMode(assignmentBrief.text ? 'preview' : 'edit');
+  }, [assignmentBrief.text]);
+  React.useEffect(() => {
+    if (appMode === 'word') return;
+    setAssignmentBriefOpen(false);
+  }, [appMode]);
+  const saveAssignmentBriefDraft = React.useCallback(() => {
+    const nextText = String(assignmentBriefDraft || '').trim();
+    if (nextText) {
+      storeAssignmentBrief({
+        text: nextText,
+        fileName: assignmentBrief.fileName,
+        sourceLabel: assignmentBrief.fileName ? 'קובץ הנחיות' : 'הנחיות ידניות',
+      });
+    } else {
+      clearAssignmentBrief();
+    }
+  }, [assignmentBrief.fileName, assignmentBriefDraft, clearAssignmentBrief, storeAssignmentBrief]);
+  const handleAssignmentBriefFileSelected = React.useCallback(async (event) => {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    try {
+      const extractedText = await readInstructionFile(file, 18000);
+      const nextText = String(extractedText || '').trim();
+      if (!nextText) {
+        window.alert('לא נמצא טקסט קריא בקובץ ההוראות.');
+        return;
+      }
+      setAssignmentBriefDraft(nextText);
+      setAssignmentBriefPanelMode('preview');
+      storeAssignmentBrief({
+        text: nextText,
+        fileName: String(file.name || '').trim(),
+        sourceLabel: 'קובץ הנחיות',
+      });
+    } catch (error) {
+      window.alert(error?.message || 'לא הצלחתי לקרוא את קובץ ההוראות.');
+    } finally {
+      if (event?.target) event.target.value = '';
+    }
+  }, [storeAssignmentBrief]);
+  const assignmentBriefPreviewBlocks = React.useMemo(() => parseAssignmentBriefBlocks(assignmentBriefDraft), [assignmentBriefDraft]);
   const triggerDocumentArrival = React.useCallback((tone = 'success') => {
     clearDocumentArrival();
     documentArrivalFrameRef.current = window.requestAnimationFrame(() => {
@@ -3509,15 +4078,27 @@ function App() {
       submitting: true,
       error: '',
       result: null,
+      scoreFlash: null,
     }));
 
     try {
       const result = await detectCopyleaksText(copyleaksConfig, copyleaksDetector.text);
+      const aiScore = Number(result?.summary?.ai);
+      const normalizedAiScore = Number.isFinite(aiScore) ? Math.max(0, Math.min(100, aiScore)) : null;
+      const scoreFlash = normalizedAiScore == null
+        ? null
+        : {
+            value: normalizedAiScore,
+            emoji: normalizedAiScore <= 15 ? '😎' : normalizedAiScore <= 45 ? '🙂' : normalizedAiScore <= 70 ? '😬' : '🚨',
+            tone: normalizedAiScore <= 15 ? 'success' : normalizedAiScore <= 45 ? 'balanced' : normalizedAiScore <= 70 ? 'warning' : 'danger',
+            label: normalizedAiScore <= 15 ? 'כמעט לא זוהה כ-AI' : normalizedAiScore <= 45 ? 'זיהוי בינוני' : normalizedAiScore <= 70 ? 'זיהוי גבוה' : 'זיהוי AI גבוה',
+          };
       setCopyleaksDetector((prev) => ({
         ...prev,
         submitting: false,
         error: '',
         result,
+        scoreFlash,
       }));
     } catch (error) {
       setCopyleaksDetector((prev) => ({
@@ -3525,6 +4106,7 @@ function App() {
         submitting: false,
         result: null,
         error: error?.message || 'Copyleaks לא הצליח להשלים את הבדיקה.',
+        scoreFlash: null,
       }));
     }
   }, [copyleaksDetector.text]);
@@ -3580,6 +4162,8 @@ function App() {
         selectedModel: String(feedbackSurvey.selectedModel || '').trim(),
         selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
         selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+        useWorkspaceV2: feedbackSurvey.useWorkspaceV2 === true,
+        workspaceV2TemplateId: String(feedbackSurvey.workspaceV2TemplateId || '').trim(),
         executionMode,
         roundIndex,
         surveySnapshot,
@@ -3681,9 +4265,7 @@ function App() {
   const effectiveFeedbackExecutionMode = feedbackExecutionMode === 'workspace' && feedbackWorkflowAvailable ? 'workspace' : 'direct';
   const feedbackRoundIndex = normalizeFeedbackRoundIndex(feedbackSurvey.roundIndex);
   const feedbackRevisionPending = feedbackSurvey.submitting && String(liveGeneration.runId || '').startsWith('doc-feedback');
-  const feedbackSubmitLabel = effectiveFeedbackExecutionMode === 'workspace'
-    ? (feedbackRevisionPending ? 'מעדכן עם צוות הסוכנים...' : 'שלח לעדכון עם צוות הסוכנים')
-    : (feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר');
+  const feedbackSubmitLabel = feedbackRevisionPending ? 'מעדכן...' : 'שלח לעדכון ישיר';
   const liveGenerationStages = Array.isArray(liveGeneration.summary?.stages) ? liveGeneration.summary.stages : [];
   const failedGenerationStage = isLiveGenerationFailureState(liveGeneration.state)
     ? [...liveGenerationStages].reverse().find((stage) => stage?.state === 'error' && stage?.id) || null
@@ -3911,6 +4493,15 @@ function App() {
   // adding it to the dependency array (which would cause a TDZ error since
   // handleCommand is defined later in the component body).
   const handleCommandRef = React.useRef(null);
+  const runGuardedSaveCommand = React.useCallback(async (runner) => {
+    if (saveOperationInFlightRef.current) return { skipped: true };
+    saveOperationInFlightRef.current = true;
+    try {
+      return await runner();
+    } finally {
+      saveOperationInFlightRef.current = false;
+    }
+  }, []);
 
   React.useEffect(() => {
     const handler = (e) => {
@@ -3921,7 +4512,9 @@ function App() {
       if (matchShortcut(e, shortcuts.toggleAssistant)) {
         e.preventDefault();
         setAssistantTrigger('manual');
-        setLastEditorActivityAt(Date.now());
+        if (Date.now() >= assistantAutoPopupBlockedUntil) {
+          setLastEditorActivityAt(Date.now());
+        }
         setSidebarOpen(v => !v);
         return;
       }
@@ -3935,7 +4528,11 @@ function App() {
 
       if (matchShortcut(e, shortcuts.saveLocal)) {
         e.preventDefault();
-        handleCommandRef.current?.('saveLocal');
+        if (e.repeat) return;
+        Promise.resolve(handleCommandRef.current?.('saveLocal')).catch((error) => {
+          console.error('Keyboard save shortcut failed:', error);
+          window.alert(error?.message || 'השמירה נכשלה.');
+        });
       }
     };
 
@@ -3953,9 +4550,13 @@ function App() {
     const isInputDialogVisible = inputDialog.open;
     const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen;
     const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen;
-    const topmostOverlay = fileMenuOpen
+    const topmostOverlay = helpModalOpen
+      ? 'help-modal'
+      : fileMenuOpen
       ? ''
-      : isInputDialogVisible && inputDialog.closeOnEscape !== false
+      : assignmentBriefOpen && !showStartScreen
+        ? 'assignment-brief'
+        : isInputDialogVisible && inputDialog.closeOnEscape !== false
         ? 'input-dialog'
         : isCopyleaksDetectorVisible
           ? 'copyleaks-detector'
@@ -3969,9 +4570,21 @@ function App() {
     const onKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
 
+      if (topmostOverlay === 'help-modal') {
+        event.preventDefault();
+        setHelpModalOpen(false);
+        return;
+      }
+
       if (topmostOverlay === 'input-dialog') {
         event.preventDefault();
         closeInputDialog(null);
+        return;
+      }
+
+      if (topmostOverlay === 'assignment-brief') {
+        event.preventDefault();
+        setAssignmentBriefOpen(false);
         return;
       }
 
@@ -3998,6 +4611,8 @@ function App() {
     inputDialog.closeOnEscape,
     copyleaksDetector.open,
     feedbackSurvey.open,
+    helpModalOpen,
+    assignmentBriefOpen,
     sidebarOpen,
     fileMenuOpen,
     showStartScreen,
@@ -4028,7 +4643,7 @@ function App() {
     if (!editor) return;
     let frameId = null;
 
-    const syncState = (includePages = false) => {
+    const syncState = (includePages = false, markEditorActivity = false) => {
       if (frameId) window.cancelAnimationFrame(frameId);
       frameId = window.requestAnimationFrame(() => {
         const { doc, selection } = editor.state;
@@ -4041,7 +4656,10 @@ function App() {
         } : null);
         setCurrentBlockText(nextEditTarget.block?.text || '');
         setEditTarget(nextEditTarget);
-        setLastEditorActivityAt(Date.now());
+        if (markEditorActivity) {
+          setLastEditorActivityAt(Date.now());
+          setLastEditorContentActivityAt(Date.now());
+        }
         if (includePages) {
           let markers = 0;
           editor.state.doc.descendants((node) => {
@@ -4053,12 +4671,12 @@ function App() {
       });
     };
 
-    const handleSelection = () => syncState(false);
-    const handleUpdate = () => syncState(true);
+    const handleSelection = () => syncState(false, false);
+    const handleUpdate = () => syncState(true, true);
     const markManualEdit = () => setLastManualStyleLearningAt(Date.now());
     const dom = editor.view?.dom;
 
-    syncState(true);
+    syncState(true, false);
     editor.on('selectionUpdate', handleSelection);
     editor.on('update', handleUpdate);
     dom?.addEventListener('input', markManualEdit);
@@ -4249,6 +4867,58 @@ function App() {
     };
   }, [consolidateAssistantEditBatchEntries, editor]);
 
+  const insertAssistantTextAtActivePosition = React.useCallback((text = '', agentType = 'assistant-sidebar-insert') => {
+    if (!editor) {
+      return { ok: false, message: 'העורך לא זמין כרגע להכנסת הטקסט.' };
+    }
+
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) {
+      return { ok: false, message: 'לא התקבל טקסט שאפשר להכניס למסמך.' };
+    }
+
+    const { selection, doc } = editor.state;
+    if (selection && !selection.empty) {
+      const result = applyAiSuggestionToRange(editor, {
+        from: selection.from,
+        to: selection.to,
+        replacementText: normalizedText,
+        agentType,
+      });
+      if (result) {
+        triggerDocumentArrival('warning');
+        return { ok: true, fallbackInserted: true, message: 'לא נמצא מיפוי ייחודי, אז החלפתי את הטקסט המסומן כהצעת AI.' };
+      }
+    }
+
+    const activeTarget = getCurrentEditTarget().active;
+    const insertPos = Number.isInteger(activeTarget?.to)
+      ? activeTarget.to
+      : Number.isInteger(selection?.to)
+        ? selection.to
+        : doc.content.size;
+    const insertionHtml = normalizedText
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean)
+      .map((paragraph) => `<p>${escHtml(paragraph).replace(/\n/g, '<br />')}</p>`)
+      .join('');
+
+    if (!insertionHtml) {
+      return { ok: false, message: 'לא התקבל טקסט שאפשר להכניס למסמך.' };
+    }
+
+    editor.chain().focus().insertContentAt(Math.max(1, Math.min(insertPos, doc.content.size)), insertionHtml).run();
+    triggerDocumentArrival('warning');
+    return {
+      ok: true,
+      fallbackInserted: true,
+      message: activeTarget?.text?.trim()
+        ? 'לא נמצא מיפוי ייחודי, אז הכנסתי את התשובה ליד הפסקה הפעילה.'
+        : 'לא נמצא מיפוי ייחודי, אז הכנסתי את התשובה במיקום הסמן או בסוף המסמך.',
+    };
+  }, [editor, getCurrentEditTarget, triggerDocumentArrival]);
+
   const applyFeedbackReviewSuggestions = React.useCallback(async () => {
     if (!editor) {
       alert('העורך לא זמין כרגע לעריכה.');
@@ -4265,10 +4935,16 @@ function App() {
     }
 
     const selectionResult = resolveReviewSuggestionSelection(feedbackSurvey.reviewApplySelection, reviewSuggestions);
-    if (selectionResult.invalid || !selectionResult.suggestions.length) {
-      alert('לא זיהיתי מספרי המלצות תקינים להחלה. אפשר לכתוב למשל: 1,2,3 או 1-3 בלי 2.');
-      return;
-    }
+    const effectiveSelectionResult = (selectionResult.invalid || !selectionResult.suggestions.length)
+      ? {
+        suggestions: reviewSuggestions,
+        selectedIndexes: reviewSuggestions.map((_, index) => index + 1),
+        excludedIndexes: [],
+        hasExplicitSelection: false,
+        invalid: false,
+        usedSelectionFallback: true,
+      }
+      : selectionResult;
 
     setFeedbackSurvey((prev) => ({
       ...prev,
@@ -4290,15 +4966,18 @@ function App() {
         selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
         focus: [
           feedbackSurvey.reviewFocus,
-          selectionResult.hasExplicitSelection
-            ? `החל רק את המלצות מספר ${selectionResult.selectedIndexes.join(', ')}.${selectionResult.excludedIndexes.length ? ` דלג על ${selectionResult.excludedIndexes.join(', ')}.` : ''}`
+          effectiveSelectionResult.usedSelectionFallback
+            ? `המשתמש כתב בחירת המלצות שלא פורקה באופן יציב: "${String(feedbackSurvey.reviewApplySelection || '').trim()}". אל תעצור ואל תבקש ניסוח מחדש; נסה למפות בזהירות את ההמלצות הזמינות מתוך הרשימה, והחזר needs_review לכל המלצה שלא ניתן למקם בבטחה.`
+            : '',
+          effectiveSelectionResult.hasExplicitSelection
+            ? `החל רק את המלצות מספר ${effectiveSelectionResult.selectedIndexes.join(', ')}.${effectiveSelectionResult.excludedIndexes.length ? ` דלג על ${effectiveSelectionResult.excludedIndexes.join(', ')}.` : ''}`
             : '',
         ].filter(Boolean).join('\n'),
-        suggestions: selectionResult.suggestions,
+        suggestions: effectiveSelectionResult.suggestions,
         returnMeta: true,
       });
       let planEdits = Array.isArray(planResult?.edits) ? planResult.edits : [];
-      let missingPlanSuggestions = collectMissingReviewActionSuggestions(selectionResult.suggestions, planEdits);
+      let missingPlanSuggestions = collectMissingReviewActionSuggestions(effectiveSelectionResult.suggestions, planEdits);
       for (let attemptIndex = 0; missingPlanSuggestions.length && attemptIndex < 2; attemptIndex += 1) {
         const completionResult = await buildDocumentReviewActionPlan({
           existingHtml: sourceHtmlSnapshot,
@@ -4324,7 +5003,7 @@ function App() {
           errorMessage: [planResult?.errorMessage, completionResult?.errorMessage].map((value) => String(value || '').trim()).filter(Boolean).join(' | '),
           edits: planEdits,
         };
-        const nextMissingPlanSuggestions = collectMissingReviewActionSuggestions(selectionResult.suggestions, planEdits);
+        const nextMissingPlanSuggestions = collectMissingReviewActionSuggestions(effectiveSelectionResult.suggestions, planEdits);
         if (nextMissingPlanSuggestions.length >= missingPlanSuggestions.length) break;
         missingPlanSuggestions = nextMissingPlanSuggestions;
       }
@@ -4343,7 +5022,7 @@ function App() {
       const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planEdits);
       const combinedUnresolved = [...unresolved, ...coverageUnresolved];
       if (!resolved.length) {
-        throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות יעדי עריכה ייחודיים מתוך הערות המרצה.');
+        throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות יעדי עריכה ייחודיים מתוך ההערות או ההמלצות.');
       }
 
       const applyResult = handleApplyAssistantEditBatch({
@@ -4351,7 +5030,7 @@ function App() {
         agentType: 'lecturer-review-apply',
       });
       if (!applyResult?.ok) {
-        throw new Error(applyResult?.message || 'לא הצלחתי להחיל את תיקוני המרצה על המסמך.');
+        throw new Error(applyResult?.message || 'לא הצלחתי להחיל את התיקונים על המסמך.');
       }
 
       triggerDocumentArrival(combinedUnresolved.length ? 'warning' : 'success');
@@ -4413,6 +5092,7 @@ function App() {
     selectedProviderId = '',
     selectedProviderModel = '',
     agentType = 'assistant-sidebar-plan',
+    fallbackInsertText = '',
   } = {}) => {
     if (!editor) {
       return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
@@ -4431,35 +5111,40 @@ function App() {
       ? normalizedPrompt
       : extractSidebarReviewContextFromConversation(normalizedConversation);
     const availableReviewSuggestions = pastedReviewSuggestions.length ? pastedReviewSuggestions : sidebarReviewSuggestions;
-    if (hasSidebarReviewSelectionIntent && !availableReviewSuggestions.length) {
-      return { ok: false, message: 'זיהיתי בקשה להחיל המלצות לפי מספרים, אבל לא הצלחתי לחלץ רשימת המלצות ממוספרת מהשיחה או מהטקסט שהודבק. בקש מהמרצה להציג את ההמלצות כרשימה ממוספרת ונסה שוב.' };
-    }
+    const shouldFallbackToGeneralReviewMapping = hasSidebarReviewSelectionIntent && !availableReviewSuggestions.length;
     const sidebarReviewSelectionText = getSidebarReviewSelectionText(normalizedPrompt);
     const sidebarReviewSelection = availableReviewSuggestions.length && hasSidebarReviewSelectionIntent
       ? resolveReviewSuggestionSelection(sidebarReviewSelectionText, availableReviewSuggestions)
       : null;
-    if (sidebarReviewSelection?.invalid || (sidebarReviewSelection?.hasExplicitSelection && !sidebarReviewSelection.suggestions.length)) {
-      return { ok: false, message: 'לא זיהיתי מספרי המלצות תקינים מהשיחה הקודמת. אפשר לכתוב למשל: תעשה את 1,2,3 או תעשה את 1-3 בלי 2.' };
-    }
+    const shouldFallbackInvalidSidebarSelection = Boolean(sidebarReviewSelection?.invalid || (sidebarReviewSelection?.hasExplicitSelection && !sidebarReviewSelection.suggestions.length));
     const shouldApplyAllAvailableReviewSuggestions = availableReviewSuggestions.length > 0
       && !sidebarReviewSelection?.hasExplicitSelection
+      && !shouldFallbackInvalidSidebarSelection
       && SIDEBAR_REVIEW_APPLY_ALL_INTENT_PATTERN.test(normalizedPrompt);
-    const selectedSidebarSuggestions = sidebarReviewSelection?.hasExplicitSelection
+    const selectedSidebarSuggestions = sidebarReviewSelection?.hasExplicitSelection && !shouldFallbackInvalidSidebarSelection
       ? sidebarReviewSelection.suggestions
       : shouldApplyAllAvailableReviewSuggestions
         ? availableReviewSuggestions
         : [];
-    const selectedSidebarIndexes = sidebarReviewSelection?.hasExplicitSelection
+    const selectedSidebarIndexes = sidebarReviewSelection?.hasExplicitSelection && !shouldFallbackInvalidSidebarSelection
       ? sidebarReviewSelection.selectedIndexes
       : shouldApplyAllAvailableReviewSuggestions
         ? selectedSidebarSuggestions.map((_, index) => index + 1)
         : [];
     const scopedSidebarFeedback = selectedSidebarSuggestions.length
       ? (sidebarReviewContext
-          ? `הערות המרצה המלאות למיפוי:
+          ? `ההערות וההמלצות המלאות למיפוי:
 ${sidebarReviewContext}`
           : '')
-      : (availableReviewSuggestions.length > 0 ? '' : normalizedConversation);
+      : (shouldFallbackInvalidSidebarSelection ? [
+          `המשתמש ביקש להחיל המלצות לפי מספרים, אך בחירת המספרים לא פורקה באופן יציב: "${sidebarReviewSelectionText}". אל תעצור ואל תבקש ניסוח מחדש; נסה להבין מתוך ההקשר אילו המלצות התבקשו, ומפה רק תיקונים שניתן לזהות בבטחה.`,
+          sidebarReviewContext || normalizedConversation,
+        ].filter(Boolean).join('\n\n') : (availableReviewSuggestions.length > 0 ? '' : [
+          shouldFallbackToGeneralReviewMapping
+            ? 'המשתמש ביקש להחיל המלצות לפי מספרים, אך ההמלצות לא חולצו כרשימה ממוספרת יציבה. אל תעצור ואל תבקש ניסוח מחדש; מפה בזהירות רק תיקונים שניתן לזהות מתוך ההקשר המצורף.'
+            : '',
+          normalizedConversation,
+        ].filter(Boolean).join('\n\n')));
 
     try {
       const generationRequest = beginGenerationRequest('sidebar-edit-plan');
@@ -4475,8 +5160,8 @@ ${sidebarReviewContext}`
           selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
           selectedSidebarIndexes.length
             ? (sidebarReviewSelection?.hasExplicitSelection
-                ? `המשתמש ביקש להחיל רק את המלצות מספר ${selectedSidebarIndexes.join(', ')} מתוך רשימת המרצה האחרונה. אסור להוסיף תיקונים אחרים.`
-                : `המשתמש ביקש להחיל את כל ${selectedSidebarIndexes.length} המלצות המרצה שחולצו מהשיחה/מהטקסט. אסור להוסיף תיקונים אחרים.`)
+                ? `המשתמש ביקש להחיל רק את המלצות מספר ${selectedSidebarIndexes.join(', ')} מתוך רשימת ההמלצות האחרונה. אסור להוסיף תיקונים אחרים.`
+                : `המשתמש ביקש להחיל את כל ${selectedSidebarIndexes.length} ההמלצות שחולצו מהשיחה/מהטקסט. אסור להוסיף תיקונים אחרים.`)
             : '',
         ].filter(Boolean).join('\n'),
         feedback: selectedSidebarSuggestions.length
@@ -4499,7 +5184,7 @@ ${sidebarReviewContext}`
             selectedSidebarSuggestions.length ? sidebarReviewSelectionText : normalizedPrompt,
             `קריאת השלמה ${attemptIndex + 1}: בקריאה הקודמת לא הוחזרה תכנית עבור ${missingPlanSuggestions.length} המלצות. חובה למפות רק את ההמלצות החסרות הבאות, לפי suggestionId, או להחזיר needs_review לכל המלצה שלא ניתן למקם בבטחה.`,
           ].filter(Boolean).join('\n'),
-          feedback: scopedSidebarFeedback ? `הערות המרצה המלאות למיפוי:\n${scopedSidebarFeedback}` : '',
+          feedback: scopedSidebarFeedback ? `ההערות וההמלצות המלאות למיפוי:\n${scopedSidebarFeedback}` : '',
           suggestions: missingPlanSuggestions,
           returnMeta: true,
         });
@@ -4531,6 +5216,15 @@ ${sidebarReviewContext}`
       const { resolved, unresolved } = resolveReviewActionPlanEdits(editor.state.doc, planEdits);
       const combinedUnresolved = [...unresolved, ...coverageUnresolved];
       if (!resolved.length) {
+        const fallbackResult = insertAssistantTextAtActivePosition(fallbackInsertText, agentType);
+        if (fallbackResult?.ok) {
+          return {
+            ...fallbackResult,
+            ok: true,
+            partial: true,
+            unresolved: combinedUnresolved,
+          };
+        }
         throw new Error(planResult?.errorMessage || 'לא הצלחתי לזהות מיקומים ייחודיים לתיקונים שביקשת להחיל.');
       }
 
@@ -4559,7 +5253,7 @@ ${sidebarReviewContext}`
         message: error?.message || 'לא הצלחתי למפות את התיקונים למיקומים הנכונים במסמך.',
       };
     }
-  }, [activeTemplateId, beginGenerationRequest, editor, feedbackSurvey.prompt, handleApplyAssistantEditBatch, isGenerationRequestCurrent, liveGeneration.prompt, triggerDocumentArrival]);
+  }, [activeTemplateId, beginGenerationRequest, editor, feedbackSurvey.prompt, handleApplyAssistantEditBatch, insertAssistantTextAtActivePosition, isGenerationRequestCurrent, liveGeneration.prompt, triggerDocumentArrival]);
 
   React.useEffect(() => {
     if (editor) applyDocumentStyleToEditor(documentStyle, editor);
@@ -4647,10 +5341,17 @@ ${sidebarReviewContext}`
 
   React.useEffect(() => {
     if (!editor || sidebarOpen || assistantBehavior.autoPopup === false) return;
+    if (Date.now() < assistantAutoPopupBlockedUntil) return;
+    if (!lastEditorContentActivityAt) return;
+    if (Date.now() - lastEditorContentActivityAt > 1000) return;
     const hasText = editor.getText().trim().length > 0;
     if (!hasText) return;
 
+    const scheduledFromContentActivityAt = lastEditorContentActivityAt;
     const timer = window.setTimeout(() => {
+      if (scheduledFromContentActivityAt !== lastEditorContentActivityAt) return;
+      if (Date.now() < assistantAutoPopupBlockedUntil) return;
+      if (!editor.state.selection.empty) return;
       const activeInEditor = document.activeElement?.closest?.('.ProseMirror');
       if (activeInEditor && !sidebarOpen) {
         setAssistantTrigger('idle');
@@ -4660,7 +5361,14 @@ ${sidebarReviewContext}`
     }, Math.max(3, Number(assistantBehavior.idleSeconds || 5)) * 1000);
 
     return () => window.clearTimeout(timer);
-  }, [editor, lastEditorActivityAt, sidebarOpen, assistantBehavior]);
+  }, [assistantAutoPopupBlockedUntil, editor, lastEditorContentActivityAt, sidebarOpen, assistantBehavior]);
+
+  React.useEffect(() => {
+    if (!sidebarOpen) return;
+    if (Date.now() >= assistantAutoPopupBlockedUntil) return;
+    if (assistantTrigger === 'autopilot') return;
+    setSidebarOpen(false);
+  }, [assistantAutoPopupBlockedUntil, assistantTrigger, sidebarOpen]);
 
   const closeAssistantPopup = React.useCallback(() => {
     setSidebarOpen(false);
@@ -4677,16 +5385,9 @@ ${sidebarReviewContext}`
     return window.confirm('יש במסמך תוכן קיים. להחליף אותו?');
   }, [hasMeaningfulContent]);
 
-  const downloadFile = (content, filename, type) => {
+  const downloadFile = async (content, filename, type) => {
     const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    return saveBlobInBrowser(blob, filename);
   };
 
   const persistLocalCache = React.useCallback((html) => {
@@ -4715,16 +5416,29 @@ ${sidebarReviewContext}`
     const selectedProviderModel = String(payload.selectedProviderModel || '').trim();
     const selectedModel = selectedProviderId;
     const requestedStyle = String(payload.documentStyle || '').trim();
+    const instructionFileName = String(payload.instructionFileName || '').trim();
     const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
     const additionalReviewRounds = Math.max(0, Math.min(2, Number(payload.additionalReviewRounds) || 0));
     const suppressDeferredReviewOffer = payload.suppressDeferredReviewOffer === true;
     const forceDirectMode = payload.forceDirectMode === true;
     const skipWorkflowAutomation = payload.skipWorkflowAutomation === true;
     const directModeReason = String(payload.directModeReason || '').trim();
+    const useWorkspaceV2 = payload.useWorkspaceV2 === true;
+    const workspaceV2TemplateId = String(payload.workspaceV2TemplateId || '').trim();
     const preserveCurrentDocumentOnError = payload.preserveCurrentDocumentOnError === true;
+    const workspaceBypassActive = payload.workspaceBypassActive === true;
 
     if (!options.skipConfirmReplace) {
       beginDocumentIdentity({ filePath: '' });
+      if (instructions) {
+        storeAssignmentBrief({
+          text: instructions,
+          fileName: instructionFileName,
+          sourceLabel: instructionFileName ? 'קובץ הנחיות' : 'הנחיות מטלה',
+        });
+      } else {
+        clearAssignmentBrief();
+      }
     } else {
       resetDocumentInteractionState();
     }
@@ -4739,6 +5453,7 @@ ${sidebarReviewContext}`
 
     const generationRequest = beginGenerationRequest('doc');
     const originWorkspaceId = generationRequest.workspaceId;
+    const generationLogsWorkspaceId = useWorkspaceV2 && workspaceV2TemplateId ? workspaceV2TemplateId : originWorkspaceId;
     const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
     const shouldReviseBaseDraft = hasBaseDraft && directModeReason !== 'chef-final-compose';
     const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
@@ -4757,7 +5472,7 @@ ${sidebarReviewContext}`
     const inspectorInstructions = shouldReviseBaseDraft
       ? String(revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST).trim()
       : instructions;
-    const isKnownDirectStartScreenRoute = String(resolvedAction.workspaceId || '').trim() === '__no-workspace__'
+    const isKnownDirectStartScreenRoute = (workspaceBypassActive || String(resolvedAction.workspaceId || '').trim() === '__no-workspace__')
       && Boolean(selectedProviderId);
     const generationLabel = shouldReviseBaseDraft
       ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
@@ -4775,12 +5490,12 @@ ${sidebarReviewContext}`
         selectedProviderId,
         selectedProviderModel,
         route: generationRoute,
-        routeMode: (isKnownDirectStartScreenRoute || forceDirectMode || skipWorkflowAutomation) ? 'direct' : '',
-        routeModeReason: directModeReason || (forceDirectMode ? 'forceDirectMode' : (skipWorkflowAutomation ? 'skipWorkflowAutomation' : (isKnownDirectStartScreenRoute ? 'providerOverride' : ''))),
+        routeMode: useWorkspaceV2 ? 'workspace-v2' : ((isKnownDirectStartScreenRoute || forceDirectMode || skipWorkflowAutomation) ? 'direct' : ''),
+        routeModeReason: useWorkspaceV2 ? workspaceV2TemplateId : (directModeReason || (forceDirectMode ? 'forceDirectMode' : (skipWorkflowAutomation ? 'skipWorkflowAutomation' : (isKnownDirectStartScreenRoute ? 'providerOverride' : '')))),
       }),
     });
     const initialSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
-    const initialLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+    const initialLogs = getRecentAgentLogs(18, { workspaceId: generationLogsWorkspaceId, runId: generationRequest.runId });
 
     setLiveGeneration({
       active: true,
@@ -4789,7 +5504,7 @@ ${sidebarReviewContext}`
       summary: initialSummary,
       logs: initialLogs,
       runId: generationRequest.runId,
-      workspaceId: originWorkspaceId,
+      workspaceId: generationLogsWorkspaceId,
     });
 
     const initialShell = buildLiveGenerationShell({
@@ -4828,7 +5543,7 @@ ${sidebarReviewContext}`
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, forceDirectMode, skipWorkflowAutomation, directModeReason, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -4838,7 +5553,7 @@ ${sidebarReviewContext}`
       const usedFallback = Boolean(result?.usedFallback);
       if (!isGenerationRequestCurrent(generationRequest)) return true;
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
-      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: generationLogsWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
       const resolvedFeedbackProviderId = resolvedInspectorMeta.requestedProviderId || selectedProviderId;
       const resolvedFeedbackProviderModel = resolvedInspectorMeta.requestedProviderModel || selectedProviderModel;
@@ -4849,7 +5564,7 @@ ${sidebarReviewContext}`
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
       persistLocalCache(generated);
-      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: generationLogsWorkspaceId }));
       setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
         ...prev,
         inspector: {
@@ -4873,6 +5588,8 @@ ${sidebarReviewContext}`
           selectedModel,
           selectedProviderId: resolvedFeedbackProviderId,
           selectedProviderModel: resolvedFeedbackProviderModel,
+          useWorkspaceV2: Boolean(result?.workspaceV2?.templateId || workspaceV2TemplateId),
+          workspaceV2TemplateId: String(result?.workspaceV2?.templateId || workspaceV2TemplateId || '').trim(),
         }),
         open: false,
         phase: 'details',
@@ -4902,6 +5619,7 @@ ${sidebarReviewContext}`
             selectedModel,
             selectedProviderId: resolvedFeedbackProviderId,
             selectedProviderModel: resolvedFeedbackProviderModel,
+            instructionFileName,
             baseDraft: {
               html: generated,
               title: resolvedTitle,
@@ -4919,13 +5637,13 @@ ${sidebarReviewContext}`
     } catch (error) {
       if (!isGenerationRequestCurrent(generationRequest)) return true;
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
-      const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
+      const latestLogs = getRecentAgentLogs(18, { workspaceId: generationLogsWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
       const terminalState = classifyLiveGenerationTerminalState(error, {
         errorPrompt: hasBaseDraft ? 'עדכון טיוטת הבסיס נכשל' : 'יצירת המסמך נכשלה',
         timeoutPrompt: hasBaseDraft ? 'עדכון טיוטת הבסיס הופסק כי הבקשה ארכה יותר מדי זמן' : 'יצירת המסמך הופסקה כי הבקשה ארכה יותר מדי זמן',
       });
-      setLiveGeneration((prev) => ({ ...prev, active: true, state: terminalState.state, prompt: terminalState.prompt, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: originWorkspaceId }));
+      setLiveGeneration((prev) => ({ ...prev, active: true, state: terminalState.state, prompt: terminalState.prompt, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: generationLogsWorkspaceId }));
       setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
         ...prev,
         inspector: {
@@ -4960,7 +5678,66 @@ ${sidebarReviewContext}`
     }
 
     return true;
-  }, [beginDocumentIdentity, beginGenerationRequest, changeDocumentStyle, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, resetDocumentInteractionState, runStartTransition, triggerDocumentArrival]);
+  }, [beginDocumentIdentity, beginGenerationRequest, changeDocumentStyle, clearAssignmentBrief, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, resetDocumentInteractionState, runStartTransition, storeAssignmentBrief, triggerDocumentArrival]);
+
+  const generatePresentationDeck = React.useCallback(async ({
+    topic = '',
+    audience = '',
+    goal = '',
+    slideCount = 10,
+    theme = 'premium',
+    imageIntensity = 'high',
+    speakerNotes = false,
+    includeCover = true,
+  } = {}) => {
+    const cleanTopic = String(topic || '').trim();
+    if (!cleanTopic) return false;
+
+    const cleanAudience = String(audience || '').trim();
+    const cleanGoal = String(goal || '').trim();
+    const cleanTheme = String(theme || 'premium').trim() || 'premium';
+    const cleanImageIntensity = String(imageIntensity || 'high').trim() || 'high';
+    const normalizedSlideCount = Math.max(4, Math.min(20, Number(slideCount) || 10));
+
+    const presentationPrompt = [
+      `צור מצגת בעברית בנושא: ${cleanTopic}`,
+      cleanAudience ? `קהל יעד: ${cleanAudience}` : '',
+      cleanGoal ? `מטרת המצגת: ${cleanGoal}` : '',
+      `כמות שקופיות: ${normalizedSlideCount}`,
+      `סגנון עיצובי: ${cleanTheme}`,
+      `דגש על תמונות וויזואליה: ${cleanImageIntensity}`,
+      includeCover ? 'כלול שקופית פתיחה חזקה.' : 'אין צורך בשקופית פתיחה נפרדת.',
+      speakerNotes ? 'הוסף לכל שקופית גם שורת הערות מרצה קצרה.' : '',
+    ].filter(Boolean).join('\n');
+
+    const presentationInstructions = [
+      'החזר מסמך HTML שנראה כמו deck של מצגת, לא כמו עבודה רגילה.',
+      'כל שקופית צריכה להכיל כותרת קצרה, מסר מרכזי חד, ועד 2-5 bullets קצרים.',
+      'בין שקופיות כתוב בשורה נפרדת בדיוק: <div data-type="page-break"></div>.',
+      'שלב הנחיות ויזואליות, רעיונות לתמונות, או placeholders לתמונה/גרפיקה במקומות הנכונים.',
+      'הימנע מפסקאות ארוכות. כתוב תמציתי, חד וייצוגי.',
+      'אם מתאים, סיים בשקופית takeaway או call to action.',
+    ].join('\n');
+
+    setAppMode('word');
+    setShowStartScreen(false);
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+    return executeStartScreenGeneration({
+      kind: 'start-screen-generate',
+      workspaceId: getActiveWorkspaceId(),
+      payload: {
+        prompt: presentationPrompt,
+        templateId: 'summary',
+        instructions: presentationInstructions,
+        selectedMaterials: [],
+        selectedProviderId: '',
+        selectedProviderModel: '',
+        additionalReviewRounds: 0,
+        documentStyle: 'presentation',
+      },
+    });
+  }, [executeStartScreenGeneration]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -5046,7 +5823,9 @@ ${sidebarReviewContext}`
         selectedModel,
         selectedProviderId,
         selectedProviderModel,
-        forceDirectMode: executionMode !== 'workspace',
+        useWorkspaceV2: payload.useWorkspaceV2 === true,
+        workspaceV2TemplateId: String(payload.workspaceV2TemplateId || '').trim(),
+        forceDirectMode: payload.useWorkspaceV2 === true ? false : executionMode !== 'workspace',
         runId: generationRequest.runId,
         returnMeta: true,
       });
@@ -5428,6 +6207,11 @@ ${sidebarReviewContext}`
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
     const importedText = String(payload.text || '').trim()
       || importedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (importedHtml.length > MAX_IMPORTED_DOCUMENT_HTML_CHARS || importedText.length > MAX_IMPORTED_DOCUMENT_TEXT_CHARS) {
+      finalizePendingImportedDocument({ rollbackToSpss: true });
+      alert('המסמך גדול מדי לפתיחה ישירה בתוך העורך כרגע. נסה גרסה קצרה יותר או פצל את הקובץ.');
+      return;
+    }
     const fallbackTitle = String(payload.title || 'מסמך שנפתח מהמחשב').trim();
     if (!confirmReplaceCurrentDocument()) {
       finalizePendingImportedDocument({ rollbackToSpss: true });
@@ -5435,7 +6219,13 @@ ${sidebarReviewContext}`
     }
 
     clearDraftReviewState();
-    editor.commands.setContent(importedHtml);
+    try {
+      editor.commands.setContent(importedHtml);
+    } catch (error) {
+      finalizePendingImportedDocument({ rollbackToSpss: true });
+      alert(error?.message || 'לא הצלחתי לטעון את תוכן הקובץ לעורך.');
+      return;
+    }
     editor.setEditable(true);
     setViewMode('print');
     if (editor.view?.dom) {
@@ -5444,6 +6234,7 @@ ${sidebarReviewContext}`
     }
     applyDocumentStyleToEditor(documentStyle, editor);
     beginDocumentIdentity({ filePath: payload.filePath });
+    clearAssignmentBrief();
     persistActiveTemplateId('blank');
     syncPersistedAppSettings();
     setActiveTemplateId('blank');
@@ -5465,7 +6256,7 @@ ${sidebarReviewContext}`
     setLastEditorActivityAt(Date.now());
     setShowStartScreen(false);
     focusEditorSoon('start');
-  }, [editor, appMode, activeTemplateId, queuePendingImportedDocument, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle, finalizePendingImportedDocument, beginDocumentIdentity]);
+  }, [editor, appMode, activeTemplateId, queuePendingImportedDocument, confirmReplaceCurrentDocument, clearDraftReviewState, focusEditorSoon, persistLocalCache, applyDocumentStyleToEditor, documentStyle, finalizePendingImportedDocument, beginDocumentIdentity, clearAssignmentBrief]);
 
   React.useEffect(() => {
     if (!window.desktopApp?.onOpenExternalDocument) return;
@@ -5549,6 +6340,195 @@ ${sidebarReviewContext}`
     return getDraftTitleFromText(text, activeTemplateId || 'blank');
   }, [activeTemplateId]);
 
+  const persistDocumentToCloud = React.useCallback(async ({ reason = 'manual', silent = false } = {}) => {
+    if (!cloudAvailable) {
+      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      return null;
+    }
+    if (!cloudUser) {
+      window.alert('צריך קודם להתחבר עם Google.');
+      return null;
+    }
+    if (!editor) {
+      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      return null;
+    }
+
+    const isAutosave = reason === 'autosave';
+    setCloudSyncState((prev) => ({
+      ...prev,
+      status: 'saving',
+      message: isAutosave ? 'שומר אוטומטית לענן...' : 'שומר לענן...',
+    }));
+
+    try {
+      const html = editor.getHTML();
+      const text = editor.getText();
+      const fallbackTitle = inferCurrentDocumentTitle(text);
+      const title = resolveDocumentHistoryTitle({
+        text,
+        filePath: currentFilePathRef.current,
+        templateId: activeTemplateId || 'blank',
+        fallbackTitle,
+      });
+      const savedDocument = await saveCloudDocument({
+        user: cloudUser,
+        documentId: currentCloudDocumentIdRef.current || activeDocumentSessionId,
+        title,
+        html,
+        text,
+        templateId: activeTemplateId || 'blank',
+        documentStyle,
+        filePath: currentFilePathRef.current,
+        sessionId: activeDocumentSessionId,
+      });
+
+      const savedAt = new Date().toISOString();
+      setCurrentCloudDocumentId(savedDocument.id);
+      currentCloudDocumentIdRef.current = savedDocument.id;
+      lastCloudSavedHtmlRef.current = html;
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'idle',
+        message: isAutosave ? 'סונכרן אוטומטית ל-Firebase' : 'נשמר ל-Firebase',
+        lastSavedAt: savedAt,
+        documentId: savedDocument.id,
+        autosaveEnabled: true,
+      }));
+
+      if (!silent && !isAutosave) {
+        window.alert('המסמך נשמר בהצלחה ל-Firebase.');
+      }
+
+      return savedDocument;
+    } catch (error) {
+      console.error('Cloud save failed:', error);
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'השמירה לענן נכשלה',
+      }));
+      if (!silent) {
+        window.alert(error?.message || 'השמירה לענן נכשלה.');
+      }
+      return null;
+    }
+  }, [activeDocumentSessionId, activeTemplateId, cloudAvailable, cloudUser, documentStyle, editor, inferCurrentDocumentTitle]);
+
+  const handleCloudGoogleSignIn = React.useCallback(async () => {
+    if (!cloudAvailable) {
+      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      return;
+    }
+    setCloudSyncState((prev) => ({
+      ...prev,
+      status: 'saving',
+      message: 'פותח התחברות עם Google...',
+    }));
+    try {
+      await cloudSignInWithGooglePopup();
+    } catch (error) {
+      console.error('Google sign-in failed:', error);
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'ההתחברות עם Google נכשלה',
+      }));
+      window.alert(error?.message || 'ההתחברות עם Google נכשלה.');
+    }
+  }, [cloudAvailable]);
+
+  const handleCloudSignOut = React.useCallback(async () => {
+    try {
+      await cloudSignOut();
+      setCloudSyncState({
+        status: 'idle',
+        message: 'לא מחובר לענן',
+        lastSavedAt: '',
+        documentId: '',
+        autosaveEnabled: false,
+      });
+    } catch (error) {
+      console.error('Cloud sign-out failed:', error);
+      window.alert(error?.message || 'ההתנתקות מהענן נכשלה.');
+    }
+  }, []);
+
+  const handleManualCloudSync = React.useCallback(async () => {
+    if (!cloudAvailable) {
+      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      return;
+    }
+    if (!cloudUser) {
+      window.alert('צריך קודם להתחבר עם Google.');
+      return;
+    }
+
+    setCloudSyncState((prev) => ({
+      ...prev,
+      status: 'saving',
+      message: 'מסנכרן פרופיל ומסמך לענן...',
+    }));
+
+    try {
+      const profilePayload = await triggerCloudSync(cloudUser, { immediate: true, force: true, throwOnError: true });
+      const savedDocument = await persistDocumentToCloud({ reason: 'manual-profile-sync', silent: true });
+      const savedAt = new Date().toISOString();
+      const syncedSettingsCount = Object.keys(profilePayload?.appSettings || {}).length;
+
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'idle',
+        message: savedDocument
+          ? `הפרופיל והמסמך סונכרנו לענן (${syncedSettingsCount} הגדרות)`
+          : `הפרופיל סונכרן לענן (${syncedSettingsCount} הגדרות)`,
+        lastSavedAt: savedAt,
+        documentId: savedDocument?.id || prev.documentId,
+        autosaveEnabled: prev.autosaveEnabled || Boolean(savedDocument),
+      }));
+
+      window.alert(savedDocument
+        ? `הפרופיל והמסמך סונכרנו לענן (${syncedSettingsCount} הגדרות).`
+        : `הפרופיל סונכרן לענן (${syncedSettingsCount} הגדרות).`);
+    } catch (error) {
+      console.error('Manual cloud sync failed:', error);
+      setCloudSyncState((prev) => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'הסנכרון לענן נכשל',
+      }));
+      window.alert(error?.message || 'הסנכרון לענן נכשל.');
+    }
+  }, [cloudAvailable, cloudUser, persistDocumentToCloud]);
+
+  React.useEffect(() => {
+    if (!cloudUser || !editor || !cloudSyncState.autosaveEnabled || !lastEditorContentActivityAt) return undefined;
+
+    const scheduledActivityAt = lastEditorContentActivityAt;
+    const timer = window.setTimeout(() => {
+      if (scheduledActivityAt !== lastEditorContentActivityAt) return;
+      const latestHtml = editor.getHTML();
+      if (!latestHtml || latestHtml === lastCloudSavedHtmlRef.current) return;
+      persistDocumentToCloud({ reason: 'autosave', silent: true }).catch((error) => {
+        console.error('Cloud autosave failed:', error);
+      });
+    }, 2200);
+
+    return () => window.clearTimeout(timer);
+  }, [cloudSyncState.autosaveEnabled, cloudUser, editor, lastEditorContentActivityAt, persistDocumentToCloud]);
+
+  const cloudStatusLabel = React.useMemo(() => {
+    if (!cloudAvailable) return 'Firebase לא מוגדר';
+    if (!cloudAuthReady) return 'בודק התחברות לענן...';
+    const baseLabel = cloudSyncState.message || (cloudUser ? 'מחובר לענן' : 'לא מחובר לענן');
+    if (!cloudSyncState.lastSavedAt) return baseLabel;
+    const timeLabel = new Date(cloudSyncState.lastSavedAt).toLocaleTimeString('he-IL', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `${baseLabel} · ${timeLabel}`;
+  }, [cloudAuthReady, cloudAvailable, cloudSyncState.lastSavedAt, cloudSyncState.message, cloudUser]);
+
   const buildDesktopSavePayload = React.useCallback((preferredExtension = 'docx') => {
     const currentPreset = DOCUMENT_STYLE_PRESETS[documentStyle] || DOCUMENT_STYLE_PRESETS.academic;
     const html = normalizeDocumentExportHtml(editor?.getHTML?.() || '', { documentStyle });
@@ -5592,6 +6572,15 @@ ${sidebarReviewContext}`
       return { handled: false, canceled: false, error };
     }
   }, [buildDesktopSavePayload]);
+
+  const buildDesktopSaveSuccessMessage = React.useCallback((result = {}, fallbackMessage = 'המסמך נשמר בהצלחה במחשב.') => {
+    const savedPath = String(result?.filePath || '').trim();
+    const requestedPath = String(result?.requestedFilePath || savedPath).trim();
+    if (savedPath && requestedPath && savedPath !== requestedPath) {
+      return `הקובץ המקורי היה פתוח או נעול, אז שמרתי עותק חדש ב:\n${savedPath}`;
+    }
+    return savedPath ? `המסמך נשמר בהצלחה ב:\n${savedPath}` : fallbackMessage;
+  }, []);
 
 
 
@@ -5969,6 +6958,7 @@ ${sidebarReviewContext}`
           clearDraftReviewState();
           editor.commands.clearContent();
           clearPersistedDraftCache();
+          clearAssignmentBrief();
           saveHomeInstructions('');
           setStartScreenInstructionsResetToken((prev) => prev + 1);
           beginDocumentIdentity({ filePath: '' });
@@ -5984,53 +6974,64 @@ ${sidebarReviewContext}`
         break;
       }
       case 'saveLocal': {
-        const html = editor.getHTML();
-        const text = editor.getText();
-        const title = inferCurrentDocumentTitle(text);
-        persistLocalCache(html);
+        await runGuardedSaveCommand(async () => {
+          const html = editor.getHTML();
+          const text = editor.getText();
+          const title = inferCurrentDocumentTitle(text);
+          persistLocalCache(html);
 
-        if (window.desktopApp?.saveDocumentDialog) {
-          const ext = String(currentFilePath || '').toLowerCase().split('.').pop();
-          const canSaveDirectly = Boolean(currentFilePath) && ['txt', 'html', 'htm', 'docx'].includes(ext);
-          const result = await window.desktopApp.saveDocumentDialog({
-            ...buildDesktopSavePayload(ext === 'txt' ? 'txt' : 'docx'),
-            filePath: canSaveDirectly ? currentFilePath : '',
-          });
+          if (window.desktopApp?.saveDocumentDialog) {
+            const ext = String(currentFilePath || '').toLowerCase().split('.').pop();
+            const canSaveDirectly = Boolean(currentFilePath) && ['html', 'htm', 'docx'].includes(ext);
+            const result = await window.desktopApp.saveDocumentDialog({
+              ...buildDesktopSavePayload(ext === 'html' || ext === 'htm' ? 'html' : 'docx'),
+              filePath: canSaveDirectly ? currentFilePath : '',
+            });
 
-          if (!result?.canceled && result?.filePath) {
-            setCurrentFilePath(String(result.filePath));
-            saveDocumentHistory({
-              title: resolveDocumentHistoryTitle({
-                text,
-                filePath: result.filePath,
+            if (result && result.ok === false) {
+              alert(result.error || 'השמירה נכשלה.');
+              return;
+            }
+
+            if (!result?.canceled && result?.filePath) {
+              setCurrentFilePath(String(result.filePath));
+              saveDocumentHistory({
+                title: resolveDocumentHistoryTitle({
+                  text,
+                  filePath: result.filePath,
+                  templateId: activeTemplateId || 'blank',
+                  fallbackTitle: title,
+                }),
+                content: html,
                 templateId: activeTemplateId || 'blank',
-                fallbackTitle: title,
-              }),
+                source: 'save-local',
+                filePath: String(result.filePath || ''),
+              });
+              alert(buildDesktopSaveSuccessMessage(result, canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : 'המסמך נשמר בהצלחה.'));
+            }
+            return;
+          }
+
+          const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+          if (browserSaveResult?.handled && !browserSaveResult.canceled) {
+            saveDocumentHistory({
+              title,
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-local',
-              filePath: String(result.filePath || ''),
             });
-            alert(canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : `המסמך נשמר בהצלחה ב:\n${result.filePath}`);
           }
-          break;
-        }
-
-        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
-        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
-          saveDocumentHistory({
-            title,
-            content: html,
-            templateId: activeTemplateId || 'blank',
-            source: 'save-local',
-          });
-        }
+        });
         break;
       }
       case 'openFile': {
         if (window.desktopApp?.openDocumentDialog) {
-          const result = await window.desktopApp.openDocumentDialog();
-          if (!result?.canceled) applyImportedDocument(result);
+          try {
+            const result = await window.desktopApp.openDocumentDialog();
+            if (!result?.canceled) applyImportedDocument(result);
+          } catch (error) {
+            alert(error?.message || 'לא ניתן לפתוח את הקובץ שנבחר.');
+          }
           break;
         }
 
@@ -6050,50 +7051,62 @@ ${sidebarReviewContext}`
         break;
       }
       case 'saveAs': {
-        const html = editor.getHTML();
-        const title = inferCurrentDocumentTitle(editor.getText());
+        await runGuardedSaveCommand(async () => {
+          const html = editor.getHTML();
+          const title = inferCurrentDocumentTitle(editor.getText());
 
-        if (window.desktopApp?.saveDocumentDialog) {
-          const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
+          if (window.desktopApp?.saveDocumentDialog) {
+            const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
 
-          if (!result?.canceled) {
-            setCurrentFilePath(String(result.filePath || ''));
+            if (result && result.ok === false) {
+              alert(result.error || 'השמירה נכשלה.');
+              return;
+            }
+
+            if (!result?.canceled) {
+              setCurrentFilePath(String(result.filePath || ''));
+              persistLocalCache(html);
+              saveDocumentHistory({
+                title: resolveDocumentHistoryTitle({
+                  text: editor.getText(),
+                  filePath: result.filePath,
+                  templateId: activeTemplateId || 'blank',
+                  fallbackTitle: title,
+                }),
+                content: html,
+                templateId: activeTemplateId || 'blank',
+                source: 'save-as',
+                filePath: String(result.filePath || ''),
+              });
+              alert(buildDesktopSaveSuccessMessage(result, 'המסמך נשמר בהצלחה.'));
+            }
+            return;
+          }
+
+          const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
+          if (browserSaveResult?.handled && !browserSaveResult.canceled) {
             persistLocalCache(html);
             saveDocumentHistory({
-              title: resolveDocumentHistoryTitle({
-                text: editor.getText(),
-                filePath: result.filePath,
-                templateId: activeTemplateId || 'blank',
-                fallbackTitle: title,
-              }),
+              title,
               content: html,
               templateId: activeTemplateId || 'blank',
               source: 'save-as',
-              filePath: String(result.filePath || ''),
             });
-            alert(`המסמך נשמר בהצלחה ב:\n${result.filePath}`);
           }
-          break;
-        }
-
-        const browserSaveResult = await downloadBrowserDocxOrAlert('docx');
-        if (browserSaveResult?.handled && !browserSaveResult.canceled) {
-          persistLocalCache(html);
-          saveDocumentHistory({
-            title,
-            content: html,
-            templateId: activeTemplateId || 'blank',
-            source: 'save-as',
-          });
-        }
+        });
         break;
       }
       case 'exportDocx': {
-        if (window.desktopApp?.saveDocumentDialog) {
-          await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
-          break;
-        }
-        await downloadBrowserDocxOrAlert('docx');
+        await runGuardedSaveCommand(async () => {
+          if (window.desktopApp?.saveDocumentDialog) {
+            const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
+            if (result && result.ok === false) {
+              alert(result.error || 'השמירה נכשלה.');
+            }
+            return;
+          }
+          await downloadBrowserDocxOrAlert('docx');
+        });
         break;
       }
       case 'print': {
@@ -6129,11 +7142,11 @@ ${sidebarReviewContext}`
       }
       case 'exportHTML': {
         const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body>${normalizeDocumentExportHtml(editor.getHTML(), { documentStyle })}</body></html>`;
-        downloadFile(htmlCtx, 'my-document.html', 'text/html');
+        await downloadFile(htmlCtx, 'my-document.html', 'text/html');
         break;
       }
       case 'exportText':
-        downloadFile(editor.getText(), 'my-document.txt', 'text/plain');
+        await downloadFile(editor.getText(), 'my-document.txt', 'text/plain');
         break;
 
       /* ---- פקודות פריסה ---- */
@@ -6535,9 +7548,12 @@ ${sidebarReviewContext}`
   const isStartTransitionRunning = startTransitionPhase === 'running';
   const prefersReducedMotion = getPrefersReducedMotion();
   const isSpssMode = appMode === 'spss';
-  const isInputDialogVisible = inputDialog.open && !isSpssMode;
-  const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && !isSpssMode;
-  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen && !isSpssMode;
+  const isPresentationMode = appMode === 'presentations';
+  const isWordMode = appMode === 'word';
+  const isNonDocumentMode = !isWordMode;
+  const isInputDialogVisible = inputDialog.open && isWordMode;
+  const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && isWordMode;
+  const isFeedbackSurveyVisible = feedbackSurvey.open && !showStartScreen && isWordMode;
   const copyleaksConfig = normalizeCopyleaksConfig(getProviderConfig().copyleaks);
   const copyleaksTextStats = getCopyleaksTextStats(copyleaksDetector.text);
   const copyleaksValidationMessage = getCopyleaksValidationMessage(copyleaksDetector.text);
@@ -6546,7 +7562,7 @@ ${sidebarReviewContext}`
   const shouldHideEditorWrapper = showStartScreen && !isInputDialogVisible;
   const canCreateDesktopWindow = Boolean(window.desktopApp?.createAppWindow);
   return (
-    <div className="flex flex-col h-screen bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
+    <div className="flex flex-col h-[100dvh] min-h-[100dvh] bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
       <ConfettiCelebration active={documentArrival.active && documentArrival.tone === 'success'} />
       <TopBar
@@ -6565,10 +7581,24 @@ ${sidebarReviewContext}`
         onHome={openHomeSafely}
         onOpenDraftRecommendations={openDraftRecommendations}
         draftRecommendationsDisabled={!canOpenDraftRecommendations}
+        onToggleAssignmentBrief={() => {
+          setAssignmentBriefOpen((prev) => !prev);
+        }}
+        assignmentBriefAvailable={Boolean(assignmentBrief.text)}
+        assignmentBriefOpen={assignmentBriefOpen}
         appMode={appMode}
         onModeChange={setAppMode}
+        cloudAvailable={cloudAvailable}
+        cloudUser={cloudUser}
+        cloudStatusLabel={cloudStatusLabel}
+        cloudBusy={cloudSyncState.status === 'saving'}
+        onCloudSignIn={handleCloudGoogleSignIn}
+        onCloudSave={() => {
+          Promise.resolve(handleManualCloudSync()).catch(() => {});
+        }}
+        onCloudSignOut={handleCloudSignOut}
       />
-      {!isSpssMode && (
+      {isWordMode && (
         <Ribbon
           onCommand={handleCommand}
           documentStyle={documentStyle}
@@ -6598,10 +7628,29 @@ ${sidebarReviewContext}`
           <SpssSyntaxStudio />
         </div>
 
-        {!isSpssMode && !showStartScreen && sidebarOpen && (
+        <div className="min-w-0 flex-1" style={{ display: isPresentationMode ? 'flex' : 'none' }}>
+          <PresentationStudio
+            busy={liveGeneration.state === 'running'}
+            onSwitchToWord={() => setAppMode('word')}
+            onGenerate={generatePresentationDeck}
+          />
+        </div>
+
+        {isWordMode && !showStartScreen && sidebarOpen && isMobileViewport && (
+          <button
+            type="button"
+            aria-label="סגור חלונית AI"
+            className="fixed inset-0 z-20 bg-slate-950/35 backdrop-blur-[1px]"
+            onClick={closeAssistantPopup}
+          />
+        )}
+
+        {isWordMode && !showStartScreen && sidebarOpen && (
           <aside
-            className="order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden"
-            style={{ width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
+            className={`${isMobileViewport
+              ? 'fixed inset-0 z-30 border-none bg-[#F8FAFC]'
+              : 'order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20'} transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden`}
+            style={isMobileViewport ? undefined : { width: sidebarCompact ? 'min(340px, 36vw)' : 'min(460px, 44vw)', minWidth: sidebarCompact ? 280 : 340, maxWidth: sidebarCompact ? '38vw' : '520px' }}
           >
             {liveGeneration.active && (
               <div className={`${shouldShowProgressOnlyPanel ? 'h-full min-h-0 p-4' : 'border-b border-slate-200 bg-white px-3 py-3'}`}>
@@ -6752,11 +7801,13 @@ ${sidebarReviewContext}`
             )}
 
             {!shouldShowProgressOnlyPanel && (
-              <AiSidebar
-                mode="sidebar"
-                compactMode={sidebarCompact}
-                activeDocumentSessionId={activeDocumentSessionId}
+            <AiSidebar
+              mode="sidebar"
+              compactMode={sidebarCompact}
+              launchPreset={assistantLaunchPreset}
+              activeDocumentSessionId={activeDocumentSessionId}
                 currentFilePath={currentFilePath}
+                assignmentBrief={assignmentBrief}
                 onToggleCompact={() => setSidebarCompact((prev) => !prev)}
                 reason={assistantTrigger}
                 documentContext={() => buildSidebarDocumentSnapshot(editor)}
@@ -6789,9 +7840,9 @@ ${sidebarReviewContext}`
 
         <div
           id="editor-wrapper"
-          className="flex flex-1 min-w-0 overflow-y-auto overflow-x-auto p-8 justify-center items-start bg-[#E1DFDD] relative"
+          className="flex flex-1 min-w-0 overflow-y-auto overflow-x-auto p-3 sm:p-8 justify-center items-start bg-[#E1DFDD] relative"
           style={{
-            display: isSpssMode ? 'none' : undefined,
+            display: isNonDocumentMode ? 'none' : undefined,
             opacity: shouldHideEditorWrapper ? 0 : 1,
             transform: prefersReducedMotion
               ? 'none'
@@ -6802,8 +7853,8 @@ ${sidebarReviewContext}`
               : 'opacity 320ms ease-out, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease-out',
             pointerEvents: shouldHideEditorWrapper ? 'none' : 'auto',
           }}
-          aria-hidden={shouldHideEditorWrapper || isSpssMode}
-          inert={shouldHideEditorWrapper || isSpssMode ? true : undefined}
+          aria-hidden={shouldHideEditorWrapper || isNonDocumentMode}
+          inert={shouldHideEditorWrapper || isNonDocumentMode ? true : undefined}
         >
           {isInputDialogVisible && (
             <div
@@ -6906,6 +7957,26 @@ ${sidebarReviewContext}`
               }}
             >
               <div className="w-[1180px] max-w-[98%] max-h-[92vh] overflow-hidden rounded-[28px] bg-white shadow-2xl border border-slate-200 flex flex-col">
+                {copyleaksDetector.scoreFlash && (
+                  <div className="pointer-events-none absolute inset-0 z-[102] flex items-center justify-center">
+                    <div className={`animate-pulse rounded-[32px] border px-8 py-7 shadow-2xl backdrop-blur-md ${
+                      copyleaksDetector.scoreFlash.tone === 'success'
+                        ? 'border-emerald-200 bg-emerald-50/95 text-emerald-700'
+                        : copyleaksDetector.scoreFlash.tone === 'balanced'
+                          ? 'border-cyan-200 bg-cyan-50/95 text-cyan-700'
+                          : copyleaksDetector.scoreFlash.tone === 'warning'
+                            ? 'border-amber-200 bg-amber-50/95 text-amber-700'
+                            : 'border-rose-200 bg-rose-50/95 text-rose-700'
+                    }`}>
+                      <div className="text-center">
+                        <div className="text-6xl leading-none mb-3">{copyleaksDetector.scoreFlash.emoji}</div>
+                        <div className="text-[11px] font-bold tracking-[0.24em] uppercase opacity-70">AI Detection</div>
+                        <div className="text-6xl font-black leading-none mt-2">{formatCopyleaksPercent(copyleaksDetector.scoreFlash.value)}</div>
+                        <div className="text-sm font-semibold mt-3">{copyleaksDetector.scoreFlash.label}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-4 px-6 py-5 md:px-8 border-b border-slate-100 bg-slate-50/70">
                   <div className="min-w-0 flex-1 text-right">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -7276,39 +8347,10 @@ ${sidebarReviewContext}`
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-                      <div className="font-bold text-slate-800">איך להריץ את סבב התיקון?</div>
-                      <div className="grid md:grid-cols-2 gap-3">
-                        <label className={`rounded-2xl border p-3 cursor-pointer transition ${effectiveFeedbackExecutionMode === 'direct' ? 'border-blue-300 bg-blue-50/70' : 'border-slate-200 bg-slate-50'}`}>
-                          <div className="flex items-start gap-3">
-                            <input
-                              type="radio"
-                              name="feedback-execution-mode"
-                              className="radio radio-sm mt-1"
-                              checked={effectiveFeedbackExecutionMode === 'direct'}
-                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'direct' }))}
-                            />
-                            <div className="space-y-1">
-                              <div className="font-semibold text-slate-800">תיקון ישיר</div>
-                              <div className="text-xs text-slate-500">סבב מהיר מול מודל אחד, בלי להריץ את צוות הסוכנים.</div>
-                            </div>
-                          </div>
-                        </label>
-                        <label className={`rounded-2xl border p-3 transition ${effectiveFeedbackExecutionMode === 'workspace' ? 'border-emerald-300 bg-emerald-50/70' : 'border-slate-200 bg-slate-50'} ${feedbackWorkflowAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                          <div className="flex items-start gap-3">
-                            <input
-                              type="radio"
-                              name="feedback-execution-mode"
-                              className="radio radio-sm mt-1"
-                              checked={effectiveFeedbackExecutionMode === 'workspace'}
-                              disabled={!feedbackWorkflowAvailable}
-                              onChange={() => setFeedbackSurvey((prev) => ({ ...prev, executionMode: 'workspace' }))}
-                            />
-                            <div className="space-y-1">
-                              <div className="font-semibold text-slate-800">תיקון עם צוות הסוכנים</div>
-                              <div className="text-xs text-slate-500">מריץ את ה-workflow הפעיל וממשיך להציג לוגים חיים לאורך הסבב.</div>
-                            </div>
-                          </div>
-                        </label>
+                      <div className="font-bold text-slate-800">סבב תיקון ישיר</div>
+                      <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-3">
+                        <div className="font-semibold text-slate-800">תיקון ישיר</div>
+                        <div className="text-xs text-slate-500 mt-1">סבב מהיר מול המודל הפעיל, בלי שכבת תיאום נוספת.</div>
                       </div>
                       <div className="text-xs text-slate-500">
                         {`סבב תיקון ${feedbackRoundIndex}. אפשר להמשיך לבקש סבבי תיקון נוספים מהמסך הזה כל עוד צריך.`}
@@ -7352,7 +8394,19 @@ ${sidebarReviewContext}`
               onWordCountChange={setWordCount}
               onCommand={handleCommand}
               wordPreferences={wordPreferences}
-              onOpenAssistant={() => {
+              onContextMenuOpen={() => {
+                setAssistantAutoPopupBlockedUntil(Date.now() + 2500);
+              }}
+              onOpenAssistant={(preset = null) => {
+                if (Date.now() < assistantAutoPopupBlockedUntil) return;
+                if (preset && typeof preset === 'object') {
+                  setAssistantLaunchPreset({
+                    nonce: Date.now(),
+                    classicAgentId: String(preset.classicAgentId || '').trim(),
+                    composerMode: String(preset.composerMode || '').trim(),
+                    prompt: String(preset.prompt || '').trim(),
+                  });
+                }
                 setAssistantTrigger('manual');
                 setLastEditorActivityAt(Date.now());
                 setSidebarOpen(true);
@@ -7362,7 +8416,7 @@ ${sidebarReviewContext}`
 
         </div>
 
-        {!isSpssMode && showStartScreen && (
+        {isWordMode && showStartScreen && (
           <div
             className="absolute inset-0 z-30 overflow-y-auto"
             style={{
@@ -7398,6 +8452,7 @@ ${sidebarReviewContext}`
                   if (!confirmReplaceCurrentDocument()) return;
                   clearPersistedDraftCache();
                   clearDraftReviewState();
+                  clearAssignmentBrief();
                   runStartTransition((activeEditor) => {
                     activeEditor.commands.clearContent();
                     beginDocumentIdentity({ filePath: '' });
@@ -7412,6 +8467,7 @@ ${sidebarReviewContext}`
                   const templateExamples = Array.isArray(template?.examples) ? template.examples : [];
                   clearPersistedDraftCache();
                   clearDraftReviewState();
+                  clearAssignmentBrief();
                   runStartTransition((activeEditor) => {
                     beginDocumentIdentity({ filePath: '' });
                     persistActiveTemplateId(templateId || 'blank');
@@ -7455,7 +8511,7 @@ ${sidebarReviewContext}`
                 }}
                 onGenerateFromPrompt={(payload) => executeStartScreenGeneration({
                   kind: 'start-screen-generate',
-                  workspaceId: getActiveWorkspaceId(),
+                  workspaceId: payload?.workspaceId || getActiveWorkspaceId(),
                   payload,
                 })}
               />
@@ -7464,7 +8520,7 @@ ${sidebarReviewContext}`
         )}
 
         {/* עט קסמים צף */}
-        {!isSpssMode && !showStartScreen && <MagicWand
+        {isWordMode && !showStartScreen && <MagicWand
           sidebarOpen={sidebarOpen}
           escapeBlocked={fileMenuOpen || isInputDialogVisible || isCopyleaksDetectorVisible || isFeedbackSurveyVisible || sidebarOpen}
           documentContext={() => editor ? editor.getText().slice(0, 7000) : ''}
@@ -7476,27 +8532,139 @@ ${sidebarReviewContext}`
           }}
         />}
 
-        {!isSpssMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}
+        {isWordMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}
       </main>
-      <footer id="status-bar" className="h-6 bg-[#2B579A] text-white flex items-center justify-between px-4 text-[11px] shrink-0 z-30">
+      {isWordMode && !showStartScreen && assignmentBriefOpen && (
+        <div className={`pointer-events-none fixed z-40 ${isMobileViewport ? 'inset-0 p-3' : 'inset-x-0 bottom-10 top-24'}`}>
+          <aside className={`pointer-events-auto overflow-hidden rounded-[28px] border border-amber-200/80 bg-white/95 shadow-[0_22px_70px_rgba(120,53,15,0.18)] backdrop-blur ${isMobileViewport ? 'absolute inset-0' : 'absolute left-4 top-4 bottom-4 w-[min(34rem,calc(100vw-2rem))]'}`}>
+            <input
+              ref={assignmentBriefFileInputRef}
+              type="file"
+              accept={getInstructionFileAcceptList()}
+              onChange={handleAssignmentBriefFileSelected}
+              className="hidden"
+            />
+            <div className="flex items-start justify-between gap-3 border-b border-amber-100 bg-gradient-to-br from-amber-50 via-white to-orange-50 px-5 py-4">
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold tracking-[0.24em] text-amber-700">TASK BRIEF</div>
+                <div className="mt-1 text-lg font-bold text-slate-900">הוראות המטלה</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  {assignmentBrief.sourceLabel ? (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">{assignmentBrief.sourceLabel}</span>
+                  ) : null}
+                  {assignmentBrief.fileName ? (
+                    <span className="truncate rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-800">{assignmentBrief.fileName}</span>
+                  ) : null}
+                  <span>{assignmentBrief.text.length.toLocaleString('he-IL')} תווים</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignmentBriefOpen(false)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+              >
+                סגור
+              </button>
+            </div>
+            <div className="h-full overflow-y-auto px-5 py-4">
+              <div className="flex flex-wrap items-center gap-2 pb-4">
+                <button
+                  type="button"
+                  onClick={() => assignmentBriefFileInputRef.current?.click()}
+                  className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+                >
+                  טען קובץ הוראות
+                </button>
+                <button
+                  type="button"
+                  onClick={saveAssignmentBriefDraft}
+                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  שמור למסמך
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssignmentBriefDraft('');
+                    clearAssignmentBrief();
+                  }}
+                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                >
+                  נקה הוראות
+                </button>
+                <div className="text-xs text-slate-500">
+                  כאן אפשר להדביק הוראות ידנית או לשייך קובץ הוראות למסמך הפעיל.
+                </div>
+              </div>
+              <div className="mb-4 inline-flex rounded-full border border-slate-200 bg-white p-1 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setAssignmentBriefPanelMode('preview')}
+                  className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                    assignmentBriefPanelMode === 'preview'
+                      ? 'bg-amber-100 text-amber-900'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  תצוגה
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignmentBriefPanelMode('edit')}
+                  className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                    assignmentBriefPanelMode === 'edit'
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  עריכה
+                </button>
+              </div>
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-3">
+                {assignmentBriefPanelMode === 'preview' ? (
+                  renderAssignmentBriefPreview(assignmentBriefPreviewBlocks)
+                ) : (
+                  <textarea
+                    value={assignmentBriefDraft}
+                    onChange={(event) => setAssignmentBriefDraft(event.target.value)}
+                    placeholder="הדבק כאן את הוראות המטלה, הדרישות, הסעיפים או הערות המרצה..."
+                    className="min-h-[42vh] w-full resize-none rounded-[18px] border border-slate-200 bg-white px-4 py-4 text-[15px] leading-7 text-slate-700 outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                  />
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+      <footer id="status-bar" className="min-h-6 bg-[#2B579A] text-white flex flex-col gap-1 px-3 py-1 text-[11px] shrink-0 z-30 sm:h-6 sm:flex-row sm:items-center sm:justify-between sm:px-4">
         {isSpssMode ? (
           <>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>SPSS Syntax Studio פעיל</span>
               <span><i className="ph ph-shield-check text-green-300"></i> רק metadata טוקניזי נשלח ל-AI</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>Tutor mode נשלט מתוך הסטודיו</span>
+            </div>
+          </>
+        ) : isPresentationMode ? (
+          <>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Presentation Studio פעיל</span>
+              <span><i className="ph ph-image text-cyan-300"></i> דגש על בריף, שקופיות, תמונות וזרימה</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>מעבר ל-Word יקרה אוטומטית אחרי יצירת המצגת</span>
             </div>
           </>
         ) : (
           <>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>עמוד 1 מתוך {pageCount}</span>
               <span>{wordCount} מילים</span>
               <span><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>מצב הדפסה</span>
               <span>{zoom}%</span>
             </div>
@@ -7505,25 +8673,33 @@ ${sidebarReviewContext}`
       </footer>
 
       {/* File Menu Backstage */}
-      {!isSpssMode && fileMenuOpen && (
-        <FileMenu
-          initialSettingsTab={fileMenuTargetTab}
-          updateCheckToken={updateCheckToken}
+      {isWordMode && fileMenuOpen && (
+        <FileMenuErrorBoundary
           onClose={() => {
             setFileMenuOpen(false);
             setFileMenuTargetTab(null);
             setUpdateCheckToken(0);
           }}
-          onCommand={(cmd, value) => handleCommand(cmd, value)}
-          shortcuts={shortcuts}
-          onShortcutsChange={setShortcuts}
-          assistantBehavior={assistantBehavior}
-          onAssistantBehaviorChange={setAssistantBehavior}
-          wordPreferences={wordPreferences}
-          onWordPreferencesChange={setWordPreferences}
-          lastGenerationAction={lastGenerationAction}
-          liveGeneration={liveGeneration}
-        />
+        >
+          <FileMenu
+            initialSettingsTab={fileMenuTargetTab}
+            updateCheckToken={updateCheckToken}
+            onClose={() => {
+              setFileMenuOpen(false);
+              setFileMenuTargetTab(null);
+              setUpdateCheckToken(0);
+            }}
+            onCommand={(cmd, value) => handleCommand(cmd, value)}
+            shortcuts={shortcuts}
+            onShortcutsChange={setShortcuts}
+            assistantBehavior={assistantBehavior}
+            onAssistantBehaviorChange={setAssistantBehavior}
+            wordPreferences={wordPreferences}
+            onWordPreferencesChange={setWordPreferences}
+            lastGenerationAction={lastGenerationAction}
+            liveGeneration={liveGeneration}
+          />
+        </FileMenuErrorBoundary>
       )}
 
       {helpModalOpen && (

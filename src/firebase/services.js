@@ -1,5 +1,5 @@
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
 import { getFirestore } from "firebase/firestore";
 import { getFirebaseApp, hasFirebaseConfig } from "./config";
@@ -42,6 +42,23 @@ function normalizeMaterial(docSnap, courseId = "") {
     };
 }
 
+function normalizeCloudDocument(docSnap) {
+    const data = docSnap.data() || {};
+    return {
+        id: docSnap.id,
+        ownerId: data.ownerId || "",
+        title: data.title || "מסמך בענן",
+        html: data.html || "<p></p>",
+        text: data.text || "",
+        templateId: data.templateId || "blank",
+        documentStyle: data.documentStyle || "academic",
+        filePath: data.filePath || "",
+        createdAt: data.createdAt || null,
+        updatedAt: data.updatedAt || null,
+        ...data,
+    };
+}
+
 export function isCloudAvailable() {
     return hasFirebaseConfig();
 }
@@ -62,6 +79,37 @@ export async function cloudSignIn(email, password) {
     return result.user;
 }
 
+export async function cloudSignInWithGooglePopup() {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    try {
+        const result = await signInWithPopup(clients.auth, provider);
+        return result.user;
+    } catch (error) {
+        if (error.code === 'auth/internal-error' || error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user') {
+            console.warn("Popup sign-in failed, falling back to redirect.", error);
+            await signInWithRedirect(clients.auth, provider);
+            return null;
+        }
+        throw error;
+    }
+}
+
+export async function handleCloudRedirectResult() {
+    const clients = ensureFirebaseClients();
+    if (!clients) return null;
+    try {
+        const result = await getRedirectResult(clients.auth);
+        return result?.user || null;
+    } catch (e) {
+        console.error("Cloud redirect auth error:", e);
+        return null;
+    }
+}
+
 export async function cloudSignInWithGoogleIdToken(idToken, accessToken = "") {
     const clients = ensureFirebaseClients();
     if (!clients) throw new Error("Firebase config is missing.");
@@ -76,6 +124,154 @@ export async function cloudSignOut() {
     const clients = ensureFirebaseClients();
     if (!clients) return;
     await signOut(clients.auth);
+}
+
+export async function ensureCloudUserProfile(user) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return null;
+
+    const userRef = doc(clients.db, "users", user.uid);
+    const snapshot = await getDoc(userRef);
+    const existing = snapshot.exists() ? snapshot.data() || {} : {};
+
+    const payload = {
+        uid: user.uid,
+        email: user.email || "",
+        displayName: user.displayName || "",
+        photoURL: user.photoURL || "",
+        lastLoginAt: serverTimestamp(),
+    };
+
+    if (!snapshot.exists()) {
+        payload.createdAt = serverTimestamp();
+    }
+
+    await setDoc(userRef, {
+        ...existing,
+        ...payload,
+    }, { merge: true });
+
+    return {
+        ...existing,
+        uid: user.uid,
+        email: user.email || "",
+        displayName: user.displayName || "",
+        photoURL: user.photoURL || "",
+    };
+}
+
+export async function syncSettingsToCloud(user, settingsPayload) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    if (!user?.uid) throw new Error("User must be signed in.");
+    
+    const docRef = doc(clients.db, "users", user.uid, "settings", "main");
+    const profileUpdatedAt = Number(settingsPayload?.profileUpdatedAt || 0) || Date.now();
+    const appSettings = settingsPayload?.appSettings && typeof settingsPayload.appSettings === "object"
+        ? settingsPayload.appSettings
+        : {};
+    const providerConfig = settingsPayload?.providerConfig && typeof settingsPayload.providerConfig === "object"
+        ? settingsPayload.providerConfig
+        : null;
+
+    await setDoc(docRef, {
+        ...settingsPayload,
+        updatedAt: serverTimestamp(),
+    });
+
+    await setDoc(doc(clients.db, "users", user.uid), {
+        uid: user.uid,
+        email: user.email || "",
+        displayName: user.displayName || "",
+        photoURL: user.photoURL || "",
+        profileSyncedAt: serverTimestamp(),
+        profileSync: {
+            schemaVersion: Number(settingsPayload?.schemaVersion || 1),
+            profileUpdatedAt,
+            settingsDocument: "settings/main",
+            appSettingsCount: Object.keys(appSettings).length,
+            providerConfigSynced: Boolean(providerConfig),
+        },
+    }, { merge: true });
+}
+
+export async function fetchSettingsFromCloud(user) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return null;
+    
+    const docRef = doc(clients.db, "users", user.uid, "settings", "main");
+    const snapshot = await getDoc(docRef);
+    return snapshot.exists() ? snapshot.data() : null;
+}
+
+export async function saveCloudDocument({
+    user,
+    documentId = "",
+    title = "",
+    html = "<p></p>",
+    text = "",
+    templateId = "blank",
+    documentStyle = "academic",
+    filePath = "",
+    sessionId = "",
+} = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    if (!user?.uid) throw new Error("User must be signed in.");
+
+    const resolvedDocumentId = String(documentId || sessionId || "").trim() || `doc-${Date.now().toString(36)}`;
+    const docRef = doc(clients.db, "users", user.uid, "documents", resolvedDocumentId);
+    const existing = await getDoc(docRef);
+
+    const payload = {
+        ownerId: user.uid,
+        title: String(title || "").trim() || "מסמך חדש",
+        html: String(html || "<p></p>"),
+        text: String(text || ""),
+        templateId: String(templateId || "blank").trim() || "blank",
+        documentStyle: String(documentStyle || "academic").trim() || "academic",
+        filePath: String(filePath || "").trim(),
+        sessionId: String(sessionId || "").trim(),
+        updatedAt: serverTimestamp(),
+    };
+
+    if (!existing.exists()) {
+        payload.createdAt = serverTimestamp();
+    }
+
+    await setDoc(docRef, payload, { merge: true });
+
+    return {
+        id: resolvedDocumentId,
+        ...payload,
+    };
+}
+
+export async function listCloudDocuments(user, maxResults = 20) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return [];
+
+    const documentsQuery = query(
+        collection(clients.db, "users", user.uid, "documents"),
+        orderBy("updatedAt", "desc"),
+        limit(Math.max(1, Number(maxResults) || 20))
+    );
+
+    const snapshot = await getDocs(documentsQuery);
+    return snapshot.docs.map(normalizeCloudDocument);
+}
+
+export async function getCloudDocument(user, documentId = "") {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    if (!user?.uid) throw new Error("User must be signed in.");
+
+    const resolvedDocumentId = String(documentId || "").trim();
+    if (!resolvedDocumentId) throw new Error("Missing cloud document id.");
+
+    const snapshot = await getDoc(doc(clients.db, "users", user.uid, "documents", resolvedDocumentId));
+    if (!snapshot.exists()) return null;
+    return normalizeCloudDocument(snapshot);
 }
 
 export async function fetchCoursesForUser(user) {

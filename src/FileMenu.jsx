@@ -3,6 +3,7 @@ import ProfileOnboarding from './ProfileOnboarding';
 import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
 import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
+import { saveBlobInBrowser } from './services/browserDocxExport';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
   DEFAULT_ASSISTANT_BEHAVIOR,
@@ -13,6 +14,7 @@ import {
   buildExternalStyleAnalysisPrompt,
   getExternalAnalysisProviderHint,
   getProviderConfig,
+  getConfiguredProviderChoices,
   getProviderModelChoices,
   isProviderModelChoiceCompatible,
   getExternalAnalysisAvailability,
@@ -57,8 +59,13 @@ import {
   processExternalStyleAnalysis,
   processSyllabusProfileImport,
   testProviderConnection,
+  getWorkspaceV2Templates,
+  saveWorkspaceV2Template,
+  createWorkspaceV2Template,
+  deleteWorkspaceV2Template,
+  resetWorkspaceV2Templates,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
@@ -513,7 +520,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   sidebar: ['sidebar', 'taskpane', 'chat panel', 'modes', 'provider', 'model', 'חלונית', 'צאט', 'צ׳אט', 'מצבים', 'ספק', 'מודל'],
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
   skills: ['skills', 'skill', 'capabilities', 'סקילים'],
-  agents: ['agents', 'agent', 'timeout', 'workflow', 'autopilot', 'workspace', 'automation', 'manager', 'retry', 'סוכנים', 'אוטומציה', 'סביבת עבודה'],
+  workspaceV2: ['workspace', 'workspace v2', 'workspaces', 'agents', 'roles', 'pipeline', 'סביבת עבודה', 'סביבות עבודה', 'תפקידים', 'סוכנים', 'פרומפטים'],
   developer: ['developer', 'advanced', 'timeout', 'override', 'logs', 'model', 'provider', 'מתקדם', 'לוגים', 'timeout ms'],
   onboarding: ['onboarding', 'profile', 'style', 'learning', 'materials', 'submission', 'פרופיל', 'הגשה'],
   writing: ['writing', 'document', 'word', 'defaults', 'כתיבה'],
@@ -528,8 +535,8 @@ const SETTINGS_TAB_GROUPS = [
     tabs: [['guide', '📘 מדריך'], ['assistant', '✨ עוזר'], ['updates', '⬆️ עדכונים']],
   },
   {
-    title: 'AI וצוות עבודה',
-    tabs: [['ai', '🤖 מנועי AI'], ['sidebar', '💬 חלונית צ׳אט'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים'], ['agents', '🧩 סוכנים']],
+    title: 'AI ועבודה ישירה',
+    tabs: [['ai', '🤖 מנועי AI'], ['workspaceV2', '🧩 סביבות עבודה'], ['sidebar', '💬 חלונית צ׳אט'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים']],
   },
   {
     title: 'כתיבה והתאמה אישית',
@@ -1653,12 +1660,28 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
   const [analysisOutput, setAnalysisOutput] = useState('');
   const [applyState, setApplyState] = useState(''); // '' | 'ok' | 'error'
   const [applyMessage, setApplyMessage] = useState('');
+  const [portablePrompt, setPortablePrompt] = useState('');
+  const [portablePromptDirty, setPortablePromptDirty] = useState(true);
 
   const deferredSharedInstructions = useDeferredValue(sharedInstructions);
   const deferredPersonalStyle = useDeferredValue(personalStyle);
-  const portablePrompt = useMemo(() => buildPortablePrompt({ sharedInstructions: deferredSharedInstructions, profile: deferredPersonalStyle, includePortablePackage: true }), [deferredSharedInstructions, deferredPersonalStyle]);
   const analysisPrompt = useMemo(() => buildExternalStyleAnalysisPrompt({ profile: deferredPersonalStyle }), [deferredPersonalStyle]);
   const promptsReady = deferredSharedInstructions === sharedInstructions && deferredPersonalStyle === personalStyle;
+
+  useEffect(() => {
+    setPortablePromptDirty(true);
+  }, [deferredSharedInstructions, deferredPersonalStyle]);
+
+  const buildPortablePromptDraft = () => {
+    const nextPrompt = buildPortablePrompt({
+      sharedInstructions: deferredSharedInstructions,
+      profile: deferredPersonalStyle,
+      includePortablePackage: true,
+    });
+    setPortablePrompt(nextPrompt);
+    setPortablePromptDirty(false);
+    return nextPrompt;
+  };
 
   const copyText = async (text, label) => {
     try {
@@ -1788,18 +1811,34 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
           </div>
           <button
             type="button"
-            onClick={() => copyText(portablePrompt, 'הועתק ללוח ✓')}
+            onClick={() => {
+              const text = portablePrompt && !portablePromptDirty ? portablePrompt : buildPortablePromptDraft();
+              copyText(text, 'הועתק ללוח ✓');
+            }}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
           >
             העתק Prompt
           </button>
         </div>
-        <textarea
-          readOnly
-          value={portablePrompt}
-          rows={10}
-          style={{ width: '100%', padding: '10px 12px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: '#0F172A' }}
-        />
+        {portablePrompt ? (
+          <textarea
+            readOnly
+            value={portablePrompt}
+            rows={10}
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: '#0F172A' }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={buildPortablePromptDraft}
+            style={{ width: '100%', padding: '12px', borderRadius: 10, border: '1px dashed #CBD5E1', background: 'white', color: '#475569', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+          >
+            הצג Portable Prompt
+          </button>
+        )}
+        {portablePrompt && portablePromptDirty ? (
+          <div style={{ fontSize: 11, color: '#B45309', marginTop: 8 }}>הפרופיל השתנה. לחץ העתק או הצג מחדש כדי לרענן את ה-Prompt.</div>
+        ) : null}
         {copyState ? <div style={{ fontSize: 11, color: copyState.includes('נכשלה') ? '#991B1B' : '#166534', marginTop: 8 }}>{copyState}</div> : null}
       </div>
     </div>
@@ -2126,6 +2165,522 @@ function SkillsSettings({ skillsState, setSkillsState }) {
   );
 }
 
+const workspaceTextToList = (value = '') => String(value || '')
+  .split('\n')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const workspaceListToText = (value = []) => (Array.isArray(value) ? value : [])
+  .filter(Boolean)
+  .join('\n');
+
+const createWorkspaceStep = (index = 1) => ({
+  id: `step-${Date.now()}-${index}`,
+  role: 'סוכן עבודה',
+  goal: 'לקדם את המשימה לשלב הבא בצורה מדויקת',
+  instructions: ['פעל לפי ההנחיות, שמור על הסגנון האישי, ואל תמציא מידע שלא נמצא בחומרים.'],
+  output: 'תוצר ביניים שימושי',
+  providerId: '',
+  model: '',
+});
+
+const createWorkspaceDraft = () => ({
+  label: 'סביבת עבודה חדשה',
+  mission: 'פתרון משימה מותאמת אישית בעזרת צוות עבודה ברור וממוקד.',
+  taskSignals: ['משימה מותאמת אישית'],
+  providerId: '',
+  model: '',
+  sourcePolicy: {
+    mode: 'context-aware',
+    citationStyle: 'לפי הצורך',
+    requireSourcesWhen: ['עבודה אקדמית', 'טענות עובדתיות', 'בקשה למקורות'],
+  },
+  stylePolicy: {
+    preservePersonalStyle: true,
+    allowPersuasiveReframing: false,
+    avoid: ['המצאת מקורות', 'שינוי סגנון אישי בלי צורך', 'הבטחות שלא נתמכות בחומרים'],
+  },
+  pipeline: [
+    {
+      id: 'planner',
+      role: 'מתכנן עבודה',
+      goal: 'להבין את המשימה, לפרק אותה לשלבים, ולזהות מה חסר לפני כתיבה.',
+      instructions: ['זהה סוג משימה, דרישות, מגבלות, חומרי עזר וחוסרים.', 'אם חסרים מקורות, ציין זאת בתוך התוצר במקום להמציא.'],
+      output: 'תכנית עבודה קצרה',
+    },
+    {
+      id: 'writer',
+      role: 'כותב ראשי',
+      goal: 'לייצר טיוטה מלאה שעונה ישירות למשימה.',
+      instructions: ['כתוב בעברית טבעית וברורה.', 'שמור על הסגנון האישי והימנע משפה רובוטית.'],
+      output: 'טיוטה מלאה',
+    },
+    {
+      id: 'reviewer',
+      role: 'מבקר איכות',
+      goal: 'לבדוק התאמה להנחיות, מקורות, מבנה וסגנון לפני הגשה.',
+      instructions: ['תקן פערים, הדק ניסוחים, וסמן מקומות שבהם אין בסיס מספיק.', 'אל תוסיף מקורות פיקטיביים.'],
+      output: 'גרסה סופית נקייה',
+    },
+  ],
+});
+
+function WorkspaceV2Settings({ config }) {
+  const [templates, setTemplates] = useState(() => getWorkspaceV2Templates());
+  const [selectedId, setSelectedId] = useState(() => templates[0]?.id || '');
+  const [draft, setDraft] = useState(() => templates[0] || createWorkspaceDraft());
+  const [status, setStatus] = useState('');
+
+  const providerChoices = useMemo(() => {
+    const choices = getConfiguredProviderChoices(config);
+    if (choices.length) return choices;
+    const fallback = String(config?.active || 'gemini').trim() || 'gemini';
+    return [{ id: fallback, label: fallback }];
+  }, [config]);
+
+  const selectedProviderId = String(draft?.providerId || '').trim();
+  const modelChoices = useMemo(() => (
+    selectedProviderId ? getProviderModelChoices(selectedProviderId, config, [draft?.model].filter(Boolean)) : []
+  ), [config, draft?.model, selectedProviderId]);
+
+  const selectedTemplate = templates.find((template) => template.id === selectedId) || null;
+  const isBuiltin = Boolean(selectedTemplate?.builtIn);
+
+  const refreshTemplates = (nextSelectedId = selectedId) => {
+    const nextTemplates = getWorkspaceV2Templates();
+    setTemplates(nextTemplates);
+    const nextSelected = nextTemplates.find((template) => template.id === nextSelectedId) || nextTemplates[0] || createWorkspaceDraft();
+    setSelectedId(nextSelected.id || '');
+    setDraft(nextSelected);
+  };
+
+  const selectTemplate = (templateId) => {
+    const nextTemplate = templates.find((template) => template.id === templateId);
+    if (!nextTemplate) return;
+    setSelectedId(nextTemplate.id);
+    setDraft(nextTemplate);
+    setStatus('');
+  };
+
+  const updateDraft = (patch) => {
+    setDraft((prev) => ({ ...(prev || createWorkspaceDraft()), ...patch }));
+    setStatus('');
+  };
+
+  const updateNestedDraft = (section, patch) => {
+    setDraft((prev) => ({
+      ...(prev || createWorkspaceDraft()),
+      [section]: {
+        ...((prev || {})[section] || {}),
+        ...patch,
+      },
+    }));
+    setStatus('');
+  };
+
+  const updateStep = (index, patch) => {
+    setDraft((prev) => {
+      const pipeline = Array.isArray(prev?.pipeline) ? [...prev.pipeline] : [];
+      pipeline[index] = { ...(pipeline[index] || createWorkspaceStep(index + 1)), ...patch };
+      return { ...(prev || createWorkspaceDraft()), pipeline };
+    });
+    setStatus('');
+  };
+
+  const addStep = () => {
+    setDraft((prev) => {
+      const pipeline = Array.isArray(prev?.pipeline) ? [...prev.pipeline] : [];
+      pipeline.push(createWorkspaceStep(pipeline.length + 1));
+      return { ...(prev || createWorkspaceDraft()), pipeline };
+    });
+    setStatus('');
+  };
+
+  const moveStep = (index, direction) => {
+    setDraft((prev) => {
+      const pipeline = Array.isArray(prev?.pipeline) ? [...prev.pipeline] : [];
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= pipeline.length) return prev;
+      [pipeline[index], pipeline[nextIndex]] = [pipeline[nextIndex], pipeline[index]];
+      return { ...(prev || createWorkspaceDraft()), pipeline };
+    });
+    setStatus('');
+  };
+
+  const removeStep = (index) => {
+    setDraft((prev) => {
+      const pipeline = (Array.isArray(prev?.pipeline) ? prev.pipeline : []).filter((_, itemIndex) => itemIndex !== index);
+      return { ...(prev || createWorkspaceDraft()), pipeline: pipeline.length ? pipeline : [createWorkspaceStep(1)] };
+    });
+    setStatus('');
+  };
+
+  const handleCreate = () => {
+    const created = createWorkspaceV2Template(createWorkspaceDraft());
+    refreshTemplates(created.id);
+    setStatus('נוצרה סביבת עבודה חדשה. אפשר לערוך ולשמור.');
+  };
+
+  const handleDuplicate = () => {
+    const base = draft || createWorkspaceDraft();
+    const created = createWorkspaceV2Template({
+      ...base,
+      id: '',
+      builtIn: false,
+      label: `${base.label || 'סביבת עבודה'} - עותק`,
+    });
+    refreshTemplates(created.id);
+    setStatus('נוצר עותק חדש לעריכה חופשית.');
+  };
+
+  const handleSave = () => {
+    const saved = saveWorkspaceV2Template(draft);
+    refreshTemplates(saved.id);
+    setStatus('סביבת העבודה נשמרה והמסך הראשי יתעדכן מיד.');
+  };
+
+  const handleDelete = () => {
+    if (!selectedId) return;
+    const message = isBuiltin
+      ? 'לאפס את כל השינויים שבוצעו לסביבת העבודה המובנית הזאת?'
+      : 'למחוק את סביבת העבודה המותאמת הזאת?';
+    if (typeof window !== 'undefined' && !window.confirm(message)) return;
+    deleteWorkspaceV2Template(selectedId);
+    refreshTemplates('');
+    setStatus(isBuiltin ? 'השינויים לסביבה המובנית אופסו.' : 'סביבת העבודה נמחקה.');
+  };
+
+  const handleResetAll = () => {
+    if (typeof window !== 'undefined' && !window.confirm('לאפס את כל סביבות העבודה המותאמות והשינויים לתבניות המובנות?')) return;
+    resetWorkspaceV2Templates();
+    refreshTemplates('');
+    setStatus('כל סביבות העבודה אופסו לברירת המחדל.');
+  };
+
+  return (
+    <div dir="rtl" style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 320px) 1fr', gap: 16 }}>
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 14, background: '#F8FAFC', alignSelf: 'start' }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>סביבות עבודה</div>
+        <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          כאן מנהלים את הצוותים שמופיעים במסך הבית. המסלול הישיר נשאר נפרד ולא מושפע מהטאב הזה.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <button type="button" onClick={handleCreate} style={{ border: '1px solid #2563EB', background: '#2563EB', color: 'white', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>צור חדשה</button>
+          <button type="button" onClick={handleDuplicate} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>שכפל</button>
+          <button type="button" onClick={handleResetAll} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>אפס הכל</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {templates.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => selectTemplate(template.id)}
+              style={{
+                textAlign: 'right',
+                border: selectedId === template.id ? '1px solid #2563EB' : '1px solid #E2E8F0',
+                background: selectedId === template.id ? '#EFF6FF' : 'white',
+                color: '#0F172A',
+                borderRadius: 12,
+                padding: 12,
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                <strong style={{ fontSize: 13 }}>{template.label}</strong>
+                <span style={{ fontSize: 10, color: template.builtIn ? '#475569' : '#047857', border: '1px solid #CBD5E1', borderRadius: 999, padding: '2px 7px', background: 'white' }}>
+                  {template.builtIn ? 'מובנית' : 'מותאמת'}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.5, marginTop: 4 }}>{template.mission}</div>
+              <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 6 }}>
+                {template.pipeline?.length || 0} תפקידים · {template.providerId || 'ספק לפי מסך הבית'}
+                {(template.pipeline || []).some((step) => step.providerId || step.model) ? ' · מודלים לפי תפקיד' : ''}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start', marginBottom: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A' }}>עריכת סביבת עבודה</div>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>כל שינוי כאן משפיע על Workspace v2 בלבד. Direct נשאר נקי.</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={handleDelete} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 10, padding: '9px 12px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                {isBuiltin ? 'אפס סביבה' : 'מחק סביבה'}
+              </button>
+              <button type="button" onClick={handleSave} style={{ border: '1px solid #16A34A', background: '#16A34A', color: 'white', borderRadius: 10, padding: '9px 16px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>שמור סביבה</button>
+            </div>
+          </div>
+          {status && <div style={{ border: '1px solid #BBF7D0', background: '#F0FDF4', color: '#166534', borderRadius: 10, padding: '9px 11px', fontSize: 12, marginBottom: 12 }}>{status}</div>}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>שם הסביבה</div>
+              <input value={draft?.label || ''} onChange={(e) => updateDraft({ label: e.target.value })} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מזהה פנימי</div>
+              <input value={draft?.id || 'ייווצר בשמירה'} readOnly style={{ width: '100%', border: '1px solid #E2E8F0', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: '#F8FAFC', color: '#64748B' }} />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>ייעוד הסביבה</div>
+              <textarea value={draft?.mission || ''} onChange={(e) => updateDraft({ mission: e.target.value })} rows={3} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>ספק AI</div>
+              <select
+                value={selectedProviderId}
+                onChange={(e) => updateDraft({ providerId: e.target.value, model: '' })}
+                style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
+              >
+                <option value="">לפי הבחירה במסך הבית</option>
+                {providerChoices.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מודל</div>
+              <select
+                value={draft?.model || ''}
+                disabled={!selectedProviderId}
+                onChange={(e) => updateDraft({ model: e.target.value })}
+                style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: selectedProviderId ? 'white' : '#F8FAFC' }}
+              >
+                <option value="">ברירת המחדל של הספק</option>
+                {modelChoices.map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מילות זיהוי לסיווג אוטומטי, שורה לכל סימן</div>
+              <textarea value={workspaceListToText(draft?.taskSignals)} onChange={(e) => updateDraft({ taskSignals: workspaceTextToList(e.target.value) })} rows={3} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>מקורות וציטוטים</div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <label style={{ fontSize: 11, color: '#475569' }}>מדיניות מקורות
+                <select value={draft?.sourcePolicy?.mode || 'context-aware'} onChange={(e) => updateNestedDraft('sourcePolicy', { mode: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}>
+                  <option value="context-aware">לפי הקשר</option>
+                  <option value="required">חובה כשאפשר</option>
+                  <option value="optional">אופציונלי</option>
+                </select>
+              </label>
+              <label style={{ fontSize: 11, color: '#475569' }}>סגנון ציטוט
+                <input value={draft?.sourcePolicy?.citationStyle || ''} onChange={(e) => updateNestedDraft('sourcePolicy', { citationStyle: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+              </label>
+              <label style={{ fontSize: 11, color: '#475569' }}>מתי חייבים מקורות, שורה לכל תנאי
+                <textarea value={workspaceListToText(draft?.sourcePolicy?.requireSourcesWhen)} onChange={(e) => updateNestedDraft('sourcePolicy', { requireSourcesWhen: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+              </label>
+            </div>
+          </div>
+
+          <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>סגנון אישי ובטיחות</div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#334155', marginBottom: 8 }}>
+              <input type="checkbox" checked={draft?.stylePolicy?.preservePersonalStyle !== false} onChange={(e) => updateNestedDraft('stylePolicy', { preservePersonalStyle: e.target.checked })} />
+              לשמור על הסגנון האישי כברירת חובה
+            </label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#334155', marginBottom: 10 }}>
+              <input type="checkbox" checked={draft?.stylePolicy?.allowPersuasiveReframing === true} onChange={(e) => updateNestedDraft('stylePolicy', { allowPersuasiveReframing: e.target.checked })} />
+              לאפשר ניסוח שכנועי אגרסיבי יותר כשזה מתאים
+            </label>
+            <label style={{ fontSize: 11, color: '#475569' }}>ממה להימנע, שורה לכל כלל
+              <textarea value={workspaceListToText(draft?.stylePolicy?.avoid)} onChange={(e) => updateNestedDraft('stylePolicy', { avoid: workspaceTextToList(e.target.value) })} rows={5} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+            </label>
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: '#0F172A' }}>תפקידי הצוות</div>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>כל כרטיס הוא “סוכן” בתוך הפרומפט: תפקיד, יעד, הוראות ותוצר צפוי.</div>
+            </div>
+            <button type="button" onClick={addStep} style={{ border: '1px solid #2563EB', background: '#EFF6FF', color: '#1D4ED8', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>הוסף תפקיד</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {(draft?.pipeline || []).map((step, index) => (
+              <div key={step.id || index} style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: 14, background: '#F8FAFC' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 13, color: '#0F172A' }}>שלב {index + 1}</strong>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button type="button" onClick={() => moveStep(index, -1)} disabled={index === 0} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === 0 ? 'not-allowed' : 'pointer', opacity: index === 0 ? 0.5 : 1 }}>למעלה</button>
+                    <button type="button" onClick={() => moveStep(index, 1)} disabled={index === (draft?.pipeline || []).length - 1} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === (draft?.pipeline || []).length - 1 ? 'not-allowed' : 'pointer', opacity: index === (draft?.pipeline || []).length - 1 ? 0.5 : 1 }}>למטה</button>
+                    <button type="button" onClick={() => removeStep(index)} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: 'pointer' }}>הסר</button>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <label style={{ fontSize: 11, color: '#475569' }}>ספק לשלב הזה
+                    <select
+                      value={step.providerId || ''}
+                      onChange={(e) => updateStep(index, { providerId: e.target.value, model: '' })}
+                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
+                    >
+                      <option value="">יורש מהסביבה / מסך הבית</option>
+                      {providerChoices.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 11, color: '#475569' }}>מודל לשלב הזה
+                    <select
+                      value={step.model || ''}
+                      disabled={!step.providerId}
+                      onChange={(e) => updateStep(index, { model: e.target.value })}
+                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: step.providerId ? 'white' : '#F8FAFC' }}
+                    >
+                      <option value="">ברירת המחדל של הספק/הסביבה</option>
+                      {getProviderModelChoices(step.providerId || '', config, [step.model].filter(Boolean)).map((modelName) => (
+                        <option key={modelName} value={modelName}>{modelName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 11, color: '#475569' }}>תפקיד
+                    <input value={step.role || ''} onChange={(e) => updateStep(index, { role: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+                  </label>
+                  <label style={{ fontSize: 11, color: '#475569' }}>תוצר צפוי
+                    <input value={step.output || ''} onChange={(e) => updateStep(index, { output: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+                  </label>
+                  <label style={{ fontSize: 11, color: '#475569', gridColumn: '1 / -1' }}>מטרה
+                    <textarea value={step.goal || ''} onChange={(e) => updateStep(index, { goal: e.target.value })} rows={2} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+                  </label>
+                  <label style={{ fontSize: 11, color: '#475569', gridColumn: '1 / -1' }}>הוראות לתפקיד, שורה לכל הוראה
+                    <textarea value={workspaceListToText(step.instructions)} onChange={(e) => updateStep(index, { instructions: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+                  </label>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InstallAppSettingsCard() {
+  const readInstallState = () => {
+    if (typeof window === 'undefined') {
+      return {
+        supported: false,
+        installed: false,
+        canInstall: false,
+        statusLabel: '',
+        instructions: '',
+        install: async () => ({ ok: false, reason: 'unavailable' }),
+      };
+    }
+    return window.__wordflowPwaInstall || {
+      supported: !window.desktopApp,
+      installed: false,
+      canInstall: false,
+      statusLabel: window.desktopApp ? 'בתוך אפליקציית הדסקטופ אין צורך בהתקנה נוספת' : 'אפשר להתקין מהדפדפן',
+      instructions: window.desktopApp ? 'כדי להתקין בטלפון, פתח את האתר בדפדפן במובייל.' : '',
+      install: async () => ({ ok: false, reason: 'not-ready' }),
+    };
+  };
+
+  const [installState, setInstallState] = useState(readInstallState);
+  const [installFeedback, setInstallFeedback] = useState('');
+
+  useEffect(() => {
+    const handleStateUpdate = (event) => {
+      if (event?.detail) {
+        setInstallState(event.detail);
+      } else {
+        setInstallState(readInstallState());
+      }
+    };
+
+    window.addEventListener('wordflow:pwa-install-state', handleStateUpdate);
+    handleStateUpdate();
+    return () => window.removeEventListener('wordflow:pwa-install-state', handleStateUpdate);
+  }, []);
+
+  const handleInstallClick = async () => {
+    const installHandler = installState?.install;
+    if (typeof installHandler !== 'function') return;
+    const result = await installHandler();
+    if (result?.reason === 'accepted') {
+      setInstallFeedback('נשלחה בקשת התקנה. אחרי האישור, האפליקציה תופיע על מסך הבית.');
+      return;
+    }
+    if (result?.reason === 'dismissed') {
+      setInstallFeedback('חלון ההתקנה נסגר. אפשר לנסות שוב מתי שתרצה.');
+      return;
+    }
+    if (result?.reason === 'already-installed') {
+      setInstallFeedback('האפליקציה כבר מותקנת על המכשיר הזה.');
+      return;
+    }
+    if (result?.reason === 'not-available') {
+      setInstallFeedback('בדפדפן הזה אין כרגע חלון התקנה אוטומטי, אבל אפשר להשתמש בהוראות הידניות למטה.');
+    }
+  };
+
+  const installButtonDisabled = !installState?.canInstall || installState?.installed || !installState?.supported;
+
+  return (
+    <div style={{ border: '1px solid #D1FAE5', borderRadius: 20, padding: '16px', background: 'linear-gradient(135deg, #ECFDF5 0%, #F8FAFC 100%)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#047857', marginBottom: 6, letterSpacing: '0.08em' }}>INSTALL ON PHONE</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>התקנת האתר כאפליקציה בטלפון</div>
+          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.75, maxWidth: 760 }}>
+            אחרי ההתקנה האתר נפתח מהמסך הראשי כמו אפליקציה, עם מסך מלא וגישה מהירה יותר.
+          </div>
+        </div>
+        <span style={{
+          fontSize: 11,
+          fontWeight: 700,
+          borderRadius: 999,
+          padding: '6px 10px',
+          background: installState?.installed ? '#DCFCE7' : installState?.canInstall ? '#DBEAFE' : '#E2E8F0',
+          color: installState?.installed ? '#166534' : installState?.canInstall ? '#1D4ED8' : '#475569',
+        }}>
+          {installState?.statusLabel || 'בודק זמינות התקנה'}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
+        <div style={{ border: '1px solid #D1FAE5', borderRadius: 14, background: 'white', padding: '11px 12px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה מקבלים</div>
+          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>אייקון על מסך הבית, פתיחה מהירה, תחושה של אפליקציה מלאה ושימוש נוח יותר במובייל.</div>
+        </div>
+        <div style={{ border: '1px solid #D1FAE5', borderRadius: 14, background: 'white', padding: '11px 12px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>אם אין כפתור התקנה</div>
+          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{installState?.instructions || 'בדרך כלל אפשר לפתוח את תפריט הדפדפן ולבחור Add to Home Screen.'}</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={handleInstallClick}
+          disabled={installButtonDisabled}
+          style={{
+            border: installButtonDisabled ? '1px solid #CBD5E1' : '1px solid #0EA5E9',
+            background: installButtonDisabled ? '#F8FAFC' : '#0EA5E9',
+            color: installButtonDisabled ? '#94A3B8' : 'white',
+            borderRadius: 12,
+            padding: '10px 14px',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: installButtonDisabled ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {installState?.installed ? 'כבר מותקן' : installState?.canInstall ? 'התקן עכשיו' : 'התקנה ידנית מהדפדפן'}
+        </button>
+        {installFeedback ? (
+          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{installFeedback}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   const [memorySnapshot, setMemorySnapshot] = useState(() => getAppMemory());
   const [activeStepIndex, setActiveStepIndex] = useState(0);
@@ -2134,21 +2689,21 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
       id: 'home',
       eyebrow: 'שלב 1 · מסך הבית',
       title: 'כאן מתחילים כל מסמך חדש',
-      description: 'מסך הבית הוא נקודת הכניסה: בוחרים נושא, תבנית, טיוטת בסיס, חומרי עזר והנחיות. אם אין צורך בצוות סוכנים, אפשר לעבוד ישירות כבר מכאן.',
+      description: 'מסך הבית הוא נקודת הכניסה: בוחרים נושא, תבנית, טיוטת בסיס, חומרי עזר והנחיות, ואז מריצים בקשה ישירה מול המודל שבחרת.',
       bullets: [
         'שדה הנושא העליון הוא brief קצר בלבד, וההנחיות למטה הן המקור המחייב.',
         'אפשר לבחור טיוטת בסיס כדי לעדכן מסמך קיים במקום להתחיל מאפס.',
-        'אפשר להוסיף חומרי עזר, קובץ הנחיות וסביבת עבודה עוד לפני שמריצים את היצירה.',
+        'אפשר להוסיף חומרי עזר וקובץ הנחיות עוד לפני שמריצים את היצירה.',
       ],
       actions: [],
     },
     {
       id: 'direct',
       eyebrow: 'שלב 2 · מסלול ישיר',
-      title: 'ללא סביבת עבודה = ספק ומודל ישירים',
-      description: 'כשבוחרים "ללא סביבת עבודה", הבקשה לא עוברת דרך צוות סוכנים. היא נשלחת ישירות לספק והמודל שבחרת במסך הבית.',
+      title: 'מסלול ישיר = ספק ומודל ברורים',
+      description: 'הבקשה נשלחת ישירות לספק והמודל שבחרת במסך הבית, בלי שכבת תיאום נוספת.',
       bullets: [
-        'המסלול הזה טוב לטיוטות מהירות, ניסוחים נקודתיים ועבודה חופשית בלי workflow כבד.',
+        'המסלול הזה טוב לטיוטות מהירות, ניסוחים נקודתיים ועבודה חופשית.',
         'הבורר של ספק AI ומודל במסך הבית שולט בדיוק על המסלול הזה.',
         'אם המטרה שלך פשוטה או דחופה, לרוב זה המסלול המהיר ביותר.',
       ],
@@ -2157,27 +2712,12 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
       ],
     },
     {
-      id: 'workspaces',
-      eyebrow: 'שלב 3 · סביבות עבודה',
-      title: 'כשצריך צוות, בוחרים workspace מתאים',
-      description: 'סביבת עבודה מפעילה workflow מוכן מראש: אילו סוכנים רצים, באיזה סדר, ואיזה סוג תוצר המערכת מנסה להחזיר.',
-      bullets: [
-        'בחר workspace לפי סוג המשימה, לא לפי ספק בלבד.',
-        'אם צריך יותר שליטה, אפשר לפתוח את טאב הסוכנים ולערוך את ה-workspace.',
-        'הסביבות החדשות מכסות אקדמי, מחקר, מוצר, משפטי, ליטוש והגשה, ותוכן שיווקי.',
-      ],
-      actions: [
-        { label: 'פתח ניהול סוכנים', tab: 'agents' },
-      ],
-    },
-    {
       id: 'chat',
-      eyebrow: 'שלב 4 · חלונית AI',
+      eyebrow: 'שלב 3 · חלונית AI',
       title: 'מפה ממשיכים בשיחה רציפה',
       description: 'חלונית ה-AI מיועדת לעבודה שוטפת על המסמך: שכתוב, קיצור, הרחבה, בדיקות, ורצף איטרציות עד שהתוצאה יושבת נכון.',
       bullets: [
         'כותבים בקשה חופשית כשלא צריך שליטה מיוחדת.',
-        'משתמשים ב-@ כדי לבחור סוכן תפקיד ייעודי.',
         'משתמשים ב-/ כדי להפעיל skill ממוקד כמו academic-structure או source-hunter.',
       ],
       actions: [
@@ -2186,23 +2726,21 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
     },
     {
       id: 'skills',
-      eyebrow: 'שלב 5 · שליטה מדויקת',
-      title: 'סקילים, prompts וסוכנים',
-      description: 'אם אתה רוצה לקבע צורת עבודה מסוימת, זה האזור שבו מגדירים איך המערכת חושבת: skills, prompts משותפים, וסדר הריצה של הצוות.',
+      eyebrow: 'שלב 4 · שליטה מדויקת',
+      title: 'סקילים ו-prompts',
+      description: 'אם אתה רוצה לקבע צורת עבודה מסוימת, זה האזור שבו מגדירים יכולות ממוקדות והנחיות רוחביות.',
       bullets: [
         'טאב הסקילים מתאים ליכולות ממוקדות כמו מחקר, שלד אקדמי, או הגשה סופית.',
         'טאב Prompt מתאים להנחיות רוחביות שחוזרות כמעט בכל הרצה.',
-        'טאב הסוכנים מתאים כשצריך לשנות סדר, תפקידים, timeouts או אוטופיילוט.',
       ],
       actions: [
         { label: 'פתח סקילים', tab: 'skills' },
         { label: 'פתח Prompt', tab: 'prompt' },
-        { label: 'פתח סוכנים', tab: 'agents' },
       ],
     },
     {
       id: 'style',
-      eyebrow: 'שלב 6 · התאמה אישית',
+      eyebrow: 'שלב 5 · התאמה אישית',
       title: 'מלמדים את המערכת איך אתה כותב',
       description: 'המערכת יכולה ללמוד העדפות כתיבה, טון, דוגמאות זהב, חומרי לימוד וסגנון אישי, כדי שלא תצטרך לחזור על אותן הנחיות בכל פעם.',
       bullets: [
@@ -2217,13 +2755,13 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
     },
     {
       id: 'finish',
-      eyebrow: 'שלב 7 · לפני מסירה',
+      eyebrow: 'שלב 6 · לפני מסירה',
       title: 'ליטוש, עיצוב וייצוא',
       description: 'בסוף התהליך עוברים על כתיבה, גופנים, מראה, ליטוש והגשה, ואז מייצאים ל-DOCX או ממשיכים לעוד איטרציה אחת קצרה.',
       bullets: [
         'טאב כתיבה מרכז ברירות מחדל כמו גופנים, גדלים והעדפות מסמך.',
         'טאב מראה מתאים להתאמות ויזואליות של הממשק.',
-        'אם הטיוטה כבר כתובה, סביבת העבודה "ליטוש והגשה סופית" היא מסלול ייעודי לסגירה לפני מסירה.',
+        'אם הטיוטה כבר כתובה, אפשר להמשיך בסבבי שיחה קצרים עד שהיא מוכנה למסירה.',
       ],
       actions: [
         { label: 'פתח כתיבה', tab: 'writing' },
@@ -2233,25 +2771,11 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   ];
   const quickRoutes = [
     { title: 'חיבור ספק AI', text: 'להגדיר API key, לבחור מודל ולבדוק חיבור לפני שמתחילים.', tab: 'ai' },
-    { title: 'בחירת סביבה', text: 'לערוך סוכנים, workflow ואוטופיילוט של סביבות העבודה.', tab: 'agents' },
     { title: 'התאמת סגנון אישי', text: 'ללמד את המערכת העדפות כתיבה, טון ודוגמאות זהב.', tab: 'personal' },
     { title: 'אוןבורדינג והגשה', text: 'להשלים פרופיל, רקע אקדמי ומסלול הגשה מסודר.', tab: 'onboarding' },
   ];
-  const workspaceShowcase = [
-    { workspaceId: '__no-workspace__', title: 'ללא סביבת עבודה', bestFor: 'טיוטה מהירה, שאלה נקודתית או ניסוח ישיר', note: 'המסלול הישיר של ספק+מודל מהמסך הראשי, בלי צוות סוכנים.' },
-    { workspaceId: 'default-content-studio', title: 'סטודיו תוכן', bestFor: 'עבודה כללית, מסמכים, סיכומים וטיוטות', note: 'ברירת המחדל הגמישה כשרוצים להתחיל בלי לחשוב יותר מדי.' },
-    { workspaceId: 'default-system-research-heavy', title: 'מחקר מערכת כבד', bestFor: 'משימות מורכבות עם מחקר רחב, אקדמי וחזותי', note: 'המסלול הכי עשיר לבקשות שדורשות עומק, בדיקה וסבבים.' },
-    { workspaceId: 'default-system-research-light', title: 'מחקר מערכת קל', bestFor: 'מחקר מהיר יותר עם פחות עלות וזמן', note: 'שומר על מבנה מחקרי אבל בגרסה חסכונית יותר.' },
-    { workspaceId: 'default-academic-lab', title: 'כתיבה אקדמית מהירה', bestFor: 'עבודות, סמינרים וסיכומים בלי מסלול מחקר כבד', note: 'טוב כשצריך מבנה אקדמי וליטוש, בלי orchestration עמוס.' },
-    { workspaceId: 'default-academic-verified', title: 'אקדמי מאומת ומבוסס מקורות', bestFor: 'עבודה אקדמית עם הפניות ומקורות כמוקד מרכזי', note: 'מסלול קשיח יותר שמפריד בין מחקר אקדמי למחקר משלים.' },
-    { workspaceId: 'default-product-desk', title: 'מוצר, אפיון ושיווק', bestFor: 'PRD, אפיון, מסמכי מוצר ורעיונות עסקיים', note: 'מתמקד במבנה, בהירות ותיעדוף עסקי.' },
-    { workspaceId: 'default-legal-contracts', title: 'משפטי וחוזים', bestFor: 'נהלים, חוזים, מכתבים רשמיים וניסוח זהיר', note: 'שומר על מבנה משפטי ברור ומצמצם ניסוחים עמומים.' },
-    { workspaceId: 'default-final-polish', title: 'ליטוש והגשה סופית', bestFor: 'מסמך כמעט גמור שצריך מעבר סופי לפני מסירה', note: 'מסלול קצר של מבנה, ניסוח, בדיקת הגשה ושער סופי.' },
-    { workspaceId: 'default-social-content', title: 'תוכן שיווקי לרשתות', bestFor: 'פוסטים, קרוסלות, מודעות ו-CTA מהירים', note: 'מיועד למסרים קצרים, hooks ותוכן מותאם פלטפורמה.' },
-  ].filter((item) => item.workspaceId === '__no-workspace__' || Boolean(DEFAULT_WORKSPACES_LIBRARY[item.workspaceId]));
   const demoPrompts = [
     { title: 'שכתוב מהיר', text: 'שכתב את הפסקה הזאת בצורה טבעית וברורה יותר' },
-    { title: 'הפעלת סוכן', text: '@writer נסח לי פתיח קצר ומקצועי למייל הזה' },
     { title: 'הפעלת סקיל', text: '/academic-structure בנה לי שלד לעבודה על מנהיגות דיגיטלית' },
     { title: 'מקורות מחקר', text: '/source-hunter תן לי מילות חיפוש ל-Google Scholar על חרדת מבחנים' },
   ];
@@ -2314,11 +2838,7 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
       <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
         <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>מתחילים כאן</div>
         <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>מילון מושגים למתחילים</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה Agent?</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>Agent הוא עוזר עם תפקיד מוגדר מראש, למשל כתיבה, מחקר או ליטוש. במקום בקשה כללית אחת, כל Agent מטפל בחלק אחר של המשימה.</div>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
           <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה API key?</div>
             <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>API key הוא מפתח גישה אישי לספק ה-AI שלך. האפליקציה משתמשת בו כדי להתחבר לחשבון שלך ולהפעיל מודלים.</div>
@@ -2327,19 +2847,14 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
             <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה Provider?</div>
             <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>Provider הוא ספק השירות שמריץ את מודל ה-AI בפועל, כמו Gemini או OpenAI. אפשר לבחור ספק אחר לפי מהירות, מחיר וסוג המשימה.</div>
           </div>
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>Direct mode מול Workspace/Workflow mode</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>ב-Direct mode הבקשה נשלחת ישירות למודל שבחרת. ב-Workspace/Workflow mode המערכת מפעילה תהליך מסודר עם כמה סוכנים ותפקידים.</div>
-          </div>
         </div>
         <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, background: '#EFF6FF', padding: '10px 12px', marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>מתי לבחור "ללא סביבת עבודה"?</div>
-          <div style={{ fontSize: 11, color: '#1E40AF', lineHeight: 1.7 }}>כשרוצים תשובה מהירה, ניסוח נקודתי או טיוטה קצרה בלי תהליך מורכב. אם המשימה גדולה או דורשת מבנה מחקרי, עדיף לבחור סביבת עבודה.</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>איך עובדים נכון במסלול הישיר?</div>
+          <div style={{ fontSize: 11, color: '#1E40AF', lineHeight: 1.7 }}>כותבים הנחיה ברורה, מצרפים חומרי עזר כשצריך, ובוחרים ספק ומודל שמתאימים למשימה.</div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {[
             { label: 'הגדרת AI וספקים', tab: 'ai' },
-            { label: 'ניהול Agents ו-Workflow', tab: 'agents' },
             { label: 'הגדרות Assistant', tab: 'assistant' },
           ].map((action) => {
             const selected = action.tab === activeTab;
@@ -2366,7 +2881,9 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 14 }}>
+      <InstallAppSettingsCard />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
         <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '18px', background: 'white' }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>{activeStep.eyebrow}</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>{activeStep.title}</div>
@@ -2465,29 +2982,8 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
       </div>
 
       <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>איזו סביבת עבודה מתאימה למה?</div>
-            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>הבחירה צריכה להיות לפי סוג המשימה. הסביבות למטה מופיעות לך במסך הבית.</div>
-          </div>
-          <button type="button" onClick={() => onNavigate('agents')} style={{ border: '1px solid #CBD5E1', background: '#F8FAFC', color: '#334155', borderRadius: 12, padding: '8px 11px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
-            פתח ניהול workspaces
-          </button>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
-          {workspaceShowcase.map((workspace) => (
-            <div key={workspace.title} style={{ border: '1px solid #E2E8F0', borderRadius: 16, padding: '12px 13px', background: '#F8FAFC' }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>{workspace.title}</div>
-              <div style={{ fontSize: 11, color: '#1D4ED8', fontWeight: 700, marginBottom: 6 }}>מתאים ל: {workspace.bestFor}</div>
-              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{workspace.note}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
         <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>הדגמות מוכנות להעתקה לחלונית ה-AI</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
           {demoPrompts.map((item) => (
             <div key={item.title} style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '12px', background: '#F8FAFC' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>{item.title}</div>
@@ -2902,6 +3398,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const onboardingDone = Boolean(profile.onboardingCompletedAt);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [buildingGoldenExample, setBuildingGoldenExample] = useState(false);
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
@@ -2975,6 +3472,25 @@ function PersonalStyleSettings({ profile, setProfile }) {
       setRecentMaterials(items.slice(0, 4));
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleBuildGoldenExample = async () => {
+    if (String(profile.goldenExample || '').trim()) {
+      const confirmed = confirm('כבר קיימת דוגמת זהב בפרופיל. לבנות דוגמה חדשה מהחומרים הקיימים ולהחליף אותה?');
+      if (!confirmed) return;
+    }
+
+    setBuildingGoldenExample(true);
+    try {
+      const result = await buildGoldenExampleFromWorkspace();
+      if (result?.ok && result.profile) {
+        setProfile(result.profile);
+      } else {
+        window.alert(result?.message || 'לא נמצאו מספיק דוגמאות כתיבה לבניית דוגמת זהב.');
+      }
+    } finally {
+      setBuildingGoldenExample(false);
     }
   };
 
@@ -3175,6 +3691,36 @@ function PersonalStyleSettings({ profile, setProfile }) {
           <input type="checkbox" checked={profile.learningConsent === true} onChange={(e) => updateField('learningConsent', e.target.checked)} />
           אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
         </label>
+      </div>
+
+      <div style={{ border: '1px solid #C7D2FE', borderRadius: 12, padding: '14px', background: '#F8FAFF', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 13, color: '#3730A3', fontWeight: 800 }}>דוגמת זהב לסגנון אישי</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>העוזר משתמש בדוגמה הזו כדי לחקות קצב, טון ומבני משפטים בלי להעתיק משפטים.</div>
+          </div>
+          <button
+            type="button"
+            onClick={handleBuildGoldenExample}
+            disabled={buildingGoldenExample}
+            style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #818CF8', background: buildingGoldenExample ? '#EEF2FF' : 'white', color: '#3730A3', cursor: buildingGoldenExample ? 'wait' : 'pointer', fontSize: 12, fontWeight: 700 }}
+          >
+            {buildingGoldenExample ? 'בונה...' : 'בנה מהחומרים הקיימים'}
+          </button>
+        </div>
+        <textarea
+          value={profile.goldenExample || ''}
+          onChange={(e) => updateField('goldenExample', e.target.value)}
+          placeholder="אפשר להדביק כאן קטע שכתבת, או ללחוץ על בנייה אוטומטית אחרי שמעלים עבודות קודמות."
+          rows={7}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
+        />
+        {profile.styleGoldenExampleBuiltAt ? (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+            נבנתה לאחרונה: {new Date(profile.styleGoldenExampleBuiltAt).toLocaleString('he-IL')}
+            {profile.styleGoldenExampleSources?.length ? ` · מקורות: ${profile.styleGoldenExampleSources.slice(0, 3).join(', ')}` : ''}
+          </div>
+        ) : null}
       </div>
 
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 12 }}>
@@ -3387,6 +3933,35 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
     window.addEventListener('wordai-workspace-changed', syncLibrary);
     return () => window.removeEventListener('wordai-workspace-changed', syncLibrary);
   }, [setAutomation, onWorkspaceChange]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (previewWorkspaceId) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        setPreviewWorkspaceId('');
+        return;
+      }
+      if (deepEditWorkspaceState.id) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        closeDeepWorkspaceEdit();
+        return;
+      }
+      if (editWorkspaceState.id) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        closeEditWorkspace();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [previewWorkspaceId, editWorkspaceState.id, deepEditWorkspaceState.id]);
 
   const buildSimpleWorkspaceName = () => {
     const usedNames = new Set(
@@ -4773,14 +5348,7 @@ const SIDEBAR_PRESET_OPTIONS = [
 const downloadTextAsFile = (filename = 'wordflow-debug.json', text = '') => {
   try {
     const blob = new Blob([String(text || '')], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    void saveBlobInBrowser(blob, filename);
   } catch {}
 };
 
@@ -5697,8 +6265,9 @@ function AppearanceSettings() {
 
 // ─── FileMenu ראשי ───
 export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0, lastGenerationAction = null, liveGeneration = null }) {
+  const normalizeVisibleSettingsTab = (tab = '') => (tab === 'agents' ? 'ai' : (tab || 'ai'));
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
-  const [settingsTab, setSettingsTab] = useState(initialSettingsTab || 'ai');
+  const [settingsTab, setSettingsTab] = useState(normalizeVisibleSettingsTab(initialSettingsTab));
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
   const openedDirectlyInSettings = Boolean(initialSettingsTab);
   const onboardingSessionActiveRef = useRef(initialSettingsTab === 'onboarding');
@@ -5715,6 +6284,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [workspaceAutomationState, setWorkspaceAutomationState] = useState(getWorkspaceAutomation());
   const [saved, setSaved] = useState(false);
   const didHydrate = useRef(false);
+  const settingsPersistTimerRef = useRef(null);
   const externalAnalysisAutoRef = useRef('');
   const [inlineUpdateState, setInlineUpdateState] = useState({ status: 'idle', message: '' });
   const [externalAnalysisBusy, setExternalAnalysisBusy] = useState(false);
@@ -5836,12 +6406,16 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   useEffect(() => {
     if (initialSettingsTab) {
       setActivePanel('settings');
-      setSettingsTab(initialSettingsTab);
+      setSettingsTab(normalizeVisibleSettingsTab(initialSettingsTab));
       if (initialSettingsTab === 'onboarding') onboardingSessionActiveRef.current = true;
     }
   }, [initialSettingsTab]);
 
   useEffect(() => {
+    if (settingsTab === 'agents') {
+      setSettingsTab('ai');
+      return;
+    }
     if (settingsTab === 'onboarding') onboardingSessionActiveRef.current = true;
   }, [settingsTab]);
 
@@ -5891,19 +6465,12 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     runExternalAnalysisProcessing({ source: 'auto' });
   }, [personalStyleState.externalStyleAnalysisRaw, personalStyleState.externalStyleAnalysisStatus, personalStyleState.externalStyleAnalysisProvider, config, externalAnalysisBusy]);
 
-  useEffect(() => {
-    if (!didHydrate.current) {
-      didHydrate.current = true;
-      return;
-    }
-
+  const persistSettingsSnapshot = (shouldSkipPersonalStylePersist = false) => {
     const normalizedPersonalStyle = mergePersonalStyleForSave(personalStyleState);
-    const shouldSkipPersonalStylePersist = skipNextPersonalStylePersistRef.current;
     const persistedComparableProfile = buildComparablePersonalStyleProfile(getPersonalStyleProfile());
     const nextComparableProfile = buildComparablePersonalStyleProfile(normalizedPersonalStyle);
     const shouldPersistPersonalStyle = !shouldSkipPersonalStylePersist
       && JSON.stringify(persistedComparableProfile) !== JSON.stringify(nextComparableProfile);
-    skipNextPersonalStylePersistRef.current = false;
 
     saveProviderConfig(config);
     saveShortcutsConfig(shortcutsState);
@@ -5928,8 +6495,32 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     onAssistantBehaviorChange?.(assistantBehaviorState);
     onWordPreferencesChange?.(wordPrefsState);
     setSaved(true);
-    const timer = setTimeout(() => setSaved(false), 1200);
-    return () => clearTimeout(timer);
+    setTimeout(() => setSaved(false), 1200);
+  };
+
+  useEffect(() => {
+    if (!didHydrate.current) {
+      didHydrate.current = true;
+      return;
+    }
+
+    const shouldSkipPersonalStylePersist = skipNextPersonalStylePersistRef.current;
+    skipNextPersonalStylePersistRef.current = false;
+
+    if (settingsPersistTimerRef.current) {
+      clearTimeout(settingsPersistTimerRef.current);
+    }
+
+    settingsPersistTimerRef.current = setTimeout(() => {
+      persistSettingsSnapshot(shouldSkipPersonalStylePersist);
+    }, 350);
+
+    return () => {
+      if (settingsPersistTimerRef.current) {
+        clearTimeout(settingsPersistTimerRef.current);
+        settingsPersistTimerRef.current = null;
+      }
+    };
   }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, sharedInstructionsState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
 
   const menuItems = [
@@ -5952,11 +6543,21 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
   const closeFileMenu = () => {
     maybePostponeOnboardingSession();
+    if (settingsPersistTimerRef.current) {
+      clearTimeout(settingsPersistTimerRef.current);
+      settingsPersistTimerRef.current = null;
+      persistSettingsSnapshot(false);
+    }
     onClose();
   };
 
   const closeSettingsPanel = () => {
     maybePostponeOnboardingSession();
+    if (settingsPersistTimerRef.current) {
+      clearTimeout(settingsPersistTimerRef.current);
+      settingsPersistTimerRef.current = null;
+      persistSettingsSnapshot(false);
+    }
     setSettingsSearchQuery('');
     if (openedDirectlyInSettings) {
       onClose();
@@ -6094,7 +6695,6 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 </button>
               </div>
             )}
-          </div>
 
           <button
             className="flex items-center gap-3 px-4 py-3 rounded-xl text-white bg-indigo-500/20 border border-indigo-500/30 hover:bg-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/10 transition-all w-full text-right group mt-2 outline-none focus:ring-2 focus:ring-indigo-400/50"
@@ -6102,6 +6702,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
             <i className="ph-fill ph-sliders-horizontal text-lg text-indigo-300 group-hover:text-white transition-colors" />
             <span className="font-bold text-[13px]">הגדרות מתקדמות</span>
           </button>
+        </div>
+
         </div>
         
         <div className="px-4 pb-4 pt-2">
@@ -6127,8 +6729,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                         <i className="ph-fill ph-gear-fine text-[26px] text-indigo-600" />
                     </div>
                     <div>
-                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות סביבת עבודה</h2>
-                        <div className="text-[12px] sm:text-[13px] text-slate-500 font-semibold mt-0.5" dir="rtl">WordFlow OS &mdash; Advanced Configuration</div>
+                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות עבודה ישירה</h2>
+                        <div className="text-[12px] sm:text-[13px] text-slate-500 font-semibold mt-0.5" dir="rtl">WordFlow OS &mdash; Direct Configuration</div>
                     </div>
                 </div>
                 <button onClick={closeSettingsPanel} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
@@ -6142,7 +6744,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   <div className="flex flex-col gap-3">
                     <div>
                       <div className="text-[12px] font-bold text-slate-700">חיפוש מהיר בהגדרות</div>
-                      <div className="text-[11px] text-slate-500 mt-1">אפשר לחפש לפי טאב או מילות מפתח כמו API, timeout, logs, workspace או updates.</div>
+                      <div className="text-[11px] text-slate-500 mt-1">אפשר לחפש לפי טאב או מילות מפתח כמו API, מודל, סקילים, סגנון או עדכונים.</div>
                     </div>
                     <div className="relative">
                       <i className="ph ph-magnifying-glass absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
@@ -6215,23 +6817,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   {settingsTab === 'sidebar'     && <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />}
                   {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
-                  {settingsTab === 'agents'      && (
-                    <div>
-                      <WorkspacesManager 
-                        automation={workspaceAutomationState} 
-                        setAutomation={setWorkspaceAutomationState}
-                        setAgents={setRoleAgents}
-                        config={config}
-                        onWorkspaceChange={() => {
-                          const nextAgents = getRoleAgents();
-                          setRoleAgents((prev) => (JSON.stringify(prev) === JSON.stringify(nextAgents) ? prev : nextAgents));
-                        }}
-                      />
-                      <div id="role-agents-settings">
-                        <RoleAgentsSettings agents={roleAgents} setAgents={setRoleAgents} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} config={config} />
-                      </div>
-                    </div>
-                  )}
+                  {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
                   {settingsTab === 'updates'     && (
                     <UpdateSettings
                       checkToken={pendingUpdateCheckToken}

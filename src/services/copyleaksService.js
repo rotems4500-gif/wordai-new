@@ -159,37 +159,65 @@ const safeJsonParse = (raw = '') => {
   }
 };
 
-const extractErrorMessage = (payload, status = 0, fallback = 'Copyleaks החזיר שגיאה לא צפויה.') => {
-  if (typeof payload === 'string') {
-    const trimmed = payload.trim();
-    if (trimmed) return trimmed;
+const normalizeErrorTextCandidate = (value) => {
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim();
   }
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '[object Object]') return '';
+  return trimmed;
+};
+
+const extractNestedErrorText = (value, depth = 0) => {
+  if (depth > 4 || value == null) return '';
+
+  const directText = normalizeErrorTextCandidate(value);
+  if (directText) return directText;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nestedText = extractNestedErrorText(item, depth + 1);
+      if (nestedText) return nestedText;
+    }
+    return '';
+  }
+
+  if (typeof value !== 'object') return '';
+
+  const prioritizedCandidates = [
+    value.message,
+    value.error,
+    value.description,
+    value.title,
+    value.reason,
+    value.details,
+    value?.data?.message,
+    value?.data?.error,
+    value?.data?.description,
+  ];
+
+  for (const candidate of prioritizedCandidates) {
+    const nestedText = extractNestedErrorText(candidate, depth + 1);
+    if (nestedText) return nestedText;
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const nestedText = extractNestedErrorText(nestedValue, depth + 1);
+    if (nestedText) return nestedText;
+  }
+
+  return '';
+};
+
+const extractErrorMessage = (payload, status = 0, fallback = 'Copyleaks החזיר שגיאה לא צפויה.') => {
+  const payloadMessage = extractNestedErrorText(payload);
+  if (payloadMessage) return payloadMessage;
 
   if (!payload || typeof payload !== 'object') {
     if (status === 401 || status === 403) return 'ההזדהות ל-Copyleaks נכשלה. בדוק את האימייל והמפתח הסודי.';
     return fallback;
-  }
-
-  const candidates = [
-    payload.message,
-    payload.error,
-    payload.description,
-    payload.title,
-    payload?.data?.message,
-    payload?.data?.error,
-  ].map((item) => String(item || '').trim()).filter(Boolean);
-
-  if (candidates.length) return candidates[0];
-
-  if (Array.isArray(payload.errors) && payload.errors.length) {
-    const firstError = payload.errors[0];
-    if (typeof firstError === 'string' && firstError.trim()) return firstError.trim();
-    if (firstError && typeof firstError === 'object') {
-      const nested = [firstError.message, firstError.error, firstError.description]
-        .map((item) => String(item || '').trim())
-        .filter(Boolean);
-      if (nested.length) return nested[0];
-    }
   }
 
   if (status === 401 || status === 403) return 'ההזדהות ל-Copyleaks נכשלה. בדוק את האימייל והמפתח הסודי.';
@@ -347,6 +375,14 @@ const requestCopyleaks = async ({ url, method = 'POST', headers = {}, body, time
       }
 
       return response;
+    }
+
+    if (typeof window !== 'undefined') {
+      const error = new Error('Copyleaks דורש את אפליקציית הדסקטופ או proxy מקומי, כי הדפדפן חוסם את ה-API שלו במגבלות CORS. פתחו את האפליקציה דרך Electron ונסו שוב.');
+      error.name = 'CopyleaksTransportError';
+      error.technicalCode = 'BROWSER_CORS';
+      error.technicalMessage = 'Copyleaks API does not expose browser CORS headers; desktop proxy is unavailable.';
+      throw error;
     }
 
     const response = await fetch(url, {

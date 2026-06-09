@@ -4,6 +4,23 @@ import { AGENTS_CONFIG } from "../agentConfig";
 import { analyzeQuery as analyzeArticleQuery, buildArticleSearchQueryVariants, extractDomainFromUrl as extractArticleDomainFromUrl, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, validateArticleCandidate } from "./articleSourceValidation";
 import { fetchBrowserPageSnapshot, isDesktopBrowserRetrievalAvailable } from "./browserRetrievalService";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
+export {
+  WORKSPACE_V2_VERSION,
+  WORKSPACE_V2_TEMPLATE_IDS,
+  WORKSPACE_V2_GLOBAL_GUARDRAILS,
+  WORKSPACE_V2_TEMPLATES,
+  getWorkspaceV2TemplatesMap,
+  normalizeWorkspaceV2TemplateId,
+  getWorkspaceV2Templates,
+  getWorkspaceV2Template,
+  saveWorkspaceV2Template,
+  createWorkspaceV2Template,
+  deleteWorkspaceV2Template,
+  resetWorkspaceV2Templates,
+  classifyWorkspaceV2Template,
+  buildWorkspaceV2RunContext,
+  validateWorkspaceV2RunContext,
+} from './workspaceV2Service';
 
 // Personal style seed – loaded at runtime from disk, not bundled
 const personalStyleSeed = {};
@@ -254,8 +271,12 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   appendAgentNotesToOutput: false,
   agentNotesInstruction: '',
   activeWorkspaceId: 'default-content-studio',
-  workspaceBypassEnabled: false,
+  workspaceBypassEnabled: true,
 };
+
+// The legacy workspace orchestrator is quarantined: keep saved workspace data intact,
+// but do not let it affect generation until a clean v2 orchestration layer replaces it.
+const WORKSPACE_AUTOMATION_QUARANTINED = true;
 
 const AUTOPILOT_MANAGER_WORKFLOW_MODES = new Set(['manager-auto', 'circular-team', 'autopilot-full']);
 const AUTOPILOT_EXECUTION_STYLE_OPTIONS = new Set(['lean', 'balanced', 'deep']);
@@ -404,6 +425,14 @@ const getSocialContentWorkspaceAgents = () => ([
   { id: 'proofreader', name: 'עורך מסר והמרה', prompt: 'בדוק שהמסר חד, שאין עודף מילים, שה-CTA ברור, ושיש התאמה טובה בין הבטחה, תוכן והנעה לפעולה.', provider: '', model: '', enabled: true },
 ]);
 
+const getArgumentWritingWorkspaceAgents = () => ([
+  { id: 'manager', name: 'מנהל טיעון', prompt: 'הבן את העמדה, הקהל והמטרה. פרק את הטקסט לטענה מרכזית, נימוקים, דוגמאות, התמודדות עם התנגדויות וסיום חד. שמור על בקשת המשתמש ועל סגנונו האישי כקריטריונים מחייבים.', provider: '', model: '', enabled: true },
+  { id: 'researcher', name: 'בודק ביסוס', prompt: 'חפש רק עובדות, דוגמאות, נתונים או מקורות שתומכים בטיעון או מאתגרים אותו. אל תמציא נתונים או מקורות. אם אין צורך במחקר חיצוני, ציין אילו נקודות בטיעון מספיקות ואילו דורשות ביסוס.', provider: '', model: '', enabled: true },
+  { id: 'designer', name: 'אדריכל טיעון', prompt: 'בנה רצף טיעוני משכנע: פתיחה עניינית, טענה ברורה, נימוקים בסדר הגיוני, התייחסות לטענת נגד וסיום. אל תכפה כותרות או מבנה אקדמי אם המשתמש ביקש טקסט רציף.', provider: '', model: '', enabled: true },
+  { id: 'writer', name: 'כותב טיעוני', prompt: 'כתוב טקסט טיעון חד, טבעי ומשכנע בעברית. שמור על הקול האישי של המשתמש, הימנע מניפוח ומקלישאות, ודאג שכל משפט יקדם את הטענה המרכזית.', provider: '', model: '', enabled: true },
+  { id: 'proofreader', name: 'מחזק אחרון', prompt: 'לטש את הטקסט מבחינת בהירות, קצב, דיוק, זרימה ואמינות. בדוק שאין קפיצות לוגיות, טענות לא מבוססות או ניסוחים שנשמעים מלאכותיים.', provider: '', model: '', enabled: true },
+]);
+
 const DEPRECATED_DEFAULT_PROVIDER_WORKSPACES = {
   'default-gemini-studio': { preset: 'gemini-studio', providerId: 'gemini', name: 'צוות Gemini' },
   'default-claude-studio': { preset: 'claude-studio', providerId: 'claude', name: 'צוות Claude' },
@@ -535,6 +564,15 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
     workflowMode: 'design-first',
     sharedGoal: 'להפיק פוסטים, קופי, קרוסלות ורצפי תוכן קצרים עם hook ברור, התאמה לפלטפורמה ו-CTA מדויק.',
     agents: getSocialContentWorkspaceAgents(),
+  }),
+  'default-argument-writing': buildDefaultWorkspaceSeed({
+    id: 'default-argument-writing',
+    name: 'טקסט טיעון ושכנוע',
+    preset: 'argument-writing',
+    workflowMode: 'manager-auto',
+    autopilotEnabled: true,
+    sharedGoal: 'להפיק טקסט טיעון חד, מבוסס ומשכנע ששומר על סגנון אישי, בונה רצף לוגי ברור ומסמן פערי ביסוס במקום להמציא.',
+    agents: getArgumentWritingWorkspaceAgents(),
   }),
   'default-autopilot': buildDefaultWorkspaceSeed({
     id: 'default-autopilot',
@@ -678,7 +716,7 @@ function getHeavySystemResearchAgents() {
     {
       id: 'manager',
       name: 'מנהל עבודה',
-      prompt: 'אתה מנהל העבודה הראשי. הבן את המטלה, חלק אותה לשלבים ברורים, ותאם בין כלל הסוכנים. אם AUTOPILOT פעיל מותר לך לשנות סדר, לקצר את המסלול או לדלג על סוכן שאינו נדרש. אם AUTOPILOT כבוי, שמור על הסדר שהוגדר וודא שכל הסוכנים משתתפים. הכוון כל שלב כך שהתוצר הסופי יעמוד בהנחיות המטלה בפועל. אם המשתמש ביקש חקר חזותי או שיש פער בחומרים חזותיים, נצל את הסוכן הייעודי researcher-visual במקום להעמיס את המשימה על שאר החוקרים.',
+      prompt: 'אתה מנהל העבודה הראשי. הבן את המטלה, חלק אותה לשלבים ברורים, ותאם בין כלל הסוכנים. בסביבת מחקר כבדה ברירת המחדל היא להשתמש בצוות המלא: מחקר אקדמי, מחקר משלים, חקר חזותי כשיש צורך, כתיבה, התאמת סגנון, ביקורת מרצה ומנהל מסכם. מותר לדלג על סוכן רק אם הוא באמת לא רלוונטי למשימה, וציין זאת בתכנית. הכוון כל שלב כך שהתוצר הסופי יעמוד בהנחיות המטלה בפועל. אם המשתמש ביקש חקר חזותי או שיש פער בחומרים חזותיים, נצל את הסוכן הייעודי researcher-visual במקום להעמיס את המשימה על שאר החוקרים.',
       provider: 'gemini',
       model: 'gemini-2.5-pro',
       enabled: true,
@@ -777,7 +815,7 @@ const readJsonFromStorage = (key, fallback) => {
   }
 };
 
-const PERSISTED_APP_SETTINGS_KEYS = [
+export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_shortcuts',
   'wordai_assistant_behavior',
   'wordai_skills_config',
@@ -830,15 +868,51 @@ export const syncPersistedAppSettings = (options = {}) => {
   if (typeof window === 'undefined' || !window.desktopApp?.saveAppSettings) return;
 
   try {
-    const { skipKeys, includeKeys } = resolvePersistedAppSettingsSyncOptions(options);
-    const snapshot = {};
-    PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
-      if (skipKeys.has(key) && !includeKeys.has(key)) return;
-      const value = localStorage.getItem(key);
-      if (value !== null) snapshot[key] = value;
-    });
+    const snapshot = getPersistedAppSettingsSnapshot(options);
     window.desktopApp.saveAppSettings(snapshot).catch(() => {});
   } catch {}
+};
+
+export const getPersistedAppSettingsSnapshot = (options = {}) => {
+  const { skipKeys, includeKeys } = resolvePersistedAppSettingsSyncOptions(options);
+  const snapshot = {};
+
+  PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
+    if (skipKeys.has(key) && !includeKeys.has(key)) return;
+    const value = localStorage.getItem(key);
+    if (value !== null) snapshot[key] = value;
+  });
+
+  return snapshot;
+};
+
+export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) => {
+  if (!snapshot || typeof snapshot !== 'object' || typeof window === 'undefined') return false;
+
+  const replaceExisting = options?.replaceExisting !== false;
+  let appliedAny = false;
+
+  PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
+    const incoming = snapshot[key];
+    if (typeof incoming !== 'string') return;
+
+    const current = localStorage.getItem(key);
+    if (!replaceExisting && hasMeaningfulStoredValue(current)) return;
+    if (current === incoming) return;
+
+    localStorage.setItem(key, incoming);
+    appliedAny = true;
+  });
+
+  if (!appliedAny) return false;
+
+  try {
+    window.dispatchEvent(new CustomEvent('wordai-settings-hydrated'));
+    window.dispatchEvent(new CustomEvent('wordai-personal-style-updated'));
+    window.dispatchEvent(new CustomEvent('wordai-workspaces-v2-changed'));
+  } catch {}
+
+  return true;
 };
 
 let appSettingsHydrationPromise = null;
@@ -859,6 +933,16 @@ export const hydrateAppSettingsFromDisk = async () => {
         const incoming = diskState[key];
         if (typeof incoming !== 'string' || !hasMeaningfulStoredValue(incoming)) return;
         const current = localStorage.getItem(key);
+        if (key === 'wordai_personal_style' && hasMeaningfulStoredValue(incoming)) {
+          try {
+            const incomingProfile = normalizePersonalStyleProfile(JSON.parse(incoming));
+            const currentProfile = normalizePersonalStyleProfile(JSON.parse(current || '{}'));
+            if (hasMeaningfulPersonalProfileData(incomingProfile) && !hasMeaningfulPersonalProfileData(currentProfile)) {
+              localStorage.setItem(key, incoming);
+              return;
+            }
+          } catch {}
+        }
         if (!hasMeaningfulStoredValue(current)) {
           localStorage.setItem(key, incoming);
         }
@@ -1534,7 +1618,7 @@ export const getWorkspaceAutomation = () => {
     ...DEFAULT_WORKSPACE_AUTOMATION,
     ...readJsonFromStorage('wordai_workspace_automation', {}),
   };
-  const workspaceBypassEnabled = baseAutomation.workspaceBypassEnabled === true;
+  const workspaceBypassEnabled = WORKSPACE_AUTOMATION_QUARANTINED || baseAutomation.workspaceBypassEnabled === true;
   const library = getWorkspacesLibrary();
   let activeWorkspaceId = String(baseAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
 
@@ -1552,6 +1636,9 @@ export const getWorkspaceAutomation = () => {
   if (workspaceBypassEnabled) {
     resolvedAutomation.enabled = false;
     resolvedAutomation.autoDispatch = false;
+    if (WORKSPACE_AUTOMATION_QUARANTINED) {
+      resolvedAutomation.quarantineReason = 'legacy-workspace-context-leak';
+    }
   }
   return resolvedAutomation;
 };
@@ -1559,6 +1646,52 @@ export const getWorkspaceAutomation = () => {
 export const shouldUseWorkspaceAutomation = (automation = getWorkspaceAutomation()) => (
   automation?.enabled === true && automation?.autoDispatch !== false
 );
+
+export const resolveWorkspaceRouting = ({
+  automation = getWorkspaceAutomation(),
+  workflowMode = '',
+  forceDirectMode = false,
+  skipWorkflowAutomation = false,
+  workspaceBypassActive = false,
+  exactSourceLock = false,
+} = {}) => {
+  const resolvedAutomation = automation && typeof automation === 'object' ? automation : getWorkspaceAutomation();
+  const resolvedWorkflowMode = String(workflowMode || resolvedAutomation?.workflowMode || 'manager-auto').trim() || 'manager-auto';
+
+  if (forceDirectMode) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'forceDirectMode', agents: [] };
+  }
+  if (skipWorkflowAutomation) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'skipWorkflowAutomation', agents: [] };
+  }
+  if (exactSourceLock) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'exactSourceUrlLock', agents: [] };
+  }
+  if (workspaceBypassActive || resolvedAutomation?.workspaceBypassEnabled === true) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'workspaceBypass', agents: [] };
+  }
+  if (resolvedAutomation?.enabled !== true) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'workspaceDisabled', agents: [] };
+  }
+  if (resolvedAutomation?.autoDispatch === false) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'autoDispatchDisabled', agents: [] };
+  }
+
+  const agents = getOrderedRoleAgents(resolvedWorkflowMode);
+  if (!Array.isArray(agents) || !agents.length) {
+    return { mode: 'direct', shouldUseWorkflowAutomation: false, reason: 'noActiveAgents', agents: [] };
+  }
+
+  return {
+    mode: 'workspace',
+    shouldUseWorkflowAutomation: true,
+    reason: '',
+    agents,
+    workflowMode: resolvedWorkflowMode,
+    workspaceId: String(resolvedAutomation?.activeWorkspaceId || '').trim(),
+    workspaceName: String(resolvedAutomation?.workspaceName || '').trim(),
+  };
+};
 
 const sanitizeWorkspaceAutomationForPersistence = (automation = {}, { preserveWorkspaceToggles = true } = {}) => {
   const nextAutomation = {
@@ -1631,7 +1764,7 @@ export const setWorkspaceBypassEnabled = (enabled = true) => {
   const activeWorkspaceId = String(currentAutomation.activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   persistWorkspacePointer({
     activeWorkspaceId,
-    workspaceBypassEnabled: Boolean(enabled),
+    workspaceBypassEnabled: WORKSPACE_AUTOMATION_QUARANTINED ? true : Boolean(enabled),
   });
   syncPersistedAppSettings();
   emitWorkspaceChangedEvent(enabled ? 'workspace-bypass-enabled' : 'workspace-bypass-disabled', activeWorkspaceId);
@@ -2055,7 +2188,7 @@ const WORKSPACE_AGENT_PRESETS = {
       autopilotEnabled: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
-      sharedGoal: 'להפיק עבודה מלאה ומבוססת מקורות עם הפרדה בין מחקר אקדמי למחקר משלים, התאמת סגנון אישי וביקורת מסכמת.',
+      sharedGoal: 'להפיק עבודה מלאה ומבוססת מקורות בעזרת צוות מלא: מחקר אקדמי, מחקר משלים, כתיבה, התאמת סגנון אישי, ביקורת מרצה ובקרה מסכמת. מקורות, דרישות והחלטות ביניים חייבים להישמר בתיק העבודה עד התוצר הסופי.',
     },
     agents: getHeavySystemResearchAgents(),
   },
@@ -2070,7 +2203,7 @@ const WORKSPACE_AGENT_PRESETS = {
       autopilotEnabled: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
-      sharedGoal: 'להפיק עבודה קלה ומהירה יותר עם מסלול מחקר אקדמי חסכוני, כתיבה, התאמת סגנון אישי וביקורת מסכמת.',
+      sharedGoal: 'להפיק עבודה קלה ומהירה יותר בלי לאבד את עבודת הצוות: מחקר אקדמי חסכוני, מחקר משלים כשצריך, כתיבה, התאמת סגנון אישי וביקורת מסכמת. מקורות ודרישות ביניים חייבים להישמר עד התוצר הסופי.',
     },
     agents: getLightSystemResearchAgents(),
   },
@@ -2097,6 +2230,12 @@ const WORKSPACE_AGENT_PRESETS = {
     description: 'מיועד לפוסטים, קופי, קרוסלות, מודעות ורצפי תוכן קצרים עם hook ו-CTA.',
     automation: { enabled: true, preset: 'social-content', workflowMode: 'design-first', autoDispatch: true },
     agents: getSocialContentWorkspaceAgents(),
+  },
+  'argument-writing': {
+    label: 'טקסט טיעון ושכנוע',
+    description: 'מיועד למאמרי דעה, נאומים, פסקאות טיעון וטקסטים שצריכים לוגיקה, קול אישי ושכנוע.',
+    automation: { enabled: true, preset: 'argument-writing', workflowMode: 'manager-auto', autoDispatch: true, autopilotEnabled: true },
+    agents: getArgumentWritingWorkspaceAgents(),
   },
   'custom-workspace': {
     label: 'סביבה מותאמת אישית',
@@ -6400,9 +6539,18 @@ const enqueueWorkflowRevisits = ({
 
 const DEFAULT_MANAGER_REVIEW_GOAL = 'בצע ביקורת סופית כמנהל עבודה: עמידה בדרישות, איכות, דיוק, פערים מהותיים ותיקוני חובה לפני החזרה למשתמש. DELIVERABLE חייב להיות המסמך המלא והמעודכן בלבד; הערות, חוסרים ותיקוני חובה שייכים ל-HANDOFF / MISSING / CHECKLIST. גם אם צריך לעצור או להחזיר סבב, DELIVERABLE נשאר הטיוטה המלאה האחרונה או גרסה מלאה מתוקנת.';
 
-const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageInstruction = '', stageAgent, stagedOutput = '', batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false, assignmentRequirements = null }) => {
+const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageInstruction = '', stageAgent, stagedOutput = '', sharedMemoryArtifacts = [], batonNotes = [], planSummary = '', index = 0, total = 1, allowCircular = false, roundIndex = 0, revisitReason = '', decisionMode = 'manager', finalReview = false, enabledAgents = [], agentNotesInstruction = '', collectAgentNotes = false, assignmentRequirements = null }) => {
   const batonBlock = batonNotes.length ? `שרשור מסירות בין הסוכנים:\n- ${batonNotes.join('\n- ')}` : '';
+  const sharedMemoryBlock = buildWorkflowSharedMemoryBlock(sharedMemoryArtifacts);
   const currentOutputBlock = stagedOutput ? `תוצר עדכני עד כה:\n${stagedOutput}` : '';
+  const roleKey = isManagerReviewAgent(stageAgent) ? 'manager-review' : getAgentRoleKey(stageAgent);
+  const sharedMemoryUsageInstruction = sharedMemoryBlock
+    ? roleKey === 'writer'
+      ? 'חשוב: לפני כתיבה, השתמש בכל תיק העבודה המצטבר - במיוחד מקורות, דרישות, שלדים וביקורות. אל תסתמך רק על "התוצר העדכני עד כה".'
+      : roleKey === 'manager-review'
+        ? 'חשוב: בביקורת הסופית בדוק גם את תיק העבודה המצטבר, לא רק את הטיוטה האחרונה, כדי לוודא שמקורות, דרישות והערות קודמות לא נשמטו.'
+        : 'השתמש בתיק העבודה המצטבר כרקע מחייב לשלב הנוכחי. אל תאבד מקורות, דרישות או החלטות שכבר נאספו בשלבים קודמים.'
+    : '';
   const isPlanningManagerStage = isPlanningManagerAgent(stageAgent);
   const isManagerReviewStage = isManagerReviewAgent(stageAgent);
   const revisitTargetAgents = (Array.isArray(enabledAgents) ? enabledAgents : [])
@@ -6448,7 +6596,9 @@ const buildStagePrompt = ({ cleanUserPrompt, stageGoal = '', stageInstruction = 
     `בקשת המשתמש המקורית:\n${cleanUserPrompt}`,
     planSummary ? `תכנית מנהל העבודה:\n${planSummary}` : '',
     batonBlock,
+    sharedMemoryBlock,
     currentOutputBlock,
+    sharedMemoryUsageInstruction,
     stageGoal ? `יעד השלב הנוכחי:\n${stageGoal}` : '',
     assignmentRequirementStageContract ? `חוזה דרישות ומכסות לשלב:\n${assignmentRequirementStageContract}` : '',
     stageInstruction ? `הנחיית AUTOPILOT לשלב הנוכחי:\n${stageInstruction}` : '',
@@ -6844,13 +6994,16 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.tonePreferences?.length) parts.push(`טון כתיבה מועדף: ${profile.tonePreferences.join(', ')}`);
   if (profile.sentenceLengthPreference) parts.push(`אורך משפטים מועדף: ${profile.sentenceLengthPreference}`);
   if (profile.paragraphLengthPreference) parts.push(`אורך פסקאות מועדף: ${profile.paragraphLengthPreference}`);
-  if (profile.alwaysRules) parts.push(`כללים שחייבים להישמר בכל תוצר: ${String(profile.alwaysRules).trim()}`);
-  if (profile.avoidRules) parts.push(`יש להימנע במיוחד מהדברים הבאים: ${String(profile.avoidRules).trim()}`);
+  if (profile.alwaysRules) parts.push(`כללים שחייבים להישמר בכל תוצר, אלא אם המשתמש סתר אותם במפורש: ${String(profile.alwaysRules).trim()}`);
+  if (profile.avoidRules) parts.push(`גבולות סגנון מחייבים - יש להימנע במיוחד מהדברים הבאים: ${String(profile.avoidRules).trim()}`);
   if (profile.greetingStyle) parts.push(`אם מתאים לפתוח את הטקסט בברכה, העדף את הסגנון: ${String(profile.greetingStyle).trim()}`);
   if (profile.signOffStyle) parts.push(`אם מתאים לסיים בחתימה או סגירה, העדף: ${String(profile.signOffStyle).trim()}`);
   if (profile.emojiPreference) parts.push(`שימוש באימוג'י: ${emojiLabels[profile.emojiPreference] || profile.emojiPreference}`);
   if (profile.listPreference) parts.push(`פורמט רשימות מועדף: ${listLabels[profile.listPreference] || profile.listPreference}`);
-  if (normalizedGoldenExample) parts.push(`דוגמת כתיבה אישית לחיקוי: ${normalizedGoldenExample.slice(0, 500)}${normalizedGoldenExample.length > 500 ? '...' : ''}`);
+  if (normalizedGoldenExample) {
+    parts.push(`דוגמת כתיבה אישית לחיקוי מבוקר: ${normalizedGoldenExample.slice(0, 1400)}${normalizedGoldenExample.length > 1400 ? '...' : ''}`);
+    parts.push('בעת שימוש בדוגמת הכתיבה: חלץ ממנה קצב, רמת פירוט, מבני משפטים, מעברים וטון; אל תעתיק משפטים שלמים ואל תשמר טעויות, פרטים אישיים או עובדות שאינם רלוונטיים לבקשה הנוכחית.');
+  }
   if (profile.protectedVocabulary?.length) parts.push(`אין לשנות את המונחים: ${profile.protectedVocabulary.join(', ')}`);
   if (profile.protectedPhrases?.length) parts.push(`אין לשנות את הביטויים: ${profile.protectedPhrases.join(', ')}`);
   if (profile.learningConsent === false) {
@@ -6867,7 +7020,14 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     if (profile.learnedNotes?.length) parts.push(`תובנות שנלמדו מהקבצים: ${profile.learnedNotes.join(' | ')}`);
   }
   if (profile.notes) parts.push(`הערות סגנון אישיות: ${String(profile.notes).trim()}`);
-  return parts.filter(Boolean).join('\n');
+
+  const cleanParts = parts.filter(Boolean);
+  if (!cleanParts.length) return '';
+  return [
+    'כללים אלה מחייבים את ניסוח התוצר כל עוד אינם סותרים הוראה מפורשת של המשתמש, חומרי מקור או דרישות מטלה. אל תדלל אותם להמלצה כללית ואל תחליף אותם בסגנון ברירת מחדל.',
+    'מטרת הסגנון: התוצר צריך להרגיש כאילו המשתמש עצמו כתב אותו אחרי עריכה נקייה, לא כמו טקסט AI כללי. העדף התאמה לסגנון האישי על פני ניסוחים גנריים, פתיחות שבלוניות וסיכומי ביניים שלא התבקשו.',
+    ...cleanParts,
+  ].join('\n');
 };
 
 const PORTABLE_PROFILE_PACKAGE_VERSION = 1;
@@ -8066,6 +8226,42 @@ const resolveDocumentPreservationCandidate = (primaryDocument = '', fallbackDocu
   const primaryText = String(primaryDocument || '').trim();
   if (primaryText && !isAgentNotesAppendixOnlyArtifact(primaryText)) return primaryText;
   return String(fallbackDocument || '').trim();
+};
+
+const WORKFLOW_SHARED_MEMORY_TOTAL_LIMIT = 10000;
+const WORKFLOW_SHARED_MEMORY_ITEM_LIMIT = 2200;
+const WORKFLOW_SHARED_MEMORY_MAX_ITEMS = 8;
+
+const buildWorkflowSharedMemoryBlock = (artifacts = []) => {
+  const usableArtifacts = (Array.isArray(artifacts) ? artifacts : [])
+    .filter((item) => item && String(item.text || item.preview || '').trim())
+    .slice(-WORKFLOW_SHARED_MEMORY_MAX_ITEMS);
+
+  if (!usableArtifacts.length) return '';
+
+  let remaining = WORKFLOW_SHARED_MEMORY_TOTAL_LIMIT;
+  const sections = [];
+  usableArtifacts.forEach((item, index) => {
+    if (remaining <= 0) return;
+    const label = String(item.agentLabel || item.agentId || `שלב ${index + 1}`).trim();
+    const role = String(item.roleKey || '').trim();
+    const text = String(item.text || item.preview || '').trim();
+    const clippedText = text.length > WORKFLOW_SHARED_MEMORY_ITEM_LIMIT
+      ? `${text.slice(0, WORKFLOW_SHARED_MEMORY_ITEM_LIMIT).trimEnd()}\n[... קוצר תוצר ביניים כדי לשמור מקום לשאר תיק העבודה ...]`
+      : text;
+    const section = `### ${label}${role ? ` (${role})` : ''}\n${clippedText}`;
+    const clippedSection = section.length > remaining
+      ? `${section.slice(0, remaining).trimEnd()}\n[... קוצר תיק העבודה המצטבר ...]`
+      : section;
+    if (clippedSection.trim()) {
+      sections.push(clippedSection);
+      remaining -= clippedSection.length + 2;
+    }
+  });
+
+  return sections.length
+    ? `תיק עבודה מצטבר מהשלבים הקודמים:\n${sections.join('\n\n')}`
+    : '';
 };
 
 const escapeHtmlForOutput = (value = '') => String(value || '')
@@ -9657,6 +9853,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       let finalOutputModel = resolvedModel;
       const batonNotes = executionPlan?.summary ? [`מנהל העבודה: ${executionPlan.summary}`] : [];
       const stageArtifacts = [];
+      const stageMemoryArtifacts = [];
       const stageNotes = [];
       let finalRequirementAuditRevisitUsed = false;
 
@@ -9704,6 +9901,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           stageInstruction,
           stageAgent,
           stagedOutput,
+          sharedMemoryArtifacts: stageMemoryArtifacts,
           batonNotes,
           planSummary: executionPlan?.summary || '',
           index: processedStages,
@@ -9845,6 +10043,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
             chars: stageArtifact.length,
             preview: trimLogText(stageArtifact, 180),
           });
+          stageMemoryArtifacts.push({
+            agentId: stageAgent.id,
+            agentLabel: stageLabel,
+            roleKey: stageRoutingKey,
+            text: stageArtifact,
+          });
+          while (stageMemoryArtifacts.length > WORKFLOW_SHARED_MEMORY_MAX_ITEMS) stageMemoryArtifacts.shift();
 
           if (effectiveParsedReply.handoff) {
             batonNotes.push(`${stageAgent.name}: ${effectiveParsedReply.handoff.replace(/\n+/g, ' ; ')}`);
@@ -10102,6 +10307,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           stageInstruction: managerReviewInstruction,
           stageAgent: managerAgent,
           stagedOutput,
+          sharedMemoryArtifacts: stageMemoryArtifacts,
           batonNotes,
           planSummary: executionPlan?.summary || '',
           index: orderedAgents.length,

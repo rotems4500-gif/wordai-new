@@ -21,7 +21,7 @@
             background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
             margin: 0; 
             display: flex; 
-            height: 100vh; 
+            height: 100dvh; 
             overflow: hidden; 
             flex-direction: column; 
             color: var(--text-color); 
@@ -234,6 +234,16 @@
             .page-surface[data-view-mode="print"] h1 { font-size: 26px; }
             .page-surface[data-view-mode="print"] h2 { font-size: 22px; }
             .page-surface[data-view-mode="print"] h3 { font-size: 19px; }
+        }
+        @media (max-width: 900px) {
+            #tabs-row { padding-inline: 6px; }
+            .tab-btn { padding: 8px 14px; font-size: 0.8rem; }
+            .toolbar-panel { min-height: 88px; padding: 8px 6px; }
+            .toolbar-group { height: 80px; padding: 0 8px; }
+            .toolbar-group-items { gap: 4px; }
+            .r-btn-large { min-width: 54px; height: 62px; font-size: 10px; gap: 4px; padding: 6px 8px; }
+            .r-btn-large i { font-size: 22px; }
+            .styles-gallery { max-width: 320px; }
         }
         .page-surface[data-active-template]:not([data-active-template="blank"]) > p:first-child {
             text-align: center;

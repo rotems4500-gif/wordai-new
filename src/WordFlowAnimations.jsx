@@ -32,14 +32,35 @@ const WAIT_MESSAGES_SIDEBAR = [
 
 const CONFETTI_COLORS = ['#6366F1','#F59E0B','#10B981','#F43F5E','#06B6D4','#8B5CF6','#FBBF24','#34D399','#FB923C','#E879F9'];
 
+const useDocumentVisible = () => {
+  const [isVisible, setIsVisible] = useState(() => (
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden'
+  ));
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+
+    const handleVisibilityChange = () => {
+      setIsVisible(document.visibilityState !== 'hidden');
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  return isVisible;
+};
+
 // ─── 1. GeneratingOverlay — כשמתחילים לייצר מסמך (StartScreen) ───
 export function GeneratingOverlay({ isVisible, prompt = '', prefersReducedMotion = false }) {
   const [msgIndex, setMsgIndex] = useState(0);
   const [fade, setFade] = useState(true);
   const [elapsed, setElapsed] = useState(0);
+  const isDocumentVisible = useDocumentVisible();
 
   useEffect(() => {
     if (!isVisible) { setMsgIndex(0); setElapsed(0); return; }
+    if (!isDocumentVisible) return undefined;
     let pendingTimeout = null;
     const iv = setInterval(() => {
       setFade(false);
@@ -50,7 +71,7 @@ export function GeneratingOverlay({ isVisible, prompt = '', prefersReducedMotion
     }, 2400);
     const elapsedIv = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => { clearInterval(iv); clearTimeout(pendingTimeout); clearInterval(elapsedIv); };
-  }, [isVisible]);
+  }, [isVisible, isDocumentVisible]);
 
   if (!isVisible) return null;
 
@@ -263,16 +284,17 @@ export function AppStartupSplash({ onDone }) {
 export function LiveGenerationMood({ state, prefersReducedMotion = false }) {
   const [msgIdx, setMsgIdx] = useState(0);
   const [fade, setFade] = useState(true);
+  const isDocumentVisible = useDocumentVisible();
 
   useEffect(() => {
-    if (state !== 'running') return;
+    if (state !== 'running' || !isDocumentVisible) return;
     let pendingTimeout = null;
     const iv = setInterval(() => {
       setFade(false);
       pendingTimeout = setTimeout(() => { setMsgIdx((i) => (i + 1) % WAIT_MESSAGES_SIDEBAR.length); setFade(true); }, 250);
     }, 2600);
     return () => { clearInterval(iv); clearTimeout(pendingTimeout); };
-  }, [state]);
+  }, [state, isDocumentVisible]);
 
   if (state === 'success') {
     return (

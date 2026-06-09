@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "wordai-website"
+  },
+  "targets": {
+    "wordai-website": {
+      "hosting": {
+        "site": [
+          "wordai-website"
+        ]
+      }
+    }
+  }
+}

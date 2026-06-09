@@ -22,7 +22,7 @@ import {
   getHelperMaterialAcceptList,
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates } from './services/aiService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -193,6 +193,7 @@ const mergeMissingManagedWorkflowRoles = (agents = [], presetId = 'content-studi
 };
 
 const NO_WORKSPACE_OPTION_VALUE = '__no-workspace__';
+const WORKSPACE_V2_DIRECT_OPTION = '__direct__';
 
 const WORKSPACE_PROVIDER_LABELS = {
   gemini: 'Gemini',
@@ -498,7 +499,22 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
   const [recentDocs, setRecentDocs] = useState(() => (typeof getRecentDocuments === 'function' ? getRecentDocuments(8) : []));
   const canOpenRecentDocs = typeof window !== 'undefined' && typeof window.desktopApp?.openDocumentByPath === 'function';
-  const workspaceBypassActive = currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE;
+  const [workspaceV2Templates, setWorkspaceV2Templates] = useState(() => (
+    typeof getWorkspaceV2Templates === 'function' ? getWorkspaceV2Templates() : []
+  ));
+  const [selectedWorkspaceV2Id, setSelectedWorkspaceV2Id] = useState(() => {
+    const remembered = String(getAppMemory().homeWorkspaceV2TemplateId || WORKSPACE_V2_DIRECT_OPTION).trim();
+    return remembered && remembered !== NO_WORKSPACE_OPTION_VALUE ? remembered : WORKSPACE_V2_DIRECT_OPTION;
+  });
+  const [showWorkspaceV2Details, setShowWorkspaceV2Details] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof getWorkspaceV2Templates !== 'function') return undefined;
+    const refreshWorkspaceV2Templates = () => setWorkspaceV2Templates(getWorkspaceV2Templates());
+    window.addEventListener('wordai-workspace-v2-templates-changed', refreshWorkspaceV2Templates);
+    return () => window.removeEventListener('wordai-workspace-v2-templates-changed', refreshWorkspaceV2Templates);
+  }, []);
+  const activeWorkspaceV2 = workspaceV2Templates.find((workspace) => workspace.id === selectedWorkspaceV2Id) || null;
+  const workspaceBypassActive = !activeWorkspaceV2;
   const workflowSelectorCurrentLabel = getWorkflowModeDisplayLabel(actualWorkflowMode, autopilotEnabled);
   const workflowSelectorSummary = autopilotEnabled === false
     ? `${workflowSelectorCurrentLabel} · Auto Pilot כבוי`
@@ -533,6 +549,22 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     modelId: resolvedDirectProviderModel,
     choices: directProviderChoices,
   });
+  const workspaceV2ProviderId = activeWorkspaceV2?.providerId || resolvedDirectProviderId;
+  const workspaceV2ModelChoices = React.useMemo(() => (
+    getProviderModelChoices(workspaceV2ProviderId, providerConfigState, [activeWorkspaceV2?.model, resolvedDirectProviderModel].filter(Boolean))
+  ), [activeWorkspaceV2?.model, providerConfigState, resolvedDirectProviderModel, workspaceV2ProviderId]);
+  const workspaceV2ProviderModel = activeWorkspaceV2?.model && workspaceV2ModelChoices.includes(normalizeProviderModelName(workspaceV2ProviderId, activeWorkspaceV2.model))
+    ? normalizeProviderModelName(workspaceV2ProviderId, activeWorkspaceV2.model)
+    : (workspaceV2ProviderId === resolvedDirectProviderId ? resolvedDirectProviderModel : (workspaceV2ModelChoices[0] || ''));
+  const hasWorkspaceV2StepRoutes = Boolean(activeWorkspaceV2)
+    && (activeWorkspaceV2.pipeline || []).some((step) => step.providerId || step.model);
+  const activeGenerationSummary = hasWorkspaceV2StepRoutes
+    ? 'Workspace v2 · מודלים לפי שלב'
+    : buildDirectGenerationSummary({
+      providerId: workspaceV2ProviderId,
+      modelId: workspaceV2ProviderModel,
+      choices: directProviderChoices,
+    });
   const selectedUploadMeta = typeof getMaterialUploadMeta === 'function' ? getMaterialUploadMeta(uploadKind) : { id: uploadKind, label: uploadKind };
   const helperMaterialAcceptList = typeof getHelperMaterialAcceptList === 'function'
     ? getHelperMaterialAcceptList()
@@ -644,6 +676,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   }, [resolvedDirectProviderId, resolvedDirectProviderModel]);
 
   useEffect(() => {
+    saveAppMemory({
+      homeWorkspaceV2TemplateId: activeWorkspaceV2 ? activeWorkspaceV2.id : WORKSPACE_V2_DIRECT_OPTION,
+    });
+  }, [activeWorkspaceV2]);
+
+  useEffect(() => {
     setDirectProviderTestStatus('idle');
     setDirectProviderTestMessage('');
   }, [providerConfigState, resolvedDirectProviderId, resolvedDirectProviderModel]);
@@ -692,7 +730,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   }, [editingCard?.id, escapeBlocked]);
 
   useEffect(() => {
-    if (editingCard?.id || showChefDialog || escapeBlocked) return undefined;
+    if (!showWorkspaceV2Details || escapeBlocked) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setShowWorkspaceV2Details(false);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showWorkspaceV2Details, escapeBlocked]);
+
+  useEffect(() => {
+    if (editingCard?.id || showChefDialog || showWorkspaceV2Details || escapeBlocked) return undefined;
     const onKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
@@ -701,7 +751,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [editingCard?.id, showChefDialog, escapeBlocked, onClose]);
+  }, [editingCard?.id, showChefDialog, showWorkspaceV2Details, escapeBlocked, onClose]);
 
   const buildLoadedWorkspaceState = (automation) => {
     if (!automation?.enabled || automation?.workspaceBypassEnabled) return null;
@@ -1090,9 +1140,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       setCurrentPromptIndex(0);
       return undefined;
     }
+    if (typeof document === 'undefined') return undefined;
 
     // אנימציה מחזורית של ההצעות המהירות
     const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       setCurrentPromptIndex(prev => (prev + 1) % QUICK_PROMPTS.length);
     }, 3000);
     
@@ -1157,16 +1209,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const handleOpenRecentDoc = async (doc) => {
     const filePath = String(doc?.filePath || '').trim();
     if (!filePath || !canOpenRecentDocs) return;
-    const result = await window.desktopApp.openDocumentByPath(filePath);
-    if (result?.ok === false) {
-      if (/(?:ENOENT|not found|לא נמצא)/i.test(String(result.error || ''))) {
-        setRecentDocs((currentDocs) => currentDocs.filter((entry) => String(entry?.filePath || '').trim() !== filePath));
-        removeDocumentHistoryByFilePath(filePath);
+    try {
+      const result = await window.desktopApp.openDocumentByPath(filePath);
+      if (result?.ok === false) {
+        if (/(?:ENOENT|not found|לא נמצא)/i.test(String(result.error || ''))) {
+          setRecentDocs((currentDocs) => currentDocs.filter((entry) => String(entry?.filePath || '').trim() !== filePath));
+          removeDocumentHistoryByFilePath(filePath);
+        }
+        window.alert(result.error || 'לא ניתן לפתוח את הקובץ');
+        return;
       }
-      window.alert(result.error || 'לא ניתן לפתוח את הקובץ');
-      return;
+
+      await onOpenDocument(result);
+    } catch (error) {
+      window.alert(error?.message || 'קרתה שגיאה בזמן פתיחת הקובץ');
     }
-    await onOpenDocument(result);
   };
 
   const handleGenerate = async () => {
@@ -1175,13 +1232,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setIsGenerating(true);
     try {
       const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
-      const selectedProviderId = workspaceBypassActive ? resolvedDirectProviderId : '';
-      const selectedProviderModel = workspaceBypassActive ? resolvedDirectProviderModel : '';
+      const selectedProviderId = activeWorkspaceV2 ? workspaceV2ProviderId : resolvedDirectProviderId;
+      const selectedProviderModel = activeWorkspaceV2 ? workspaceV2ProviderModel : resolvedDirectProviderModel;
       await onGenerateFromPrompt?.({
         prompt,
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
+        instructionFileName: String(instructionFileName || '').trim(),
         selectedMaterials,
+        workspaceId: activeWorkspaceV2 ? `workspace-v2:${activeWorkspaceV2.id}` : currentWorkspaceId,
+        workspaceBypassActive,
+        useWorkspaceV2: Boolean(activeWorkspaceV2),
+        workspaceV2TemplateId: activeWorkspaceV2?.id || '',
         selectedModel: selectedProviderId,
         selectedProviderId,
         selectedProviderModel,
@@ -1216,7 +1278,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         prompt: generatedPrompt,
         templateId: selectedTemplate,
         instructions: String(instructions || '').trim(),
+        instructionFileName: String(instructionFileName || '').trim(),
         selectedMaterials,
+        workspaceId: currentWorkspaceId,
+        workspaceBypassActive,
         selectedModel: model,
         selectedProviderId,
         selectedProviderModel,
@@ -1298,7 +1363,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   ));
 
   return (
-    <div className="min-h-[calc(100vh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
+    <div className="min-h-[calc(100dvh-140px)] w-full flex-1 bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 relative overflow-hidden" dir="rtl">
       <GeneratingOverlay isVisible={isGenerating} prompt={prompt} prefersReducedMotion={prefersReducedMotion} />
       {/* Animated Background Elements */}
       <div className="absolute inset-0 pointer-events-none">
@@ -1329,27 +1394,27 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       </div>
 
       {/* Main Content */}
-      <div className="relative z-10 max-w-7xl mx-auto px-6 py-12">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
         {/* Hero Section */}
-        <div className={buildStartScreenRevealClassName(mounted, 'text-center mb-16')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.hero)}>
+        <div className={buildStartScreenRevealClassName(mounted, 'text-center mb-10 sm:mb-16')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.hero)}>
           <div className="mb-8">
-            <h1 className="text-6xl md:text-7xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 20px rgba(0,0,0,0.5)' }}>
+            <h1 className="text-4xl sm:text-5xl md:text-7xl font-bold text-white mb-4" style={{ textShadow: '2px 2px 20px rgba(0,0,0,0.5)' }}>
               {profile?.displayName ? (
                 <>שלום <span className="bg-gradient-to-r from-cyan-200 to-amber-200 bg-clip-text text-transparent">{profile.displayName}</span>! 👋</>
               ) : (
                 <>יוצרים <span className="bg-gradient-to-r from-cyan-200 to-amber-200 bg-clip-text text-transparent">תוכן חכם</span> ביחד? 🚀</>
               )}
             </h1>
-            <p className="text-xl md:text-2xl text-white/80 max-w-3xl mx-auto leading-relaxed" style={{ textShadow: '1px 1px 10px rgba(0,0,0,0.3)' }}>
+            <p className="text-base sm:text-xl md:text-2xl text-white/80 max-w-3xl mx-auto leading-relaxed" style={{ textShadow: '1px 1px 10px rgba(0,0,0,0.3)' }}>
               AI שמבין אותך, יוצר איתך, וממשיך ללמוד מהסגנון שלך ⚡
             </p>
           </div>
 
           {/* Quick Prompt Animation */}
-          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-2xl p-6 max-w-4xl mx-auto mb-8 shadow-[0_20px_60px_rgba(2,6,23,0.45)]">
+          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-2xl p-4 sm:p-6 max-w-4xl mx-auto mb-8 shadow-[0_20px_60px_rgba(2,6,23,0.45)]">
             <div className="text-white/70 text-sm mb-4">רעיונות למסמכים:</div>
             <div 
-              className="text-white text-lg font-medium transition-all duration-500"
+              className="text-white text-base sm:text-lg font-medium transition-all duration-500"
               style={{ textShadow: '1px 1px 5px rgba(0,0,0,0.5)' }}
             >
               {QUICK_PROMPTS[currentPromptIndex]}
@@ -1367,8 +1432,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           </div>
 
           {/* Main Input Area */}
-          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-3xl p-8 max-w-5xl mx-auto shadow-[0_24px_80px_rgba(3,7,18,0.55)]">
-            <div className="flex flex-col md:flex-row gap-4 items-center mb-6">
+          <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-3xl p-4 sm:p-8 max-w-5xl mx-auto shadow-[0_24px_80px_rgba(3,7,18,0.55)]">
+            <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center mb-6">
               <div className="flex-1 relative">
                 <input
                   type="text"
@@ -1376,7 +1441,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
                   placeholder="נושא קצר או הקשר אופציונלי למסמך. אפשר להשאיר ריק אם ההנחיות למטה כבר מגדירות הכול"
-                  className="w-full px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
+                  className="w-full px-5 sm:px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-base sm:text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
                 />
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
                   <div className={`w-3 h-3 bg-cyan-200 rounded-full ${prefersReducedMotion ? '' : 'animate-pulse'}`}></div>
@@ -1386,7 +1451,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate}
-                className={`px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 ${
+                className={`w-full md:w-auto px-6 sm:px-8 py-4 rounded-2xl font-bold text-base sm:text-lg transition-all duration-300 transform hover:scale-105 ${
                   !canGenerate
                     ? 'bg-gray-500/50 text-gray-300 cursor-not-allowed'
                     : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg hover:shadow-2xl'
@@ -1408,7 +1473,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <button
                 onClick={() => setShowChefDialog(true)}
                 disabled={isGenerating}
-                className="px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:text-gray-200 disabled:cursor-not-allowed"
+                className="w-full md:w-auto px-6 sm:px-8 py-4 rounded-2xl font-bold text-base sm:text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:text-gray-200 disabled:cursor-not-allowed"
                 style={{
                   boxShadow: !isGenerating ? '0 10px 30px rgba(245, 158, 11, 0.45)' : 'none'
                 }}
@@ -1475,41 +1540,64 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             {/* Advance Options Area */}
             <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6">
                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
-                 <div className="text-white/80 font-medium whitespace-nowrap">✨ סביבת עבודה ומצב הפעלה</div>
-                 <div className="flex flex-wrap items-center gap-2 justify-end w-full">
-                   <select 
-                     value={currentWorkspaceId} 
-                     onChange={handleWorkspaceChange} 
-                     className="px-3 py-2 bg-cyan-500/25 hover:bg-cyan-500/35 border border-cyan-200/45 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[120px]"
+                 <div className="text-white/80 font-medium whitespace-nowrap">✨ מצב הפעלה</div>
+               </div>
+
+               <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
+                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+                   <div className="text-white font-semibold text-sm">סביבת עבודה</div>
+                   <div className="flex flex-wrap items-center gap-2">
+                     <span className="text-[11px] text-cyan-100 bg-cyan-500/20 border border-cyan-200/30 px-3 py-1 rounded-full">
+                       {activeWorkspaceV2 ? activeWorkspaceV2.label : 'Direct'}
+                     </span>
+                     <button
+                       type="button"
+                       onClick={() => setShowWorkspaceV2Details(true)}
+                       className="text-[11px] text-white/85 bg-white/10 hover:bg-white/15 border border-white/20 px-3 py-1 rounded-full transition"
+                     >
+                       פרטים
+                     </button>
+                   </div>
+                 </div>
+
+                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+                   <button
+                     type="button"
+                     onClick={() => setSelectedWorkspaceV2Id(WORKSPACE_V2_DIRECT_OPTION)}
+                     className={`text-right rounded-xl border px-3 py-3 transition ${!activeWorkspaceV2
+                       ? 'bg-cyan-400/20 border-cyan-200/50 text-white shadow-lg shadow-cyan-900/20'
+                       : 'bg-white/8 border-white/15 text-white/75 hover:bg-white/12'}`}
                    >
-                     <option value={NO_WORKSPACE_OPTION_VALUE} className="bg-gray-800 text-white">
-                       ללא סביבת עבודה · {directGenerationSummary}
-                     </option>
-                     {workspacesList.map(workspace => (
-                       <option key={workspace.id} value={workspace.id} className="bg-gray-800 text-white">
-                         {workspace.name} · {getWorkspaceModeLabel(workspace)}
-                       </option>
-                     ))}
-                   </select>
-                    <label className="px-3 py-2 bg-violet-500/25 hover:bg-violet-500/35 border border-violet-200/45 rounded-xl text-white text-xs transition-all shadow-sm cursor-pointer min-w-[150px] inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={autopilotEnabled}
-                        onChange={handleAutopilotToggle}
-                        disabled={workspaceBypassActive}
-                        className="checkbox checkbox-xs border-violet-200 rounded bg-white/20"
-                        aria-label="הפעל Auto Pilot"
-                      />
-                      הפעל Auto Pilot
-                    </label>
+                     <div className="text-sm font-bold">Direct</div>
+                     <div className="text-[11px] mt-1 opacity-75">קריאה יחידה ונקייה</div>
+                   </button>
+                   {workspaceV2Templates.map((workspace) => {
+                     const active = activeWorkspaceV2?.id === workspace.id;
+                     return (
+                       <button
+                         key={workspace.id}
+                         type="button"
+                         onClick={() => setSelectedWorkspaceV2Id(workspace.id)}
+                         className={`text-right rounded-xl border px-3 py-3 transition ${active
+                           ? 'bg-emerald-400/20 border-emerald-200/50 text-white shadow-lg shadow-emerald-900/20'
+                           : 'bg-white/8 border-white/15 text-white/75 hover:bg-white/12'}`}
+                       >
+                         <div className="text-sm font-bold">{workspace.label}</div>
+                         <div className="text-[11px] mt-1 opacity-75">
+                           {workspace.pipeline?.length || 0} שלבים
+                           {(workspace.pipeline || []).some((step) => step.providerId || step.model) ? ' · מודלים לפי שלב' : ''}
+                         </div>
+                       </button>
+                     );
+                   })}
                  </div>
                </div>
 
                <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
-                   <div className="text-white font-semibold text-sm">🧠 ספק ומודל למסלול הישיר</div>
+                   <div className="text-white font-semibold text-sm">🧠 ספק ומודל</div>
                    <span className="text-[11px] text-cyan-100 bg-cyan-500/20 border border-cyan-200/30 px-3 py-1 rounded-full">
-                     {workspaceBypassActive ? `פעיל עכשיו: ${directGenerationSummary}` : `ברירת מחדל למסלול הישיר: ${directGenerationSummary}`}
+                     פעיל עכשיו: {activeGenerationSummary}
                    </span>
                  </div>
 
@@ -1569,85 +1657,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     ) : null}
                   </div>
 
-                 <div className="mt-3 text-[11px] text-white/70">
-                   הבורר הזה שולט במסלול הישיר של דף הבית. כשהבחירה למעלה היא "ללא סביבת עבודה" הוא יופעל בפועל; כשנבחר workspace, המנועים נקבעים לפי צוות הסוכנים של אותה סביבה.
-                 </div>
                </div>
-
-               <div className="bg-white/6 border border-white/15 rounded-2xl p-4 mb-4">
-                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
-                   <div className="text-white font-semibold text-sm">🔁 הגדרות זרימת עבודה מהירה</div>
-                 </div>
-                 <select
-                   value={displayedQuickWorkflowMode}
-                   onChange={handleWorkflowModeChange}
-                   disabled={workspaceBypassActive}
-                   className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-sm outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
-                 >
-                   <option value="__keep-current__" className="bg-slate-900 text-white" disabled>השאר מצב קיים: {workflowSelectorSummary}</option>
-                    <option value="autopilot-full" className="bg-slate-900 text-white">Auto Pilot מלא</option>
-                    <option value="manager-auto" className="bg-slate-900 text-white">Auto Pilot דינמי</option>
-                   <option value="circular-team" className="bg-slate-900 text-white">סביבה מעגלית</option>
-                   <option value="custom-order" className="bg-slate-900 text-white">סדר ידני</option>
-                 </select>
-                 {quickWorkflowMode === 'circular-team' ? (
-                   <div className="mt-3 border border-cyan-200/20 bg-cyan-400/10 rounded-xl p-3">
-                     <label className="flex items-center gap-2 text-white text-xs font-semibold mb-3">
-                       <input
-                         type="checkbox"
-                         checked={circularWorkflowEnabled}
-                         onChange={handleCircularWorkflowToggle}
-                         disabled={workspaceBypassActive}
-                         className="checkbox checkbox-xs border-cyan-200 rounded bg-white/20"
-                       />
-                       אפשר חזרה לסוכן קודם
-                     </label>
-                     <div className="flex items-center justify-between gap-3">
-                       <span className="text-white/75 text-xs">מקסימום סבבים</span>
-                       <input
-                         type="number"
-                         min="1"
-                         max="4"
-                         value={circularMaxRounds}
-                         onChange={handleCircularMaxRoundsChange}
-                         disabled={workspaceBypassActive}
-                         className="w-20 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm text-center outline-none focus:ring-1 focus:ring-cyan-300 focus:border-transparent"
-                       />
-                     </div>
-                   </div>
-                 ) : quickWorkflowMode === 'custom-order' ? (
-                   <div className="mt-3 text-[11px] text-white/70">במצב סדר ידני, המערכת תרוץ לפי סדר הסוכנים שהגדרת בסביבת העבודה.</div>
-                 ) : (
-                   <div className="mt-3 text-[11px] text-white/70">מצב העבודה הנוכחי נשמר כפי שהוגדר בסביבת העבודה: {workflowSelectorSummary}.</div>
-                 )}
-               </div>
-
-               {currentWorkspaceId === NO_WORKSPACE_OPTION_VALUE ? (
-                 <div className="mb-4 p-3 bg-slate-500/20 border border-slate-300/30 rounded-xl text-right">
-                   <div className="text-slate-100 text-sm font-semibold mb-1">ללא סביבת עבודה</div>
-                   <div className="text-slate-200/85 text-xs">
-                     כל הבקשות יישלחו ישירות דרך: {directGenerationSummary}
-                   </div>
-                   <div className="text-slate-200/60 text-[10px] mt-1">
-                     סביבת העבודה האחרונה נשמרת ברקע, ואפשר לחזור אליה מייד דרך הבחירה למעלה.
-                   </div>
-                 </div>
-               ) : loadedWorkspace && (
-                 <div className="mb-4 p-3 bg-amber-500/20 border border-amber-400/30 rounded-xl text-right">
-                   <div className="text-amber-100 text-sm font-semibold mb-1">סביבת העבודה שנטענה</div>
-                   <div className="text-amber-200/80 text-xs">
-                     {loadedWorkspace?.workflowMode === 'custom-order' || loadedWorkspace?.autopilotEnabled === false
-                       ? `${((loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' ← ') || 'אין סדר מוגדר')}${loadedWorkspace?.autopilotEnabled === false ? ' · Auto Pilot כבוי' : ''}`
-                       : (WORKFLOW_LABELS[loadedWorkspace?.workflowMode] || loadedWorkspace?.workflowMode || 'manager-auto')}
-                   </div>
-                   <div className="text-amber-200/60 text-[10px] mt-1">
-                     מנועים: {loadedWorkspace?.providerSummary}
-                   </div>
-                   <div className="text-amber-200/60 text-[10px] mt-1">
-                     {(loadedWorkspace?.agents || []).map((agent) => String(agent?.name || '').trim()).filter(Boolean).join(' • ')}
-                   </div>
-                 </div>
-               )}
 
                <div className="border-t border-white/10 pt-4">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
@@ -1865,7 +1875,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             תבניות חכמות להתחלה מהירה
           </h2>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
             {renderTemplateCards(primaryTemplateCards)}
           </div>
 
@@ -1885,7 +1895,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               </div>
 
               {shouldShowExtraTemplates ? (
-                <div id="start-screen-extra-templates" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
+                <div id="start-screen-extra-templates" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-16">
                   {renderTemplateCards(extraTemplateCards, primaryTemplateCards.length)}
                 </div>
               ) : null}
@@ -1899,7 +1909,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         {canOpenRecentDocs && recentDocs.some((doc) => Boolean(String(doc?.filePath || '').trim())) && (
           <div className={buildStartScreenRevealClassName(mounted, 'mb-8')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
             <h2 className="text-white/70 text-sm font-semibold uppercase tracking-widest mb-3 text-right">מסמכים אחרונים</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               {recentDocs.filter((doc) => Boolean(String(doc?.filePath || '').trim())).map((doc) => {
                 const savedAt = doc?.savedAt ? new Date(doc.savedAt) : null;
                 const dateLabel = savedAt && !Number.isNaN(savedAt.getTime())
@@ -1923,11 +1933,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         )}
 
         {/* Quick Access Bar */}
-        <div className={buildStartScreenRevealClassName(mounted, 'bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
-          <div className="flex flex-wrap justify-center gap-4">
+        <div className={buildStartScreenRevealClassName(mounted, 'bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 sm:p-6')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
+          <div className="flex flex-wrap justify-center gap-3 sm:gap-4">
             <button
               onClick={onOpenDocument}
-              className="flex items-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
+              className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
             >
               📁 פתח מסמך קיים
             </button>
@@ -1935,7 +1945,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             {hasDraft && (
               <button
                 onClick={onOpenLastDraft}
-                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500/80 to-emerald-600/80 hover:from-green-600/80 hover:to-emerald-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
+                className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500/80 to-emerald-600/80 hover:from-green-600/80 hover:to-emerald-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
               >
                 ⚡ המשך טיוטה אחרונה
               </button>
@@ -1943,19 +1953,102 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             
             <button
               onClick={() => onOpenSettings('onboarding')}
-              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500/80 to-orange-600/80 hover:from-amber-600/80 hover:to-orange-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
+              className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500/80 to-orange-600/80 hover:from-amber-600/80 hover:to-orange-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
             >
               {onboardingDone ? '🧭 עדכון פרופיל היכרות' : '🎯 התחלת היכרות חכמה'}
             </button>
 
             <button
               onClick={() => onOpenSettings('guide')}
-              className="flex items-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
+              className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
             >
               ⚙️ הגדרות וסקילים
             </button>
           </div>
         </div>
+
+        {showWorkspaceV2Details && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowWorkspaceV2Details(false)}>
+            <div className="w-[760px] max-w-[96vw] max-h-[88vh] overflow-y-auto rounded-[24px] bg-slate-900 shadow-2xl border border-white/20 p-6 text-right" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4 mb-5">
+                <div>
+                  <div className="text-2xl font-bold text-white">{activeWorkspaceV2 ? activeWorkspaceV2.label : 'Direct'}</div>
+                  <div className="text-sm text-slate-300 mt-2 leading-6">
+                    {activeWorkspaceV2?.mission || 'קריאה יחידה למודל הפעיל, בלי pipeline של סביבת עבודה.'}
+                  </div>
+                </div>
+                <button type="button" onClick={() => setShowWorkspaceV2Details(false)} className="p-2 text-slate-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">✕</button>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-3 mb-5">
+                <div className="rounded-xl border border-cyan-200/20 bg-cyan-500/10 p-4">
+                  <div className="text-[11px] text-cyan-100/75 font-semibold mb-1">ספק ומודל</div>
+                  <div className="text-white text-sm font-bold">{activeGenerationSummary}</div>
+                </div>
+                <div className="rounded-xl border border-emerald-200/20 bg-emerald-500/10 p-4">
+                  <div className="text-[11px] text-emerald-100/75 font-semibold mb-1">מסלול</div>
+                  <div className="text-white text-sm font-bold">{activeWorkspaceV2 ? 'Workspace v2' : 'Direct'}</div>
+                </div>
+                <div className="rounded-xl border border-white/15 bg-white/8 p-4">
+                  <div className="text-[11px] text-white/55 font-semibold mb-1">שלבים</div>
+                  <div className="text-white text-sm font-bold">{activeWorkspaceV2?.pipeline?.length || 1}</div>
+                </div>
+              </div>
+
+              {activeWorkspaceV2 ? (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-white/15 bg-white/8 p-4">
+                    <div className="text-white text-sm font-bold mb-2">מדיניות</div>
+                    <div className="grid md:grid-cols-2 gap-3 text-xs leading-6 text-slate-200">
+                      <div>
+                        <div className="text-slate-400 font-semibold mb-1">מקורות</div>
+                        <div>מצב: {activeWorkspaceV2.sourcePolicy?.mode || 'context-aware'}</div>
+                        <div>ציטוט: {activeWorkspaceV2.sourcePolicy?.citationStyle || 'לפי הצורך'}</div>
+                        {(activeWorkspaceV2.sourcePolicy?.requireSourcesWhen || []).length ? (
+                          <div className="mt-1">מופעל כש: {activeWorkspaceV2.sourcePolicy.requireSourcesWhen.join(' | ')}</div>
+                        ) : null}
+                      </div>
+                      <div>
+                        <div className="text-slate-400 font-semibold mb-1">סגנון</div>
+                        <div>{activeWorkspaceV2.stylePolicy?.preservePersonalStyle ? 'שמירת סגנון אישי פעילה' : 'סגנון אישי לפי הצורך'}</div>
+                        {(activeWorkspaceV2.stylePolicy?.avoid || []).length ? (
+                          <div className="mt-1">להימנע מ: {activeWorkspaceV2.stylePolicy.avoid.join(' | ')}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/15 bg-white/8 p-4">
+                    <div className="text-white text-sm font-bold mb-3">תפקידי הצוות</div>
+                    <div className="space-y-3">
+                      {(activeWorkspaceV2.pipeline || []).map((step, index) => (
+                        <div key={step.id || index} className="rounded-xl border border-white/10 bg-slate-950/35 p-4">
+                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-2">
+                            <div className="text-white text-sm font-bold">{index + 1}. {step.role || step.id}</div>
+                            <div className="text-[11px] text-cyan-100 bg-cyan-500/15 border border-cyan-200/20 px-2 py-1 rounded-full self-start md:self-auto">{step.output || 'תוצר ביניים'}</div>
+                          </div>
+                          <div className="text-slate-200 text-xs leading-6">{step.goal}</div>
+                          {(step.providerId || step.model) ? (
+                            <div className="mt-2 text-cyan-100 text-[11px] leading-5">
+                              מודל השלב: {[step.providerId, step.model].filter(Boolean).join(' · ')}
+                            </div>
+                          ) : null}
+                          {(step.instructions || []).length ? (
+                            <div className="mt-2 text-slate-400 text-[11px] leading-5">{step.instructions.join(' | ')}</div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-white/15 bg-white/8 p-4 text-slate-200 text-sm leading-7">
+                  Direct משתמש באותו ספק ומודל שמוצגים כאן, ומדלג על חוזה Workspace v2. זה המסלול הכי נקי ומהיר ליצירה בלי תפקידי צוות.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {editingCard && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">

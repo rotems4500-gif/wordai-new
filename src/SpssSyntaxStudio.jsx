@@ -1,4 +1,5 @@
 import React from 'react';
+import { saveBlobInBrowser } from './services/browserDocxExport';
 import {
   SPSS_QUICK_ACTIONS,
   buildQuickActionSyntax,
@@ -40,12 +41,7 @@ const buildMasterSyntax = (blocks = []) => blocks
 
 const downloadTextFile = (content = '', fileName = 'wordflow-spss-syntax.sps') => {
   const blob = new Blob([String(content || '')], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  void saveBlobInBrowser(blob, fileName);
 };
 
 const noticeToneClassMap = {

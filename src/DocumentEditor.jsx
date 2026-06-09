@@ -18,7 +18,7 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
-import { Wand2, Sparkles, CheckCheck, PaintBucket, BookOpen, Table2, Check, X } from "lucide-react";
+import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser } from "lucide-react";
 import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
 import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
@@ -28,6 +28,81 @@ const DOC_STYLE_PRESETS = {
   legal: { fontFamily: "'Times New Roman', 'Miriam Libre', serif", fontSize: '12.5pt', lineHeight: '1.85', padding: '2.54cm 2.75cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d1d5db' },
   business: { fontFamily: "'Segoe UI', 'Assistant', sans-serif", fontSize: '12pt', lineHeight: '1.62', padding: '2.45cm 2.54cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #dbe3ee' },
   presentation: { fontFamily: "'Heebo', 'Segoe UI', sans-serif", fontSize: '14pt', lineHeight: '1.48', padding: '2.15cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d8d6e8' },
+};
+
+const MINI_TOOLBAR_FONTS = ['Alef', 'David', 'Assistant', 'Heebo', 'Arial', 'Times New Roman'];
+const MINI_TOOLBAR_SIZES = ['8', '9', '10', '11', '12', '14', '16', '18', '20', '24', '28', '36'];
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const getBestContextPanelPosition = ({ anchorX, anchorY, containerWidth, containerHeight, menuWidth, menuHeight, gap = 12, padding = 16 }) => {
+  const availableRight = containerWidth - anchorX - padding;
+  const availableLeft = anchorX - padding;
+  const availableBottom = containerHeight - anchorY - padding;
+  const availableTop = anchorY - padding;
+
+  const placeRight = availableRight >= availableLeft;
+  const placeDown = availableBottom >= availableTop;
+
+  const x = placeRight
+    ? anchorX + gap
+    : anchorX - menuWidth - gap;
+  const y = placeDown
+    ? anchorY + gap
+    : anchorY - menuHeight - gap;
+
+  return {
+    x: clamp(x, padding, Math.max(padding, containerWidth - menuWidth - padding)),
+    y: clamp(y, padding, Math.max(padding, containerHeight - menuHeight - padding)),
+  };
+};
+
+const getSelectionClientRect = (view) => {
+  if (!view?.state?.selection || !view?.coordsAtPos) return null;
+  const { from, to, empty } = view.state.selection;
+  const resolvedFrom = Number(from);
+  const resolvedTo = Number(to);
+  if (!Number.isInteger(resolvedFrom) || !Number.isInteger(resolvedTo)) return null;
+
+  try {
+    const start = view.coordsAtPos(resolvedFrom);
+    const end = view.coordsAtPos(empty ? resolvedFrom : resolvedTo);
+    const left = Math.min(start.left, end.left);
+    const right = Math.max(start.right || start.left, end.right || end.left);
+    const top = Math.min(start.top, end.top);
+    const bottom = Math.max(start.bottom || start.top, end.bottom || end.top);
+    return {
+      left,
+      right,
+      top,
+      bottom,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getBubbleMenuReferenceRect = (editor) => {
+  const rect = getSelectionClientRect(editor?.view);
+  if (!rect) return editor?.view?.dom?.getBoundingClientRect?.() || {
+    left: 0,
+    right: 1,
+    top: 0,
+    bottom: 1,
+    width: 1,
+    height: 1,
+  };
+  const centerX = rect.left + (rect.width / 2);
+  return {
+    left: centerX,
+    right: centerX,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: 1,
+    height: rect.height || 1,
+  };
 };
 
 const normalizeTextDirection = (value) => {
@@ -68,21 +143,26 @@ const getSavedTypographyDefaults = (prefs = {}) => {
   }
 };
 
-export default function DocumentEditor({ onReady, onWordCountChange, onCommand = () => {}, onOpenAssistant = () => {}, wordPreferences = {}, documentStyle = 'academic', viewMode = 'print', activeTemplateId = 'blank' }) {
+export default function DocumentEditor({ onReady, onWordCountChange, onCommand = () => {}, onOpenAssistant = () => {}, onContextMenuOpen = () => {}, wordPreferences = {}, documentStyle = 'academic', viewMode = 'print', activeTemplateId = 'blank' }) {
   const [loadingAction, setLoadingAction] = useState(null);
   const [formatPainterActive, setFormatPainterActive] = useState(false);
   const [copiedFormat, setCopiedFormat] = useState(null);
-  const [contextPanel, setContextPanel] = useState({ open: false, y: 80 });
+  const [contextPanel, setContextPanel] = useState({ open: false, x: 24, y: 80 });
   const wrapperRef = React.useRef(null);
   const wordCountFrameRef = React.useRef(null);
   const bubbleActions = React.useMemo(() => ([
-    { id: "fix", icon: <CheckCheck size={14} className="text-green-600" />, label: "תיקון" },
-    { id: "humanize", icon: <Sparkles size={14} className="text-purple-600" />, label: "האנשה" },
-    { id: "summary", icon: <Wand2 size={14} className="text-blue-600" />, label: "סיכום" },
-    { id: "academic", icon: <BookOpen size={14} className="text-indigo-600" />, label: "אקדמי" },
-    { id: "organize", icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
-    { id: "textToTable", icon: <Table2 size={14} className="text-teal-600" />, label: "לטבלה" },
+    { id: "sourcesAcademic", type: "assistant", row: 1, icon: <GraduationCap size={14} className="text-indigo-600" />, label: "מקור אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות אקדמיים מאומתים בלבד לטקסט או למסמך הפעיל. אם חסר הקשר, התבסס על המסמך והשיחה הקודמת.' } },
+    { id: "summary", type: "inline", row: 1, icon: <Wand2 size={14} className="text-blue-600" />, label: "סיכום" },
+    { id: "humanize", type: "inline", row: 1, icon: <Sparkles size={14} className="text-purple-600" />, label: "האנשה" },
+    { id: "reviewFix", type: "inline", row: 1, icon: <CheckCheck size={14} className="text-rose-600" />, label: "תצרה+תיקון" },
+    { id: "fix", type: "inline", row: 1, icon: <CheckCheck size={14} className="text-green-600" />, label: "תיקון" },
+    { id: "aiDetect", type: "command", row: 2, icon: <Shield size={14} className="text-fuchsia-600" />, label: "זיהוי AI", command: "openCopyleaksDetector", commandValue: { source: 'selection' } },
+    { id: "textToTable", type: "inline", row: 2, icon: <Table2 size={14} className="text-teal-600" />, label: "לטבלה" },
+    { id: "organize", type: "inline", row: 2, icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
+    { id: "holeFill", type: "inline", row: 2, icon: <Wand2 size={14} className="text-lime-600" />, label: "מילוי חורים" },
+    { id: "sourcesGeneral", type: "assistant", row: 2, icon: <Newspaper size={14} className="text-sky-600" />, label: "מקור לא אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות לא אקדמיים אבל אמינים ומאומתים, כמו כתבות, אתרי ממשלה או גופים רשמיים, לטקסט או למסמך הפעיל.' } },
   ].filter(({ id }) => wordPreferences?.aiQuickActions?.[id] !== false)), [wordPreferences]);
+  const bubbleActionRows = React.useMemo(() => ([1, 2].map((row) => bubbleActions.filter((action) => action.row === row)).filter((row) => row.length)), [bubbleActions]);
 
   const syncEditorSurface = useCallback((instance, styleId = documentStyle) => {
     if (!instance?.view?.dom) return;
@@ -211,16 +291,36 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
         },
         contextmenu: (view, event) => {
           event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation?.();
+          onContextMenuOpen();
           const hasSelection = !view.state.selection.empty;
           const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
           if (!hasSelection && typeof pos === 'number') {
             editor?.chain().focus().setTextSelection(pos).run();
           }
-          const rect = wrapperRef.current?.getBoundingClientRect();
-          const relativeY = rect ? (event?.clientY || 120) - rect.top + (wrapperRef.current?.scrollTop || 0) - 70 : 80;
+          const menuWidth = 356;
+          const menuHeight = 290;
+          const viewport = window.visualViewport || window;
+          const viewportWidth = viewport.width || window.innerWidth || menuWidth + 48;
+          const viewportHeight = viewport.height || window.innerHeight || menuHeight + 48;
+          const selectionRect = hasSelection ? getSelectionClientRect(view) : null;
+          const viewportOffsetLeft = Number(viewport.offsetLeft) || 0;
+          const viewportOffsetTop = Number(viewport.offsetTop) || 0;
+          const anchorX = (selectionRect ? selectionRect.right : event?.clientX) - viewportOffsetLeft || 24;
+          const anchorY = (selectionRect ? selectionRect.bottom : event?.clientY) - viewportOffsetTop || 80;
+          const position = getBestContextPanelPosition({
+            anchorX,
+            anchorY,
+            containerWidth: viewportWidth,
+            containerHeight: viewportHeight,
+            menuWidth,
+            menuHeight,
+          });
           setContextPanel({
             open: true,
-            y: Math.max(16, relativeY),
+            x: position.x,
+            y: position.y,
           });
           return true;
         },
@@ -410,6 +510,100 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     }
   };
 
+  const handleBubbleAction = async (action) => {
+    if (!action) return;
+    if (action.type === 'inline') {
+      await handleAiAction(action.id);
+      return;
+    }
+    if (action.type === 'assistant') {
+      onOpenAssistant(action.payload || {});
+      return;
+    }
+    if (action.type === 'command') {
+      onCommand(action.command, action.commandValue);
+    }
+  };
+
+  const closeContextPanel = useCallback(() => {
+    setContextPanel((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const applyContextCommand = useCallback((command, value) => {
+    if (!editor) return;
+    const chain = editor.chain().focus();
+
+    switch (command) {
+      case 'fontFamily':
+        chain.setFontFamily(value).run();
+        break;
+      case 'fontSize':
+        chain.setFontSize(value).run();
+        break;
+      case 'bold':
+        chain.toggleBold().run();
+        break;
+      case 'italic':
+        chain.toggleItalic().run();
+        break;
+      case 'underline':
+        chain.toggleUnderline().run();
+        break;
+      case 'bulletList':
+        chain.toggleBulletList().run();
+        break;
+      case 'orderedList':
+        chain.toggleOrderedList().run();
+        break;
+      case 'alignRight':
+        chain.setTextAlign('right').run();
+        break;
+      case 'alignCenter':
+        chain.setTextAlign('center').run();
+        break;
+      case 'alignLeft':
+        chain.setTextAlign('left').run();
+        break;
+      case 'clearFormatting':
+        chain.unsetAllMarks().clearNodes().run();
+        break;
+      default:
+        break;
+    }
+  }, [editor]);
+
+  const handleCopySelection = useCallback(async () => {
+    try {
+      const selected = editor?.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ');
+      if (selected) await navigator.clipboard.writeText(selected);
+    } catch {}
+    closeContextPanel();
+  }, [closeContextPanel, editor]);
+
+  const handleCutSelection = useCallback(async () => {
+    if (!editor || editor.state.selection.empty) {
+      closeContextPanel();
+      return;
+    }
+    try {
+      const selected = editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ');
+      if (selected) await navigator.clipboard.writeText(selected);
+    } catch {}
+    editor.chain().focus().deleteSelection().run();
+    closeContextPanel();
+  }, [closeContextPanel, editor]);
+
+  const handlePasteClipboard = useCallback(async () => {
+    if (!editor) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        editor.chain().focus().insertContent(text.replace(/\r\n/g, '\n')).run();
+      }
+    } catch {}
+    closeContextPanel();
+  }, [closeContextPanel, editor]);
+
   const copyFormat = useCallback(() => {
     if (!editor) return;
     const attrs = editor.getAttributes("textStyle");
@@ -449,12 +643,21 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     if (!contextPanel.open) return;
     const closePanel = (e) => {
       if (!e.target.closest?.('[data-context-panel="true"]')) {
-        setContextPanel((prev) => ({ ...prev, open: false }));
+        closeContextPanel();
       }
     };
+    const handleEscape = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      closeContextPanel();
+    };
     document.addEventListener('mousedown', closePanel);
-    return () => document.removeEventListener('mousedown', closePanel);
-  }, [contextPanel.open]);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', closePanel);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [closeContextPanel, contextPanel.open]);
 
   if (!editor) return null;
 
@@ -463,54 +666,131 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       {contextPanel.open && (
         <div
           data-context-panel="true"
-          className="absolute right-4 z-40 w-56 rounded-2xl border border-slate-200 bg-white/95 shadow-2xl backdrop-blur-sm"
-          style={{ top: `${contextPanel.y}px` }}
+          className="fixed z-40 max-h-[calc(100vh-32px)] w-[356px] overflow-hidden rounded-2xl border border-slate-200 bg-white/98 shadow-[0_24px_72px_rgba(15,23,42,0.22)] backdrop-blur-sm"
+          style={{ left: `${contextPanel.x}px`, top: `${contextPanel.y}px` }}
         >
-          <div className="px-4 py-3 border-b border-slate-100">
-            <div className="text-sm font-bold text-slate-800">פעולות מהירות</div>
-            <div className="text-[11px] text-slate-500 mt-1">נפתח בקליק ימני על המסמך</div>
+          <div className="border-b border-slate-200 bg-slate-50/95 px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handlePasteClipboard} title="הדבק">
+                <Clipboard size={16} />
+              </button>
+              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handleCutSelection} title="גזור">
+                <Scissors size={16} />
+              </button>
+              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handleCopySelection} title="העתק">
+                <Copy size={16} />
+              </button>
+              <div className="mx-1 h-5 w-px bg-slate-200" />
+              <select
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
+                value={editor.getAttributes('textStyle').fontFamily || 'Alef'}
+                onChange={(e) => applyContextCommand('fontFamily', e.target.value)}
+                title="גופן"
+              >
+                {!MINI_TOOLBAR_FONTS.includes(editor.getAttributes('textStyle').fontFamily || '') && editor.getAttributes('textStyle').fontFamily ? (
+                  <option value={editor.getAttributes('textStyle').fontFamily}>{editor.getAttributes('textStyle').fontFamily}</option>
+                ) : null}
+                {MINI_TOOLBAR_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}
+              </select>
+              <select
+                className="h-9 w-[68px] rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
+                value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
+                onChange={(e) => applyContextCommand('fontSize', `${e.target.value}pt`)}
+                title="גודל"
+              >
+                {!MINI_TOOLBAR_SIZES.includes(String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')) ? (
+                  <option value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}>
+                    {String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
+                  </option>
+                ) : null}
+                {MINI_TOOLBAR_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+              <button className={`rounded-lg p-2 transition ${editor.isActive('bold') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('bold')} title="מודגש">
+                <Bold size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive('italic') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('italic')} title="נטוי">
+                <Italic size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive('underline') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('underline')} title="קו תחתי">
+                <UnderlineIcon size={16} />
+              </button>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <button className={`rounded-lg p-2 transition ${editor.isActive('bulletList') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('bulletList')} title="רשימת נקודות">
+                <List size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive('orderedList') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('orderedList')} title="רשימה ממוספרת">
+                <ListOrdered size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'right' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignRight')} title="יישור לימין">
+                <AlignRight size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'center' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignCenter')} title="מרכוז">
+                <AlignCenter size={16} />
+              </button>
+              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'left' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignLeft')} title="יישור לשמאל">
+                <AlignLeft size={16} />
+              </button>
+              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={() => applyContextCommand('clearFormatting')} title="נקה עיצוב">
+                <Eraser size={16} />
+              </button>
+            </div>
           </div>
-          <div className="p-2 flex flex-col gap-1 text-sm">
-            {wordPreferences?.aiQuickActions?.fix !== false && <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('fix')}>✨ תיקון AI</button>}
-            {wordPreferences?.aiQuickActions?.summary !== false && <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => handleAiAction('summary')}>📝 סיכום מהיר</button>}
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onOpenAssistant(); setContextPanel((prev) => ({ ...prev, open: false })); }}>💬 פתח חלון AI</button>
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onCommand('insertBlankPage'); setContextPanel((prev) => ({ ...prev, open: false })); }}>📄 עמוד ריק</button>
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={() => { onCommand('pageBreak'); setContextPanel((prev) => ({ ...prev, open: false })); }}>↩️ מעבר עמוד</button>
-            <button className="text-right rounded-xl px-3 py-2 hover:bg-slate-50" onClick={async () => {
-              try {
-                const selected = editor?.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ');
-                if (selected) await navigator.clipboard.writeText(selected);
-              } catch {}
-              setContextPanel((prev) => ({ ...prev, open: false }));
-            }}>📋 העתק נבחר</button>
+          <div className="p-2">
+            <div className="mb-1 px-2 pb-1 text-[11px] font-semibold tracking-[0.18em] text-slate-400">עריכה</div>
+            <div className="flex flex-col gap-0.5 text-sm">
+              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handlePasteClipboard}><span>הדבק</span><Clipboard size={15} className="text-slate-400" /></button>
+              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handleCutSelection}><span>גזור</span><Scissors size={15} className="text-slate-400" /></button>
+              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handleCopySelection}><span>העתק</span><Copy size={15} className="text-slate-400" /></button>
+              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={() => { applyContextCommand('clearFormatting'); closeContextPanel(); }}><span>נקה עיצוב</span><Eraser size={15} className="text-slate-400" /></button>
+            </div>
           </div>
         </div>
       )}
 
       {/* תפריט צף חכם שמופיע רק כשיש בחירת טקסט */}
-      <BubbleMenu editor={editor} tippyOptions={{ duration: 100 }} className="flex flex-wrap overflow-hidden rtl bg-white border border-gray-200 shadow-xl rounded-xl px-2 py-1.5 items-center gap-1 max-w-[520px]">
-        {/* --- AI Actions --- */}
+      <BubbleMenu
+        editor={editor}
+        shouldShow={({ editor }) => !contextPanel.open && !editor.state.selection.empty}
+        tippyOptions={{
+          duration: 100,
+          appendTo: () => document.body,
+          placement: 'top',
+          strategy: 'fixed',
+          getReferenceClientRect: () => getBubbleMenuReferenceRect(editor),
+        }}
+        className="rtl bg-white border border-gray-200 shadow-xl rounded-2xl px-3 py-2.5 max-w-[760px] min-w-[620px]"
+      >
         {bubbleActions.length ? (
-          bubbleActions.map(({ id, icon, label }) => (
-            <button
-              key={id}
-              onClick={() => handleAiAction(id)}
-              disabled={loadingAction !== null}
-              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full transition-colors whitespace-nowrap ${
-                loadingAction === id
-                  ? "text-gray-400 bg-gray-50"
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
-              title={label}
-            >
-              {loadingAction === id ? (
-                <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full" />
-              ) : (
-                icon
-              )}
-              <span>{loadingAction === id ? "..." : label}</span>
-            </button>
-          ))
+          <div className="flex flex-col gap-2">
+            {bubbleActionRows.map((row, rowIndex) => (
+              <React.Fragment key={`bubble-row-${rowIndex}`}>
+                {rowIndex > 0 ? <div className="h-px bg-slate-200 mx-2" /> : null}
+                <div className="flex flex-wrap items-center justify-start gap-1.5">
+                  {row.map((action) => (
+                    <button
+                      key={action.id}
+                      onClick={() => handleBubbleAction(action)}
+                      disabled={loadingAction !== null}
+                      className={`flex flex-row-reverse items-center gap-1.5 px-3 py-1.5 text-[15px] font-semibold rounded-xl transition-colors whitespace-nowrap ${
+                        loadingAction === action.id
+                          ? "text-gray-400 bg-gray-50"
+                          : "text-slate-700 hover:bg-slate-50"
+                      }`}
+                      title={action.label}
+                    >
+                      {loadingAction === action.id ? (
+                        <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full" />
+                      ) : (
+                        action.icon
+                      )}
+                      <span>{loadingAction === action.id ? "..." : action.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
         ) : (
           <button
             onClick={onOpenAssistant}
@@ -520,11 +800,10 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
           </button>
         )}
 
-        <div className="w-px h-5 bg-gray-200 mx-1" />
-
         {/* --- Accept / Reject AI Suggestion --- */}
         {editor.isActive("aiSuggestion") && (
           <>
+            <div className="w-full h-px bg-gray-200 my-2" />
             <button
               onClick={() => {
                 const suggestion = getActiveAiSuggestion();

@@ -4,6 +4,7 @@ const mammoth = require('mammoth');
 const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun, Table, TableRow, TableCell, WidthType, ImageRun } = require('docx');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { randomUUID } = require('node:crypto');
 const { extractMaterialTextFromBuffer, shutdownMaterialExtraction } = require('./materialExtraction.cjs');
 
@@ -150,6 +151,89 @@ let latestUpdateState = {
   percent: 0,
   checkedAt: '',
 };
+let localRendererServer = null;
+let localRendererServerUrl = '';
+
+const LOCAL_RENDERER_MIME_TYPES = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+function resolveRendererStaticFilePath(requestUrl = '/') {
+  const distDir = path.join(__dirname, '..', 'dist');
+  const safeRequestUrl = String(requestUrl || '/').split('?')[0].split('#')[0];
+  const decodedPathname = decodeURIComponent(safeRequestUrl);
+  const normalizedPathname = decodedPathname === '/' ? '/index.html' : decodedPathname;
+  const requestedFilePath = path.normalize(path.join(distDir, normalizedPathname.replace(/^\/+/, '')));
+  const safePrefix = `${distDir}${path.sep}`;
+
+  if (requestedFilePath !== distDir && !requestedFilePath.startsWith(safePrefix)) {
+    return path.join(distDir, 'index.html');
+  }
+
+  if (fs.existsSync(requestedFilePath) && fs.statSync(requestedFilePath).isFile()) {
+    return requestedFilePath;
+  }
+
+  return path.join(distDir, 'index.html');
+}
+
+function ensureLocalRendererServer() {
+  if (localRendererServer && localRendererServerUrl) {
+    return Promise.resolve(localRendererServerUrl);
+  }
+
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        const filePath = resolveRendererStaticFilePath(req?.url || '/');
+        const ext = path.extname(filePath).toLowerCase();
+        const contentType = LOCAL_RENDERER_MIME_TYPES[ext] || 'application/octet-stream';
+        const body = fs.readFileSync(filePath);
+        res.writeHead(200, {
+          'Cache-Control': 'no-cache',
+          'Content-Type': contentType,
+        });
+        res.end(body);
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(error?.message || 'renderer-server-failed');
+      }
+    });
+
+    server.on('error', (error) => {
+      if (localRendererServer === server) {
+        localRendererServer = null;
+        localRendererServerUrl = '';
+      }
+      reject(error);
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      if (!port) {
+        server.close(() => {});
+        reject(new Error('Failed to allocate local renderer server port.'));
+        return;
+      }
+
+      localRendererServer = server;
+      localRendererServerUrl = `http://localhost:${port}`;
+      resolve(localRendererServerUrl);
+    });
+  });
+}
 
 function isUsableWindow(targetWindow) {
   return Boolean(
@@ -1426,13 +1510,14 @@ async function loadRenderer(win) {
   }
 
   try {
+    const localRendererUrl = await ensureLocalRendererServer();
     rendererLoadInProgressWindowIds.add(win.id);
-    await win.loadFile(distPath);
+    await win.loadURL(localRendererUrl);
     rendererLoadInProgressWindowIds.delete(win.id);
     return false;
   } catch (error) {
     rendererLoadInProgressWindowIds.delete(win.id);
-    await showLoadErrorPage(win, error?.message || 'קובץ הממשק המקומי לא נטען.');
+    await showLoadErrorPage(win, error?.message || `קובץ הממשק המקומי לא נטען: ${distPath}`);
     return false;
   }
 }
@@ -1492,6 +1577,23 @@ function createMainWindow({ pendingFilePayload = null, pendingSettingsPayload = 
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
+      
+      // Allow Firebase and Google Auth to open as a child window
+      if (parsed.hostname === 'wordai-website.firebaseapp.com' || parsed.hostname.endsWith('google.com')) {
+        return { 
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            webPreferences: {
+              preload: undefined,
+              contextIsolation: false,
+              nodeIntegration: false,
+              sandbox: false,
+              webSecurity: false
+            }
+          }
+        };
+      }
+
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
         shell.openExternal(url);
       }
@@ -2213,6 +2315,13 @@ if (!singleInstanceLock) {
 }
 
 app.on('will-quit', () => {
+  if (localRendererServer) {
+    try {
+      localRendererServer.close();
+    } catch {}
+    localRendererServer = null;
+    localRendererServerUrl = '';
+  }
   shutdownMaterialExtraction().catch(() => {});
   globalShortcut.unregisterAll();
 });

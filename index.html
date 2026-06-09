@@ -3,16 +3,22 @@
 <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; img-src 'self' data: blob: https:; connect-src 'self' https: ws://localhost:* wss://localhost:*; worker-src 'self' blob: https://cdnjs.cloudflare.com; media-src 'self' data: blob:;" />
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com https://apis.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; img-src 'self' data: blob: https:; connect-src 'self' https: ws://localhost:* wss://localhost:*; worker-src 'self' blob: https://cdnjs.cloudflare.com; frame-src 'self' https://wordai-website.firebaseapp.com; media-src 'self' data: blob:;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="WordFlow AI">
     <title>WordFlow AI</title>
     <link rel="icon" type="image/png" href="/app-icon.png" />
+    <link rel="apple-touch-icon" href="/app-icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <!-- הסרת office.js בעקבות פיצול הפרויקט לאפליקציה עצמאית -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Alef:wght@400;700&family=Assistant:wght@400;600;700&family=Frank+Ruhl+Libre:wght@400;700&family=Heebo:wght@400;500;700&family=Miriam+Libre:wght@400;700&family=Secular+One&display=swap" media="print" onload="this.media='all'" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
     <script src="https://unpkg.com/@phosphor-icons/web" defer></script>
 </head>
-<body class="bg-gray-50 h-screen w-screen m-0 overflow-hidden">
+<body class="bg-gray-50 h-[100dvh] w-screen m-0 overflow-hidden">
     <div id="app" class="h-full w-full"></div>
     <script>
       // מסך שגיאה חירום — מוצג כאשר ה-JS הראשי לא נטען

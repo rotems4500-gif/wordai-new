@@ -5,19 +5,25 @@ import {
   logAgentDebugEvent,
   getOrderedRoleAgents,
   getWorkspaceAutomation,
+  resolveWorkspaceRouting,
   syncPersistedAppSettings,
+  buildWorkspaceV2RunContext,
+  validateWorkspaceV2RunContext,
 } from './aiService';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const HOME_INSTRUCTIONS_KEY = 'wordai_home_instructions';
 const HOME_INSTRUCTION_FILE_TEXT_KEY = 'wordai_home_instruction_file_text';
 const HOME_INSTRUCTION_FILE_NAME_KEY = 'wordai_home_instruction_file_name';
+const HOME_INSTRUCTIONS_UPDATED_EVENT = 'wordai-home-instructions-updated';
 const PAST_DOCS_INDEX_URL = 'PAST-DOC/index.json';
 const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
 const MATERIAL_PREVIEW_MAX_LENGTH = 5000;
+const HISTORY_STYLE_SAMPLE_MAX_LENGTH = 3600;
+const GOLDEN_EXAMPLE_MAX_LENGTH = 2600;
 const MATERIAL_EXTRACTION_AUDIT_LIMIT = 180000;
 const FEEDBACK_CONTEXT_TOTAL_LIMIT = 7200;
 const FEEDBACK_CONTEXT_TOPIC_LIMIT = 320;
@@ -29,7 +35,7 @@ const FEEDBACK_CONTEXT_HTML_GAP = '\n\n[... קוצר אמצע ה-HTML כדי ל�
 const ACTION_PLAN_SECTION_VISIBLE_TARGET = 1500;
 const ACTION_PLAN_SECTION_INDEX_LIMIT = 1600;
 const ACTION_PLAN_SECTION_EXCERPT_LIMIT = 140;
-const ACTION_PLAN_CANDIDATE_SECTION_LIMIT = 12;
+const ACTION_PLAN_CANDIDATE_SECTION_LIMIT = 18;
 const ACTION_PLAN_BATCH_SECTION_LIMIT = 3;
 const ACTION_PLAN_FOCUSED_SECTION_FALLBACK_LIMIT = 4;
 const ACTION_PLAN_SUPPORTING_LIMIT = 3200;
@@ -54,7 +60,7 @@ const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv
 const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
 const LOCAL_FALLBACK_RICH_REQUEST_PATTERN = /(מקור(?:ות)?|ביבליוגרפ|ציטוט|references?|citation|doi|מאמר(?:ים)?|סקיר(?:ת)?\s+ספרות|מחקר|מסמך\s+מלא|מסמך\s+עשיר|מקיף|מעמיק|literature\s+review|comprehensive|rich)/i;
-const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה']);
+const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה', 'המשתמש', 'ביקש', 'בקשה', 'החל', 'יישם', 'תיקון', 'תיקונים', 'המלצה', 'המלצות', 'הערה', 'הערות', 'מרצה', 'המרצה', 'מסמך', 'המסמך', 'עבודה', 'העבודה']);
 const EXPLICIT_SOURCE_URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 export const MATERIAL_UPLOAD_PRESETS = {
     general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
@@ -348,12 +354,12 @@ function topMapKeys(map = {}, limit = 8) {
 }
 
 function shouldUseDocumentWorkflowAutomation({ automation = {}, directStructureLock = false, forceDirectMode = false, skipWorkflowAutomation = false } = {}) {
-  if (directStructureLock || forceDirectMode || skipWorkflowAutomation) return false;
-  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
-  const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
-  return automation?.enabled === true
-    && automation?.autoDispatch !== false
-    && hasActiveWorkflowAgents;
+  const route = resolveWorkspaceRouting({
+    automation,
+    forceDirectMode,
+    skipWorkflowAutomation,
+  });
+  return route.shouldUseWorkflowAutomation === true;
 }
 
 function getDocumentRunLabel({ automation = {}, selectedModel = '', selectedProviderId = '', selectedProviderModel = '', directStructureLock = false, forceDirectMode = false, skipWorkflowAutomation = false, shouldUseWorkflowAutomation = null } = {}) {
@@ -777,6 +783,7 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     id: `${Date.now()}`,
     title: entryTitle,
     summary: plainText.slice(0, 400),
+    styleSample: plainText.slice(0, HISTORY_STYLE_SAMPLE_MAX_LENGTH),
     templateId,
     source,
     category: classifyDocName(entryTitle).category,
@@ -814,14 +821,138 @@ export function getRecentDocuments(limit = 10) {
     .slice(0, safeLimit);
 }
 
+function normalizeStyleExampleText(value = '') {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function trimStyleExampleAtSentenceBoundary(value = '', maxLength = GOLDEN_EXAMPLE_MAX_LENGTH) {
+  const clean = normalizeStyleExampleText(value);
+  if (clean.length <= maxLength) return clean;
+  const clipped = clean.slice(0, maxLength);
+  const boundaryIndex = Math.max(
+    clipped.lastIndexOf('. '),
+    clipped.lastIndexOf('! '),
+    clipped.lastIndexOf('? '),
+    clipped.lastIndexOf('׃ '),
+  );
+  return clipped.slice(0, boundaryIndex > 900 ? boundaryIndex + 1 : maxLength).trim();
+}
+
+function pickGoldenStyleExampleSources({ history = [], materials = [] } = {}) {
+  const historyCandidates = (Array.isArray(history) ? history : [])
+    .map((item, index) => ({
+      id: `history:${item?.id || index}`,
+      title: item?.title || 'טיוטה שמורה',
+      text: normalizeStyleExampleText(item?.styleSample || item?.summary || ''),
+      score: 80 - index,
+    }));
+
+  const materialCandidates = (Array.isArray(materials) ? materials : [])
+    .map((item, index) => {
+      const uploadKind = String(item?.uploadKind || '').trim();
+      const category = String(item?.category || '').trim();
+      const baseScore = uploadKind === 'writing-sample'
+        ? 130
+        : category === 'academic'
+          ? 95
+          : uploadKind === 'template-example'
+            ? 70
+            : 50;
+      return {
+        id: `material:${item?.id || index}`,
+        title: item?.title || item?.file || 'קובץ סגנון',
+        text: normalizeStyleExampleText(item?.previewText || item?.excerptText || item?.preview || ''),
+        score: baseScore - index,
+      };
+    });
+
+  return [...materialCandidates, ...historyCandidates]
+    .filter((item) => item.text.length >= 280)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3);
+}
+
+export async function buildGoldenExampleFromWorkspace({ maxLength = GOLDEN_EXAMPLE_MAX_LENGTH } = {}) {
+  const [history, materials] = await Promise.all([
+    Promise.resolve(getSavedDocsHistory()),
+    loadProjectMaterials(),
+  ]);
+
+  const enrichedMaterials = await Promise.all((Array.isArray(materials) ? materials : []).map(async (item) => ({
+    ...item,
+    previewText: item.previewText || await loadMaterialPreview(item),
+  })));
+
+  const sources = pickGoldenStyleExampleSources({ history, materials: enrichedMaterials });
+  if (!sources.length) {
+    return {
+      ok: false,
+      reason: 'no-sources',
+      message: 'לא נמצאו עדיין דוגמאות כתיבה מספיק ארוכות. כדאי להעלות עבודת עבר או לשמור מסמך אחד ואז לרענן.',
+      profile: getPersonalStyleProfile(),
+      sources: [],
+    };
+  }
+
+  const profile = getPersonalStyleProfile();
+  const sourceTitles = sources.map((source) => source.title).filter(Boolean);
+  const goldenExample = trimStyleExampleAtSentenceBoundary(
+    sources.map((source) => source.text).join('\n\n'),
+    Math.max(900, Math.min(GOLDEN_EXAMPLE_MAX_LENGTH, Number(maxLength) || GOLDEN_EXAMPLE_MAX_LENGTH)),
+  );
+  const nextProfile = {
+    ...profile,
+    goldenExample,
+    learnedNotes: Array.from(new Set([
+      ...(profile.learnedNotes || []),
+      `דוגמת זהב נבנתה אוטומטית מתוך ${sources.length} מקורות כתיבה קיימים.`,
+    ])).slice(-8),
+    examples: Array.from(new Set([
+      ...(profile.examples || []),
+      ...sourceTitles,
+    ])).slice(0, 8),
+    styleGoldenExampleBuiltAt: new Date().toISOString(),
+    styleGoldenExampleSources: sourceTitles.slice(0, 5),
+  };
+
+  savePersonalStyleProfile(nextProfile);
+  try {
+    window.dispatchEvent(new CustomEvent('wordai-personal-style-updated', { detail: { source: 'golden-example-builder' } }));
+  } catch {}
+
+  return {
+    ok: true,
+    reason: 'built',
+    message: `דוגמת הזהב נבנתה מתוך ${sources.length} מקורות.`,
+    profile: nextProfile,
+    sources,
+  };
+}
+
 export function getHomeInstructions() {
   return String(localStorage.getItem(HOME_INSTRUCTIONS_KEY) || '');
+}
+
+function emitHomeInstructionsUpdated() {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new CustomEvent(HOME_INSTRUCTIONS_UPDATED_EVENT, {
+    detail: {
+      instructions: getHomeInstructions(),
+      fileText: getHomeInstructionFileText(),
+      fileName: getHomeInstructionFileName(),
+    },
+  }));
 }
 
 export function saveHomeInstructions(value = '') {
   const clean = String(value || '').trim();
   localStorage.setItem(HOME_INSTRUCTIONS_KEY, clean);
   syncPersistedAppSettings();
+  emitHomeInstructionsUpdated();
 }
 
 export function getHomeInstructionFileText() {
@@ -835,6 +966,7 @@ export function saveHomeInstructionFileText(value = '') {
   } else {
     localStorage.setItem(HOME_INSTRUCTION_FILE_TEXT_KEY, clean);
   }
+  emitHomeInstructionsUpdated();
 }
 
 export function getHomeInstructionFileName() {
@@ -848,6 +980,7 @@ export function saveHomeInstructionFileName(value = '') {
   } else {
     localStorage.setItem(HOME_INSTRUCTION_FILE_NAME_KEY, clean);
   }
+  emitHomeInstructionsUpdated();
 }
 
 function dominantCategoryFromItems(items = []) {
@@ -877,7 +1010,7 @@ export async function syncLearnedStyleFromWorkspace() {
     ...learnableHistory.map((item) => ({
       id: `history:${item.id}`,
       title: item.title || 'טיוטה שמורה',
-      text: `${item.title || ''}\n${item.summary || ''}`.trim(),
+      text: `${item.title || ''}\n${item.styleSample || item.summary || ''}`.trim(),
     })),
     ...projectMaterials.map((item) => ({
       id: `material:${item.id}`,
@@ -903,6 +1036,7 @@ export async function syncLearnedStyleFromWorkspace() {
     }
     preparedSources.push(source);
   }
+  const learnablePreparedSources = preparedSources.filter((source) => String(source?.text || '').replace(/\s+/g, ' ').trim().length >= 280);
 
   if (profile.learningConsent === false) {
     const nextProfile = {
@@ -924,7 +1058,23 @@ export async function syncLearnedStyleFromWorkspace() {
     return { pastDocs, history, projectMaterials, dominantCategory, notes: nextProfile.learnedNotes, scanStats: nextProfile.scanStats, profile: nextProfile };
   }
 
-  const newlyDiscoveredSources = preparedSources.filter((source) => !alreadyScanned.has(source.id));
+  if (!learnablePreparedSources.length) {
+    const nextProfile = {
+      ...profile,
+      scanStats: {
+        ...(profile.scanStats || {}),
+        totalKnown: preparedSources.length,
+        totalScanned: profile.scanStats?.totalScanned || 0,
+        newlyScanned: 0,
+        pendingCount: preparedSources.length,
+        lastScanAt: new Date().toISOString(),
+      },
+    };
+    savePersonalStyleProfile(nextProfile);
+    return { pastDocs, history, projectMaterials, dominantCategory, notes: nextProfile.learnedNotes || [], scanStats: nextProfile.scanStats, profile: nextProfile };
+  }
+
+  const newlyDiscoveredSources = learnablePreparedSources.filter((source) => !alreadyScanned.has(source.id));
   let vocabularyCounts = { ...(profile.learnedVocabularyCounts || {}) };
   let phraseCounts = { ...(profile.learnedPhraseCounts || {}) };
 
@@ -934,7 +1084,7 @@ export async function syncLearnedStyleFromWorkspace() {
     phraseCounts = mergeCountMaps(phraseCounts, stats.phraseCounts);
   });
 
-  const overallStats = analyzeTextSample(preparedSources.map((source) => source.text).join('\n\n'));
+  const overallStats = analyzeTextSample(learnablePreparedSources.map((source) => source.text).join('\n\n'));
   const toneDescriptors = Array.from(new Set([
     ...(profile.toneDescriptors || []),
     classifySentenceLength(overallStats.avgSentenceWords),
@@ -979,7 +1129,7 @@ export async function syncLearnedStyleFromWorkspace() {
       totalKnown: preparedSources.length,
       totalScanned: nextScannedIds.length,
       newlyScanned: newlyDiscoveredSources.length,
-      pendingCount: Math.max(0, preparedSources.length - nextScannedIds.length),
+      pendingCount: Math.max(0, learnablePreparedSources.length - nextScannedIds.length),
       lastScanAt: new Date().toISOString(),
     },
   };
@@ -1977,10 +2127,17 @@ function selectActionPlanCandidateSections(sections = [], rankingText = '') {
   const rankableSlots = Math.max(0, maxSections - reservedAnchorSlots);
 
   addSection(scoredSections[0]);
-  [...scoredSections]
+  const rankedSections = [...scoredSections]
     .sort((left, right) => right.relevanceScore - left.relevanceScore || left.order - right.order)
-    .slice(0, rankableSlots)
-    .forEach(addSection);
+    .slice(0, rankableSlots);
+  rankedSections.forEach(addSection);
+  rankedSections
+    .filter((section) => Number(section.relevanceScore) > 0)
+    .forEach((section) => {
+      const sectionIndex = scoredSections.findIndex((candidate) => candidate.id === section.id);
+      if (sectionIndex > 0) addSection(scoredSections[sectionIndex - 1]);
+      if (sectionIndex >= 0 && sectionIndex < scoredSections.length - 1) addSection(scoredSections[sectionIndex + 1]);
+    });
   addSection(scoredSections[scoredSections.length - 1]);
   scoredSections.forEach(addSection);
 
@@ -2467,6 +2624,339 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
   return validatedResponse;
 }
 
+function buildWorkspaceV2PipelineBrief(runContext = {}) {
+  const template = runContext?.template || {};
+  const pipeline = Array.isArray(template.pipeline) ? template.pipeline : [];
+  return pipeline.map((step, index) => {
+    const instructions = Array.isArray(step.instructions) && step.instructions.length
+      ? `\n   הנחיות: ${step.instructions.join(' | ')}`
+      : '';
+    const modelRoute = [step.providerId, step.model].filter(Boolean).join(' · ');
+    return `${index + 1}. ${step.role || step.id}: ${step.goal || ''}${instructions}\n   תוצר ביניים נדרש: ${step.output || 'סיכום שלב'}${modelRoute ? `\n   מודל ייעודי: ${modelRoute}` : ''}`;
+  }).join('\n');
+}
+
+function resolveWorkspaceV2StepRoute({ step = {}, template = {}, requestedProviderSelection = {} } = {}) {
+  const stepProviderId = String(step?.providerId || '').trim();
+  const templateProviderId = String(template?.providerId || '').trim();
+  const requestProviderId = String(requestedProviderSelection?.providerId || '').trim();
+  const providerOverride = stepProviderId || templateProviderId || requestProviderId;
+
+  const stepModel = String(step?.model || '').trim();
+  const templateModel = String(template?.model || '').trim();
+  const requestModel = String(requestedProviderSelection?.providerModel || '').trim();
+  let modelOverride = stepModel;
+
+  if (!modelOverride && providerOverride && templateProviderId && providerOverride === templateProviderId) {
+    modelOverride = templateModel;
+  }
+  if (!modelOverride && providerOverride && requestProviderId && providerOverride === requestProviderId) {
+    modelOverride = requestModel;
+  }
+  if (!modelOverride && !providerOverride) {
+    modelOverride = templateModel || requestModel;
+  }
+
+  return {
+    providerOverride,
+    modelOverride,
+  };
+}
+
+function buildWorkspaceV2StepContext({
+  baseContext = '',
+  runContext = {},
+  previousStepOutputs = [],
+  currentStep = {},
+  currentStepIndex = 0,
+  isFinalStep = false,
+} = {}) {
+  const previousOutputsText = previousStepOutputs.map((item, index) => {
+    const label = item?.role || `שלב ${index + 1}`;
+    const output = truncateContextSectionHeadTail(String(item?.output || '').trim(), 2600, GENERATED_HTML_CONTINUATION_GAP);
+    return output ? `שלב קודם ${index + 1} - ${label}:\n${output}` : '';
+  }).filter(Boolean).join('\n\n');
+
+  return [
+    baseContext,
+    previousOutputsText ? `תוצרי שלבים קודמים, מחייבים כהקשר עבודה:\n${previousOutputsText}` : '',
+    `השלב הנוכחי:\n${JSON.stringify({
+      index: currentStepIndex + 1,
+      id: currentStep.id,
+      role: currentStep.role,
+      goal: currentStep.goal,
+      output: currentStep.output,
+      isFinalStep,
+    }, null, 2)}`,
+    `Workspace run context:\n${JSON.stringify({
+      version: runContext.version,
+      runId: runContext.runId,
+      workspaceId: runContext.workspaceId,
+      templateId: runContext.template?.id,
+      classification: runContext.classification,
+      memoryScopes: runContext.memoryScopes,
+      personalStyleSnapshot: runContext.personalStyleSnapshot,
+    }, null, 2)}`,
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildWorkspaceV2GuardrailBrief(runContext = {}) {
+  const guardrails = runContext?.guardrails || {};
+  return [
+    ...(guardrails.directIsolation || []),
+    ...(guardrails.styleProtection || []),
+    ...(guardrails.sourceDiscipline || []),
+    ...(guardrails.memoryIsolation || []),
+  ].filter(Boolean).join('\n');
+}
+
+async function runWorkspaceV2DocumentGeneration({
+  cleanPrompt = '',
+  cleanInstructions = '',
+  title = '',
+  templateId = 'blank',
+  selectedMaterials = [],
+  selectedModel = '',
+  selectedProviderId = '',
+  selectedProviderModel = '',
+  runId = '',
+  templateGuide = '',
+  notes = '',
+  materialsText = '',
+  structureLockInstructions = '',
+  structurePolicy = null,
+  normalizedAdditionalReviewRounds = 0,
+  workspaceV2TemplateId = '',
+  returnMeta = false,
+}) {
+  const personalStyleProfile = getPersonalStyleProfile();
+  const runContext = buildWorkspaceV2RunContext({
+    prompt: cleanPrompt,
+    instructions: cleanInstructions,
+    templateId,
+    selectedTemplateId: workspaceV2TemplateId,
+    selectedMaterials,
+    personalStyleProfile,
+    runId,
+    workspaceId: workspaceV2TemplateId,
+  });
+  const validation = validateWorkspaceV2RunContext(runContext);
+  if (!validation.ok) {
+    throw new Error(`Workspace v2 context invalid: ${validation.errors.join(', ')}`);
+  }
+
+  const template = runContext.template;
+  const workspaceLabel = template?.label || 'Workspace v2';
+  const requestLogContext = {
+    activeWorkspaceId: runContext.workspaceId,
+    workspaceName: workspaceLabel,
+  };
+  const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
+  const pipelineBrief = buildWorkspaceV2PipelineBrief(runContext);
+  const guardrailBrief = buildWorkspaceV2GuardrailBrief(runContext);
+  const sourcePolicy = template?.sourcePolicy || {};
+  const stylePolicy = template?.stylePolicy || {};
+  const pipeline = Array.isArray(template?.pipeline) && template.pipeline.length ? template.pipeline : [];
+  const userRequestSections = [];
+
+  if (cleanInstructions) {
+    userRequestSections.push(`הוראות המשתמש המחייבות למסמך:\n${cleanInstructions}`);
+    if (cleanPrompt) userRequestSections.push(`נושא קצר או הקשר משלים:\n${cleanPrompt}`);
+  } else {
+    userRequestSections.push(`בקשת המשתמש למסמך:\n${cleanPrompt}`);
+  }
+
+  logAgentDebugEvent({
+    type: 'workspace-v2-start',
+    state: 'running',
+    runId,
+    agentLabel: workspaceLabel,
+    message: `Workspace v2 התחיל להריץ תבנית ${workspaceLabel}`,
+    templateId,
+    workspaceV2TemplateId: template.id,
+    classification: runContext.classification,
+    selectedMaterialsCount: selectedMaterials.length,
+    ...requestLogContext,
+  });
+
+  const systemPrompt = [
+    'אתה מנוע Workspace v2 של WordFlow AI. עבוד כצוות מיומן ומבודד למשימה הנוכחית בלבד.',
+    'כל שלב בצוות מקבל קריאת API נפרדת ויכול להשתמש בספק/מודל שונה. אל תניח שכל הצוות רץ על אותו מודל.',
+    'בשלבים שאינם אחרונים החזר תוצר עבודה פנימי ברור בלבד. בשלב האחרון החזר HTML סופי בלבד עם תגיות כמו h1, h2, p, ul, li.',
+    `שם סביבת העבודה: ${workspaceLabel}`,
+    template?.mission ? `משימה מרכזית: ${template.mission}` : '',
+    pipelineBrief ? `Pipeline מחייב:\n${pipelineBrief}` : '',
+    guardrailBrief ? `Guardrails מחייבים:\n${guardrailBrief}` : '',
+    `מדיניות מקורות: ${sourcePolicy.mode || 'context-aware'}`,
+    Array.isArray(sourcePolicy.requireSourcesWhen) && sourcePolicy.requireSourcesWhen.length
+      ? `חובה להפעיל משמעת מקורות כאשר: ${sourcePolicy.requireSourcesWhen.join(' | ')}`
+      : '',
+    `מדיניות סגנון: שמירת סגנון אישי ${stylePolicy.preservePersonalStyle ? 'חובה' : 'לפי הצורך'}.`,
+    Array.isArray(stylePolicy.avoid) && stylePolicy.avoid.length
+      ? `יש להימנע מ: ${stylePolicy.avoid.join(' | ')}`
+      : '',
+    `סוג תבנית מועדף באפליקציה: ${templateGuide}.`,
+    cleanInstructions ? `הנחיות מחייבות של המשתמש:\n${cleanInstructions}` : '',
+    structureLockInstructions ? `נעילת מבנה מפורשת:\n${structureLockInstructions}` : '',
+    notes ? `למידת סגנון מעבודות קודמות:\n${notes}` : '',
+    'כלל הכרעה: הוראת המשתמש וחומרי המקור גוברים על תבנית workspace. התבנית עוזרת לבצע, לא מחליפה את המטלה.',
+    'אם חסר מידע עובדתי או מקור דרוש, נסח בזהירות וסמן חוסר רק אם אי אפשר לייצר תוצר אמין.',
+  ].filter(Boolean).join('\n\n');
+
+  const baseContext = [
+    materialsText ? `חומרי עזר ומקורות זמינים:\n${materialsText}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const previousStepOutputs = [];
+  let cleanedResponse = '';
+
+  for (let stepIndex = 0; stepIndex < pipeline.length; stepIndex += 1) {
+    const step = pipeline[stepIndex] || {};
+    const isFinalStep = stepIndex === pipeline.length - 1;
+    const stepLabel = step.role || step.id || `שלב ${stepIndex + 1}`;
+    const { providerOverride, modelOverride } = resolveWorkspaceV2StepRoute({
+      step,
+      template,
+      requestedProviderSelection,
+    });
+    const stepRequestOptions = {
+      runId,
+      agentLabel: `${workspaceLabel} · ${stepLabel}`,
+      activeWorkspaceId: runContext.workspaceId,
+      workspaceName: workspaceLabel,
+      templateId,
+      isAcademicTask: template.id.startsWith('academic'),
+      additionalReviewRounds: isFinalStep ? normalizedAdditionalReviewRounds : 0,
+      skipAutomation: true,
+      skipAutomationPrompt: true,
+      skipSkillSelection: true,
+      skipMultiModel: true,
+      automationSkipReason: 'workspace-v2-step-runner',
+      ...(providerOverride ? {
+        providerOverride,
+        strictProviderOverride: true,
+      } : {}),
+      ...(modelOverride ? { modelOverride } : {}),
+    };
+    const stepContext = buildWorkspaceV2StepContext({
+      baseContext,
+      runContext,
+      previousStepOutputs,
+      currentStep: step,
+      currentStepIndex: stepIndex,
+      isFinalStep,
+    });
+    const stepSystemPrompt = [
+      systemPrompt,
+      `אתה עכשיו מבצע רק את שלב ${stepIndex + 1}: ${stepLabel}.`,
+      step.goal ? `מטרת השלב: ${step.goal}` : '',
+      Array.isArray(step.instructions) && step.instructions.length ? `הוראות השלב:\n${step.instructions.join('\n')}` : '',
+      step.output ? `תוצר נדרש מהשלב: ${step.output}` : '',
+      isFinalStep
+        ? 'זה השלב האחרון. החזר רק HTML מלא וסופי של המסמך, בלי Markdown, בלי יומן עבודה ובלי הסברים.'
+        : 'זה אינו השלב האחרון. החזר תוצר ביניים מקצועי, תמציתי ומועיל לשלב הבא. אל תחזיר HTML סופי.',
+    ].filter(Boolean).join('\n\n');
+
+    logAgentDebugEvent({
+      type: 'workspace-v2-step-start',
+      state: 'running',
+      runId,
+      agentLabel: `${workspaceLabel} · ${stepLabel}`,
+      message: `Workspace v2 מריץ שלב ${stepIndex + 1}: ${stepLabel}`,
+      workspaceV2TemplateId: template.id,
+      stepId: step.id || '',
+      stepIndex,
+      provider: providerOverride,
+      model: modelOverride,
+      ...requestLogContext,
+    });
+
+    if (isFinalStep) {
+      cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
+        userPrompt: userRequestSections.join('\n\n'),
+        context: stepContext,
+        systemPrompt: stepSystemPrompt,
+        requestOptions: {
+          ...stepRequestOptions,
+          expectDocumentOutput: true,
+          maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
+        },
+        operationLabel: `Workspace v2 ${workspaceLabel}`,
+        continuationPrompt: 'השלם רק את המשך ה-HTML החסר של המסמך, בלי לחזור על ההתחלה ובלי markdown.',
+        runId,
+        agentLabel: `${workspaceLabel} · ${stepLabel}`,
+        requestLogContext,
+      });
+    } else {
+      const stepResponse = await chatWithActiveProvider(
+        userRequestSections.join('\n\n'),
+        stepContext,
+        stepSystemPrompt,
+        {
+          ...stepRequestOptions,
+          expectDocumentOutput: false,
+          includeCompletionMetadata: true,
+        },
+      );
+      const stepOutput = getGeneratedHtmlProviderResponseText(stepResponse).trim();
+      previousStepOutputs.push({
+        id: step.id || `step-${stepIndex + 1}`,
+        role: stepLabel,
+        output: stepOutput,
+        provider: providerOverride,
+        model: modelOverride,
+      });
+      logAgentDebugEvent({
+        type: 'workspace-v2-step-success',
+        state: 'success',
+        runId,
+        agentLabel: `${workspaceLabel} · ${stepLabel}`,
+        message: `Workspace v2 סיים שלב ${stepIndex + 1}: ${stepLabel}`,
+        workspaceV2TemplateId: template.id,
+        stepId: step.id || '',
+        stepIndex,
+        outputChars: stepOutput.length,
+        provider: providerOverride,
+        model: modelOverride,
+        ...requestLogContext,
+      });
+    }
+  }
+
+  const repairedResponse = repairGeneratedHtmlForStructurePolicy(cleanedResponse, structurePolicy);
+  const finalResponse = repairedResponse.replace(/<[^>]+>/g, '').trim().length >= 10
+    ? repairedResponse
+    : cleanedResponse;
+  const validatedFinalResponse = ensureCompleteGeneratedHtmlResponse(finalResponse, `Workspace v2 ${workspaceLabel}`);
+
+  logAgentDebugEvent({
+    type: 'workspace-v2-success',
+    state: 'success',
+    runId,
+    agentLabel: workspaceLabel,
+    message: `Workspace v2 סיים להריץ תבנית ${workspaceLabel}`,
+    outputChars: validatedFinalResponse.length,
+    templateId,
+    workspaceV2TemplateId: template.id,
+    ...requestLogContext,
+  });
+
+  return returnMeta
+    ? {
+      html: validatedFinalResponse,
+      usedFallback: false,
+      runId,
+      errorMessage: '',
+      title,
+      workspaceV2: {
+        templateId: template.id,
+        label: workspaceLabel,
+        classification: runContext.classification,
+      },
+    }
+    : validatedFinalResponse;
+}
+
 function normalizeJsonOnlyResponse(response = '') {
   return String(response || '')
     .replace(/^```json\s*/i, '')
@@ -2632,7 +3122,7 @@ function normalizeReviewActionPlanPayload(payload = null) {
       return {
         suggestionId,
         title,
-        reason: reason || 'המלצת תיקון שנגזרה מבדיקת המרצה.',
+        reason: reason || 'המלצת תיקון שנגזרה מההערות או מההמלצות שנשלחו.',
         replacement,
         operation: effectiveOperation,
         targetConfidence,
@@ -2657,7 +3147,7 @@ function normalizeReviewActionPlanPayload(payload = null) {
 function buildReviewActionPlanFallback({ focusText = '', errorMessage = '' } = {}) {
   return {
     summary: focusText
-      ? 'לא הצלחתי למפות כרגע את הערות המרצה לתכנית תיקונים ישימה על המסמך.'
+      ? 'לא הצלחתי למפות כרגע את ההערות לתכנית תיקונים ישימה על המסמך.'
       : 'לא הצלחתי למפות כרגע את ההמלצות לתכנית תיקונים ישימה על המסמך.',
     edits: [],
     usedFallback: true,
@@ -3188,7 +3678,7 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '' }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
@@ -3201,17 +3691,18 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   const automation = getWorkspaceAutomation();
   const shouldForceDirectCompose = forceDirectMode === true || skipWorkflowAutomation === true;
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
-  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  const workspaceRoute = resolveWorkspaceRouting({
+    automation,
+    forceDirectMode: shouldForceDirectCompose,
+    skipWorkflowAutomation: shouldForceDirectCompose,
+    exactSourceLock: Boolean(exactArticleUrl),
+  });
+  const activeWorkflowAgents = workspaceRoute.agents || getOrderedRoleAgents(automation?.workflowMode);
   const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
   const noActiveWorkflowAutomation = automation?.enabled === true
     && automation?.autoDispatch !== false
     && !hasActiveWorkflowAgents;
-  const shouldUseWorkflowAutomation = shouldUseDocumentWorkflowAutomation({
-    automation,
-    directStructureLock: structurePolicy.directStructureLock,
-    forceDirectMode: shouldForceDirectCompose,
-    skipWorkflowAutomation: shouldForceDirectCompose,
-  });
+  const shouldUseWorkflowAutomation = workspaceRoute.shouldUseWorkflowAutomation === true;
   const documentRunLabel = getDocumentRunLabel({
     automation,
     selectedModel,
@@ -3271,6 +3762,33 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
+    const shouldUseWorkspaceV2 = useWorkspaceV2 === true
+      && !shouldForceDirectCompose
+      && !exactArticleUrl
+      && String(workspaceV2TemplateId || '').trim();
+
+    if (shouldUseWorkspaceV2) {
+      return await runWorkspaceV2DocumentGeneration({
+        cleanPrompt,
+        cleanInstructions,
+        title,
+        templateId,
+        selectedMaterials,
+        selectedModel,
+        selectedProviderId,
+        selectedProviderModel,
+        runId,
+        templateGuide,
+        notes,
+        materialsText,
+        structureLockInstructions,
+        structurePolicy,
+        normalizedAdditionalReviewRounds,
+        workspaceV2TemplateId,
+        returnMeta,
+      });
+    }
+
     if (shouldForceDirectCompose) {
       logAgentDebugEvent({
         type: 'doc-generation-direct-compose',
@@ -3281,6 +3799,17 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
           ? 'Chef final generation uses direct single-model compose; workflow automation skipped'
           : 'יצירת המסמך משתמשת במסלול ישיר של מודל יחיד ללא workflow automation',
         reason: String(directModeReason || 'forceDirectMode').trim(),
+        ...requestLogContext,
+      });
+    }
+    if (!shouldUseWorkflowAutomation && workspaceRoute.reason && !shouldForceDirectCompose && !exactArticleUrl) {
+      logAgentDebugEvent({
+        type: 'doc-generation-route-direct',
+        state: 'running',
+        runId,
+        agentLabel: documentRunLabel,
+        message: 'יצירת המסמך רצה במסלול ישיר כי סביבת העבודה אינה זמינה להרצה',
+        reason: workspaceRoute.reason,
         ...requestLogContext,
       });
     }
@@ -3302,13 +3831,16 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         ? String(automation?.agentNotesInstruction || '').trim()
         : '',
     };
-    if (structurePolicy.directStructureLock || shouldForceDirectCompose) {
+    if (shouldForceDirectCompose) {
       requestOptions.strictFormatting = true;
       requestOptions.skipAutomation = true;
       requestOptions.skipAutomationPrompt = true;
       requestOptions.skipSkillSelection = true;
       requestOptions.skipMultiModel = true;
-      requestOptions.omitPersonalStyleStructureHints = structurePolicy.directStructureLock ? true : requestOptions.omitPersonalStyleStructureHints;
+    }
+    if (structurePolicy.directStructureLock) {
+      requestOptions.strictFormatting = true;
+      requestOptions.omitPersonalStyleStructureHints = true;
     }
     if (exactArticleUrl) {
       requestOptions.sourceQueryOverride = exactArticleUrl;
@@ -3321,7 +3853,9 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       requestOptions.skipMultiModel = true;
       requestOptions.automationSkipReason = 'exactSourceUrlLock';
     }
-    if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
+    if (!shouldUseWorkflowAutomation && workspaceRoute.reason && !requestOptions.automationSkipReason) {
+      requestOptions.automationSkipReason = workspaceRoute.reason;
+    } else if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
     if (requestedProviderSelection.providerId && (shouldUseWorkflowAutomation === false || exactArticleUrl)) {
@@ -3434,15 +3968,16 @@ async function prepareFeedbackDrivenDocumentContext({
   preparationErrorMessage = 'שגיאה מפורשת בשלב הכנת עדכון המסמך לפני קריאת API',
 }) {
   const automation = getWorkspaceAutomation();
-  const activeWorkflowAgents = getOrderedRoleAgents(automation?.workflowMode);
+  const workspaceRoute = resolveWorkspaceRouting({
+    automation,
+    forceDirectMode,
+  });
+  const activeWorkflowAgents = workspaceRoute.agents || getOrderedRoleAgents(automation?.workflowMode);
   const hasActiveWorkflowAgents = Array.isArray(activeWorkflowAgents) && activeWorkflowAgents.length > 0;
   const noActiveWorkflowAutomation = automation?.enabled === true
     && automation?.autoDispatch !== false
     && !hasActiveWorkflowAgents;
-  const shouldUseWorkflowAutomation = !forceDirectMode
-    && automation?.enabled === true
-    && automation?.autoDispatch !== false
-    && hasActiveWorkflowAgents;
+  const shouldUseWorkflowAutomation = workspaceRoute.shouldUseWorkflowAutomation === true;
   const requestWorkspaceId = String(automation?.activeWorkspaceId || '').trim();
   const requestWorkspaceName = String(automation?.workspaceName || '').trim();
   const requestLogContext = {
@@ -3479,6 +4014,7 @@ async function prepareFeedbackDrivenDocumentContext({
     return {
       shouldUseWorkflowAutomation,
       noActiveWorkflowAutomation,
+      workspaceRouteReason: workspaceRoute.reason || '',
       requestWorkspaceId,
       requestWorkspaceName,
       requestLogContext,
@@ -3494,6 +4030,7 @@ async function prepareFeedbackDrivenDocumentContext({
   return {
     shouldUseWorkflowAutomation,
     noActiveWorkflowAutomation,
+    workspaceRouteReason: workspaceRoute.reason || '',
     requestWorkspaceId,
     requestWorkspaceName,
     requestLogContext,
@@ -3506,7 +4043,7 @@ async function prepareFeedbackDrivenDocumentContext({
   };
 }
 
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '' }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
@@ -3520,6 +4057,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
   const {
     shouldUseWorkflowAutomation,
     noActiveWorkflowAutomation,
+    workspaceRouteReason,
     requestWorkspaceId,
     requestWorkspaceName,
     requestLogContext,
@@ -3548,6 +4086,32 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     return returnMeta
       ? { html: cleanHtml, usedFallback: true, runId, errorMessage: preparationError?.message || 'שגיאה לא ידועה' }
       : cleanHtml;
+  }
+
+  if (useWorkspaceV2 === true && String(workspaceV2TemplateId || '').trim()) {
+    return await runWorkspaceV2DocumentGeneration({
+      cleanPrompt: originalPrompt || 'עדכון מסמך קיים',
+      cleanInstructions: [
+        'עדכן את המסמך הקיים לפי המשוב. החזר תמיד HTML מלא של כל המסמך אחרי התיקון, לא fragment.',
+        `משוב המשתמש:\n${cleanFeedback}`,
+        `המסמך הקיים ב-HTML:\n${cleanHtml}`,
+      ].join('\n\n'),
+      title: originalPrompt || 'עדכון מסמך',
+      templateId,
+      selectedMaterials,
+      selectedModel,
+      selectedProviderId,
+      selectedProviderModel,
+      runId,
+      templateGuide,
+      notes,
+      materialsText,
+      structureLockInstructions: '',
+      structurePolicy: null,
+      normalizedAdditionalReviewRounds,
+      workspaceV2TemplateId,
+      returnMeta,
+    });
   }
 
   const wideRevisionRequested = feedbackAllowsWideDocumentRewrite(cleanFeedback);
@@ -3614,8 +4178,9 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       requestOptions.skipAutomationPrompt = true;
       requestOptions.skipSkillSelection = true;
       requestOptions.skipMultiModel = true;
+      requestOptions.automationSkipReason = workspaceRouteReason || (noActiveWorkflowAutomation ? 'noActiveAgents' : 'direct');
     }
-    if (noActiveWorkflowAutomation) {
+    if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
     if (requestedProviderSelection.providerId && (!shouldUseWorkflowAutomation || exactArticleUrl)) {
@@ -3844,6 +4409,9 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
 export async function buildDocumentReviewActionPlan({ existingHtml = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', runId: providedRunId = '', returnMeta = false, feedback = '', focus = '', suggestions = [] }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFocus = [String(focus || '').trim(), String(feedback || '').trim()].filter(Boolean).join('\n\n');
+  const sourceMentionsLecturer = /(?:מרצה|מנחה|lecturer|instructor)/iu.test(cleanFocus);
+  const actionPlanLabel = sourceMentionsLecturer ? 'הערות המרצה והמלצות היישום' : 'הערות, המלצות והנחיות היישום';
+  const actionPlanMapLabel = sourceMentionsLecturer ? 'מיפוי תיקוני מרצה' : 'מיפוי תיקונים למסמך';
   const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: originalPrompt, instructions: cleanFocus });
   const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
   const cleanSuggestions = (Array.isArray(suggestions) ? suggestions : [])
@@ -3861,7 +4429,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
     })
     .filter(Boolean);
   const actionInputText = [
-    cleanFocus ? `מיקוד המשתמש/המרצה:\n${cleanFocus}` : '',
+    cleanFocus ? `מיקוד המשתמש ומקור ההמלצות:\n${cleanFocus}` : '',
     cleanSuggestions.length ? `המלצות שכבר הופקו לבדיקה:\n${cleanSuggestions.join('\n\n')}` : '',
   ].filter(Boolean).join('\n\n');
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
@@ -3888,10 +4456,10 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
     forceDirectMode: true,
     providedRunId,
     runIdPrefix: 'doc-review-apply-plan',
-    automatedLabel: 'מיפוי תיקוני מרצה',
-    directLabel: 'מיפוי תיקוני מרצה',
+    automatedLabel: actionPlanMapLabel,
+    directLabel: actionPlanMapLabel,
     preparationErrorType: 'doc-review-apply-plan-preparation-error',
-    preparationErrorMessage: 'שגיאה בשלב הכנת מיפוי תיקוני המרצה לפני קריאת API',
+    preparationErrorMessage: 'שגיאה בשלב הכנת מיפוי התיקונים לפני קריאת API',
   });
 
   if (preparationError) {
@@ -3908,7 +4476,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
       state: 'running',
       runId,
       agentLabel: documentReviewLabel,
-      message: 'התחיל מיפוי תיקוני המרצה לתכנית edits ישימה',
+      message: 'התחיל מיפוי תיקונים לתכנית edits ישימה',
       templateId,
       selectedMaterialsCount: selectedMaterials.length,
       ...requestLogContext,
@@ -3917,7 +4485,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
     const fullContext = buildFeedbackDrivenRequestContext({
       originalPrompt,
       supportingText: actionInputText,
-      supportingLabel: 'הערות המרצה והמלצות היישום',
+      supportingLabel: actionPlanLabel,
       materialsText,
       existingHtml: cleanHtml,
       htmlLabel: 'המסמך הקיים ב-HTML',
@@ -3935,8 +4503,9 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
         `${cleanSuggestions.length ? 'יש רשימת המלצות מפורשת לביצוע. החזר edits רק עבור ההמלצות שמופיעות ברשימה הזו, לפי suggestionId שלהן. אסור להוסיף תיקונים, רקע תיאורטי, שינויים סגנוניים או סעיפים שלא מופיעים ברשימת ההמלצות שנשלחה. אם המלצה נבחרת אינה ניתנת למיקום בטוח, החזר אותה כ-needs_review במקום לבצע תיקון אחר.\n' : ''}` +
         `${scopePrompt}\n` +
         `שים לב: מגבלת ${ACTION_PLAN_EDIT_BATCH_LIMIT} edits היא לקריאה הנוכחית בלבד, לא למסמך כולו. המערכת תאחד כמה קריאות עד ${ACTION_PLAN_TOTAL_EDIT_LIMIT} תיקונים כאשר צריך יותר תיקונים.\n` +
-        `לפני יצירת edit, בדוק מה כבר קיים באזור כאילו זו בדיקת מרצה: זהה מה חסר, חלש, כפול, לא מדויק או לא ממוקם נכון, ואז החזר את התיקון שמיישם את האבחנה. אם יש כפילות תוכנית או כפילות רעיונית באותו אזור, התייחס אליה כבעיה לתיקון ואחד לנוסח תקין אחד.\n` +
+        `לפני יצירת edit, בדוק מה כבר קיים באזור ביחס להמלצה או להנחיה שנשלחה: זהה מה חסר, חלש, כפול, לא מדויק או לא ממוקם נכון, ואז החזר את התיקון שמיישם את האבחנה. אם יש כפילות תוכנית או כפילות רעיונית באותו אזור, התייחס אליה כבעיה לתיקון ואחד לנוסח תקין אחד.\n` +
         `targetConfidence=high רק כשיש ציטוט מדויק או התאמה כמעט מלאה לאזור יחיד. targetConfidence=medium כשיש אזור יחיד סביר לפי כותרת, נושא, מונחים סמוכים או מיקום במסמך אבל אין ציטוט מושלם. targetConfidence=low כשיש כמה אזורים דומים, locator כללי מדי, או שהתיקון דורש שיפוט אנושי; במקרה כזה השתמש operation=needs_review ואל תחזיר replacement אגרסיבי.\n` +
+        `אם ההמלצה כוללת ביטויים כמו "הניסוח הקיים", "הניסוח הקיים שלך", "במקום שבו כתוב", או ציטוט מתוך המסמך - השתמש בציטוט הזה בתור originalText ו/או locator המרכזי. אל תשתמש בכותרת כללית כמו "רקע" כ-locator יחיד כאשר קיים ציטוט מדויק יותר באותה המלצה.\n` +
         `אם targetConfidence=medium, התיקון חייב להיות מקומי וצר: פסקה אחת, משפט, ציטוט, או הוספה קצרה סביב אזור ברור. אסור להחזיר targetType=section רחב או replacement שמחליף כמה פסקאות.\n` +
         `targetType=section עבור replace רק אם צריך להחליף סעיף שלם עם כותרת ייחודית; במקרה כזה locator חייב להיות כותרת הסעיף, ו-originalText חייב לכלול excerpt גלוי, רציף ומדויק מתוך גוף הסעיף הקיים לפני התיקון. עבור insert_before/insert_after ליד כותרת או סעיף קיים, מותר ואף רצוי להשתמש ב-targetType=section עם locator שהוא כותרת הסעיף, ו-originalText אופציונלי.\n` +
         `locator ו-originalText חייבים להיות טקסט גלוי בלבד, בלי תגיות HTML, entities, או markup מכל סוג. replacement בלבד יכול להכיל HTML בטוח כשצריך.\n` +
@@ -3948,7 +4517,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
         `אם התיקון דורש הרחבה, השלמת טיעון, הוספת נימוק, דוגמה, מעבר, או פיתוח רעיון חסר, בחר אזור מקומי רציף שמכסה את כל היחידה הרלוונטית והחזר replacement מלא לאותו אזור או insertion ממוקם היטב לפי הצורך. מותר ואף נדרש להחזיר כמה משפטים או כמה פסקאות רצופות כשזה נדרש כדי להשלים את ההנחיה. אל תקצר אוטומטית למשפט אחד.\n` +
         `אם המלצה כללית מדי ולא בטוחה ליישום אוטומטי, דלג עליה.\n` +
         `אל תחזיר Markdown, הסברים מחוץ ל-JSON או code fences.\n` +
-        `התייחס להמלצות המרצה כהנחיה מחייבת, אבל שמור על שינויים מינימליים ומדויקים רק ביחס לאזור הנבחר, לא על חשבון תוכן חסר שהמשתמש ביקש להשלים.\n` +
+        `התייחס להמלצות ולהנחיות שנשלחו כהנחיה מחייבת, גם אם הן נוצרו בשיחה ולא הגיעו ממרצה. שמור על שינויים מינימליים ומדויקים רק ביחס לאזור הנבחר, לא על חשבון תוכן חסר שהמשתמש ביקש להשלים.\n` +
         `סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר מפורשים, השתמש בהם רק כהקשר משלים למיפוי התיקונים.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
     };
 
@@ -3981,8 +4550,8 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
     const invokeActionPlanCall = async ({ context = '', scopedSections = false, batchLabel = '' } = {}) => {
       const response = await chatWithActiveProvider(
         batchLabel
-          ? `מפה את הערות המרצה לתכנית תיקונים ישימה על המסמך הקיים (${batchLabel})`
-          : 'מפה את הערות המרצה לתכנית תיקונים ישימה על המסמך הקיים',
+          ? `מפה את ההערות וההמלצות לתכנית תיקונים ישימה על המסמך הקיים (${batchLabel})`
+          : 'מפה את ההערות וההמלצות לתכנית תיקונים ישימה על המסמך הקיים',
         context,
         buildActionPlanSystemPrompt({ scopedSections }),
         {
@@ -4024,7 +4593,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
       const scopedSingleCall = buildActionPlanScopedContext({
         originalPrompt,
         supportingText: actionInputText,
-        supportingLabel: 'הערות המרצה והמלצות היישום',
+        supportingLabel: actionPlanLabel,
         supportingTextMaxLength: ACTION_PLAN_SUPPORTING_LIMIT,
         materialsText,
         allSections: documentSections,
@@ -4047,7 +4616,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
           const batchContext = buildActionPlanScopedContext({
             originalPrompt,
             supportingText: actionInputText,
-            supportingLabel: 'הערות המרצה והמלצות היישום',
+            supportingLabel: actionPlanLabel,
             supportingTextMaxLength: ACTION_PLAN_SUPPORTING_LIMIT,
             materialsText,
             allSections: documentSections,
@@ -4089,7 +4658,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
       state: batchErrors.length ? 'warning' : 'success',
       runId,
       agentLabel: documentReviewLabel,
-      message: 'תכנית תיקוני המרצה הוכנה בהצלחה',
+      message: 'תכנית התיקונים הוכנה בהצלחה',
       planningStrategy,
       callCount: planResults.length,
       batchErrors: batchErrors.length,
@@ -4106,7 +4675,7 @@ export async function buildDocumentReviewActionPlan({ existingHtml = '', origina
       state: 'error',
       runId,
       agentLabel: documentReviewLabel,
-      message: 'מיפוי תיקוני המרצה לא הושלם',
+      message: 'מיפוי התיקונים לא הושלם',
       errorMessage: error?.message || 'שגיאה לא ידועה',
       ...requestLogContext,
     });

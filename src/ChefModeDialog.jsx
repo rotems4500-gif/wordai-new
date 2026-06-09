@@ -5,6 +5,7 @@ import { buildSelectedMaterialsContext } from './services/workspaceLearningServi
 const MAX_QUESTIONS = 13;
 const MIN_AUTO_STOP_RESPONSES = 5;
 const CHEF_MATERIALS_CONTEXT_MAX_CHARS = 8000;
+const CHEF_FINAL_ADDITIONS_QUESTION_ID = 'final-additions';
 
 const CHEF_MODEL_OPTIONS = [
   { value: 'gemini', label: 'Gemini' },
@@ -79,6 +80,16 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const [responses, setResponses] = useState([]);
   const [selectedChoices, setSelectedChoices] = useState([]);
   const [customText, setCustomText] = useState('');
+  const [finalAdditionsText, setFinalAdditionsText] = useState('');
+  const [finalAdditionsBaseResponses, setFinalAdditionsBaseResponses] = useState([]);
+  const [isFinalAdditionsStep, setIsFinalAdditionsStep] = useState(false);
+  const [askFinalAdditions, setAskFinalAdditions] = useState(() => {
+    try {
+      return localStorage.getItem('wordflow_chef_ask_final_additions') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [localModel, setLocalModel] = useState(selectedModel || 'gemini');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -179,7 +190,13 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
           const firstQuestion = await requestDynamicQuestion(1, loadedResponses, loadedModel);
           if (!isMounted) return;
           if (firstQuestion?.shouldStop && canAutoStop(loadedResponses.length)) {
-            if (typeof onStart === 'function') await onStart(loadedResponses, loadedModel);
+            if (askFinalAdditions) {
+              setFinalAdditionsText('');
+              setFinalAdditionsBaseResponses(loadedResponses);
+              setIsFinalAdditionsStep(true);
+            } else if (typeof onStart === 'function') {
+              await onStart(loadedResponses, loadedModel);
+            }
             return;
           }
           loadedQuestionFlow = [toSafeQuestionCard(1, firstQuestion)];
@@ -271,6 +288,56 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     }
   };
 
+  const buildResponsesWithFinalAdditions = (baseResponses = responses) => {
+    const cleanText = String(finalAdditionsText || '').trim();
+    const withoutExistingFinalAdditions = (Array.isArray(baseResponses) ? baseResponses : [])
+      .filter((item) => item?.question !== CHEF_FINAL_ADDITIONS_QUESTION_ID);
+
+    if (!cleanText) return withoutExistingFinalAdditions;
+
+    return [
+      ...withoutExistingFinalAdditions,
+      {
+        question: CHEF_FINAL_ADDITIONS_QUESTION_ID,
+        questionText: 'האם יש משהו אחרון שחשוב להוסיף לפני יצירת המסמך?',
+        choices: [],
+        freeText: cleanText,
+        answer: cleanText,
+        answeredAt: Date.now(),
+      },
+    ];
+  };
+
+  const requestFinishWithFinalReview = async (baseResponses = responses) => {
+    const preparedResponses = saveCurrentDraftResponse(baseResponses, { requireAnswer: false });
+    if (askFinalAdditions) {
+      setFinalAdditionsText('');
+      setFinalAdditionsBaseResponses(preparedResponses);
+      setIsFinalAdditionsStep(true);
+      saveSession(preparedResponses, currentQuestion, questionFlow, localModel);
+      return;
+    }
+    await handleFinish(preparedResponses);
+  };
+
+  const handleConfirmFinalAdditions = async () => {
+    if (isSubmitting) return;
+    await handleFinish(buildResponsesWithFinalAdditions(finalAdditionsBaseResponses));
+  };
+
+  const handleBackFromFinalAdditions = () => {
+    if (isSubmitting) return;
+    setIsFinalAdditionsStep(false);
+    setFinalAdditionsBaseResponses([]);
+  };
+
+  const handleAskFinalAdditionsChange = (nextValue) => {
+    setAskFinalAdditions(nextValue);
+    try {
+      localStorage.setItem('wordflow_chef_ask_final_additions', nextValue ? 'true' : 'false');
+    } catch {}
+  };
+
   const handleNext = async () => {
     if ((!selectedChoices.length && !customText.trim()) || isSubmitting || isEvaluating || isLoadingQuestion) return;
 
@@ -292,7 +359,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     saveSession(newResponses, currentQuestion, questionFlow, localModel);
 
     if (newResponses.length >= MAX_QUESTIONS) {
-      await handleFinish(newResponses);
+      await requestFinishWithFinalReview(newResponses);
       return;
     }
 
@@ -314,7 +381,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         materialsContext,
       });
       if (decision?.shouldStop && canAutoStop(newResponses.length)) {
-        await handleFinish(newResponses);
+        await requestFinishWithFinalReview(newResponses);
         return;
       }
 
@@ -322,7 +389,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       const nextStep = questionFlow.length + 1;
       const dynamicQuestion = await requestDynamicQuestion(nextStep, newResponses, localModel);
       if (dynamicQuestion?.shouldStop && canAutoStop(newResponses.length)) {
-        await handleFinish(newResponses);
+        await requestFinishWithFinalReview(newResponses);
         return;
       }
       const nextQuestionFlow = [...questionFlow, toSafeQuestionCard(nextStep, dynamicQuestion)];
@@ -331,7 +398,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     } catch (error) {
       console.warn('Chef flow fallback error', error);
       if (canAutoStop(newResponses.length)) {
-        await handleFinish(newResponses);
+        await requestFinishWithFinalReview(newResponses);
       }
     } finally {
       setIsEvaluating(false);
@@ -348,7 +415,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     }
 
     if (canAutoStop(responses.length)) {
-      await handleFinish(responses);
+      await requestFinishWithFinalReview(responses);
       return;
     }
 
@@ -357,7 +424,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       const nextStep = questionFlow.length + 1;
       const dynamicQuestion = await requestDynamicQuestion(nextStep, responses, localModel);
       if (dynamicQuestion?.shouldStop && canAutoStop(responses.length)) {
-        await handleFinish(responses);
+        await requestFinishWithFinalReview(responses);
         return;
       }
       const nextQuestionFlow = [...questionFlow, toSafeQuestionCard(nextStep, dynamicQuestion)];
@@ -401,6 +468,9 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       setQuestionFlow([]);
       setSelectedChoices([]);
       setCustomText('');
+      setFinalAdditionsText('');
+      setFinalAdditionsBaseResponses([]);
+      setIsFinalAdditionsStep(false);
       onClose?.();
     }
   };
@@ -465,6 +535,16 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
             </select>
           </div>
 
+          <label className="mb-4 flex items-center gap-2 text-white/75 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={askFinalAdditions}
+              onChange={(event) => handleAskFinalAdditionsChange(event.target.checked)}
+              className="h-4 w-4 rounded border-white/30 bg-white/10 accent-cyan-400"
+            />
+            שאל אותי לפני הכתיבה אם יש משהו אחרון להוסיף
+          </label>
+
           <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-cyan-300 to-blue-300 transition-all duration-300"
@@ -477,7 +557,25 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         </div>
 
         <div className="p-8">
-          {!question || isLoadingQuestion ? (
+          {isFinalAdditionsStep ? (
+            <>
+              <h3 className="text-xl md:text-2xl font-bold text-white mb-3 text-right">
+                יש משהו אחרון שחשוב להוסיף לפני שאני מתחיל לכתוב?
+              </h3>
+              <p className="text-white/65 text-sm mb-6 text-right">
+                אפשר להשאיר ריק ולהתחיל מיד, או להוסיף דגש קצר שאכנס איתו לבריף הסופי.
+              </p>
+
+              <div className="mb-6">
+                <textarea
+                  value={finalAdditionsText}
+                  onChange={(e) => setFinalAdditionsText(e.target.value)}
+                  placeholder="למשל: להדגיש את הטון, להימנע מנושא מסוים, לשמור על מבנה מסוים, או להוסיף פרט אחרון..."
+                  className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent resize-y min-h-[120px]"
+                />
+              </div>
+            </>
+          ) : !question || isLoadingQuestion ? (
             <div className="text-center py-12">
               <div className="animate-spin w-8 h-8 border-2 border-white/30 border-t-cyan-200 rounded-full mx-auto mb-4"></div>
               <div className="text-white/80 text-sm">השף מנתח את ההקשר ובונה שאלה מותאמת...</div>
@@ -518,6 +616,30 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
           )}
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            {isFinalAdditionsStep ? (
+              <>
+                <button
+                  onClick={handleConfirmFinalAdditions}
+                  disabled={isSubmitting}
+                  className={`px-8 py-3 rounded-xl font-bold transition-all transform ${
+                    isSubmitting
+                      ? 'bg-gray-500/30 text-gray-300 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:shadow-lg hover:shadow-cyan-500/30 hover:scale-105'
+                  }`}
+                >
+                  {isSubmitting ? '⏳ מכין מסמך...' : finalAdditionsText.trim() ? 'הוסף והתחל לכתוב' : 'התחל לכתוב בלי תוספות'}
+                </button>
+
+                <button
+                  onClick={handleBackFromFinalAdditions}
+                  disabled={isSubmitting}
+                  className="px-8 py-3 rounded-xl font-bold border border-white/20 text-white hover:bg-white/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  חזרה לשאלות
+                </button>
+              </>
+            ) : (
+              <>
             <button
               onClick={handleNext}
               disabled={(!selectedChoices.length && !customText.trim()) || isSubmitting || isEvaluating || isLoadingQuestion || !question}
@@ -549,7 +671,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
             </button>
 
             <button
-              onClick={() => handleFinish(saveCurrentDraftResponse(responses, { requireAnswer: false }))}
+              onClick={() => requestFinishWithFinalReview(responses)}
               disabled={effectiveResponseCount < 3 || isSubmitting || isEvaluating || isLoadingQuestion}
               className="px-6 py-3 rounded-xl font-bold border border-amber-200/40 text-amber-100 hover:bg-amber-300/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -570,6 +692,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
             >
               עבור ליצירת מסמך
             </button>
+              </>
+            )}
           </div>
 
           {responses.length > 0 && (

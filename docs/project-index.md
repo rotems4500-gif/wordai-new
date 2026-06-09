@@ -48,6 +48,7 @@
 * `user-guide.md` - מדריך משתמש (הכולל הסבר על Live Streaming, מנגנון ה-Update, ושאר פיצ'רים).
 * `project-index.md` - המסמך הנוכחי, משמש למעבר זריז בין מחלקות הפרויקט (TOC).
 * `project-plan.md` / `plan.md` / `next-version-plan.md` - מפות דרכים (Roadmaps) ופירוטים טכניים לגרסאות הבאות.
+* `ux-audit-roadmap.md` - audit ממוקד UX עם אבחון עומס, הצעת ארכיטקטורת ממשק, ו-roadmap לביצוע הדרגתי.
 * `ai-word-processor-plan.md` - הסבר קונספטואלי וארכיטקטוני למעבד התמלילים.
 * `api-keys-guide.md` - הוראות טכניות להתחברות משתמשים לשירותי LLM (Gemini / OpenAI).
 * `integration-plan.md` / `live-streaming-plan.md` - תיעוד ספציפי למנגנוני הזרמת מידע ל-streaming sockets והטמעת פיצ'רים.

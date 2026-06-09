@@ -167,6 +167,19 @@ const GUIDE_CONTENT = {
 };
 
 export default function HelpModal({ isOpen, onClose, topic }) {
+  React.useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose?.();
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const doc = GUIDE_CONTENT[topic] || GUIDE_CONTENT.about;
@@ -176,6 +189,9 @@ export default function HelpModal({ isOpen, onClose, topic }) {
       position: 'fixed', inset: 0, zIndex: 99999,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       backgroundColor: 'rgba(0,0,0,0.5)', direction: 'rtl'
+    }} onClick={(event) => {
+      if (event.target !== event.currentTarget) return;
+      onClose?.();
     }}>
       <div style={{
         background: '#fff', width: '90%', maxWidth: '800px',

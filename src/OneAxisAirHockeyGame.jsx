@@ -48,6 +48,25 @@ const createSurfaceStyle = ({ focused = false, height = 240, background = 'linea
   transition: 'box-shadow 140ms ease, border-color 140ms ease',
 });
 
+const useDocumentVisible = () => {
+  const [isVisible, setIsVisible] = useState(() => (
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden'
+  ));
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+
+    const handleVisibilityChange = () => {
+      setIsVisible(document.visibilityState !== 'hidden');
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  return isVisible;
+};
+
 function AirHockeyArcadeGame({ title = 'הוקי בציר אחד', compact = false }) {
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
@@ -65,6 +84,7 @@ function AirHockeyArcadeGame({ title = 'הוקי בציר אחד', compact = fal
   const paddleXRef = useRef(50);
   const puckRef = useRef({ x: 50, y: 12 });
   const keyStateRef = useRef({ left: false, right: false });
+  const isDocumentVisible = useDocumentVisible();
 
   const setRunningSafe = (value) => {
     const safeValue = Boolean(value);
@@ -113,6 +133,11 @@ function AirHockeyArcadeGame({ title = 'הוקי בציר אחד', compact = fal
   }, []);
 
   useEffect(() => {
+    if (!isDocumentVisible || !running || missed) {
+      lastTsRef.current = 0;
+      return undefined;
+    }
+
     let rafId = 0;
 
     const tick = (timestamp) => {
@@ -171,7 +196,7 @@ function AirHockeyArcadeGame({ title = 'הוקי בציר אחד', compact = fal
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, []);
+  }, [isDocumentVisible, running, missed]);
 
   const focusBoard = () => {
     boardRef.current?.focus();

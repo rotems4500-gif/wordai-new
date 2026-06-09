@@ -1,0 +1,97 @@
+const STATIC_CACHE = 'wordflow-static-v2';
+const RUNTIME_CACHE = 'wordflow-runtime-v2';
+
+const getAppUrls = () => {
+  const scope = self.registration?.scope || self.location.origin + '/';
+  return {
+    root: new URL('./', scope).toString(),
+    index: new URL('./index.html', scope).toString(),
+    manifest: new URL('./manifest.webmanifest', scope).toString(),
+    icon: new URL('./app-icon.png', scope).toString(),
+    icon192: new URL('./app-icon-192.png', scope).toString(),
+    icon512: new URL('./app-icon-512.png', scope).toString(),
+  };
+};
+
+const isCacheableAsset = (pathname = '') => (
+  pathname.endsWith('.js')
+  || pathname.endsWith('.css')
+  || pathname.endsWith('.png')
+  || pathname.endsWith('.svg')
+  || pathname.endsWith('.webmanifest')
+  || pathname.endsWith('.woff2')
+);
+
+const isNavigationRequest = (request) => request.mode === 'navigate';
+
+self.addEventListener('install', (event) => {
+  const appUrls = getAppUrls();
+  event.waitUntil(
+    caches
+      .open(STATIC_CACHE)
+      .then((cache) => cache.addAll([
+        appUrls.root,
+        appUrls.index,
+        appUrls.manifest,
+        appUrls.icon,
+        appUrls.icon192,
+        appUrls.icon512,
+      ]))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(
+      keys
+        .filter((key) => ![STATIC_CACHE, RUNTIME_CACHE].includes(key))
+        .map((key) => caches.delete(key))
+    )).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin) return;
+
+  if (isNavigationRequest(event.request)) {
+    const { index } = getAppUrls();
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse.ok) {
+            const responseClone = networkResponse.clone();
+            caches.open(RUNTIME_CACHE).then((cache) => cache.put(index, responseClone));
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cachedIndex = await caches.match(index);
+          if (cachedIndex) return cachedIndex;
+          const cachedRoot = await caches.match(getAppUrls().root);
+          if (cachedRoot) return cachedRoot;
+          throw new Error('Navigation request failed and no cached shell exists.');
+        })
+    );
+    return;
+  }
+
+  if (!isCacheableAsset(requestUrl.pathname)) return;
+
+  event.respondWith(
+    caches.match(event.request).then((cachedResponse) => {
+      if (cachedResponse) return cachedResponse;
+
+      return fetch(event.request).then((networkResponse) => {
+        if (networkResponse.ok) {
+          const responseClone = networkResponse.clone();
+          caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, responseClone));
+        }
+        return networkResponse;
+      });
+    })
+  );
+});

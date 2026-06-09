@@ -1,6 +1,6 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.111",
+  "version": "1.0.129",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
@@ -15,6 +15,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "firebase:login": "firebase login",
+    "firebase:deploy": "npm run build && firebase deploy",
+    "firebase:deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "firebase:deploy:rules": "firebase deploy --only firestore:rules",
     "smoke:article-retrieval": "node scripts/news-site-article-retrieval-smoke.mjs",
     "sync:storage": "node scripts/sync-storage-to-local.mjs",
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"",
