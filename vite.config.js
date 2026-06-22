@@ -306,10 +306,30 @@ function styleBankPlugin() {
 export default async () => defineConfig({
   base: './',
   plugins: [react(), pastWorksPlugin(), styleBankPlugin()],
+  resolve: {
+    alias: {
+      'sav-reader': path.resolve(process.cwd(), 'node_modules', 'sav-reader', 'dist', 'SavBufferReader.js'),
+      events: 'events',
+      stream: 'stream-browserify',
+    },
+  },
+  define: {
+    global: 'globalThis',
+    __APP_VERSION__: JSON.stringify(
+      (() => {
+        try {
+          return JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')).version || '';
+        } catch {
+          return '';
+        }
+      })()
+    ),
+  },
   server: {
     port: 3001,
     strictPort: true,
-    https: await getHttpsOptions(),
+    // VITE_NO_HTTPS=1 משבית HTTPS לצורך בדיקה אוטומטית בדפדפן (cert עצמי נדחה ע"י preview). לא משפיע על dev רגיל.
+    https: process.env.VITE_NO_HTTPS ? false : await getHttpsOptions(),
     proxy: {
       '/api/local-article-check': {
         target: 'http://127.0.0.1:4317',

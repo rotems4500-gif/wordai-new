@@ -1,220 +1,485 @@
-import React, { useMemo, useState } from 'react';
+// ═══════════════════════════════════════════════════════════════
+// PresentationStudio.jsx — סטודיו מצגות מלא.
+// שני מצבים: (1) ללא deck → טופס יצירה. (2) עם deck → עורך שקופיות.
+// מקור האמת הוא אובייקט ה-deck (deckModel). אין HTML, אין TipTap.
+// ═══════════════════════════════════════════════════════════════
 
-const PRESENTATION_THEMES = [
-  { id: 'cinematic', label: 'קולנועי', accent: 'from-amber-400 via-orange-500 to-rose-500', blurb: 'פתיחים חזקים, שקופיות גדולות ונראות עשירה.' },
-  { id: 'premium', label: 'פרימיום', accent: 'from-sky-400 via-cyan-500 to-teal-500', blurb: 'מראה נקי ויוקרתי למצגות הנהלה, מכירה ופיץ׳.' },
-  { id: 'academic', label: 'אקדמי', accent: 'from-indigo-400 via-blue-500 to-slate-600', blurb: 'מסרים מסודרים, היררכיה ברורה, פחות רעש ויותר טיעון.' },
-  { id: 'bold', label: 'נועז', accent: 'from-fuchsia-500 via-violet-500 to-indigo-600', blurb: 'ליינים חדים, שקופיות קצרות ואימפקט גבוה.' },
+import React, { useMemo, useRef, useState } from 'react';
+import { SlideFrame } from './presentation/SlideRenderer';
+import PresentMode from './presentation/PresentMode';
+import { DECK_THEMES } from './presentation/deckThemes';
+import {
+  SLIDE_LAYOUTS, getLayout, layoutHasImage,
+  createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide,
+} from './presentation/deckModel';
+import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
+import { buildPptxBase64 } from './services/pptxExport';
+import { getProviderConfig, saveProviderConfig, getPresentationPreferences, savePresentationPreferences } from './services/aiService';
+
+const DENSITY = [
+  { id: 'lean', label: 'רזה' },
+  { id: 'balanced', label: 'מאוזן' },
+  { id: 'rich', label: 'עשיר' },
 ];
 
-const QUICK_BRIEFS = [
-  'פיץ׳ לסטארטאפ עם מסר חד ותמונות חזקות',
-  'מצגת אקדמית ברורה עם מסקנות וסיכום חזותי',
-  'מצגת מכירה ללקוח עם דגש על ערך עסקי',
-  'מצגת הרצאה עם מבנה סוחף ושקופיות קלות לקריאה',
-];
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
 
-export default function PresentationStudio({ onGenerate = () => {}, onSwitchToWord = () => {}, busy = false }) {
+// ── טופס יצירה (מצב ללא deck) ────────────────────────────────────
+function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
+  const prefs = useMemo(() => getPresentationPreferences(), []);
+  const [source, setSource] = useState('topic');
   const [topic, setTopic] = useState('');
-  const [audience, setAudience] = useState('');
-  const [goal, setGoal] = useState('');
-  const [slideCount, setSlideCount] = useState(10);
-  const [theme, setTheme] = useState('premium');
-  const [imageIntensity, setImageIntensity] = useState('high');
-  const [speakerNotes, setSpeakerNotes] = useState(false);
-  const [includeCover, setIncludeCover] = useState(true);
+  const [audience, setAudience] = useState(prefs.defaultAudience || '');
+  const [goal, setGoal] = useState(prefs.defaultGoal || '');
+  const [slideCount, setSlideCount] = useState(prefs.defaultSlideCount || 10);
+  const [themeId, setThemeId] = useState(prefs.defaultThemeId || 'premium');
+  const [density, setDensity] = useState(prefs.defaultDensity || 'balanced');
+  const [imageIntensity, setImageIntensity] = useState(prefs.defaultImageIntensity || 'high');
 
-  const selectedTheme = useMemo(
-    () => PRESENTATION_THEMES.find((item) => item.id === theme) || PRESENTATION_THEMES[0],
-    [theme],
-  );
+  const fromDocument = source === 'document';
+  const canGenerate = (fromDocument ? hasDocument : Boolean(topic.trim())) && !busy;
 
-  const canGenerate = Boolean(String(topic || '').trim()) && !busy;
-
-  const handleGenerate = () => {
+  const submit = () => {
     if (!canGenerate) return;
+    const resolvedSlideCount = Math.max(4, Math.min(20, Number(slideCount) || 10));
+    if (prefs.rememberLastChoices !== false) {
+      savePresentationPreferences({
+        ...prefs,
+        defaultThemeId: themeId,
+        defaultDensity: density,
+        defaultSlideCount: resolvedSlideCount,
+        defaultImageIntensity: imageIntensity,
+        defaultAudience: audience.trim(),
+        defaultGoal: goal.trim(),
+      });
+    }
     onGenerate({
-      topic: String(topic || '').trim(),
-      audience: String(audience || '').trim(),
-      goal: String(goal || '').trim(),
-      slideCount: Math.max(4, Math.min(20, Number(slideCount) || 10)),
-      theme,
-      imageIntensity,
-      speakerNotes,
-      includeCover,
+      source, topic: topic.trim(), audience: audience.trim(), goal: goal.trim(),
+      slideCount: resolvedSlideCount,
+      themeId, density, imageIntensity,
     });
   };
 
   return (
-    <div className="flex min-h-full flex-1 overflow-auto bg-[radial-gradient(circle_at_top_right,_rgba(56,189,248,0.16),_transparent_32%),linear-gradient(180deg,_#f8fbff_0%,_#eef4ff_42%,_#f8fafc_100%)]">
-      <div className="mx-auto flex w-full max-w-[1380px] flex-col gap-8 px-6 py-8 lg:px-10">
-        <div className="grid gap-6 lg:grid-cols-[1.1fr,0.9fr]">
-          <section className="rounded-[32px] border border-white/70 bg-white/85 p-7 shadow-[0_20px_70px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-            <div className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-[11px] font-bold text-white">מצגות</div>
-            <h1 className="mt-4 text-4xl font-black tracking-tight text-slate-900">מחולל מצגות ברמה גבוהה</h1>
-            <p className="mt-3 max-w-2xl text-[15px] leading-7 text-slate-600">
-              לא פאוורפוינט טכני, אלא סטודיו ליצירת מצגות עם כיוון קריאטיבי, מבנה שקופיות, מסרים חדים, מקומות לתמונות, ועיצוב שמתאים להצגה אמיתית.
-            </p>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-10">
+      <div>
+        <div className="inline-flex items-center rounded-full bg-cyan-500/15 px-3 py-1 text-[11px] font-bold text-cyan-300">סטודיו מצגות</div>
+        <h1 className="mt-3 text-3xl font-black text-white">בוא נבנה מצגת אמיתית</h1>
+        <p className="mt-2 text-sm leading-7 text-slate-400">דק שקופיות חי שאפשר לערוך, להוסיף תמונות, להציג ולייצא ל-PowerPoint.</p>
+      </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-2">
-                <span className="text-sm font-bold text-slate-700">נושא המצגת</span>
-                <textarea
-                  value={topic}
-                  onChange={(event) => setTopic(event.target.value)}
-                  placeholder="על מה המצגת? מה בדיוק צריך להעביר?"
-                  className="min-h-[132px] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 text-slate-800 outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                />
-              </label>
+      <div className="inline-flex w-fit rounded-2xl border border-slate-700 bg-slate-800/60 p-1">
+        <button type="button" onClick={() => setSource('topic')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${!fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>נושא חופשי</button>
+        <button type="button" onClick={() => setSource('document')} disabled={!hasDocument} title={hasDocument ? '' : 'אין מסמך פתוח'} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'} ${!hasDocument ? 'cursor-not-allowed opacity-40' : ''}`}>מהמסמך הפתוח</button>
+      </div>
 
-              <div className="flex flex-col gap-4">
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-bold text-slate-700">קהל יעד</span>
-                  <input
-                    value={audience}
-                    onChange={(event) => setAudience(event.target.value)}
-                    placeholder="משקיעים, מרצה, לקוח, הנהלה, כיתה..."
-                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                  />
-                </label>
+      {fromDocument && (
+        <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm text-slate-300">
+          {hasDocument ? <>המצגת תיבנה מהמסמך הפתוח{documentTitle ? <>: <b className="text-white">{documentTitle}</b></> : ''}. שדה הנושא אופציונלי — זווית או דגש.</> : 'אין מסמך פתוח.'}
+        </div>
+      )}
 
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-bold text-slate-700">מטרת המצגת</span>
-                  <input
-                    value={goal}
-                    onChange={(event) => setGoal(event.target.value)}
-                    placeholder="לשכנע, להסביר, ללמד, למכור, לסכם..."
-                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                  />
-                </label>
+      <label className="flex flex-col gap-2">
+        <span className="text-sm font-bold text-slate-200">{fromDocument ? 'זווית או דגש (אופציונלי)' : 'נושא המצגת'}</span>
+        <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={fromDocument ? 'על מה להדגיש מהמסמך?' : 'על מה המצגת? מה צריך להעביר?'} className="min-h-[96px] rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm leading-7 text-slate-100 outline-none focus:border-cyan-400" />
+      </label>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-bold text-slate-700">מספר שקופיות</span>
-                    <input
-                      type="number"
-                      min="4"
-                      max="20"
-                      value={slideCount}
-                      onChange={(event) => setSlideCount(event.target.value)}
-                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                    />
-                  </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">קהל יעד</span>
+          <input value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="משקיעים, מרצה, לקוח..." className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+        <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">מטרה</span>
+          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="לשכנע, להסביר, למכור..." className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+        <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">מספר שקופיות</span>
+          <input type="number" min="4" max="20" value={slideCount} onChange={(e) => setSlideCount(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+        <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">דגש על תמונות</span>
+          <select value={imageIntensity} onChange={(e) => setImageIntensity(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400">
+            <option value="high">גבוה</option><option value="medium">בינוני</option><option value="low">נמוך</option>
+          </select></label>
+      </div>
 
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-bold text-slate-700">דגש על תמונות</span>
-                    <select
-                      value={imageIntensity}
-                      onChange={(event) => setImageIntensity(event.target.value)}
-                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                    >
-                      <option value="high">גבוה</option>
-                      <option value="medium">בינוני</option>
-                      <option value="low">נמוך</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">סגנון</span>
+          <div className="grid grid-cols-2 gap-2">
+            {DECK_THEMES.map((t) => (
+              <button key={t.id} type="button" onClick={() => setThemeId(t.id)} title={t.blurb} className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${themeId === t.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{t.label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">רמת עומס</span>
+          <div className="grid grid-cols-3 gap-2">
+            {DENSITY.map((d) => (
+              <button key={d.id} type="button" onClick={() => setDensity(d.id)} className={`rounded-xl border px-2 py-2 text-sm font-bold transition ${density === d.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{d.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <button type="button" onClick={submit} disabled={!canGenerate} className={`mt-2 rounded-2xl px-6 py-3.5 text-sm font-bold text-white transition ${canGenerate ? 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400' : 'cursor-not-allowed bg-slate-700 text-slate-400'}`}>
+        {busy ? 'בונה מצגת...' : '📊 צור מצגת'}
+      </button>
+    </div>
+  );
+}
+
+// ── הזנת מפתח inline (זהה בהתנהגות להגדרות, נגיש מתוך הבורר) ──────
+function KeyEntry({ title, hint, link, linkLabel, onSave }) {
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState(false);
+  return (
+    <div className="mb-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <div className="text-sm font-bold text-amber-300">{title}</div>
+      {hint && <div className="mt-1 text-xs leading-6 text-slate-400">{hint}</div>}
+      {link && <a href={link} target="_blank" rel="noreferrer" className="text-xs font-semibold text-cyan-400 underline">{linkLabel || 'קבל מפתח'}</a>}
+      <div className="mt-2 flex gap-2">
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => { setValue(e.target.value); setSaved(false); }}
+          placeholder="הדבק מפתח כאן"
+          dir="ltr"
+          className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400"
+        />
+        <button
+          onClick={() => { if (value.trim()) { onSave(value.trim()); setSaved(true); } }}
+          disabled={!value.trim()}
+          className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-bold text-slate-950 disabled:opacity-40"
+        >שמור</button>
+      </div>
+      {saved && <div className="mt-1.5 text-xs font-semibold text-emerald-400">✓ נשמר</div>}
+    </div>
+  );
+}
+
+// ── מודאל בחירת/יצירת תמונה ───────────────────────────────────────
+function ImagePicker({ slide, onPick, onClose }) {
+  const [tab, setTab] = useState('stock');
+  const [query, setQuery] = useState(slide?.image?.query || slide?.title || '');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const fileRef = useRef(null);
+  const [avail, setAvail] = useState(() => getImageSourceAvailability());
+
+  // שמירת מפתח ישירות מתוך החלון — בדיוק כמו בהגדרות, רק נגיש כאן
+  const saveStockKey = (key) => {
+    const cfg = getProviderConfig();
+    const provider = avail.stockProvider === 'unsplash' ? 'unsplash' : 'pexels';
+    const next = { ...cfg, [provider]: { ...cfg[provider], key: String(key || '').trim() } };
+    saveProviderConfig(next);
+    setAvail(getImageSourceAvailability(next));
+  };
+  const saveAiKey = (key) => {
+    const cfg = getProviderConfig();
+    const next = { ...cfg, imageGen: { ...cfg.imageGen, key: String(key || '').trim() } };
+    saveProviderConfig(next);
+    setAvail(getImageSourceAvailability(next));
+  };
+
+  const runSearch = async () => {
+    setError(''); setLoading(true); setResults([]);
+    try {
+      const res = await searchStockImages(query, { count: 12 });
+      setResults(res);
+      if (!res.length) setError('לא נמצאו תמונות. נסה ניסוח אחר (באנגלית עובד טוב יותר).');
+    } catch (e) { setError(e?.message || 'שגיאה בחיפוש'); }
+    finally { setLoading(false); }
+  };
+
+  const runGenerate = async () => {
+    setError(''); setLoading(true);
+    try {
+      const img = await generateAiImage(query);
+      onPick({ ...img, query });
+    } catch (e) { setError(e?.message || 'שגיאה ביצירת תמונה'); }
+    finally { setLoading(false); }
+  };
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      onPick({ source: 'upload', dataUrl, url: '', alt: file.name, query: '', attribution: '' });
+    } catch { setError('שגיאה בטעינת הקובץ'); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/70 p-4" onClick={onClose}>
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()} dir="rtl">
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+          <div className="flex gap-1 rounded-xl bg-slate-800 p-1">
+            <button onClick={() => setTab('stock')} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${tab === 'stock' ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>מאגר תמונות</button>
+            <button onClick={() => setTab('ai')} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${tab === 'ai' ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>יצירת AI</button>
+            <button onClick={() => setTab('upload')} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${tab === 'upload' ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>העלאה</button>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-5">
+          {(tab === 'stock' || tab === 'ai') && (
+            <div className="mb-4 flex gap-2">
+              <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (tab === 'stock' ? runSearch() : runGenerate())} placeholder={tab === 'stock' ? 'תיאור לחיפוש (באנגלית מומלץ)' : 'תיאור התמונה ליצירה'} className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+              <button onClick={tab === 'stock' ? runSearch : runGenerate} disabled={loading || !query.trim()} className="rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-40">{loading ? '...' : tab === 'stock' ? 'חפש' : 'צור'}</button>
             </div>
+          )}
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              {QUICK_BRIEFS.map((brief) => (
-                <button
-                  key={brief}
-                  type="button"
-                  onClick={() => setTopic(brief)}
-                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-cyan-300 hover:text-cyan-700"
-                >
-                  {brief}
+          {tab === 'stock' && !avail.stock && (
+            <KeyEntry
+              title={`הוסף מפתח ${avail.stockProvider === 'unsplash' ? 'Unsplash' : 'Pexels'}`}
+              hint={avail.stockProvider === 'unsplash' ? 'Access Key חינמי מ-Unsplash Developers.' : 'מפתח חינמי מ-Pexels API.'}
+              link={avail.stockProvider === 'unsplash' ? 'https://unsplash.com/developers' : 'https://www.pexels.com/api/'}
+              linkLabel="קבל מפתח חינם"
+              onSave={saveStockKey}
+            />
+          )}
+          {tab === 'ai' && !avail.ai && (
+            <KeyEntry
+              title={`הוסף מפתח ליצירת תמונות (${avail.aiProvider === 'openai' ? 'OpenAI' : 'Gemini'})`}
+              hint="המפתח נשמר בנפרד ומשמש ליצירת תמונות. אפשר גם להגדיר בהגדרות → מפתחות → תמונות."
+              link={avail.aiProvider === 'openai' ? 'https://platform.openai.com/api-keys' : 'https://aistudio.google.com/apikey'}
+              linkLabel="קבל מפתח"
+              onSave={saveAiKey}
+            />
+          )}
+          {error && <p className="text-sm text-rose-400">{error}</p>}
+
+          {tab === 'stock' && (
+            <div className="grid grid-cols-3 gap-3">
+              {results.map((r) => (
+                <button key={r.id} onClick={() => onPick(r)} className="group relative overflow-hidden rounded-xl border border-slate-700">
+                  <img src={r.thumb || r.url} alt={r.alt} className="h-28 w-full object-cover transition group-hover:scale-105" />
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300">{r.attribution}</span>
                 </button>
               ))}
             </div>
-
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
-                <input type="checkbox" checked={includeCover} onChange={(event) => setIncludeCover(event.target.checked)} />
-                שקופית פתיחה
-              </label>
-              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
-                <input type="checkbox" checked={speakerNotes} onChange={(event) => setSpeakerNotes(event.target.checked)} />
-                הערות מרצה קצרות
-              </label>
+          )}
+          {tab === 'ai' && loading && <p className="text-sm text-slate-400">יוצר תמונה... זה יכול לקחת כמה שניות.</p>}
+          {tab === 'upload' && (
+            <div>
+              <input ref={fileRef} type="file" accept="image/*" onChange={handleUpload} className="hidden" />
+              <button onClick={() => fileRef.current?.click()} className="w-full rounded-2xl border-2 border-dashed border-slate-600 py-12 text-sm text-slate-400 hover:border-cyan-400 hover:text-cyan-300">לחץ להעלאת תמונה מהמחשב</button>
             </div>
-
-            <div className="mt-8 flex flex-wrap justify-end gap-3">
-              <button
-                type="button"
-                onClick={onSwitchToWord}
-                className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                חזור ל-Word
-              </button>
-              <button
-                type="button"
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                className={`rounded-2xl px-6 py-3 text-sm font-bold text-white shadow-lg transition ${canGenerate ? 'bg-gradient-to-r from-sky-500 to-cyan-600 hover:from-sky-600 hover:to-cyan-700' : 'cursor-not-allowed bg-slate-300'}`}
-              >
-                {busy ? 'בונה מצגת...' : 'צור מצגת'}
-              </button>
-            </div>
-          </section>
-
-          <section className="rounded-[32px] border border-slate-200/80 bg-slate-950 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
-            <div className={`rounded-[28px] bg-gradient-to-br ${selectedTheme.accent} p-[1px]`}>
-              <div className="rounded-[27px] bg-slate-950/92 p-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-[0.28em] text-white/60">Theme</div>
-                    <div className="mt-2 text-2xl font-black">{selectedTheme.label}</div>
-                  </div>
-                  <div className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/80">
-                    {slideCount} שקופיות
-                  </div>
-                </div>
-
-                <div className="mt-4 text-sm leading-7 text-white/75">{selectedTheme.blurb}</div>
-
-                <div className="mt-6 grid gap-3">
-                  {PRESENTATION_THEMES.map((item) => {
-                    const active = item.id === theme;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => setTheme(item.id)}
-                        className={`rounded-2xl border px-4 py-3 text-right transition ${
-                          active
-                            ? 'border-white/60 bg-white/12 shadow-[0_0_0_1px_rgba(255,255,255,0.12)]'
-                            : 'border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.07]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-bold text-white">{item.label}</div>
-                            <div className="mt-1 text-xs leading-6 text-white/65">{item.blurb}</div>
-                          </div>
-                          <div className={`h-10 w-10 rounded-2xl bg-gradient-to-br ${item.accent}`} />
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                  <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/55">מה ייווצר</div>
-                  <ul className="mt-3 space-y-2 text-sm leading-7 text-white/80">
-                    <li>שלד שקופיות עם כותרת לכל שקופית</li>
-                    <li>מסר חד לכל שקופית במקום פסקאות ארוכות</li>
-                    <li>הנחיות ויזואליות ותמונות בהתאם לדגש שבחרת</li>
-                    <li>עיצוב שמתאים ל־{selectedTheme.label} ולא למסמך Word רגיל</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </section>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── עורך (inspector) של שקופית נבחרת ─────────────────────────────
+function Inspector({ slide, onChange, onOpenImagePicker }) {
+  const layoutDef = getLayout(slide.layout);
+  const setField = (field, value) => onChange({ [field]: value });
+  const setBullet = (i, value) => {
+    const bullets = [...slide.bullets]; bullets[i] = value; setField('bullets', bullets);
+  };
+  const addBullet = () => setField('bullets', [...slide.bullets, '']);
+  const removeBullet = (i) => setField('bullets', slide.bullets.filter((_, idx) => idx !== i));
+
+  const fields = layoutDef.fields;
+
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">פריסה</span>
+        <select value={slide.layout} onChange={(e) => setField('layout', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400">
+          {SLIDE_LAYOUTS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+        </select>
+      </label>
+
+      {(fields.includes('title')) && (
+        <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת</span>
+          <input value={slide.title} onChange={(e) => setField('title', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+      )}
+      {(fields.includes('subtitle')) && (
+        <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת משנה</span>
+          <input value={slide.subtitle} onChange={(e) => setField('subtitle', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+      )}
+      {(fields.includes('body')) && (
+        <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">טקסט / ציטוט</span>
+          <textarea value={slide.body} onChange={(e) => setField('body', e.target.value)} className="min-h-[100px] rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm leading-7 text-slate-100 outline-none focus:border-cyan-400" /></label>
+      )}
+
+      {(fields.includes('bullets')) && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-bold text-slate-400">נקודות</span>
+          {slide.bullets.map((b, i) => (
+            <div key={i} className="flex gap-1.5">
+              <input value={b} onChange={(e) => setBullet(i, e.target.value)} className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+              <button onClick={() => removeBullet(i)} className="rounded-lg px-2 text-slate-500 hover:text-rose-400">✕</button>
+            </div>
+          ))}
+          <button onClick={addBullet} className="mt-1 self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-cyan-400">+ נקודה</button>
+        </div>
+      )}
+
+      {(fields.includes('columns')) && (
+        <div className="flex flex-col gap-3">
+          <span className="text-xs font-bold text-slate-400">עמודות</span>
+          {(slide.columns || []).map((col, ci) => (
+            <div key={ci} className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
+              <input value={col.heading} placeholder={`כותרת עמודה ${ci + 1}`} onChange={(e) => { const cols = slide.columns.map((c, idx) => idx === ci ? { ...c, heading: e.target.value } : c); setField('columns', cols); }} className="mb-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+              <textarea value={(col.bullets || []).join('\n')} placeholder="נקודה בכל שורה" onChange={(e) => { const cols = slide.columns.map((c, idx) => idx === ci ? { ...c, bullets: e.target.value.split('\n').filter(Boolean) } : c); setField('columns', cols); }} className="min-h-[70px] w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {layoutHasImage(slide.layout) && (
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-bold text-slate-400">תמונה</span>
+          {slide.image && (slide.image.dataUrl || slide.image.url)
+            ? <div className="relative overflow-hidden rounded-xl border border-slate-700">
+                <img src={slide.image.dataUrl || slide.image.url} alt="" className="h-24 w-full object-cover" />
+                <button onClick={() => setField('image', null)} className="absolute left-1 top-1 rounded-md bg-slate-950/70 px-2 py-0.5 text-xs text-slate-200">הסר</button>
+              </div>
+            : null}
+          <button onClick={onOpenImagePicker} className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-cyan-400">{slide.image ? 'החלף תמונה' : '+ הוסף תמונה'}</button>
+        </div>
+      )}
+
+      <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">הערות מרצה</span>
+        <textarea value={slide.notes} onChange={(e) => setField('notes', e.target.value)} className="min-h-[60px] rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400" /></label>
+    </div>
+  );
+}
+
+// ── הקומפוננטה הראשית ─────────────────────────────────────────────
+export default function PresentationStudio({
+  deck = null,
+  onDeckChange = () => {},
+  onGenerate = () => {},
+  onExit = () => {},
+  busy = false,
+  hasDocument = false,
+  documentTitle = '',
+  showToast = () => {},
+}) {
+  const [selectedId, setSelectedId] = useState(deck?.slides?.[0]?.id || '');
+  const [presenting, setPresenting] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const slides = deck?.slides || [];
+  const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
+  const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
+
+  // אם אין deck — טופס יצירה
+  if (!deck) {
+    return (
+      <div className="flex min-h-full flex-1 overflow-auto bg-slate-950">
+        <div className="flex w-full flex-col">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
+            <span className="text-sm font-bold text-slate-300">📊 סטודיו מצגות</span>
+            <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+          </div>
+          {busy
+            ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-slate-300">
+                <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
+                <div className="text-sm font-semibold">בונה את המצגת...</div>
+              </div>
+            : <CreateForm onGenerate={onGenerate} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
+        </div>
+      </div>
+    );
+  }
+
+  const patchSlide = (patch) => onDeckChange(updateSlide(deck, selected.id, patch));
+  const handleAddSlide = () => {
+    const next = addSlideAfter(deck, selected.id, createSlide({ layout: 'title-bullets', title: 'שקופית חדשה' }));
+    onDeckChange(next);
+    const newIdx = next.slides.findIndex((s) => s.id === selected.id) + 1;
+    setSelectedId(next.slides[newIdx]?.id || selectedId);
+  };
+  const handleRemove = () => {
+    if (slides.length <= 1) return;
+    const idx = selectedIndex;
+    const next = removeSlide(deck, selected.id);
+    onDeckChange(next);
+    setSelectedId(next.slides[Math.max(0, idx - 1)]?.id || '');
+  };
+  const handleMove = (dir) => onDeckChange(moveSlide(deck, selected.id, dir));
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const base64 = await buildPptxBase64(deck);
+      if (window.desktopApp?.saveDocumentDialog) {
+        const res = await window.desktopApp.saveDocumentDialog({ title: deck.title || 'presentation', preferredExtension: 'pptx', base64 });
+        if (res?.ok) showToast('המצגת נשמרה כ-PPTX ✓', { tone: 'success' });
+        else if (!res?.canceled) showToast(res?.error || 'שמירה נכשלה', { tone: 'error' });
+      } else {
+        // דפדפן: הורדה ישירה
+        const blob = await (await fetch(`data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,${base64}`)).blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${deck.title || 'presentation'}.pptx`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    } catch (e) {
+      showToast(e?.message || 'ייצוא נכשל', { tone: 'error' });
+    } finally { setExporting(false); }
+  };
+
+  return (
+    <div className="flex min-h-full flex-1 flex-col overflow-hidden bg-slate-950" dir="rtl">
+      {/* סרגל עליון */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+        <input value={deck.title} onChange={(e) => onDeckChange({ ...deck, title: e.target.value })} className="rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-white outline-none focus:bg-slate-800" />
+        <select value={deck.themeId} onChange={(e) => onDeckChange({ ...deck, themeId: e.target.value })} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 outline-none">
+          {DECK_THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <div className="flex-1" />
+        <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
+        <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
+        <button onClick={handleExport} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX'}</button>
+        <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/* ניווט שקופיות */}
+        <div className="flex w-52 flex-col gap-2 overflow-auto border-l border-slate-800 bg-slate-900/50 p-3">
+          {slides.map((s, i) => (
+            <button key={s.id} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
+              <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
+              <SlideFrame slide={s} themeId={deck.themeId} shadow={false} />
+            </button>
+          ))}
+          <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
+        </div>
+
+        {/* תצוגה מרכזית */}
+        <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
+          <div className="w-full max-w-3xl">
+            {selected && <SlideFrame slide={selected} themeId={deck.themeId} />}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
+            <button onClick={() => handleMove('down')} disabled={selectedIndex >= slides.length - 1} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">אחר →</button>
+            <button onClick={handleRemove} disabled={slides.length <= 1} className="rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs text-rose-400 disabled:opacity-30">מחק שקופית</button>
+          </div>
+        </div>
+
+        {/* inspector */}
+        <div className="w-72 overflow-auto border-r border-slate-800 bg-slate-900/50">
+          {selected && <Inspector slide={selected} onChange={patchSlide} onOpenImagePicker={() => setPickerOpen(true)} />}
+        </div>
+      </div>
+
+      {pickerOpen && selected && (
+        <ImagePicker
+          slide={selected}
+          onClose={() => setPickerOpen(false)}
+          onPick={(img) => { patchSlide({ image: { source: img.source || 'stock', url: img.url || '', dataUrl: img.dataUrl || '', query: img.query || '', alt: img.alt || '', attribution: img.attribution || '' } }); setPickerOpen(false); }}
+        />
+      )}
+
+      {presenting && <PresentMode deck={deck} startIndex={Math.max(0, selectedIndex)} onClose={() => setPresenting(false)} />}
     </div>
   );
 }

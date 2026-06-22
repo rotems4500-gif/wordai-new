@@ -11,9 +11,11 @@ export default function TopBar({
   onRedo = () => {},
   onHome = () => {},
   onOpenUpdates = () => {},
+  onOpenSearch = () => {},
   onFocus = () => {},
   onOpenDraftRecommendations = () => {},
   draftRecommendationsDisabled = false,
+  onCheckStyle = () => {},
   onToggleAssignmentBrief = () => {},
   assignmentBriefAvailable = false,
   assignmentBriefOpen = false,
@@ -25,10 +27,12 @@ export default function TopBar({
   cloudBusy = false,
   onCloudSignIn = () => {},
   onCloudSave = () => {},
+  onCloudPull = () => {},
   onCloudSignOut = () => {},
+  documentTitle = '',
 }) {
   const isSpssMode = appMode === 'spss';
-  const isPresentationsMode = appMode === 'presentations';
+  const isPresentationsMode = appMode === 'presentation';
   const isWordMode = appMode === 'word';
   const cloudInitials = String(cloudUser?.displayName || cloudUser?.email || 'CL')
     .trim()
@@ -52,15 +56,15 @@ export default function TopBar({
     <button
       type="button"
       onClick={() => onModeChange(mode)}
-      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${appMode === mode ? 'bg-white text-[#2B579A] shadow-sm' : 'text-white/85 hover:bg-white/20'}`}
+      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${appMode === mode ? 'bg-white text-chrome shadow-sm' : 'text-white/85 hover:bg-white/20'}`}
     >
       {label}
     </button>
   );
 
   return (
-    <header className="bg-[#2B579A] text-white min-h-12 flex flex-wrap items-center justify-between px-3 py-2 text-sm shrink-0 w-full gap-2 sm:px-4">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+    <header className="bg-chrome text-white min-h-12 flex flex-wrap items-center justify-start px-3 py-2 text-sm shrink-0 w-full gap-2 sm:px-4 lg:flex-nowrap">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 lg:flex-none lg:flex-nowrap">
         {quickBtn('ph ph-house', 'בית', onHome)}
         {isWordMode && (
           <>
@@ -72,6 +76,7 @@ export default function TopBar({
             {quickBtn('ph ph-arrow-counter-clockwise', 'בטל', onUndo)}
             {quickBtn('ph ph-arrow-clockwise', 'בצע שוב', onRedo)}
             {quickBtn('ph ph-list-checks', 'המלצות לטיוטה', onOpenDraftRecommendations, draftRecommendationsDisabled)}
+            {quickBtn('ph ph-magnifying-glass', 'בדיקת סגנון (נשמע כמו AI?)', onCheckStyle)}
             <div className="mx-1 h-6 w-px bg-white/30"></div>
           </>
         )}
@@ -80,11 +85,12 @@ export default function TopBar({
         </button>
         <div className="hidden lg:flex items-center gap-1 rounded-full bg-white/10 p-1 mr-1">
           {modeBtn('word', 'Word')}
-          {modeBtn('presentations', 'מצגות')}
           {modeBtn('spss', 'SPSS AI')}
+          {modeBtn('spss-project', 'עבודת סיום')}
+          {modeBtn('presentation', 'מצגות')}
         </div>
         <i className={`${isSpssMode ? 'ph-fill ph-chart-scatter' : isPresentationsMode ? 'ph-fill ph-presentation-chart' : 'ph-fill ph-file-word'} text-2xl ml-1`}></i>
-        <span className="truncate max-w-full">{isSpssMode ? 'SPSS Syntax Studio' : isPresentationsMode ? 'Presentation Studio' : 'מסמך 1 - Word'}</span>
+        <span className="truncate max-w-[12rem] xl:max-w-[16rem]">{isSpssMode ? 'SPSS Syntax Studio' : isPresentationsMode ? 'Presentation Studio' : `${documentTitle || 'מסמך חדש'} - Word`}</span>
       </div>
       {isSpssMode ? (
         <div className="hidden min-w-0 items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90 md:flex">
@@ -97,7 +103,7 @@ export default function TopBar({
           <span className="truncate">מצב מצגות פעיל · בריף, ויזואליה, תמונות וסיפור הצגה</span>
         </div>
       ) : (
-        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap lg:justify-center">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:min-w-[260px] lg:max-w-[560px] lg:flex-1 lg:flex-nowrap">
           {isWordMode && (
             <button
               type="button"
@@ -115,21 +121,25 @@ export default function TopBar({
               <span>{assignmentBriefOpen ? 'הסתר הוראות' : (assignmentBriefAvailable ? 'הוראות המטלה' : 'הוסף הוראות')}</span>
             </button>
           )}
-          <div className="hidden md:flex bg-white/20 rounded px-3 py-1 w-full md:w-[320px] lg:w-[400px] md:max-w-[42vw] flex items-center gap-2">
+          <div className="hidden md:flex bg-white/20 rounded px-3 py-1 w-full md:w-[320px] lg:w-full flex items-center gap-2">
             <i className="ph ph-magnifying-glass"></i>
-            <input 
-              type="text" 
-              placeholder="חיפוש (Alt+Q)" 
-              className="bg-transparent border-none text-white outline-none w-full placeholder-white/70 font-[inherit]"
+            <input
+              type="text"
+              placeholder="חיפוש והחלפה (Ctrl+F)"
+              readOnly
+              onFocus={onOpenSearch}
+              onClick={onOpenSearch}
+              className="bg-transparent border-none text-white outline-none w-full placeholder-white/70 font-[inherit] cursor-pointer"
             />
           </div>
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+      <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 lg:flex-nowrap lg:shrink-0">
         <div className="flex lg:hidden items-center gap-1 rounded-full bg-white/10 p-1">
           {modeBtn('word', 'Word')}
-          {modeBtn('presentations', 'מצגות')}
           {modeBtn('spss', 'SPSS')}
+          {modeBtn('spss-project', 'עבודה')}
+          {modeBtn('presentation', 'מצגות')}
         </div>
         {isWordMode && cloudAvailable && (
           <>
@@ -148,6 +158,20 @@ export default function TopBar({
                 >
                   <i className={`ph ${cloudBusy ? 'ph-arrows-clockwise' : 'ph-cloud-arrow-up'} text-base`}></i>
                   <span>{cloudBusy ? 'מסנכרן...' : 'העלה לענן'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onCloudPull}
+                  disabled={cloudBusy}
+                  title="משוך הגדרות ומפתחות API מהענן (למכשיר הזה)"
+                  className={`flex items-center gap-2 rounded-full border px-3 py-1.5 transition text-xs font-semibold ${
+                    cloudBusy
+                      ? 'border-emerald-200/40 bg-emerald-100/10 text-white/70 cursor-wait'
+                      : 'border-emerald-200/60 bg-emerald-300/15 text-white hover:bg-emerald-300/25'
+                  }`}
+                >
+                  <i className="ph ph-cloud-arrow-down text-base"></i>
+                  <span>משוך מהענן</span>
                 </button>
                 <button
                   type="button"
@@ -192,7 +216,6 @@ export default function TopBar({
               <i className="ph ph-arrow-circle-up text-base"></i>
               <span className="hidden sm:inline">עדכונים</span>
             </button>
-            <i className="hidden sm:inline ph-fill ph-megaphone text-lg"></i>
           </>
         )}
         {isSpssMode && (

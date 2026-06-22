@@ -53,3 +53,14 @@ test.js
 
 *.exe
 *.exe.blockmap
+
+# Tauri / Rust build artifacts (target dir can be >10GB)
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Firebase deploy cache
+.firebase/
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+.claude/launch.json

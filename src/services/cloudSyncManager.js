@@ -19,6 +19,7 @@ const CLOUD_PROFILE_APP_SETTING_KEYS = [
   "wordai_shared_agent_instructions",
   "wordai_role_agents",
   "wordai_home_instructions",
+  "wordai_hidden_project_materials",
   "wordflow_home_customizations",
   "wordflow_style_overrides",
   "default-font",
@@ -197,19 +198,39 @@ function applyCloudProfile(cloudProfile = null) {
   }
 }
 
-export async function handleCloudAuthSuccess(user) {
-  if (!user) return;
+function cloudProfileHasData(cloudProfile = null) {
+  if (!cloudProfile) return false;
+  return hasMeaningfulSnapshotData(cloudProfile.appSettings)
+    || Boolean(cloudProfile.providerConfig && typeof cloudProfile.providerConfig === "object" && Object.keys(cloudProfile.providerConfig).length);
+}
 
+// משיכה מהענן והחלה מקומית. force=true עוקף את שער ה-timestamp (לכפתור ידני
+// ולמכשיר חדש). מחזיר תוצאה מפורטת ל-UI.
+export async function pullFromCloud(user, { force = false } = {}) {
+  if (!user) return { ok: false, error: "לא מחובר לחשבון." };
   try {
     const cloudSettings = await fetchSettingsFromCloud(user);
     const cloudProfile = normalizeCloudProfile(cloudSettings);
-
-    if (shouldApplyCloudProfile(cloudProfile)) {
-      applyCloudProfile(cloudProfile);
+    if (!cloudProfileHasData(cloudProfile)) {
+      return { ok: true, applied: false, reason: "אין נתונים בענן לחשבון הזה." };
     }
+    if (force || shouldApplyCloudProfile(cloudProfile)) {
+      const applied = applyCloudProfile(cloudProfile);
+      return { ok: true, applied, hadProviderConfig: Boolean(cloudProfile.providerConfig && Object.keys(cloudProfile.providerConfig || {}).length) };
+    }
+    return { ok: true, applied: false, reason: "הנתונים המקומיים חדשים יותר." };
   } catch (e) {
-    console.error("Failed to handle cloud auth success:", e);
+    console.error("pullFromCloud failed:", e);
+    return { ok: false, error: e?.message || String(e) };
   }
+}
+
+export async function handleCloudAuthSuccess(user) {
+  if (!user) return;
+  // מכשיר חדש (מעולם לא הוחל ענן כאן) → משיכה כפויה כדי שמפתחות/הגדרות יחזרו מהענן.
+  const meta = readCloudSyncMeta();
+  const neverAppliedHere = !Number(meta.lastAppliedCloudUpdatedAt || 0);
+  await pullFromCloud(user, { force: neverAppliedHere });
 }
 
 export async function triggerCloudSync(user, options = {}) {

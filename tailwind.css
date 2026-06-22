@@ -5,15 +5,79 @@
   themes: corporate --default, light;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Design tokens (Tailwind v4 @theme) — Wave A, Batch 1.
+   Additive only: defines NEW token names so Tailwind emits utilities
+   (bg-primary, text-ink, rounded-pill…) AND :root CSS vars (var(--color-primary)).
+   We deliberately do NOT override Tailwind's built-in radius / text / spacing
+   scales — that would change existing rounded- and text- usages (regression).
+   The 3 brand blues are split BY ROLE, not merged:
+     primary = the de-facto purple primary (#6c5ce7) used across controls
+     chrome  = Word-blue app chrome (#2B579A) used by TopBar
+   ───────────────────────────────────────────────────────────── */
+@theme {
+    /* Brand — NOTE: avoid daisyUI's reserved color names
+       (primary/secondary/accent/neutral/info/success/warning/error/base-*),
+       which daisyUI sets per-theme as oklch. We use distinct names so our
+       tokens never collide with or get overridden by the active daisyUI theme. */
+    --color-brand: #6c5ce7;
+    --color-brand-light: #a29bfe;
+    --color-brand-accent: #0066cc;
+    --color-chrome: #2B579A;
+    --color-chrome-hover: #1e3f70;
+
+    /* Neutrals */
+    --color-ink: #2d3436;
+    --color-muted: #636e72;
+    --color-page: #f8f9fa;
+    --color-surface: #ffffff;
+
+    /* Status — mirror src/services/uiFeedback.js tones.
+       Renamed off daisyUI's success/warning/error/info to avoid collision. */
+    --color-ok: #10b981;
+    --color-warn: #f59e0b;
+    --color-err: #ef4444;
+    --color-notice: #6c5ce7;
+
+    /* Additive radii (do not collide with Tailwind defaults) */
+    --radius-control: 10px;
+    --radius-card: 16px;
+    --radius-pill: 999px;
+
+    /* Additive type sizes already sprinkled in markup */
+    --text-micro: 10px;
+    --text-label: 11px;
+
+    /* Chrome dimensions */
+    --spacing-topbar-h: 56px;
+    --spacing-ribbon-h: 100px;
+}
+
         :root {
-            --word-blue: #6c5ce7;
-            --word-blue-light: #a29bfe;
+            /* Legacy vars now ALIAS the tokens above. Every existing
+               var(--word-blue) consumer keeps working unchanged — this is the
+               core de-risk that lets tokens ship with zero call-site edits. */
+            --word-blue: var(--color-brand);
+            --word-blue-light: var(--color-brand-light);
+            /* כחול המותג (Word blue) — מרוכז ב-token --color-chrome (open-items #58). */
+            --brand-blue: var(--color-chrome);
+            --brand-blue-accent: var(--color-brand-accent);
             --ribbon-bg: rgba(255, 255, 255, 0.55);
             --ribbon-border: rgba(255, 255, 255, 0.4);
             --ribbon-hover: rgba(255, 255, 255, 0.9);
-            --text-color: #2d3436;
-            --group-label: #636e72;
-            --page-bg: #f8f9fa;
+            --text-color: var(--color-ink);
+            --group-label: var(--color-muted);
+            --page-bg: var(--color-page);
+
+            /* z-index scale — consumed via z-[var(--z-*)] or inline style.
+               Replaces the ad-hoc z-[100]/z-[99999]/z-30 jumble incrementally. */
+            --z-ribbon: 20;
+            --z-sidebar: 10;
+            --z-topbar: 50;
+            --z-dropdown: 100;
+            --z-overlay: 1000;
+            --z-modal: 1100;
+            --z-toast: 2147483600;
         }
 
         body { 
@@ -166,6 +230,21 @@
         .ProseMirror ul, .ProseMirror ol { padding-right: 24px; padding-left: 0; margin: 4pt 0; }
         .ProseMirror li { margin: 2pt 0; }
         .ProseMirror hr { border: none; border-top: 2px solid #E1DFDD; margin: 16pt 0; }
+        .ProseMirror .track-insert { color: #1d4ed8; text-decoration: underline; }
+        .ProseMirror .comment-mark { background: #FEF9C3; border-bottom: 2px solid #F59E0B; cursor: pointer; }
+        .ProseMirror .comment-mark[data-resolved="true"] { background: transparent; border-bottom: 1px dotted #cbd5e1; }
+        .ProseMirror .comment-mark.comment-active { background: #FDE68A; }
+        .ProseMirror .find-match { background: #FEF08A; border-radius: 2px; }
+        .ProseMirror .find-match-active { background: #FB923C; color: #1f2937; box-shadow: 0 0 0 1px #EA580C; }
+        .ProseMirror .pagination-gap { width: 100%; clear: both; }
+        .ProseMirror .pagination-gap-band {
+            left: 50%;
+            transform: translateX(-50%);
+            width: var(--wordai-page-width, 21cm);
+            max-width: calc(100vw - 32px);
+            background: #e9edf2;
+            box-shadow: inset 0 7px 9px -7px rgba(15,23,42,0.22), inset 0 -7px 9px -7px rgba(15,23,42,0.22);
+        }
         .ProseMirror[data-empty="true"]::before {
             content: attr(data-placeholder);
             float: right;

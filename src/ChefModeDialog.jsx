@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { chefModeDecideNextStep, chefModeGenerateQuestion } from './services/aiService';
+import { showConfirm } from './services/uiFeedback';
 import { buildSelectedMaterialsContext } from './services/workspaceLearningService';
 
 const MAX_QUESTIONS = 13;
@@ -152,6 +153,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       instructions: chefContext?.instructions,
       selectedMaterials: chefContext?.selectedMaterials || [],
       materialsContext,
+      baseDraftText: String(chefContext?.baseDraftText || '').trim(),
     });
     return payload;
   };
@@ -460,19 +462,27 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     goToQuestion(currentQuestion - 1, responses, questionFlow);
   };
 
-  const handleStop = () => {
-    if (window.confirm('בטוח שתרצה להפסיק בישול?')) {
-      localStorage.removeItem('wordflow_chef_session');
-      setResponses([]);
-      setCurrentQuestion(0);
-      setQuestionFlow([]);
-      setSelectedChoices([]);
-      setCustomText('');
-      setFinalAdditionsText('');
-      setFinalAdditionsBaseResponses([]);
-      setIsFinalAdditionsStep(false);
-      onClose?.();
+  const stoppingRef = useRef(false);
+  const handleStop = async () => {
+    if (stoppingRef.current) return; // מונע פתיחת דיאלוג אישור כפול (למשל Escape בזמן שהאישור פתוח)
+    stoppingRef.current = true;
+    let confirmed = false;
+    try {
+      confirmed = await showConfirm('בטוח שתרצה להפסיק בישול?', { title: 'הפסקת בישול', confirmLabel: 'הפסק', tone: 'danger' });
+    } finally {
+      stoppingRef.current = false;
     }
+    if (!confirmed) return;
+    localStorage.removeItem('wordflow_chef_session');
+    setResponses([]);
+    setCurrentQuestion(0);
+    setQuestionFlow([]);
+    setSelectedChoices([]);
+    setCustomText('');
+    setFinalAdditionsText('');
+    setFinalAdditionsBaseResponses([]);
+    setIsFinalAdditionsStep(false);
+    onClose?.();
   };
 
   useEffect(() => {
@@ -480,7 +490,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     const onKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
-      onClose?.();
+      // עקביות: Escape עובר דרך אותו אישור+ניקוי כמו "הפסק בישול"
+      handleStop();
     };
 
     document.addEventListener('keydown', onKeyDown);

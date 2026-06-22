@@ -1,121 +1,58 @@
-# Word AI Assistant
+# WordFlow AI
 
-A modern, custom Microsoft Word Add-in that integrates the **Google Gemini (2.5) AI API** directly into your Word workflow. This tool completely eliminates the need to copy-paste text between Word and external AI chat interfaces.
+**🌐 Website / PWA: [wordai-website.web.app](https://wordai-website.web.app)**
 
-![Word AI Assistant Interface](assets/screenshot.png) *(Add a screenshot here later)*
+A desktop word processor for Windows with built-in AI, purpose-built for **academic and legal writing in Hebrew** (RTL-first, fully bilingual Hebrew/English). The editor is a rich TipTap/ProseMirror surface; an AI side panel runs a fleet of specialized agents for drafting, rewriting, source-grounded research, originality checking, and DOCX export — all without copy-pasting between your document and a chat window.
 
-## ✨ Features
-* **Select & Read**: Instantly pulls highlighted text from your document into the assistant.
-* **Quick Actions**: One-click buttons for common editing tasks:
-  * 🪄 **Fix Grammar:** Corrects spelling, grammar, and phrasing.
-  * 📝 **Summarize:** Creates a concise summary of the selected text.
-  * 👔 **Professional:** Rewrites text to sound polished and business-appropriate.
-  * 🌍 **Translate to English:** Accurately translates Hebrew (or any language) to natural English.
-* **Contextual Academic Research (📚):** A dedicated Research tab powered by Perplexity AI for seamless academic writing:
-  * **Auto-Context:** Switching to the Research tab automatically pulls in whatever text you highlighted in the editor.
-  * 👍 **Support Claim (`תמוך בטענה`):** Automatically finds scholarly sources that support your claim and writes an integrated academic paragraph.
-  * 👎 **Contradict Claim (`סתר טענה`):** Automatically finds contrasting views and writes a critical counter-argument paragraph.
-  * 💬 **Direct Quote (`מצא ציטוט ישיר`):** Finds a compelling direct quote from published literature that fits your context, complete with citation.
-  * **Document Scanner Bibliography (`סריקת מסמך וביבליוגרפיה`):** Powered by Gemini's massive context window. Press one button and the AI will read your **entire Word document**, locate every single in-text citation (e.g. "Smith, 2021") you wrote manually, track down the full source on the web, and generate a complete, alphabetically sorted APA bibliography at the end of your document!
-* **Custom Prompts**: Ask the AI to do anything with the selected text exactly as you would in ChatGPT or Gemini.
-* **Insert at Cursor**: Seamlessly insert the AI's response back into your Word document exactly where your cursor is.
-* **Secure Key Storage**: Your personal Gemini API key is securely saved locally in the Add-in's `localStorage` (via the ⚙️ Settings menu) instead of being hardcoded and exposed in the source files.
+The same React frontend ships two ways:
+- **Desktop app** — Tauri 2 (Rust + WebView2), auto-updating NSIS installer for Windows.
+- **Website / PWA** — served from Firebase Hosting at **[wordai-website.web.app](https://wordai-website.web.app)**.
 
-## 🚀 Prerequisites
-- Node.js (v20+)
-- Microsoft Word (Desktop/Mac or Word Online)
-- A [Google Gemini AI API Key](https://aistudio.google.com/app/apikey)
-
-## 🛠️ Installation & Setup
-
-1. **Clone or Download the repository.**
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-3. **Start the local development server:**
-   ```bash
-   npm run dev
-   ```
-   *This starts the Vite server on `https://localhost:3000`.*
+> ℹ️ This app was previously a Microsoft Word Office.js add-in, then an Electron desktop app. It migrated to **Tauri 2** in June 2026. The architecture map lives in [CLAUDE.md](CLAUDE.md) — trust that over older docs.
 
 ---
 
-## 📖 How to Run & Test in Word
+## ✨ What it does
 
-### Option 1: Automagical Desktop Sideloading (Windows/Mac)
-Open a **new terminal acting as Administrator**, navigate to this folder, and run:
-   ```bash
-   npx office-addin-debugging start manifest.xml desktop
-   ```
-*Note: Running as Administrator is required the very first time on Windows to allow the `loopback exemption` so Word can talk to your `localhost` server.*
+- **AI side panel with specialized agents** — fix, humanize, summarize, academic rewrite, organize, text-to-table (inline), plus chat agents for source-finding, hole-filling, lecturer review, draft generation, and "Chef Mode" guided document building. See [src/agentConfig.js](src/agentConfig.js).
+- **Source-grounded research (anti-hallucination)** — the `sources` / `holeFill` agents are forbidden from inventing references; real sources are validated and normalized via [src/services/articleSourceValidation.js](src/services/articleSourceValidation.js).
+- **Originality & AI-content checks** — Copyleaks integration, plus a local "sounds like AI / not like you" style scorer ([styleAuthenticityService.js](src/services/styleAuthenticityService.js)).
+- **Study-material context** — load local files (PDF/DOCX/TXT/XLSX/PPTX, OCR) and inject selected ones into AI context.
+- **DOCX export** — DOM → `.docx` in the browser ([browserDocxExport.js](src/services/browserDocxExport.js)).
+- **SPSS syntax studio, presentation studio, comments / track-changes / find-replace** — full editing suite.
+- **Cloud sync** — Firebase auth + Firestore + Storage, cross-device.
+- **Multiple AI providers** — Gemini (default), OpenAI, Claude, Groq, Ollama, Perplexity, custom — via [src/services/aiService.js](src/services/aiService.js). API keys are stored locally, encrypted with Windows DPAPI.
 
-### Option 2: Word Online (Browser)
-1. Keep the `npm run dev` server running.
-2. Go to [Word Online](https://www.office.com/launch/word) and create a new blank document.
-3. Click **Insert > Add-ins > Manage My Add-ins > Upload My Add-in**.
-4. Select the `manifest.xml` file from this project folder.
-5. The "Word AI Assistant" will appear in your Home ribbon!
+## 🧱 Stack
 
-## 🔐 Managing the API Key
-For security reasons, do **not** hardcode your API key into the HTML or Javascript.
-1. Open the Add-in inside Word.
-2. Click the **Settings (⚙️)** icon in the top right.
-3. Paste your Gemini API Key and click **Save**. 
-4. The key is now safely stored on your device and will be remembered for future sessions.
+Tauri 2 (Rust, WebView2) · React 19 · Vite 8 · TipTap 3 · TailwindCSS 4 + daisyUI · Firebase
 
-First time with API keys?
-- In-app guide (works in production): [public/api-keys-guide.html](public/api-keys-guide.html)
-- Repo markdown guide: [docs/api-keys-guide.md](docs/api-keys-guide.md)
+## 🚀 Run & build
 
-## ☁️ Study Materials From Storage Or Project Folder
-The add-in now works best with local project materials, with an optional one-way sync from Firebase Storage into the project folder.
+```bash
+npm install
 
-Local project folder:
-1. Put your files under `public/project-materials/`.
-2. List them in `public/project-materials/index.json`.
-3. The add-in will load them locally and inject selected files into AI context.
-
-Sync from Firebase Storage into the local folder:
-1. In Storage, keep an `index.json` file at the bucket root or provide a direct URL to any remote index file.
-2. Run:
-    ```bash
-    npm run sync:storage -- gs://my-study-b-b.firebasestorage.app
-    ```
-3. The script downloads all indexed files into `public/project-materials/` and rewrites the local `index.json`.
-4. After that, run the add-in normally with `npm run dev`.
-
-Expected `index.json` format:
-```json
-[
-   {
-      "id": "article-1",
-      "title": "Political Communication Article",
-      "file": "materials/political-communication.pdf",
-      "type": "pdf"
-   }
-]
+npm run dev           # Vite dev server for the website on https://localhost:3001 (HTTPS)
+npm run desktop:dev   # tauri dev — Vite (http) on :1420 + Tauri window
+npm run build         # vite build -> dist/  (website + Tauri frontendDist)
+npm run desktop:build # tauri build — NSIS installer + exe -> src-tauri/target/release/bundle/
 ```
 
-Supported extraction: `pdf`, `docx`, and text-based files such as `txt`, `md`, `csv`, `json`, `html`.
+- **Website**: Vite dev on `:3001` (HTTPS, self-signed cert in [vite.config.js](vite.config.js)). Deploy with `firebase deploy`.
+- **Desktop**: Vite dev on `:1420` (HTTP — WebView2 rejects self-signed certs, so a separate port). Config in [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json).
 
-## 🔄 Auto Update Release Flow
-To publish a real desktop update that installed users can receive automatically:
+## 🔄 Desktop auto-update
 
-1. Bump the app version in [package.json](package.json).
-2. Push the code to GitHub.
-3. Trigger the release workflow or push a tag like v1.0.1.
-4. GitHub Actions will build the Windows installer, upload the release assets, and publish `latest.yml` plus the installer files to the GitHub Release.
-5. Installed apps will check the public `releases/latest/download` feed automatically, download the update in the background, and install it on quit.
+Release flow: bump version in [package.json](package.json) → signed `tauri build` (env `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`) → upload installer + `.sig` + `latest.json` to the GitHub Release. Installed apps check the feed and update on quit. The updater signing key (`~/.tauri/wordflow-updater.key`) is secret and not in the repo; the public key lives in `tauri.conf.json`.
 
-Local builds alone do not trigger auto-update for installed users.
+## 🔐 API keys
 
-If you ever need to override the update host, set `WORDFLOW_UPDATE_FEED_URL` before launching the packaged app.
+Keys are entered in-app (Settings / onboarding) and stored locally in `ai-provider-config.json` under the app's userData, encrypted with DPAPI — never hardcoded. First-time guide: [docs/api-keys-guide.md](docs/api-keys-guide.md).
 
-## 🏗️ Built With
-- **Vanilla JS & HTML5**
-- **Vite** - Lightning fast dev server & bundler.
-- **Office.js** - Microsoft's official API to interact with Word documents.
+## 📚 More docs
+
+- [CLAUDE.md](CLAUDE.md) — up-to-date architecture & navigation map (Hebrew).
+- [docs/](docs/) — user guide, API-keys guide, planning notes.
 
 ---
-*Created for personal workflow automation and productivity.*
+*App id `com.wordai.assistant` · productName **WordFlow AI**. Version in [package.json](package.json).*

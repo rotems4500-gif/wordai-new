@@ -1,5 +1,5 @@
-const STATIC_CACHE = 'wordflow-static-v2';
-const RUNTIME_CACHE = 'wordflow-runtime-v2';
+const STATIC_CACHE = 'wordflow-static-v4';
+const RUNTIME_CACHE = 'wordflow-runtime-v4';
 
 const getAppUrls = () => {
   const scope = self.registration?.scope || self.location.origin + '/';

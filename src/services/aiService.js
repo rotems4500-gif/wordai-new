@@ -41,6 +41,13 @@ export const DEFAULT_PROVIDER_CONFIG = {
   perplexity: { key: '', model: 'sonar-pro' },
   custom:     { name: '', baseUrl: '', key: '', model: '' },
   scholar:    { key: '', provider: 'serpapi' },
+  // מקורות תמונה למצגות
+  imageProvider: 'pexels', // ספק תמונות הסטוק הפעיל: 'pexels' | 'unsplash'
+  pexels:     { key: '' },
+  unsplash:   { key: '' },
+  imageGen:   { provider: 'gemini', key: '', model: 'imagen-3.0-generate-002' }, // יצירת תמונות AI
+  // מנוע גרפים אמיתי (QuickChart) — מרנדר תרשימים מדויקים מנתוני SPSS/מצגות
+  chartEngine: { provider: 'quickchart', key: '', baseUrl: 'https://quickchart.io', fallbackToAi: true },
   copyleaks:  { ...DEFAULT_COPYLEAKS_CONFIG },
   toolLinks: {
     googleSearch: { label: 'חיפוש גוגל', url: 'https://www.google.com/search?q={query}' },
@@ -157,6 +164,23 @@ export const DEFAULT_WORD_PREFERENCES = {
     conclusion: true,
     sources: true,
   },
+};
+
+export const DEFAULT_PRESENTATION_PREFERENCES = {
+  defaultThemeId: 'premium',
+  defaultDensity: 'balanced',
+  defaultSlideCount: 10,
+  defaultImageIntensity: 'high',
+  defaultAudience: '',
+  defaultGoal: '',
+  rememberLastChoices: true,
+};
+
+export const DEFAULT_SPSS_PREFERENCES = {
+  tutorMode: true,
+  defaultGenMode: 'analysis',
+  defaultSyntaxView: 'master',
+  autoSwitchPrepForReliability: true,
 };
 
 export const DEFAULT_PERSONAL_STYLE = {
@@ -588,66 +612,66 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
 export const SKILL_LIBRARY = [
   {
     id: 'style-guardian',
-    label: 'שומר סגנון אישי',
-    description: 'שומר על טון, ניסוח ואופי כתיבה עקבי לפי ההעדפות שנלמדו.',
-    usageHint: 'שכתוב, ליטוש, התאמת טון וניסוח',
-    prompt: 'פעל כשומר הסגנון האישי של המשתמש. שמור על הטון, אורך המשפטים, הבהירות והניסוחים המועדפים עליו. אל תשנה את הכוונה המקורית ואל תוסיף מלל מנופח.',
-    keywords: ['שכתב', 'ניסוח', 'סגנון', 'טון', 'תחדד', 'ליטוש', 'אנושי', 'מקצועי'],
+    label: 'ליטוש בסגנון שלי',
+    description: 'משכתב ומלטש בלי למחוק את הקול האישי או לנפח את הטקסט.',
+    usageHint: 'שכתוב, ליטוש, התאמת טון וניסוח אישי',
+    prompt: 'פעל כעורך סגנון אישי. מטרתך היא לשפר ניסוח, בהירות וקצב תוך שמירה על הקול, הכוונה ואוצר המילים הטבעי של המשתמש. אל תוסיף תוכן חדש, אל תנפח משפטים, ואל להפוך טקסט פשוט לפורמלי מדי אלא אם המשתמש ביקש זאת.',
+    keywords: ['שכתב', 'ניסוח', 'סגנון', 'טון', 'תחדד', 'ליטוש', 'אנושי', 'מקצועי', 'קול אישי'],
   },
   {
     id: 'template-autopilot',
-    label: 'טייס תבניות ודפי שער',
-    description: 'בוחר מבנה, דף שער ותבנית מתאימים למסמך החדש.',
+    label: 'תבנית ודף שער',
+    description: 'מסדר מסמך חדש בתבנית, כותרות ושדות פתיחה כשצריך.',
     usageHint: 'דפי שער, מסמכים רשמיים ותבניות',
-    prompt: 'פעל כטייס תבניות. כשנבנה מסמך חדש, ארגן אותו בתבנית ברורה, בחר מבנה מתאים, והצע דף שער ושדות מסודרים בלי להכביד על המשתמש.',
+    prompt: 'פעל כמסדר תבניות. כשנבנה מסמך חדש או רשמי, הצע מבנה, כותרות, שדות פתיחה ודף שער רק אם הם מתאימים לבקשה. אל תכפה תבנית קבועה על טקסט קצר או על שאלה פשוטה.',
     keywords: ['תבנית', 'דף שער', 'שער', 'כותרת', 'מסמך רשמי', 'תבנית מסמך'],
   },
   {
     id: 'academic-structure',
-    label: 'בונה שלד אקדמי',
-    description: 'מייצר מבנה ברור לעבודות, מאמרים, סיכומים והצעות מחקר.',
+    label: 'מבנה אקדמי',
+    description: 'בונה שלד, פרקים ורצף טיעוני לעבודות ומאמרים.',
     usageHint: 'עבודות אקדמיות, מאמרים וסיכומים',
-    prompt: 'פעל כבונה שלד אקדמי. בנה את מבנה המסמך בדיוק לפי הוראות המשתמש והמטלה. אם המשתמש ביקש מבוא או פרקים מסוימים - כלול אותם; אם לא ביקש, אל תוסיף מבנה קבוע על דעת עצמך. אם חסר מידע, הצע שלד זהיר במקום להמציא תוכן.',
+    prompt: 'פעל כבונה מבנה אקדמי. סדר את העבודה לפי ההנחיות, צור שלד פרקים ורצף טיעוני ברור, והבחן בין מה שכבר ידוע לבין מה שחסר. אם המשתמש לא ביקש מבוא, סיכום או פרקים מסוימים, אל תוסיף אותם אוטומטית.',
     keywords: ['עבודה', 'אקדמי', 'מאמר', 'סמינר', 'סיכום', 'הצעת מחקר', 'שלד'],
   },
   {
     id: 'source-hunter',
-    label: 'צייד מקורות אקדמיים',
-    description: 'מכוון לאיתור מקורות, מילות חיפוש וחוקרים רלוונטיים.',
+    label: 'איתור מקורות',
+    description: 'מחפש מקורות קונקרטיים ומסמן מה אומת ומה עדיין חסר.',
     usageHint: 'Google Scholar, חיפוש מקורות ומחקר',
-    prompt: 'פעל כחוקר מקורות אקדמיים. החזר חבילת מחקר usable ולא רק כיווני חיפוש כלליים: כשאפשר, ספק לפחות 3 מקורות או מאמרים קונקרטיים. לכל מקור ציין כותרת, מחבר או גוף מפרסם, שנה אם ידועה, קישור או DOI אם זמין, ולמה הוא רלוונטי למשימה. אם לא נמצאו מספיק מקורות, כתוב במפורש כמה נמצאו ומה בדיוק חסר, ואל תסתפק רק במילות חיפוש או במסלולי חיפוש כלליים. אפשר להוסיף כיווני חיפוש כהשלמה בלבד. אל תמציא ציטוטים, מאמרים, DOI או פרטים שלא אומתו. אם המשתמש ביקש במפורש גם חומר חזותי, ציין גם אילו מקורות חזותיים צריך להשלים דרך סוכן מחקר חזותי ייעודי.',
+    prompt: 'פעל כחוקר מקורות. החזר מקורות קונקרטיים ושימושיים, לא רק כיווני חיפוש. כשאפשר, הבא לפחות 3 מקורות עם כותרת, מחבר או גוף מפרסם, שנה, קישור או DOI, והסבר קצר למה כל מקור רלוונטי. אם אין מספיק מקורות מאומתים, אמור בדיוק מה נמצא ומה חסר. אל תמציא ציטוטים, מאמרים, DOI או פרטים שלא אומתו.',
     keywords: ['מקור', 'מקורות', 'גוגל סקולר', 'google scholar', 'מחקר', 'מאמרים', 'חוקרים', 'youtube', 'וידאו', 'visual', 'ויזואלי', 'צילום מסך', 'screenshot', 'diagram'],
   },
   {
     id: 'citation-weaver',
-    label: 'אורג ציטוטים חכם',
-    description: 'מסייע לשלב ציטוטים וביבליוגרפיה בפורמט עקבי.',
+    label: 'ציטוטים וביבליוגרפיה',
+    description: 'משלב מקורות בטקסט ומסדר רשימת מקורות עקבית.',
     usageHint: 'APA, MLA, ביבליוגרפיה והערות שוליים',
-    prompt: 'פעל כאורג ציטוטים. כשמבקשים לשלב מקורות, סדר ציטוטים בתוך הטקסט ובנה רשימת מקורות עקבית וזהירה. אם חסר מקור אמיתי, כתוב זאת במפורש.',
+    prompt: 'פעל כעורך ציטוטים. שלב מקורות קיימים בתוך הטקסט, סדר הפניות ורשימת מקורות בפורמט עקבי, וסמן במפורש כל מקום שבו חסר מקור אמיתי. אל תמציא פרטי מקור, DOI, עמודים או ציטוטים.',
     keywords: ['ציטוט', 'ביבליוגרפיה', 'apa', 'mla', 'הערת שוליים', 'מקורות בטקסט'],
   },
   {
     id: 'consistency-checker',
-    label: 'בודק עקביות מסמך',
-    description: 'מאתר חוסר אחידות במבנה, ניסוח, כותרות ומונחים.',
+    label: 'בדיקת עקביות',
+    description: 'מאתר חוסר אחידות בכותרות, מונחים, זמנים וסגנון.',
     usageHint: 'בדיקת אחידות ושיפור מסמך קיים',
-    prompt: 'פעל כבודק עקביות מסמך. חפש חוסר אחידות בכותרות, מונחים, זמנים, סגנון, טון ועימוד, והצע תיקונים ממוקדים.',
+    prompt: 'פעל כבודק עקביות למסמך קיים. אתר חוסר אחידות בכותרות, מונחים, זמנים, סגנון, טון, הפניות ועימוד. החזר תיקונים ממוקדים לפי סדר חשיבות, בלי לשכתב את כל המסמך אם אין צורך.',
     keywords: ['בדוק', 'אחידות', 'עקביות', 'שגיאות', 'בקרת איכות', 'יישור קו'],
   },
   {
     id: 'draft-from-materials',
-    label: 'בונה טיוטה מחומרי עזר',
-    description: 'הופך נושא, חומרים וקבצים לטיוטה ראשונה מסודרת.',
+    label: 'טיוטה מחומרים',
+    description: 'הופך קבצים, הערות ונושא לטיוטה ראשונה מסודרת.',
     usageHint: 'יצירת טיוטה ראשונה מחומרים שהועלו',
-    prompt: 'פעל כבונה טיוטה מחומרי עזר. קח נושא, מסמכי רקע והנחיות קיימות, וחבר מהם טיוטה מסודרת עם סדר לוגי, בלי להעתיק חומר גלם כמו שהוא.',
+    prompt: 'פעל כבונה טיוטה מחומרי עזר. השתמש בנושא, בקבצים, בהערות ובהנחיות שסופקו כדי ליצור טיוטה ראשונה מסודרת. ארגן את החומר בסדר לוגי, אל תעתיק חומר גלם כפי שהוא, וסמן פערים שלא ניתן להשלים מהחומרים.',
     keywords: ['טיוטה', 'מחומרי עזר', 'מחומרים', 'קבצים', 'תבנה מסמך', 'תכתוב מסמך'],
   },
   {
     id: 'final-submission',
-    label: 'מצב הגשה סופית',
-    description: 'מבצע מעבר אחרון לפני הגשה: שפה, מבנה, מקורות ודגלים אדומים.',
+    label: 'בדיקה לפני הגשה',
+    description: 'מעבר אחרון על שפה, מבנה, מקורות ודגלים אדומים.',
     usageHint: 'בדיקה אחרונה לפני מסירה או הגשה',
-    prompt: 'פעל במצב הגשה סופית. בצע בדיקה אחרונה של בהירות, שגיאות, מבנה, עקביות, ורשימת נקודות שעדיין דורשות תשומת לב לפני שליחה.',
+    prompt: 'פעל כבודק לפני הגשה. בצע מעבר אחרון על בהירות, שגיאות, מבנה, עקביות, מקורות ונקודות סיכון. החזר תיקונים או רשימת חסמים קצרה ומעשית; אל תפתח מחדש חלקים תקינים ללא צורך.',
     keywords: ['הגשה', 'סופי', 'בדיקה אחרונה', 'לפני שליחה', 'לפני הגשה'],
   },
 ];
@@ -820,12 +844,15 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_assistant_behavior',
   'wordai_skills_config',
   'wordai_word_preferences',
+  'wordai_presentation_preferences',
+  'wordai_spss_preferences',
   'wordai_personal_style',
   'wordai_workspace_automation',
   'wordai_workspaces_library',
   'wordai_shared_agent_instructions',
   'wordai_role_agents',
   'wordai_home_instructions',
+  'wordai_hidden_project_materials',
   'wordai_saved_docs_history',
   'wordai_app_memory',
   'wordflow_home_customizations',
@@ -1247,6 +1274,26 @@ export const getWordPreferences = () => ({
 
 export const saveWordPreferences = (config) => {
   localStorage.setItem('wordai_word_preferences', JSON.stringify({ ...DEFAULT_WORD_PREFERENCES, ...config }));
+  syncPersistedAppSettings();
+};
+
+export const getPresentationPreferences = () => ({
+  ...DEFAULT_PRESENTATION_PREFERENCES,
+  ...readJsonFromStorage('wordai_presentation_preferences', {}),
+});
+
+export const savePresentationPreferences = (config) => {
+  localStorage.setItem('wordai_presentation_preferences', JSON.stringify({ ...DEFAULT_PRESENTATION_PREFERENCES, ...config }));
+  syncPersistedAppSettings();
+};
+
+export const getSpssPreferences = () => ({
+  ...DEFAULT_SPSS_PREFERENCES,
+  ...readJsonFromStorage('wordai_spss_preferences', {}),
+});
+
+export const saveSpssPreferences = (config) => {
+  localStorage.setItem('wordai_spss_preferences', JSON.stringify({ ...DEFAULT_SPSS_PREFERENCES, ...config }));
   syncPersistedAppSettings();
 };
 
@@ -2293,6 +2340,9 @@ const normalizeProviderConfig = (config = {}) => {
     perplexity: { ...DEFAULT_PROVIDER_CONFIG.perplexity, ...(config?.perplexity || {}) },
     custom:     { ...DEFAULT_PROVIDER_CONFIG.custom,     ...(config?.custom || {}) },
     scholar:    { ...DEFAULT_PROVIDER_CONFIG.scholar,    ...(config?.scholar || {}) },
+    pexels:     { ...DEFAULT_PROVIDER_CONFIG.pexels,     ...(config?.pexels || {}) },
+    unsplash:   { ...DEFAULT_PROVIDER_CONFIG.unsplash,   ...(config?.unsplash || {}) },
+    imageGen:   { ...DEFAULT_PROVIDER_CONFIG.imageGen,   ...(config?.imageGen || {}) },
     copyleaks:  { ...DEFAULT_PROVIDER_CONFIG.copyleaks,  ...(config?.copyleaks || {}) },
     toolLinks: getToolLinksConfig({ ...DEFAULT_PROVIDER_CONFIG, ...(config || {}) }),
     active: safeActive,
@@ -2305,6 +2355,8 @@ const normalizeProviderConfig = (config = {}) => {
   merged.copyleaks = normalizeCopyleaksConfig(merged.copyleaks);
   merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
+  merged.imageProvider = ['pexels', 'unsplash'].includes(merged.imageProvider) ? merged.imageProvider : 'pexels';
+  merged.imageGen.provider = ['gemini', 'openai'].includes(merged.imageGen.provider) ? merged.imageGen.provider : 'gemini';
   return merged;
 };
 
@@ -2902,6 +2954,25 @@ const buildVerifiedSourceFollowOnGroundingPrompt = (verifiedSourceText = '') => 
   ].join('\n');
 };
 
+// מסיר URLs ב-prose שלא הופיעו באחזור המאומת, בלי לחסום את שאר הטקסט.
+// קישורי markdown: שומר את התווית, מסיר רק את היעד הלא-מאומת.
+const stripDisallowedInlineUrls = (text = '', allowedUrlSet = new Set()) => {
+  let result = String(text || '')
+    .replace(/\[([^\]]+)\]\(\s*((?:https?:\/\/|www\.)[^\s)]+)\s*\)/gi, (match, label, url) => (
+      hasVerifiedSourceAllowedUrl(allowedUrlSet, url) ? match : label
+    ))
+    .replace(SOURCE_GROUNDING_URL_REGEX, (url) => (
+      hasVerifiedSourceAllowedUrl(allowedUrlSet, url) ? url : ''
+    ));
+  // ניקוי שאריות: סוגריים ריקים, רווחים כפולים, רווח לפני פיסוק.
+  result = result
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ +([.,;:])/g, '$1');
+  return result.trim();
+};
+
 const sanitizeSourceGroundingResponse = (text = '', { enforce = false, providerSupportsGrounding = false, allowedUrls = new Set() } = {}) => {
   const normalizedText = String(text || '').trim();
   if (!normalizedText || !enforce) return normalizedText;
@@ -2909,12 +2980,18 @@ const sanitizeSourceGroundingResponse = (text = '', { enforce = false, providerS
   if (fakeUrls.length) {
     return `${SOURCE_GROUNDING_FAILURE_TOKEN}\n\nנחסם פלט שכלל קישורי דוגמה או placeholder, כדי לא להציג מקורות מומצאים.`;
   }
-  if (providerSupportsGrounding) return normalizedText;
   const allowedUrlSet = buildVerifiedSourceAllowedUrlSet(allowedUrls);
   const responseUrls = normalizedText.match(SOURCE_GROUNDING_URL_REGEX) || [];
   if (!responseUrls.length) return normalizedText;
   const disallowedUrls = responseUrls.filter((url) => !hasVerifiedSourceAllowedUrl(allowedUrlSet, url));
   if (!disallowedUrls.length) return normalizedText;
+  if (providerSupportsGrounding) {
+    // ספק grounding: רוב הקישורים אמיתיים מ-metadata. אל תחסום את כל הפלט —
+    // נקה רק את ה-URLs בגוף הטקסט שלא הופיעו באחזור המאומת (סגירת דליפת inline).
+    if (!allowedUrlSet.size) return normalizedText;
+    return stripDisallowedInlineUrls(normalizedText, allowedUrlSet);
+  }
+  // ספק ללא grounding: כל URL שלא ברשימה = מומצא → חסום את כל הפלט.
   return `${SOURCE_GROUNDING_FAILURE_TOKEN}\n\nנחסם פלט שכלל URLs שלא הופיעו באחזור המאומת, כדי לא להציג מקורות מומצאים.`;
 };
 
@@ -9202,12 +9279,15 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const forceVerifiedSourceFollowOn = options.forceVerifiedSourceFollowOn === true;
   const exactSourceGroundingUrl = String(options.exactSourceUrl || '').trim();
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
-  const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
-    omitStructuralHints: omitPersonalStyleStructureHints,
-    requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
-    templateId: String(options.templateId || '').trim(),
-    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
-  });
+  // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
+  const personalStylePrompt = options.suppressPersonalStyle === true
+    ? ''
+    : buildPersonalStyleInstructions(getPersonalStyleProfile(), {
+      omitStructuralHints: omitPersonalStyleStructureHints,
+      requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+      templateId: String(options.templateId || '').trim(),
+      isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+    });
   const sharedInstructions = getSharedAgentInstructions();
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt });
   const skillsConfig = getSkillsConfig();
@@ -11483,6 +11563,7 @@ export const chefModeGenerateQuestion = async (params = {}) => {
   const instructions = String(params?.instructions || '').trim();
   const selectedMaterials = Array.isArray(params?.selectedMaterials) ? params.selectedMaterials : [];
   const preparedMaterialsContext = String(params?.materialsContext || '').trim();
+  const baseDraftText = String(params?.baseDraftText || '').trim().slice(0, 6000);
 
   if (responses.length >= maxQuestions) {
     return { shouldStop: true, question: '', options: [], placeholder: '', reason: 'max-questions-reached' };
@@ -11506,6 +11587,7 @@ export const chefModeGenerateQuestion = async (params = {}) => {
     '- לפני ניסוח השאלה, קרא את חומרי העזר כולל קטעי התוכן, הסק מהם עובדות, דרישות, מבנה, מושגים ודגשים.',
     '- שאל רק על פערים, סתירות או החלטות שלא מופיעים בחומרי העזר, בפרומפט או בתשובות הקודמות.',
     '- אם זוהו דרישות מטלה מובנות, אל תשאל עליהן שוב. שאל רק בחירות חסרות שהמשתמש צריך להחליט, למשל משבר/מקרה/קבוצה נבחרת.',
+    baseDraftText ? '- צורפה טיוטת בסיס שהמשתמש כבר התחיל לכתוב. התייחס אליה כבסיס קיים שצריך להשלים/ללטש: שאל רק על השלמות, הרחבות, כיוונים או החלטות שחסרים בה. אל תשאל על מה שכבר כתוב ומוכרע בטיוטה.' : '',
     '- options: בין 3 ל-5 אפשרויות קצרות וברורות.',
     '- אם יש מספיק מידע לכתיבה מלאה, החזר shouldStop=true ללא שאלה.',
     '- אל תייצר שאלות כלליות מדי אם כבר יש תשובות בנושא.',
@@ -11515,6 +11597,7 @@ export const chefModeGenerateQuestion = async (params = {}) => {
     `תבנית נבחרת: ${templateId}`,
     `הנחיות משתמש: ${instructions || 'ללא הנחיות נוספות'}`,
     assignmentRequirementsText ? `דרישות מטלה מזוהות:\n${assignmentRequirementsText}` : '',
+    baseDraftText ? `טיוטת בסיס קיימת (המשתמש כבר התחיל — יש להשלים/ללטש אותה, לא להתחיל מאפס):\n${baseDraftText}` : '',
     `חומרי עזר:\n${materialsText}`,
     '',
     `תשובות קודמות:\n${responsesText}`,
@@ -11791,12 +11874,15 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
     || cfg.active;
 
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
-  const personalStylePrompt = buildPersonalStyleInstructions(getPersonalStyleProfile(), {
-    omitStructuralHints: omitPersonalStyleStructureHints,
-    requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
-    templateId: String(options.templateId || '').trim(),
-    isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
-  });
+  // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
+  const personalStylePrompt = options.suppressPersonalStyle === true
+    ? ''
+    : buildPersonalStyleInstructions(getPersonalStyleProfile(), {
+      omitStructuralHints: omitPersonalStyleStructureHints,
+      requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+      templateId: String(options.templateId || '').trim(),
+      isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+    });
   const sharedInstructions = getSharedAgentInstructions();
   const automation = getWorkspaceAutomation();
   const skipAutomationPrompt = options.skipAutomationPrompt === true || options.skipAutomation === true;

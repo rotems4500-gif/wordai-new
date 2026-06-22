@@ -4,6 +4,9 @@ import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListIn
 import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import { saveBlobInBrowser } from './services/browserDocxExport';
+import { showToast, showConfirm } from './services/uiFeedback';
+import { APP_VERSION_LABEL } from './appVersion';
+import { DECK_THEMES } from './presentation/deckThemes';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
   DEFAULT_ASSISTANT_BEHAVIOR,
@@ -29,6 +32,10 @@ import {
   saveAssistantBehavior,
   getWordPreferences,
   saveWordPreferences,
+  getPresentationPreferences,
+  savePresentationPreferences,
+  getSpssPreferences,
+  saveSpssPreferences,
   getPersonalStyleProfile,
   normalizePersonalStyleProfile,
   savePersonalStyleProfile,
@@ -65,7 +72,7 @@ import {
   deleteWorkspaceV2Template,
   resetWorkspaceV2Templates,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
@@ -517,6 +524,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   assistant: ['assistant', 'helper', 'behavior', 'tone', 'assistant behavior', 'עוזר'],
   updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
   ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'copyleaks', 'detector', 'detection', 'ai detector', 'ספק', 'מודל', 'מפתח', 'זיהוי ai', 'בדיקת ai'],
+  media: ['media', 'images', 'image', 'photo', 'stock', 'pexels', 'unsplash', 'imagen', 'gpt-image', 'chart', 'charts', 'graph', 'quickchart', 'תמונות', 'תמונה', 'גרף', 'גרפים', 'תרשים', 'spss', 'ויזואל'],
   sidebar: ['sidebar', 'taskpane', 'chat panel', 'modes', 'provider', 'model', 'חלונית', 'צאט', 'צ׳אט', 'מצבים', 'ספק', 'מודל'],
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
   skills: ['skills', 'skill', 'capabilities', 'סקילים'],
@@ -524,6 +532,8 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   developer: ['developer', 'advanced', 'timeout', 'override', 'logs', 'model', 'provider', 'מתקדם', 'לוגים', 'timeout ms'],
   onboarding: ['onboarding', 'profile', 'style', 'learning', 'materials', 'submission', 'פרופיל', 'הגשה'],
   writing: ['writing', 'document', 'word', 'defaults', 'כתיבה'],
+  presentation: ['presentation', 'slides', 'deck', 'pptx', 'powerpoint', 'theme', 'density', 'מצגת', 'מצגות', 'שקופיות', 'סטודיו מצגות'],
+  spss: ['spss', 'syntax', 'statistics', 'analysis', 'tutor', 'data', 'סטטיסטיקה', 'תחביר', 'ניתוח', 'סטודיו spss'],
   appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
   debug: ['debug', 'logs', 'log', 'console', 'לוגים', 'ניפוי'],
   personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי'],
@@ -531,20 +541,24 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
 
 const SETTINGS_TAB_GROUPS = [
   {
-    title: 'התחלה ועזרה',
-    tabs: [['guide', '📘 מדריך'], ['assistant', '✨ עוזר'], ['updates', '⬆️ עדכונים']],
+    title: 'AI ומנועים',
+    desc: 'מפתחות, מודלים והעוזר החכם',
+    tabs: [['ai', '🤖 מנועי AI'], ['sidebar', '💬 עוזר וצ׳אט'], ['skills', '🧠 סקילים'], ['workspaceV2', '🧩 סביבות עבודה']],
   },
   {
-    title: 'AI ועבודה ישירה',
-    tabs: [['ai', '🤖 מנועי AI'], ['workspaceV2', '🧩 סביבות עבודה'], ['sidebar', '💬 חלונית צ׳אט'], ['prompt', '📌 Prompt'], ['skills', '🧠 סקילים']],
+    title: 'הכתיבה שלי',
+    desc: 'הפרופיל, הסגנון וברירות המחדל למסמך',
+    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 עריכת סגנון'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
   },
   {
-    title: 'כתיבה והתאמה אישית',
-    tabs: [['onboarding', '👤 פרופיל והגשה'], ['writing', '✍️ כתיבה'], ['appearance', '🎨 מראה']],
+    title: 'תוכן וויזואל',
+    desc: 'תמונות, מצגות, נתונים ומראה',
+    tabs: [['media', '🖼️ תמונות וגרפים'], ['presentation', '📊 מצגות'], ['spss', '📈 SPSS'], ['appearance', '🎨 מראה']],
   },
   {
-    title: 'תחזוקה ולוגים',
-    tabs: [['developer', '🛠️ Developer'], ['debug', '🪵 לוגים']],
+    title: 'מערכת ועזרה',
+    desc: 'עדכונים, מדריך ותחזוקה',
+    tabs: [['updates', '⬆️ עדכונים'], ['guide', '📘 מדריך'], ['developer', '🛠️ תחזוקה']],
   },
 ];
 
@@ -556,14 +570,21 @@ const SETTINGS_TAB_SEARCH_INDEX = [
     searchText: mergeSettingsSearchTerms([id, label, group.title, SETTINGS_TAB_SEARCH_KEYWORDS[id] || []]).join(' '),
   }))),
   {
-    id: 'personal',
-    label: '🧬 סגנון אישי',
-    groupTitle: 'כתיבה והתאמה אישית',
+    id: 'sidebar',
+    label: '💬 עוזר וצ׳אט',
+    groupTitle: 'AI ומנועים',
     searchText: mergeSettingsSearchTerms([
-      'personal',
-      'סגנון אישי',
-      'פרופיל אישי',
-      SETTINGS_TAB_SEARCH_KEYWORDS.personal || [],
+      'assistant', 'helper', 'behavior', 'auto popup', 'עוזר', 'התנהגות עוזר', 'קפיצה אוטומטית',
+      SETTINGS_TAB_SEARCH_KEYWORDS.assistant || [],
+    ]).join(' '),
+  },
+  {
+    id: 'developer',
+    label: '🛠️ תחזוקה',
+    groupTitle: 'מערכת ועזרה',
+    searchText: mergeSettingsSearchTerms([
+      'debug', 'logs', 'console', 'לוגים', 'ניפוי', 'קונסולה',
+      SETTINGS_TAB_SEARCH_KEYWORDS.debug || [],
     ]).join(' '),
   },
 ];
@@ -701,7 +722,7 @@ const linkifyText = (text = '') => {
     const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     return (
       <a key={index} href={href} target="_blank" rel="noreferrer"
-        style={{ color: '#2B579A', textDecoration: 'underline', wordBreak: 'break-all' }}>
+        style={{ color: 'var(--color-chrome)', textDecoration: 'underline', wordBreak: 'break-all' }}>
         {trimmed}
       </a>
     );
@@ -842,12 +863,12 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
   }, [expandedHint]);
 
   return (
-    <div style={{ border: `2px solid ${active ? '#2B579A' : '#E1DFDD'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
+    <div style={{ border: `2px solid ${active ? 'var(--color-chrome)' : '#E1DFDD'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 18 }}>{icon}</span>
           <span style={{ fontWeight: 700, fontSize: 13, color: '#323130' }}>{title}</span>
-          {active && <span style={{ fontSize: 10, background: '#2B579A', color: 'white', padding: '2px 8px', borderRadius: 10 }}>ברירת מחדל</span>}
+          {active && <span style={{ fontSize: 10, background: 'var(--color-chrome)', color: 'white', padding: '2px 8px', borderRadius: 10 }}>ברירת מחדל</span>}
           {configured && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '2px 8px', borderRadius: 10 }}>מוגדר</span>}
           {!configured && <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 10 }}>חסר מפתח/הגדרה</span>}
         </div>
@@ -863,7 +884,7 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
           {allowActivate && (
             <button onClick={onActivate}
               disabled={!configured}
-              style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : '#2B579A', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
+              style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : 'var(--color-chrome)', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
               {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
             </button>
           )}
@@ -885,6 +906,71 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
 }
 
 // ─── הגדרות AI ───
+function MediaVisualsSettings({ config, setConfig }) {
+  const update = (provider, field, value) =>
+    setConfig((prev) => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
+  const chartEngine = config.chartEngine || {};
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16, lineHeight: 1.7 }}>
+        כאן מגדירים את כל ה-API שמייצרים תוכן ויזואלי: תמונות לסטודיו המצגות, וגרפים אמיתיים מנתוני SPSS.
+        מנוע הגרפים מרנדר תרשים מדויק מהמספרים שבפלט — לא תמונה ש-AI ממציא.
+      </p>
+
+      <ProviderSection title="תמונות למצגות" icon="🖼️" active={false} allowActivate={false}
+        configured={Boolean(String(config.pexels?.key || '').trim() || String(config.unsplash?.key || '').trim() || String(config.imageGen?.key || '').trim())}
+        onActivate={() => {}}
+        description="חיפוש תמונות סטוק (Pexels/Unsplash — חינמי) ויצירת תמונות ב-AI (Imagen של Gemini או gpt-image של OpenAI).">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק תמונות סטוק פעיל</label>
+          <select value={config.imageProvider || 'pexels'} onChange={(e) => setConfig((prev) => ({ ...prev, imageProvider: e.target.value }))} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="pexels">Pexels</option>
+            <option value="unsplash">Unsplash</option>
+          </select>
+        </div>
+        <FieldRow label="מפתח Pexels" type="password" placeholder="your_pexels_key" value={config.pexels?.key}
+          onChange={(v) => update('pexels', 'key', v)} hint="מפתח חינמי מ-pexels.com/api" />
+        <FieldRow label="מפתח Unsplash (Access Key)" type="password" placeholder="your_unsplash_access_key" value={config.unsplash?.key}
+          onChange={(v) => update('unsplash', 'key', v)} hint="Access Key מ-unsplash.com/developers" />
+        <div style={{ borderTop: '1px solid #DBEAFE', paddingTop: 10, marginTop: 10 }}>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות AI</label>
+            <select value={config.imageGen?.provider || 'gemini'} onChange={(e) => update('imageGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+              <option value="gemini">Gemini (Imagen)</option>
+              <option value="openai">OpenAI (gpt-image)</option>
+            </select>
+          </div>
+          <FieldRow label="מפתח ליצירת תמונות (אופציונלי — אחרת ייעשה שימוש במפתח הטקסט של אותו ספק)" type="password" placeholder="leave empty to reuse text key" value={config.imageGen?.key}
+            onChange={(v) => update('imageGen', 'key', v)} hint="אם ריק — נשתמש במפתח Gemini/OpenAI הרגיל." />
+          <FieldRow label="מודל יצירת תמונות" placeholder="imagen-3.0-generate-002" value={config.imageGen?.model}
+            onChange={(v) => update('imageGen', 'model', v)} options={['imagen-3.0-generate-002', 'gpt-image-1']} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1" />
+        </div>
+      </ProviderSection>
+
+      <ProviderSection title="גרפים מנתוני SPSS" icon="📈" active={false} allowActivate={false}
+        configured={(chartEngine.provider || 'quickchart') === 'quickchart'}
+        onActivate={() => {}}
+        description="מנוע גרפים אמיתי. AI מחלץ את המספרים מפלט ה-SPSS, ו-QuickChart מרנדר תרשים PNG מדויק (עמודות / קו / עוגה / פיזור). עובד חינם ללא מפתח; אפשר מפתח להגבלות גבוהות יותר.">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>מנוע גרפים</label>
+          <select value={chartEngine.provider || 'quickchart'} onChange={(e) => update('chartEngine', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="quickchart">QuickChart (Chart.js — מדויק)</option>
+          </select>
+        </div>
+        <FieldRow label="כתובת שרת QuickChart" placeholder="https://quickchart.io" value={chartEngine.baseUrl || ''}
+          onChange={(v) => update('chartEngine', 'baseUrl', v)} hint="ברירת מחדל: quickchart.io הציבורי. אפשר להפנות ל-self-host." />
+        <FieldRow label="מפתח QuickChart (אופציונלי)" type="password" placeholder="leave empty for free tier" value={chartEngine.key || ''}
+          onChange={(v) => update('chartEngine', 'key', v)} hint="ריק = שכבה חינמית. מפתח מ-quickchart.io מסיר הגבלות קצב." />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginTop: 10 }}>
+          <input type="checkbox" checked={chartEngine.fallbackToAi !== false} onChange={(e) => update('chartEngine', 'fallbackToAi', e.target.checked)} />
+          גיבוי AI — אם רינדור הגרף נכשל, צור תמונת המחשה ב-AI (לא מדויקת מספרית)
+        </label>
+      </ProviderSection>
+    </div>
+  );
+}
+
 function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
   const [selectedGuideId, setSelectedGuideId] = useState(() => deriveProviderGuideId(config));
@@ -1332,6 +1418,14 @@ function AiSettings({ config, setConfig }) {
         }} />
       </ProviderSection>
 
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#FAFAFA', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 20 }}>🖼️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>תמונות וגרפים עברו לטאב ייעודי</div>
+          <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>מפתחות תמונות סטוק, יצירת תמונות AI ומנוע הגרפים ל-SPSS נמצאים עכשיו בטאב "תמונות וגרפים".</div>
+        </div>
+      </div>
+
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: '#F8FBFF', marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>קישורי תוספות בסרגל</div>
         <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
@@ -1369,7 +1463,7 @@ function AiSettings({ config, setConfig }) {
 
         {/* כפתור הסבר */}
         <button onClick={() => setShowCustomHelp(v => !v)}
-          style={{ fontSize: 12, color: '#2B579A', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 12, textDecoration: 'underline', display: 'flex', alignItems: 'center', gap: 4 }}>
+          style={{ fontSize: 12, color: 'var(--color-chrome)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 12, textDecoration: 'underline', display: 'flex', alignItems: 'center', gap: 4 }}>
           {showCustomHelp ? '▴' : '▾'} מה צריך להכין? איך זה עובד?
         </button>
 
@@ -1391,7 +1485,7 @@ function AiSettings({ config, setConfig }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {POPULAR_CUSTOM.map(p => (
                 <div key={p.name} style={{ background: 'white', border: '1px solid #E1DFDD', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ fontWeight: 600, color: '#2B579A', marginBottom: 4 }}>{p.name}</div>
+                  <div style={{ fontWeight: 600, color: 'var(--color-chrome)', marginBottom: 4 }}>{p.name}</div>
                   <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6 }}>📌 {linkifyText(p.note)}</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     <button onClick={() => update('custom', 'baseUrl', p.url)}
@@ -1887,6 +1981,240 @@ const finalizePersonalProfile = (profile = {}) => {
   };
 };
 
+function PresentationDefaultsSettings({ prefs, setPrefs }) {
+  const set = (field, value) => setPrefs((prev) => ({ ...prev, [field]: value }));
+  const densityOptions = [
+    ['lean', 'רזה'],
+    ['balanced', 'מאוזן'],
+    ['rich', 'עשיר'],
+  ];
+  const imageOptions = [
+    ['high', 'גבוה'],
+    ['medium', 'בינוני'],
+    ['low', 'נמוך'],
+  ];
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+        ברירות המחדל של סטודיו המצגות. הערכים האלה ימולאו אוטומטית בטופס יצירת מצגת חדשה.
+      </p>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>סגנון ברירת מחדל</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {DECK_THEMES.map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              onClick={() => set('defaultThemeId', theme.id)}
+              title={theme.blurb || ''}
+              style={{
+                textAlign: 'right',
+                border: `1px solid ${prefs.defaultThemeId === theme.id ? '#2563EB' : '#E5E7EB'}`,
+                background: prefs.defaultThemeId === theme.id ? '#EFF6FF' : '#FAFAFA',
+                borderRadius: 10,
+                padding: '10px 12px',
+                fontSize: 12,
+                fontWeight: 700,
+                color: '#323130',
+                cursor: 'pointer',
+              }}
+            >
+              {theme.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>מבנה ברירת מחדל</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 10, marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>רמת עומס</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {densityOptions.map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => set('defaultDensity', id)}
+                  style={{
+                    flex: 1,
+                    border: `1px solid ${prefs.defaultDensity === id ? '#2563EB' : '#C8C6C4'}`,
+                    background: prefs.defaultDensity === id ? '#EFF6FF' : 'white',
+                    borderRadius: 6,
+                    padding: '7px 4px',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: '#323130',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>מספר שקופיות</div>
+            <input
+              type="number"
+              min="4"
+              max="20"
+              value={prefs.defaultSlideCount ?? 10}
+              onChange={(e) => set('defaultSlideCount', Math.max(4, Math.min(20, Number(e.target.value) || 10)))}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
+            />
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>דגש על תמונות</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {imageOptions.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => set('defaultImageIntensity', id)}
+                style={{
+                  flex: 1,
+                  border: `1px solid ${prefs.defaultImageIntensity === id ? '#2563EB' : '#C8C6C4'}`,
+                  background: prefs.defaultImageIntensity === id ? '#EFF6FF' : 'white',
+                  borderRadius: 6,
+                  padding: '7px 4px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: '#323130',
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>קהל ומטרה ברירת מחדל</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>קהל יעד</div>
+            <input
+              type="text"
+              value={prefs.defaultAudience || ''}
+              onChange={(e) => set('defaultAudience', e.target.value)}
+              placeholder="משקיעים, מרצה, לקוח..."
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>מטרה</div>
+            <input
+              type="text"
+              value={prefs.defaultGoal || ''}
+              onChange={(e) => set('defaultGoal', e.target.value)}
+              placeholder="לשכנע, להסביר, למכור..."
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+          <input type="checkbox" checked={prefs.rememberLastChoices !== false} onChange={(e) => set('rememberLastChoices', e.target.checked)} />
+          זכור את הבחירות האחרונות שלי בטופס היצירה
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function SpssDefaultsSettings({ prefs, setPrefs }) {
+  const set = (field, value) => setPrefs((prev) => ({ ...prev, [field]: value }));
+  const genModeOptions = [
+    ['analysis', 'ניתוח', 'יצירת syntax לניתוחים סטטיסטיים'],
+    ['prep', 'הכנת נתונים', 'recode / compute / מהימנות — כותב משתנים חדשים'],
+  ];
+  const viewOptions = [
+    ['master', 'Master מאוחד'],
+    ['block', 'בלוק אחרון'],
+  ];
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+        ברירות המחדל של סטודיו ה-SPSS. הערכים חלים בכל פעם שנכנסים לסטודיו.
+      </p>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 6 }}>מצב יצירה ברירת מחדל</div>
+        <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, lineHeight: 1.6 }}>
+          איזה מצב יהיה פעיל כשפותחים את הסטודיו.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {genModeOptions.map(([id, label, hint]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => set('defaultGenMode', id)}
+              style={{
+                textAlign: 'right',
+                border: `1px solid ${prefs.defaultGenMode === id ? '#2563EB' : '#E5E7EB'}`,
+                background: prefs.defaultGenMode === id ? '#EFF6FF' : '#FAFAFA',
+                borderRadius: 10,
+                padding: '10px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              <strong style={{ display: 'block', fontSize: 12, color: '#323130', marginBottom: 2 }}>{label}</strong>
+              <span style={{ fontSize: 10, color: '#64748B' }}>{hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>תצוגת סינטקס ברירת מחדל</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {viewOptions.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => set('defaultSyntaxView', id)}
+              style={{
+                flex: 1,
+                border: `1px solid ${prefs.defaultSyntaxView === id ? '#2563EB' : '#C8C6C4'}`,
+                background: prefs.defaultSyntaxView === id ? '#EFF6FF' : 'white',
+                borderRadius: 6,
+                padding: '7px 4px',
+                fontSize: 12,
+                fontWeight: 700,
+                color: '#323130',
+                cursor: 'pointer',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>הסברים והתנהגות</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+          <input type="checkbox" checked={prefs.tutorMode !== false} onChange={(e) => set('tutorMode', e.target.checked)} />
+          מצב לימוד — הוסף הסברים לכל בלוק syntax כברירת מחדל
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+          <input type="checkbox" checked={prefs.autoSwitchPrepForReliability !== false} onChange={(e) => set('autoSwitchPrepForReliability', e.target.checked)} />
+          עבור אוטומטית למצב הכנת נתונים בבקשות מהימנות / recode / היפוך סולם
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function WordDefaultsSettings({ prefs, setPrefs }) {
   const setFlag = (field, value) => setPrefs(prev => ({ ...prev, [field]: value }));
   const setActionVisibility = (actionId, value) => setPrefs(prev => ({
@@ -2339,19 +2667,19 @@ function WorkspaceV2Settings({ config }) {
     setStatus('סביבת העבודה נשמרה והמסך הראשי יתעדכן מיד.');
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!selectedId) return;
     const message = isBuiltin
       ? 'לאפס את כל השינויים שבוצעו לסביבת העבודה המובנית הזאת?'
       : 'למחוק את סביבת העבודה המותאמת הזאת?';
-    if (typeof window !== 'undefined' && !window.confirm(message)) return;
+    if (!(await showConfirm(message, { title: isBuiltin ? 'איפוס סביבה' : 'מחיקת סביבה', confirmLabel: isBuiltin ? 'אפס' : 'מחק', tone: 'danger' }))) return;
     deleteWorkspaceV2Template(selectedId);
     refreshTemplates('');
     setStatus(isBuiltin ? 'השינויים לסביבה המובנית אופסו.' : 'סביבת העבודה נמחקה.');
   };
 
-  const handleResetAll = () => {
-    if (typeof window !== 'undefined' && !window.confirm('לאפס את כל סביבות העבודה המותאמות והשינויים לתבניות המובנות?')) return;
+  const handleResetAll = async () => {
+    if (!(await showConfirm('לאפס את כל סביבות העבודה המותאמות והשינויים לתבניות המובנות?', { title: 'איפוס כל הסביבות', confirmLabel: 'אפס הכל', tone: 'danger' }))) return;
     resetWorkspaceV2Templates();
     refreshTemplates('');
     setStatus('כל סביבות העבודה אופסו לברירת המחדל.');
@@ -2781,7 +3109,8 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   ];
   const activeStep = guidedTourSteps[activeStepIndex] || guidedTourSteps[0];
 
-  const resetSavedMemory = () => {
+  const resetSavedMemory = async () => {
+    if (!(await showConfirm('לאפס את כל הזיכרון השמור (שיחות אחרונות, תזכורות והעדפות)?\nפעולה זו לא ניתנת לביטול.', { title: 'איפוס זיכרון שמור', confirmLabel: 'אפס', tone: 'danger' }))) return;
     clearAppMemory();
     try {
       clearSidebarChatHistory({ clearAll: true });
@@ -3239,18 +3568,17 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
     }));
   };
 
-  const resetLearningGame = () => {
-    if (confirm('האם אתה בטוח שברצונך לאפס את הלמידה?')) {
-      setProfile((prev) => ({
-        ...prev,
-        learningGameAnswers: {},
-        learningGameInsights: [],
-        learningGamesCompletedAt: '',
-        styleTrainingSummary: '',
-        preferredTrainingExamples: [],
-        dislikedStylePatterns: [],
-      }));
-    }
+  const resetLearningGame = async () => {
+    if (!(await showConfirm('האם אתה בטוח שברצונך לאפס את הלמידה?', { title: 'איפוס למידה', confirmLabel: 'אפס', tone: 'danger' }))) return;
+    setProfile((prev) => ({
+      ...prev,
+      learningGameAnswers: {},
+      learningGameInsights: [],
+      learningGamesCompletedAt: '',
+      styleTrainingSummary: '',
+      preferredTrainingExamples: [],
+      dislikedStylePatterns: [],
+    }));
   };
 
   const updateExternalAnalysisRaw = (value) => setProfile((prev) => {
@@ -3399,6 +3727,9 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [buildingGoldenExample, setBuildingGoldenExample] = useState(false);
+  const [styleProbePrompt, setStyleProbePrompt] = useState('כתוב פסקה קצרה שמסבירה למה כדאי להתחיל לכתוב מוקדם.');
+  const [styleProbeRunning, setStyleProbeRunning] = useState(false);
+  const [styleProbeResult, setStyleProbeResult] = useState(null);
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
   const [uploadKind, setUploadKind] = useState('writing-sample');
@@ -3412,8 +3743,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const preferredSentenceStructuresInput = useDelimitedListInput(profile.preferredSentenceStructures, (value) => updateList('preferredSentenceStructures', value));
   const tonePreferencesInput = useDelimitedListInput(profile.tonePreferences, (value) => updateList('tonePreferences', value));
 
-  const handleResetProfile = () => {
-    if (!confirm('לאפס רק את העדפות הפרופיל, נתוני ההיכרות והלמידה השמורה בפרופיל? חומרי מקור מקומיים, עבודות עבר והיסטוריית הלמידה המקומית לא יימחקו.')) return;
+  const handleResetProfile = async () => {
+    if (!(await showConfirm('לאפס רק את העדפות הפרופיל, נתוני ההיכרות והלמידה השמורה בפרופיל? חומרי מקור מקומיים, עבודות עבר והיסטוריית הלמידה המקומית לא יימחקו.', { title: 'איפוס פרופיל', confirmLabel: 'אפס', tone: 'danger' }))) return;
     savePersonalStyleProfile(DEFAULT_PERSONAL_STYLE);
     setProfile(getPersonalStyleProfile());
   };
@@ -3449,13 +3780,13 @@ function PersonalStyleSettings({ profile, setProfile }) {
         .map((item) => ({ item, info: getMaterialExtractionStatusInfo(item) }))
         .filter(({ info }) => info.status !== 'success');
       if (failedUploads.length || problematicUploads.length) {
-        window.alert([
+        showToast([
           failedUploads.length ? 'הקבצים הבאים נכשלו בהעלאה ולא נשמרו:' : '',
           ...failedUploads.map(({ name, message }) => `- ${name}: ${message}`),
           failedUploads.length && problematicUploads.length ? '' : '',
           problematicUploads.length ? 'חלק מהקבצים נשמרו אבל לא נקראו במלואם:' : '',
           ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
-        ].filter((line) => line !== '').join('\n'));
+        ].filter((line) => line !== '').join('\n'), { tone: 'warning', duration: 8000 });
       }
     } finally {
       setUploading(false);
@@ -3477,7 +3808,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
 
   const handleBuildGoldenExample = async () => {
     if (String(profile.goldenExample || '').trim()) {
-      const confirmed = confirm('כבר קיימת דוגמת זהב בפרופיל. לבנות דוגמה חדשה מהחומרים הקיימים ולהחליף אותה?');
+      const confirmed = await showConfirm('כבר קיימת דוגמת זהב בפרופיל. לבנות דוגמה חדשה מהחומרים הקיימים ולהחליף אותה?', { title: 'דוגמת זהב', confirmLabel: 'בנה מחדש' });
       if (!confirmed) return;
     }
 
@@ -3487,10 +3818,26 @@ function PersonalStyleSettings({ profile, setProfile }) {
       if (result?.ok && result.profile) {
         setProfile(result.profile);
       } else {
-        window.alert(result?.message || 'לא נמצאו מספיק דוגמאות כתיבה לבניית דוגמת זהב.');
+        showToast(result?.message || 'לא נמצאו מספיק דוגמאות כתיבה לבניית דוגמת זהב.', { tone: 'warning' });
       }
     } finally {
       setBuildingGoldenExample(false);
+    }
+  };
+
+  const handleRunStyleProbe = async () => {
+    setStyleProbeRunning(true);
+    setStyleProbeResult(null);
+    try {
+      const result = await probePersonalStyleInfluence({ prompt: styleProbePrompt });
+      setStyleProbeResult(result);
+      if (!result?.ok) {
+        showToast(result?.message || 'הבדיקה נכשלה.', { tone: 'warning' });
+      }
+    } catch (error) {
+      showToast(`הבדיקה נכשלה: ${error?.message || error}`, { tone: 'warning' });
+    } finally {
+      setStyleProbeRunning(false);
     }
   };
 
@@ -3719,6 +4066,52 @@ function PersonalStyleSettings({ profile, setProfile }) {
           <div style={{ marginTop: 8, fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
             נבנתה לאחרונה: {new Date(profile.styleGoldenExampleBuiltAt).toLocaleString('he-IL')}
             {profile.styleGoldenExampleSources?.length ? ` · מקורות: ${profile.styleGoldenExampleSources.slice(0, 3).join(', ')}` : ''}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ border: '1px solid #FBCFE8', borderRadius: 12, padding: '14px', background: '#FFF7FC', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 13, color: '#9D174D', fontWeight: 800 }}>בדיקת השפעת הסגנון</div>
+            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>מפיק שני פלטים על אותה בקשה — אחד עם הפרופיל ואחד בלעדיו — ומשווה כדי לבדוק כמה הסגנון באמת משפיע.</div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRunStyleProbe}
+            disabled={styleProbeRunning}
+            style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #F472B6', background: styleProbeRunning ? '#FDF2F8' : 'white', color: '#9D174D', cursor: styleProbeRunning ? 'wait' : 'pointer', fontSize: 12, fontWeight: 700 }}
+          >
+            {styleProbeRunning ? 'מריץ...' : 'הרץ בדיקה'}
+          </button>
+        </div>
+        <textarea
+          value={styleProbePrompt}
+          onChange={(e) => setStyleProbePrompt(e.target.value)}
+          placeholder="כתוב כאן בקשת כתיבה לדוגמה, למשל: כתוב פסקת פתיחה למאמר על..."
+          rows={2}
+          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
+        />
+        {styleProbeResult?.ok ? (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: styleProbeResult.negligible ? '#B91C1C' : '#047857', marginBottom: 6 }}>
+              {styleProbeResult.verdict}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11, color: '#334155', marginBottom: 8 }}>
+              <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>חפיפת אוצר מילים: {Math.round(styleProbeResult.metrics.vocabularyOverlap * 100)}%</span>
+              <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>הפרש מילים למשפט: {styleProbeResult.metrics.sentenceDelta}</span>
+              <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>הפרש מילים לפסקה: {styleProbeResult.metrics.paragraphDelta}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ border: '1px solid #FBCFE8', borderRadius: 8, padding: 8, background: 'white' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#9D174D', marginBottom: 4 }}>עם הפרופיל</div>
+                <div style={{ fontSize: 11, color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withStyleText}</div>
+              </div>
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 8, background: 'white' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>בלי הפרופיל</div>
+                <div style={{ fontSize: 11, color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withoutStyleText}</div>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>
@@ -3985,7 +4378,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
     const newId = createNewWorkspace(nextName, 'content-studio');
     const switched = switchToWorkspace(newId);
     if (!switched) {
-      window.alert('הסביבה נוצרה, אבל לא הצלחתי לעבור אליה אוטומטית. נסה לבחור אותה מהרשימה.');
+      showToast('הסביבה נוצרה, אבל לא הצלחתי לעבור אליה אוטומטית. נסה לבחור אותה מהרשימה.', { tone: 'warning' });
       return;
     }
     const nextLibrary = getWorkspacesLibrary();
@@ -4000,13 +4393,13 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
   const handleQuickCreateWorkspace = () => createAndSwitchWorkspace(false);
 
-  const handleDeleteWorkspace = (workspaceId, workspaceName) => {
+  const handleDeleteWorkspace = async (workspaceId, workspaceName) => {
     const targetId = String(workspaceId || '').trim();
     if (!targetId || Object.prototype.hasOwnProperty.call(DEFAULT_WORKSPACES_LIBRARY, targetId)) return;
-    if (!window.confirm(`למחוק את סביבת העבודה "${workspaceName || targetId}"?`)) return;
+    if (!(await showConfirm(`למחוק את סביבת העבודה "${workspaceName || targetId}"?`, { title: 'מחיקת סביבה', confirmLabel: 'מחק', tone: 'danger' }))) return;
     const deleted = deleteWorkspace(targetId);
     if (!deleted) {
-      window.alert('לא הצלחתי למחוק את סביבת העבודה.');
+      showToast('לא הצלחתי למחוק את סביבת העבודה.', { tone: 'error' });
       return;
     }
     refreshWorkspaceState();
@@ -4066,7 +4459,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       : workspaceInput;
     const targetId = String(resolvedWorkspace?.id || '').trim();
     if (!targetId || !resolvedWorkspace) {
-      window.alert('לא הצלחתי לפתוח את סביבת העבודה לעריכה.');
+      showToast('לא הצלחתי לפתוח את סביבת העבודה לעריכה.', { tone: 'error' });
       return;
     }
 
@@ -4926,7 +5319,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           return (
           <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-              <span style={{ minWidth: 28, height: 28, borderRadius: 999, background: '#EEF4FF', color: '#2B579A', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>
+              <span style={{ minWidth: 28, height: 28, borderRadius: 999, background: '#EEF4FF', color: 'var(--color-chrome)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>
                 {index + 1}
               </span>
               <input
@@ -5234,7 +5627,8 @@ function DebugConsoleSettings({ automation }) {
     } catch {}
   };
 
-  const resetLogs = () => {
+  const resetLogs = async () => {
+    if (!(await showConfirm('לנקות את כל הלוגים של סביבת העבודה הנוכחית?', { title: 'ניקוי לוגים', confirmLabel: 'נקה', tone: 'danger' }))) return;
     clearAgentDebugLogs(activeWorkspaceId);
     setLogs([]);
     setSummary(getLatestAgentRunSummary(automation));
@@ -5666,8 +6060,8 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
   // Storage inspector state
   const [storageInfo, setStorageInfo] = useState(getWordAiStorageInfo);
   const refreshStorageInfo = () => setStorageInfo(getWordAiStorageInfo());
-  const clearStorageKey = (key) => {
-    if (!window.confirm(`למחוק את המפתח "${key}" מה-localStorage?\nפעולה זו לא ניתנת לביטול.`)) return;
+  const clearStorageKey = async (key) => {
+    if (!(await showConfirm(`למחוק את המפתח "${key}" מה-localStorage?\nפעולה זו לא ניתנת לביטול.`, { title: 'מחיקת מפתח אחסון', confirmLabel: 'מחק', tone: 'danger' }))) return;
     localStorage.removeItem(key);
     refreshStorageInfo();
   };
@@ -5676,8 +6070,13 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
   // App memory & chat history state
   const [appMemory, setAppMemory] = useState(() => getAppMemory());
   const [chatCleared, setChatCleared] = useState(false);
-  const handleClearAppMemory = () => { clearAppMemory(); setAppMemory(getAppMemory()); };
-  const handleClearChatHistory = () => {
+  const handleClearAppMemory = async () => {
+    if (!(await showConfirm('לנקות את זיכרון ה-AI (הערות ושיחות אחרונות)?\nפעולה זו לא ניתנת לביטול.', { title: 'ניקוי זיכרון AI', confirmLabel: 'נקה', tone: 'danger' }))) return;
+    clearAppMemory();
+    setAppMemory(getAppMemory());
+  };
+  const handleClearChatHistory = async () => {
+    if (!(await showConfirm('לנקות את היסטוריית הצ׳אט של סביבת העבודה הנוכחית?', { title: 'ניקוי צ׳אט', confirmLabel: 'נקה', tone: 'danger' }))) return;
     clearSidebarChatHistory({ workspaceId: automation?.activeWorkspaceId || 'default-content-studio', clearAll: false });
     setAppMemory(getAppMemory());
     setChatCleared(true);
@@ -5750,7 +6149,8 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
     downloadTextAsFile(`wordflow-debug-${activeWorkspaceId}-${Date.now()}.json`, JSON.stringify(payload, null, 2));
   };
 
-  const resetLogs = () => {
+  const resetLogs = async () => {
+    if (!(await showConfirm('לנקות את כל הלוגים של סביבת העבודה הנוכחית?', { title: 'ניקוי לוגים', confirmLabel: 'נקה', tone: 'danger' }))) return;
     clearAgentDebugLogs(activeWorkspaceId);
     setLogsCount(0);
     setSummary(getLatestAgentRunSummary(getWorkspaceAutomation()));
@@ -6265,7 +6665,12 @@ function AppearanceSettings() {
 
 // ─── FileMenu ראשי ───
 export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0, lastGenerationAction = null, liveGeneration = null }) {
-  const normalizeVisibleSettingsTab = (tab = '') => (tab === 'agents' ? 'ai' : (tab || 'ai'));
+  const normalizeVisibleSettingsTab = (tab = '') => {
+    const t = tab === 'agents' ? 'ai' : (tab || 'ai');
+    if (t === 'assistant') return 'sidebar';
+    if (t === 'debug') return 'developer';
+    return t;
+  };
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(normalizeVisibleSettingsTab(initialSettingsTab));
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
@@ -6275,6 +6680,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [shortcutsState, setShortcutsState] = useState(shortcuts || getShortcutsConfig());
   const [assistantBehaviorState, setAssistantBehaviorState] = useState(assistantBehavior || getAssistantBehavior());
   const [wordPrefsState, setWordPrefsState] = useState(wordPreferences || getWordPreferences());
+  const [presentationPrefsState, setPresentationPrefsState] = useState(getPresentationPreferences());
+  const [spssPrefsState, setSpssPrefsState] = useState(getSpssPreferences());
   const [personalStyleState, setPersonalStyleState] = useState(getPersonalStyleProfile());
   const personalStyleStateRef = useRef(getPersonalStyleProfile());
   const skipNextPersonalStylePersistRef = useRef(false);
@@ -6476,6 +6883,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     saveShortcutsConfig(shortcutsState);
     saveAssistantBehavior(assistantBehaviorState);
     saveWordPreferences(wordPrefsState);
+    savePresentationPreferences(presentationPrefsState);
+    saveSpssPreferences(spssPrefsState);
     localStorage.setItem('default-font', wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-font-stack', wordPrefsState.defaultFontStack || wordPrefsState.defaultFontFamily || 'Alef');
     localStorage.setItem('default-size', wordPrefsState.defaultFontSize || '12pt');
@@ -6521,7 +6930,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         settingsPersistTimerRef.current = null;
       }
     };
-  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, personalStyleState, sharedInstructionsState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
+  }, [config, shortcutsState, assistantBehaviorState, wordPrefsState, presentationPrefsState, spssPrefsState, personalStyleState, sharedInstructionsState, skillsState, roleAgents, workspaceAutomationState, onShortcutsChange, onAssistantBehaviorChange, onWordPreferencesChange]);
 
   const menuItems = [
     { id: 'openFile',   icon: 'ph-fill ph-folder-open',   label: 'פתח מהמחשב',         desc: 'פותח מסמך מקומי' },
@@ -6707,6 +7116,11 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </div>
         
         <div className="px-4 pb-4 pt-2">
+            <div className="mb-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] font-semibold text-slate-400">
+              <a href="legal/privacy.html" target="_blank" rel="noopener noreferrer" className="hover:text-white">פרטיות</a>
+              <a href="legal/terms.html" target="_blank" rel="noopener noreferrer" className="hover:text-white">תנאי שימוש</a>
+              <a href="legal/accessibility.html" target="_blank" rel="noopener noreferrer" className="hover:text-white">נגישות</a>
+            </div>
             <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-slate-400 bg-black/20 hover:text-white hover:bg-black/40 transition-colors w-full outline-none focus:ring-1 focus:ring-indigo-400/50" onClick={closeFileMenu}>
               <i className="ph ph-x text-sm" />
               <span className="font-semibold text-xs">חזור לעריכה</span>
@@ -6714,7 +7128,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         </div>
 
         <div className="pb-4 text-center text-[10px] text-slate-600 font-mono tracking-wider opacity-60">
-          WF-OS v1.0.13
+          WordFlow {APP_VERSION_LABEL || 'OS'}
         </div>
       </div>
 
@@ -6794,14 +7208,17 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 </div>
 
                 {visibleSettingsGroups.length > 0 && (
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 md:mb-8">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-6 md:mb-8">
                     {visibleSettingsGroups.map((group) => (
-                      <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition-colors">
-                        <div className="text-[11px] font-bold text-slate-400 mb-3 tracking-widest">{group.title}</div>
-                        <div className="flex flex-col gap-1.5">
+                      <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-5 shadow-sm hover:border-indigo-200 hover:shadow-md transition-all">
+                        <div className="mb-4">
+                          <div className="text-[14px] font-extrabold text-slate-800 tracking-tight">{group.title}</div>
+                          {group.desc && <div className="text-[11px] text-slate-400 font-medium mt-0.5 leading-snug">{group.desc}</div>}
+                        </div>
+                        <div className="flex flex-col gap-2">
                           {group.tabs.map(([id, label]) => (
                             <button key={id} onClick={() => setSettingsTab(id)}
-                              className={`w-full text-right px-3 py-2 rounded-xl text-[12px] sm:text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm focus:ring-indigo-100' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900 focus:ring-slate-100 focus:bg-slate-50'}`}>
+                              className={`w-full text-right px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-600 text-white border border-indigo-600 shadow-sm shadow-indigo-600/20 focus:ring-indigo-200' : 'bg-slate-50 text-slate-600 border border-transparent hover:bg-indigo-50 hover:text-indigo-700 focus:ring-slate-100'}`}>
                               {label}
                             </button>
                           ))}
@@ -6814,7 +7231,19 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
                   {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                   {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
-                  {settingsTab === 'sidebar'     && <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />}
+                  {settingsTab === 'media'       && <MediaVisualsSettings config={config} setConfig={setConfig} />}
+                  {settingsTab === 'sidebar'     && (
+                    <div className="flex flex-col gap-8">
+                      <div>
+                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>✨</span>התנהגות העוזר</div>
+                        <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />
+                      </div>
+                      <div className="border-t border-slate-100 pt-7">
+                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>💬</span>מצבי הצ׳אט בחלונית</div>
+                        <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />
+                      </div>
+                    </div>
+                  )}
                   {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
                   {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                   {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
@@ -6824,9 +7253,18 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
                     />
                   )}
-                  {settingsTab === 'developer'   && <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} setAgents={setRoleAgents} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />}
-                  {settingsTab === 'assistant'   && <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />}      
-                  {settingsTab === 'debug'       && <DebugConsoleSettings automation={workspaceAutomationState} />}
+                  {settingsTab === 'developer'   && (
+                    <div className="flex flex-col gap-8">
+                      <div>
+                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🛠️</span>כלים מתקדמים</div>
+                        <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} setAgents={setRoleAgents} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />
+                      </div>
+                      <div className="border-t border-slate-100 pt-7">
+                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🪵</span>קונסולת לוגים</div>
+                        <DebugConsoleSettings automation={workspaceAutomationState} />
+                      </div>
+                    </div>
+                  )}
                   {settingsTab === 'onboarding'  && (
                     <OnboardingTabContainer
                       profile={personalStyleState}
@@ -6842,6 +7280,8 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                     />
                   )}
                   {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
+                  {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
+                  {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
                   {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
                   {settingsTab === 'appearance'  && <AppearanceSettings />}       
                 </div>

@@ -18,10 +18,15 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
-import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser } from "lucide-react";
+import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot } from "lucide-react";
 import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
+import { showToast } from "./services/uiFeedback";
+import { tagStyleSample } from "./services/styleAuthenticityService";
 import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
+import { FindHighlight } from "./extensions/FindHighlight";
+import { CommentMark } from "./extensions/CommentMark";
+import { TrackChange } from "./extensions/TrackChange";
 
 const DOC_STYLE_PRESETS = {
   academic: { fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d6d9de' },
@@ -148,6 +153,9 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
   const [formatPainterActive, setFormatPainterActive] = useState(false);
   const [copiedFormat, setCopiedFormat] = useState(null);
   const [contextPanel, setContextPanel] = useState({ open: false, x: 24, y: 80 });
+  // D2: קווי גבול-עמוד (overlay בטוח, ללא reflow) — מציין היכן כל עמוד A4 נגמר.
+  const [pageBox, setPageBox] = useState(null);
+  const [pageGuides, setPageGuides] = useState([]);
   const wrapperRef = React.useRef(null);
   const wordCountFrameRef = React.useRef(null);
   const bubbleActions = React.useMemo(() => ([
@@ -161,8 +169,10 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     { id: "organize", type: "inline", row: 2, icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
     { id: "holeFill", type: "inline", row: 2, icon: <Wand2 size={14} className="text-lime-600" />, label: "מילוי חורים" },
     { id: "sourcesGeneral", type: "assistant", row: 2, icon: <Newspaper size={14} className="text-sky-600" />, label: "מקור לא אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות לא אקדמיים אבל אמינים ומאומתים, כמו כתבות, אתרי ממשלה או גופים רשמיים, לטקסט או למסמך הפעיל.' } },
+    { id: "tagDesired", type: "tag", tagKind: "desired", row: 3, icon: <UserCheck size={14} className="text-emerald-600" />, label: "הסגנון שלי (רצוי)" },
+    { id: "tagAi", type: "tag", tagKind: "ai", row: 3, icon: <Bot size={14} className="text-rose-500" />, label: "נראה כמו AI" },
   ].filter(({ id }) => wordPreferences?.aiQuickActions?.[id] !== false)), [wordPreferences]);
-  const bubbleActionRows = React.useMemo(() => ([1, 2].map((row) => bubbleActions.filter((action) => action.row === row)).filter((row) => row.length)), [bubbleActions]);
+  const bubbleActionRows = React.useMemo(() => ([1, 2, 3].map((row) => bubbleActions.filter((action) => action.row === row)).filter((row) => row.length)), [bubbleActions]);
 
   const syncEditorSurface = useCallback((instance, styleId = documentStyle) => {
     if (!instance?.view?.dom) return;
@@ -265,6 +275,9 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       TaskItem,
       AiSuggestionMark,
       PageBreak,
+      FindHighlight,
+      CommentMark,
+      TrackChange,
     ],
     content: "<p></p>",
     editorProps: {
@@ -483,7 +496,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     if (!editor) return;
     const cfg = getProviderConfig();
     if (cfg.active === 'gemini' && !getApiKey()) {
-      alert('לא הוגדר מפתח AI. פתח את ההגדרות מתוך תפריט קובץ.');
+      showToast('לא הוגדר מפתח AI. פתח את ההגדרות מתוך תפריט קובץ.', { tone: 'warning' });
       return;
     }
 
@@ -504,7 +517,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       await applyInlineAi(editor, agentId);
       setContextPanel((prev) => ({ ...prev, open: false }));
     } catch (error) {
-      alert("שגיאה מקריאת AI: " + error.message);
+      showToast("שגיאה מקריאת AI: " + error.message, { tone: 'error' });
     } finally {
       setLoadingAction(null);
     }
@@ -512,6 +525,16 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
 
   const handleBubbleAction = async (action) => {
     if (!action) return;
+    if (action.type === 'tag') {
+      if (!editor || editor.state.selection.empty) {
+        showToast('בחר טקסט לפני התיוג.', { tone: 'warning' });
+        return;
+      }
+      const selected = editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ');
+      const res = tagStyleSample(selected, action.tagKind);
+      showToast(res.message, { tone: res.ok ? (action.tagKind === 'desired' ? 'success' : 'info') : 'warning' });
+      return;
+    }
     if (action.type === 'inline') {
       await handleAiAction(action.id);
       return;
@@ -659,6 +682,49 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     };
   }, [closeContextPanel, contextPanel.open]);
 
+  // D2: מדידת גבולות עמוד A4 וציור קווי-עמוד ב-overlay (ללא נגיעה במסמך).
+  React.useEffect(() => {
+    if (!editor) return undefined;
+    const PX_PER_CM = 96 / 2.54;
+    const PAGE_OUTER_PX = 29.7 * PX_PER_CM;
+
+    const measure = () => {
+      const wrap = wrapperRef.current;
+      const pm = wrap?.querySelector('.ProseMirror');
+      if (!wrap || !pm || (pm.dataset.viewMode && pm.dataset.viewMode !== 'print')) {
+        setPageGuides((prev) => (prev.length ? [] : prev));
+        return;
+      }
+      let top = 0;
+      let left = 0;
+      let el = pm;
+      while (el && el !== wrap) { top += el.offsetTop; left += el.offsetLeft; el = el.offsetParent; }
+      const height = pm.offsetHeight;
+      const width = pm.offsetWidth;
+      const guides = [];
+      for (let y = PAGE_OUTER_PX; y < height - 6; y += PAGE_OUTER_PX) {
+        guides.push(Math.round(y));
+      }
+      setPageBox({ top, left, width, height });
+      setPageGuides(guides);
+    };
+
+    let timer = null;
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(measure, 60); };
+
+    schedule();
+    editor.on('update', schedule);
+    const pmEl = wrapperRef.current?.querySelector('.ProseMirror');
+    const ro = pmEl ? new window.ResizeObserver(schedule) : null;
+    if (pmEl && ro) ro.observe(pmEl);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      editor.off('update', schedule);
+      if (ro) ro.disconnect();
+    };
+  }, [editor, viewMode, documentStyle]);
+
   if (!editor) return null;
 
   return (
@@ -734,15 +800,6 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
               <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={() => applyContextCommand('clearFormatting')} title="נקה עיצוב">
                 <Eraser size={16} />
               </button>
-            </div>
-          </div>
-          <div className="p-2">
-            <div className="mb-1 px-2 pb-1 text-[11px] font-semibold tracking-[0.18em] text-slate-400">עריכה</div>
-            <div className="flex flex-col gap-0.5 text-sm">
-              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handlePasteClipboard}><span>הדבק</span><Clipboard size={15} className="text-slate-400" /></button>
-              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handleCutSelection}><span>גזור</span><Scissors size={15} className="text-slate-400" /></button>
-              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={handleCopySelection}><span>העתק</span><Copy size={15} className="text-slate-400" /></button>
-              <button className="flex items-center justify-between rounded-xl px-3 py-2 text-right text-slate-700 hover:bg-slate-50" onClick={() => { applyContextCommand('clearFormatting'); closeContextPanel(); }}><span>נקה עיצוב</span><Eraser size={15} className="text-slate-400" /></button>
             </div>
           </div>
         </div>
@@ -863,6 +920,44 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       </BubbleMenu>
 
       <EditorContent editor={editor} className="w-full shrink-0" />
+
+      {pageBox && pageGuides.length > 0 && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: pageBox.top,
+            left: pageBox.left,
+            width: pageBox.width,
+            height: pageBox.height,
+            pointerEvents: 'none',
+            zIndex: 5,
+          }}
+        >
+          {pageGuides.map((y, i) => (
+            <div key={y} style={{ position: 'absolute', top: y, left: 0, right: 0 }}>
+              <div style={{ borderTop: '1px dashed #94a3b8', opacity: 0.7 }} />
+              <span
+                style={{
+                  position: 'absolute',
+                  top: -9,
+                  left: 12,
+                  background: '#eef2f7',
+                  color: '#64748b',
+                  fontSize: 11,
+                  lineHeight: '18px',
+                  padding: '0 8px',
+                  borderRadius: 9,
+                  border: '1px solid #cbd5e1',
+                  fontFamily: "'Heebo','Segoe UI',sans-serif",
+                }}
+              >
+                עמוד {i + 2}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

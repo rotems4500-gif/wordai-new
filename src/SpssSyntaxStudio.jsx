@@ -4,12 +4,20 @@ import {
   SPSS_QUICK_ACTIONS,
   buildQuickActionSyntax,
   buildSmartSuggestions,
+  collectDeclaredTargetNames,
   generateSpssSyntax,
   getGuardrailGuidanceMessage,
   getQuickActionState,
+  interpretSpssOutput,
   isGuardrailSyntaxResponse,
-  parseCsvText,
+  runSpssGuidance,
 } from './services/spssSyntaxService';
+import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
+import { getSpssPreferences } from './services/aiService';
+import { generateSpssChart } from './services/chartService';
+
+// Methods that write new variables back to the data — these belong in prep mode.
+const PREP_METHOD_PATTERN = /(reliability|cronbach|recode|compute|scale|index|reverse|מהימנות|סולם|מדד|היפוך|recoding)/i;
 
 const createLocalId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -25,11 +33,34 @@ const formatTime = (value = 0) => new Date(value || Date.now()).toLocaleTimeStri
 
 const sourceLabelMap = {
   ai: 'AI',
+  local: 'SPSS בטוח',
   'quick-action': 'פעולה מהירה',
   guardrail: 'הכוונה',
 };
 
 const normalizeBlockTitle = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+
+const buildSafeFileStem = (value = 'wordflow-spss') => {
+  const base = String(value || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 42);
+  return base || 'wordflow-spss';
+};
+
+const buildSyntaxFileName = ({ analysis = null, mode = 'master', blockCount = 0, block = null } = {}) => {
+  const datasetStem = buildSafeFileStem(analysis?.fileName || 'dataset');
+  const countPart = Math.max(0, Number(blockCount) || 0);
+  const timePart = new Date(block?.createdAt || Date.now())
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\..+$/, '')
+    .replace('T', '-');
+  const modePart = mode === 'block' ? `block-${countPart || 1}` : `master-${countPart}`;
+  return `${datasetStem}-${modePart}-${timePart}.sps`;
+};
 
 const buildMasterSyntax = (blocks = []) => blocks
   .map((block, index) => [
@@ -41,7 +72,7 @@ const buildMasterSyntax = (blocks = []) => blocks
 
 const downloadTextFile = (content = '', fileName = 'wordflow-spss-syntax.sps') => {
   const blob = new Blob([String(content || '')], { type: 'text/plain;charset=utf-8' });
-  void saveBlobInBrowser(blob, fileName);
+  return saveBlobInBrowser(blob, fileName);
 };
 
 const noticeToneClassMap = {
@@ -50,65 +81,49 @@ const noticeToneClassMap = {
   info: 'border-slate-200 bg-slate-50 text-slate-700',
 };
 
-const SUPPORTED_DATA_FILE_ACCEPT = '.csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,.tsv,text/tab-separated-values,.txt,text/plain,.sav,application/x-spss-sav';
-const TEXT_TABULAR_EXTENSIONS = new Set(['csv', 'tsv', 'txt']);
-const EXCEL_TABULAR_EXTENSIONS = new Set(['xlsx', 'xls']);
-
-const getFileExtension = (fileName = '') => {
-  const cleanName = String(fileName || '').trim().toLowerCase();
-  const match = cleanName.match(/\.([^.]+)$/);
-  return match?.[1] || '';
-};
-
-const readExcelFileAsCsvText = async (file) => {
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const firstSheetName = workbook.SheetNames?.[0] || '';
-  if (!firstSheetName) throw new Error('לא נמצא גיליון בקובץ Excel.');
-
-  const worksheet = workbook.Sheets[firstSheetName];
-  const csvText = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
-  if (!String(csvText || '').trim()) throw new Error('הגיליון הראשון בקובץ Excel ריק.');
-  return csvText;
-};
-
-const readTabularUploadAsText = async (file) => {
-  const extension = getFileExtension(file?.name);
-  const mimeType = String(file?.type || '').toLowerCase();
-
-  if (extension === 'sav') {
-    throw new Error('קובצי SAV אינם נתמכים כרגע. יש לייצא את הקובץ מ-SPSS ל-CSV או XLSX ואז להעלות אותו שוב.');
-  }
-
-  if (TEXT_TABULAR_EXTENSIONS.has(extension) || mimeType.startsWith('text/')) {
-    return file.text();
-  }
-
-  if (EXCEL_TABULAR_EXTENSIONS.has(extension) || mimeType.includes('spreadsheet') || mimeType === 'application/vnd.ms-excel') {
-    return readExcelFileAsCsvText(file);
-  }
-
-  throw new Error('סוג הקובץ לא נתמך. אפשר להעלות CSV, XLSX, XLS, TSV או TXT. קובצי SAV דורשים ייצוא קודם ל-CSV או XLSX.');
-};
-
-export default function SpssSyntaxStudio() {
+export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
   const fileInputRef = React.useRef(null);
   const activeUploadRequestIdRef = React.useRef('');
   const activeSessionIdRef = React.useRef('');
   const activeGenerateRequestIdRef = React.useRef('');
+  const spssPrefsRef = React.useRef(getSpssPreferences());
   const [analysis, setAnalysis] = React.useState(null);
   const [request, setRequest] = React.useState('');
-  const [tutorMode, setTutorMode] = React.useState(true);
+  const [tutorMode, setTutorMode] = React.useState(() => spssPrefsRef.current.tutorMode !== false);
+  const [genMode, setGenMode] = React.useState(() => spssPrefsRef.current.defaultGenMode || 'analysis');
   const [loading, setLoading] = React.useState(false);
   const [dragActive, setDragActive] = React.useState(false);
   const [blocks, setBlocks] = React.useState([]);
   const [lastBlockId, setLastBlockId] = React.useState('');
+  const [syntaxView, setSyntaxView] = React.useState(() => spssPrefsRef.current.defaultSyntaxView || 'master');
   const [guidance, setGuidance] = React.useState('');
-  const [notice, setNotice] = React.useState({ tone: 'info', text: 'העלה CSV, Excel, TSV או TXT כדי להתחיל לבנות syntax ל-SPSS.' });
+  const [lastRejectedRequest, setLastRejectedRequest] = React.useState(null);
+  const [notice, setNotice] = React.useState({ tone: 'info', text: 'העלה SAV, CSV, Excel, TSV או TXT כדי להתחיל לבנות syntax ל-SPSS.' });
+  const [studioView, setStudioView] = React.useState('syntax');
+  const [chatMessages, setChatMessages] = React.useState([]);
+  const [chatInput, setChatInput] = React.useState('');
+  const [chatInputMode, setChatInputMode] = React.useState('ask');
+  const [outputDraft, setOutputDraft] = React.useState('');
+  const [chatBusy, setChatBusy] = React.useState(false);
 
   const suggestions = React.useMemo(() => buildSmartSuggestions(analysis), [analysis]);
   const masterSyntax = React.useMemo(() => buildMasterSyntax(blocks), [blocks]);
-  const lastBlock = React.useMemo(() => blocks.find((block) => block.id === lastBlockId) || blocks[blocks.length - 1] || null, [blocks, lastBlockId]);
+  const priorCreatedNames = React.useMemo(
+    () => Array.from(new Set(blocks.flatMap((block) => Array.from(collectDeclaredTargetNames(block.syntax))))),
+    [blocks],
+  );
+  const latestBlock = React.useMemo(() => blocks[blocks.length - 1] || null, [blocks]);
+  const selectedBlock = React.useMemo(() => blocks.find((block) => block.id === lastBlockId) || latestBlock, [blocks, lastBlockId, latestBlock]);
+  const activeSyntaxContent = syntaxView === 'block' ? String(selectedBlock?.syntax || '') : masterSyntax;
+  const activeSyntaxFileName = React.useMemo(() => buildSyntaxFileName({
+    analysis,
+    mode: syntaxView,
+    blockCount: blocks.length,
+    block: syntaxView === 'block' ? selectedBlock : latestBlock,
+  }), [analysis, blocks.length, latestBlock, selectedBlock, syntaxView]);
+  const activeSyntaxTitle = syntaxView === 'block'
+    ? (selectedBlock ? `בלוק נבחר: ${selectedBlock.title}` : 'בלוק נבחר')
+    : 'Master syntax עדכני';
   const openFilePicker = React.useCallback(() => {
     if (!fileInputRef.current) return;
     fileInputRef.current.value = '';
@@ -128,6 +143,8 @@ export default function SpssSyntaxStudio() {
     };
     setBlocks((prev) => [...prev, nextBlock]);
     setLastBlockId(nextBlock.id);
+    setSyntaxView('master');
+    setLastRejectedRequest(null);
     return nextBlock;
   }, []);
 
@@ -137,6 +154,15 @@ export default function SpssSyntaxStudio() {
       setNotice({ tone: 'success', text: successMessage });
     } catch {
       setNotice({ tone: 'error', text: 'ההעתקה נכשלה. אפשר לסמן ולהעתיק ידנית.' });
+    }
+  }, []);
+
+  const handleDownloadSyntax = React.useCallback(async (content, fileName) => {
+    try {
+      await downloadTextFile(content, fileName);
+      setNotice({ tone: 'success', text: `קובץ הסינטקס נוצר: ${fileName}` });
+    } catch {
+      setNotice({ tone: 'error', text: 'הורדת קובץ הסינטקס נכשלה. אפשר להעתיק את הסינטקס ידנית.' });
     }
   }, []);
 
@@ -151,11 +177,18 @@ export default function SpssSyntaxStudio() {
     });
     setBlocks([]);
     setLastBlockId('');
+    setSyntaxView('master');
     setRequest('');
     setGuidance('');
+    setLastRejectedRequest(null);
+    setChatMessages([]);
+    setChatInput('');
+    setOutputDraft('');
+    setChatInputMode('ask');
+    setChatBusy(false);
     setNotice({
       tone: 'success',
-      text: `נטען ${nextAnalysis.fileName || 'קובץ נתונים'} עם ${nextAnalysis.rowCount.toLocaleString('he-IL')} שורות ו-${nextAnalysis.columnCount} עמודות. רק metadata טוקניזי יישלח ל-AI.`,
+      text: `נטען ${nextAnalysis.fileName || 'קובץ נתונים'} עם ${nextAnalysis.rowCount.toLocaleString('he-IL')} שורות ו-${nextAnalysis.columnCount} עמודות. ל-AI נשלחים שמות המשתנים וסטטיסטיקות סיכום — לא שורות הדאטה.`,
     });
   }, []);
 
@@ -167,10 +200,7 @@ export default function SpssSyntaxStudio() {
     setLoading(false);
 
     try {
-      const content = await readTabularUploadAsText(file);
-      if (activeUploadRequestIdRef.current !== uploadRequestId) return;
-
-      const nextAnalysis = parseCsvText(content, { fileName: file.name });
+      const nextAnalysis = await readDataFileToAnalysis(file);
       if (activeUploadRequestIdRef.current !== uploadRequestId) return;
 
       resetForNewDataset(nextAnalysis);
@@ -227,6 +257,7 @@ export default function SpssSyntaxStudio() {
     if (!actionState.available) {
       const guidanceMessage = getGuardrailGuidanceMessage(actionState.reason);
       setGuidance(guidanceMessage);
+      setLastRejectedRequest(null);
       setNotice({ tone: 'error', text: guidanceMessage });
       return;
     }
@@ -235,6 +266,7 @@ export default function SpssSyntaxStudio() {
     if (isGuardrailSyntaxResponse(syntax)) {
       const guidanceMessage = getGuardrailGuidanceMessage(syntax);
       setGuidance(guidanceMessage);
+      setLastRejectedRequest(null);
       setNotice({ tone: 'error', text: guidanceMessage });
       return;
     }
@@ -257,27 +289,45 @@ export default function SpssSyntaxStudio() {
     if (!analysis) {
       const guidanceMessage = 'צריך להעלות קובץ נתונים לפני יצירת syntax.';
       setGuidance(guidanceMessage);
+      setLastRejectedRequest(null);
       setNotice({ tone: 'error', text: guidanceMessage });
       return;
     }
     if (!request.trim()) {
       const guidanceMessage = 'כתוב בקשה קצרה בעברית כדי לייצר syntax.';
       setGuidance(guidanceMessage);
+      setLastRejectedRequest(null);
       setNotice({ tone: 'error', text: guidanceMessage });
       return;
     }
 
     const currentAnalysis = analysis;
     const requestText = request.trim();
+    let effectiveMode = genMode;
+    if (
+      genMode === 'analysis'
+      && spssPrefsRef.current.autoSwitchPrepForReliability !== false
+      && PREP_METHOD_PATTERN.test(requestText)
+    ) {
+      effectiveMode = 'prep';
+      setGenMode('prep');
+    }
     const sessionId = String(currentAnalysis?.sessionId || '');
     const generateRequestId = createLocalId();
     activeGenerateRequestIdRef.current = generateRequestId;
 
     setLoading(true);
     setGuidance('');
-    setNotice({ tone: 'info', text: 'מייצר syntax דרך ה-provider הפעיל, עם metadata טוקניזי בלבד...' });
+    setLastRejectedRequest(null);
+    setNotice({ tone: 'info', text: 'מייצר syntax דרך ה-provider הפעיל...' });
     try {
-      const result = await generateSpssSyntax({ analysis: currentAnalysis, request: requestText, tutorMode });
+      const result = await generateSpssSyntax({
+        analysis: currentAnalysis,
+        request: requestText,
+        tutorMode,
+        mode: effectiveMode,
+        extraAllowedNames: priorCreatedNames,
+      });
       if (
         activeGenerateRequestIdRef.current !== generateRequestId
         || activeSessionIdRef.current !== sessionId
@@ -288,7 +338,15 @@ export default function SpssSyntaxStudio() {
       if (!result.ok) {
         const guidanceMessage = result.guidanceMessage || 'הבקשה נעצרה לפני יצירת syntax כדי למנוע פלט שגוי.';
         setGuidance(guidanceMessage);
-        setNotice({ tone: 'error', text: 'לא הוספתי את התוצאה ל-master syntax כי ה-guardrail עצר את הבקשה.' });
+        setLastRejectedRequest({
+          id: generateRequestId,
+          createdAt: Date.now(),
+          title: requestText,
+          guidance: guidanceMessage,
+          tokenizedRequest: String(result.tokenizedRequest || '').trim(),
+          rawSyntax: String(result.rawSyntax || '').trim(),
+        });
+        setNotice({ tone: 'error', text: 'הבקשה נעצרה: ה-master syntax ורצף העבודה למטה נשארו ללא שינוי.' });
         return;
       }
 
@@ -314,6 +372,7 @@ export default function SpssSyntaxStudio() {
       }
 
       setGuidance('הקריאה ל-provider נכשלה. אפשר לנסח מחדש את הבקשה או לבדוק את הגדרות ה-AI.');
+      setLastRejectedRequest(null);
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'יצירת syntax נכשלה.' });
     } finally {
       if (
@@ -323,7 +382,101 @@ export default function SpssSyntaxStudio() {
         setLoading(false);
       }
     }
-  }, [analysis, appendBlock, request, tutorMode]);
+  }, [analysis, appendBlock, request, tutorMode, genMode, priorCreatedNames]);
+
+  const appendChatMessage = React.useCallback((message) => {
+    setChatMessages((prev) => [...prev, { id: createLocalId(), createdAt: Date.now(), ...message }]);
+  }, []);
+
+  const onSendGuidance = React.useCallback(async () => {
+    const question = chatInput.trim();
+    if (!question || chatBusy) return;
+
+    const history = chatMessages.map((message) => ({ role: message.role, text: message.text }));
+    appendChatMessage({ role: 'user', text: question, kind: 'ask' });
+    setChatInput('');
+    setChatBusy(true);
+    try {
+      const result = await runSpssGuidance({ analysis, question, history, mode: genMode });
+      appendChatMessage(
+        result.ok
+          ? { role: 'assistant', text: result.answer, kind: 'guidance', providerId: result.providerId, model: result.model }
+          : { role: 'assistant', text: result.error || 'קבלת ההדרכה נכשלה.', kind: 'error' },
+      );
+    } catch (error) {
+      appendChatMessage({ role: 'assistant', text: error instanceof Error ? error.message : 'קבלת ההדרכה נכשלה.', kind: 'error' });
+    } finally {
+      setChatBusy(false);
+    }
+  }, [analysis, appendChatMessage, chatBusy, chatInput, chatMessages, genMode]);
+
+  const onInterpretOutput = React.useCallback(async () => {
+    const output = outputDraft.trim();
+    if (!output || chatBusy) return;
+
+    const focus = chatInput.trim();
+    appendChatMessage({ role: 'user', text: `פירוש פלט SPSS${focus ? ` · ${focus}` : ''}:\n${output}`, kind: 'output' });
+    setOutputDraft('');
+    setChatInput('');
+    setChatBusy(true);
+    try {
+      const result = await interpretSpssOutput({ analysis, output, question: focus });
+      appendChatMessage(
+        result.ok
+          ? { role: 'assistant', text: result.answer, kind: 'interpretation', providerId: result.providerId, model: result.model }
+          : { role: 'assistant', text: result.error || 'פירוש הפלט נכשל.', kind: 'error' },
+      );
+    } catch (error) {
+      appendChatMessage({ role: 'assistant', text: error instanceof Error ? error.message : 'פירוש הפלט נכשל.', kind: 'error' });
+    } finally {
+      setChatBusy(false);
+    }
+  }, [analysis, appendChatMessage, chatBusy, chatInput, outputDraft]);
+
+  const onGenerateChart = React.useCallback(async () => {
+    const output = outputDraft.trim();
+    if (!output || chatBusy) return;
+
+    const focus = chatInput.trim();
+    appendChatMessage({ role: 'user', text: `צור גרף מהפלט${focus ? ` · ${focus}` : ''}:\n${output}`, kind: 'output' });
+    setChatBusy(true);
+    setNotice({ tone: 'info', text: 'מחלץ נתונים מהפלט ומרנדר גרף...' });
+    try {
+      const result = await generateSpssChart({ analysis, output, focus });
+      if (result.ok) {
+        appendChatMessage({
+          role: 'assistant',
+          kind: 'chart',
+          text: result.engine === 'ai' ? 'גרף המחשה שנוצר ב-AI (לא מדויק מספרית).' : 'גרף מדויק מנתוני הפלט.',
+          dataUrl: result.dataUrl,
+          chartTitle: result.title || 'תרשים',
+          chartAlt: result.alt || 'תרשים',
+          engine: result.engine,
+        });
+        setOutputDraft('');
+        setChatInput('');
+        setNotice({ tone: 'success', text: 'הגרף נוצר. אפשר להוריד או לגרור לעורך.' });
+      } else {
+        appendChatMessage({ role: 'assistant', kind: 'error', text: result.reason || 'יצירת הגרף נכשלה.' });
+        setNotice({ tone: 'error', text: result.reason || 'יצירת הגרף נכשלה.' });
+      }
+    } catch (error) {
+      appendChatMessage({ role: 'assistant', kind: 'error', text: error instanceof Error ? error.message : 'יצירת הגרף נכשלה.' });
+    } finally {
+      setChatBusy(false);
+    }
+  }, [analysis, appendChatMessage, chatBusy, chatInput, outputDraft]);
+
+  const handleDownloadChart = React.useCallback(async (dataUrl, title) => {
+    try {
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      await saveBlobInBrowser(blob, `${buildSafeFileStem(title || analysis?.fileName || 'spss-chart')}.png`);
+      setNotice({ tone: 'success', text: 'הגרף נשמר כקובץ PNG.' });
+    } catch {
+      setNotice({ tone: 'error', text: 'שמירת הגרף נכשלה.' });
+    }
+  }, [analysis]);
 
   const statusToneClass = noticeToneClassMap[notice.tone] || noticeToneClassMap.info;
 
@@ -369,17 +522,27 @@ export default function SpssSyntaxStudio() {
                 </div>
               </div>
 
+              {onOpenProjectMode && (
+                <button
+                  type="button"
+                  className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-[#1F6FEB]/30 bg-[#1F6FEB]/5 px-5 py-3 text-sm font-semibold text-[#1F6FEB] transition hover:bg-[#1F6FEB]/10"
+                  onClick={onOpenProjectMode}
+                >
+                  עבודת סיום שלמה? עבור למצב עבודה מונחה →
+                </button>
+              )}
+
               <div className="mt-6 grid gap-4 md:grid-cols-2">
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4">
-                  <div className="text-sm font-bold text-slate-900">פרטיות כברירת מחדל</div>
+                  <div className="text-sm font-bold text-slate-900">איך זה עובד</div>
                   <p className="mt-2 text-sm leading-7 text-slate-600">
-                    WordFlow מנתח מקומית שמות עמודות, טיפוסים, וחלון inference קטן בלבד. ל-AI נשלח רק metadata טוקניזי, לא כל הדאטה שלך.
+                    WordFlow מנתח מקומית שמות עמודות, טיפוסים וטווחי ערכים. ל-AI נשלחים שמות המשתנים וסטטיסטיקות הסיכום כדי לייצר syntax והדרכה מדויקים — שורות הדאטה עצמן לא נשלחות.
                   </p>
                 </div>
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4">
                   <div className="text-sm font-bold text-slate-900">מה להכין מראש</div>
                   <p className="mt-2 text-sm leading-7 text-slate-600">
-                    ודא שהשורה הראשונה בקובץ היא שמות משתנים ברורים. אם יש קובץ SAV, ייצא אותו קודם ל-CSV או XLSX מתוך SPSS.
+                    אפשר להעלות קובץ SAV ישירות. בקובצי CSV, Excel, TSV או TXT ודא שהשורה הראשונה כוללת שמות משתנים ברורים.
                   </p>
                 </div>
               </div>
@@ -387,11 +550,11 @@ export default function SpssSyntaxStudio() {
 
             <aside className="space-y-4">
               <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                <div className="text-lg font-bold text-slate-900">איך מייצאים נתונים מ-SPSS?</div>
+                <div className="text-lg font-bold text-slate-900">קבצים נתמכים</div>
                 <ol className="mt-4 space-y-3 pr-5 text-sm leading-7 text-slate-600 list-decimal">
-                  <li>פתח את קובץ ה-SAV ב-SPSS.</li>
-                  <li>בחר File ואז Save As.</li>
-                  <li>בחר CSV (*.csv) או Excel (*.xlsx) ושמור עם שורת כותרות של שמות המשתנים.</li>
+                  <li>SAV מקורי של SPSS.</li>
+                  <li>CSV, TSV או TXT עם שורת כותרות.</li>
+                  <li>Excel מסוג XLSX או XLS, לפי הגיליון הראשון.</li>
                 </ol>
               </div>
 
@@ -462,7 +625,7 @@ export default function SpssSyntaxStudio() {
                 החלף קובץ
               </button>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
-                רק metadata טוקניזי נשלח ל-AI. שורות הדאטה המלאות לא נשלחות החוצה.
+ל-AI נשלחים שמות המשתנים וסטטיסטיקות סיכום. שורות הדאטה המלאות לא נשלחות.
               </div>
             </div>
           </div>
@@ -471,7 +634,7 @@ export default function SpssSyntaxStudio() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-bold text-slate-900">מה תרצה לעשות עם הדאטה?</div>
-                <div className="mt-1 text-sm text-slate-500">כתוב בעברית חופשית. אם תזכיר שמות עמודות, WordFlow יטוקנז אותם לפני השליחה.</div>
+                <div className="mt-1 text-sm text-slate-500">כתוב בעברית חופשית. אפשר להזכיר שמות עמודות מהקובץ — WordFlow מזהה אותם אוטומטית.</div>
               </div>
               <button
                 type="button"
@@ -481,6 +644,29 @@ export default function SpssSyntaxStudio() {
               >
                 {loading ? 'מייצר syntax...' : 'צור syntax'}
               </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${genMode === 'analysis' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  onClick={() => setGenMode('analysis')}
+                >
+                  ניתוח (read-only)
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${genMode === 'prep' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  onClick={() => setGenMode('prep')}
+                >
+                  הכנת דאטה
+                </button>
+              </div>
+              <span className="text-xs leading-5 text-slate-500">
+                {genMode === 'prep'
+                  ? 'מותרות פעולות שמשנות נתונים: COMPUTE, RECODE, בניית סולמות, Cronbach, טיפול בחסרים. צור משתנים חדשים.'
+                  : 'רק ניתוח לקריאה. פקודות שמשנות נתונים חסומות — עבור ל״הכנת דאטה״ כדי לאפשר אותן.'}
+              </span>
             </div>
             <textarea
               className="min-h-[150px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"
@@ -508,10 +694,10 @@ export default function SpssSyntaxStudio() {
           </div>
 
           <details className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-            <summary className="cursor-pointer text-lg font-bold text-slate-900">פרטיות, טוקניזציה והרצה ב-SPSS</summary>
+            <summary className="cursor-pointer text-lg font-bold text-slate-900">איך זה עובד והרצה ב-SPSS</summary>
             <div className="mt-4 space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-700">
-                העמודות עוברות טוקניזציה ל-VAR_n לפני שליחה ל-AI, ואז הסינטקס חוזר לשמות המשתנים הבטוחים שלך לפני תצוגה או ייצוא.
+                פנימית כל עמודה מקבלת token יציב (VAR_n) שמאפשר ל-WordFlow לאמת שה-AI לא ממציא משתנים, ואז הסינטקס חוזר לשמות המשתנים שלך לפני תצוגה או ייצוא.
               </div>
               <ol className="space-y-3 pr-5 text-sm leading-7 text-slate-600 list-decimal">
                 <li>פתח את קובץ הנתונים שלך ב-SPSS וודא ששמות המשתנים תקינים.</li>
@@ -577,18 +763,182 @@ export default function SpssSyntaxStudio() {
             {notice.text}
           </div>
 
-          {guidance && (
+          <div className="inline-flex rounded-full border border-slate-200 bg-white p-1 shadow-sm">
+            <button
+              type="button"
+              className={`rounded-full px-4 py-2 text-xs font-bold transition ${studioView === 'syntax' ? 'bg-[#0066cc] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              onClick={() => setStudioView('syntax')}
+            >
+              סטודיו Syntax
+            </button>
+            <button
+              type="button"
+              className={`rounded-full px-4 py-2 text-xs font-bold transition ${studioView === 'tutor' ? 'bg-[#0066cc] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              onClick={() => setStudioView('tutor')}
+            >
+              מדריך ושיחה
+            </button>
+          </div>
+
+          {studioView === 'tutor' && (
+            <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm flex min-h-[620px] flex-col">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-bold text-slate-900">מדריך SPSS</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    שאל איך עושים משהו ב-SPSS (תפריטים + syntax), מתי להשתמש בכל מבחן, או הדבק פלט וקבל פירוש. השיחה זוכרת את הדאטה והקשר.
+                  </div>
+                </div>
+                {chatMessages.length > 0 && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-rose-200 hover:text-rose-700"
+                    onClick={() => { setChatMessages([]); setChatInput(''); setOutputDraft(''); }}
+                  >
+                    נקה שיחה
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-4 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-slate-100 bg-slate-50/60 px-4 py-4">
+                {chatMessages.length ? chatMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`rounded-2xl border px-4 py-3 text-sm leading-7 ${
+                      message.role === 'user'
+                        ? 'border-blue-100 bg-blue-50 text-slate-800'
+                        : message.kind === 'error'
+                          ? 'border-rose-200 bg-rose-50 text-rose-700'
+                          : 'border-slate-200 bg-white text-slate-800'
+                    }`}
+                  >
+                    <div className="mb-1 text-[11px] font-bold text-slate-400">
+                      {message.role === 'user' ? 'אתה' : (message.kind === 'chart' ? 'גרף' : 'מדריך SPSS')}
+                      {message.providerId ? ` · ${message.providerId}` : ''}
+                    </div>
+                    {message.kind === 'chart' && message.dataUrl ? (
+                      <div className="flex flex-col gap-2">
+                        {message.chartTitle && <div className="text-sm font-bold text-slate-700">{message.chartTitle}</div>}
+                        <img
+                          src={message.dataUrl}
+                          alt={message.chartAlt || 'תרשים'}
+                          draggable
+                          className="w-full max-w-[520px] rounded-xl border border-slate-200 bg-white"
+                        />
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            className="text-xs font-bold text-blue-700 hover:underline"
+                            onClick={() => handleDownloadChart(message.dataUrl, message.chartTitle)}
+                          >
+                            ⬇ הורד PNG
+                          </button>
+                          {message.engine === 'ai' && <span className="text-[11px] text-amber-600">המחשה — לא מדויק מספרית</span>}
+                        </div>
+                        {message.text && <div className="text-[11px] text-slate-400">{message.text}</div>}
+                      </div>
+                    ) : (
+                      <div className="whitespace-pre-wrap break-words">{message.text}</div>
+                    )}
+                  </div>
+                )) : (
+                  <div className="flex h-full items-center justify-center px-6 py-10 text-center text-sm leading-7 text-slate-500">
+                    התחל בשאלה כמו "מתי משתמשים ב-ANOVA ולא ב-T-test?" או "איך מריצים מהימנות לסולם?", או עבור ל״פירוש פלט״ והדבק טבלה מ-SPSS.
+                  </div>
+                )}
+                {chatBusy && (
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">חושב...</div>
+                )}
+              </div>
+
+              <div className="mt-4 inline-flex self-start rounded-full border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${chatInputMode === 'ask' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  onClick={() => setChatInputMode('ask')}
+                >
+                  שאלה
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${chatInputMode === 'output' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  onClick={() => setChatInputMode('output')}
+                >
+                  פירוש פלט
+                </button>
+              </div>
+
+              {chatInputMode === 'output' && (
+                <textarea
+                  className="mt-3 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[12px] leading-6 text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"
+                  placeholder="הדבק כאן את טבלת ה-Output מ-SPSS (למשל טבלת Independent Samples Test)."
+                  value={outputDraft}
+                  onChange={(event) => setOutputDraft(event.target.value)}
+                />
+              )}
+
+              <div className="mt-3 flex items-end gap-2">
+                <textarea
+                  className="min-h-[52px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"
+                  placeholder={chatInputMode === 'output' ? 'שאלה ממוקדת על הפלט (לא חובה).' : 'כתוב שאלה על SPSS...'}
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey && chatInputMode === 'ask') {
+                      event.preventDefault();
+                      onSendGuidance();
+                    }
+                  }}
+                />
+                {chatInputMode === 'output' && (
+                  <button
+                    type="button"
+                    className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${chatBusy || !outputDraft.trim() ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'border border-blue-200 bg-white text-blue-700 hover:bg-blue-50'}`}
+                    onClick={onGenerateChart}
+                    disabled={chatBusy || !outputDraft.trim()}
+                    title="חלץ את המספרים מהפלט וצור תרשים מדויק"
+                  >
+                    📈 צור גרף
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`rounded-2xl px-4 py-3 text-sm font-semibold text-white transition ${chatBusy ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
+                  onClick={chatInputMode === 'output' ? onInterpretOutput : onSendGuidance}
+                  disabled={chatBusy || (chatInputMode === 'output' ? !outputDraft.trim() : !chatInput.trim())}
+                >
+                  {chatBusy ? '...' : (chatInputMode === 'output' ? 'פרש' : 'שלח')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {studioView === 'syntax' && guidance && (
             <div className="rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-5 shadow-sm text-sm leading-7 text-amber-900">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-bold">הבקשה נעצרה לפני כתיבה ל-syntax</div>
                   <div className="mt-2 max-w-3xl text-sm leading-7 text-amber-800">{guidance}</div>
-                  <div className="mt-2 text-xs font-semibold text-amber-700">ההודעה נשארת נפרדת ולא נכנסת ל-master syntax או ל-history.</div>
+                  <div className="mt-2 text-xs font-semibold text-amber-700">ההודעה נשארת נפרדת ולא נכנסת ל-master syntax או לרצף העבודה.</div>
+                  {lastRejectedRequest && (
+                    <div className="mt-3 rounded-2xl border border-amber-200 bg-white/70 px-4 py-3 text-xs leading-6 text-amber-800">
+                      <div className="font-bold">הבקשה שלא נשמרה: {lastRejectedRequest.title}</div>
+                      {lastRejectedRequest.tokenizedRequest && (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer font-semibold">פרטים טכניים</summary>
+                          <div className="mt-2">בקשה טוקניזית: {lastRejectedRequest.tokenizedRequest}</div>
+                        </details>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
                   className="rounded-full border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
-                  onClick={() => setGuidance('')}
+                  onClick={() => {
+                    setGuidance('');
+                    setLastRejectedRequest(null);
+                  }}
                 >
                   סגור
                 </button>
@@ -596,116 +946,103 @@ export default function SpssSyntaxStudio() {
             </div>
           )}
 
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,0.92fr),minmax(0,1.08fr)]">
-            <div className="space-y-5">
-              <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-lg font-bold text-slate-900">התוצאה האחרונה</div>
-                    <div className="mt-1 text-sm text-slate-500">רק בלוקים תקפים נכנסים לכאן. guardrails נשארים כהכוונה נפרדת.</div>
-                  </div>
-                  {lastBlock && (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-                        onClick={() => handleCopy(lastBlock.syntax, 'הבלוק האחרון הועתק ללוח.')}
-                      >
-                        העתק
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-                        onClick={() => downloadTextFile(lastBlock.syntax, 'wordflow-last-block.sps')}
-                      >
-                        הורד .sps
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-rose-200 hover:text-rose-700"
-                        onClick={removeLastBlock}
-                      >
-                        הסר בלוק אחרון
-                      </button>
-                    </div>
-                  )}
+          {studioView === 'syntax' && (
+          <>
+          <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm flex min-h-[620px] flex-col">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="text-lg font-bold text-slate-900">{activeSyntaxTitle}</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {syntaxView === 'master'
+                    ? 'זה הקובץ העדכני להרצה: כל הבלוקים התקפים מצטברים כאן לפי הסדר.'
+                    : 'תצוגת בלוק יחיד מתוך הרצף. להורדה מלאה עבור SPSS עבור ל-Master.'}
                 </div>
+              </div>
 
-                {lastBlock ? (
-                  <div className="mt-4 space-y-4">
-                    <div className="flex flex-wrap items-center gap-2 text-[12px]">
-                      <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{lastBlock.title}</span>
-                      <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{sourceLabelMap[lastBlock.source] || lastBlock.source}</span>
-                      {lastBlock.providerId && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{lastBlock.providerId}</span>}
-                      {lastBlock.model && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{lastBlock.model}</span>}
-                      <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{formatTime(lastBlock.createdAt)}</span>
-                    </div>
-                    {lastBlock.tokenizedRequest && (
-                      <details className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
-                        <summary className="cursor-pointer font-semibold text-slate-700">פרטים טכניים של הבקשה האחרונה</summary>
-                        <div className="mt-3">בקשה טוקניזית שנשלחה ל-AI: {lastBlock.tokenizedRequest}</div>
-                      </details>
-                    )}
-                    <textarea
-                      readOnly
-                      value={lastBlock.syntax}
-                      className="min-h-[280px] w-full rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 font-mono text-[13px] leading-6 text-slate-100 outline-none"
-                    />
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-sm leading-7 text-slate-500">
-                    עדיין לא נוצר בלוק syntax תקף. אפשר להתחיל מפעולה מהירה מתאימה, או לכתוב בקשה חופשית בעברית.
-                  </div>
-                )}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+                  <button
+                    type="button"
+                    className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${syntaxView === 'master' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    onClick={() => setSyntaxView('master')}
+                  >
+                    Master
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${syntaxView === 'block' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    onClick={() => setSyntaxView('block')}
+                    disabled={!selectedBlock}
+                  >
+                    בלוק נבחר
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => handleCopy(activeSyntaxContent, syntaxView === 'master' ? 'ה-master syntax הועתק ללוח.' : 'הבלוק הנבחר הועתק ללוח.')}
+                  disabled={!activeSyntaxContent}
+                >
+                  העתק
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => handleDownloadSyntax(activeSyntaxContent, activeSyntaxFileName)}
+                  disabled={!activeSyntaxContent}
+                >
+                  הורד .sps
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-rose-200 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={removeLastBlock}
+                  disabled={!blocks.length}
+                >
+                  הסר אחרון
+                </button>
               </div>
             </div>
 
-            <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm flex min-h-[480px] flex-col">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-lg font-bold text-slate-900">Master syntax</div>
-                  <div className="mt-1 text-sm text-slate-500">כל הבלוקים שנוצרו מצטברים כאן לפי הסדר.</div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-                    onClick={() => handleCopy(masterSyntax, 'ה-master syntax הועתק ללוח.')}
-                    disabled={!masterSyntax}
-                  >
-                    העתק הכל
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-                    onClick={() => downloadTextFile(masterSyntax, 'wordflow-master-syntax.sps')}
-                    disabled={!masterSyntax}
-                  >
-                    הורד .sps
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-rose-200 hover:text-rose-700"
-                    onClick={removeLastBlock}
-                    disabled={!masterSyntax}
-                  >
-                    הסר בלוק אחרון
-                  </button>
-                </div>
+            {selectedBlock && syntaxView === 'block' && (
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{selectedBlock.title}</span>
+                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{sourceLabelMap[selectedBlock.source] || selectedBlock.source}</span>
+                {selectedBlock.providerId && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{selectedBlock.providerId}</span>}
+                {selectedBlock.model && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{selectedBlock.model}</span>}
+                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{formatTime(selectedBlock.createdAt)}</span>
               </div>
+            )}
 
-              {masterSyntax ? (
+            {selectedBlock?.tokenizedRequest && syntaxView === 'block' && (
+              <details className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
+                <summary className="cursor-pointer font-semibold text-slate-700">פרטים טכניים של הבלוק הנבחר</summary>
+                <div className="mt-3">בקשה טוקניזית שנשלחה ל-AI: {selectedBlock.tokenizedRequest}</div>
+              </details>
+            )}
+
+            {lastRejectedRequest && activeSyntaxContent && (
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold leading-6 text-amber-800">
+                ה-syntax שמוצג כאן הוא מהבלוקים התקפים הקודמים. הבקשה האחרונה נעצרה ולא נוספה לקובץ הזה.
+              </div>
+            )}
+
+            {activeSyntaxContent ? (
+              <>
+                <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-semibold leading-6 text-blue-700">
+                  שם הקובץ הבא: {activeSyntaxFileName}
+                </div>
                 <textarea
                   readOnly
-                  value={masterSyntax}
-                  className="mt-4 flex-1 min-h-[420px] w-full rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 font-mono text-[13px] leading-6 text-slate-100 outline-none"
+                  value={activeSyntaxContent}
+                  className="mt-4 flex-1 min-h-[460px] w-full rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 font-mono text-[13px] leading-6 text-slate-100 outline-none"
                 />
-              ) : (
-                <div className="mt-4 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center text-sm leading-7 text-slate-500">
-                  ברגע שתוסיף בלוק ראשון, master syntax יצטבר כאן ויהיה מוכן להעתקה או להורדה כקובץ .sps.
-                </div>
-              )}
-            </div>
+              </>
+            ) : (
+              <div className="mt-4 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center text-sm leading-7 text-slate-500">
+                עדיין לא נוצר syntax תקף. אפשר להתחיל מפעולה מהירה מתאימה, או לכתוב בקשה חופשית בעברית.
+              </div>
+            )}
           </div>
 
           <details className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
@@ -716,7 +1053,10 @@ export default function SpssSyntaxStudio() {
                   key={block.id}
                   type="button"
                   className={`w-full rounded-2xl border px-4 py-3 text-right transition ${block.id === lastBlockId ? 'border-blue-300 bg-blue-50/70' : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`}
-                  onClick={() => setLastBlockId(block.id)}
+                  onClick={() => {
+                    setLastBlockId(block.id);
+                    setSyntaxView('block');
+                  }}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="font-semibold text-slate-800">{block.title}</div>
@@ -731,6 +1071,8 @@ export default function SpssSyntaxStudio() {
               )}
             </div>
           </details>
+          </>
+          )}
         </section>
       </div>
     </div>

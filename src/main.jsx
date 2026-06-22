@@ -1,3 +1,4 @@
+import './desktopShim'; // מתקין window.desktopApp מעל Tauri (חייב לרוץ ראשון)
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { DOMSerializer } from '@tiptap/pm/model';
@@ -6,20 +7,39 @@ import DocumentEditor from './DocumentEditor';
 import Ribbon from './Ribbon';
 import AiSidebar from './AiSidebar';
 import TopBar from './TopBar';
+import FindReplace from './FindReplace';
+import SourceManager from './SourceManager';
+import CommentsPanel from './CommentsPanel';
+import { removeCommentById } from './extensions/CommentMark';
+import { acceptInsertions, rejectInsertions } from './extensions/TrackChange';
 import FileMenu from './FileMenu';
 import MagicWand from './MagicWand';
+import AuthenticityModal from './components/AuthenticityModal';
 import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
+import SpssProjectStudio from './SpssProjectStudio';
 import PresentationStudio from './PresentationStudio';
+import { generateDeck } from './services/presentationService';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
+import { showToast, showConfirm } from './services/uiFeedback';
+import { Modal, Button, Input, TextArea } from './components/ui';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
 import { cloudSignInWithGooglePopup, cloudSignOut, ensureCloudUserProfile, isCloudAvailable, onCloudAuthChange, saveCloudDocument, handleCloudRedirectResult } from './firebase/services';
-import { handleCloudAuthSuccess, initCloudSyncListeners, triggerCloudSync } from './services/cloudSyncManager';
+import { handleCloudAuthSuccess, initCloudSyncListeners, triggerCloudSync, pullFromCloud } from './services/cloudSyncManager';
+
+// תוויות מצבי תצוגה לשורת הסטטוס (open-items #56) — תואם ל-setViewMode מה-Ribbon.
+const VIEW_MODE_LABELS = {
+  print: 'מצב הדפסה',
+  read: 'מצב קריאה',
+  web: 'פריסת אינטרנט',
+  outline: 'מתאר',
+  draft: 'טיוטה',
+};
 
 const DOCUMENT_STYLE_PRESETS = {
   academic: { label: 'אקדמי', fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', maxWidth: '21cm', background: '#ffffff', textAlign: 'right' },
@@ -3208,12 +3228,20 @@ function App() {
   const cloudAvailable = isCloudAvailable();
   const [editor, setEditor] = React.useState(null);
   const [appMode, setAppMode] = React.useState('word');
+  const [presentationDeck, setPresentationDeck] = React.useState(null);
+  const [presentationBusy, setPresentationBusy] = React.useState(false);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [authenticityOpen, setAuthenticityOpen] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
   ));
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
+  const [findReplace, setFindReplace] = React.useState({ open: false, mode: 'find' });
+  const [sourceManagerOpen, setSourceManagerOpen] = React.useState(false);
+  const [comments, setComments] = React.useState([]);
+  const [commentsPanelOpen, setCommentsPanelOpen] = React.useState(false);
+  const [activeCommentId, setActiveCommentId] = React.useState(null);
   const [wordCount, setWordCount] = React.useState(0);
   const [pageCount, setPageCount] = React.useState(1);
   const [zoom, setZoom] = React.useState(100);
@@ -3462,6 +3490,7 @@ function App() {
   });
   const [feedbackSurvey, setFeedbackSurvey] = React.useState({ ...DEFAULT_FEEDBACK_SURVEY });
   const [inputDialog, setInputDialog] = React.useState({ ...DEFAULT_INPUT_DIALOG });
+  const inputDialogFirstFieldRef = React.useRef(null);
   const [copyleaksDetector, setCopyleaksDetector] = React.useState({ ...DEFAULT_COPYLEAKS_DETECTOR });
   const [assistantLaunchPreset, setAssistantLaunchPreset] = React.useState({ nonce: 0, classicAgentId: '', composerMode: '', prompt: '' });
   const [assistantTrigger, setAssistantTrigger] = React.useState('manual');
@@ -3593,7 +3622,7 @@ function App() {
       const extractedText = await readInstructionFile(file, 18000);
       const nextText = String(extractedText || '').trim();
       if (!nextText) {
-        window.alert('לא נמצא טקסט קריא בקובץ ההוראות.');
+        showToast('לא נמצא טקסט קריא בקובץ ההוראות.', { tone: 'warning' });
         return;
       }
       setAssignmentBriefDraft(nextText);
@@ -3604,7 +3633,7 @@ function App() {
         sourceLabel: 'קובץ הנחיות',
       });
     } catch (error) {
-      window.alert(error?.message || 'לא הצלחתי לקרוא את קובץ ההוראות.');
+      showToast(error?.message || 'לא הצלחתי לקרוא את קובץ ההוראות.', { tone: 'error' });
     } finally {
       if (event?.target) event.target.value = '';
     }
@@ -3904,7 +3933,7 @@ function App() {
 
   const runStartTransition = React.useCallback((applyChange, focusPosition = 'start') => {
     if (!editor) {
-      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      showToast('העורך עדיין נטען. נסה שוב בעוד רגע.', { tone: 'warning' });
       return false;
     }
     applyChange(editor);
@@ -4021,15 +4050,15 @@ function App() {
         : String(selectedText || '');
 
     if (normalizedSource === 'selection' && !nextText.trim()) {
-      alert('אין כרגע טקסט מסומן לבדיקה.');
+      showToast('אין כרגע טקסט מסומן לבדיקה.', { tone: 'warning' });
       return;
     }
     if (normalizedSource === 'currentBlock' && !nextText.trim()) {
-      alert('לא זוהתה פסקה פעילה לבדיקה.');
+      showToast('לא זוהתה פסקה פעילה לבדיקה.', { tone: 'warning' });
       return;
     }
     if (normalizedSource === 'document' && !nextText.trim()) {
-      alert('המסמך ריק כרגע.');
+      showToast('המסמך ריק כרגע.', { tone: 'warning' });
       return;
     }
 
@@ -4140,7 +4169,7 @@ function App() {
     };
 
     if (!selectedOptions.length && !freeText) {
-      alert('בחר לפחות אפשרות אחת או כתוב הערה חופשית.');
+      showToast('בחר לפחות אפשרות אחת או כתוב הערה חופשית.', { tone: 'warning' });
       return;
     }
 
@@ -4242,7 +4271,7 @@ function App() {
 
     closeInputDialog(null);
     setFeedbackSurvey((prev) => (prev.open ? { ...prev, open: false } : prev));
-    if (appMode === 'spss') {
+    if (appMode !== 'word') {
       setAppMode('word');
     }
     setShowStartScreen(true);
@@ -4414,6 +4443,9 @@ function App() {
       alignLeft: currentEditor.isActive({ textAlign: 'left' }),
       alignJustify: currentEditor.isActive({ textAlign: 'justify' }),
       dir: currentEditor.getAttributes('paragraph')?.dir || 'rtl',
+      headingLevel: [1, 2, 3, 4, 5, 6].find((level) => currentEditor.isActive('heading', { level })) || 0,
+      isBlockquote: currentEditor.isActive('blockquote'),
+      isParagraph: currentEditor.isActive('paragraph'),
       fontFamily,
       fontSize,
     });
@@ -4531,7 +4563,7 @@ function App() {
         if (e.repeat) return;
         Promise.resolve(handleCommandRef.current?.('saveLocal')).catch((error) => {
           console.error('Keyboard save shortcut failed:', error);
-          window.alert(error?.message || 'השמירה נכשלה.');
+          showToast(error?.message || 'השמירה נכשלה.', { tone: 'error' });
         });
       }
     };
@@ -4637,6 +4669,24 @@ function App() {
       setFormatPainterActive(helpers.formatPainterActive);
     }
   }, [updateActiveFormats]);
+
+  // קיצורי Word לחיפוש והחלפה: Ctrl/⌘+F לחיפוש, Ctrl/⌘+H להחלפה.
+  React.useEffect(() => {
+    if (appMode !== 'word' || showStartScreen) return undefined;
+    const onKeyDown = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = String(event.key || '').toLowerCase();
+      if (key === 'f') {
+        event.preventDefault();
+        setFindReplace({ open: true, mode: 'find' });
+      } else if (key === 'h') {
+        event.preventDefault();
+        setFindReplace({ open: true, mode: 'replace' });
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [appMode, showStartScreen]);
 
   // מעקב אחר בחירת טקסט + מצב עיצוב פעיל
   React.useEffect(() => {
@@ -4921,7 +4971,7 @@ function App() {
 
   const applyFeedbackReviewSuggestions = React.useCallback(async () => {
     if (!editor) {
-      alert('העורך לא זמין כרגע לעריכה.');
+      showToast('העורך לא זמין כרגע לעריכה.', { tone: 'warning' });
       return;
     }
     if (feedbackSurvey.submitting || feedbackSurvey.applyingRecommendations) return;
@@ -4930,7 +4980,7 @@ function App() {
       ? feedbackSurvey.reviewResult.suggestions
       : [];
     if (!reviewSuggestions.length) {
-      alert('אין כרגע המלצות ישימות להחלה על המסמך.');
+      showToast('אין כרגע המלצות ישימות להחלה על המסמך.', { tone: 'warning' });
       return;
     }
 
@@ -5076,7 +5126,7 @@ function App() {
       const unresolvedMessage = combinedUnresolved.length
         ? ` הוחלו ${resolved.length} תיקונים, אבל ${combinedUnresolved.length} המלצות נשארו ללא מיקום ייחודי במסמך.`
         : '';
-      alert(`${applyResult.message}${unresolvedMessage}`);
+      showToast(`${applyResult.message}${unresolvedMessage}`, { tone: 'info', duration: 6000 });
     } catch (error) {
       setFeedbackSurvey((prev) => ({
         ...prev,
@@ -5380,6 +5430,9 @@ ${sidebarReviewContext}`
     return hasMeaningfulEditorContent(editor);
   }, [editor, hasMeaningfulEditorContent]);
 
+  // הערה: נשאר window.confirm סינכרוני בכוונה — זהו gate לזרימת בקרה ב-6 callers
+  // (כולל deps של useCallback ו-handlers של StartScreen). המרה ל-showConfirm async
+  // דורשת ריפקטור רחב של כל ה-callers; מתוכנן כ-follow-up. ראה open-items #57.
   const confirmReplaceCurrentDocument = React.useCallback(() => {
     if (!hasMeaningfulContent()) return true;
     return window.confirm('יש במסמך תוכן קיים. להחליף אותו?');
@@ -5397,7 +5450,7 @@ ${sidebarReviewContext}`
   const executeStartScreenGeneration = React.useCallback(async (action, options = {}) => {
     const payload = action?.payload || {};
     if (!editor) {
-      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      showToast('העורך עדיין נטען. נסה שוב בעוד רגע.', { tone: 'warning' });
       return false;
     }
     if (!options.skipConfirmReplace && !confirmReplaceCurrentDocument()) return false;
@@ -5455,7 +5508,9 @@ ${sidebarReviewContext}`
     const originWorkspaceId = generationRequest.workspaceId;
     const generationLogsWorkspaceId = useWorkspaceV2 && workspaceV2TemplateId ? workspaceV2TemplateId : originWorkspaceId;
     const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
-    const shouldReviseBaseDraft = hasBaseDraft && directModeReason !== 'chef-final-compose';
+    // טיוטת בסיס היא תמיד מקור אמת לעדכון — גם כשהבקשה הגיעה ממצב שף (chef-final-compose).
+    // ה-brief של השף משמש כ-feedback לליטוש/הרחבה, והטיוטה נשמרת במקום להיכתב מאפס.
+    const shouldReviseBaseDraft = hasBaseDraft;
     const baseDraftTitle = String(baseDraft?.title || baseDraft?.name || '').trim();
     const generationRoute = shouldReviseBaseDraft ? 'reviseDocumentWithFeedback' : 'generateDocumentFromPrompt';
     const revisionRequest = shouldReviseBaseDraft
@@ -5603,7 +5658,7 @@ ${sidebarReviewContext}`
             usedFallback,
           });
 
-      if (deferredReviewOffer && window.confirm(deferredReviewOffer.confirmMessage)) {
+      if (deferredReviewOffer && await showConfirm(deferredReviewOffer.confirmMessage, { title: 'סבב סקירה נוסף', confirmLabel: 'כן, המשך' })) {
         const followUpInstructions = [
           String(instructions || '').trim(),
           deferredReviewOffer.feedback,
@@ -5680,64 +5735,63 @@ ${sidebarReviewContext}`
     return true;
   }, [beginDocumentIdentity, beginGenerationRequest, changeDocumentStyle, clearAssignmentBrief, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, resetDocumentInteractionState, runStartTransition, storeAssignmentBrief, triggerDocumentArrival]);
 
+  // פותח את סטודיו המצגות (עם או בלי deck קיים)
+  const openPresentationStudio = React.useCallback(() => {
+    setShowStartScreen(false);
+    setAppMode('presentation');
+  }, []);
+
+  // מייצר deck JSON אמיתי (לא HTML) ומציג אותו בסטודיו המצגות
   const generatePresentationDeck = React.useCallback(async ({
+    source = 'topic',
     topic = '',
     audience = '',
     goal = '',
     slideCount = 10,
     theme = 'premium',
+    themeId = '',
     imageIntensity = 'high',
-    speakerNotes = false,
-    includeCover = true,
+    density = 'balanced',
+    documentText: providedDocumentText = '',
   } = {}) => {
     const cleanTopic = String(topic || '').trim();
-    if (!cleanTopic) return false;
+    const fromDocument = source === 'document';
 
-    const cleanAudience = String(audience || '').trim();
-    const cleanGoal = String(goal || '').trim();
-    const cleanTheme = String(theme || 'premium').trim() || 'premium';
-    const cleanImageIntensity = String(imageIntensity || 'high').trim() || 'high';
-    const normalizedSlideCount = Math.max(4, Math.min(20, Number(slideCount) || 10));
+    let documentText = '';
+    if (fromDocument) {
+      documentText = String(providedDocumentText || '').trim() || String(editor?.getText?.() || '').trim();
+      if (!documentText) {
+        showToast('אין תוכן מקור כדי להפוך אותו למצגת.', { tone: 'warning' });
+        return false;
+      }
+    } else if (!cleanTopic) {
+      return false;
+    }
 
-    const presentationPrompt = [
-      `צור מצגת בעברית בנושא: ${cleanTopic}`,
-      cleanAudience ? `קהל יעד: ${cleanAudience}` : '',
-      cleanGoal ? `מטרת המצגת: ${cleanGoal}` : '',
-      `כמות שקופיות: ${normalizedSlideCount}`,
-      `סגנון עיצובי: ${cleanTheme}`,
-      `דגש על תמונות וויזואליה: ${cleanImageIntensity}`,
-      includeCover ? 'כלול שקופית פתיחה חזקה.' : 'אין צורך בשקופית פתיחה נפרדת.',
-      speakerNotes ? 'הוסף לכל שקופית גם שורת הערות מרצה קצרה.' : '',
-    ].filter(Boolean).join('\n');
-
-    const presentationInstructions = [
-      'החזר מסמך HTML שנראה כמו deck של מצגת, לא כמו עבודה רגילה.',
-      'כל שקופית צריכה להכיל כותרת קצרה, מסר מרכזי חד, ועד 2-5 bullets קצרים.',
-      'בין שקופיות כתוב בשורה נפרדת בדיוק: <div data-type="page-break"></div>.',
-      'שלב הנחיות ויזואליות, רעיונות לתמונות, או placeholders לתמונה/גרפיקה במקומות הנכונים.',
-      'הימנע מפסקאות ארוכות. כתוב תמציתי, חד וייצוגי.',
-      'אם מתאים, סיים בשקופית takeaway או call to action.',
-    ].join('\n');
-
-    setAppMode('word');
     setShowStartScreen(false);
-    await new Promise((resolve) => window.requestAnimationFrame(resolve));
-
-    return executeStartScreenGeneration({
-      kind: 'start-screen-generate',
-      workspaceId: getActiveWorkspaceId(),
-      payload: {
-        prompt: presentationPrompt,
-        templateId: 'summary',
-        instructions: presentationInstructions,
-        selectedMaterials: [],
-        selectedProviderId: '',
-        selectedProviderModel: '',
-        additionalReviewRounds: 0,
-        documentStyle: 'presentation',
-      },
-    });
-  }, [executeStartScreenGeneration]);
+    setAppMode('presentation');
+    setPresentationBusy(true);
+    try {
+      const deck = await generateDeck({
+        source,
+        topic: cleanTopic,
+        audience: String(audience || '').trim(),
+        goal: String(goal || '').trim(),
+        documentText,
+        slideCount,
+        themeId: themeId || theme || 'premium',
+        density,
+        imageIntensity,
+      });
+      setPresentationDeck(deck);
+      return true;
+    } catch (error) {
+      showToast(error?.message || 'יצירת המצגת נכשלה', { tone: 'error' });
+      return false;
+    } finally {
+      setPresentationBusy(false);
+    }
+  }, [editor]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -5899,7 +5953,7 @@ ${sidebarReviewContext}`
       });
 
       if (usedFallback && result?.errorMessage) {
-        alert(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`);
+        showToast(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`, { tone: 'error' });
       }
     } catch (error) {
       if (!isGenerationRequestCurrent(generationRequest)) {
@@ -5944,7 +5998,7 @@ ${sidebarReviewContext}`
           routeResolved: 'reviseDocumentWithFeedback',
         },
       }));
-      alert(terminalState.alertMessage);
+      showToast(terminalState.alertMessage, { tone: terminalState.state === 'error' ? 'error' : 'success', duration: 6000 });
     }
 
     return true;
@@ -6142,7 +6196,7 @@ ${sidebarReviewContext}`
           routeResolved: 'reviewDocumentRecommendations',
         },
       }));
-      alert(terminalState.alertMessage);
+      showToast(terminalState.alertMessage, { tone: terminalState.state === 'error' ? 'error' : 'success', duration: 6000 });
     }
 
     return true;
@@ -6201,7 +6255,7 @@ ${sidebarReviewContext}`
     if (!editor) return;
     if (payload?.ok === false || payload?.error) {
       finalizePendingImportedDocument({ rollbackToSpss: true });
-      alert(payload?.error || 'לא ניתן לפתוח את הקובץ שנבחר.');
+      showToast(payload?.error || 'לא ניתן לפתוח את הקובץ שנבחר.', { tone: 'error' });
       return;
     }
     const importedHtml = String(payload.html || '').trim() || '<p></p>';
@@ -6209,7 +6263,7 @@ ${sidebarReviewContext}`
       || importedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     if (importedHtml.length > MAX_IMPORTED_DOCUMENT_HTML_CHARS || importedText.length > MAX_IMPORTED_DOCUMENT_TEXT_CHARS) {
       finalizePendingImportedDocument({ rollbackToSpss: true });
-      alert('המסמך גדול מדי לפתיחה ישירה בתוך העורך כרגע. נסה גרסה קצרה יותר או פצל את הקובץ.');
+      showToast('המסמך גדול מדי לפתיחה ישירה בתוך העורך כרגע. נסה גרסה קצרה יותר או פצל את הקובץ.', { tone: 'warning', duration: 6000 });
       return;
     }
     const fallbackTitle = String(payload.title || 'מסמך שנפתח מהמחשב').trim();
@@ -6223,7 +6277,7 @@ ${sidebarReviewContext}`
       editor.commands.setContent(importedHtml);
     } catch (error) {
       finalizePendingImportedDocument({ rollbackToSpss: true });
-      alert(error?.message || 'לא הצלחתי לטעון את תוכן הקובץ לעורך.');
+      showToast(error?.message || 'לא הצלחתי לטעון את תוכן הקובץ לעורך.', { tone: 'error' });
       return;
     }
     editor.setEditable(true);
@@ -6342,15 +6396,15 @@ ${sidebarReviewContext}`
 
   const persistDocumentToCloud = React.useCallback(async ({ reason = 'manual', silent = false } = {}) => {
     if (!cloudAvailable) {
-      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      showToast('Firebase עדיין לא מוגדר בפרויקט הזה.', { tone: 'warning' });
       return null;
     }
     if (!cloudUser) {
-      window.alert('צריך קודם להתחבר עם Google.');
+      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
       return null;
     }
     if (!editor) {
-      window.alert('העורך עדיין נטען. נסה שוב בעוד רגע.');
+      showToast('העורך עדיין נטען. נסה שוב בעוד רגע.', { tone: 'warning' });
       return null;
     }
 
@@ -6397,7 +6451,7 @@ ${sidebarReviewContext}`
       }));
 
       if (!silent && !isAutosave) {
-        window.alert('המסמך נשמר בהצלחה ל-Firebase.');
+        showToast('המסמך נשמר בהצלחה ל-Firebase.', { tone: 'success' });
       }
 
       return savedDocument;
@@ -6409,7 +6463,7 @@ ${sidebarReviewContext}`
         message: error?.message || 'השמירה לענן נכשלה',
       }));
       if (!silent) {
-        window.alert(error?.message || 'השמירה לענן נכשלה.');
+        showToast(error?.message || 'השמירה לענן נכשלה.', { tone: 'error' });
       }
       return null;
     }
@@ -6417,7 +6471,7 @@ ${sidebarReviewContext}`
 
   const handleCloudGoogleSignIn = React.useCallback(async () => {
     if (!cloudAvailable) {
-      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      showToast('Firebase עדיין לא מוגדר בפרויקט הזה.', { tone: 'warning' });
       return;
     }
     setCloudSyncState((prev) => ({
@@ -6434,7 +6488,7 @@ ${sidebarReviewContext}`
         status: 'error',
         message: error?.message || 'ההתחברות עם Google נכשלה',
       }));
-      window.alert(error?.message || 'ההתחברות עם Google נכשלה.');
+      showToast(error?.message || 'ההתחברות עם Google נכשלה.', { tone: 'error' });
     }
   }, [cloudAvailable]);
 
@@ -6450,17 +6504,17 @@ ${sidebarReviewContext}`
       });
     } catch (error) {
       console.error('Cloud sign-out failed:', error);
-      window.alert(error?.message || 'ההתנתקות מהענן נכשלה.');
+      showToast(error?.message || 'ההתנתקות מהענן נכשלה.', { tone: 'error' });
     }
   }, []);
 
   const handleManualCloudSync = React.useCallback(async () => {
     if (!cloudAvailable) {
-      window.alert('Firebase עדיין לא מוגדר בפרויקט הזה.');
+      showToast('Firebase עדיין לא מוגדר בפרויקט הזה.', { tone: 'warning' });
       return;
     }
     if (!cloudUser) {
-      window.alert('צריך קודם להתחבר עם Google.');
+      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
       return;
     }
 
@@ -6487,9 +6541,9 @@ ${sidebarReviewContext}`
         autosaveEnabled: prev.autosaveEnabled || Boolean(savedDocument),
       }));
 
-      window.alert(savedDocument
+      showToast(savedDocument
         ? `הפרופיל והמסמך סונכרנו לענן (${syncedSettingsCount} הגדרות).`
-        : `הפרופיל סונכרן לענן (${syncedSettingsCount} הגדרות).`);
+        : `הפרופיל סונכרן לענן (${syncedSettingsCount} הגדרות).`, { tone: 'success' });
     } catch (error) {
       console.error('Manual cloud sync failed:', error);
       setCloudSyncState((prev) => ({
@@ -6497,9 +6551,41 @@ ${sidebarReviewContext}`
         status: 'error',
         message: error?.message || 'הסנכרון לענן נכשל',
       }));
-      window.alert(error?.message || 'הסנכרון לענן נכשל.');
+      showToast(error?.message || 'הסנכרון לענן נכשל.', { tone: 'error' });
     }
   }, [cloudAvailable, cloudUser, persistDocumentToCloud]);
+
+  const handlePullFromCloud = React.useCallback(async () => {
+    if (!cloudAvailable) {
+      showToast('Firebase עדיין לא מוגדר בפרויקט הזה.', { tone: 'warning' });
+      return;
+    }
+    if (!cloudUser) {
+      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
+      return;
+    }
+
+    setCloudSyncState((prev) => ({ ...prev, status: 'saving', message: 'מושך נתונים מהענן...' }));
+    try {
+      const result = await pullFromCloud(cloudUser, { force: true });
+      if (!result.ok) {
+        throw new Error(result.error || 'משיכה מהענן נכשלה');
+      }
+      if (result.applied) {
+        setCloudSyncState((prev) => ({ ...prev, status: 'idle', message: 'הנתונים נמשכו מהענן' }));
+        showToast(result.hadProviderConfig
+          ? 'הגדרות ומפתחות API נמשכו מהענן. ייתכן שצריך לרענן.'
+          : 'ההגדרות נמשכו מהענן. ייתכן שצריך לרענן.', { tone: 'success' });
+      } else {
+        setCloudSyncState((prev) => ({ ...prev, status: 'idle', message: result.reason || 'אין מה למשוך' }));
+        showToast(result.reason || 'אין נתונים חדשים בענן.', { tone: 'info' });
+      }
+    } catch (error) {
+      console.error('Pull from cloud failed:', error);
+      setCloudSyncState((prev) => ({ ...prev, status: 'error', message: error?.message || 'משיכה מהענן נכשלה' }));
+      showToast(error?.message || 'משיכה מהענן נכשלה.', { tone: 'error' });
+    }
+  }, [cloudAvailable, cloudUser]);
 
   React.useEffect(() => {
     if (!cloudUser || !editor || !cloudSyncState.autosaveEnabled || !lastEditorContentActivityAt) return undefined;
@@ -6568,7 +6654,7 @@ ${sidebarReviewContext}`
       return await downloadBrowserDocx(buildDesktopSavePayload(preferredExtension));
     } catch (error) {
       console.error('Browser DOCX export failed:', error);
-      window.alert(error?.message || 'לא הצלחתי לשמור את קובץ ה-Word בדפדפן.');
+      showToast(error?.message || 'לא הצלחתי לשמור את קובץ ה-Word בדפדפן.', { tone: 'error' });
       return { handled: false, canceled: false, error };
     }
   }, [buildDesktopSavePayload]);
@@ -6604,6 +6690,9 @@ ${sidebarReviewContext}`
           setHelpModalOpen(true);
         }
         break;
+      case 'openFindReplace':
+        setFindReplace({ open: true, mode: value === 'replace' ? 'replace' : 'find' });
+        break;
       case 'bold': editor.chain().focus().toggleBold().run(); break;
       case 'italic': editor.chain().focus().toggleItalic().run(); break;
       case 'underline': editor.chain().focus().toggleUnderline?.().run(); break;
@@ -6619,9 +6708,9 @@ ${sidebarReviewContext}`
       case 'alignJustify': editor.chain().focus().setTextAlign('justify').run(); break;
       case 'indent': editor.chain().focus().sinkListItem('listItem').run(); break;
       case 'outdent': editor.chain().focus().liftListItem('listItem').run(); break;
-      case 'heading': editor.chain().focus().toggleHeading({ level: value }).run(); break;
-      case 'paragraph': editor.chain().focus().setParagraph().run(); break;
-      case 'blockquote': editor.chain().focus().toggleBlockquote().run(); break;
+      case 'heading': editor.chain().focus().toggleHeading({ level: value }).run(); updateActiveFormats(editor); break;
+      case 'paragraph': editor.chain().focus().setParagraph().run(); updateActiveFormats(editor); break;
+      case 'blockquote': editor.chain().focus().toggleBlockquote().run(); updateActiveFormats(editor); break;
       case 'codeBlock': editor.chain().focus().toggleCodeBlock().run(); break;
       case 'insertHR': editor.chain().focus().setHorizontalRule().run(); break;
       case 'fontFamily': {
@@ -6679,7 +6768,7 @@ ${sidebarReviewContext}`
           defaultFontSize: currentSize,
         }));
         applyDocumentStyleToEditor(documentStyle);
-        alert(`ברירת המחדל נשמרה: ${currentFont} · ${currentSize}`);
+        showToast(`ברירת המחדל נשמרה: ${currentFont} · ${currentSize}`, { tone: 'success' });
         break;
       }
       case 'applyDocumentStyle':
@@ -6841,13 +6930,33 @@ ${sidebarReviewContext}`
       }
       case 'insertMath': editor.chain().focus().insertContent(' ∑ ').run(); break;
       case 'insertSymbol': editor.chain().focus().insertContent(value).run(); break;
-      case 'addComment': editor.chain().focus().toggleHighlight({ color: '#FCE100' }).run(); break;
-      case 'removeComment': editor.chain().focus().unsetHighlight().run(); break;
+      case 'addComment': {
+        const { from, to, empty } = editor.state.selection;
+        if (empty) { showToast('בחר טקסט כדי להוסיף הערה.', { tone: 'warning' }); break; }
+        const quote = editor.state.doc.textBetween(from, to, ' ').slice(0, 120);
+        const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        editor.chain().focus().setComment(id).run();
+        setComments((prev) => [...prev, { id, quote, body: '', replies: [], resolved: false }]);
+        setActiveCommentId(id);
+        setCommentsPanelOpen(true);
+        break;
+      }
+      case 'removeComment': {
+        const attrs = editor.getAttributes('comment') || {};
+        const id = attrs.commentId;
+        if (id) {
+          removeCommentById(editor, id);
+          setComments((prev) => prev.filter((c) => c.id !== id));
+        } else {
+          editor.chain().focus().unsetHighlight().run();
+        }
+        break;
+      }
 
       case 'copySelection': {
         const { from, to, empty } = editor.state.selection;
         if (empty) {
-          alert('בחר טקסט להעתקה.');
+          showToast('בחר טקסט להעתקה.', { tone: 'warning' });
           break;
         }
         const text = editor.state.doc.textBetween(from, to, ' ');
@@ -6861,21 +6970,21 @@ ${sidebarReviewContext}`
       case 'copyCurrentParagraph': {
         const paragraphText = String(currentBlockText || '').trim();
         if (!paragraphText) {
-          alert('לא זוהתה פסקה פעילה להעתקה.');
+          showToast('לא זוהתה פסקה פעילה להעתקה.', { tone: 'warning' });
           break;
         }
         const copied = await copyPlainTextToClipboard(paragraphText);
         if (!copied) {
-          alert('לא הצלחתי להעתיק את הפסקה הפעילה.');
+          showToast('לא הצלחתי להעתיק את הפסקה הפעילה.', { tone: 'error' });
           break;
         }
-        alert('הפסקה הפעילה הועתקה ללוח.');
+        showToast('הפסקה הפעילה הועתקה ללוח.', { tone: 'success' });
         break;
       }
       case 'cutSelection': {
         const { from, to, empty } = editor.state.selection;
         if (empty) {
-          alert('בחר טקסט לגזירה.');
+          showToast('בחר טקסט לגזירה.', { tone: 'warning' });
           break;
         }
         const text = editor.state.doc.textBetween(from, to, ' ');
@@ -6892,18 +7001,18 @@ ${sidebarReviewContext}`
           const text = await navigator.clipboard.readText();
           if (text) editor.chain().focus().insertContent(escHtml(text).replace(/\n/g, '<br />')).run();
         } catch {
-          alert('הדבקה אוטומטית נחסמה על ידי המערכת. אפשר להשתמש גם ב־Ctrl+V.');
+          showToast('הדבקה אוטומטית נחסמה על ידי המערכת. אפשר להשתמש גם ב־Ctrl+V.', { tone: 'warning' });
         }
         break;
       }
       case 'wordCount': {
         const txt = editor.getText();
         const wc = txt.trim() ? txt.trim().split(/\s+/).length : 0;
-        alert(`ספירת מילים: ${wc}`); break;
+        showToast(`ספירת מילים: ${wc}`, { tone: 'info' }); break;
       }
       case 'charCount': {
         const cc = editor.getText().length;
-        alert(`ספירת תווים: ${cc}`); break;
+        showToast(`ספירת תווים: ${cc}`, { tone: 'info' }); break;
       }
 
       // --- תוכן עניינים אמיתי (מוזרק לתוך העורך) ---
@@ -6915,7 +7024,7 @@ ${sidebarReviewContext}`
             headings.push({ level: node.attrs.level, text: node.textContent, id });
           }
         });
-        if (!headings.length) { alert('לא נמצאו כותרות במסמך'); break; }
+        if (!headings.length) { showToast('לא נמצאו כותרות במסמך', { tone: 'warning' }); break; }
         const tocItems = headings
           .map((h) => `<li style="padding-right:${(h.level - 1) * 16}px"><a href="#${h.id}">${h.text}</a></li>`)
           .join('');
@@ -6949,11 +7058,11 @@ ${sidebarReviewContext}`
         break;
       }
 
-      case 'aiSpellCheck': alert('בדיקת איות AI: סמן טקסט ולחץ "תיקון" ב-BubbleMenu.'); break;
+      case 'aiSpellCheck': showToast('בדיקת איות AI: סמן טקסט ולחץ "תיקון" ב-BubbleMenu.', { tone: 'info' }); break;
 
       // --- פקודות File Menu ---
       case 'newDoc': {
-        if (window.confirm('האם למחוק את תוכן המסמך הנוכחי ולפתוח מסמך חדש?')) {
+        if (await showConfirm('האם למחוק את תוכן המסמך הנוכחי ולפתוח מסמך חדש?', { title: 'מסמך חדש', confirmLabel: 'מחק והתחל', tone: 'danger' })) {
           const shouldShowStartExperience = isLegacyHomeEnabled() ? true : wordPreferences.showStartExperience !== false;
           clearDraftReviewState();
           editor.commands.clearContent();
@@ -6989,7 +7098,7 @@ ${sidebarReviewContext}`
             });
 
             if (result && result.ok === false) {
-              alert(result.error || 'השמירה נכשלה.');
+              showToast(result.error || 'השמירה נכשלה.', { tone: 'error' });
               return;
             }
 
@@ -7007,7 +7116,7 @@ ${sidebarReviewContext}`
                 source: 'save-local',
                 filePath: String(result.filePath || ''),
               });
-              alert(buildDesktopSaveSuccessMessage(result, canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : 'המסמך נשמר בהצלחה.'));
+              showToast(buildDesktopSaveSuccessMessage(result, canSaveDirectly ? 'המסמך נשמר בהצלחה במחשב.' : 'המסמך נשמר בהצלחה.'), { tone: 'success' });
             }
             return;
           }
@@ -7030,7 +7139,7 @@ ${sidebarReviewContext}`
             const result = await window.desktopApp.openDocumentDialog();
             if (!result?.canceled) applyImportedDocument(result);
           } catch (error) {
-            alert(error?.message || 'לא ניתן לפתוח את הקובץ שנבחר.');
+            showToast(error?.message || 'לא ניתן לפתוח את הקובץ שנבחר.', { tone: 'error' });
           }
           break;
         }
@@ -7059,7 +7168,7 @@ ${sidebarReviewContext}`
             const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
 
             if (result && result.ok === false) {
-              alert(result.error || 'השמירה נכשלה.');
+              showToast(result.error || 'השמירה נכשלה.', { tone: 'error' });
               return;
             }
 
@@ -7078,7 +7187,7 @@ ${sidebarReviewContext}`
                 source: 'save-as',
                 filePath: String(result.filePath || ''),
               });
-              alert(buildDesktopSaveSuccessMessage(result, 'המסמך נשמר בהצלחה.'));
+              showToast(buildDesktopSaveSuccessMessage(result, 'המסמך נשמר בהצלחה.'), { tone: 'success' });
             }
             return;
           }
@@ -7101,7 +7210,7 @@ ${sidebarReviewContext}`
           if (window.desktopApp?.saveDocumentDialog) {
             const result = await window.desktopApp.saveDocumentDialog(buildDesktopSavePayload('docx'));
             if (result && result.ok === false) {
-              alert(result.error || 'השמירה נכשלה.');
+              showToast(result.error || 'השמירה נכשלה.', { tone: 'error' });
             }
             return;
           }
@@ -7351,14 +7460,14 @@ ${sidebarReviewContext}`
 
       /* ---- פקודות סקירה ---- */
       case 'toggleComments': {
-        const marks = document.querySelectorAll('.ProseMirror mark');
-        marks.forEach(m => { m.style.display = m.style.display === 'none' ? '' : 'none'; });
+        setCommentsPanelOpen((prev) => !prev);
         break;
       }
       case 'toggleTracking': {
         const newVal = !trackChanges;
         setTrackChanges(newVal);
-        alert(newVal ? 'מעקב שינויים: פעיל' : 'מעקב שינויים: כבוי');
+        editor.commands.setTrackChangesEnabled?.(newVal);
+        showToast(newVal ? 'מעקב שינויים: פעיל' : 'מעקב שינויים: כבוי', { tone: 'info' });
         break;
       }
       case 'acceptAllChanges': {
@@ -7369,6 +7478,7 @@ ${sidebarReviewContext}`
           el.replaceWith(...Array.from(el.childNodes));
         });
         editor.commands.setContent(div.innerHTML);
+        acceptInsertions(editor);
         break;
       }
       case 'rejectAllChanges': {
@@ -7389,6 +7499,7 @@ ${sidebarReviewContext}`
           el.replaceWith(span);
         });
         editor.commands.setContent(div2.innerHTML);
+        rejectInsertions(editor);
         break;
       }
 
@@ -7428,17 +7539,14 @@ ${sidebarReviewContext}`
         syncPersistedAppSettings();
         break;
       case 'manageSources': {
-        let srcs = [];
-        try { srcs = JSON.parse(localStorage.getItem('bib-sources') || '[]'); } catch { srcs = []; }
-        if (!srcs.length) { alert('אין מקורות שמורים עדיין.'); break; }
-        alert('מקורות שמורים:\n\n' + srcs.map((s, i) => `${i + 1}. ${s.author} (${s.year}). ${s.title}`).join('\n'));
+        setSourceManagerOpen(true);
         break;
       }
       case 'insertBibliography': {
         let srcs2 = [];
         try { srcs2 = JSON.parse(localStorage.getItem('bib-sources') || '[]'); } catch { srcs2 = []; }
         const style = localStorage.getItem('citation-style') || 'APA';
-        if (!srcs2.length) { alert('אין מקורות לביבליוגרפיה. הוסף ציטוטים תחילה.'); break; }
+        if (!srcs2.length) { showToast('אין מקורות לביבליוגרפיה. הוסף ציטוטים תחילה.', { tone: 'warning' }); break; }
         const bibItems = srcs2.map(s => {
           const a = escHtml(s.author), y = escHtml(String(s.year)), t = escHtml(s.title);
           if (style === 'APA') return `<li>${a} (${y}). <em>${t}</em>.</li>`;
@@ -7512,7 +7620,7 @@ ${sidebarReviewContext}`
         break;
       }
       case 'splitWindow':
-        alert('הפצל אינו נתמך בדפדפן. פתח חלון נוסף עם Ctrl+T.');
+        showToast('הפצל אינו נתמך בדפדפן. פתח חלון נוסף עם Ctrl+T.', { tone: 'warning' });
         break;
 
       default: break;
@@ -7548,8 +7656,22 @@ ${sidebarReviewContext}`
   const isStartTransitionRunning = startTransitionPhase === 'running';
   const prefersReducedMotion = getPrefersReducedMotion();
   const isSpssMode = appMode === 'spss';
-  const isPresentationMode = appMode === 'presentations';
+  const isSpssProjectMode = appMode === 'spss-project';
   const isWordMode = appMode === 'word';
+  const isPresentationMode = appMode === 'presentation';
+
+  // Stream a generated SPSS findings chapter into the editor and switch to Word mode.
+  const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים' } = {}) => {
+    if (!String(html || '').trim()) return;
+    applyImportedDocument({ ok: true, html, title, filePath: '', source: 'spss-project' });
+    setAppMode('word');
+  }, [applyImportedDocument]);
+
+  // יצירה/איפוס מתוך הסטודיו: payload=null → טופס יצירה חדש; אחרת מייצר deck
+  const handleStudioGenerate = React.useCallback((payload) => {
+    if (!payload) { setPresentationDeck(null); return; }
+    return generatePresentationDeck(payload);
+  }, [generatePresentationDeck]);
   const isNonDocumentMode = !isWordMode;
   const isInputDialogVisible = inputDialog.open && isWordMode;
   const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && isWordMode;
@@ -7567,6 +7689,7 @@ ${sidebarReviewContext}`
       <ConfettiCelebration active={documentArrival.active && documentArrival.tone === 'success'} />
       <TopBar
         onOpenUpdates={openUpdatesPanel}
+        onOpenSearch={() => setFindReplace({ open: true, mode: 'find' })}
         onOpen={() => handleCommand('openFile')}
         onNew={() => handleCommand('newDoc')}
         onNewWindow={() => {
@@ -7581,6 +7704,7 @@ ${sidebarReviewContext}`
         onHome={openHomeSafely}
         onOpenDraftRecommendations={openDraftRecommendations}
         draftRecommendationsDisabled={!canOpenDraftRecommendations}
+        onCheckStyle={() => setAuthenticityOpen(true)}
         onToggleAssignmentBrief={() => {
           setAssignmentBriefOpen((prev) => !prev);
         }}
@@ -7596,7 +7720,11 @@ ${sidebarReviewContext}`
         onCloudSave={() => {
           Promise.resolve(handleManualCloudSync()).catch(() => {});
         }}
+        onCloudPull={() => {
+          Promise.resolve(handlePullFromCloud()).catch(() => {});
+        }}
         onCloudSignOut={handleCloudSignOut}
+        documentTitle={getDraftTitleFromFilePath(currentFilePath)}
       />
       {isWordMode && (
         <Ribbon
@@ -7625,16 +7753,32 @@ ${sidebarReviewContext}`
       
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         <div className="min-w-0 flex-1" style={{ display: isSpssMode ? 'flex' : 'none' }}>
-          <SpssSyntaxStudio />
+          <SpssSyntaxStudio onOpenProjectMode={() => setAppMode('spss-project')} />
         </div>
 
-        <div className="min-w-0 flex-1" style={{ display: isPresentationMode ? 'flex' : 'none' }}>
-          <PresentationStudio
-            busy={liveGeneration.state === 'running'}
-            onSwitchToWord={() => setAppMode('word')}
-            onGenerate={generatePresentationDeck}
-          />
-        </div>
+        {isSpssProjectMode && (
+          <div className="min-w-0 flex-1 flex">
+            <SpssProjectStudio
+              onExit={() => setAppMode('word')}
+              onEmitDocument={handleEmitSpssDocument}
+            />
+          </div>
+        )}
+
+        {isPresentationMode && (
+          <div className="min-w-0 flex-1 flex">
+            <PresentationStudio
+              deck={presentationDeck}
+              onDeckChange={setPresentationDeck}
+              onGenerate={handleStudioGenerate}
+              onExit={() => setAppMode('word')}
+              busy={presentationBusy}
+              hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}
+              documentTitle={getDraftTitleFromFilePath(currentFilePath)}
+              showToast={showToast}
+            />
+          </div>
+        )}
 
         {isWordMode && !showStartScreen && sidebarOpen && isMobileViewport && (
           <button
@@ -7857,94 +8001,72 @@ ${sidebarReviewContext}`
           inert={shouldHideEditorWrapper || isNonDocumentMode ? true : undefined}
         >
           {isInputDialogVisible && (
-            <div
-              className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all duration-300"
-              dir="rtl"
-              onMouseDown={(event) => {
-                if (event.target !== event.currentTarget) return;
-                if (inputDialog.closeOnBackdrop) closeInputDialog(null);
-              }}
+            <Modal
+              open={isInputDialogVisible}
+              onClose={() => closeInputDialog(null)}
+              title={inputDialog.title || 'השלם פרטים'}
+              size="md"
+              /* Escape is handled by the global overlay-coordination effect; block
+                 the Modal's own Escape to avoid double-close. */
+              escapeBlocked
+              backdropBlocked={!inputDialog.closeOnBackdrop}
+              initialFocusRef={inputDialogFirstFieldRef}
+              footer={(
+                <>
+                  <Button variant="quiet" onClick={() => closeInputDialog(null)}>ביטול</Button>
+                  <Button onClick={submitInputDialog}>{inputDialog.confirmLabel || 'אישור'}</Button>
+                </>
+              )}
             >
-              <div className="w-[520px] max-w-[96%] rounded-[24px] bg-white shadow-2xl border border-slate-200 p-6 md:p-8 transform transition-all scale-100 opacity-100 flex flex-col gap-6">
-                
-                {/* Header */}
-                <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
-                  <div className="flex-1 text-right">
-                    <h3 className="text-2xl font-bold text-slate-800 tracking-tight">{inputDialog.title || 'השלם פרטים'}</h3>
-                    {inputDialog.description ? <p className="text-sm text-slate-500 mt-2 leading-relaxed">{inputDialog.description}</p> : null}
-                  </div>
-                  <button 
-                    className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0" 
-                    onClick={() => closeInputDialog(null)}
-                    title="סגור"
-                  >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-                </div>
-
-                {/* Body */}
-                <div className="space-y-5">
-                  {(inputDialog.fields || []).map((field, idx) => (
-                    <label key={field.id} className="block text-right group">
-                      <div className="text-sm font-semibold text-slate-700 mb-2">{field.label}</div>
-                      {field.type === 'textarea' ? (
-                        <textarea
-                          autoFocus={idx === 0}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none min-h-[120px] resize-y"
-                          placeholder={field.placeholder || ''}
-                          value={inputDialog.values?.[field.id] || ''}
-                          onChange={(e) => setInputDialog((prev) => ({
-                            ...prev,
-                            values: { ...prev.values, [field.id]: e.target.value },
-                          }))}
-                          onKeyDown={(e) => {
-                            if (inputDialog.submitOnCtrlEnterForTextarea && e.key === 'Enter' && e.ctrlKey) {
-                              e.preventDefault();
-                              submitInputDialog();
-                            }
-                          }}
-                        />
-                      ) : (
-                        <input
-                          type={field.type || 'text'}
-                          autoFocus={idx === 0}
-                          dir="rtl"
-                          className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl ${field.id === 'url' ? 'text-left dir-ltr font-mono text-sm' : 'text-slate-800'} placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none`}
-                          placeholder={field.placeholder || ''}
-                          value={inputDialog.values?.[field.id] || ''}
-                          onChange={(e) => setInputDialog((prev) => ({
-                            ...prev,
-                            values: { ...prev.values, [field.id]: e.target.value },
-                          }))}
-                          onKeyDown={(e) => {
-                            if (inputDialog.submitOnEnter && e.key === 'Enter') {
-                              e.preventDefault();
-                              submitInputDialog();
-                            }
-                          }}
-                        />
-                      )}
-                    </label>
-                  ))}
-                </div>
-
-                {/* Footer */}
-                <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
-                  <button 
-                    className="px-6 py-2.5 rounded-xl font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 transition-colors" 
-                    onClick={() => closeInputDialog(null)}
-                  >
-                    ביטול
-                  </button>
-                  <button 
-                    className="px-8 py-2.5 rounded-xl font-semibold text-white bg-[#0066cc] hover:bg-blue-700 shadow-sm hover:shadow transition-all active:scale-[0.98]" 
-                    onClick={submitInputDialog}
-                  >
-                    {inputDialog.confirmLabel || 'אישור'}
-                  </button>
-                </div>
+              {inputDialog.description ? (
+                <p className="-mt-1 mb-4 text-sm leading-relaxed text-slate-500">{inputDialog.description}</p>
+              ) : null}
+              <div className="flex flex-col gap-5">
+                {(inputDialog.fields || []).map((field, idx) => {
+                  const commonProps = {
+                    label: field.label,
+                    placeholder: field.placeholder || '',
+                    value: inputDialog.values?.[field.id] || '',
+                    onChange: (e) => setInputDialog((prev) => ({
+                      ...prev,
+                      values: { ...prev.values, [field.id]: e.target.value },
+                    })),
+                  };
+                  if (field.type === 'textarea') {
+                    return (
+                      <TextArea
+                        key={field.id}
+                        ref={idx === 0 ? inputDialogFirstFieldRef : undefined}
+                        rows={5}
+                        {...commonProps}
+                        onKeyDown={(e) => {
+                          if (inputDialog.submitOnCtrlEnterForTextarea && e.key === 'Enter' && e.ctrlKey) {
+                            e.preventDefault();
+                            submitInputDialog();
+                          }
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <Input
+                      key={field.id}
+                      ref={idx === 0 ? inputDialogFirstFieldRef : undefined}
+                      type={field.type || 'text'}
+                      ltr={field.id === 'url'}
+                      className={field.id === 'url' ? 'font-mono text-sm' : ''}
+                      {...commonProps}
+                      onKeyDown={(e) => {
+                        if (inputDialog.submitOnEnter && e.key === 'Enter') {
+                          e.preventDefault();
+                          submitInputDialog();
+                        }
+                      }}
+                    />
+                  );
+                })}
               </div>
-            </div>
+            </Modal>
           )}
 
           {isCopyleaksDetectorVisible && (
@@ -8514,6 +8636,8 @@ ${sidebarReviewContext}`
                   workspaceId: payload?.workspaceId || getActiveWorkspaceId(),
                   payload,
                 })}
+                onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
+                onOpenSpssProject={() => setAppMode('spss-project')}
               />
             </div>
           </div>
@@ -8531,6 +8655,12 @@ ${sidebarReviewContext}`
             if (editor) editor.chain().focus().insertContent(text).run();
           }}
         />}
+
+        <AuthenticityModal
+          open={authenticityOpen}
+          onClose={() => setAuthenticityOpen(false)}
+          getText={() => (editor ? editor.getText() : '')}
+        />
 
         {isWordMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}
       </main>
@@ -8647,16 +8777,6 @@ ${sidebarReviewContext}`
               <span>Tutor mode נשלט מתוך הסטודיו</span>
             </div>
           </>
-        ) : isPresentationMode ? (
-          <>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>Presentation Studio פעיל</span>
-              <span><i className="ph ph-image text-cyan-300"></i> דגש על בריף, שקופיות, תמונות וזרימה</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>מעבר ל-Word יקרה אוטומטית אחרי יצירת המצגת</span>
-            </div>
-          </>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -8665,8 +8785,11 @@ ${sidebarReviewContext}`
               <span><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>מצב הדפסה</span>
+              <span>{VIEW_MODE_LABELS[viewMode] || 'מצב הדפסה'}</span>
               <span>{zoom}%</span>
+              <a href="legal/privacy.html" target="_blank" rel="noopener noreferrer" className="text-white/85 underline-offset-2 hover:text-white hover:underline">פרטיות</a>
+              <a href="legal/terms.html" target="_blank" rel="noopener noreferrer" className="text-white/85 underline-offset-2 hover:text-white hover:underline">תנאי שימוש</a>
+              <a href="legal/accessibility.html" target="_blank" rel="noopener noreferrer" className="text-white/85 underline-offset-2 hover:text-white hover:underline">נגישות</a>
             </div>
           </>
         )}
@@ -8707,6 +8830,47 @@ ${sidebarReviewContext}`
           isOpen={helpModalOpen}
           onClose={() => setHelpModalOpen(false)}
           topic={helpModalTopic}
+        />
+      )}
+
+      {appMode === 'word' && findReplace.open && editor && (
+        <FindReplace
+          editor={editor}
+          open={findReplace.open}
+          mode={findReplace.mode}
+          onClose={() => setFindReplace((prev) => ({ ...prev, open: false }))}
+        />
+      )}
+
+      {appMode === 'word' && sourceManagerOpen && (
+        <SourceManager
+          open={sourceManagerOpen}
+          editor={editor}
+          onCommand={handleCommand}
+          onClose={() => setSourceManagerOpen(false)}
+        />
+      )}
+
+      {appMode === 'word' && commentsPanelOpen && (
+        <CommentsPanel
+          open={commentsPanelOpen}
+          comments={comments}
+          activeCommentId={activeCommentId}
+          onClose={() => setCommentsPanelOpen(false)}
+          onUpdateBody={(id, body) => setComments((prev) => prev.map((c) => (c.id === id ? { ...c, body } : c)))}
+          onAddReply={(id, text) => setComments((prev) => prev.map((c) => (c.id === id ? { ...c, replies: [...(c.replies || []), { id: `r_${Date.now()}`, text }] } : c)))}
+          onResolve={(id) => { if (editor) removeCommentById(editor, id); setComments((prev) => prev.map((c) => (c.id === id ? { ...c, resolved: true } : c))); }}
+          onDelete={(id) => { if (editor) removeCommentById(editor, id); setComments((prev) => prev.filter((c) => c.id !== id)); }}
+          onScrollTo={(id) => {
+            setActiveCommentId(id);
+            const dom = document.querySelector('.ProseMirror');
+            const el = dom?.querySelector(`span[data-comment-id="${id}"]`);
+            if (el) {
+              el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              el.classList.add('comment-active');
+              window.setTimeout(() => el.classList.remove('comment-active'), 1200);
+            }
+          }}
         />
       )}
     </div>

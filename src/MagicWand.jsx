@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { chatWithActiveProvider, matchShortcut, shouldUseWorkspaceAutomation } from './services/aiService';
+import { scoreTextAuthenticity, formatAuthenticityResultText } from './services/styleAuthenticityService';
 
 const MAX_WAND_CONTEXT = 1200;
 
@@ -64,6 +65,7 @@ const WAND_ACTIONS = [
   { icon: '📖', label: 'הרחב',     prompt: 'הרחב את הטקסט עם פרטים ודוגמאות נוספות' },
   { icon: '🎓', label: 'אקדמי',    prompt: 'שכתב בסגנון אקדמי ופורמלי' },
   { icon: '✂️', label: 'קצר',      prompt: 'קצר את הטקסט ב-40% בלי לאבד את המשמעות העיקרית' },
+  { icon: '🔍', label: 'בדיקת סגנון', kind: 'authenticity' },
 ];
 
 export default function MagicWand({ sidebarOpen, documentContext, selectedText, selectionContext = null, onInsert, shortcuts = {}, escapeBlocked = false }) {
@@ -73,6 +75,8 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
   const [input, setInput] = useState('');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
+  // reportMode=true כשהתוצאה היא דוח (בדיקת סגנון) ולא טקסט להוספה למסמך.
+  const [reportMode, setReportMode] = useState(false);
   const popupRef = useRef(null);
   const triggerRef = useRef(null);
   const inputRef = useRef(null);
@@ -120,13 +124,33 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
       setResult('');
       setInput('');
       setLoading(false);
+      setReportMode(false);
     }
   }, [open]);
+
+  // בדיקת סגנון מקומית (אין קריאת AI): מנקד את הטקסט הנבחר, או את הקשר המסמך אם אין בחירה.
+  const runStyleCheck = () => {
+    const sourceContext = typeof documentContext === 'function' ? documentContext() : documentContext;
+    const target = toPlainText(selectedText || selectionContext?.selection) || toPlainText(sourceContext);
+    setLoading(false);
+    setReportMode(true);
+    if (!target || target.length < 25) {
+      setResult('בחר טקסט ארוך יותר (לפחות ~25 מילים) כדי לבדוק סגנון.');
+      return;
+    }
+    try {
+      const res = scoreTextAuthenticity(target);
+      setResult(formatAuthenticityResultText(res));
+    } catch (err) {
+      setResult('❌ ' + (err?.message || 'שגיאה בבדיקת הסגנון'));
+    }
+  };
 
   const run = async (prompt) => {
     const reqId = ++activeRequestId.current;
     const sourceContext = typeof documentContext === 'function' ? documentContext() : documentContext;
     const request = buildWandRequest(prompt, selectedText, sourceContext, selectionContext);
+    setReportMode(false);
     setLoading(true);
     setResult('');
     try {
@@ -162,7 +186,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
   };
 
   // מיקום קבוע ונוח גם כשהעוזר נפתח כחלונית צד
-  const rightPx = sidebarOpen ? 20 : 20;
+  const rightPx = 20;
 
   return (
     <div style={{ position: 'fixed', right: rightPx, bottom: 80, zIndex: 500, transition: 'right 0.25s, opacity 0.2s', opacity: sidebarOpen ? 0 : 1, pointerEvents: sidebarOpen ? 'none' : 'auto' }}>
@@ -188,7 +212,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
           {/* כפתורי פעולה מהירה */}
           <div style={{ display: 'flex', gap: 4, padding: '10px 10px 6px', flexWrap: 'wrap' }}>
             {WAND_ACTIONS.map(a => (
-              <button key={a.label} onClick={() => run(a.prompt)} title={a.prompt}
+              <button key={a.label} onClick={() => (a.kind === 'authenticity' ? runStyleCheck() : run(a.prompt))} title={a.prompt || a.label}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '6px 8px', border: '1px solid #E1DFDD', borderRadius: 8, background: 'white', cursor: 'pointer', fontSize: 11, minWidth: 44, transition: 'all 0.12s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; e.currentTarget.style.borderColor = '#2B579A'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
@@ -227,7 +251,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
               ) : (
                 <>
                   <div style={{ fontSize: 12, color: '#323130', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: 8, direction: 'rtl' }}>{result}</div>
-                  {onInsert && (
+                  {onInsert && !reportMode && (
                     <button onClick={() => { onInsert(result); setOpen(false); }}
                       style={{ fontSize: 11, padding: '5px 14px', background: '#2B579A', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
                       + הוסף למסמך

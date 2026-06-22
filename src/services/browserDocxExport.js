@@ -518,7 +518,7 @@ const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = r
   return children.length ? children : [new Paragraph({ text: '' })];
 };
 
-const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} } = {}) => {
+export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} } = {}) => {
   const typography = resolveDocxExportOptions({ html, exportOptions });
   const headingOneSize = Math.max(typography.fontSize + 10, 34);
   const headingTwoSize = Math.max(typography.fontSize + 4, 28);

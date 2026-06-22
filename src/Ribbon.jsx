@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getToolLinksConfig } from './services/aiService';
+import { showToast } from './services/uiFeedback';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 
 const FONTS = [
@@ -364,7 +365,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                 stream.getTracks().forEach((track) => track.stop());
                 onCommand('insertImage', cv.toDataURL('image/png'));
               } catch (err) {
-                alert('צילום המסך לא נתמך כרגע במצב הזה. אפשר לבחור תמונה מקובץ במקום זאת.');
+                showToast('צילום המסך לא נתמך כרגע במצב הזה. אפשר לבחור תמונה מקובץ במקום זאת.', { tone: 'warning' });
               }
             }}>
             <i className="ph-fill ph-monitor text-blue-600"></i> שתף מסך וצלם
@@ -630,9 +631,19 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                             <span style={sample}>AaBb</span><span>{label}</span>
                           </div>
                         ))}
-                        <div className="style-item" onClick={() => onCommand('paragraph')}><span style={{ fontSize: '13px' }}>AaBb</span><span>רגיל</span></div>
-                        <div className="style-item" onClick={() => onCommand('heading', 1)}><span style={{ fontSize: '14px', fontWeight: 'bold', color: '#2B579A' }}>AaBb</span><span>כותרת 1</span></div>
-                        <div className="style-item" onClick={() => onCommand('blockquote')}><span style={{ fontSize: '12px', borderRight: '3px solid #2B579A', paddingRight: '4px', color: '#605E5C' }}>AaBb</span><span>ציטוט</span></div>
+                        {(() => {
+                          const activeBox = { background: '#EEF4FF', borderColor: '#93C5FD' };
+                          const isPara = activeFormats.isParagraph && !activeFormats.headingLevel && !activeFormats.isBlockquote;
+                          return (
+                            <>
+                              <div className="style-item" style={isPara ? activeBox : {}} onClick={() => onCommand('paragraph')}><span style={{ fontSize: '13px' }}>AaBb</span><span>רגיל</span></div>
+                              <div className="style-item" style={activeFormats.headingLevel === 1 ? activeBox : {}} onClick={() => onCommand('heading', 1)}><span style={{ fontSize: '15px', fontWeight: 'bold', color: '#2B579A' }}>AaBb</span><span>כותרת 1</span></div>
+                              <div className="style-item" style={activeFormats.headingLevel === 2 ? activeBox : {}} onClick={() => onCommand('heading', 2)}><span style={{ fontSize: '13px', fontWeight: 'bold', color: '#2B579A', borderBottom: '1px solid #2B579A' }}>AaBb</span><span>כותרת 2</span></div>
+                              <div className="style-item" style={activeFormats.headingLevel === 3 ? activeBox : {}} onClick={() => onCommand('heading', 3)}><span style={{ fontSize: '12px', fontWeight: 'bold', color: '#404040' }}>AaBb</span><span>כותרת 3</span></div>
+                              <div className="style-item" style={activeFormats.isBlockquote ? activeBox : {}} onClick={() => onCommand('blockquote')}><span style={{ fontSize: '12px', borderRight: '3px solid #2B579A', paddingRight: '4px', color: '#605E5C', fontStyle: 'italic' }}>AaBb</span><span>ציטוט</span></div>
+                            </>
+                          );
+                        })()}
                     </div>
                 </div>
                 <div className="toolbar-group-label">סגנונות</div>

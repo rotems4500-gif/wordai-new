@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
+import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/styleAuthenticityService";
+import { showToast } from "./services/uiFeedback";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 
@@ -895,6 +897,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [requestSnapshot, setRequestSnapshot] = useState(null);
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
+  const [pendingMentionSelectionState, setPendingMentionSelectionState] = useState(() => ({ ...EMPTY_PENDING_MENTION_SELECTION }));
   const [showQuickPrompts, setShowQuickPrompts] = useState(false);
   const rawActiveClassicAgent = activeClassicAgentId ? AGENTS_CONFIG[activeClassicAgentId] : null;
   const launchPresetNonce = Number(launchPreset?.nonce) || 0;
@@ -976,6 +979,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     : null;
   const activeSkill = effectiveSelectedSkillId !== 'none'
     ? skillCatalog.find((skill) => skill.id === effectiveSelectedSkillId) || null
+    : null;
+  const pendingSkill = pendingMentionSelectionState.skillId
+    ? skillCatalog.find((skill) => skill.id === pendingMentionSelectionState.skillId) || null
+    : null;
+  const pendingAgent = pendingMentionSelectionState.agentId
+    ? roleAgents.find((agent) => agent.id === pendingMentionSelectionState.agentId) || null
     : null;
 
   useEffect(() => {
@@ -1183,13 +1192,77 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       color: '#FDE68A',
     },
   ];
+  const renderPendingMentionPill = (variant = 'classic') => {
+    if (!pendingSkill && !pendingAgent) return null;
+    const isDark = variant === 'dark';
+    const label = pendingSkill
+      ? `סקיל לשליחה הבאה: ${pendingSkill.label}`
+      : `סוכן לשליחה הבאה: ${pendingAgent.name}`;
+    const hint = pendingSkill
+      ? (pendingSkill.description || pendingSkill.usageHint || 'ישנה את אופן הטיפול בבקשה הבאה בלבד.')
+      : 'יטפל בבקשה הבאה בלבד.';
+    return (
+      <div style={{
+        marginBottom: 8,
+        padding: '8px 10px',
+        borderRadius: variant === 'dark' ? 14 : 8,
+        border: isDark ? '1px solid rgba(52, 211, 153, 0.36)' : '1px solid #A7F3D0',
+        background: isDark ? 'rgba(16, 185, 129, 0.16)' : '#ECFDF5',
+        color: isDark ? '#D1FAE5' : '#065F46',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        direction: 'rtl',
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {label}
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.82, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+            {hint}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={clearPendingMentionSelection}
+          title="בטל בחירה זמנית"
+          style={{
+            width: 26,
+            height: 26,
+            borderRadius: variant === 'dark' ? 13 : 6,
+            border: isDark ? '1px solid rgba(209, 250, 229, 0.32)' : '1px solid #A7F3D0',
+            background: isDark ? 'rgba(255,255,255,0.08)' : '#FFFFFF',
+            color: isDark ? '#D1FAE5' : '#047857',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
+    );
+  };
   const shouldShowProgress = workspaceAutomation.showProgress !== false && (loading || ['running', 'retrying', 'error', 'success'].includes(activeAgentStatus.state));
   const lockedControlStyle = isSettingsLocked ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {};
 
+  const setPendingMentionSelection = useCallback((nextSelection = {}) => {
+    const next = {
+      agentId: String(nextSelection.agentId || '').trim(),
+      skillId: String(nextSelection.skillId || '').trim(),
+    };
+    pendingMentionSelectionRef.current = next;
+    setPendingMentionSelectionState(next);
+  }, []);
+
   const clearPendingMentionSelection = useCallback(() => {
     preservePendingMentionRef.current = false;
-    pendingMentionSelectionRef.current = { ...EMPTY_PENDING_MENTION_SELECTION };
-  }, []);
+    setPendingMentionSelection({ ...EMPTY_PENDING_MENTION_SELECTION });
+  }, [setPendingMentionSelection]);
 
   const setDraftInput = useCallback((nextValue, { preservePendingMention = false } = {}) => {
     if (!preservePendingMention && !preservePendingMentionRef.current) clearPendingMentionSelection();
@@ -1204,7 +1277,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     try {
       const extractedText = await readInstructionFile(file);
       if (!String(extractedText).trim()) {
-        window.alert('לא הצלחתי לקרוא תוכן מתוך קובץ זה.');
+        showToast('לא הצלחתי לקרוא תוכן מתוך קובץ זה.', { tone: 'warning' });
         return;
       }
       setAttachedFiles((prev) => [...prev, { name: file.name, text: extractedText }]);
@@ -1213,7 +1286,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       }, 50);
     } catch (err) {
       console.error(err);
-      window.alert('שגיאה בעת קריאת הקובץ.');
+      showToast('שגיאה בעת קריאת הקובץ.', { tone: 'error' });
     }
   };
 
@@ -1293,7 +1366,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           .map((skill) => ({
             id: skill.id,
             label: skill.label,
-            description: skill.usageHint || skill.description,
+            description: skill.description || skill.usageHint,
             insertText: `/${skill.id} `,
             type: 'skill',
           }))
@@ -1318,15 +1391,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const after = currentValue.slice(mentionMenu.end);
     const nextValue = `${before}${after}`;
     if (item.type === 'agent') {
-      pendingMentionSelectionRef.current = {
+      setPendingMentionSelection({
         ...pendingMentionSelectionRef.current,
         agentId: item.id,
-      };
+      });
     } else if (item.type === 'skill') {
-      pendingMentionSelectionRef.current = {
+      setPendingMentionSelection({
         ...pendingMentionSelectionRef.current,
         skillId: item.id,
-      };
+      });
     }
     preservePendingMentionRef.current = true;
     setDraftInput(nextValue, { preservePendingMention: true });
@@ -1947,10 +2020,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       });
       updateAgentStatus(agentId, safeAgentLabel, { state: 'error', progress: 100, message: errorMessage });
     } finally {
-      if (!isCurrentRequestCycle(requestCycle)) return;
+      // ניקוי loading/snapshot תמיד — גם אם מחזור הבקשה התחלף בינתיים (מעבר מסמך/workspace/reset),
+      // כדי שלא להישאר תקועים ב-loading. רק החזרת הפוקוס מותנית בכך שזו עדיין הבקשה הנוכחית.
       setLoading(false);
       setRequestSnapshot(null);
-      inputRef.current?.focus();
+      if (isCurrentRequestCycle(requestCycle)) inputRef.current?.focus();
     }
   };
 
@@ -3335,10 +3409,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       appendAssistantMessage(`❌ ${err.message}`, { error: true, composerMode });
       updateAgentStatus(agent.id, safeAgentLabel, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
-      if (!isCurrentRequestCycle(requestCycle)) return;
+      // ניקוי loading/snapshot תמיד — גם אם מחזור הבקשה התחלף בינתיים (מעבר מסמך/workspace/reset),
+      // כדי שלא להישאר תקועים ב-loading. רק החזרת הפוקוס מותנית בכך שזו עדיין הבקשה הנוכחית.
       setLoading(false);
       setRequestSnapshot(null);
-      inputRef.current?.focus();
+      if (isCurrentRequestCycle(requestCycle)) inputRef.current?.focus();
     }
   };
 
@@ -3358,6 +3433,29 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     closeMentionMenu();
 
     let txt = originalText;
+
+    // זיהוי בקשת "בדיקת סגנון / נשמע כמו AI" → ניקוד מקומי במקום קריאת LLM.
+    const wantsStyleCheck = (
+      /(בדוק|תבדוק|בדיקת|לבדוק|תנתח|נתח)\b[^]{0,40}?(סגנון|גנרי|מלאכותי|אותנטי|כמו\s*ai|בינה\s*מלאכותית|נשמע)/i.test(txt)
+      || /נשמע\s+(כמו\s+)?(ai|מכונה|מלאכותי|רובוט|בינה)/i.test(txt)
+      || /(האם|אם)\s+(זה|הטקסט|הטיוטה|המסמך)\b[^]{0,40}?(ai|מלאכותי|גנרי|נכתב\s+על\s+ידי)/i.test(txt)
+      || /\b(ai\s*detector|sound[s]?\s+like\s+ai|written\s+by\s+ai|check\s+(my\s+)?style|does\s+this\s+sound\s+like\s+me)\b/i.test(txt)
+    );
+    if (wantsStyleCheck) {
+      const targetText = String(selectedText || currentBlockText || documentSnapshot.fullText || '').trim();
+      setTab('chat');
+      setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
+      if (!targetText || targetText.length < 25) {
+        appendAssistantMessage('אין מספיק טקסט לבדיקת סגנון. בחר טקסט או פתח מסמך עם תוכן (לפחות ~25 מילים), ונסה שוב.');
+      } else {
+        try {
+          appendAssistantMessage(formatAuthenticityResultText(scoreTextAuthenticity(targetText)));
+        } catch (err) {
+          appendAssistantMessage('❌ ' + (err?.message || 'שגיאה בבדיקת הסגנון'));
+        }
+      }
+      return;
+    }
     let manualSkillId = isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId);
     let finalExtraSystemPrompt = [composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
       .filter(Boolean)
@@ -3469,10 +3567,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     if (!txt) {
       if (!customPrompt) {
-        pendingMentionSelectionRef.current = {
+        setPendingMentionSelection({
           agentId: usedDraftAgentMention && forcedAgent ? forcedAgent.id : (pendingMentionSelection.agentId || ''),
           skillId: usedDraftSkillMention && manualSkillId ? manualSkillId : (pendingMentionSelection.skillId || ''),
-        };
+        });
         preservePendingMentionRef.current = Boolean(
           pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId
         );
@@ -3770,10 +3868,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       });
       updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'error', progress: 100, message: err.message || 'שגיאה' });
     } finally {
-      if (!isCurrentRequestCycle(requestCycle)) return;
+      // ניקוי loading/snapshot תמיד — גם אם מחזור הבקשה התחלף בינתיים (מעבר מסמך/workspace/reset),
+      // כדי שלא להישאר תקועים ב-loading. רק החזרת הפוקוס מותנית בכך שזו עדיין הבקשה הנוכחית.
       setLoading(false);
       setRequestSnapshot(null);
-      inputRef.current?.focus();
+      if (isCurrentRequestCycle(requestCycle)) inputRef.current?.focus();
     }
   };
 
@@ -3939,10 +4038,10 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
     
     setDraftInput(prompt, { preservePendingMention: true });
-    pendingMentionSelectionRef.current = {
+    setPendingMentionSelection({
       agentId: agentId,
       skillId: ''
-    };
+    });
     preservePendingMentionRef.current = true;
 
     setTimeout(() => {
@@ -3971,7 +4070,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       };
     })
     .filter((agent) => agent.label);
-  const canSendCurrentInput = !loading && Boolean(input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId);
+  const hasPendingMentionSelectionState = Boolean(pendingMentionSelectionState.agentId || pendingMentionSelectionState.skillId);
+  const canSendCurrentInput = !loading && Boolean(input.trim() || hasPendingMentionSelectionState);
   const selectionPreviewText = localContext
     ? (contextPreview || contextSourceText.replace(/\s+/g, ' ').slice(0, 96))
     : 'לא נבחר טקסט — ה-AI קורא את כל המסמך';
@@ -4423,6 +4523,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                     >✕</button>
                   </div>
                 ))}
+                {renderPendingMentionPill('classic')}
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -5241,6 +5342,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             )}
 
             {renderComposerModeToggle('modern')}
+            {renderPendingMentionPill('dark')}
 
             {/* Input Container */}
             <div style={{ 
@@ -5423,36 +5525,36 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               {/* Send Button */}
               <button 
                 onClick={() => send()} 
-                disabled={loading || (!input.trim() && !pendingMentionSelectionRef.current.agentId && !pendingMentionSelectionRef.current.skillId)}
+                disabled={!canSendCurrentInput}
                 style={{
                   width: 56,
                   height: 56,
                   flexShrink: 0,
-                  background: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
+                  background: canSendCurrentInput
                     ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
                     : 'rgba(255, 255, 255, 0.1)',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   borderRadius: 16,
-                  cursor: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId) ? 'pointer' : 'default',
+                  cursor: canSendCurrentInput ? 'pointer' : 'default',
                   fontSize: 20,
                   color: 'white',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  boxShadow: !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
+                  boxShadow: canSendCurrentInput
                     ? '0 8px 25px rgba(102, 126, 234, 0.3)'
                     : 'none',
                 }}
                 onMouseEnter={(e) => {
-                  if (!loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)) {
+                  if (canSendCurrentInput) {
                     e.currentTarget.style.transform = 'scale(1.05) translateY(-2px)';
                     e.currentTarget.style.boxShadow = '0 12px 35px rgba(102, 126, 234, 0.4)';
                   }
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'scale(1) translateY(0)';
-                  e.currentTarget.style.boxShadow = !loading && (input.trim() || pendingMentionSelectionRef.current.agentId || pendingMentionSelectionRef.current.skillId)
+                  e.currentTarget.style.boxShadow = canSendCurrentInput
                     ? '0 8px 25px rgba(102, 126, 234, 0.3)'
                     : 'none';
                 }}

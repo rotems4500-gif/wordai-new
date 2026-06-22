@@ -1,7 +1,7 @@
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getFirebaseApp, hasFirebaseConfig } from "./config";
 
 let auth = null;
@@ -14,7 +14,13 @@ function ensureFirebaseClients() {
 
     const app = getFirebaseApp();
     auth = getAuth(app);
-    db = getFirestore(app);
+    // WebView2 (Tauri) חוסם לעיתים את ה-WebChannel transport של Firestore → סנכרון נתקע.
+    // long-polling אוטומטי פותר; נופלים ל-getFirestore אם כבר אותחל.
+    try {
+        db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+    } catch {
+        db = getFirestore(app);
+    }
     storage = getStorage(app);
     return { auth, db, storage };
 }
@@ -82,6 +88,15 @@ export async function cloudSignIn(email, password) {
 export async function cloudSignInWithGooglePopup() {
     const clients = ensureFirebaseClients();
     if (!clients) throw new Error("Firebase config is missing.");
+
+    // דסקטופ (Tauri): signInWithPopup לא עובד ב-WebView — זרימת OAuth מקומית (loopback)
+    if (typeof window !== "undefined" && typeof window.desktopApp?.googleOAuth === "function") {
+        const res = await window.desktopApp.googleOAuth();
+        if (!res?.ok || !res.idToken) {
+            throw new Error(res?.error || "התחברות Google נכשלה.");
+        }
+        return cloudSignInWithGoogleIdToken(res.idToken, res.accessToken);
+    }
 
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
@@ -174,10 +189,12 @@ export async function syncSettingsToCloud(user, settingsPayload) {
         ? settingsPayload.providerConfig
         : null;
 
-    await setDoc(docRef, {
-        ...settingsPayload,
-        updatedAt: serverTimestamp(),
-    });
+    // אנטי-דריסה: לעולם לא לדרוס נתונים בענן עם מקומי ריק (מנע מחיקת מפתחות).
+    // merge:true שומר שדות קיימים בענן כשמשמיטים אותם.
+    const cleanPayload = { ...settingsPayload, updatedAt: serverTimestamp() };
+    if (!providerConfig || !Object.keys(providerConfig).length) delete cleanPayload.providerConfig;
+    if (!Object.keys(appSettings).length) delete cleanPayload.appSettings;
+    await setDoc(docRef, cleanPayload, { merge: true });
 
     await setDoc(doc(clients.db, "users", user.uid), {
         uid: user.uid,

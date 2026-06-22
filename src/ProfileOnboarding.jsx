@@ -1055,29 +1055,10 @@ export default function ProfileOnboarding({
             אמשיך אחר כך
           </button>
           
-          <div className="text-center">
-            <div className="text-white text-sm mb-1" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-              שלב {step} מתוך 7
-            </div>
-            <div className="w-24 h-2 bg-slate-700/50 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-blue-400 to-purple-500 transition-all duration-700"
-                style={{ width: `${(step / 7) * 100}%` }}
-              ></div>
-            </div>
-          </div>
-          
           <button
             onClick={step === 7 ? onComplete : nextStep}
-            disabled={false}
-            className={`group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 ${
-              step === 4 
-                ? 'bg-white/10 text-white/40 cursor-not-allowed backdrop-blur-sm border border-white/20' 
-                : 'bg-gradient-to-r from-pink-500 to-purple-600 text-white hover:from-pink-600 hover:to-purple-700 shadow-lg hover:shadow-2xl transform hover:scale-105 border border-white/20'
-            }`}
-            style={{
-              boxShadow: step !== 4 ? '0 10px 30px rgba(236, 72, 153, 0.3)' : 'none'
-            }}
+            className="group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 bg-gradient-to-r from-pink-500 to-purple-600 text-white hover:from-pink-600 hover:to-purple-700 shadow-lg hover:shadow-2xl transform hover:scale-105 border border-white/20"
+            style={{ boxShadow: '0 10px 30px rgba(236, 72, 153, 0.3)' }}
           >
             <span className="flex items-center gap-2">
               {step === 7 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}

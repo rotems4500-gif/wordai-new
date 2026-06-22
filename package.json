@@ -1,13 +1,12 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.129",
+  "version": "1.0.130",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
     "type": "git",
     "url": "https://github.com/rotems4500-gif/wordai-new.git"
   },
-  "main": "electron/main.cjs",
   "engines": {
     "node": ">=20"
   },
@@ -21,13 +20,15 @@
     "firebase:deploy:rules": "firebase deploy --only firestore:rules",
     "smoke:article-retrieval": "node scripts/news-site-article-retrieval-smoke.mjs",
     "sync:storage": "node scripts/sync-storage-to-local.mjs",
-    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:3001 && cross-env VITE_DEV_SERVER_URL=https://localhost:3001 electron .\"",
-    "desktop:build": "npm run build && electron-builder --dir",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:publish": "node scripts/guarded-local-publish.cjs"
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "dist:win": "tauri build"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tiptap/extension-blockquote": "^3.22.3",
     "@tiptap/extension-bubble-menu": "^3.22.3",
     "@tiptap/extension-code-block-lowlight": "^3.22.3",
@@ -51,17 +52,22 @@
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",
     "ai": "^6.0.159",
+    "buffer": "^6.0.3",
     "clsx": "^2.1.1",
     "core-js": "^3.36.0",
     "docx": "^9.6.1",
-    "electron-updater": "^6.6.2",
+    "events": "^3.3.0",
     "firebase": "^12.12.0",
     "jszip": "^3.10.1",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "^4.10.38",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "sav-reader": "^2.0.8",
+    "stream-browserify": "^3.0.0",
     "tailwind-merge": "^3.5.0",
     "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
@@ -69,82 +75,14 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
     "@tailwindcss/typography": "^0.5.19",
+    "@tauri-apps/cli": "^2.11.3",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
-    "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "daisyui": "^5.5.19",
-    "electron": "^35.5.1",
-    "electron-builder": "^26.0.12",
     "office-addin-dev-certs": "^1.11.8",
     "postcss": "^8.5.9",
-    "rcedit": "^4.0.1",
     "tailwindcss": "^4.2.2",
-    "vite": "^8.0.8",
-    "wait-on": "^8.0.5"
-  },
-  "build": {
-    "appId": "com.wordai.assistant",
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "rotems4500-gif",
-        "repo": "wordai-new",
-        "releaseType": "release"
-      }
-    ],
-    "productName": "WordFlow AI",
-    "asar": true,
-    "npmRebuild": false,
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "!dist/PAST-DOC/**/*",
-      "dist/PAST-DOC/index.json",
-      "electron/**/*",
-      "assets/**/*",
-      "package.json"
-    ],
-    "afterPack": "scripts/after-pack.cjs",
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "assets/app-icon.ico",
-      "signAndEditExecutable": false,
-      "artifactName": "WordFlow-AI-Setup-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "installerIcon": "assets/app-icon.ico",
-      "uninstallerIcon": "assets/app-icon.ico",
-      "installerHeaderIcon": "assets/app-icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "WordFlow AI"
-    },
-    "fileAssociations": [
-      {
-        "ext": "docx",
-        "name": "WordFlow AI Document",
-        "description": "Open DOCX files with WordFlow AI",
-        "role": "Editor"
-      },
-      {
-        "ext": "txt",
-        "name": "WordFlow AI Text Document",
-        "description": "Open text files with WordFlow AI",
-        "role": "Editor"
-      },
-      {
-        "ext": "html",
-        "name": "WordFlow AI HTML Document",
-        "description": "Open HTML files with WordFlow AI",
-        "role": "Editor"
-      }
-    ]
+    "vite": "^8.0.8"
   }
 }

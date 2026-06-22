@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GeneratingOverlay } from './WordFlowAnimations';
 import ChefModeDialog from './ChefModeDialog';
+import { showToast, showConfirm } from './services/uiFeedback';
+import { scoreTextAuthenticity } from './services/styleAuthenticityService';
 import {
   getHomeInstructions,
   saveHomeInstructionFileText,
@@ -12,6 +14,7 @@ import {
   loadProjectMaterials,
   getMaterialExtractionStatusInfo,
   saveHelperMaterial,
+  removeHelperMaterial,
   saveHomeInstructions,
   getRecentDocuments,
   removeDocumentHistoryByFilePath,
@@ -73,6 +76,19 @@ const MODERN_TEMPLATES = [
     gradient: 'from-pink-400 to-rose-600',
     icon: '🌟'
   },
+];
+
+const PPT_THEMES = [
+  { id: 'premium', label: 'פרימיום' },
+  { id: 'academic', label: 'אקדמי' },
+  { id: 'cinematic', label: 'קולנועי' },
+  { id: 'bold', label: 'נועז' },
+];
+
+const PPT_DENSITY = [
+  { id: 'lean', label: 'רזה', blurb: 'מינימלי ונקי' },
+  { id: 'balanced', label: 'מאוזן', blurb: 'איזון תוכן/ויזואל' },
+  { id: 'rich', label: 'עשיר', blurb: 'ויזואלי ומלא' },
 ];
 
 const PRIMARY_TEMPLATE_CARD_LIMIT = 3;
@@ -293,6 +309,18 @@ const getProviderLabelFromChoices = (providerId = '', choices = []) => {
   return choices.find((choice) => choice.id === normalizedId)?.label || WORKSPACE_PROVIDER_LABELS[normalizedId] || normalizedId;
 };
 
+const START_SCREEN_DEFAULT_PROVIDER_ID = 'gemini';
+
+const resolveStartScreenDefaultProviderId = (config = {}, choices = []) => {
+  const defaultChoice = choices.find((choice) => choice.id === START_SCREEN_DEFAULT_PROVIDER_ID);
+  if (defaultChoice) return defaultChoice.id;
+
+  const activeProviderId = String(config?.active || '').trim();
+  if (activeProviderId && choices.some((choice) => choice.id === activeProviderId)) return activeProviderId;
+
+  return choices[0]?.id || activeProviderId || START_SCREEN_DEFAULT_PROVIDER_ID;
+};
+
 const buildDirectGenerationSummary = ({ providerId = '', modelId = '', choices = [] } = {}) => {
   const providerLabel = getProviderLabelFromChoices(providerId, choices);
   const cleanModel = String(modelId || '').trim();
@@ -433,8 +461,15 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
+  const [outputType, setOutputType] = useState('document');
+  const [pptSlideCount, setPptSlideCount] = useState(10);
+  const [pptTheme, setPptTheme] = useState('premium');
+  const [pptDensity, setPptDensity] = useState('balanced');
+  const [pptImageIntensity, setPptImageIntensity] = useState('high');
+  const [pptSpeakerNotes, setPptSpeakerNotes] = useState(false);
+  const [pptIncludeCover, setPptIncludeCover] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
@@ -447,20 +482,23 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const initialConfig = getProviderConfig();
     const memory = getAppMemory();
     const configuredChoices = getConfiguredProviderChoices(initialConfig);
-    const fallbackProviderId = configuredChoices[0]?.id || String(initialConfig?.active || 'gemini').trim() || 'gemini';
+    const fallbackProviderId = resolveStartScreenDefaultProviderId(initialConfig, configuredChoices);
     const rememberedProviderId = String(memory.homeProviderId || '').trim();
-    return configuredChoices.some((choice) => choice.id === rememberedProviderId)
+    return rememberedProviderId !== 'ollama' && configuredChoices.some((choice) => choice.id === rememberedProviderId)
       ? rememberedProviderId
-      : (rememberedProviderId || fallbackProviderId);
+      : fallbackProviderId;
   });
   const [directProviderModel, setDirectProviderModel] = useState(() => {
     const initialConfig = getProviderConfig();
     const memory = getAppMemory();
     const configuredChoices = getConfiguredProviderChoices(initialConfig);
-    const fallbackProviderId = configuredChoices[0]?.id || String(initialConfig?.active || 'gemini').trim() || 'gemini';
-    const rememberedProviderId = String(memory.homeProviderId || '').trim() || fallbackProviderId;
-    const modelChoices = getProviderModelChoices(rememberedProviderId, initialConfig, [memory.homeProviderModel]);
-    const rememberedProviderModel = normalizeProviderModelName(rememberedProviderId, String(memory.homeProviderModel || '').trim());
+    const fallbackProviderId = resolveStartScreenDefaultProviderId(initialConfig, configuredChoices);
+    const rememberedProviderId = String(memory.homeProviderId || '').trim();
+    const initialProviderId = rememberedProviderId !== 'ollama' && configuredChoices.some((choice) => choice.id === rememberedProviderId)
+      ? rememberedProviderId
+      : fallbackProviderId;
+    const modelChoices = getProviderModelChoices(initialProviderId, initialConfig, [memory.homeProviderModel]);
+    const rememberedProviderModel = normalizeProviderModelName(initialProviderId, String(memory.homeProviderModel || '').trim());
     return modelChoices.includes(rememberedProviderModel) ? rememberedProviderModel : (modelChoices[0] || '');
   });
   const [directProviderTestStatus, setDirectProviderTestStatus] = useState('idle');
@@ -576,7 +614,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const validateMaterialFiles = (files = []) => {
     const { accepted, rejected } = partitionFilesByAcceptList(files, helperMaterialAcceptList);
     if (rejected.length) {
-      window.alert('חלק מהקבצים נדחו כי הסוג שלהם לא נתמך למסמכי עזר.');
+      showToast('חלק מהקבצים נדחו כי הסוג שלהם לא נתמך למסמכי עזר.', { tone: 'warning' });
     }
     return accepted;
   };
@@ -584,7 +622,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const validateInstructionFile = (file) => {
     const { accepted, rejected } = partitionFilesByAcceptList(file ? [file] : [], instructionFileAcceptList);
     if (rejected.length) {
-      window.alert('קובץ ההנחיות לא נתמך.');
+      showToast('קובץ ההנחיות לא נתמך.', { tone: 'warning' });
       return null;
     }
     return accepted[0] || null;
@@ -839,7 +877,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const largeFiles = normalizedFiles.filter((file) => (file?.size || 0) > LARGE_FILE_THRESHOLD);
     if (largeFiles.length) {
       const sizesText = largeFiles.map((f) => `- ${f.name} (${Math.round((f.size || 0) / (1024 * 1024))}MB)`).join('\n');
-      const proceed = window.confirm(`שמת לב שהקבצים הבאים כבדים מ-25MB ויעלו לאט יותר:\n${sizesText}\n\nלהמשיך?`);
+      const proceed = await showConfirm(`שמת לב שהקבצים הבאים כבדים מ-25MB ויעלו לאט יותר:\n${sizesText}\n\nלהמשיך?`, { title: 'קבצים גדולים', confirmLabel: 'המשך' });
       if (!proceed) return;
     }
     setUploading(true);
@@ -884,12 +922,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         problematicUploads.forEach(({ item, info }) => messages.push(`- ${item.title}: ${info.message}`));
       }
       if (messages.length) {
-        window.alert(messages.join('\n'));
+        showToast(messages.join('\n'), { tone: 'warning', duration: 7000 });
       }
     } catch (e) {
       // כשל גלובלי בלתי צפוי - חייב הודעה למשתמש, לא רק console
       console.error('Material upload pipeline failed:', e);
-      window.alert(`ההעלאה נכשלה: ${e?.message || 'שגיאה לא ידועה'}`);
+      showToast(`ההעלאה נכשלה: ${e?.message || 'שגיאה לא ידועה'}`, { tone: 'error' });
     } finally {
       setUploading(false);
       setUploadProgress({ current: 0, total: 0, fileName: '' });
@@ -912,7 +950,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       if (typeof readInstructionFile === 'function') extracted = await readInstructionFile(file);
       const nextInstructions = String(extracted || '').trim();
       if (!nextInstructions) {
-        window.alert('לא הצלחתי לקרוא תוכן מתוך קובץ ההנחיות.');
+        showToast('לא הצלחתי לקרוא תוכן מתוך קובץ ההנחיות.', { tone: 'warning' });
         return;
       }
       setInstructions(nextInstructions);
@@ -922,7 +960,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       if (typeof saveHomeInstructionFileText === 'function') saveHomeInstructionFileText(nextInstructions);
     } catch (error) {
       console.error(error);
-      window.alert(formatInstructionFileUploadError(error));
+      showToast(formatInstructionFileUploadError(error), { tone: 'error' });
     }
   };
 
@@ -982,6 +1020,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     };
   };
 
+  // מחיל טיוטת בסיס + בדיקת סגנון אוטומטית: אם הטקסט נשמע גנרי/מכונה — התרעה רכה.
+  const commitBaseDraft = (payload = {}) => {
+    const normalized = normalizeBaseDraft(payload);
+    setBaseDraft(normalized);
+    try {
+      const sampleText = normalized.text
+        || String(normalized.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const res = scoreTextAuthenticity(sampleText);
+      if (res.ok && res.score >= res.threshold) {
+        showToast(`⚠️ הטיוטה נשמעת גנרית/מכונה (${res.score}/100). אפשר לבדוק לעומק עם "בדיקת סגנון".`, { tone: 'warning', duration: 6000 });
+      }
+    } catch {}
+    return normalized;
+  };
+
   const clearBaseDraft = () => {
     setBaseDraft(null);
     if (baseDraftInputRef.current) baseDraftInputRef.current.value = '';
@@ -993,20 +1046,20 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         const result = await window.desktopApp.openDocumentDialog();
         if (result?.canceled) return;
         if (result?.ok === false || result?.error) {
-          window.alert(result?.error || 'לא הצלחתי לטעון את הטיוטה שנבחרה.');
+          showToast(result?.error || 'לא הצלחתי לטעון את הטיוטה שנבחרה.', { tone: 'error' });
           return;
         }
-        setBaseDraft(normalizeBaseDraft({
+        commitBaseDraft({
           ...result,
           source: 'desktop',
-        }));
+        });
         return;
       }
 
       baseDraftInputRef.current?.click();
     } catch (error) {
       console.error(error);
-      window.alert('לא הצלחתי לבחור טיוטת בסיס.');
+      showToast('לא הצלחתי לבחור טיוטת בסיס.', { tone: 'error' });
     }
   };
 
@@ -1017,7 +1070,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     try {
       const ext = String(file.name || '').toLowerCase().split('.').pop();
       if (!['txt', 'md', 'markdown', 'html', 'htm'].includes(ext)) {
-        window.alert('בדפדפן אפשר לבחור כעת רק קובצי txt, md או html כטיוטת בסיס.');
+        showToast('בדפדפן אפשר לבחור כעת רק קובצי txt, md או html כטיוטת בסיס.', { tone: 'warning' });
         return;
       }
 
@@ -1026,16 +1079,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         ? rawText
         : plainTextToHtml(rawText);
 
-      setBaseDraft(normalizeBaseDraft({
+      commitBaseDraft({
         name: file.name,
         title: getDraftTitleFromFileName(file.name),
         html,
         text: rawText,
         source: 'browser',
-      }));
+      });
     } catch (error) {
       console.error(error);
-      window.alert('לא הצלחתי לקרוא את הטיוטה שנבחרה.');
+      showToast('לא הצלחתי לקרוא את הטיוטה שנבחרה.', { tone: 'error' });
     } finally {
       event.target.value = '';
     }
@@ -1046,7 +1099,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     const automation = getWorkspaceAutomation();
     const agents = getOrderedRoleAgents(automation.workflowMode);
     if (!automation?.enabled) {
-      window.alert('צריך קודם להפעיל את סביבת הסוכנים במסך ההגדרות.');
+      showToast('צריך קודם להפעיל את סביבת הסוכנים במסך ההגדרות.', { tone: 'warning' });
       return;
     }
     setLoadedWorkspace({ ...automation, agents });
@@ -1064,7 +1117,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         applyAutomationSnapshot(nextAutomation);
       } catch (error) {
         console.error('שגיאה במעבר למצב ללא סביבת עבודה:', error);
-        window.alert('לא הצלחתי לעבור למצב ללא סביבת עבודה.');
+        showToast('לא הצלחתי לעבור למצב ללא סביבת עבודה.', { tone: 'error' });
       }
       return;
     }
@@ -1072,7 +1125,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     try {
       const switched = await switchToWorkspace(selectedWorkspaceId);
       if (!switched) {
-        window.alert('לא הצלחתי להחליף סביבת עבודה. בדוק שהסביבה קיימת.');
+        showToast('לא הצלחתי להחליף סביבת עבודה. בדוק שהסביבה קיימת.', { tone: 'error' });
         return;
       }
       
@@ -1086,7 +1139,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       }
     } catch (error) {
       console.error('שגיאה בהחלפת סביבת עבודה:', error);
-      window.alert('שגיאה בהחלפת סביבת העבודה');
+      showToast('שגיאה בהחלפת סביבת העבודה', { tone: 'error' });
     }
   };
 
@@ -1153,7 +1206,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
   const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim() || hasBaseDraft);
-  const canGenerate = hasGenerationInput && !isGenerating;
+  const isPresentationOutput = outputType === 'presentation';
+  const canGeneratePresentation = Boolean(String(prompt || '').trim() || hasBaseDraft);
+  const canGenerate = (isPresentationOutput ? canGeneratePresentation : hasGenerationInput) && !isGenerating;
 
   const filteredMaterials = React.useMemo(() => (
     materials.filter((item) => doesMaterialMatchFilter(item, materialsFilter))
@@ -1216,18 +1271,87 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           setRecentDocs((currentDocs) => currentDocs.filter((entry) => String(entry?.filePath || '').trim() !== filePath));
           removeDocumentHistoryByFilePath(filePath);
         }
-        window.alert(result.error || 'לא ניתן לפתוח את הקובץ');
+        showToast(result.error || 'לא ניתן לפתוח את הקובץ', { tone: 'error' });
         return;
       }
 
       await onOpenDocument(result);
     } catch (error) {
-      window.alert(error?.message || 'קרתה שגיאה בזמן פתיחת הקובץ');
+      showToast(error?.message || 'קרתה שגיאה בזמן פתיחת הקובץ', { tone: 'error' });
+    }
+  };
+
+  const handleDeleteRecentDoc = async (event, doc) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const filePath = String(doc?.filePath || '').trim();
+    if (!filePath) return;
+    const title = doc?.title || 'המסמך הזה';
+    const confirmed = await showConfirm(`להסיר את "${title}" מרשימת המסמכים האחרונים?\nהקובץ עצמו לא יימחק מהמחשב.`, { title: 'הסרה מהרשימה', confirmLabel: 'הסר', tone: 'danger' });
+    if (!confirmed) return;
+    const nextHistory = removeDocumentHistoryByFilePath(filePath);
+    setRecentDocs(nextHistory.slice(0, 8));
+  };
+
+  const handleDeleteMaterial = async (event, item) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const title = item?.title || 'קובץ העזר הזה';
+    const canDeleteStoredFile = ['materials-local', 'materials-browser'].includes(String(item?.source || ''));
+    const confirmMessage = canDeleteStoredFile
+      ? `למחוק את "${title}" מקבצי העזר?\nקבצים שהועלו לאפליקציה יוסרו גם מהאחסון המקומי.`
+      : `להסיר את "${title}" מרשימת קבצי העזר?\nקובץ מובנה יוסתר מהרשימה, אבל לא יימחק מקבצי האפליקציה.`;
+    const confirmed = await showConfirm(confirmMessage, { title: 'מחיקת קובץ עזר', confirmLabel: 'מחק', tone: 'danger' });
+    if (!confirmed) return;
+
+    try {
+      const result = await removeHelperMaterial(item);
+      if (result?.ok === false) {
+        showToast(result.error || 'לא הצלחתי למחוק את קובץ העזר', { tone: 'error' });
+        return;
+      }
+      const nextMaterials = typeof loadProjectMaterials === 'function'
+        ? await loadProjectMaterials()
+        : materials.filter((material) => material.id !== item.id);
+      setMaterials(nextMaterials);
+      setSelectedIds((prev) => prev.filter((id) => id !== item.id));
+      setLastUploadedMaterials((prev) => prev.filter((material) => material.id !== item.id));
+    } catch (error) {
+      showToast(error?.message || 'לא הצלחתי למחוק את קובץ העזר', { tone: 'error' });
     }
   };
 
   const handleGenerate = async () => {
-    if (!hasGenerationInput || isGenerating) return;
+    if (isGenerating) return;
+
+    if (outputType === 'presentation') {
+      const presentationSelectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
+      const fromDraft = hasBaseDraft;
+      const draftSourceText = fromDraft
+        ? (String(baseDraft?.text || '').trim() || String(baseDraft?.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+        : '';
+      if (!fromDraft && !String(prompt || '').trim()) return;
+      setIsGenerating(true);
+      try {
+        await onGeneratePresentation?.({
+          source: fromDraft ? 'document' : 'topic',
+          topic: String(prompt || '').trim(),
+          documentText: draftSourceText,
+          slideCount: pptSlideCount,
+          theme: pptTheme,
+          density: pptDensity,
+          imageIntensity: pptImageIntensity,
+          speakerNotes: pptSpeakerNotes,
+          includeCover: pptIncludeCover,
+          selectedMaterials: presentationSelectedMaterials,
+        });
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
+    if (!hasGenerationInput) return;
 
     setIsGenerating(true);
     try {
@@ -1295,7 +1419,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       setShowChefDialog(false);
     } catch (error) {
       console.error('שגיאה בשלב הבישול:', error);
-      window.alert('שגיאה בשלב הבישול. בדוק את הקונסול.');
+      showToast('שגיאה בשלב הבישול. בדוק את הקונסול.', { tone: 'error' });
     } finally {
       setIsGenerating(false);
     }
@@ -1433,6 +1557,35 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
           {/* Main Input Area */}
           <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-3xl p-4 sm:p-8 max-w-5xl mx-auto shadow-[0_24px_80px_rgba(3,7,18,0.55)]">
+            <div className="flex justify-center mb-6">
+              <div className="inline-flex rounded-2xl bg-white/10 border border-white/25 p-1">
+                <button
+                  type="button"
+                  onClick={() => setOutputType('document')}
+                  className={`rounded-xl px-5 py-2 text-sm font-bold transition ${!isPresentationOutput ? 'bg-white text-[#2B579A] shadow-sm' : 'text-white/80 hover:bg-white/15'}`}
+                >
+                  📄 מסמך
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutputType('presentation')}
+                  className={`rounded-xl px-5 py-2 text-sm font-bold transition ${isPresentationOutput ? 'bg-white text-[#2B579A] shadow-sm' : 'text-white/80 hover:bg-white/15'}`}
+                >
+                  📊 מצגת
+                </button>
+                {onOpenSpssProject && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSpssProject()}
+                    className="rounded-xl px-5 py-2 text-sm font-bold text-white/80 transition hover:bg-white/15"
+                    title="עבודת סיום סטטיסטית: נתונים → קוד → פלט → פרק ממצאים"
+                  >
+                    📈 עבודת SPSS
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center mb-6">
               <div className="flex-1 relative">
                 <input
@@ -1440,7 +1593,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-                  placeholder="נושא קצר או הקשר אופציונלי למסמך. אפשר להשאיר ריק אם ההנחיות למטה כבר מגדירות הכול"
+                  placeholder={isPresentationOutput
+                    ? (hasBaseDraft ? 'זווית או דגש למצגת (אופציונלי) — המקור הוא טיוטת הבסיס למטה' : 'נושא המצגת')
+                    : 'נושא קצר או הקשר אופציונלי למסמך. אפשר להשאיר ריק אם ההנחיות למטה כבר מגדירות הכול'}
                   className="w-full px-5 sm:px-6 py-4 bg-white/18 backdrop-blur-md border border-white/40 rounded-2xl text-white placeholder-white/70 text-base sm:text-lg outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent transition-all duration-300"
                 />
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
@@ -1466,24 +1621,101 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     יוצר...
                   </div>
                 ) : (
-                  <>{hasBaseDraft ? '✨ עדכן מהטיוטה' : '✨ בואו נתחיל'}</>
+                  <>{isPresentationOutput ? '📊 צור מצגת' : (hasBaseDraft ? '✨ עדכן מהטיוטה' : '✨ בואו נתחיל')}</>
                 )}
               </button>
 
-              <button
-                onClick={() => setShowChefDialog(true)}
-                disabled={isGenerating}
-                className="w-full md:w-auto px-6 sm:px-8 py-4 rounded-2xl font-bold text-base sm:text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:text-gray-200 disabled:cursor-not-allowed"
-                style={{
-                  boxShadow: !isGenerating ? '0 10px 30px rgba(245, 158, 11, 0.45)' : 'none'
-                }}
-              >
-                👨‍🍳 בוא נבשל
-              </button>
+              {!isPresentationOutput && (
+                <button
+                  onClick={() => setShowChefDialog(true)}
+                  disabled={isGenerating}
+                  className="w-full md:w-auto px-6 sm:px-8 py-4 rounded-2xl font-bold text-base sm:text-lg transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 shadow-lg hover:shadow-2xl disabled:bg-gray-500/50 disabled:text-gray-200 disabled:cursor-not-allowed"
+                  style={{
+                    boxShadow: !isGenerating ? '0 10px 30px rgba(245, 158, 11, 0.45)' : 'none'
+                  }}
+                >
+                  👨‍🍳 בוא נבשל
+                </button>
+              )}
             </div>
 
+            {isPresentationOutput && (
+              <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
+                <div className="text-white font-semibold text-sm mb-4">⚙️ הגדרות מצגת</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">מספר שקופיות</span>
+                    <input
+                      type="number"
+                      min="4"
+                      max="20"
+                      value={pptSlideCount}
+                      onChange={(e) => setPptSlideCount(Math.max(4, Math.min(20, Number(e.target.value) || 10)))}
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">סגנון עיצובי</span>
+                    <select
+                      value={pptTheme}
+                      onChange={(e) => setPptTheme(e.target.value)}
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 [&>option]:text-slate-900"
+                    >
+                      {PPT_THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">דגש על תמונות</span>
+                    <select
+                      value={pptImageIntensity}
+                      onChange={(e) => setPptImageIntensity(e.target.value)}
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 [&>option]:text-slate-900"
+                    >
+                      <option value="high">גבוה</option>
+                      <option value="medium">בינוני</option>
+                      <option value="low">נמוך</option>
+                    </select>
+                  </label>
+                  <div className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">רמת עומס</span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {PPT_DENSITY.map((d) => {
+                        const active = d.id === pptDensity;
+                        return (
+                          <button
+                            key={d.id}
+                            type="button"
+                            onClick={() => setPptDensity(d.id)}
+                            title={d.blurb}
+                            className={`rounded-xl border px-2 py-2 text-xs font-bold transition ${active ? 'border-cyan-200 bg-cyan-400/25 text-white' : 'border-white/25 bg-white/8 text-white/75 hover:bg-white/15'}`}
+                          >
+                            {d.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <label className="inline-flex items-center gap-2 text-white/85 text-xs">
+                    <input type="checkbox" checked={pptIncludeCover} onChange={(e) => setPptIncludeCover(e.target.checked)} />
+                    שקופית פתיחה
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-white/85 text-xs">
+                    <input type="checkbox" checked={pptSpeakerNotes} onChange={(e) => setPptSpeakerNotes(e.target.checked)} />
+                    הערות מרצה קצרות
+                  </label>
+                </div>
+                <div className="mt-3 text-white/55 text-[11px]">
+                  {hasBaseDraft ? 'המקור: טיוטת הבסיס שנבחרה למטה. שדה הנושא למעלה אופציונלי (זווית/דגש).' : 'המצגת תיווצר מהנושא למעלה. אפשר גם לבחור טיוטת בסיס למטה כמקור.'}
+                </div>
+              </div>
+            )}
+
             <div className="text-right text-xs text-white/72 mb-6">
-              שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך. אם בחרת טיוטת בסיס, אפשר גם להשאיר את שני השדות ריקים כדי לבצע ליטוש ראשוני.
+              {isPresentationOutput
+                ? 'בחרת מצגת: ה-deck נפתח כמסמך חדש. אם בחרת טיוטת בסיס היא תהפוך לשקופיות בלי לדרוס את הקובץ המקורי.'
+                : 'שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך. אם בחרת טיוטת בסיס, אפשר גם להשאיר את שני השדות ריקים כדי לבצע ליטוש ראשוני.'}
             </div>
 
             <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6">
@@ -1685,13 +1917,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    >
                      {uploading ? (uploadProgress.total > 1 ? `מעלה ${uploadProgress.current}/${uploadProgress.total}…` : 'מעלה…') : 'הוסף מסמכי עזר'}
                    </button>
-                   <button
-                     type="button"
-                     onClick={handleSelectBaseDraft}
-                     className="px-3 py-2 bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-200/45 rounded-xl text-white text-xs transition-all shadow-sm"
-                   >
-                     {baseDraft ? 'החלף טיוטת בסיס' : 'בחר טיוטת בסיס'}
-                   </button>
+                   {/* בורר טיוטת הבסיס מרוכז בכרטיס הייעודי למעלה (open-items #19) — הוסר כפל כאן */}
                    <input ref={instructionFileInputRef} type="file" accept={instructionFileAcceptList} className="hidden" onChange={handleInstructionFileUpload} />
                    <input ref={fileInputRef} type="file" multiple accept={helperMaterialAcceptList} className="hidden" onChange={handleUpload} />
                  </div>
@@ -1847,14 +2073,24 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                                    ? 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-300/25'
                                    : 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-300/25'}`}
                                >
-                                 <div className="flex items-center gap-2 overflow-hidden w-[85%]">
+                                 <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                                    <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
-                                   <div className="flex flex-col overflow-hidden w-full">
+                                   <div className="flex min-w-0 flex-col overflow-hidden">
                                      <span className="text-white/90 text-xs truncate leading-tight w-full">{item.title}</span>
                                      <span className={`text-[10px] truncate ${successTone ? 'text-emerald-100' : 'text-rose-100'}`}>{extractionInfo.label}</span>
                                    </div>
                                  </div>
-                                 <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
+                                 <div className="flex shrink-0 items-center gap-1">
+                                   <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
+                                   <button
+                                     type="button"
+                                     onClick={(event) => handleDeleteMaterial(event, item)}
+                                     title="מחק קובץ עזר"
+                                     className="w-6 h-6 rounded-md border border-rose-300/35 bg-rose-500/15 text-rose-50 hover:bg-rose-500/30 transition-colors text-xs leading-none"
+                                   >
+                                     ×
+                                   </button>
+                                 </div>
                                </label>
                              );
                            })}
@@ -1916,16 +2152,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   ? savedAt.toLocaleDateString('he-IL', { day: 'numeric', month: 'short' })
                   : '';
                 return (
-                  <button
+                  <div
                     key={doc.id}
-                    type="button"
-                    onClick={() => handleOpenRecentDoc(doc)}
-                    title={doc.title || 'מסמך ללא שם'}
-                    className="flex flex-col items-start gap-1 p-3 rounded-xl border text-right transition-all duration-200 bg-white/10 hover:bg-white/20 border-white/20 hover:border-white/35 cursor-pointer hover:scale-[1.02]"
+                    className="relative rounded-xl border transition-all duration-200 bg-white/10 hover:bg-white/20 border-white/20 hover:border-white/35 hover:scale-[1.02]"
                   >
-                    <span className="text-white text-xs font-medium leading-snug line-clamp-2 w-full">{doc.title || 'מסמך ללא שם'}</span>
-                    {dateLabel && <span className="text-white/50 text-[10px]">{dateLabel}</span>}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenRecentDoc(doc)}
+                      title={doc.title || 'מסמך ללא שם'}
+                      className="flex min-h-[74px] w-full flex-col items-start gap-1 p-3 pl-10 text-right cursor-pointer"
+                    >
+                      <span className="text-white text-xs font-medium leading-snug line-clamp-2 w-full">{doc.title || 'מסמך ללא שם'}</span>
+                      {dateLabel && <span className="text-white/50 text-[10px]">{dateLabel}</span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => handleDeleteRecentDoc(event, doc)}
+                      title="הסר מהמסמכים האחרונים"
+                      className="absolute left-2 top-2 inline-flex w-6 h-6 items-center justify-center rounded-md border border-rose-300/35 bg-rose-500/15 text-rose-50 hover:bg-rose-500/30 transition-colors text-xs leading-none"
+                    >
+                      ×
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -2106,6 +2354,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               templateId: selectedTemplate,
               instructions: String(instructions || '').trim(),
               selectedMaterials: materials.filter((item) => selectedIds.includes(item.id)),
+              baseDraftText: String(baseDraft?.text || '').trim()
+                || String(baseDraft?.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
             }}
           />
         )}

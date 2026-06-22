@@ -12,6 +12,8 @@ import {
 } from './aiService';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
+const BROWSER_MATERIALS_KEY = 'wordai_browser_uploaded_materials';
+const HIDDEN_MATERIALS_KEY = 'wordai_hidden_project_materials';
 const HOME_INSTRUCTIONS_KEY = 'wordai_home_instructions';
 const HOME_INSTRUCTION_FILE_TEXT_KEY = 'wordai_home_instruction_file_text';
 const HOME_INSTRUCTION_FILE_NAME_KEY = 'wordai_home_instruction_file_name';
@@ -22,15 +24,20 @@ const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
 const MATERIAL_PREVIEW_MAX_LENGTH = 5000;
+// מספר סבבי הסקירה הנוספים המרבי שאפשר לבקש על מסמך (מעבר לסבב הבסיס).
+const MAX_ADDITIONAL_REVIEW_ROUNDS = 2;
 const HISTORY_STYLE_SAMPLE_MAX_LENGTH = 3600;
 const GOLDEN_EXAMPLE_MAX_LENGTH = 2600;
 const MATERIAL_EXTRACTION_AUDIT_LIMIT = 180000;
-const FEEDBACK_CONTEXT_TOTAL_LIMIT = 7200;
+const BROWSER_MATERIAL_STORAGE_LIMIT = 60;
+// תקרות הוגדלו כדי שטיוטה רב-עמודית תיכנס שלמה ל-context ולא תיחתך באמצע (head-tail gap).
+// ~48k תווים ≈ 12k טוקנים — בטוח לספקים מודרניים (Gemini/Claude/GPT). טיוטה גדולה מזה עדיין נחתכת.
+const FEEDBACK_CONTEXT_TOTAL_LIMIT = 48000;
 const FEEDBACK_CONTEXT_TOPIC_LIMIT = 320;
 const FEEDBACK_CONTEXT_SUPPORTING_LIMIT = 1100;
 const FEEDBACK_CONTEXT_MATERIALS_LIMIT = 1600;
-const FEEDBACK_CONTEXT_HTML_MIN_LIMIT = 3600;
-const FEEDBACK_CONTEXT_HTML_MAX_LIMIT = 5200;
+const FEEDBACK_CONTEXT_HTML_MIN_LIMIT = 8000;
+const FEEDBACK_CONTEXT_HTML_MAX_LIMIT = 44000;
 const FEEDBACK_CONTEXT_HTML_GAP = '\n\n[... קוצר אמצע ה-HTML כדי לשמור גם את ההתחלה וגם את הסוף ...]\n\n';
 const ACTION_PLAN_SECTION_VISIBLE_TARGET = 1500;
 const ACTION_PLAN_SECTION_INDEX_LIMIT = 1600;
@@ -326,6 +333,37 @@ function resolveRequestedProviderSelection({ selectedModel = '', selectedProvide
   return { providerId, providerModel };
 }
 
+// מדלג על workflow automation / בחירת skill / ריבוי מודלים — לקריאה ישירה במודל יחיד.
+function applyDirectModeSkips(requestOptions) {
+  requestOptions.skipAutomation = true;
+  requestOptions.skipAutomationPrompt = true;
+  requestOptions.skipSkillSelection = true;
+  requestOptions.skipMultiModel = true;
+  return requestOptions;
+}
+
+// מחיל נעילת מקור URL מדויקת: מאלץ grounding למקור הספציפי ומדלג על automation
+// כדי לא לסטות ממנו. זהה בין generate/revise/review — מקור אמת אחד.
+function applyExactSourceUrlLock(requestOptions, exactArticleUrl) {
+  if (!exactArticleUrl) return requestOptions;
+  requestOptions.sourceQueryOverride = exactArticleUrl;
+  requestOptions.exactSourceUrl = exactArticleUrl;
+  requestOptions.forceVerifiedSourceFollowOn = true;
+  requestOptions.blockAssignmentSourceQuery = true;
+  applyDirectModeSkips(requestOptions);
+  requestOptions.automationSkipReason = 'exactSourceUrlLock';
+  return requestOptions;
+}
+
+// מחיל בחירת ספק/מודל מפורשת של המשתמש כ-override מחייב (התנאי החיצוני נשאר באתר הקריאה).
+function applyRequestedProviderOverride(requestOptions, requestedProviderSelection) {
+  if (!requestedProviderSelection?.providerId) return requestOptions;
+  requestOptions.providerOverride = requestedProviderSelection.providerId;
+  requestOptions.strictProviderOverride = true;
+  if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
+  return requestOptions;
+}
+
 function mergeCountMaps(base = {}, incoming = {}) {
   const next = { ...base };
   Object.entries(incoming || {}).forEach(([key, count]) => {
@@ -446,6 +484,84 @@ function analyzeTextSample(text = '') {
     sentencesCount: sentences.length,
     paragraphCount: paragraphs.length,
     wordCount: words.length,
+  };
+}
+
+// מחזיר את N המילים השכיחות ביותר כסט, לחישוב חפיפת אוצר מילים בין שני פלטים.
+function topVocabularySet(counts = {}, limit = 30) {
+  return new Set(
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([word]) => word),
+  );
+}
+
+// חפיפת ז'קארד בין שני סטים (0 = שונה לחלוטין, 1 = זהה).
+function jaccardOverlap(setA, setB) {
+  if (!setA.size && !setB.size) return 1;
+  let intersection = 0;
+  setA.forEach((item) => { if (setB.has(item)) intersection += 1; });
+  const union = setA.size + setB.size - intersection;
+  return union ? Math.round((intersection / union) * 1000) / 1000 : 0;
+}
+
+/**
+ * בדיקת השפעת הסגנון האישי: מפיק שני פלטים על אותה בקשה — אחד עם הפרופיל ואחד בלי —
+ * ומשווה את טביעת האצבע הסגנונית. אם הפלטים כמעט זהים, ההזרקה לא משפיעה בפועל.
+ */
+export async function probePersonalStyleInfluence({ prompt = '' } = {}) {
+  const cleanPrompt = String(prompt || '').trim();
+  if (cleanPrompt.length < 8) {
+    return { ok: false, reason: 'prompt-too-short', message: 'כתוב בקשת כתיבה קצרה (לפחות כמה מילים) כדי להריץ את הבדיקה.' };
+  }
+
+  const baseOptions = { skipAutomation: true, skipMultiModel: true, directChat: true };
+  let withStyleText = '';
+  let withoutStyleText = '';
+  try {
+    // ברצף ולא במקביל, כדי לא להריץ שתי בקשות כבדות על אותו ספק בו-זמנית.
+    withStyleText = String(await chatWithActiveProvider(cleanPrompt, '', '', { ...baseOptions, suppressPersonalStyle: false }) || '').trim();
+    withoutStyleText = String(await chatWithActiveProvider(cleanPrompt, '', '', { ...baseOptions, suppressPersonalStyle: true }) || '').trim();
+  } catch (error) {
+    return { ok: false, reason: 'generation-failed', message: `ההפקה נכשלה: ${error?.message || error}` };
+  }
+
+  if (!withStyleText || !withoutStyleText) {
+    return { ok: false, reason: 'empty-output', message: 'אחת ההפקות חזרה ריקה. נסה בקשה אחרת או ספק AI אחר.' };
+  }
+
+  const withStyle = analyzeTextSample(withStyleText);
+  const withoutStyle = analyzeTextSample(withoutStyleText);
+  const vocabularyOverlap = jaccardOverlap(
+    topVocabularySet(withStyle.vocabularyCounts),
+    topVocabularySet(withoutStyle.vocabularyCounts),
+  );
+  const sentenceDelta = Math.round(Math.abs(withStyle.avgSentenceWords - withoutStyle.avgSentenceWords) * 10) / 10;
+  const paragraphDelta = Math.round(Math.abs(withStyle.avgParagraphWords - withoutStyle.avgParagraphWords) * 10) / 10;
+
+  // הערכה גסה: חפיפת אוצר מילים גבוהה + הפרשי אורך זעירים = הסגנון כמעט לא השפיע.
+  const negligible = vocabularyOverlap >= 0.85 && sentenceDelta <= 1.5 && paragraphDelta <= 12;
+  const verdict = negligible
+    ? 'השפעה זניחה — הפלטים כמעט זהים. ההזרקה כנראה לא מורגשת בפועל.'
+    : vocabularyOverlap >= 0.6
+      ? 'השפעה חלקית — יש הבדל מדיד אך לא דרמטי.'
+      : 'השפעה ברורה — הסגנון האישי שינה את הפלט באופן משמעותי.';
+
+  return {
+    ok: true,
+    prompt: cleanPrompt,
+    verdict,
+    negligible,
+    metrics: {
+      vocabularyOverlap,
+      sentenceDelta,
+      paragraphDelta,
+      withStyle: { avgSentenceWords: withStyle.avgSentenceWords, avgParagraphWords: withStyle.avgParagraphWords, wordCount: withStyle.wordCount },
+      withoutStyle: { avgSentenceWords: withoutStyle.avgSentenceWords, avgParagraphWords: withoutStyle.avgParagraphWords, wordCount: withoutStyle.wordCount },
+    },
+    withStyleText,
+    withoutStyleText,
   };
 }
 
@@ -637,19 +753,23 @@ export async function getWorkspaceTemplateCards() {
 }
 
 export async function loadProjectMaterials() {
-  const [bundledPayload, localPayload] = await Promise.all([
+  const [bundledPayload, localPayload, browserPayload] = await Promise.all([
     safeFetchJson(PROJECT_MATERIALS_INDEX_URL, []),
     window.desktopApp?.listLocalMaterials ? window.desktopApp.listLocalMaterials().catch(() => []) : Promise.resolve([]),
+    Promise.resolve(getBrowserUploadedMaterials()),
   ]);
 
   const bundledList = Array.isArray(bundledPayload) ? bundledPayload : [];
   const localList = Array.isArray(localPayload) ? localPayload : [];
-  const mergedList = [...bundledList, ...localList].filter(Boolean);
+  const browserList = Array.isArray(browserPayload) ? browserPayload : [];
+  const hiddenKeys = getHiddenMaterialKeys();
+  const mergedList = [...bundledList, ...localList, ...browserList].filter(Boolean);
   const seen = new Set();
 
   return mergedList
     .filter((item) => {
       const key = String(item.id || item.file || item.title || '');
+      if (isMaterialHidden(item, hiddenKeys)) return false;
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -3678,11 +3798,13 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
+// forceDirectMode=false כברירת מחדל: יצירה חדשה רשאית לרוץ ב-workflow automation (ריבוי סוכנים)
+// כשסביבת העבודה מאפשרת. בכוונה שונה מ-reviseDocumentWithFeedback (true) — עריכה ממוקדת לא מצדיקה ריבוי סוכנים.
 export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
-  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
+  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(MAX_ADDITIONAL_REVIEW_ROUNDS, Number(additionalReviewRounds) || 0));
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: cleanPrompt, instructions: cleanInstructions, templateId });
   const structurePolicy = detectDocumentStructurePolicy({ prompt: cleanPrompt, instructions: cleanInstructions });
   const structureLockInstructions = buildStructureLockInstructions(structurePolicy);
@@ -3833,35 +3955,20 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     };
     if (shouldForceDirectCompose) {
       requestOptions.strictFormatting = true;
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
+      applyDirectModeSkips(requestOptions);
     }
     if (structurePolicy.directStructureLock) {
       requestOptions.strictFormatting = true;
       requestOptions.omitPersonalStyleStructureHints = true;
     }
-    if (exactArticleUrl) {
-      requestOptions.sourceQueryOverride = exactArticleUrl;
-      requestOptions.blockAssignmentSourceQuery = true;
-      requestOptions.forceVerifiedSourceFollowOn = true;
-      requestOptions.exactSourceUrl = exactArticleUrl;
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
-      requestOptions.automationSkipReason = 'exactSourceUrlLock';
-    }
+    applyExactSourceUrlLock(requestOptions, exactArticleUrl);
     if (!shouldUseWorkflowAutomation && workspaceRoute.reason && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = workspaceRoute.reason;
     } else if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (requestedProviderSelection.providerId && (shouldUseWorkflowAutomation === false || exactArticleUrl)) {
-      requestOptions.providerOverride = requestedProviderSelection.providerId;
-      requestOptions.strictProviderOverride = true;
-      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
+    if (shouldUseWorkflowAutomation === false || exactArticleUrl) {
+      applyRequestedProviderOverride(requestOptions, requestedProviderSelection);
     }
 
     const userRequestSections = [];
@@ -4043,11 +4150,13 @@ async function prepareFeedbackDrivenDocumentContext({
   };
 }
 
+// forceDirectMode=true כברירת מחדל: שכתוב לפי feedback הוא עריכה ממוקדת — רץ ישירות במודל יחיד
+// בלי workflow automation. בכוונה שונה מ-generateDocumentFromPrompt (false) שמאפשר ריבוי סוכנים ביצירה חדשה.
 export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '' }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
-  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(2, Number(additionalReviewRounds) || 0));
+  const normalizedAdditionalReviewRounds = Math.max(0, Math.min(MAX_ADDITIONAL_REVIEW_ROUNDS, Number(additionalReviewRounds) || 0));
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: originalPrompt, instructions: cleanFeedback, templateId });
   const exactArticleUrl = resolveExactArticleUrlConstraint({ prompt: originalPrompt, instructions: cleanFeedback });
   const exactArticleGroundingInstructions = buildExactArticleGroundingInstructions(exactArticleUrl);
@@ -4174,31 +4283,16 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
     };
     if (!shouldUseWorkflowAutomation) {
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
+      applyDirectModeSkips(requestOptions);
       requestOptions.automationSkipReason = workspaceRouteReason || (noActiveWorkflowAutomation ? 'noActiveAgents' : 'direct');
     }
     if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (requestedProviderSelection.providerId && (!shouldUseWorkflowAutomation || exactArticleUrl)) {
-      requestOptions.providerOverride = requestedProviderSelection.providerId;
-      requestOptions.strictProviderOverride = true;
-      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
+    if (!shouldUseWorkflowAutomation || exactArticleUrl) {
+      applyRequestedProviderOverride(requestOptions, requestedProviderSelection);
     }
-    if (exactArticleUrl) {
-      requestOptions.sourceQueryOverride = exactArticleUrl;
-      requestOptions.exactSourceUrl = exactArticleUrl;
-      requestOptions.forceVerifiedSourceFollowOn = true;
-      requestOptions.blockAssignmentSourceQuery = true;
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
-      requestOptions.automationSkipReason = 'exactSourceUrlLock';
-    }
+    applyExactSourceUrlLock(requestOptions, exactArticleUrl);
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt: 'שפר את המסמך הקיים בהתאם למשוב המשתמש',
@@ -4324,27 +4418,10 @@ export async function reviewDocumentRecommendations({ existingHtml = '', origina
       strictFormatting: true,
     };
     if (!shouldUseWorkflowAutomation) {
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
+      applyDirectModeSkips(requestOptions);
     }
-    if (requestedProviderSelection.providerId) {
-      requestOptions.providerOverride = requestedProviderSelection.providerId;
-      requestOptions.strictProviderOverride = true;
-      if (requestedProviderSelection.providerModel) requestOptions.modelOverride = requestedProviderSelection.providerModel;
-    }
-    if (exactArticleUrl) {
-      requestOptions.sourceQueryOverride = exactArticleUrl;
-      requestOptions.exactSourceUrl = exactArticleUrl;
-      requestOptions.forceVerifiedSourceFollowOn = true;
-      requestOptions.blockAssignmentSourceQuery = true;
-      requestOptions.skipAutomation = true;
-      requestOptions.skipAutomationPrompt = true;
-      requestOptions.skipSkillSelection = true;
-      requestOptions.skipMultiModel = true;
-      requestOptions.automationSkipReason = 'exactSourceUrlLock';
-    }
+    applyRequestedProviderOverride(requestOptions, requestedProviderSelection);
+    applyExactSourceUrlLock(requestOptions, exactArticleUrl);
 
     const reviewContext = buildFeedbackDrivenRequestContext({
       originalPrompt,
@@ -4698,6 +4775,101 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
+function getBrowserUploadedMaterials() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(BROWSER_MATERIALS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBrowserUploadedMaterialEntry(entry = {}) {
+  const existing = getBrowserUploadedMaterials();
+  const next = [
+    ...existing.filter((item) => item?.id !== entry.id && item?.file !== entry.file),
+    entry,
+  ].slice(-BROWSER_MATERIAL_STORAGE_LIMIT);
+  localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+}
+
+function removeBrowserUploadedMaterialEntry(material = {}) {
+  const cleanId = String(material?.id || '').trim();
+  const cleanFile = String(material?.file || '').trim();
+  const existing = getBrowserUploadedMaterials();
+  const next = existing.filter((item) => {
+    if (cleanId && String(item?.id || '').trim() === cleanId) return false;
+    if (cleanFile && String(item?.file || '').trim() === cleanFile) return false;
+    return true;
+  });
+  localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+  syncPersistedAppSettings();
+  return next;
+}
+
+function buildMaterialHiddenKeys(material = {}) {
+  return [
+    material?.id ? `id:${String(material.id).trim()}` : '',
+    material?.file ? `file:${String(material.file).trim()}` : '',
+    material?.title ? `title:${String(material.title).trim()}` : '',
+  ].filter(Boolean);
+}
+
+function getHiddenMaterialKeys() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HIDDEN_MATERIALS_KEY) || '[]');
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || '').trim()).filter(Boolean) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function isMaterialHidden(material = {}, hiddenKeys = getHiddenMaterialKeys()) {
+  return buildMaterialHiddenKeys(material).some((key) => hiddenKeys.has(key));
+}
+
+function hideProjectMaterialEntry(material = {}) {
+  const current = getHiddenMaterialKeys();
+  buildMaterialHiddenKeys(material).forEach((key) => current.add(key));
+  localStorage.setItem(HIDDEN_MATERIALS_KEY, JSON.stringify(Array.from(current)));
+  syncPersistedAppSettings();
+}
+
+function buildUploadedMaterialEntry(payload = {}) {
+  const originalName = String(payload?.name || 'material.bin').trim() || 'material.bin';
+  const timestamp = Date.now();
+  const safeName = originalName
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim() || `material-${timestamp}`;
+  const dotIndex = safeName.lastIndexOf('.');
+  const ext = dotIndex >= 0 ? safeName.slice(dotIndex + 1).toLowerCase() : '';
+  const id = `browser-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return {
+    id,
+    title: String(payload?.title || originalName),
+    file: safeName,
+    type: ext,
+    source: 'materials-browser',
+    uploadKind: String(payload?.uploadKind || 'general'),
+    label: String(payload?.label || 'קובץ עזר כללי'),
+    category: String(payload?.category || 'general'),
+    templateId: String(payload?.templateId || 'blank'),
+    learningHint: String(payload?.learningHint || ''),
+    previewText: String(payload?.previewText || '').trim(),
+    previewChars: Math.max(0, Number(payload?.previewChars) || 0),
+    previewStatus: String(payload?.previewStatus || '').trim(),
+    previewSource: String(payload?.previewSource || '').trim(),
+    previewError: String(payload?.previewError || '').trim(),
+    extractedChars: Math.max(0, Number(payload?.extractedChars) || 0),
+    extractionStatus: String(payload?.extractionStatus || '').trim(),
+    extractionMessage: String(payload?.extractionMessage || '').trim(),
+    extractionTruncated: payload?.extractionTruncated === true,
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
 export async function saveHelperMaterial(file, options = {}) {
   if (!file) throw new Error('לא נבחר קובץ');
   const meta = getMaterialUploadMeta(options.uploadKind || options.id || 'general');
@@ -4727,16 +4899,30 @@ export async function saveHelperMaterial(file, options = {}) {
     return window.desktopApp.saveLocalMaterial(payload);
   }
 
-  const response = await fetch('/api/materials/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const browserEntry = buildUploadedMaterialEntry(payload);
+  saveBrowserUploadedMaterialEntry(browserEntry);
+  return { ok: true, file: browserEntry.file, entry: browserEntry };
+}
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => 'upload failed');
-    throw new Error(errorText || 'upload failed');
+export async function removeHelperMaterial(material = {}) {
+  const source = String(material?.source || '').trim();
+  const file = String(material?.file || '').trim();
+  if (!file && !material?.id) {
+    return { ok: false, error: 'לא נמצא מזהה לקובץ העזר' };
   }
 
-  return response.json();
+  if (source === 'materials-local') {
+    if (!window.desktopApp?.deleteLocalMaterial) {
+      return { ok: false, error: 'מחיקת קבצי עזר מקומיים זמינה רק באפליקציית הדסקטופ' };
+    }
+    return window.desktopApp.deleteLocalMaterial(file);
+  }
+
+  if (source === 'materials-browser') {
+    removeBrowserUploadedMaterialEntry(material);
+    return { ok: true, file };
+  }
+
+  hideProjectMaterialEntry(material);
+  return { ok: true, file, hiddenOnly: true };
 }
