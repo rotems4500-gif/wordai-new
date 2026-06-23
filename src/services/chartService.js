@@ -6,7 +6,7 @@
 // כל הקריאות עוברות proxy-http-request של Electron (CORS) או fetch.
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider, getProviderConfig } from './aiService';
+import { chatWithActiveProvider, getProviderConfig, getFeatureProviderConfig } from './aiService';
 import { generateAiImage } from './imageService';
 
 const QUICKCHART_DEFAULT_BASE = 'https://quickchart.io';
@@ -136,11 +136,17 @@ export const requestChartSpec = async ({ output = '', analysis = null, focus = '
   const cleanOutput = String(output || '').trim();
   if (!cleanOutput) throw new Error('אין פלט SPSS להפיכה לגרף.');
 
+  // גרפים הם חלק מטאב SPSS — מכבדים את ה-API הייעודי ל-SPSS אם הוגדר.
+  const feat = getFeatureProviderConfig('spss');
+
   const rawResponse = await chatWithActiveProvider(
     buildChartSpecPrompt({ output: cleanOutput, analysis, focus: String(focus || '').trim() }),
     '',
     'אתה ממיר טבלאות פלט SPSS למפרט תרשים Chart.js מדויק. החזר אך ורק JSON תקין. לעולם אל תמציא מספרים.',
     {
+      providerOverride: feat?.providerId || undefined,
+      strictProviderOverride: Boolean(feat?.providerId),
+      ...(feat ? { providerConfigOverride: feat.config } : {}),
       skipAutomation: true,
       skipMultiModel: true,
       directChat: true,
@@ -270,7 +276,7 @@ export const generateSpssChart = async ({ output = '', analysis = null, focus = 
       focus ? `focus: ${focus}` : '',
       'flat design, white background, clear axis labels',
     ].filter(Boolean);
-    const image = await generateAiImage(promptParts.join(', '), { signal });
+    const image = await generateAiImage(promptParts.join(', '), { signal, featureId: 'spss' });
     return {
       ok: true,
       dataUrl: image.dataUrl,

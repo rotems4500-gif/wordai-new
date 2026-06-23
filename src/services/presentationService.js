@@ -3,7 +3,7 @@
 // מחזיר אובייקט deck מנורמל, לא HTML. זה הלב של "מצגת אמיתית".
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider } from './aiService';
+import { chatWithActiveProvider, getFeatureProviderConfig } from './aiService';
 import { normalizeDeck, SLIDE_LAYOUT_IDS } from '../presentation/deckModel';
 import { DECK_THEMES } from '../presentation/deckThemes';
 
@@ -106,13 +106,16 @@ export const generateDeck = async ({
     fromDocument ? `\nתוכן המסמך:\n"""\n${trimmedDoc}\n"""` : '',
   ].filter(Boolean).join('\n');
 
+  // override מפורש מנצח; אחרת — API ייעודי למצגות אם הוגדר בהגדרות.
+  const featureOverride = providerConfigOverride || getFeatureProviderConfig('presentations')?.config || null;
+
   const rawResponse = await chatWithActiveProvider(prompt, '', 'אתה מעצב מצגות מקצועי. החזר אך ורק JSON תקין לפי הסכמה.', {
     skipAutomation: true,
     skipMultiModel: true,
     directChat: true,
     skipSkillSelection: true,
     omitPersonalStyleStructureHints: true,
-    ...(providerConfigOverride ? { providerConfigOverride } : {}),
+    ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
     ...(signal ? { signal } : {}),
   });
 

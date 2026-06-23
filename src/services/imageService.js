@@ -4,7 +4,7 @@
 // כל הקריאות החיצוניות עוברות דרך proxy-http-request של Electron (CORS).
 // ═══════════════════════════════════════════════════════════════
 
-import { getProviderConfig } from './aiService';
+import { getProviderConfig, getFeatureImageConfig } from './aiService';
 
 const hasDesktopProxy = () =>
   typeof window !== 'undefined' && window.desktopApp && typeof window.desktopApp.proxyHttpRequest === 'function';
@@ -73,10 +73,10 @@ const searchUnsplash = async (query, count, key, signal) => {
 /**
  * searchStockImages — מחזיר מערך תוצאות תמונה לפי הספק הפעיל.
  */
-export const searchStockImages = async (query, { count = 12, signal } = {}) => {
+export const searchStockImages = async (query, { count = 12, signal, featureId = '' } = {}) => {
   const cleanQuery = String(query || '').trim();
   if (!cleanQuery) return [];
-  const cfg = getProviderConfig();
+  const cfg = (featureId && getFeatureImageConfig(featureId)) || getProviderConfig();
   const provider = cfg.imageProvider || 'pexels';
   const safeCount = Math.max(1, Math.min(30, Number(count) || 12));
 
@@ -125,26 +125,106 @@ const generateOpenAiImage = async (prompt, key, model, signal) => {
   throw new Error('OpenAI לא החזיר תמונה.');
 };
 
+// Stability AI (Stable Diffusion / SDXL) — endpoint v1 שמחזיר base64 ב-JSON
+const generateStabilityImage = async (prompt, key, model, signal) => {
+  const engine = String(model || 'stable-diffusion-xl-1024-v1-0').trim() || 'stable-diffusion-xl-1024-v1-0';
+  const url = `https://api.stability.ai/v1/generation/${encodeURIComponent(engine)}/text-to-image`;
+  const body = JSON.stringify({
+    text_prompts: [{ text: prompt }],
+    cfg_scale: 7,
+    height: 1024,
+    width: 1024,
+    samples: 1,
+    steps: 30,
+  });
+  const { body: resBody } = await httpRequest({
+    url, method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${key}` },
+    body, signal,
+  });
+  const data = JSON.parse(resBody);
+  const b64 = data.artifacts?.[0]?.base64;
+  if (!b64) throw new Error('Stability לא החזיר תמונה. בדוק את שם המנוע/המפתח.');
+  return `data:image/png;base64,${b64}`;
+};
+
+// xAI Grok — תואם OpenAI images API
+const generateXaiImage = async (prompt, key, model, signal) => {
+  const url = 'https://api.x.ai/v1/images/generations';
+  const body = JSON.stringify({
+    model: String(model || 'grok-2-image').trim() || 'grok-2-image',
+    prompt,
+    n: 1,
+    response_format: 'b64_json',
+  });
+  const { body: resBody } = await httpRequest({
+    url, method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    body, signal,
+  });
+  const data = JSON.parse(resBody);
+  const item = data.data?.[0];
+  if (item?.b64_json) return `data:image/png;base64,${item.b64_json}`;
+  if (item?.url) return fetchImageAsDataUrl(item.url, signal);
+  throw new Error('xAI לא החזיר תמונה.');
+};
+
+// Black Forest FLUX דרך fal.ai — סינכרוני, מחזיר URL
+const generateFluxImage = async (prompt, key, model, signal) => {
+  const path = String(model || 'fal-ai/flux/schnell').trim() || 'fal-ai/flux/schnell';
+  const url = `https://fal.run/${path.replace(/^\/+/, '')}`;
+  const body = JSON.stringify({ prompt, image_size: 'landscape_16_9', num_images: 1 });
+  const { body: resBody } = await httpRequest({
+    url, method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Key ${key}` },
+    body, signal,
+  });
+  const data = JSON.parse(resBody);
+  const imgUrl = data.images?.[0]?.url || data.image?.url;
+  if (!imgUrl) throw new Error('FLUX (fal.ai) לא החזיר תמונה.');
+  return fetchImageAsDataUrl(imgUrl, signal);
+};
+
+// בוחר מפתח AI ל-imageGen: gen.key → fallback למפתח הטקסט של אותו ספק (רק gemini/openai)
+const resolveImageGenKey = (gen = {}, cfg = {}) => {
+  const direct = gen.key?.trim();
+  if (direct) return direct;
+  if (gen.provider === 'openai') return cfg.openai?.key?.trim() || '';
+  if (gen.provider === 'gemini' || !gen.provider) return cfg.gemini?.key?.trim() || '';
+  return '';
+};
+
 /**
  * generateAiImage — מייצר תמונה ומחזיר dataUrl.
+ * featureId (אופציונלי) → מכבד API ייעודי לתמונות של הפיצ'ר (מצגות/SPSS).
  */
-export const generateAiImage = async (prompt, { signal } = {}) => {
+export const generateAiImage = async (prompt, { signal, featureId = '' } = {}) => {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('חסר תיאור ליצירת התמונה.');
-  const cfg = getProviderConfig();
+  const cfg = (featureId && getFeatureImageConfig(featureId)) || getProviderConfig();
   const gen = cfg.imageGen || {};
   const provider = gen.provider || 'gemini';
+  const key = resolveImageGenKey(gen, cfg);
+  const finish = (dataUrl) => ({ source: 'ai', dataUrl, url: '', alt: cleanPrompt, query: cleanPrompt, attribution: 'נוצר ב-AI' });
 
   if (provider === 'openai') {
-    const key = gen.key?.trim() || cfg.openai?.key?.trim();
     if (!key) throw new Error('לא הוגדר מפתח OpenAI ליצירת תמונות.');
-    const dataUrl = await generateOpenAiImage(cleanPrompt, key, gen.model, signal);
-    return { source: 'ai', dataUrl, url: '', alt: cleanPrompt, query: cleanPrompt, attribution: 'נוצר ב-AI' };
+    return finish(await generateOpenAiImage(cleanPrompt, key, gen.model, signal));
   }
-  const key = gen.key?.trim() || cfg.gemini?.key?.trim();
+  if (provider === 'stability') {
+    if (!key) throw new Error('לא הוגדר מפתח Stability AI ליצירת תמונות.');
+    return finish(await generateStabilityImage(cleanPrompt, key, gen.model, signal));
+  }
+  if (provider === 'xai') {
+    if (!key) throw new Error('לא הוגדר מפתח xAI ליצירת תמונות.');
+    return finish(await generateXaiImage(cleanPrompt, key, gen.model, signal));
+  }
+  if (provider === 'flux') {
+    if (!key) throw new Error('לא הוגדר מפתח fal.ai (FLUX) ליצירת תמונות.');
+    return finish(await generateFluxImage(cleanPrompt, key, gen.model, signal));
+  }
   if (!key) throw new Error('לא הוגדר מפתח Gemini ליצירת תמונות.');
-  const dataUrl = await generateGeminiImage(cleanPrompt, key, gen.model, signal);
-  return { source: 'ai', dataUrl, url: '', alt: cleanPrompt, query: cleanPrompt, attribution: 'נוצר ב-AI' };
+  return finish(await generateGeminiImage(cleanPrompt, key, gen.model, signal));
 };
 
 /**
@@ -160,12 +240,10 @@ export const fetchImageAsDataUrl = async (url, signal) => {
 };
 
 // ── זמינות מקורות (ל-UI) ─────────────────────────────────────────
-export const getImageSourceAvailability = (cfg = null) => {
-  const config = cfg || getProviderConfig();
+export const getImageSourceAvailability = (cfg = null, featureId = '') => {
+  const config = cfg || (featureId && getFeatureImageConfig(featureId)) || getProviderConfig();
   const gen = config.imageGen || {};
-  const aiKey = gen.provider === 'openai'
-    ? (gen.key?.trim() || config.openai?.key?.trim())
-    : (gen.key?.trim() || config.gemini?.key?.trim());
+  const aiKey = resolveImageGenKey(gen, config);
   return {
     stock: Boolean(config.imageProvider === 'unsplash' ? config.unsplash?.key?.trim() : config.pexels?.key?.trim()),
     stockProvider: config.imageProvider || 'pexels',

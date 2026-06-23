@@ -48,6 +48,12 @@ export const DEFAULT_PROVIDER_CONFIG = {
   imageGen:   { provider: 'gemini', key: '', model: 'imagen-3.0-generate-002' }, // יצירת תמונות AI
   // מנוע גרפים אמיתי (QuickChart) — מרנדר תרשימים מדויקים מנתוני SPSS/מצגות
   chartEngine: { provider: 'quickchart', key: '', baseUrl: 'https://quickchart.io', fallbackToAi: true },
+  // API ייעודי לפי פיצ'ר — provider+model+key נפרדים ל-SPSS ולמצגות.
+  // enabled=false → נופל ל-provider הגלובלי (active). ראה getFeatureProviderConfig.
+  featureOverrides: {
+    spss:          { enabled: false, providerId: '', model: '', key: '', baseUrl: '', image: { enabled: false, stockProvider: '', stockKey: '', genProvider: '', genModel: '', genKey: '' } },
+    presentations: { enabled: false, providerId: '', model: '', key: '', baseUrl: '', image: { enabled: false, stockProvider: '', stockKey: '', genProvider: '', genModel: '', genKey: '' } },
+  },
   copyleaks:  { ...DEFAULT_COPYLEAKS_CONFIG },
   toolLinks: {
     googleSearch: { label: 'חיפוש גוגל', url: 'https://www.google.com/search?q={query}' },
@@ -181,6 +187,10 @@ export const DEFAULT_SPSS_PREFERENCES = {
   defaultGenMode: 'analysis',
   defaultSyntaxView: 'master',
   autoSwitchPrepForReliability: true,
+  // On-page provider/model picker (like the home screen). '' = use the active
+  // provider / feature default resolved in spssSyntaxService.
+  providerId: '',
+  model: '',
 };
 
 export const DEFAULT_PERSONAL_STYLE = {
@@ -2327,6 +2337,93 @@ export const matchShortcut = (event, shortcut = '') => {
   return normalizeShortcut(parts.join('+')) === normalizeShortcut(shortcut);
 };
 
+// פיצ'רים שיכולים לקבל API ייעודי (provider+model+key נפרד מהגלובלי)
+export const FEATURE_OVERRIDE_IDS = ['spss', 'presentations'];
+
+// ספקי תמונות זמינים ל-override לפי פיצ'ר
+export const IMAGE_STOCK_PROVIDER_IDS = ['pexels', 'unsplash'];
+export const IMAGE_GEN_PROVIDER_IDS = ['gemini', 'openai', 'stability', 'xai', 'flux'];
+
+const normalizeFeatureImage = (raw = {}) => {
+  const img = raw && typeof raw === 'object' ? raw : {};
+  return {
+    enabled: Boolean(img.enabled),
+    stockProvider: IMAGE_STOCK_PROVIDER_IDS.includes(img.stockProvider) ? img.stockProvider : '',
+    stockKey: String(img.stockKey || '').trim(),
+    genProvider: IMAGE_GEN_PROVIDER_IDS.includes(img.genProvider) ? img.genProvider : '',
+    genModel: String(img.genModel || '').trim(),
+    genKey: String(img.genKey || '').trim(),
+  };
+};
+
+const normalizeFeatureOverrides = (raw = {}) => {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (const id of FEATURE_OVERRIDE_IDS) {
+    const ov = source[id] && typeof source[id] === 'object' ? source[id] : {};
+    const providerId = KNOWN_PROVIDER_IDS.includes(ov.providerId) ? ov.providerId : '';
+    out[id] = {
+      enabled: Boolean(ov.enabled) && Boolean(providerId),
+      providerId,
+      model: String(ov.model || '').trim(),
+      key: String(ov.key || '').trim(),
+      baseUrl: String(ov.baseUrl || '').trim(),
+      image: normalizeFeatureImage(ov.image),
+    };
+  }
+  return out;
+};
+
+/**
+ * getFeatureProviderConfig — מחזיר config מותאם לפיצ'ר אם הוגדר לו API ייעודי.
+ * @returns {{ config: object, providerId: string, model: string } | null}
+ *   null = אין override פעיל → השתמש ב-provider הגלובלי כרגיל.
+ */
+export const getFeatureProviderConfig = (featureId, baseConfig = null) => {
+  const cfg = baseConfig || getProviderConfig();
+  const ov = cfg?.featureOverrides?.[featureId];
+  if (!ov || !ov.enabled) return null;
+  const providerId = String(ov.providerId || '').trim();
+  if (!providerId || !KNOWN_PROVIDER_IDS.includes(providerId)) return null;
+  // משכפל את ה-config הגלובלי, כופה את ה-provider הייעודי ומזריק מפתח/מודל/baseUrl ייעודיים.
+  // key/model ריקים → נופלים לערך הגלובלי של אותו provider.
+  const merged = normalizeProviderConfig({
+    ...cfg,
+    active: providerId,
+    activeProviders: [providerId],
+    multiModelEnabled: false,
+    [providerId]: {
+      ...(cfg[providerId] || {}),
+      ...(ov.key ? { key: ov.key } : {}),
+      ...(ov.model ? { model: ov.model } : {}),
+      ...(ov.baseUrl ? { baseUrl: ov.baseUrl } : {}),
+    },
+  });
+  return { config: merged, providerId, model: String(ov.model || merged[providerId]?.model || '').trim() };
+};
+
+/**
+ * getFeatureImageConfig — מחזיר config תמונות מותאם לפיצ'ר אם הוגדר API ייעודי לתמונות.
+ * @returns {object|null} provider-config מנורמל עם imageProvider/pexels/unsplash/imageGen מוחלפים, או null.
+ */
+export const getFeatureImageConfig = (featureId, baseConfig = null) => {
+  const cfg = baseConfig || getProviderConfig();
+  const img = cfg?.featureOverrides?.[featureId]?.image;
+  if (!img || !img.enabled) return null;
+  const next = { ...cfg };
+  const effectiveStock = img.stockProvider || cfg.imageProvider;
+  if (img.stockProvider) next.imageProvider = img.stockProvider;
+  if (img.stockKey && effectiveStock === 'pexels') next.pexels = { ...cfg.pexels, key: img.stockKey };
+  if (img.stockKey && effectiveStock === 'unsplash') next.unsplash = { ...cfg.unsplash, key: img.stockKey };
+  next.imageGen = {
+    ...cfg.imageGen,
+    ...(img.genProvider ? { provider: img.genProvider } : {}),
+    ...(img.genModel ? { model: img.genModel } : {}),
+    ...(img.genKey ? { key: img.genKey } : {}),
+  };
+  return normalizeProviderConfig(next);
+};
+
 const normalizeProviderConfig = (config = {}) => {
   const safeActive = KNOWN_PROVIDER_IDS.includes(config?.active) ? config.active : DEFAULT_PROVIDER_CONFIG.active;
   const merged = {
@@ -2345,6 +2442,7 @@ const normalizeProviderConfig = (config = {}) => {
     imageGen:   { ...DEFAULT_PROVIDER_CONFIG.imageGen,   ...(config?.imageGen || {}) },
     copyleaks:  { ...DEFAULT_PROVIDER_CONFIG.copyleaks,  ...(config?.copyleaks || {}) },
     toolLinks: getToolLinksConfig({ ...DEFAULT_PROVIDER_CONFIG, ...(config || {}) }),
+    featureOverrides: normalizeFeatureOverrides(config?.featureOverrides),
     active: safeActive,
   };
   merged.claude.model = normalizeProviderModelName('claude', merged.claude.model || DEFAULT_PROVIDER_CONFIG.claude.model);
@@ -2356,7 +2454,7 @@ const normalizeProviderConfig = (config = {}) => {
   merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
   merged.imageProvider = ['pexels', 'unsplash'].includes(merged.imageProvider) ? merged.imageProvider : 'pexels';
-  merged.imageGen.provider = ['gemini', 'openai'].includes(merged.imageGen.provider) ? merged.imageGen.provider : 'gemini';
+  merged.imageGen.provider = IMAGE_GEN_PROVIDER_IDS.includes(merged.imageGen.provider) ? merged.imageGen.provider : 'gemini';
   return merged;
 };
 
@@ -9114,6 +9212,9 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
     'Content-Type': 'application/json',
     'x-api-key': apiKey,
     'anthropic-version': '2023-06-01',
+    // מאפשר קריאה ישירה מדפדפן (אתר/PWA) — Anthropic חוסם CORS בלי זה.
+    // בדסקטופ הקריאה ממילא עוברת ב-proxy, והheader לא מזיק שם.
+    'anthropic-dangerous-direct-browser-access': 'true',
   };
   const bodyStr = JSON.stringify({
     model, max_tokens: 4096,
@@ -12029,7 +12130,7 @@ const pingGemini = async (key, model, signal) => {
 
 const pingClaude = async (key, model, signal) => {
   const url = 'https://api.anthropic.com/v1/messages';
-  const headers = { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const headers = { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
   const bodyStr = JSON.stringify({ model, max_tokens: 16, messages: [{ role: 'user', content: 'אמור "אוקי" בלבד.' }] });
 
   const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr, timeoutMs: 12000 }, signal);

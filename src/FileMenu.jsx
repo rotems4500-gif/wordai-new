@@ -918,10 +918,10 @@ function MediaVisualsSettings({ config, setConfig }) {
         מנוע הגרפים מרנדר תרשים מדויק מהמספרים שבפלט — לא תמונה ש-AI ממציא.
       </p>
 
-      <ProviderSection title="תמונות למצגות" icon="🖼️" active={false} allowActivate={false}
-        configured={Boolean(String(config.pexels?.key || '').trim() || String(config.unsplash?.key || '').trim() || String(config.imageGen?.key || '').trim())}
+      <ProviderSection title="תמונות סטוק למצגות" icon="🖼️" active={false} allowActivate={false}
+        configured={Boolean(String(config.pexels?.key || '').trim() || String(config.unsplash?.key || '').trim())}
         onActivate={() => {}}
-        description="חיפוש תמונות סטוק (Pexels/Unsplash — חינמי) ויצירת תמונות ב-AI (Imagen של Gemini או gpt-image של OpenAI).">
+        description="חיפוש תמונות סטוק (Pexels/Unsplash — חינמי). יצירת תמונות ב-AI עברה לכרטיס 'יצירת תמונות AI' בטאב 'מנועי AI'.">
         <div style={{ marginBottom: 10 }}>
           <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק תמונות סטוק פעיל</label>
           <select value={config.imageProvider || 'pexels'} onChange={(e) => setConfig((prev) => ({ ...prev, imageProvider: e.target.value }))} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
@@ -933,19 +933,6 @@ function MediaVisualsSettings({ config, setConfig }) {
           onChange={(v) => update('pexels', 'key', v)} hint="מפתח חינמי מ-pexels.com/api" />
         <FieldRow label="מפתח Unsplash (Access Key)" type="password" placeholder="your_unsplash_access_key" value={config.unsplash?.key}
           onChange={(v) => update('unsplash', 'key', v)} hint="Access Key מ-unsplash.com/developers" />
-        <div style={{ borderTop: '1px solid #DBEAFE', paddingTop: 10, marginTop: 10 }}>
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות AI</label>
-            <select value={config.imageGen?.provider || 'gemini'} onChange={(e) => update('imageGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
-              <option value="gemini">Gemini (Imagen)</option>
-              <option value="openai">OpenAI (gpt-image)</option>
-            </select>
-          </div>
-          <FieldRow label="מפתח ליצירת תמונות (אופציונלי — אחרת ייעשה שימוש במפתח הטקסט של אותו ספק)" type="password" placeholder="leave empty to reuse text key" value={config.imageGen?.key}
-            onChange={(v) => update('imageGen', 'key', v)} hint="אם ריק — נשתמש במפתח Gemini/OpenAI הרגיל." />
-          <FieldRow label="מודל יצירת תמונות" placeholder="imagen-3.0-generate-002" value={config.imageGen?.model}
-            onChange={(v) => update('imageGen', 'model', v)} options={['imagen-3.0-generate-002', 'gpt-image-1']} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1" />
-        </div>
       </ProviderSection>
 
       <ProviderSection title="גרפים מנתוני SPSS" icon="📈" active={false} allowActivate={false}
@@ -978,6 +965,25 @@ function AiSettings({ config, setConfig }) {
   const [quickKeyPopup, setQuickKeyPopup] = useState(null); // { providerId, label, keyField, baseUrlField? }
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
+  const updateFeatureOverride = (featureId, patch) =>
+    setConfig(prev => ({
+      ...prev,
+      featureOverrides: {
+        ...(prev.featureOverrides || {}),
+        [featureId]: { ...(prev.featureOverrides?.[featureId] || {}), ...patch },
+      },
+    }));
+  const updateFeatureImage = (featureId, patch) =>
+    setConfig(prev => ({
+      ...prev,
+      featureOverrides: {
+        ...(prev.featureOverrides || {}),
+        [featureId]: {
+          ...(prev.featureOverrides?.[featureId] || {}),
+          image: { ...(prev.featureOverrides?.[featureId]?.image || {}), ...patch },
+        },
+      },
+    }));
   const updateToolLink = (toolId, field, value) =>
     setConfig((prev) => ({
       ...prev,
@@ -1418,11 +1424,80 @@ function AiSettings({ config, setConfig }) {
         }} />
       </ProviderSection>
 
+      <ProviderSection title="יצירת תמונות AI" icon="🎨" active={false} allowActivate={false}
+        configured={Boolean(String(config.imageGen?.key || '').trim()) || ['gemini', 'openai'].includes(config.imageGen?.provider || 'gemini')}
+        onActivate={() => {}}
+        description="יצירת תמונות מקור ב-AI לסטודיו המצגות (Imagen של Gemini, gpt-image של OpenAI, Stability, xAI Grok או FLUX).">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות</label>
+          <select value={config.imageGen?.provider || 'gemini'} onChange={(e) => update('imageGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="gemini">Gemini (Imagen)</option>
+            <option value="openai">OpenAI (gpt-image)</option>
+            <option value="stability">Stability AI (Stable Diffusion)</option>
+            <option value="xai">xAI Grok</option>
+            <option value="flux">Black Forest FLUX (fal.ai)</option>
+          </select>
+        </div>
+        <FieldRow label="מפתח ליצירת תמונות (אופציונלי ל-Gemini/OpenAI — חובה לשאר)" type="password" placeholder="leave empty to reuse text key" value={config.imageGen?.key}
+          onChange={(v) => update('imageGen', 'key', v)} hint="Gemini/OpenAI: ריק = מפתח הטקסט הרגיל. Stability/xAI/FLUX: חובה מפתח ייעודי." />
+        <FieldRow label="מודל יצירת תמונות" placeholder="imagen-3.0-generate-002" value={config.imageGen?.model}
+          onChange={(v) => update('imageGen', 'model', v)} options={['imagen-3.0-generate-002', 'gpt-image-1', 'stable-diffusion-xl-1024-v1-0', 'grok-2-image', 'fal-ai/flux/schnell', 'fal-ai/flux/dev']} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1 · Stability: stable-diffusion-xl-1024-v1-0 · xAI: grok-2-image · FLUX: fal-ai/flux/schnell" />
+      </ProviderSection>
+
+      {(() => {
+        const ov = config.featureOverrides?.spss || {};
+        const providerId = ov.providerId || '';
+        const needsBaseUrl = providerId === 'custom' || providerId === 'ollama';
+        return (
+          <ProviderSection title="קוד (SPSS Syntax)" icon="💻" active={false} allowActivate={false}
+            configured={Boolean(ov.enabled && providerId)}
+            onActivate={() => {}}
+            description="ספק ומודל ייעודיים ליצירת SPSS syntax. ריק = הספק הפעיל הרגיל. אפשר גם לבחור מודל ישירות במסך ה-SPSS Studio בכל הרצה.">
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק ל-SPSS</label>
+              <select
+                value={providerId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  updateFeatureOverride('spss', next ? { enabled: true, providerId: next, model: '' } : { enabled: false, providerId: '', model: '' });
+                }}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}
+              >
+                <option value="">— ברירת מחדל (הספק הפעיל) —</option>
+                {[
+                  ['gemini', 'Google Gemini'],
+                  ['openai', 'OpenAI'],
+                  ['claude', 'Claude (Anthropic)'],
+                  ['groq', 'Groq'],
+                  ['perplexity', 'Perplexity'],
+                  ['ollama', 'Ollama (מקומי)'],
+                  ['custom', 'מותאם אישית'],
+                ].map(([pid, plabel]) => (<option key={pid} value={pid}>{plabel}</option>))}
+              </select>
+            </div>
+            {providerId && (
+              <>
+                <FieldRow label="מודל (אופציונלי)" placeholder={`ברירת מחדל: ${config[providerId]?.model || '—'}`}
+                  value={ov.model || ''} onChange={(v) => updateFeatureOverride('spss', { model: v })}
+                  options={getProviderModelChoices(providerId, config, [ov.model].filter(Boolean))} hint="ריק = המודל הגלובלי של הספק" />
+                {needsBaseUrl && (
+                  <FieldRow label="Base URL" placeholder={config[providerId]?.baseUrl || 'https://...'}
+                    value={ov.baseUrl || ''} onChange={(v) => updateFeatureOverride('spss', { baseUrl: v })} hint="ריק = הכתובת הגלובלית של הספק" />
+                )}
+                <FieldRow label="מפתח API ייעודי (אופציונלי)" type="password" placeholder="ריק = המפתח הגלובלי של הספק"
+                  value={ov.key || ''} onChange={(v) => updateFeatureOverride('spss', { key: v })} hint="מפתח נפרד ל-SPSS — שימושי לבילינג/מכסה נפרדים" />
+                <ApiTestButton providerId={providerId} providerConfig={{ key: ov.key || config[providerId]?.key, baseUrl: ov.baseUrl || config[providerId]?.baseUrl, model: ov.model || config[providerId]?.model }} />
+              </>
+            )}
+          </ProviderSection>
+        );
+      })()}
+
       <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#FAFAFA', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ fontSize: 20 }}>🖼️</span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>תמונות וגרפים עברו לטאב ייעודי</div>
-          <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>מפתחות תמונות סטוק, יצירת תמונות AI ומנוע הגרפים ל-SPSS נמצאים עכשיו בטאב "תמונות וגרפים".</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>תמונות סטוק וגרפים</div>
+          <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>מפתחות תמונות סטוק (Pexels/Unsplash) ומנוע הגרפים ל-SPSS נמצאים בטאב "תמונות וגרפים".</div>
         </div>
       </div>
 
@@ -1518,6 +1593,178 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('custom', 'model', v)} hint="חובה — העתק מרשימת Models של הספק" />
         <ApiTestButton providerId="custom" providerConfig={{ baseUrl: config.custom?.baseUrl, key: config.custom?.key, model: config.custom?.model }} />
       </ProviderSection>
+
+      {/* API ייעודי לפי פיצ'ר — SPSS ומצגות */}
+      <div style={{ border: '1px solid #DDD6FE', borderRadius: 12, padding: '14px 16px', background: '#FAF5FF', marginTop: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#5B21B6', marginBottom: 4 }}>🎯 API ייעודי למצגות</div>
+        <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.7, marginBottom: 12 }}>
+          אפשר להקצות למצגות ספק/מודל/מפתח נפרדים מהספק הגלובלי. כשכבוי — הפיצ'ר משתמש בספק הפעיל הרגיל. מפתח או מודל ריקים נופלים אוטומטית לערך הגלובלי. ל-SPSS יש כרטיס ייעודי משלו ("קוד (SPSS Syntax)") למעלה.
+        </div>
+        {[
+          { id: 'presentations', label: 'מצגות — Presentation Studio', icon: '🖼️' },
+        ].map(({ id, label, icon }) => {
+          const ov = config.featureOverrides?.[id] || {};
+          const enabled = ov.enabled === true;
+          const providerId = ov.providerId || '';
+          const needsBaseUrl = providerId === 'custom' || providerId === 'ollama';
+          return (
+            <div key={id} style={{ borderTop: '1px solid #E9D5FF', paddingTop: 12, marginTop: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#4C1D95', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => updateFeatureOverride(id, { enabled: e.target.checked })}
+                />
+                {icon} {label}
+              </label>
+              {enabled && (
+                <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>ספק ייעודי</div>
+                    <select
+                      value={providerId}
+                      onChange={(e) => updateFeatureOverride(id, { providerId: e.target.value, model: '' })}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #C4B5FD', borderRadius: 8, fontSize: 12, background: 'white' }}
+                    >
+                      <option value="">— בחר ספק —</option>
+                      {[
+                        ['gemini', 'Google Gemini'],
+                        ['openai', 'OpenAI'],
+                        ['claude', 'Claude (Anthropic)'],
+                        ['groq', 'Groq'],
+                        ['perplexity', 'Perplexity'],
+                        ['ollama', 'Ollama (מקומי)'],
+                        ['custom', 'מותאם אישית'],
+                      ].map(([pid, plabel]) => (
+                        <option key={pid} value={pid}>{plabel}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {providerId && (
+                    <>
+                      <FieldRow
+                        label="מודל (אופציונלי)"
+                        placeholder={`ברירת מחדל: ${config[providerId]?.model || '—'}`}
+                        value={ov.model || ''}
+                        onChange={(v) => updateFeatureOverride(id, { model: v })}
+                        options={getProviderModelChoices(providerId, config, [ov.model].filter(Boolean))}
+                        hint="ריק = המודל הגלובלי של הספק"
+                      />
+                      {needsBaseUrl && (
+                        <FieldRow
+                          label="Base URL"
+                          placeholder={config[providerId]?.baseUrl || 'https://...'}
+                          value={ov.baseUrl || ''}
+                          onChange={(v) => updateFeatureOverride(id, { baseUrl: v })}
+                          hint="ריק = הכתובת הגלובלית של הספק"
+                        />
+                      )}
+                      <FieldRow
+                        label="מפתח API ייעודי (אופציונלי)"
+                        type="password"
+                        placeholder="ריק = המפתח הגלובלי של הספק"
+                        value={ov.key || ''}
+                        onChange={(v) => updateFeatureOverride(id, { key: v })}
+                        hint="מפתח נפרד לפיצ'ר זה — שימושי לבילינג/מכסה נפרדים"
+                      />
+                      <ApiTestButton
+                        providerId={providerId}
+                        providerConfig={{
+                          key: ov.key || config[providerId]?.key,
+                          baseUrl: ov.baseUrl || config[providerId]?.baseUrl,
+                          model: ov.model || config[providerId]?.model,
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* override תמונות לפיצ'ר */}
+              {(() => {
+                const im = ov.image || {};
+                const imEnabled = im.enabled === true;
+                const genProvider = im.genProvider || '';
+                const genNeedsKey = genProvider && genProvider !== 'gemini' && genProvider !== 'openai';
+                return (
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, color: '#6D28D9', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={imEnabled}
+                        onChange={(e) => updateFeatureImage(id, { enabled: e.target.checked })}
+                      />
+                      🖼️ API תמונות ייעודי לפיצ'ר זה
+                    </label>
+                    {imEnabled && (
+                      <div style={{ marginTop: 10, display: 'grid', gap: 10, paddingRight: 22 }}>
+                        <div style={{ fontSize: 10, color: '#7C3AED' }}>שדה ריק נופל להגדרת התמונות הגלובלית.</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>תמונות סטוק</div>
+                            <select
+                              value={im.stockProvider || ''}
+                              onChange={(e) => updateFeatureImage(id, { stockProvider: e.target.value })}
+                              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C4B5FD', borderRadius: 8, fontSize: 12, background: 'white' }}
+                            >
+                              <option value="">— גלובלי —</option>
+                              <option value="pexels">Pexels</option>
+                              <option value="unsplash">Unsplash</option>
+                            </select>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>יצירת תמונות AI</div>
+                            <select
+                              value={genProvider}
+                              onChange={(e) => updateFeatureImage(id, { genProvider: e.target.value, genModel: '' })}
+                              style={{ width: '100%', padding: '8px 10px', border: '1px solid #C4B5FD', borderRadius: 8, fontSize: 12, background: 'white' }}
+                            >
+                              <option value="">— גלובלי —</option>
+                              <option value="gemini">Gemini (Imagen)</option>
+                              <option value="openai">OpenAI (gpt-image)</option>
+                              <option value="stability">Stability AI</option>
+                              <option value="xai">xAI Grok</option>
+                              <option value="flux">FLUX (fal.ai)</option>
+                            </select>
+                          </div>
+                        </div>
+                        {im.stockProvider && (
+                          <FieldRow
+                            label={`מפתח ${im.stockProvider === 'unsplash' ? 'Unsplash' : 'Pexels'} (אופציונלי)`}
+                            type="password"
+                            placeholder="ריק = המפתח הגלובלי"
+                            value={im.stockKey || ''}
+                            onChange={(v) => updateFeatureImage(id, { stockKey: v })}
+                          />
+                        )}
+                        {genProvider && (
+                          <>
+                            <FieldRow
+                              label="מודל יצירת תמונות (אופציונלי)"
+                              placeholder="ברירת מחדל של הספק"
+                              value={im.genModel || ''}
+                              onChange={(v) => updateFeatureImage(id, { genModel: v })}
+                              options={['imagen-3.0-generate-002', 'gpt-image-1', 'stable-diffusion-xl-1024-v1-0', 'grok-2-image', 'fal-ai/flux/schnell', 'fal-ai/flux/dev']}
+                            />
+                            <FieldRow
+                              label={genNeedsKey ? 'מפתח API לתמונות (חובה)' : 'מפתח API לתמונות (אופציונלי)'}
+                              type="password"
+                              placeholder={genNeedsKey ? 'מפתח הספק' : 'ריק = מפתח הטקסט/הגלובלי'}
+                              value={im.genKey || ''}
+                              onChange={(v) => updateFeatureImage(id, { genKey: v })}
+                              hint={genNeedsKey ? 'Stability/xAI/FLUX דורשים מפתח ייעודי.' : ''}
+                            />
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -6647,15 +6894,13 @@ function AppearanceSettings() {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>ערכת נושא — תחול מיידית:</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+      <p className="text-[13px] text-slate-500 mb-4 font-medium">ערכת נושא — תחול מיידית:</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {themes.map(t => (
           <button key={t.name} onClick={() => applyTheme(t.vars)}
-            style={{ border: '1px solid #E1DFDD', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', background: 'white', textAlign: 'center', transition: 'box-shadow 0.15s' }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)'}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}>
-            <div style={{ height: 36, background: `linear-gradient(90deg, ${t.preview[0]} 50%, ${t.preview[1]} 50%)` }} />
-            <div style={{ padding: '7px 6px', fontSize: 11, color: '#323130', fontWeight: 500 }}>{t.name}</div>
+            className="border border-slate-200 rounded-xl overflow-hidden bg-white text-center transition-all hover:border-indigo-200 hover:shadow-md outline-none focus:ring-2 focus:ring-indigo-100">
+            <div className="h-9" style={{ background: `linear-gradient(90deg, ${t.preview[0]} 50%, ${t.preview[1]} 50%)` }} />
+            <div className="px-1.5 py-2 text-[11px] text-slate-700 font-semibold">{t.name}</div>
           </button>
         ))}
       </div>
@@ -6713,6 +6958,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
       .filter((group) => group.tabs.length)
     : SETTINGS_TAB_GROUPS;
   const settingsSearchHasNoResults = settingsSearchTokens.length > 0 && settingsSearchResults.length === 0;
+  const activeSettingsTabLabel = (SETTINGS_TAB_GROUPS.flatMap((group) => group.tabs).find(([id]) => id === settingsTab) || [])[1] || '';
 
   useEffect(() => {
     personalStyleStateRef.current = personalStyleState;
@@ -7137,170 +7383,149 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
         <div className="absolute inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md transition-opacity duration-200" onClick={closeSettingsPanel}>
           <div className={`${settingsTab === 'onboarding' ? 'bg-transparent w-full max-w-[1400px] h-[95vh] border-none shadow-none' : 'bg-slate-50 w-full max-w-[1280px] h-[90vh] sm:h-[85vh] rounded-[24px] shadow-2xl border border-slate-200/60'} flex flex-col overflow-hidden`} onClick={e => e.stopPropagation()}>
              {/* POPUP HEADER */}
-             <div className="bg-white px-6 sm:px-8 py-5 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
-                <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center shadow-inner border border-indigo-100/50">
-                        <i className="ph-fill ph-gear-fine text-[26px] text-indigo-600" />
+             <div className="bg-white px-6 sm:px-8 py-4 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
+                <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 bg-indigo-50 rounded-2xl flex items-center justify-center shadow-inner border border-indigo-100/50">
+                        <i className="ph-fill ph-gear-fine text-[24px] text-indigo-600" />
                     </div>
                     <div>
-                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות עבודה ישירה</h2>
-                        <div className="text-[12px] sm:text-[13px] text-slate-500 font-semibold mt-0.5" dir="rtl">WordFlow OS &mdash; Direct Configuration</div>
+                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות</h2>
+                        {settingsTab !== 'onboarding' && activeSettingsTabLabel && (
+                          <div className="text-[12px] sm:text-[13px] text-slate-400 font-semibold mt-0.5">{activeSettingsTabLabel}</div>
+                        )}
                     </div>
                 </div>
                 <button onClick={closeSettingsPanel} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
                     <i className="ph ph-x text-lg font-bold" />
                 </button>
              </div>
-             
-             {/* POPUP CONTENT (TABS + SCREENS) */}
-             <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-slate-50/50 custom-scrollbar-slim">
-                <div className="bg-white border border-slate-200/70 rounded-2xl p-4 sm:p-5 shadow-sm mb-6 md:mb-8">
-                  <div className="flex flex-col gap-3">
-                    <div>
-                      <div className="text-[12px] font-bold text-slate-700">חיפוש מהיר בהגדרות</div>
-                      <div className="text-[11px] text-slate-500 mt-1">אפשר לחפש לפי טאב או מילות מפתח כמו API, מודל, סקילים, סגנון או עדכונים.</div>
-                    </div>
+
+             {settingsTab === 'onboarding' ? (
+               /* Onboarding — מסך immersive ללא רייל/footer */
+               <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-slate-50/50 custom-scrollbar-slim">
+                 <OnboardingTabContainer
+                   profile={personalStyleState}
+                   setProfile={setPersonalStyleDraftState}
+                   persistProfile={persistPersonalStyleDraft}
+                   setProviderConfig={setConfig}
+                   externalAnalysisBusy={externalAnalysisBusy}
+                   providerConfig={config}
+                   onOpenAiSettings={() => setSettingsTab('ai')}
+                   onOpenPersonalStyle={() => setSettingsTab('personal')}
+                   onDismiss={closeSettingsPanel}
+                   onSubmitExternalAnalysis={() => runExternalAnalysisProcessing({ source: 'manual' })}
+                 />
+               </div>
+             ) : (
+             /* פריסת דו-פאנל: רייל ניווט + תוכן עם footer דביק */
+             <div className="flex-1 flex flex-col md:flex-row min-h-0">
+                {/* ─── NAV RAIL ─── */}
+                <aside className="w-full md:w-64 shrink-0 bg-white border-b md:border-b-0 md:border-l border-slate-200 flex flex-col min-h-0 max-h-[40vh] md:max-h-none">
+                  <div className="p-3 border-b border-slate-100 shrink-0">
                     <div className="relative">
-                      <i className="ph ph-magnifying-glass absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
+                      <i className="ph ph-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
                       <input
                         type="text"
                         dir="auto"
                         value={settingsSearchQuery}
                         onChange={(e) => setSettingsSearchQuery(e.target.value)}
-                        placeholder="חפש טאב, ספק, timeout, logs, updates או profile"
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pr-11 pl-10 text-[13px] font-medium text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-100/70"
+                        placeholder="חיפוש בהגדרות…"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pr-9 pl-8 text-[13px] font-medium text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-100/70"
                       />
                       {settingsSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setSettingsSearchQuery('')}
-                          className="absolute left-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-slate-200"
-                        >
-                          <i className="ph ph-x text-sm" />
+                        <button type="button" onClick={() => setSettingsSearchQuery('')}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-slate-200">
+                          <i className="ph ph-x text-xs" />
                         </button>
                       )}
                     </div>
-
-                    {settingsSearchTokens.length > 0 && (
-                      settingsSearchHasNoResults ? (
-                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-700">
-                          לא נמצאו הגדרות תואמות
-                        </div>
-                      ) : (
-                        <div>
-                          <div className="text-[11px] font-bold text-slate-400 mb-2 tracking-widest">קפיצה ישירה</div>
-                          <div className="flex flex-wrap gap-2">
-                            {settingsSearchResults.map((entry) => (
-                              <button
-                                key={entry.id}
-                                type="button"
-                                onClick={() => setSettingsTab(entry.id)}
-                                className={`px-3 py-2 rounded-xl text-[12px] font-semibold border transition-all outline-none focus:ring-2 ${settingsTab === entry.id ? 'bg-indigo-600 text-white border-indigo-600 focus:ring-indigo-200' : 'bg-indigo-50 text-indigo-700 border-indigo-100 hover:bg-indigo-100 focus:ring-indigo-100'}`}
-                              >
-                                {entry.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )
-                    )}
                   </div>
-                </div>
-
-                {visibleSettingsGroups.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-6 md:mb-8">
-                    {visibleSettingsGroups.map((group) => (
-                      <div key={group.title} className="bg-white border border-slate-200/70 rounded-2xl p-5 shadow-sm hover:border-indigo-200 hover:shadow-md transition-all">
-                        <div className="mb-4">
-                          <div className="text-[14px] font-extrabold text-slate-800 tracking-tight">{group.title}</div>
-                          {group.desc && <div className="text-[11px] text-slate-400 font-medium mt-0.5 leading-snug">{group.desc}</div>}
-                        </div>
-                        <div className="flex flex-col gap-2">
+                  <nav className="flex-1 overflow-y-auto p-3 flex flex-col gap-4 custom-scrollbar-slim">
+                    {settingsSearchHasNoResults ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-700">
+                        לא נמצאו הגדרות תואמות
+                      </div>
+                    ) : visibleSettingsGroups.map((group) => (
+                      <div key={group.title}>
+                        <div className="px-2 mb-1.5 text-[10px] font-bold text-slate-400 tracking-widest">{group.title}</div>
+                        <div className="flex flex-col gap-1">
                           {group.tabs.map(([id, label]) => (
                             <button key={id} onClick={() => setSettingsTab(id)}
-                              className={`w-full text-right px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-600 text-white border border-indigo-600 shadow-sm shadow-indigo-600/20 focus:ring-indigo-200' : 'bg-slate-50 text-slate-600 border border-transparent hover:bg-indigo-50 hover:text-indigo-700 focus:ring-slate-100'}`}>
+                              className={`w-full text-right px-3 py-2 rounded-xl text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20 focus:ring-indigo-200' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 focus:ring-slate-100'}`}>
                               {label}
                             </button>
                           ))}
                         </div>
                       </div>
                     ))}
-                  </div>
-                )}
+                  </nav>
+                </aside>
 
-                <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm min-h-[500px]">
-                  {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
-                  {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
-                  {settingsTab === 'media'       && <MediaVisualsSettings config={config} setConfig={setConfig} />}
-                  {settingsTab === 'sidebar'     && (
-                    <div className="flex flex-col gap-8">
-                      <div>
-                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>✨</span>התנהגות העוזר</div>
-                        <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />
-                      </div>
-                      <div className="border-t border-slate-100 pt-7">
-                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>💬</span>מצבי הצ׳אט בחלונית</div>
-                        <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />
-                      </div>
+                {/* ─── CONTENT + STICKY FOOTER ─── */}
+                <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50">
+                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 custom-scrollbar-slim">
+                    <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm">
+                      {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
+                      {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+                      {settingsTab === 'media'       && <MediaVisualsSettings config={config} setConfig={setConfig} />}
+                      {settingsTab === 'sidebar'     && (
+                        <div className="flex flex-col gap-8">
+                          <div>
+                            <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>✨</span>התנהגות העוזר</div>
+                            <AssistantBehaviorSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} />
+                          </div>
+                          <div className="border-t border-slate-100 pt-7">
+                            <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>💬</span>מצבי הצ׳אט בחלונית</div>
+                            <SidebarPanelSettings behavior={assistantBehaviorState} setBehavior={setAssistantBehaviorState} config={config} />
+                          </div>
+                        </div>
+                      )}
+                      {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
+                      {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
+                      {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
+                      {settingsTab === 'updates'     && (
+                        <UpdateSettings
+                          checkToken={pendingUpdateCheckToken}
+                          onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
+                        />
+                      )}
+                      {settingsTab === 'developer'   && (
+                        <div className="flex flex-col gap-8">
+                          <div>
+                            <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🛠️</span>כלים מתקדמים</div>
+                            <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} setAgents={setRoleAgents} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />
+                          </div>
+                          <div className="border-t border-slate-100 pt-7">
+                            <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🪵</span>קונסולת לוגים</div>
+                            <DebugConsoleSettings automation={workspaceAutomationState} />
+                          </div>
+                        </div>
+                      )}
+                      {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
+                      {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
+                      {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
+                      {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                      {settingsTab === 'appearance'  && <AppearanceSettings />}
                     </div>
-                  )}
-                  {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
-                  {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
-                  {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
-                  {settingsTab === 'updates'     && (
-                    <UpdateSettings
-                      checkToken={pendingUpdateCheckToken}
-                      onCheckTokenConsumed={(token) => setConsumedUpdateCheckToken((prev) => Math.max(prev, Number(token) || 0))}
-                    />
-                  )}
-                  {settingsTab === 'developer'   && (
-                    <div className="flex flex-col gap-8">
-                      <div>
-                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🛠️</span>כלים מתקדמים</div>
-                        <DeveloperSettings config={config} setConfig={setConfig} automation={workspaceAutomationState} setAutomation={setWorkspaceAutomationState} setAgents={setRoleAgents} assistantBehavior={assistantBehaviorState} setAssistantBehavior={setAssistantBehaviorState} wordPrefs={wordPrefsState} setWordPrefs={setWordPrefsState} lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />
-                      </div>
-                      <div className="border-t border-slate-100 pt-7">
-                        <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🪵</span>קונסולת לוגים</div>
-                        <DebugConsoleSettings automation={workspaceAutomationState} />
-                      </div>
-                    </div>
-                  )}
-                  {settingsTab === 'onboarding'  && (
-                    <OnboardingTabContainer
-                      profile={personalStyleState}
-                      setProfile={setPersonalStyleDraftState}
-                      persistProfile={persistPersonalStyleDraft}
-                      setProviderConfig={setConfig}
-                      externalAnalysisBusy={externalAnalysisBusy}
-                      providerConfig={config}
-                      onOpenAiSettings={() => setSettingsTab('ai')}
-                      onOpenPersonalStyle={() => setSettingsTab('personal')}
-                      onDismiss={closeSettingsPanel}
-                      onSubmitExternalAnalysis={() => runExternalAnalysisProcessing({ source: 'manual' })}
-                    />
-                  )}
-                  {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
-                  {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
-                  {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
-                  {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
-                  {settingsTab === 'appearance'  && <AppearanceSettings />}       
-                </div>
-
-                {/* Footer Actions */}
-                <div className="mt-6 md:mt-8 flex flex-wrap gap-4 items-center justify-end bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
-                  <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2">
-                     * שינויים מוחלים מיד בלחיצה על שמירה.
                   </div>
-                  <button onClick={closeSettingsPanel}
-                    className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none">
-                    בטל וחזור לתפריט
-                  </button>
-                  <button onClick={handleSave}
-                    className={`px-8 py-2.5 text-white rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold transition-all shadow-md outline-none focus:ring-2 ${saved ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 shadow-emerald-600/30 focus:ring-emerald-200' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 border border-indigo-500 shadow-indigo-600/30 focus:ring-indigo-200'}`}>
-                    {saved ? '✓ עודכן בהצלחה!' : 'שמור והחל שינויים'}
-                  </button>
+
+                  {/* Sticky Footer */}
+                  <div className="shrink-0 flex flex-wrap gap-3 items-center justify-end bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-[0_-2px_8px_rgba(0,0,0,0.04)]">
+                    <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2 min-w-0">
+                       * שינויים מוחלים בלחיצה על שמירה.
+                    </div>
+                    <button onClick={closeSettingsPanel}
+                      className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none">
+                      בטל וחזור לתפריט
+                    </button>
+                    <button onClick={handleSave}
+                      className={`px-8 py-2.5 text-white rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold transition-all shadow-md outline-none focus:ring-2 ${saved ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 shadow-emerald-600/30 focus:ring-emerald-200' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 border border-indigo-500 shadow-indigo-600/30 focus:ring-indigo-200'}`}>
+                      {saved ? '✓ עודכן בהצלחה!' : 'שמור והחל שינויים'}
+                    </button>
+                  </div>
                 </div>
              </div>
+             )}
           </div>
         </div>
       )}

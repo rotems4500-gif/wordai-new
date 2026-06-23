@@ -13,7 +13,14 @@ import {
   runSpssGuidance,
 } from './services/spssSyntaxService';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
-import { getSpssPreferences } from './services/aiService';
+import {
+  getSpssPreferences,
+  saveSpssPreferences,
+  getProviderConfig,
+  getConfiguredProviderChoices,
+  getProviderModelChoices,
+  normalizeProviderModelName,
+} from './services/aiService';
 import { generateSpssChart } from './services/chartService';
 
 // Methods that write new variables back to the data — these belong in prep mode.
@@ -105,6 +112,74 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
   const [chatInputMode, setChatInputMode] = React.useState('ask');
   const [outputDraft, setOutputDraft] = React.useState('');
   const [chatBusy, setChatBusy] = React.useState(false);
+  // On-page provider/model picker (mirrors the home screen). Empty = follow the
+  // active provider / settings; once the user picks, it overrides per-request.
+  const [providerConfigState, setProviderConfigState] = React.useState(() => getProviderConfig());
+  const [spssProviderId, setSpssProviderId] = React.useState(() => String(spssPrefsRef.current.providerId || '').trim());
+  const [spssModel, setSpssModel] = React.useState(() => String(spssPrefsRef.current.model || '').trim());
+
+  const providerChoices = React.useMemo(() => {
+    const configured = getConfiguredProviderChoices(providerConfigState);
+    if (configured.length) return configured;
+    const fallbackId = String(providerConfigState?.active || 'gemini').trim() || 'gemini';
+    return [{ id: fallbackId, label: fallbackId, isDefault: true }];
+  }, [providerConfigState]);
+
+  const activeProviderId = String(providerConfigState?.active || '').trim();
+  const resolvedSpssProviderId = (spssProviderId && providerChoices.some((choice) => choice.id === spssProviderId))
+    ? spssProviderId
+    : (providerChoices.some((choice) => choice.id === activeProviderId) ? activeProviderId : (providerChoices[0]?.id || ''));
+
+  const modelChoices = React.useMemo(
+    () => getProviderModelChoices(resolvedSpssProviderId, providerConfigState, [spssModel].filter(Boolean)),
+    [providerConfigState, resolvedSpssProviderId, spssModel],
+  );
+  const normalizedSpssModel = normalizeProviderModelName(resolvedSpssProviderId, spssModel);
+  const resolvedSpssModel = (normalizedSpssModel && modelChoices.includes(normalizedSpssModel))
+    ? normalizedSpssModel
+    : (modelChoices[0] || '');
+
+  // The override actually sent to the service: empty until the user picks, so an
+  // untouched studio still honors the active provider / settings feature config.
+  const spssRouteRef = React.useRef({ providerId: '', model: '' });
+  React.useEffect(() => {
+    spssRouteRef.current = spssProviderId
+      ? { providerId: resolvedSpssProviderId, model: resolvedSpssModel }
+      : { providerId: '', model: '' };
+  }, [spssProviderId, resolvedSpssProviderId, resolvedSpssModel]);
+
+  const persistSpssRoute = React.useCallback((providerId, model) => {
+    const next = { ...getSpssPreferences(), providerId, model };
+    spssPrefsRef.current = next;
+    saveSpssPreferences(next);
+  }, []);
+
+  const onPickSpssProvider = React.useCallback((providerId) => {
+    const nextModel = getProviderModelChoices(providerId, getProviderConfig())[0] || '';
+    setSpssProviderId(providerId);
+    setSpssModel(nextModel);
+    persistSpssRoute(providerId, nextModel);
+  }, [persistSpssRoute]);
+
+  const onPickSpssModel = React.useCallback((model) => {
+    setSpssModel(model);
+    setSpssProviderId(resolvedSpssProviderId);
+    persistSpssRoute(resolvedSpssProviderId, model);
+  }, [persistSpssRoute, resolvedSpssProviderId]);
+
+  React.useEffect(() => {
+    const refreshProviderConfig = () => setProviderConfigState(getProviderConfig());
+    refreshProviderConfig();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('focus', refreshProviderConfig);
+    window.addEventListener('wordai-provider-config-changed', refreshProviderConfig);
+    window.addEventListener('wordai-settings-hydrated', refreshProviderConfig);
+    return () => {
+      window.removeEventListener('focus', refreshProviderConfig);
+      window.removeEventListener('wordai-provider-config-changed', refreshProviderConfig);
+      window.removeEventListener('wordai-settings-hydrated', refreshProviderConfig);
+    };
+  }, []);
 
   const suggestions = React.useMemo(() => buildSmartSuggestions(analysis), [analysis]);
   const masterSyntax = React.useMemo(() => buildMasterSyntax(blocks), [blocks]);
@@ -327,6 +402,8 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
         tutorMode,
         mode: effectiveMode,
         extraAllowedNames: priorCreatedNames,
+        providerOverride: spssRouteRef.current.providerId,
+        modelOverride: spssRouteRef.current.model,
       });
       if (
         activeGenerateRequestIdRef.current !== generateRequestId
@@ -397,7 +474,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     setChatInput('');
     setChatBusy(true);
     try {
-      const result = await runSpssGuidance({ analysis, question, history, mode: genMode });
+      const result = await runSpssGuidance({ analysis, question, history, mode: genMode, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       appendChatMessage(
         result.ok
           ? { role: 'assistant', text: result.answer, kind: 'guidance', providerId: result.providerId, model: result.model }
@@ -420,7 +497,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     setChatInput('');
     setChatBusy(true);
     try {
-      const result = await interpretSpssOutput({ analysis, output, question: focus });
+      const result = await interpretSpssOutput({ analysis, output, question: focus, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       appendChatMessage(
         result.ok
           ? { role: 'assistant', text: result.answer, kind: 'interpretation', providerId: result.providerId, model: result.model }
@@ -667,6 +744,29 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
                   ? 'מותרות פעולות שמשנות נתונים: COMPUTE, RECODE, בניית סולמות, Cronbach, טיפול בחסרים. צור משתנים חדשים.'
                   : 'רק ניתוח לקריאה. פקודות שמשנות נתונים חסומות — עבור ל״הכנת דאטה״ כדי לאפשר אותן.'}
               </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+              <span className="text-xs font-bold text-slate-600">מודל ל-AI</span>
+              <select
+                value={resolvedSpssProviderId}
+                onChange={(event) => onPickSpssProvider(event.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              >
+                {providerChoices.map((choice) => (
+                  <option key={choice.id} value={choice.id}>{choice.label}{choice.isDefault ? ' (ברירת מחדל)' : ''}</option>
+                ))}
+              </select>
+              <select
+                value={resolvedSpssModel}
+                onChange={(event) => onPickSpssModel(event.target.value)}
+                disabled={!modelChoices.length}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
+              >
+                {modelChoices.length
+                  ? modelChoices.map((modelName) => (<option key={modelName} value={modelName}>{modelName}</option>))
+                  : <option value="">אין מודלים זמינים</option>}
+              </select>
+              <span className="text-[11px] text-slate-400">נבחר כאן — בלי להיכנס להגדרות</span>
             </div>
             <textarea
               className="min-h-[150px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"

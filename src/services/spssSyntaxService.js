@@ -1953,7 +1953,7 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
   ].filter(Boolean).join('\n');
 };
 
-export const generateSpssSyntax = async ({ analysis = null, request = '', tutorMode = false, mode = 'analysis', extraAllowedNames = [] } = {}) => {
+export const generateSpssSyntax = async ({ analysis = null, request = '', tutorMode = false, mode = 'analysis', extraAllowedNames = [], providerOverride = '', modelOverride = '' } = {}) => {
   if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
     return {
       ok: false,
@@ -1999,16 +1999,23 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
     };
   }
 
-  const { chatWithActiveProvider, getProviderConfig } = await import('./aiService.js');
+  const { chatWithActiveProvider, getProviderConfig, getFeatureProviderConfig } = await import('./aiService.js');
   const providerConfig = getProviderConfig();
-  const providerId = String(providerConfig?.active || '').trim();
-  const providerModel = providerId && providerConfig?.[providerId]?.model
-    ? String(providerConfig[providerId].model || '').trim()
-    : '';
+  // An explicit on-page pick (studio model picker) wins over the feature config.
+  const studioProvider = String(providerOverride || '').trim();
+  const studioModel = String(modelOverride || '').trim();
+  const feat = studioProvider ? null : getFeatureProviderConfig('spss', providerConfig);
+  const effectiveConfig = feat?.config || providerConfig;
+  const providerId = studioProvider || feat?.providerId || String(providerConfig?.active || '').trim();
+  const providerModel = studioModel || feat?.model || (providerId && effectiveConfig?.[providerId]?.model
+    ? String(effectiveConfig[providerId].model || '').trim()
+    : '');
 
   const rawResponse = await chatWithActiveProvider(tokenizedRequest, '', buildSpssSystemPrompt({ analysis, tutorMode, mode, extraAllowedNames }), {
     providerOverride: providerId || undefined,
     strictProviderOverride: Boolean(providerId),
+    modelOverride: providerModel || undefined,
+    ...(feat ? { providerConfigOverride: feat.config } : {}),
     skipAutomation: true,
     skipSkillSelection: true,
     skipMultiModel: true,
@@ -2097,14 +2104,24 @@ const buildSpssGuidanceSystemPrompt = ({ analysis = null, mode = 'analysis', his
   ].filter(Boolean).join('\n\n');
 };
 
-const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', agentName = 'SPSS Tutor' } = {}) => {
-  const { chatWithActiveProvider, getProviderConfig } = await import('./aiService.js');
+const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', agentName = 'SPSS Tutor', providerOverride = '', modelOverride = '' } = {}) => {
+  const { chatWithActiveProvider, getProviderConfig, getFeatureProviderConfig } = await import('./aiService.js');
   const providerConfig = getProviderConfig();
-  const { providerId, model } = resolveActiveProviderMeta(providerConfig);
+  // An explicit on-page pick (studio model picker) wins over the feature config.
+  const studioProvider = String(providerOverride || '').trim();
+  const studioModel = String(modelOverride || '').trim();
+  const feat = studioProvider ? null : getFeatureProviderConfig('spss', providerConfig);
+  const resolved = feat
+    ? { providerId: feat.providerId, model: feat.model }
+    : resolveActiveProviderMeta(providerConfig);
+  const providerId = studioProvider || resolved.providerId;
+  const model = studioModel || resolved.model;
 
   const rawResponse = await chatWithActiveProvider(tokenizedMessage, '', systemPrompt, {
     providerOverride: providerId || undefined,
     strictProviderOverride: Boolean(providerId),
+    modelOverride: model || undefined,
+    ...(feat ? { providerConfigOverride: feat.config } : {}),
     skipAutomation: true,
     skipSkillSelection: true,
     skipMultiModel: true,
@@ -2119,7 +2136,7 @@ const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', 
   return { text, providerId, model };
 };
 
-export const runSpssGuidance = async ({ analysis = null, question = '', history = [], mode = 'analysis' } = {}) => {
+export const runSpssGuidance = async ({ analysis = null, question = '', history = [], mode = 'analysis', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) {
     return { ok: false, answer: '', providerId: '', model: '', error: 'כתוב שאלה כדי לקבל הדרכה.' };
@@ -2132,6 +2149,8 @@ export const runSpssGuidance = async ({ analysis = null, question = '', history 
       tokenizedMessage: tokenizedQuestion,
       systemPrompt,
       agentName: 'SPSS Tutor',
+      providerOverride,
+      modelOverride,
     });
 
     const answer = restoreColumnTokens(text, analysis) || text;
@@ -2150,7 +2169,7 @@ export const runSpssGuidance = async ({ analysis = null, question = '', history 
   }
 };
 
-export const interpretSpssOutput = async ({ analysis = null, output = '', question = '' } = {}) => {
+export const interpretSpssOutput = async ({ analysis = null, output = '', question = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
     return { ok: false, answer: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי לקבל פירוש.' };
@@ -2179,6 +2198,8 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
       tokenizedMessage: message,
       systemPrompt,
       agentName: 'SPSS Output Reader',
+      providerOverride,
+      modelOverride,
     });
 
     const answer = restoreColumnTokens(text, analysis) || text;

@@ -163,7 +163,7 @@ function ImagePicker({ slide, onPick, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
-  const [avail, setAvail] = useState(() => getImageSourceAvailability());
+  const [avail, setAvail] = useState(() => getImageSourceAvailability(null, 'presentations'));
 
   // שמירת מפתח ישירות מתוך החלון — בדיוק כמו בהגדרות, רק נגיש כאן
   const saveStockKey = (key) => {
@@ -183,7 +183,7 @@ function ImagePicker({ slide, onPick, onClose }) {
   const runSearch = async () => {
     setError(''); setLoading(true); setResults([]);
     try {
-      const res = await searchStockImages(query, { count: 12 });
+      const res = await searchStockImages(query, { count: 12, featureId: 'presentations' });
       setResults(res);
       if (!res.length) setError('לא נמצאו תמונות. נסה ניסוח אחר (באנגלית עובד טוב יותר).');
     } catch (e) { setError(e?.message || 'שגיאה בחיפוש'); }
@@ -193,7 +193,7 @@ function ImagePicker({ slide, onPick, onClose }) {
   const runGenerate = async () => {
     setError(''); setLoading(true);
     try {
-      const img = await generateAiImage(query);
+      const img = await generateAiImage(query, { featureId: 'presentations' });
       onPick({ ...img, query });
     } catch (e) { setError(e?.message || 'שגיאה ביצירת תמונה'); }
     finally { setLoading(false); }
