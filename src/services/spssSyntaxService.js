@@ -7,6 +7,38 @@ const DATE_INFERENCE_RATIO = 0.8;
 const LOW_CARDINALITY_RATIO = 0.25;
 const SMALL_SET_CATEGORICAL_RATIO = 0.75;
 const MAX_SMALL_SET_DISTINCT = 12;
+// Classic SPSS sentinel/user-missing codes. Used only to FLAG suspected undeclared
+// missing (a sentinel sitting far outside the natural scale), never to drop data.
+const SENTINEL_MISSING_CODES = new Set([-9, -99, -999, 97, 98, 99, 997, 998, 999, 9998, 9999]);
+// Many survey exports never DECLARE user-missing — they bury the sentinel meaning in
+// the VALUE-LABEL text instead ("888", "999", "Don't know", "Refuse to answer"), often
+// on remapped codes (98/99/100/101) that the numeric heuristic can't see because other
+// non-asked codes (94/96) inflate the scale max. So we read the dictionary text directly.
+// Conservative on purpose: only universal "respondent gave no usable answer" markers —
+// NOT analytic categories like "Didn't vote" / "Blank ballot" / "Undecided", which can be
+// legitimate response options. EN + HE.
+const MISSING_LABEL_PATTERNS = [
+  /\b888\b/,
+  /\b999\b/,
+  /don'?t\s*know/i,
+  /doesn'?t\s*know/i,
+  /no\s*answer/i,
+  /no\s*response/i,
+  /refus/i,
+  /(?:don'?t|not|doesn'?t)\s*remember/i,
+  /declined\s*to\s*answer/i,
+  /\bn\/?a\b/i,
+  /לא\s*יוד[עע]/u,
+  /לא\s*זוכר/u,
+  /(?:מסרב|סירב|סירוב)/u,
+  /אין\s*תשוב/u,
+];
+// Normalize curly/typographic apostrophes so the EN patterns above match real SAV labels.
+const normalizeApostrophes = (text = '') => String(text).replace(/[‘’ʼ´`]/g, "'");
+const labelMarksMissing = (label = '') => {
+  const normalized = normalizeApostrophes(label);
+  return MISSING_LABEL_PATTERNS.some((pattern) => pattern.test(normalized));
+};
 const REVERSE_SCALE_MAX_DISTINCT = 10;
 const REVERSE_SCALE_MAX_RANGE = 10;
 const REVERSE_SCALE_MIN_VALUE = -1;
@@ -44,7 +76,10 @@ const OUTLIER_PATTERN = /(outlier|outliers|חריג(?:ים)?)/i;
 const DESCRIPTIVE_PATTERN = /(descriptive|descriptives|סטטיסטיק(?:ה|ות)?\s+תיאורי(?:ת|ות)|תיאורי(?:ת|ות))/i;
 const REVERSE_SCALE_PATTERN = /(reverse\s+scale|reverse\s+code|reverse\s+score|הפוך\s+סולם|היפוך\s+סולם|רברס)/i;
 const FILTER_DISPLAY_PATTERN = /(show|list|display|filter|select\s+only|only\s+(?:show|list|display)|הצג|הציגו|הראה|הראו|סנן|סננו|בחר|בחרו|רק\s+(?:משיבים|נבדקים|מקרים|שורות)|משיבים\s+ש(?:הם|גילם|ענו|סומנו))/i;
-const GROUP_COMPARISON_HINT_PATTERN = /(?:\bבין\b|\bמול\b|\bלעומת\b|השוו?ה?\s+בין|compare\s+(?:between|across)|versus|\bvs\.?\b)/i;
+// NOTE: \b is an ASCII-only word boundary, so `\bבין\b` never matched Hebrew. Use
+// Unicode letter lookarounds for the Hebrew alternatives (so "בין" matches as a word
+// but not inside "מבינים"), and keep \b for the Latin tokens.
+const GROUP_COMPARISON_HINT_PATTERN = /(?:(?<![\p{L}])(?:בין|מול|לעומת)(?![\p{L}])|השוו?ה?\s+בין|compare\s+(?:between|across)|versus|\bvs\.?\b)/iu;
 const GROUP_REFERENCE_PATTERNS = [
   /\bBY\s+(VAR_\d+)\b/gi,
   /לפי\s+(VAR_\d+)\b/g,
@@ -56,7 +91,7 @@ const GROUP_REFERENCE_PATTERNS = [
 ];
 
 const SPSS_COMMAND_START_PATTERNS = [
-  /^(?:T-?TEST|ONEWAY|ANOVA|UNIANOVA|GLM|DESCRIPTIVES|FREQUENCIES|EXAMINE|LIST|RECODE|COMPUTE|CORRELATIONS|NONPAR\s+CORR|NPAR\s+TESTS|REGRESSION|CROSSTABS|MEANS|GRAPH|SORT\s+CASES|SPLIT\s+FILE|TEMPORARY|SELECT\s+IF|FILTER\s+(?:BY|OFF)|USE\s+ALL|IF|DO\s+IF|ELSE\s+IF|ELSE|END\s+IF|VALUE\s+LABELS|VARIABLE\s+LABELS|FORMATS|MISSING\s+VALUES|RENAME\s+VARIABLES|AGGREGATE|RANK|CTABLES|OMS|DATASET|TITLE|EXECUTE)\b/i,
+  /^(?:T-?TEST|ONEWAY|ANOVA|UNIANOVA|GLM|MANOVA|DESCRIPTIVES|FREQUENCIES|EXAMINE|LIST|RECODE|COMPUTE|CORRELATIONS|PARTIAL\s+CORR|NONPAR\s+CORR|NPAR\s+TESTS|NPTESTS|REGRESSION|LOGISTIC\s+REGRESSION|NOMREG|PLUM|MIXED|GENLIN|GENLINMIXED|DISCRIMINANT|COXREG|CURVEFIT|WLS|2SLS|NLR|CNLR|RELIABILITY|FACTOR|PROXIMITIES|CLUSTER|QUICK\s+CLUSTER|TWOSTEP\s+CLUSTER|HILOGLINEAR|LOGLINEAR|GENLOG|SURVIVAL|KM|ROC|CROSSTABS|MEANS|SUMMARIZE|OLAP\s+CUBES|REPORT|MULT\s+RESPONSE|RATIO\s+STATISTICS|MVA|GRAPH|XGRAPH|GGRAPH|PPLOT|SORT\s+CASES|SPLIT\s+FILE|TEMPORARY|SELECT\s+IF|FILTER\s+(?:BY|OFF)|USE\s+ALL|WEIGHT|N\s+OF\s+CASES|SAMPLE|IF|DO\s+IF|ELSE\s+IF|ELSE|END\s+IF|DO\s+REPEAT|END\s+REPEAT|LOOP|END\s+LOOP|BREAK|COUNT|AUTORECODE|NUMERIC|STRING|VECTOR|VALUE\s+LABELS|ADD\s+VALUE\s+LABELS|VARIABLE\s+LABELS|VARIABLE\s+LEVEL|VARIABLE\s+WIDTH|VARIABLE\s+ALIGNMENT|FORMATS|MISSING\s+VALUES|RENAME\s+VARIABLES|DELETE\s+VARIABLES|ALTER\s+TYPE|AGGREGATE|RANK|CTABLES|OMS|DATASET|TITLE|SUBTITLE|EXECUTE|COMMENT|SET|SHOW|DISPLAY|CODEBOOK|ECHO|PRESERVE|RESTORE|MRSETS|CATREG|CATPCA|CORRESPONDENCE|OVERALS|PREFSCAL|ALSCAL|MULTIDIMENSIONAL|GENLOG|MODEL\s+CLOSE|MODEL\s+HANDLE|BEGIN\s+PROGRAM|END\s+PROGRAM|BEGIN\s+DATA|END\s+DATA|BEGIN\s+GPL|END\s+GPL|MATRIX|END\s+MATRIX|DEFINE|!ENDDEFINE|CSPLAN|CSSELECT|CSDESCRIPTIVES|CSTABULATE|CSGLM|CSLOGISTIC|CSCOXREG|CSORDINAL|TSMODEL|TSAPPLY|SPECTRA|ACF|PACF|CCF|TSPLOT|PREDICT|BOOTSTRAP|KNN|NAIVEBAYES|OPTIMAL\s+BINNING|DETECTANOMALY|VALIDATEDATA|GET|GET\s+DATA|GET\s+FILE|SAVE|SAVE\s+TRANSLATE|XSAVE|EXPORT|IMPORT|ADD\s+FILES|MATCH\s+FILES|UPDATE|NEW\s+FILE|DATA\s+LIST|APPLY\s+DICTIONARY|CACHE|COMPRESS|INCLUDE|INSERT|WRITE|PRINT|REREAD|OUTPUT|FLIP|RESTRUCTURE|VARSTOCASES|CASESTOVARS|SPSSINC|STATS)\b/i,
 ];
 
 const RECODE_RANGE_KEYWORD_PATTERN = /\b(?:THRU|THROUGH|TO|LO|LOWEST|HI|HIGHEST|MISSING|SYSMIS|ELSE|COPY)\b/i;
@@ -88,6 +123,20 @@ const RESERVED_SLOT_TOKENS = new Set([
   'FIRST',
   'LAST',
   'PAIRED',
+  'INTO',
+  'CONVERT',
+  'ENTER',
+  'STEPWISE',
+  'REMOVE',
+  'FORWARD',
+  'BACKWARD',
+  'POOLED',
+  'SEPARATE',
+  'TEST',
+  'KEY',
+  'USING',
+  'IN',
+  'OUT',
 ]);
 
 const IDENTIFIER_PATTERN = /[\p{L}_][\p{L}\p{N}_]*/gu;
@@ -107,8 +156,21 @@ const GRAPH_ARGUMENT_KEYWORDS = new Set([
   'MEDIAN',
   'MODE',
   'SD',
+  'STDDEV',
   'SE',
+  'SEMEAN',
   'VARIANCE',
+  'RANGE',
+  'KURTOSIS',
+  'SKEWNESS',
+  'CUMULATIVE',
+  'CUPCT',
+  'CUFREQ',
+  'GMEDIAN',
+  'VALID',
+  'MISSING',
+  'FIRST',
+  'LAST',
   'PAIRS',
   'TOTAL',
 ]);
@@ -250,6 +312,11 @@ const ensureUniqueLabels = (labels = []) => {
 const sanitizeSpssVariableName = (value = '', index = 0) => {
   const normalized = String(value || '')
     .trim()
+    // Strip C1 controls + Latin-1 supplement (U+0080–U+00FF). This is where UTF-8↔Latin-1
+    // mis-decode artifacts land (e.g. a SAV name byte read as 'â'/'Ã'/'Â'), and they are
+    // Unicode letters so the \p{L} pass below would otherwise KEEP them, producing broken
+    // names like "Versionâ" that SPSS rejects. ASCII and Hebrew (U+05xx) names are untouched.
+    .replace(/[\u0080-\u00FF]/g, '')
     .replace(/\s+/g, '_')
     .replace(/[^\p{L}\p{N}_@#$]/gu, '_')
     .replace(/_+/g, '_')
@@ -390,6 +457,83 @@ const inferMeasurementLevel = ({ inferredType = 'text', numericValues = [], dist
   return 'scale';
 };
 
+// Names that strongly signal a bookkeeping identifier (respondent id / serial),
+// not a measure. Used only to demote a high-cardinality integer to role=identifier.
+const IDENTIFIER_NAME_PATTERN = /(\bid\b|\bids\b|\bcode\b|\bserial\b|\buuid\b|\brow\b|\bindex\b|מזהה|מספר\s*(?:נבדק|מזהה|סידורי|שורה)|ת\.?\s*ז|תעודת\s*זהות|מס['׳]\s*נבדק)/i;
+
+// Likert item signal = the variable NAME reads like a rated survey item/scale, OR
+// a generic item name (q1, item3, שאלה_2). Reuses the reverse-scale name patterns.
+const LIKERT_NAME_SIGNAL_PATTERNS = [
+  ...REVERSE_SCALE_STRONG_NAME_SIGNAL_PATTERNS,
+  ...REVERSE_SCALE_GENERIC_NAME_SIGNAL_PATTERNS,
+];
+const hasLikertNameSignal = (nameText = '') => LIKERT_NAME_SIGNAL_PATTERNS.some((pattern) => pattern.test(nameText));
+// A Likert response sits inside a canonical rating span (1..4 / 1..5 / 1..7 / 0..10).
+// "within" (not exact) tolerates an unused endpoint, e.g. observed 2..5 on a 1..5 scale.
+const isLikertCanonicalRange = (min = null, max = null) => min !== null && max !== null
+  && REVERSE_SCALE_CANONICAL_RANGES.some((range) => min >= range.min && max <= range.max);
+
+// Analysis role = how a variable should be USED in a statistical procedure, which
+// is NOT the same as its storage type. A category coded as a number (1=male,
+// 2=female; region 1..5) is type=numeric but must be treated as categorical.
+// The role is a precomputed hint so the model does not have to re-derive it:
+//   continuous       — a real measured quantity (regression/correlation/t-test test var, ANOVA DV)
+//   categorical      — a clear group/factor (text categories, or nominal level)
+//   categorical-code — a number that stands for a NOMINAL category (gender/region/education);
+//                      must be dummy-coded for regression, used as a factor in ANOVA/chi-square
+//   likert           — a rated item on a canonical 1..5/1..7-style span whose NAME reads like a
+//                      survey item/scale; may be treated as ~continuous (mean/correlation/regression)
+//                      or pooled into an index. Single item → Spearman is also defensible.
+//   identifier       — a bookkeeping id/serial; not a measure, do not analyze
+//   date / text      — non-analytic as-is
+const deriveAnalysisRole = ({
+  inferredType = 'text',
+  measurementLevel = 'text',
+  distinctCount = 0,
+  nonEmptyCount = 0,
+  numericStats = null,
+  aliases = [],
+  hasValueLabels = false,
+  valueLabelCoverage = 0,
+} = {}) => {
+  if (inferredType === 'date') return 'date';
+  if (inferredType === 'text') return 'text';
+  if (inferredType === 'categorical') return 'categorical';
+  // numeric storage from here:
+  const integerLike = Boolean(numericStats?.integerLike);
+  const distinctRatio = nonEmptyCount > 0 ? distinctCount / nonEmptyCount : 0;
+  const nameText = (Array.isArray(aliases) ? aliases : []).filter(Boolean).join(' ');
+  if (
+    integerLike
+    && distinctCount > MAX_SMALL_SET_DISTINCT
+    && distinctRatio >= 0.9
+    && IDENTIFIER_NAME_PATTERN.test(nameText)
+  ) {
+    return 'identifier';
+  }
+  if (integerLike && distinctCount >= 2 && distinctCount <= MAX_SMALL_SET_DISTINCT) {
+    // A coded number with a Likert name AND a canonical rating span (≥3 points) is a
+    // rated item, not a nominal code — split it out so the model can treat it as ~continuous.
+    if (
+      distinctCount >= 3
+      && hasLikertNameSignal(nameText)
+      && isLikertCanonicalRange(numericStats?.min ?? null, numericStats?.max ?? null)
+    ) {
+      return 'likert';
+    }
+    return 'categorical-code';
+  }
+  // SAV dictionary truth beats the distinct-count heuristic: a numeric variable whose
+  // observed values are (almost) all value-labeled is categorical by definition —
+  // even past the small-set threshold (e.g. a 15-category country/region code). The
+  // likert branch above already claimed labeled rating items, so this stays nominal.
+  if (hasValueLabels && valueLabelCoverage >= 0.8 && distinctCount >= 2) {
+    return 'categorical-code';
+  }
+  if (measurementLevel === 'nominal') return 'categorical';
+  return 'continuous';
+};
+
 const getTypeLabel = (value = '') => {
   switch (value) {
     case 'numeric':
@@ -502,9 +646,37 @@ const getReverseScalePlan = (column = null) => {
 
 const isReverseScaleCandidate = (column = null) => getReverseScalePlan(column).allowed;
 
-const buildColumnProfile = ({ originalName = '', outputName = '', token = '', allValues = [], sampleValues = [], aliases = [] } = {}) => {
+// Does a numeric value fall inside a SAV-declared user-missing spec?
+const isDeclaredMissingNumeric = (num, declared) => {
+  if (num === null || !declared) return false;
+  if (Array.isArray(declared.discrete) && declared.discrete.some((value) => value === num)) return true;
+  if (declared.range && num >= declared.range.min && num <= declared.range.max) return true;
+  return false;
+};
+
+// Map raw SAV value-label entries to a clean { value, label } list keyed by the
+// normalized cell string, so we can both report them and measure how many of the
+// observed distinct values are labeled (a categorical fingerprint).
+const buildValueLabelMap = (valueLabels = []) => {
+  const map = new Map();
+  (Array.isArray(valueLabels) ? valueLabels : []).forEach((entry) => {
+    const value = normalizeCell(entry?.value);
+    const label = String(entry?.label || '').trim();
+    if (value && label && !map.has(value)) map.set(value, label);
+  });
+  return map;
+};
+
+const buildColumnProfile = ({ originalName = '', outputName = '', token = '', allValues = [], sampleValues = [], aliases = [], valueLabels = [], declaredMissing = null } = {}) => {
+  const declared = declaredMissing && (declaredMissing.discrete?.length || declaredMissing.range) ? declaredMissing : null;
   const normalizedValues = allValues.map(normalizeCell);
-  const nonEmptyValues = normalizedValues.filter(Boolean);
+  // Treat SAV-declared user-missing codes as missing — exactly what SPSS does. This
+  // keeps min/max/distinct/observedValues clean (the 98/99 codes no longer inflate
+  // the range) while missingCount rises to reflect the real picture.
+  const nonEmptyValues = normalizedValues.filter((value) => {
+    if (!value) return false;
+    return !isDeclaredMissingNumeric(parseNumericValue(value), declared);
+  });
   const numericValues = nonEmptyValues.map(parseNumericValue).filter((value) => value !== null);
   const distinctValues = Array.from(new Set(nonEmptyValues));
   const min = numericValues.length ? Math.min(...numericValues) : null;
@@ -528,11 +700,59 @@ const buildColumnProfile = ({ originalName = '', outputName = '', token = '', al
     ? distinctValues.slice(0, MAX_SMALL_SET_DISTINCT)
     : [];
 
+  const integerLike = numericValues.length > 0 && numericValues.every((value) => Number.isInteger(value));
+  const aliasList = Array.from(new Set([originalName, outputName, ...aliases].map(normalizeCell).filter(Boolean)));
+
+  // Value labels (1="זכר", 2="נקבה") are the SAV dictionary's categorical fingerprint
+  // and the human-readable key for naming groups in code + interpretation.
+  const valueLabelMap = buildValueLabelMap(valueLabels);
+  const labeledValueList = distinctValues
+    .filter((value) => valueLabelMap.has(value))
+    .map((value) => ({ value, label: valueLabelMap.get(value) }))
+    .slice(0, MAX_SMALL_SET_DISTINCT);
+  const valueLabelCoverage = distinctValues.length ? labeledValueList.length / distinctValues.length : 0;
+  const hasValueLabels = valueLabelMap.size > 0;
+
+  // D5: suspected UNDECLARED user-missing — codes SPSS is NOT excluding (no
+  // declared-missing spec) that silently inflate means/SD. Two deterministic signals,
+  // unioned: (a) the numeric heuristic — a classic sentinel sitting far outside the
+  // natural scale; (b) the dictionary heuristic — a value LABEL that literally reads
+  // "888"/"999"/"Don't know"/"Refuse" etc. (b) is the authoritative one for survey
+  // exports that bury missing meaning in label text on remapped codes (98/99/100/101),
+  // where (a) goes blind because non-asked codes (94/96) poison the scale max.
+  const sentinelCandidates = uniqueNumericValues.filter((value) => SENTINEL_MISSING_CODES.has(value));
+  const nonSentinelValues = uniqueNumericValues.filter((value) => !SENTINEL_MISSING_CODES.has(value));
+  const restMax = nonSentinelValues.length ? Math.max(...nonSentinelValues) : 0;
+  const numericHeuristicMissing = integerLike && restMax > 0
+    ? sentinelCandidates.filter((value) => value >= 2 * restMax)
+    : [];
+  // Read every dictionary entry (not just observed/labeled distinct values) so prep code
+  // defensively declares the sentinel even when this sample never happened to hit it.
+  const labelDerivedMissing = [];
+  valueLabelMap.forEach((label, valueKey) => {
+    if (!labelMarksMissing(label)) return;
+    const numericCode = parseNumericValue(valueKey);
+    if (numericCode !== null && Number.isInteger(numericCode)) labelDerivedMissing.push(numericCode);
+  });
+  const suspectedMissingCodes = Array.from(new Set([...numericHeuristicMissing, ...labelDerivedMissing]))
+    .sort((left, right) => left - right);
+
+  const analysisRole = deriveAnalysisRole({
+    inferredType,
+    measurementLevel,
+    distinctCount: distinctValues.length,
+    nonEmptyCount: nonEmptyValues.length,
+    numericStats: { integerLike, min, max },
+    aliases: aliasList,
+    hasValueLabels,
+    valueLabelCoverage,
+  });
+
   return {
     token,
     originalName,
     outputName,
-    aliases: Array.from(new Set([originalName, outputName, ...aliases].map(normalizeCell).filter(Boolean))),
+    aliases: aliasList,
     inferredType,
     typeLabel: getTypeLabel(inferredType),
     measurementLevel,
@@ -544,14 +764,18 @@ const buildColumnProfile = ({ originalName = '', outputName = '', token = '', al
     distinctCount: distinctValues.length,
     distinctPreview: distinctValues.slice(0, MAX_DISTINCT_PREVIEW),
     observedValues,
+    valueLabels: labeledValueList,
+    declaredMissing: declared,
+    suspectedMissingCodes,
     numericStats: numericValues.length
       ? {
           min,
           max,
           uniqueValues: uniqueNumericValues,
-          integerLike: numericValues.every((value) => Number.isInteger(value)),
+          integerLike,
         }
       : null,
+    analysisRole,
     isNumeric: inferredType === 'numeric',
     isCategorical: inferredType === 'categorical' || measurementLevel === 'nominal',
   };
@@ -589,6 +813,8 @@ const buildTabularAnalysis = ({
   outputNames = [],
   dataRows = [],
   aliasesByIndex = [],
+  valueLabelsByIndex = [],
+  declaredMissingByIndex = [],
 } = {}) => {
   const safeDataRows = Array.isArray(dataRows) ? dataRows : [];
   const columnCount = Math.max(originalNames.length, outputNames.length, safeDataRows.reduce((max, row) => Math.max(max, row.length), 0));
@@ -610,6 +836,8 @@ const buildTabularAnalysis = ({
     allValues: normalizedDataRows.map((row) => row[index]),
     sampleValues: sampleRows.map((row) => row[index]),
     aliases: Array.isArray(aliasesByIndex[index]) ? aliasesByIndex[index] : [],
+    valueLabels: Array.isArray(valueLabelsByIndex[index]) ? valueLabelsByIndex[index] : [],
+    declaredMissing: declaredMissingByIndex[index] || null,
   }));
 
   return {
@@ -666,6 +894,8 @@ export const parseSpssSavDataset = ({ fileName = '', variables = [], rows = [] }
     outputNames: safeVariables.map((variable) => variable.name),
     dataRows,
     aliasesByIndex: safeVariables.map((variable) => [variable.name, variable.label]),
+    valueLabelsByIndex: safeVariables.map((variable) => (Array.isArray(variable.valueLabels) ? variable.valueLabels : [])),
+    declaredMissingByIndex: safeVariables.map((variable) => variable.declaredMissing || null),
   });
 };
 
@@ -1108,6 +1338,14 @@ export const getGuardrailGuidanceMessage = (value = '') => {
     : cleanMessage;
 };
 
+// Roles that genuinely cannot enter a modeling procedure (regression/correlation):
+// free text, dates, and bookkeeping ids. Everything else — continuous, likert,
+// categorical, categorical-code — is usable: the model dummy-codes categoricals or
+// treats likert as ~continuous (guided by buildSpssSystemPrompt), and the retry
+// ladder escalates to prep mode when data-prep (AUTORECODE/dummy) is required.
+const METHODOLOGY_UNANALYZABLE_ROLES = new Set(['text', 'date', 'identifier']);
+const isModelingUnanalyzableColumn = (column = null) => METHODOLOGY_UNANALYZABLE_ROLES.has(column?.analysisRole);
+
 export const detectMethodologyIssue = (request = '', analysis = null) => {
   const cleanRequest = String(request || '').trim();
   if (!cleanRequest) return 'Write a short Hebrew request before generating syntax.';
@@ -1135,36 +1373,52 @@ export const detectMethodologyIssue = (request = '', analysis = null) => {
   const scopedNonNumericColumns = hasReferencedColumns
     ? referencedColumns.filter((column) => !column?.isNumeric)
     : [];
+  // Role-aware view for modeling gates (regression/correlation): block only on truly
+  // unusable roles, and count usable predictors regardless of storage type so a coded
+  // categorical predictor no longer trips the "needs another numeric variable" guard.
+  const datasetColumns = Array.isArray(analysis?.columns) ? analysis.columns : [];
+  const scopedUnanalyzableColumns = hasReferencedColumns
+    ? referencedColumns.filter(isModelingUnanalyzableColumn)
+    : [];
+  const scopedAnalyzableColumns = (hasReferencedColumns ? referencedColumns : datasetColumns)
+    .filter((column) => column && !isModelingUnanalyzableColumn(column));
   const binaryGroupColumn = scopedCategoricalColumns.find((column) => column.distinctCount === 2);
   const explicitlyRequestedBinaryGroupColumn = explicitlyRequestedGroupColumns.find((column) => column.distinctCount === 2);
+
+  const hasGroupComparisonHint = GROUP_COMPARISON_HINT_PATTERN.test(cleanRequest);
 
   if (T_TEST_PATTERN.test(cleanRequest)) {
     if (requestedNonNumericAnalysisColumns.length) {
       return `T-test requires numeric requested test variables: ${formatColumnNames(requestedNonNumericAnalysisColumns)}.`;
     }
     if (!scopedRequestedAnalysisNumericColumns.length) return 'T-test requires a numeric test variable.';
-    if (!explicitlyRequestedGroupColumns.length) {
+    if (explicitlyRequestedGroupColumns.length) {
+      // An explicit grouping variable was named — keep the strict two-group check.
+      if (!explicitlyRequestedBinaryGroupColumn) {
+        return 'The requested T-test grouping variable must have exactly two groups.';
+      }
+    } else if (!(hasGroupComparisonHint && binaryGroupColumn)) {
+      // No grouping variable named. Allow value-based phrasing ("compare men vs women")
+      // when a comparison hint + a binary group column exist — the model maps the group
+      // words to the right variable via valueLabels. Otherwise block.
       return 'T-test requires an explicitly requested grouping variable with exactly two groups.';
-    }
-    if (!explicitlyRequestedBinaryGroupColumn) {
-      return 'The requested T-test grouping variable must have exactly two groups.';
     }
     if (!binaryGroupColumn) return 'T-test requires a grouping variable with exactly two groups.';
   }
 
-  if (CORRELATION_PATTERN.test(cleanRequest) && scopedNonNumericColumns.length) {
-    return `Correlation requires numeric requested variables: ${formatColumnNames(scopedNonNumericColumns)}.`;
+  if (CORRELATION_PATTERN.test(cleanRequest) && scopedUnanalyzableColumns.length) {
+    return `Correlation requires numeric requested variables: ${formatColumnNames(scopedUnanalyzableColumns)}.`;
   }
 
-  if (CORRELATION_PATTERN.test(cleanRequest) && scopedNumericColumns.length < 2) {
+  if (CORRELATION_PATTERN.test(cleanRequest) && scopedAnalyzableColumns.length < 2) {
     return 'Correlation requires at least two numeric variables.';
   }
 
-  if (REGRESSION_PATTERN.test(cleanRequest) && scopedNonNumericColumns.length) {
-    return `Regression requires numeric requested variables: ${formatColumnNames(scopedNonNumericColumns)}.`;
+  if (REGRESSION_PATTERN.test(cleanRequest) && scopedUnanalyzableColumns.length) {
+    return `Regression requires numeric requested variables: ${formatColumnNames(scopedUnanalyzableColumns)}.`;
   }
 
-  if (REGRESSION_PATTERN.test(cleanRequest) && scopedNumericColumns.length < 2) {
+  if (REGRESSION_PATTERN.test(cleanRequest) && scopedAnalyzableColumns.length < 2) {
     return 'Regression requires at least one numeric outcome and one additional numeric predictor.';
   }
 
@@ -1179,11 +1433,12 @@ export const detectMethodologyIssue = (request = '', analysis = null) => {
       return `ANOVA requires numeric requested dependent variables: ${formatColumnNames(requestedNonNumericAnalysisColumns)}.`;
     }
     if (!scopedRequestedAnalysisNumericColumns.length) return 'ANOVA requires a numeric dependent variable.';
-    if (!explicitlyRequestedGroupColumns.length) {
+    if (explicitlyRequestedGroupColumns.length) {
+      if (!explicitlyRequestedMultiGroupColumn) {
+        return 'The requested ANOVA grouping variable must have at least three groups.';
+      }
+    } else if (!(hasGroupComparisonHint && multiGroupColumn)) {
       return 'ANOVA requires an explicitly requested grouping variable with at least three groups.';
-    }
-    if (!explicitlyRequestedMultiGroupColumn) {
-      return 'The requested ANOVA grouping variable must have at least three groups.';
     }
     if (!multiGroupColumn) return 'ANOVA requires a grouping variable with at least three groups.';
   }
@@ -1853,7 +2108,6 @@ export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysi
     .trim();
   if (!cleaned) return buildErrorLine('The model returned an empty SPSS response.');
 
-  const isPrepMode = mode === 'prep';
   const allowedTokens = new Set(Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token) : []);
   const syntaxOnly = stripSpssCommentLines(cleaned);
   const syntaxCommands = getSpssCommands(syntaxOnly);
@@ -1871,15 +2125,16 @@ export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysi
     return buildErrorLine(`The model referenced unknown variables: ${unknownTokens.join(', ')}.`);
   }
 
-  // In data-prep mode, names created within this block (or carried over from prior blocks via
-  // extraAllowedNames) count as known identifiers so the guard does not flag them as invented.
-  const identifierAllowList = isPrepMode
-    ? new Set([
-        ...allowedTokens,
-        ...(Array.isArray(extraAllowedNames) ? extraAllowedNames : []).map((name) => String(name || '').trim()).filter(Boolean),
-        ...collectDeclaredTargetNames(syntaxCommands),
-      ])
-    : allowedTokens;
+  // Names created within this block, plus names carried over from prior blocks via
+  // extraAllowedNames, count as known identifiers so the guard does not flag them as invented.
+  // This holds in analysis mode too: a prior prep block may have created a derived variable
+  // (e.g. age_group) that an analysis block legitimately READS. Creation itself stays blocked
+  // in analysis mode by findBlockedAnalysisOnlyCommandIssue above, so this cannot be abused.
+  const identifierAllowList = new Set([
+    ...allowedTokens,
+    ...(Array.isArray(extraAllowedNames) ? extraAllowedNames : []).map((name) => String(name || '').trim()).filter(Boolean),
+    ...collectDeclaredTargetNames(syntaxCommands),
+  ]);
 
   const invalidIdentifiers = Array.from(new Set([
     ...extractInvalidVariableIdentifiers(syntaxCommands, identifierAllowList),
@@ -1898,6 +2153,33 @@ export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysi
   return restoreColumnTokens(cleaned, analysis);
 };
 
+// SAV value labels → "1=זכר; 2=נקבה" so the model can name groups, pick reference
+// categories for dummies, and the interpreter can report results by category name.
+const formatValueLabelMetadata = (column = null) => {
+  const labels = Array.isArray(column?.valueLabels) ? column.valueLabels : [];
+  if (!labels.length) return '';
+  const rendered = labels
+    .map((entry) => `${entry.value}=${String(entry.label || '').replace(/[\n;]+/g, ' ').trim()}`)
+    .filter(Boolean)
+    .join('; ');
+  return rendered ? `; valueLabels=[${rendered}]` : '';
+};
+
+// Declared user-missing from the SAV dictionary — so the model knows SPSS already
+// excludes these codes (no need to MISSING VALUES them again).
+const formatDeclaredMissingMetadata = (column = null) => {
+  const declared = column?.declaredMissing;
+  if (!declared) return '';
+  const parts = [];
+  if (Array.isArray(declared.discrete) && declared.discrete.length) {
+    parts.push(declared.discrete.map((value) => formatNumericLiteral(value)).join(','));
+  }
+  if (declared.range) {
+    parts.push(`${formatNumericLiteral(declared.range.min)}..${formatNumericLiteral(declared.range.max)}`);
+  }
+  return parts.length ? `; declaredMissing=[${parts.join('; ')}]` : '';
+};
+
 const buildTokenizedMetadataLines = (analysis = null) => {
   const columns = Array.isArray(analysis?.columns) ? analysis.columns : [];
   return columns.map((column) => {
@@ -1905,14 +2187,20 @@ const buildTokenizedMetadataLines = (analysis = null) => {
       ? `; range=${formatNumericLiteral(column.numericStats.min)}..${formatNumericLiteral(column.numericStats.max)}`
       : '';
     const observedValues = formatObservedLiteralMetadata(column);
+    const valueLabels = formatValueLabelMetadata(column);
+    const declaredMissing = formatDeclaredMissingMetadata(column);
+    const suspectedMissing = Array.isArray(column.suspectedMissingCodes) && column.suspectedMissingCodes.length
+      ? `; suspectedUndeclaredMissing=[${column.suspectedMissingCodes.map((value) => formatNumericLiteral(value)).join(',')}]`
+      : '';
     // Real variable name is included for semantic context (this is a study tool, not a
     // privacy sandbox). The model still emits VAR_n tokens, which the guardrails validate.
     const name = column.originalName ? `; name=${JSON.stringify(column.originalName)}` : '';
-    return `${column.token}${name}: type=${column.inferredType}; level=${column.measurementLevel}; missing=${column.missingCount}; distinct=${column.distinctCount}${numericRange}${observedValues}`;
+    const role = column.analysisRole ? `; role=${column.analysisRole}` : '';
+    return `${column.token}${name}: type=${column.inferredType}; level=${column.measurementLevel}${role}; missing=${column.missingCount}; distinct=${column.distinctCount}${numericRange}${observedValues}${valueLabels}${declaredMissing}${suspectedMissing}`;
   }).join('\n');
 };
 
-const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'analysis', extraAllowedNames = [] } = {}) => {
+const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'analysis', extraAllowedNames = [], repairHint = '' } = {}) => {
   const allowedTokens = Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token).join(', ') : '';
   const isPrepMode = mode === 'prep';
   const carriedNames = (Array.isArray(extraAllowedNames) ? extraAllowedNames : [])
@@ -1924,9 +2212,6 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
         'זהו מסלול data-prep. מותר להחזיר פקודות הכנת דאטה: COMPUTE, RECODE (כולל INTO), IF, DO IF / ELSE IF / END IF, DO REPEAT, COUNT, AUTORECODE, NUMERIC, STRING, VECTOR, RANK, AGGREGATE, וגם VALUE LABELS / VARIABLE LABELS / FORMATS / MISSING VALUES / RENAME VARIABLES, לצד פקודות ניתוח.',
         'מותר ליצור משתנים חדשים דרך COMPUTE, RECODE ... INTO, COUNT, NUMERIC, STRING, VECTOR. תן להם שמות אנגלית קצרים, ברורים ותקפים ל-SPSS (אותיות, ספרות, _; עד 64 תווים; מתחיל באות). אסור להשתמש בשם של VAR_n קיים כשם יעד חדש.',
         'אסור לקרוא ממשתנה מקור שאינו VAR_n קיים (או שם יעד שכבר יצרת בבלוק הזה). אל תמציא משתני מקור.',
-        carriedNames.length
-          ? `שמות משתנים שכבר נוצרו בבלוקים קודמים וזמינים לשימוש: ${carriedNames.join(', ')}.`
-          : '',
         'אחרי פקודות transformation הוסף EXECUTE. כשצריך, כדי שהן יחולו.',
         'עדיין אסור: GET/SAVE/EXPORT/IMPORT, DATASET, OMS, OUTPUT routing, SPLIT FILE, FILTER, SELECT IF קבוע, USE ALL, TEMPORARY, SORT CASES, ADD/MATCH FILES, INCLUDE, WRITE, PRINT — כל מה שפותח/כותב קבצים או משנה מצב session בין בלוקים.',
       ]
@@ -1936,24 +2221,53 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
         'אם הבקשה דורשת סינון זמני של מקרים לפני ניתוח, מותר להשתמש רק בצירוף TEMPORARY. ואז SELECT IF (...). ואז פקודת ניתוח/תצוגה אחת. אסור להשתמש ב-FILTER או USE ALL.',
       ];
 
+  const carriedNamesLine = carriedNames.length
+    ? `משתנים שכבר נוצרו בבלוקים קודמים וזמינים לשימוש (קריאה תקפה גם במצב analysis): ${carriedNames.join(', ')}.`
+    : '';
+
+  // Methodology reasoning — make the model build the analysis from each variable's
+  // analysis ROLE, not its storage type. Targets the two recurring failure modes:
+  // (1) a numerically-coded category dumped raw into regression as if continuous,
+  // (2) referencing a derived/grouping variable that was never created.
+  const phantomRule = isPrepMode
+    ? 'משתני רפאים — אסור: כל משתנה שאתה מזכיר חייב להיות VAR_n קיים, או שם שכבר נוצר (בבלוק הזה או בבלוק קודם מהרשימה למעלה). אם הניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל, ציון או מדד מחושב, משתני דמה) — צור אותו תחילה מ-VAR_n קיים (RECODE ... INTO / COMPUTE / COUNT) ואז השתמש בו. לעולם אל תניח שמשתנה נגזר כבר קיים.'
+    : 'משתני רפאים — אסור: כל משתנה שאתה מזכיר חייב להיות VAR_n קיים, או שם שכבר נוצר בבלוק קודם (מהרשימה למעלה). אם הניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל, ציון או מדד מחושב, דמיז) — אתה במצב analysis-only ואסור לך ליצור אותו כאן: החזר שורת * ERROR: שמסבירה איזה משתנה צריך להיווצר תחילה. לעולם אל תניח שמשתנה נגזר כבר קיים.';
+
+  const methodologyRules = [
+    '— מתודולוגיה (בנה את הניתוח לפי role של כל משתנה, לא רק לפי type):',
+    'role=continuous = משתנה רציף (מתאים כ-DV/IV ברגרסיה, במתאם Pearson, וכמשתנה תלוי ב-t-test/ANOVA). role=categorical או role=categorical-code = משתנה קבוצתי/קטגוריאלי: מספר שמייצג קטגוריה (1=זכר 2=נקבה; אזור 1..5; השכלה 1..4) הוא קטגוריאלי גם אם type=numeric — אל תתייחס אליו כרציף.',
+    'role=categorical-code = מספר שמייצג קטגוריה נומינלית (מגדר/אזור/השכלה) — קטגוריאלי לכל דבר: גורם ב-ANOVA/chi-square, ודורש dummy-coding ברגרסיה. role=likert = פריט דירוג בסולם (טווח 1..5/1..7) — מותר להתייחס אליו כרציף (ממוצע/מתאם/רגרסיה/t-test) או לאחד כמה פריטים למדד; פריט בודד אפשר גם Spearman. role=identifier = מזהה (ת"ז/מספר נבדק) — לעולם אל תכליל אותו כמשתנה בניתוח.',
+    'התאמת פרוצדורה לרמות המדידה: T-TEST = DV רציף + משתנה קיבוץ עם 2 קטגוריות בדיוק; ONEWAY/ANOVA = DV רציף + גורם עם ≥3 קטגוריות; CORRELATIONS (Pearson) = שני משתנים רציפים; CROSSTABS/chi-square = שני משתנים קטגוריאליים; רגרסיה ליניארית = DV רציף.',
+    'רגרסיה (REGRESSION /DEPENDENT): כל מנבא חייב להיות רציף או דמה (0/1). מנבא קטגוריאלי עם 2 קטגוריות אפשר להכניס גולמי. מנבא קטגוריאלי עם ≥3 קטגוריות אסור להכניס גולמי כאילו רציף — או (א) צור k-1 משתני דמה (RECODE/COMPUTE) במצב prep ואז הרץ REGRESSION, או (ב) השתמש ב-UNIANOVA/GLM עם המשתנה הקטגוריאלי כ-factor אחרי BY ו-/DESIGN. אל תשתמש במשתנה קטגוריאלי או role=identifier כ-DV רציף של רגרסיה.',
+    phantomRule,
+  ];
+
   return [
     'אתה מחזיר SPSS syntax בלבד עבור SPSS Syntax Studio בתוך WordFlow.',
     'אסור להחזיר markdown, bullets, כותרות, הסברים חופשיים, או fences.',
     'מותר להחזיר רק פקודות SPSS ושורות comment של SPSS שמתחילות ב-* .',
     `העמודות (משתני המקור) המותרות היחידות הן: ${allowedTokens || 'none'}.`,
     ...modeRules,
-    'אם הבקשה לא תקפה מתודולוגית, החזר רק שורות comment שמתחילות ב-* ERROR:.',
+    carriedNamesLine,
+    ...methodologyRules,
+    repairHint
+      ? `ניסיון קודם ליצור syntax לבקשה הזו נחסם בגלל: "${String(repairHint).slice(0, 300)}". זוהי בקשה אמיתית ממטלת סטטיסטיקה שכבר אומתה מול הנתונים — ספק את ה-syntax הטוב ביותר שאפשר. אם נדרשת הכנת נתונים (חישוב ציון/מדד, היפוך פריטים, recode) — בצע אותה תחילה ואז את הניתוח. החזר * ERROR: רק אם זה באמת בלתי אפשרי עם המשתנים הקיימים, ואז נמק בקצרה.`
+      : 'אם הבקשה לא תקפה מתודולוגית, החזר רק שורות comment שמתחילות ב-* ERROR:.',
     tutorMode
       ? 'Tutor mode פעיל: לפני הבלוק הוסף 1-2 שורות comment קצרות בעברית שמסבירות למה בחרת בפרוצדורה.'
       : 'Tutor mode כבוי: אל תוסיף comment אלא אם זו שגיאת * ERROR:.',
     'ה-metadata כולל את שמות המשתנים (name) וסטטיסטיקות סיכום, אבל לא את שורות הדאטה הגולמיות. השתמש בשמות כדי להבין את ההקשר, אבל בפלט עצמו כתוב אך ורק tokens מסוג VAR_n — לא את השמות.',
     'אם צריך literals מפורשים ב-/GROUPS, ב-BY(...), או ב-RECODE, השתמש רק ב-observedValues שסופקו במשתנים המתאימים. אם אין observedValues, אל תנחש literals.',
+    'valueLabels=[קוד=תווית] במטא-דאטה = משמעות הקודים (1=זכר, 2=נקבה). השתמש בהם כדי לבחור את הקבוצות הנכונות ב-/GROUPS, לבחור reference category הגיונית כשיוצרים משתני דמה, ולכתוב comment קצר עם שם הקטגוריה כשעוזר. אל תמציא קודים שלא ב-observedValues/valueLabels.',
+    isPrepMode
+      ? 'אם משתנה מסומן suspectedUndeclaredMissing=[קודים] — אלה קודי sentinel (98/99/-9) שלא הוגדרו כ-missing ומזהמים את הסטטיסטיקה. במצב prep הוסף MISSING VALUES להגדרתם כ-user-missing לפני הניתוח. declaredMissing=[...] כבר מטופל — אל תיגע בו.'
+      : 'אם משתנה מסומן suspectedUndeclaredMissing=[קודים] — אלה קודי sentinel שלא הוגדרו כ-missing. במצב analysis-only אסור לך להריץ MISSING VALUES; ציין זאת ב-comment קצר (* הערה:) שממליץ להגדירם במצב הכנת נתונים. declaredMissing=[...] כבר מטופל.',
     'Metadata:',
     buildTokenizedMetadataLines(analysis),
   ].filter(Boolean).join('\n');
 };
 
-export const generateSpssSyntax = async ({ analysis = null, request = '', tutorMode = false, mode = 'analysis', extraAllowedNames = [], providerOverride = '', modelOverride = '' } = {}) => {
+export const generateSpssSyntax = async ({ analysis = null, request = '', tutorMode = false, mode = 'analysis', extraAllowedNames = [], providerOverride = '', modelOverride = '', skipMethodologyGuard = false, repairHint = '' } = {}) => {
   if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
     return {
       ok: false,
@@ -1968,7 +2282,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
   }
 
   const cleanRequest = String(request || '').trim();
-  const methodologyIssue = detectMethodologyIssue(cleanRequest, analysis);
+  const methodologyIssue = skipMethodologyGuard ? '' : detectMethodologyIssue(cleanRequest, analysis);
   if (methodologyIssue) {
     return {
       ok: false,
@@ -2011,7 +2325,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
     ? String(effectiveConfig[providerId].model || '').trim()
     : '');
 
-  const rawResponse = await chatWithActiveProvider(tokenizedRequest, '', buildSpssSystemPrompt({ analysis, tutorMode, mode, extraAllowedNames }), {
+  const rawResponse = await chatWithActiveProvider(tokenizedRequest, '', buildSpssSystemPrompt({ analysis, tutorMode, mode, extraAllowedNames, repairHint }), {
     providerOverride: providerId || undefined,
     strictProviderOverride: Boolean(providerId),
     modelOverride: providerModel || undefined,
@@ -2042,6 +2356,164 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
     providerId,
     model: providerModel,
     source: guardrailHit ? 'guardrail' : 'ai',
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Real-SPSS-error repair loop. The studio cannot run SPSS, so the human is the
+// compiler: they run the master syntax in SPSS, paste the Output back, and we
+// parse the real Error/Warning blocks and ask the model to fix the syntax that
+// produced them. Same VAR_n privacy model as everywhere else (syntax + the
+// pasted error text are tokenized to VAR_n before leaving the device).
+//
+// SPSS Output diagnostic block (each line usually prefixed with '>'):
+//   >Error # 4285 in column 23.  Text: gender
+//   >An undefined variable name ...
+//   >Execution of this command stops.
+// Variants: ">Error # 1.  Command name: FREENCIES" (no column, names the command),
+// warnings (">Warning # 206 ...") are NON-fatal — the command still ran, so we
+// only repair them when they change result correctness.
+// ---------------------------------------------------------------------------
+
+const SPSS_DIAGNOSTIC_PATTERN = /(error|warning)\s*#\s*(\d+)/gi;
+
+export const parseSpssOutputErrors = (output = '') => {
+  const text = String(output || '').replace(/\r\n?/g, '\n');
+  const anchors = [];
+  SPSS_DIAGNOSTIC_PATTERN.lastIndex = 0;
+  let match = SPSS_DIAGNOSTIC_PATTERN.exec(text);
+  while (match) {
+    anchors.push({ index: match.index, severity: match[1].toLowerCase(), number: Number(match[2]) });
+    if (match[0].length === 0) SPSS_DIAGNOSTIC_PATTERN.lastIndex += 1;
+    match = SPSS_DIAGNOSTIC_PATTERN.exec(text);
+  }
+
+  const diagnostics = anchors.map((anchor, i) => {
+    const rawSegment = text.slice(anchor.index, i + 1 < anchors.length ? anchors[i + 1].index : undefined);
+    // Drop the leading '>' line markers SPSS prints so the description reads clean.
+    const segment = rawSegment.replace(/^[ \t]*>[ \t]?/gm, '').trim();
+    const columnMatch = segment.match(/in column\s+(\d+)/i);
+    const textMatch = segment.match(/Text:\s*(.+?)(?:\n|$)/i);
+    const commandMatch = segment.match(/Command name:\s*([^\n.]+)/i);
+    return {
+      severity: anchor.severity === 'warning' ? 'warning' : 'error',
+      number: anchor.number,
+      column: columnMatch ? Number(columnMatch[1]) : null,
+      offendingText: textMatch ? textMatch[1].trim() : '',
+      command: commandMatch ? commandMatch[1].trim() : '',
+      message: segment.slice(0, 600),
+    };
+  });
+
+  const fatal = diagnostics.filter((entry) => entry.severity === 'error');
+  const warnings = diagnostics.filter((entry) => entry.severity === 'warning');
+  return { diagnostics, fatal, warnings, hasFatal: fatal.length > 0, hasWarnings: warnings.length > 0 };
+};
+
+const buildSpssErrorDigest = (parsed = null, analysis = null) => {
+  const formatEntry = (entry) => {
+    const parts = [`${entry.severity === 'warning' ? 'אזהרה' : 'שגיאה'} #${entry.number}`];
+    if (entry.command) parts.push(`פקודה: ${tokenizeSpssRequest(entry.command, analysis)}`);
+    if (entry.column !== null) parts.push(`עמודה ${entry.column}`);
+    if (entry.offendingText) parts.push(`טקסט: ${tokenizeSpssRequest(entry.offendingText, analysis)}`);
+    const body = tokenizeSpssRequest(entry.message, analysis).replace(/\n/g, '\n  ');
+    return `- ${parts.join(' · ')}\n  ${body}`;
+  };
+  const lines = [];
+  if (parsed?.fatal?.length) {
+    lines.push('שגיאות (fatal — הפקודה לא רצה, חובה לתקן):');
+    parsed.fatal.forEach((entry) => lines.push(formatEntry(entry)));
+  }
+  if (parsed?.warnings?.length) {
+    lines.push('אזהרות (הפקודה רצה בכל זאת — תקן רק אם הן משנות את נכונות התוצאה):');
+    parsed.warnings.forEach((entry) => lines.push(formatEntry(entry)));
+  }
+  return lines.join('\n');
+};
+
+const buildSpssRepairSystemPrompt = ({ analysis = null } = {}) => {
+  const allowedTokens = Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token).join(', ') : '';
+  return [
+    'אתה מומחה SPSS שמתקן syntax שמשתמש הריץ ב-SPSS וקיבל עליו שגיאות בחלון ה-Output.',
+    'קיבלת את ה-syntax המקורי ואת הודעות השגיאה/אזהרה המדויקות מ-SPSS. תקן את ה-syntax כך שירוץ נקי.',
+    'תקן מינימלית: שמר על מבנה הניתוח ועל הכוונה המקורית. שנה אך ורק את מה שגורם לשגיאה (נקודה חסרה, subcommand שגוי, שם משתנה לא תקף, סדר פקודות שגוי). אל תכתוב מחדש ניתוח שכבר תקין.',
+    'הבחנה קריטית: Error = פטאלי, הפקודה לא רצה — חובה לתקן. Warning = הפקודה רצה בכל זאת — תקן רק אם האזהרה משנה את נכונות התוצאה (למשל ערכי missing שמזהמים סטטיסטיקה), אחרת השאר כמו שהיא.',
+    'Error #1 ("first word in the line is not recognized as a command") נגרם כמעט תמיד מנקודה (.) חסרה בסוף הפקודה ה-קודמת — בדוק את הפקודה שלפני שורת השגיאה, לא רק את השורה שצוינה.',
+    'כל פקודת SPSS חייבת להסתיים בנקודה (.). כל subcommand מתחיל ב-/.',
+    `העמודות (משתני המקור) המותרות היחידות הן: ${allowedTokens || 'none'}. השתמש אך ורק ב-tokens מסוג VAR_n — לא בשמות אמיתיים. אם SPSS דיווח על "undefined variable", מפה אותו ל-VAR_n הנכון לפי ה-metadata, או הסר אותו אם אין התאמה אמיתית.`,
+    'אם נדרש משתנה נגזר שלא קיים (קבוצות גיל, מדד מחושב, משתני דמה) — צור אותו תחילה (COMPUTE / RECODE ... INTO / COUNT) ואז השתמש בו, והוסף EXECUTE. אחרי transformation.',
+    'אל תמציא קודים או literals שלא מופיעים ב-observedValues / valueLabels של המשתנה.',
+    'החזר אך ורק את ה-syntax המלא והמתוקן — בלי markdown, fences, כותרות או הסברים חופשיים. מותר רק שורות comment של SPSS שמתחילות ב-* .',
+    'אם אי אפשר לתקן עם המשתנים הקיימים, החזר רק שורת * ERROR: עם הסבר קצר בעברית.',
+    'ה-metadata כולל את שמות המשתנים וסטטיסטיקות סיכום אך לא את שורות הדאטה הגולמיות. בפלט עצמו כתוב אך ורק tokens מסוג VAR_n.',
+    'Metadata:',
+    buildTokenizedMetadataLines(analysis),
+  ].filter(Boolean).join('\n');
+};
+
+export const repairSpssSyntaxFromError = async ({ analysis = null, priorSyntax = '', output = '', providerOverride = '', modelOverride = '' } = {}) => {
+  if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
+    return { ok: false, syntax: '', rawSyntax: '', parsed: null, guidanceMessage: '', error: 'טען קובץ נתונים לפני תיקון syntax.', providerId: '', model: '' };
+  }
+  const cleanSyntax = String(priorSyntax || '').trim();
+  if (!cleanSyntax) {
+    return { ok: false, syntax: '', rawSyntax: '', parsed: null, guidanceMessage: '', error: 'אין syntax לתקן — צור קוד קודם.', providerId: '', model: '' };
+  }
+  const parsed = parseSpssOutputErrors(output);
+  if (!parsed.diagnostics.length) {
+    return { ok: false, syntax: '', rawSyntax: '', parsed, guidanceMessage: '', error: 'לא זוהו שגיאות או אזהרות SPSS בטקסט שהודבק. ודא שהדבקת את הודעת השגיאה (Error # / Warning #) מחלון ה-Output.', providerId: '', model: '' };
+  }
+
+  const tokenizedSyntax = tokenizeSpssRequest(cleanSyntax, analysis);
+  const userMessage = [
+    'ה-syntax המקורי שהורץ ב-SPSS:',
+    tokenizedSyntax,
+    '',
+    'הודעות מ-SPSS Output:',
+    buildSpssErrorDigest(parsed, analysis),
+  ].join('\n');
+
+  const { chatWithActiveProvider, getProviderConfig, getFeatureProviderConfig } = await import('./aiService.js');
+  const providerConfig = getProviderConfig();
+  const studioProvider = String(providerOverride || '').trim();
+  const studioModel = String(modelOverride || '').trim();
+  const feat = studioProvider ? null : getFeatureProviderConfig('spss', providerConfig);
+  const effectiveConfig = feat?.config || providerConfig;
+  const providerId = studioProvider || feat?.providerId || String(providerConfig?.active || '').trim();
+  const providerModel = studioModel || feat?.model || (providerId && effectiveConfig?.[providerId]?.model
+    ? String(effectiveConfig[providerId].model || '').trim()
+    : '');
+
+  const rawResponse = await chatWithActiveProvider(userMessage, '', buildSpssRepairSystemPrompt({ analysis }), {
+    providerOverride: providerId || undefined,
+    strictProviderOverride: Boolean(providerId),
+    modelOverride: providerModel || undefined,
+    ...(feat ? { providerConfigOverride: feat.config } : {}),
+    skipAutomation: true,
+    skipSkillSelection: true,
+    skipMultiModel: true,
+    strictFormatting: true,
+    includeAppMemory: false,
+    shouldPersistMemory: false,
+    autoUseDefaultSkill: false,
+    agentLabel: 'SPSS Syntax Repair',
+    agentName: 'SPSS Syntax Repair',
+  });
+
+  const rawSyntax = typeof rawResponse === 'string' ? rawResponse : String(rawResponse?.text || '').trim();
+  // Repair runs in prep mode: the master file legitimately contains data-prep
+  // commands, and a real fix may need to create a missing derived variable.
+  const syntax = sanitizeSpssSyntax(rawSyntax, analysis, { mode: 'prep' });
+  const guardrailHit = isGuardrailSyntaxResponse(syntax);
+  return {
+    ok: !guardrailHit,
+    syntax: guardrailHit ? '' : syntax,
+    rawSyntax,
+    parsed,
+    guidanceMessage: guardrailHit ? getGuardrailGuidanceMessage(syntax) : '',
+    error: guardrailHit ? getGuardrailGuidanceMessage(syntax) : '',
+    providerId,
+    model: providerModel,
   };
 };
 
@@ -2136,7 +2608,7 @@ const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', 
   return { text, providerId, model };
 };
 
-export const runSpssGuidance = async ({ analysis = null, question = '', history = [], mode = 'analysis', providerOverride = '', modelOverride = '' } = {}) => {
+export const runSpssGuidance = async ({ analysis = null, question = '', history = [], mode = 'analysis', draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) {
     return { ok: false, answer: '', providerId: '', model: '', error: 'כתוב שאלה כדי לקבל הדרכה.' };
@@ -2144,9 +2616,13 @@ export const runSpssGuidance = async ({ analysis = null, question = '', history 
 
   try {
     const tokenizedQuestion = tokenizeSpssRequest(cleanQuestion, analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
     const systemPrompt = buildSpssGuidanceSystemPrompt({ analysis, mode, history });
+    const tokenizedMessage = tokenizedDraft
+      ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}\n\nהשאלה:\n${tokenizedQuestion}`
+      : tokenizedQuestion;
     const { text, providerId, model } = await callGuidanceProvider({
-      tokenizedMessage: tokenizedQuestion,
+      tokenizedMessage,
       systemPrompt,
       agentName: 'SPSS Tutor',
       providerOverride,
@@ -2169,7 +2645,7 @@ export const runSpssGuidance = async ({ analysis = null, question = '', history 
   }
 };
 
-export const interpretSpssOutput = async ({ analysis = null, output = '', question = '', providerOverride = '', modelOverride = '' } = {}) => {
+export const interpretSpssOutput = async ({ analysis = null, output = '', question = '', draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
     return { ok: false, answer: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי לקבל פירוש.' };
@@ -2178,17 +2654,23 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
   try {
     const tokenizedOutput = tokenizeSpssRequest(cleanOutput, analysis);
     const tokenizedQuestion = tokenizeSpssRequest(String(question || '').trim(), analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
 
     const systemPrompt = [
       'אתה מומחה SPSS ש-מסביר בעברית ברורה פלט (Output) שמשתמש הדביק.',
       'הסבר: מה הטבלה מציגה, מה הערכים המרכזיים (למשל t, F, χ², r, p, df, גודל אפקט), האם התוצאה מובהקת ומה המשמעות המהותית, ואזהרות על הפרת הנחות אם נראות.',
+      'בדיקת שפיות חובה לפני שאתה מסביר: ודא שהסטטיסטיקה התיאורית הגיונית ביחס לסוג המשתנה. דגל אדום קלאסי — סטיית תקן (SD) גדולה מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם הצפוי (למשל M≈9 או SD≈20 בסולם 0–10, או SD שגדול מהממוצע במשתנה חסום). זה כמעט תמיד אומר ערכי missing לא-מוגדרים (קודים כמו 98/99) שנכנסים לחישוב ומנפחים את התוצאות. אם יש metadata — הצלב מול ה-range וה-observedValues של המשתנה (קודים כמו 98/99 = חשד מיידי).',
+      'ה-metadata כבר עשה חלק מהעבודה: שדה suspectedUndeclaredMissing=[...] במשתנה = WordFlow זיהה קוד sentinel (98/99/-9) שלא הוגדר כ-missing וכנראה מזהם את הסטטיסטיקה — התייחס לזה כדגל אדום ודאי. שדה declaredMissing=[...] = הקודים האלה כבר מוגדרים כ-user-missing ו-SPSS מתעלם מהם, אז הם תקינים.',
+      'כשאתה מזהה דגל אדום כזה: פתח את הפירוש באזהרה מפורשת, הסבר שכל התוצאות שמבוססות על הממוצעים האלה (t-test/ANOVA/מתאם/רגרסיה) אינן אמינות עד שמגדירים את הקודים כ-user-missing (MISSING VALUES או Variable View → Missing) ומריצים מחדש, ואל תדווח את הערכים המזוהמים ב-APA כאילו הם תקינים.',
       'תן ניסוח מוכן לדיווח ב-APA כשרלוונטי.',
       'אל תמציא מספרים שלא מופיעים בפלט. אם משהו חסר כדי להסיק, אמור זאת.',
       'מותר markdown.',
+      tokenizedDraft ? 'צורפה טיוטה קיימת של העבודה — התאם את הניסוח למינוח ולסגנון שבה כדי שאפשר יהיה לשבץ את הפירוש ישירות.' : '',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n\n');
 
     const message = [
+      tokenizedDraft ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}` : '',
       tokenizedQuestion ? `שאלה ממוקדת: ${tokenizedQuestion}` : '',
       'פלט SPSS להסבר:',
       tokenizedOutput,
@@ -2228,6 +2710,15 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
 
 const MAX_ASSIGNMENT_CHARS = 12000;
 const MAX_PROJECT_SYNTAX_CHARS = 12000;
+const MAX_DRAFT_CHARS = 16000;
+
+// טיוטה קיימת שהמשתמש העלה (עבודה בכתיבה) — מוזרמת כהקשר ל-AI, מטוקנת כמו כל
+// טקסט אחר כדי לשמור על מודל הפרטיות (שמות עמודות → VAR_n).
+const buildDraftContextBlock = (draftText = '', analysis = null) => {
+  const clean = String(draftText || '').trim().slice(0, MAX_DRAFT_CHARS);
+  if (!clean) return '';
+  return tokenizeSpssRequest(clean, analysis);
+};
 
 // Pull the first balanced JSON object/array out of a model response that may be
 // wrapped in ```json fences or surrounded by prose.
@@ -2289,7 +2780,69 @@ const normalizeAssignmentProfile = (raw = {}, analysis = null) => {
   };
 };
 
-export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null } = {}) => {
+// Deterministic self-check over the planner's output (Batch F, zero AI cost): resolve
+// every analysis's variables to real columns and flag method↔measurement-level
+// mismatches the model may have made. Warnings are advisory (appended to notes), never
+// a hard fail — the user can still run, but is told what looks off.
+const MODELING_CONTINUOUS_ROLES = new Set(['continuous', 'likert']);
+const CATEGORICAL_ROLES = new Set(['categorical', 'categorical-code']);
+
+const buildAliasToColumnMap = (analysis = null) => {
+  const map = new Map();
+  (Array.isArray(analysis?.columns) ? analysis.columns : []).forEach((column) => {
+    (Array.isArray(column.aliases) ? column.aliases : []).forEach((alias) => {
+      const key = String(alias || '').trim().toLowerCase();
+      if (key && !map.has(key)) map.set(key, column);
+    });
+  });
+  return map;
+};
+
+export const validateAssignmentProfile = (profile = null, analysis = null) => {
+  const warnings = [];
+  if (!profile || !Array.isArray(profile.analyses) || !Array.isArray(analysis?.columns)) return warnings;
+  const aliasMap = buildAliasToColumnMap(analysis);
+
+  profile.analyses.forEach((entry) => {
+    const label = entry.label || entry.method || 'ניתוח';
+    const method = String(entry.method || '').toLowerCase();
+    const resolved = [];
+    (Array.isArray(entry.variables) ? entry.variables : []).forEach((name) => {
+      const column = aliasMap.get(String(name || '').trim().toLowerCase());
+      if (column) resolved.push(column);
+      else if (name) warnings.push(`"${label}": המשתנה "${name}" לא נמצא בקובץ הנתונים.`);
+    });
+    if (!resolved.length) return;
+
+    const roles = resolved.map((column) => column.analysisRole);
+    const continuousCount = roles.filter((role) => MODELING_CONTINUOUS_ROLES.has(role)).length;
+    const categoricalCols = resolved.filter((column) => CATEGORICAL_ROLES.has(column.analysisRole));
+    const binaryGroup = categoricalCols.some((column) => column.distinctCount === 2);
+    const multiGroup = categoricalCols.some((column) => column.distinctCount >= 3);
+    const unusable = resolved.filter((column) => ['identifier', 'text', 'date'].includes(column.analysisRole));
+
+    if (unusable.length && /(correlation|regression|t-test|anova|מתאם|רגרסיה)/.test(method)) {
+      warnings.push(`"${label}": ${unusable.map((column) => column.originalName).join(', ')} אינו מתאים כמשתנה בניתוח (מזהה/טקסט/תאריך).`);
+    }
+    if (/(t-test|ttest|מבחן t)/.test(method) && !binaryGroup) {
+      warnings.push(`"${label}": מבחן t דורש משתנה קבוצה עם 2 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
+    }
+    if (/anova|ניתוח שונות/.test(method) && !multiGroup) {
+      warnings.push(`"${label}": ANOVA דורש גורם קטגוריאלי עם ≥3 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
+    }
+    if (/(correlation|pearson|מתאם)/.test(method) && continuousCount < 2) {
+      warnings.push(`"${label}": מתאם Pearson דורש שני משתנים רציפים — בדוק את רמות המדידה.`);
+    }
+    if (/(chi-square|chisquare|חי בריבוע|קי בריבוע)/.test(method) && categoricalCols.length < 2) {
+      warnings.push(`"${label}": חי-בריבוע דורש שני משתנים קטגוריאליים.`);
+    }
+  });
+
+  // De-dup, cap so the notes block stays readable.
+  return Array.from(new Set(warnings)).slice(0, 8);
+};
+
+export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null, providerOverride = '', modelOverride = '' } = {}) => {
   const cleanAssignment = String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS);
   if (!cleanAssignment) {
     return { ok: false, profile: null, providerId: '', model: '', error: 'הדבק את טקסט המטלה כדי שאבין מה צריך לעשות.' };
@@ -2319,6 +2872,11 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
       'כללים: השתמש אך ורק במשתנים שמופיעים במטא-דאטה (VAR_n). אל תמציא משתנים או מבחנים שלא נדרשים.',
       'בחר deliverable לפי מה שהמטלה מבקשת: פרק ממצאים שלם, פירוש פלט בלבד, או רק קוד.',
       'אם המטלה מציינת מבחן ספציפי — כבד אותו. אם לא, הצע את המבחן הסטטיסטי הנכון למבנה הנתונים.',
+      'סווג כל משתנה לפי role במטא-דאטה, לא רק לפי type: role=continuous = רציף; role=categorical / role=categorical-code = קטגוריאלי/קבוצתי (מספר שמייצג קטגוריה הוא קטגוריאלי גם אם type=numeric); role=likert = פריט דירוג בסולם — אפשר לטפל בו כרציף או לאחד פריטים למדד; role=identifier = מזהה, אל תכליל בניתוח. התאם את המבחן לרמות המדידה (t-test/ANOVA = DV רציף + גורם קטגוריאלי; chi-square = שני קטגוריאליים; correlation/regression = רציפים).',
+      'אם ניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל מתוך גיל רציף, ציון/מדד מחושב, משתני דמה) — הוסף קודם analysis נפרד בשלב הכנה (method "recode" או "compute") שה-request שלו יוצר את המשתנה בשם אנגלי ברור, ואז ב-analysis שאחריו השתמש בשם הזה. סדר ה-analyses חייב להציב את שלב ההכנה לפני השימוש. אל תניח שמשתנה נגזר כבר קיים.',
+      'רגרסיה עם מנבא קטגוריאלי בעל ≥3 קטגוריות: או הוסף שלב prep ליצירת k-1 משתני דמה, או ציין ב-rationale שיש להריץ GLM/UNIANOVA עם המשתנה כ-factor. אל תכניס מנבא קטגוריאלי רב-קטגורי גולמי לרגרסיה ליניארית.',
+      'השתמש ב-valueLabels=[קוד=תווית] במטא-דאטה כדי למפות תיאורים מילוליים במטלה ("נשים", "תואר ראשון") לקודים הנכונים ולמשתנה הנכון. אל תמציא קטגוריות שלא מופיעות ב-valueLabels/observedValues.',
+      'אם משתנה שנדרש לניתוח מסומן suspectedUndeclaredMissing=[קודים] — הוסף analysis ראשון בשלב הכנה (method "missing-values") שה-request שלו מגדיר את הקודים האלה כ-user-missing (MISSING VALUES), לפני כל ניתוח שמשתמש במשתנה. אחרת התוצאות יהיו מוטות.',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n');
 
@@ -2326,6 +2884,8 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
       tokenizedMessage: `טקסט המטלה:\n${tokenizedAssignment}`,
       systemPrompt,
       agentName: 'SPSS Assignment Planner',
+      providerOverride,
+      modelOverride,
     });
 
     const parsed = extractJsonPayload(text);
@@ -2337,13 +2897,18 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
     if (!profile.analyses.length) {
       return { ok: false, profile, providerId, model, error: 'לא זוהו ניתוחים נדרשים מהמטלה. ודא שטקסט המטלה כולל מה צריך לבדוק.' };
     }
+    const warnings = validateAssignmentProfile(profile, analysis);
+    if (warnings.length) {
+      const warningBlock = `⚠️ בדיקת התאמה אוטומטית:\n• ${warnings.join('\n• ')}`;
+      profile.notes = profile.notes ? `${profile.notes}\n\n${warningBlock}` : warningBlock;
+    }
     return { ok: true, profile, providerId, model, error: '' };
   } catch (error) {
     return { ok: false, profile: null, providerId: '', model: '', error: error instanceof Error ? error.message : 'ניתוח המטלה נכשל.' };
   }
 };
 
-export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '' } = {}) => {
+export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
     return { ok: false, verdict: 'needs-output', issues: [], summary: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי שאבדוק אותו מול המטלה.' };
@@ -2358,6 +2923,8 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
       'אתה בודק סטטיסטי שמוודא שהרצת SPSS עונה על המטלה לפני שכותבים ממצאים.',
       'קיבלת: טקסט המטלה, ה-syntax שהורץ, והפלט שהמשתמש הדביק.',
       'בדוק: האם יש שגיאות SPSS בפלט (Error/Warning), האם כל הניתוחים הנדרשים רצו, האם הופרו הנחות (נורמליות, שונויות, גודל מדגם), והאם חסר משהו שהמטלה ביקשה.',
+      'דגל אדום קריטי לבדוק תמיד — סטטיסטיקה תיאורית בלתי-אפשרית: אם ה-SD גדול מהטווח הסביר של הסולם, או הממוצע/מינימום/מקסימום חורגים מהסולם הצפוי (למשל M≈9 או SD≈20 בסולם 0–10, או SD גדול מהממוצע במשתנה חסום), זה מעיד על ערכי missing לא-מוגדרים (קודים כמו 98/99) שנכללים בחישוב ומנפחים את התוצאות. אם יש metadata — הצלב מול ה-range וה-observedValues (קוד 98/99 = חשד). אם זיהית זאת — סמן issue עם verdict="needs-fixes" ו-fixRequest להגדיר את הקודים כ-user-missing (MISSING VALUES) ולהריץ מחדש; כל ניתוח שמבוסס על הממוצעים האלה אינו אמין עד אז.',
+      'אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...] — זהו דגל אדום ודאי שזוהה אוטומטית: פתח issue עם verdict="needs-fixes" ו-fixRequest להגדיר את אותם קודים כ-user-missing ולהריץ מחדש. אם הוא מסומן declaredMissing=[...] בלבד — הקודים כבר מטופלים ואין בעיה.',
       'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
       '{',
       '  "verdict": "clean" | "needs-fixes",',
@@ -2378,6 +2945,8 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
       tokenizedMessage: message,
       systemPrompt,
       agentName: 'SPSS Run Critic',
+      providerOverride,
+      modelOverride,
     });
 
     const parsed = extractJsonPayload(text);
@@ -2399,7 +2968,7 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
   }
 };
 
-export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [] } = {}) => {
+export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [], draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
     return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פלט להרכבת פרק ממצאים. הדבק קודם את הפלט מ-SPSS.' };
@@ -2409,6 +2978,7 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
     const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
     const tokenizedSyntax = tokenizeSpssRequest(String(masterSyntax || '').trim().slice(0, MAX_PROJECT_SYNTAX_CHARS), analysis);
     const tokenizedOutput = tokenizeSpssRequest(cleanOutput, analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
     const interpretationBlock = (Array.isArray(interpretations) ? interpretations : [])
       .map((entry) => {
         const label = String(entry?.label || '').trim();
@@ -2423,11 +2993,16 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       'החזר אך ורק HTML נקי (בלי ```), עם <h2>/<h3>/<p>/<table> בלבד. בלי <html> או <body>.',
       'מבנה מומלץ: כותרת פרק (<h2>פרק ממצאים</h2>), ואז תת-פרק לכל ניתוח עם דיווח התוצאה, מובהקות וגודל אפקט בסגנון APA, וטבלה כשמתאים.',
       'הסתמך אך ורק על המספרים שבפלט ובפירושים שסופקו. אל תמציא ערכים. אם משהו חסר — ציין זאת בעדינות.',
+      'דגל אדום לפני דיווח: אם הסטטיסטיקה התיאורית בלתי-אפשרית (SD גדול מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם — סימן לערכי missing לא-מוגדרים כמו 98/99 שנכללו בחישוב), או אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...], אל תדווח את הערכים כאילו הם תקינים. ציין במפורש בפרק שהתוצאות מוטות עקב missing לא-מוגדר, ושיש להגדירו (MISSING VALUES) ולהריץ מחדש לפני הסקת מסקנות.',
       'כתוב עברית אקדמית רהוטה, לא תרגום מילולי.',
+      tokenizedDraft
+        ? 'צורפה טיוטה קיימת של העבודה. כתוב את פרק הממצאים כך שישתלב בה: התאם למינוח, למבנה ולסגנון הכתיבה, אל תחזור על דברים שכבר נכתבו בטיוטה, והפנה לחלקים קיימים כשרלוונטי. החזר רק את פרק הממצאים (לא לשכתב את הטיוטה).'
+        : '',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n');
 
     const message = [
+      tokenizedDraft ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}` : '',
       `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
       interpretationBlock ? `פירושים שכבר הופקו:\n${interpretationBlock}` : '',
       `ה-syntax שהורץ:\n${tokenizedSyntax || '(לא סופק)'}`,
@@ -2438,6 +3013,8 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       tokenizedMessage: message,
       systemPrompt,
       agentName: 'SPSS Findings Writer',
+      providerOverride,
+      modelOverride,
     });
 
     const restoredHtml = (restoreColumnTokens(text, analysis) || text)

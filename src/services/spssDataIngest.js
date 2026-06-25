@@ -37,6 +37,30 @@ const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+// Normalize sav-reader's polymorphic `missing` field into one stable shape:
+//   { discrete: number[], range: {min,max}|null }  (or null when none declared).
+// sav-reader gives: a bare number (1 discrete), number[] (2-3 discrete),
+// {min,max} (range), or {min,max,value} (range + 1 discrete).
+const normalizeDeclaredMissing = (missing) => {
+  if (missing === null || missing === undefined) return null;
+  const discrete = [];
+  let range = null;
+  if (typeof missing === 'number') {
+    if (Number.isFinite(missing)) discrete.push(missing);
+  } else if (Array.isArray(missing)) {
+    missing.forEach((value) => {
+      if (typeof value === 'number' && Number.isFinite(value)) discrete.push(value);
+    });
+  } else if (typeof missing === 'object') {
+    const min = Number(missing.min);
+    const max = Number(missing.max);
+    if (Number.isFinite(min) && Number.isFinite(max)) range = { min, max };
+    if (typeof missing.value === 'number' && Number.isFinite(missing.value)) discrete.push(missing.value);
+  }
+  if (!discrete.length && !range) return null;
+  return { discrete, range };
+};
+
 const normalizeSpssSavCellValue = (value) => {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number') return Number.isFinite(value) ? value : '';
@@ -44,13 +68,42 @@ const normalizeSpssSavCellValue = (value) => {
   return String(value);
 };
 
+// Builds a binary-mode Readable that emits the whole buffer then ends. We do NOT
+// use sav-reader's SavBufferReader because it calls `stream.Readable.from(buffer)`,
+// and readable-stream's browser build throws "Readable.from is not available in
+// the browser". Driving SavReader with our own Readable sidesteps that entirely.
+// Binary mode (not objectMode) is required so AsyncReader's `.read(len)` returns
+// exact byte counts.
+const createBufferReadable = (Readable, buffer) => {
+  const readable = new Readable({ read() {} });
+  readable.push(buffer);
+  readable.push(null);
+  return readable;
+};
+
+// readable-stream (under stream-browserify) references the Node `process` global
+// for nextTick/env. It isn't polyfilled by Vite, so without this it throws
+// "process is not defined". Provide a minimal browser shim.
+const ensureProcessShim = () => {
+  const proc = globalThis.process || (globalThis.process = {});
+  if (!proc.env) proc.env = {};
+  if (typeof proc.nextTick !== 'function') {
+    proc.nextTick = (cb, ...args) => queueMicrotask(() => cb(...args));
+  }
+  if (proc.browser === undefined) proc.browser = true;
+};
+
 const readSpssSavFileInBrowser = async (file) => {
   try {
+    ensureProcessShim();
     const { Buffer } = await import('buffer');
     if (!globalThis.Buffer) globalThis.Buffer = Buffer;
 
-    const { SavBufferReader } = await import('sav-reader');
-    const sav = new SavBufferReader(Buffer.from(await file.arrayBuffer()));
+    const streamMod = await import('stream');
+    const Readable = streamMod.Readable || streamMod.default?.Readable || streamMod.default;
+    const { SavReader } = await import('sav-reader-core');
+    const readable = createBufferReadable(Readable, Buffer.from(await file.arrayBuffer()));
+    const sav = new SavReader(readable);
     await sav.open();
 
     const variables = Array.isArray(sav.meta?.sysvars)
@@ -64,6 +117,12 @@ const readSpssSavFileInBrowser = async (file) => {
                 label: String(entry?.label || '').trim(),
               }))
             : [],
+          // Declared user-missing values from the SAV dictionary. sav-reader exposes
+          // `missing` as: a number (one discrete), an array (2-3 discrete), or a
+          // {min,max[,value]} object (a range, optionally plus one discrete value).
+          // This is the authoritative source for the "contaminated stats" red flag —
+          // if 98/99 are declared missing here, SPSS already excludes them.
+          declaredMissing: normalizeDeclaredMissing(variable?.missing),
         })).filter((variable) => variable.name)
       : [];
 

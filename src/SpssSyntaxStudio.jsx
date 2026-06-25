@@ -10,9 +10,11 @@ import {
   getQuickActionState,
   interpretSpssOutput,
   isGuardrailSyntaxResponse,
+  repairSpssSyntaxFromError,
   runSpssGuidance,
 } from './services/spssSyntaxService';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
+import { BROWSER_DOC_ACCEPT, pickDesktopDocument, readBrowserDocumentFile } from './services/documentUpload';
 import {
   getSpssPreferences,
   saveSpssPreferences,
@@ -90,11 +92,14 @@ const noticeToneClassMap = {
 
 export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
   const fileInputRef = React.useRef(null);
+  const draftInputRef = React.useRef(null);
   const activeUploadRequestIdRef = React.useRef('');
   const activeSessionIdRef = React.useRef('');
   const activeGenerateRequestIdRef = React.useRef('');
   const spssPrefsRef = React.useRef(getSpssPreferences());
   const [analysis, setAnalysis] = React.useState(null);
+  const [draft, setDraft] = React.useState(null);
+  const [draftBusy, setDraftBusy] = React.useState(false);
   const [request, setRequest] = React.useState('');
   const [tutorMode, setTutorMode] = React.useState(() => spssPrefsRef.current.tutorMode !== false);
   const [genMode, setGenMode] = React.useState(() => spssPrefsRef.current.defaultGenMode || 'analysis');
@@ -292,6 +297,48 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     if (file) handleDataFile(file);
   }, [handleDataFile]);
 
+  // טיוטה קיימת (אופציונלי) — נשלחת ל-AI כהקשר/סגנון בפירוש הפלט ובצ'אט.
+  const onSelectDraft = React.useCallback(async () => {
+    setDraftBusy(true);
+    try {
+      const desktop = await pickDesktopDocument();
+      if (desktop.canceled) return;
+      if (desktop.unsupported) {
+        draftInputRef.current?.click();
+        return;
+      }
+      setDraft(desktop.doc);
+      setNotice({ tone: 'success', text: `נטענה טיוטה: ${desktop.doc.name}. ה-AI יתחשב בה בפירוש הפלט ובצ'אט.` });
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'טעינת הטיוטה נכשלה.' });
+    } finally {
+      setDraftBusy(false);
+    }
+  }, []);
+
+  const onDraftInputChange = React.useCallback(async (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    setDraftBusy(true);
+    try {
+      const next = await readBrowserDocumentFile(file);
+      if (next) {
+        setDraft(next);
+        setNotice({ tone: 'success', text: `נטענה טיוטה: ${next.name}. ה-AI יתחשב בה בפירוש הפלט ובצ'אט.` });
+      }
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'טעינת הטיוטה נכשלה.' });
+    } finally {
+      setDraftBusy(false);
+    }
+  }, []);
+
+  const clearDraft = React.useCallback(() => {
+    setDraft(null);
+    if (draftInputRef.current) draftInputRef.current.value = '';
+  }, []);
+
   const onDrop = React.useCallback((event) => {
     event.preventDefault();
     setDragActive(false);
@@ -396,15 +443,49 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     setLastRejectedRequest(null);
     setNotice({ tone: 'info', text: 'מייצר syntax דרך ה-provider הפעיל...' });
     try {
-      const result = await generateSpssSyntax({
+      const route = {
+        providerOverride: spssRouteRef.current.providerId,
+        modelOverride: spssRouteRef.current.model,
+      };
+
+      // C6 — retry ladder (mirrors the project studio): a deterministic guardrail
+      // false-positive should NOT be final here. If the first pass is blocked, retry in
+      // prep mode (allows data-prep) while skipping the methodology guard and feeding the
+      // block reason back as a repair hint, then a final enriched attempt. Only a genuine
+      // dead-end (still ERROR after prep) surfaces as a rejection.
+      let result = await generateSpssSyntax({
         analysis: currentAnalysis,
         request: requestText,
         tutorMode,
         mode: effectiveMode,
         extraAllowedNames: priorCreatedNames,
-        providerOverride: spssRouteRef.current.providerId,
-        modelOverride: spssRouteRef.current.model,
+        ...route,
       });
+      let repaired = false;
+      if (!result.ok || !result.syntax) {
+        const result2 = await generateSpssSyntax({
+          analysis: currentAnalysis, request: requestText, tutorMode, mode: 'prep',
+          extraAllowedNames: priorCreatedNames, skipMethodologyGuard: true, repairHint: result.guidanceMessage, ...route,
+        });
+        if (result2.ok && result2.syntax) {
+          result = result2;
+          repaired = true;
+        } else {
+          const enrichedRequest = `${requestText}\n(אם נדרשת הכנת נתונים — בצע אותה תחילה ואז את הניתוח. ספק syntax מלא ושמיש; אל תחזיר ERROR אלא אם זה באמת בלתי אפשרי.)`;
+          const result3 = await generateSpssSyntax({
+            analysis: currentAnalysis, request: enrichedRequest, tutorMode, mode: 'prep',
+            extraAllowedNames: priorCreatedNames, skipMethodologyGuard: true,
+            repairHint: result2.guidanceMessage || result.guidanceMessage, ...route,
+          });
+          if (result3.ok && result3.syntax) {
+            result = result3;
+            repaired = true;
+          } else {
+            result = result3 || result2 || result;
+          }
+        }
+      }
+
       if (
         activeGenerateRequestIdRef.current !== generateRequestId
         || activeSessionIdRef.current !== sessionId
@@ -412,7 +493,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
         return;
       }
 
-      if (!result.ok) {
+      if (!result.ok || !result.syntax) {
         const guidanceMessage = result.guidanceMessage || 'הבקשה נעצרה לפני יצירת syntax כדי למנוע פלט שגוי.';
         setGuidance(guidanceMessage);
         setLastRejectedRequest({
@@ -438,7 +519,9 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
       setGuidance('');
       setNotice({
         tone: 'success',
-        text: 'נוסף בלוק syntax חדש ל-master syntax.',
+        text: repaired
+          ? 'נוסף בלוק syntax חדש ל-master syntax (שוקם בניסיון חוזר עם הכנת נתונים).'
+          : 'נוסף בלוק syntax חדש ל-master syntax.',
       });
     } catch (error) {
       if (
@@ -474,7 +557,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     setChatInput('');
     setChatBusy(true);
     try {
-      const result = await runSpssGuidance({ analysis, question, history, mode: genMode, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      const result = await runSpssGuidance({ analysis, question, history, mode: genMode, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       appendChatMessage(
         result.ok
           ? { role: 'assistant', text: result.answer, kind: 'guidance', providerId: result.providerId, model: result.model }
@@ -485,7 +568,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     } finally {
       setChatBusy(false);
     }
-  }, [analysis, appendChatMessage, chatBusy, chatInput, chatMessages, genMode]);
+  }, [analysis, appendChatMessage, chatBusy, chatInput, chatMessages, genMode, draft]);
 
   const onInterpretOutput = React.useCallback(async () => {
     const output = outputDraft.trim();
@@ -497,7 +580,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     setChatInput('');
     setChatBusy(true);
     try {
-      const result = await interpretSpssOutput({ analysis, output, question: focus, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      const result = await interpretSpssOutput({ analysis, output, question: focus, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       appendChatMessage(
         result.ok
           ? { role: 'assistant', text: result.answer, kind: 'interpretation', providerId: result.providerId, model: result.model }
@@ -508,7 +591,46 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     } finally {
       setChatBusy(false);
     }
-  }, [analysis, appendChatMessage, chatBusy, chatInput, outputDraft]);
+  }, [analysis, appendChatMessage, chatBusy, chatInput, outputDraft, draft]);
+
+  const onRepairFromError = React.useCallback(async () => {
+    const output = outputDraft.trim();
+    if (!output || chatBusy) return;
+    if (!masterSyntax.trim()) {
+      setNotice({ tone: 'error', text: 'אין master syntax לתקן — צור קוד קודם.' });
+      return;
+    }
+
+    appendChatMessage({ role: 'user', text: `תקן את ה-syntax לפי שגיאות SPSS:\n${output}`, kind: 'output' });
+    setChatBusy(true);
+    setNotice({ tone: 'info', text: 'מנתח את שגיאות SPSS ומתקן את ה-syntax...' });
+    try {
+      const result = await repairSpssSyntaxFromError({ analysis, priorSyntax: masterSyntax, output, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      const parsed = result.parsed;
+      const summary = parsed ? `זוהו ${parsed.fatal.length} שגיאות ו-${parsed.warnings.length} אזהרות. ` : '';
+      if (result.ok && result.syntax) {
+        appendChatMessage({
+          role: 'assistant',
+          kind: 'repair',
+          text: `${summary}הקוד תוקן — העתק והרץ שוב ב-SPSS. אם נשארת שגיאה, הדבק אותה שוב לתיקון נוסף.`,
+          syntax: result.syntax,
+          providerId: result.providerId,
+          model: result.model,
+        });
+        setOutputDraft('');
+        setChatInput('');
+        setNotice({ tone: 'success', text: 'הקוד תוקן. העתק את הגרסה המתוקנת מהצ׳אט.' });
+      } else {
+        appendChatMessage({ role: 'assistant', kind: 'error', text: `${summary}${result.error || result.guidanceMessage || 'תיקון הקוד נכשל.'}` });
+        setNotice({ tone: 'error', text: result.error || result.guidanceMessage || 'תיקון הקוד נכשל.' });
+      }
+    } catch (error) {
+      appendChatMessage({ role: 'assistant', kind: 'error', text: error instanceof Error ? error.message : 'תיקון הקוד נכשל.' });
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'תיקון הקוד נכשל.' });
+    } finally {
+      setChatBusy(false);
+    }
+  }, [analysis, appendChatMessage, chatBusy, masterSyntax, outputDraft]);
 
   const onGenerateChart = React.useCallback(async () => {
     const output = outputDraft.trim();
@@ -666,6 +788,13 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
         className="hidden"
         onChange={handleFileInputChange}
       />
+      <input
+        ref={draftInputRef}
+        type="file"
+        accept={BROWSER_DOC_ACCEPT}
+        className="hidden"
+        onChange={onDraftInputChange}
+      />
       <div className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[minmax(320px,390px),1fr]">
         <aside className="min-h-0 overflow-y-auto border-l border-slate-200 bg-[#F8FAFC] px-5 py-5 md:px-6 md:py-6 space-y-5">
           <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
@@ -705,6 +834,39 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
 ל-AI נשלחים שמות המשתנים וסטטיסטיקות סיכום. שורות הדאטה המלאות לא נשלחות.
               </div>
             </div>
+          </div>
+
+          <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-lg font-bold text-slate-900">טיוטה קיימת <span className="text-sm font-normal text-slate-500">(אופציונלי)</span></div>
+                <p className="mt-1 text-sm leading-6 text-slate-600">העלה עבודה בכתיבה כדי שהפירושים והצ'אט יתאימו למינוח ולסגנון שלה.</p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-2">
+                <button
+                  type="button"
+                  className={`rounded-2xl px-4 py-2.5 text-sm font-semibold text-white transition ${draftBusy ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
+                  onClick={onSelectDraft}
+                  disabled={draftBusy}
+                >
+                  {draftBusy ? 'טוען...' : (draft ? 'החלף' : 'העלה טיוטה')}
+                </button>
+                {draft && (
+                  <button
+                    type="button"
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300"
+                    onClick={clearDraft}
+                  >
+                    הסר
+                  </button>
+                )}
+              </div>
+            </div>
+            {draft && (
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-700" title={draft.name}>📄 {draft.name}</span>
+              </div>
+            )}
           </div>
 
           <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm space-y-4">
@@ -913,10 +1075,22 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
                     }`}
                   >
                     <div className="mb-1 text-[11px] font-bold text-slate-400">
-                      {message.role === 'user' ? 'אתה' : (message.kind === 'chart' ? 'גרף' : 'מדריך SPSS')}
+                      {message.role === 'user' ? 'אתה' : (message.kind === 'chart' ? 'גרף' : message.kind === 'repair' ? 'תיקון קוד' : 'מדריך SPSS')}
                       {message.providerId ? ` · ${message.providerId}` : ''}
                     </div>
-                    {message.kind === 'chart' && message.dataUrl ? (
+                    {message.kind === 'repair' && message.syntax ? (
+                      <div className="flex flex-col gap-2">
+                        <div className="whitespace-pre-wrap break-words">{message.text}</div>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[12px] leading-6 text-slate-800">{message.syntax}</pre>
+                        <button
+                          type="button"
+                          className="self-start text-xs font-bold text-blue-700 hover:underline"
+                          onClick={() => handleCopy(message.syntax, 'הקוד המתוקן הועתק ללוח.')}
+                        >
+                          העתק קוד מתוקן
+                        </button>
+                      </div>
+                    ) : message.kind === 'chart' && message.dataUrl ? (
                       <div className="flex flex-col gap-2">
                         {message.chartTitle && <div className="text-sm font-bold text-slate-700">{message.chartTitle}</div>}
                         <img
@@ -971,7 +1145,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
               {chatInputMode === 'output' && (
                 <textarea
                   className="mt-3 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[12px] leading-6 text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"
-                  placeholder="הדבק כאן את טבלת ה-Output מ-SPSS (למשל טבלת Independent Samples Test)."
+                  placeholder="הדבק כאן את ה-Output מ-SPSS: טבלה לפירוש/גרף, או הודעת שגיאה (Error # / Warning #) ולחץ ‏🛠 תקן קוד."
                   value={outputDraft}
                   onChange={(event) => setOutputDraft(event.target.value)}
                 />
@@ -990,6 +1164,17 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
                     }
                   }}
                 />
+                {chatInputMode === 'output' && (
+                  <button
+                    type="button"
+                    className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${chatBusy || !outputDraft.trim() || !masterSyntax.trim() ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'border border-amber-200 bg-white text-amber-700 hover:bg-amber-50'}`}
+                    onClick={onRepairFromError}
+                    disabled={chatBusy || !outputDraft.trim() || !masterSyntax.trim()}
+                    title="הדבק את שגיאת ה-Output מ-SPSS ותקן את ה-master syntax אוטומטית"
+                  >
+                    🛠 תקן קוד
+                  </button>
+                )}
                 {chatInputMode === 'output' && (
                   <button
                     type="button"
