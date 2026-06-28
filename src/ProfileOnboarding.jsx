@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useDelimitedListInput } from './delimitedListInput';
-import { getSyllabusFileAcceptList, hasDesktopMaterialTextExtraction } from './services/workspaceLearningService';
+import { useDelimitedListInput } from './useDelimitedListInput';
+import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
 
 const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'gemini', label: 'Gemini' },
@@ -63,7 +63,6 @@ export default function ProfileOnboarding({
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
   const syllabusFileInputRef = useRef(null);
   const previousSyllabusImportBusyRef = useRef(false);
-  const supportsDesktopSyllabusExtraction = hasDesktopMaterialTextExtraction();
 
   useEffect(() => {
     setMounted(true);
@@ -433,9 +432,7 @@ export default function ProfileOnboarding({
                         {syllabusImportBusy ? 'מייבא סילבוס...' : 'העלה סילבוס'}
                       </button>
                       <div className="text-[11px] text-white/65">
-                        {supportsDesktopSyllabusExtraction
-                          ? 'תומך ב־docx, txt, md, html, pdf, Excel ובתמונות עם OCR'
-                          : 'תומך ב־docx, txt, md, html ו־pdf'}
+                        תומך ב־docx, txt, md, html, pdf, מצגות (pptx), Excel ובתמונות עם OCR
                       </div>
                     </div>
                   </div>

@@ -204,6 +204,7 @@ const saveLocalMaterial = async (payload = {}) => {
     templateId: String(payload.templateId || 'blank'),
     learningHint: String(payload.learningHint || ''),
     previewText: String(payload.previewText || '').trim(),
+    contentText: String(payload.contentText || payload.previewText || '').trim(),
     previewChars: Math.max(0, Number(payload.previewChars) || 0),
     previewStatus: String(payload.previewStatus || '').trim(),
     previewSource: String(payload.previewSource || '').trim(),
@@ -231,7 +232,8 @@ const readLocalMaterial = async (fileName) => {
   let extractedText = '';
   let extractedTextError = '';
   try {
-    const extraction = await extractMaterialTextFromBytes(safeName, base64ToUint8(r.data), 5000);
+    // 48k תווים ≈ 12k טוקנים — תוכן מלא לחומר עזר (ולא רק תצוגה מקדימה) להזרמה ל-AI.
+    const extraction = await extractMaterialTextFromBytes(safeName, base64ToUint8(r.data), 48000);
     if (extraction.ok) extractedText = extraction.text || '';
     else extractedTextError = extraction.error || '';
   } catch (err) {

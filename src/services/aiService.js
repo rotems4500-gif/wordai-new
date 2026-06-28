@@ -3,7 +3,9 @@ import { DOMParser as ProseMirrorDOMParser, DOMSerializer } from "@tiptap/pm/mod
 import { AGENTS_CONFIG } from "../agentConfig";
 import { analyzeQuery as analyzeArticleQuery, buildArticleSearchQueryVariants, extractDomainFromUrl as extractArticleDomainFromUrl, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, validateArticleCandidate } from "./articleSourceValidation";
 import { fetchBrowserPageSnapshot, isDesktopBrowserRetrievalAvailable } from "./browserRetrievalService";
+import { shouldRelayHostViaFunction, relayHttpRequestViaFunction } from "./webProxyService";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
+import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService";
 export {
   WORKSPACE_V2_VERSION,
   WORKSPACE_V2_TEMPLATE_IDS,
@@ -1304,6 +1306,29 @@ export const getSpssPreferences = () => ({
 
 export const saveSpssPreferences = (config) => {
   localStorage.setItem('wordai_spss_preferences', JSON.stringify({ ...DEFAULT_SPSS_PREFERENCES, ...config }));
+  syncPersistedAppSettings();
+};
+
+// העדפות לולאת ההאנשה היריבה (adversarial humanizer). פר-קריאה: target=יעד ציון
+// (נמוך=אנושי), maxPasses=מקס' סבבי שכתוב מול הגלאי. enabled=הפעלת הלולאה כולה.
+export const DEFAULT_HUMANIZER_PREFERENCES = {
+  enabled: true,
+  target: 35,
+  maxPasses: 4,
+};
+
+export const getHumanizerPreferences = () => {
+  const stored = readJsonFromStorage('wordai_humanizer_preferences', {});
+  const merged = { ...DEFAULT_HUMANIZER_PREFERENCES, ...stored };
+  return {
+    enabled: merged.enabled !== false,
+    target: Math.max(0, Math.min(100, Number(merged.target) || DEFAULT_HUMANIZER_PREFERENCES.target)),
+    maxPasses: Math.max(0, Math.min(8, Math.round(Number(merged.maxPasses) || DEFAULT_HUMANIZER_PREFERENCES.maxPasses))),
+  };
+};
+
+export const saveHumanizerPreferences = (config = {}) => {
+  localStorage.setItem('wordai_humanizer_preferences', JSON.stringify({ ...DEFAULT_HUMANIZER_PREFERENCES, ...config }));
   syncPersistedAppSettings();
 };
 
@@ -9060,7 +9085,14 @@ const createProxyRequestId = () => {
 };
 
 const proxyDesktopHttpRequest = async ({ url, method = 'POST', headers = {}, body, timeoutMs = 0 } = {}, signal) => {
-  if (!(typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest)) return null;
+  if (!(typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest)) {
+    // אתר (ללא דסקטופ): מארחים חסומי-CORS (SerpAPI/Copyleaks) עוברים דרך ה-relay בשרת.
+    // השאר (ספקי AI) מחזירים null → הקורא עושה fetch ישיר (עובד ישירות מהדפדפן).
+    if (shouldRelayHostViaFunction(url)) {
+      return relayHttpRequestViaFunction({ url, method, headers, body, timeoutMs }, signal);
+    }
+    return null;
+  }
 
   if (signal?.aborted) throw createProxyAbortError();
 
@@ -11206,11 +11238,34 @@ export const callAiAgent = async (agentId, selectedText, context = "") => {
   if (!agentConf) throw new Error("Invalid agent ID");
   const fullPrompt = buildPrompt(agentConf, selectedText, context);
   // משתמש במנוע הפעיל הנבחר (לא תמיד Gemini)
-  return chatWithActiveProvider(fullPrompt, context, '', {
+  const baseOptions = {
     skipAutomation: true,
     skipMultiModel: true,
     strictFormatting: true,
-  });
+  };
+  const firstPass = await chatWithActiveProvider(fullPrompt, context, '', baseOptions);
+
+  // האנשה: סוגרים לולאה יריבה מול הגלאי המקומי — צור → נקד → תקן ממוקד → חזור,
+  // עד שהציון יורד מתחת ליעד שהמשתמש קבע (פר-קריאה דרך getHumanizerPreferences).
+  if (agentId === 'humanize') {
+    const prefs = getHumanizerPreferences();
+    if (prefs.enabled && prefs.maxPasses > 0 && String(firstPass || '').trim()) {
+      try {
+        const loop = await runHumanizerLoop({
+          text: firstPass,
+          context,
+          target: prefs.target,
+          maxPasses: prefs.maxPasses,
+          profile: getPersonalStyleProfile(),
+          invokeModel: (prompt, ctx) => chatWithActiveProvider(prompt, ctx, STEALTH_HUMANIZE_GUIDE, baseOptions),
+        });
+        if (loop?.text) return loop.text;
+      } catch {
+        // כשל בלולאה — מחזירים את הפלט הראשון.
+      }
+    }
+  }
+  return firstPass;
 };
 
 const AI_EDIT_ALLOWED_INLINE_TAGS = new Set(['strong', 'b', 'em', 'i', 'u', 'span', 's', 'mark', 'sub', 'sup', 'a', 'code']);

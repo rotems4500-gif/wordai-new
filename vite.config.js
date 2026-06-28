@@ -307,11 +307,21 @@ export default async () => defineConfig({
   base: './',
   plugins: [react(), pastWorksPlugin(), styleBankPlugin()],
   resolve: {
+    // Force a single React instance. Without this, dev (optimizer + react-refresh)
+    // can wire some modules to a second React copy → "Invalid hook call" /
+    // "can't detect preamble" crashes (e.g. ProfileOnboarding's SyllabusListTextarea).
+    dedupe: ['react', 'react-dom'],
     alias: {
       'sav-reader': path.resolve(process.cwd(), 'node_modules', 'sav-reader', 'dist', 'SavBufferReader.js'),
+      // SavReader core (without SavBufferReader's broken `stream.Readable.from`).
+      // We feed it a Readable we build ourselves — see spssDataIngest.js.
+      'sav-reader-core': path.resolve(process.cwd(), 'node_modules', 'sav-reader', 'dist', 'SavReader.js'),
       events: 'events',
       stream: 'stream-browserify',
     },
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
   },
   define: {
     global: 'globalThis',

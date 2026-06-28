@@ -25,7 +25,8 @@ import {
   getHelperMaterialAcceptList,
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
-import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
+import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 
 const MODERN_TEMPLATES = [
   { 
@@ -454,7 +455,7 @@ const partitionFilesByAcceptList = (files = [], acceptList = '') => {
 
 const formatInstructionFileUploadError = (error) => {
   const code = String(error?.message || '').trim();
-  if (code === 'unsupported-binary-file') return 'קובץ ההנחיות לא נתמך. אפשר להעלות כרגע docx, txt, md, html, json או pdf.';
+  if (code === 'unsupported-binary-file') return 'קובץ ההנחיות לא נתמך. אפשר docx, pdf, txt, md, html, json, מצגות (pptx), Excel‏ (xls/xlsx) ותמונות. פורמטים ישנים (.doc/.ppt) וארכיונים לא נתמכים.';
   if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
   if (code === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-DOCX.';
   if (code === 'empty-file-text') return 'לא נמצא טקסט קריא בתוך קובץ ההנחיות שנבחר.';
@@ -465,6 +466,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [prompt, setPrompt] = useState('');
   const [outputType, setOutputType] = useState('document');
   const [pptSlideCount, setPptSlideCount] = useState(10);
+  const [pptSlideAuto, setPptSlideAuto] = useState(false);
   const [pptTheme, setPptTheme] = useState('premium');
   const [pptDensity, setPptDensity] = useState('balanced');
   const [pptImageIntensity, setPptImageIntensity] = useState('high');
@@ -472,6 +474,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [pptIncludeCover, setPptIncludeCover] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [humanizeLoopEnabled, setHumanizeLoopEnabled] = useState(() => Boolean(getAppMemory().humanizeLoopOnGenerate));
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -1068,16 +1071,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (!file) return;
 
     try {
-      const ext = String(file.name || '').toLowerCase().split('.').pop();
-      if (!['txt', 'md', 'markdown', 'html', 'htm'].includes(ext)) {
-        showToast('בדפדפן אפשר לבחור כעת רק קובצי txt, md או html כטיוטת בסיס.', { tone: 'warning' });
-        return;
-      }
-
-      const rawText = await file.text();
-      const html = /<(html|body|p|h1|h2|div|span|br|ul|ol|li)\b/i.test(rawText)
+      // קורא Word‏ (docx), PDF, וגם טקסט/HTML דרך המחלץ של הדפדפן (אותה תמיכה כמו בדסקטופ).
+      const doc = await readBrowserDocumentFile(file);
+      if (!doc) return;
+      const rawText = doc.text || '';
+      const html = doc.html || (/<(html|body|p|h1|h2|div|span|br|ul|ol|li)\b/i.test(rawText)
         ? rawText
-        : plainTextToHtml(rawText);
+        : plainTextToHtml(rawText));
 
       commitBaseDraft({
         name: file.name,
@@ -1337,7 +1337,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           source: fromDraft ? 'document' : 'topic',
           topic: String(prompt || '').trim(),
           documentText: draftSourceText,
-          slideCount: pptSlideCount,
+          slideCount: pptSlideAuto ? 'auto' : pptSlideCount,
           theme: pptTheme,
           density: pptDensity,
           imageIntensity: pptImageIntensity,
@@ -1373,6 +1373,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedProviderModel,
         baseDraft,
         additionalReviewRounds: 0,
+        humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
       });
     } finally {
       setIsGenerating(false);
@@ -1411,6 +1412,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         selectedProviderModel,
         baseDraft,
         additionalReviewRounds: 0,
+        humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
         forceDirectMode: true,
         skipWorkflowAutomation: true,
         directModeReason: 'chef-final-compose',
@@ -1639,19 +1641,49 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               )}
             </div>
 
+            {!isPresentationOutput && (
+              <label className="flex items-center gap-3 mb-6 px-4 py-3 bg-white/10 backdrop-blur-md border border-white/25 rounded-2xl cursor-pointer text-right">
+                <input
+                  type="checkbox"
+                  checked={humanizeLoopEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setHumanizeLoopEnabled(next);
+                    saveAppMemory({ ...getAppMemory(), humanizeLoopOnGenerate: next });
+                  }}
+                  className="w-4 h-4 accent-cyan-400 shrink-0"
+                />
+                <span className="flex flex-col">
+                  <span className="text-white font-semibold text-sm">🧬 האנשה בלולאה עד תוצאה מספקת</span>
+                  <span className="text-white/65 text-xs">אחרי היצירה, המסמך משוכתב שוב ושוב ונמדד מול גלאי ה-AI עד שאין שיפור. איטי יותר, אבל אנושי ככל האפשר.</span>
+                </span>
+              </label>
+            )}
+
             {isPresentationOutput && (
               <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
                 <div className="text-white font-semibold text-sm mb-4">⚙️ הגדרות מצגת</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <label className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">מספר שקופיות</span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/80 text-xs font-semibold">מספר שקופיות</span>
+                      <button
+                        type="button"
+                        onClick={() => setPptSlideAuto((v) => !v)}
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${pptSlideAuto ? 'bg-cyan-400 text-slate-900' : 'bg-white/10 text-white/70 hover:bg-white/20'}`}
+                      >
+                        ✨ אוטומטי
+                      </button>
+                    </div>
                     <input
                       type="number"
                       min="4"
-                      max="20"
-                      value={pptSlideCount}
-                      onChange={(e) => setPptSlideCount(Math.max(4, Math.min(20, Number(e.target.value) || 10)))}
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200"
+                      max="40"
+                      value={pptSlideAuto ? '' : pptSlideCount}
+                      disabled={pptSlideAuto}
+                      placeholder={pptSlideAuto ? 'ה-AI יחליט לפי התוכן' : ''}
+                      onChange={(e) => setPptSlideCount(Math.max(4, Math.min(40, Number(e.target.value) || 10)))}
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 disabled:opacity-50 placeholder:text-white/40 placeholder:text-xs"
                     />
                   </label>
                   <label className="flex flex-col gap-2">
@@ -1763,7 +1795,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               <input
                 ref={baseDraftInputRef}
                 type="file"
-                accept=".txt,.md,.markdown,.html,.htm"
+                accept={BROWSER_DOC_ACCEPT}
                 className="hidden"
                 onChange={handleBaseDraftUpload}
               />

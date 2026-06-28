@@ -20,12 +20,15 @@ import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
 import SpssProjectStudio from './SpssProjectStudio';
 import PresentationStudio from './PresentationStudio';
+import PptxDraftStudio from './PptxDraftStudio';
 import { generateDeck } from './services/presentationService';
+import { importPptxDraft } from './services/pptxDraftService';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
+import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { Modal, Button, Input, TextArea } from './components/ui';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
@@ -3230,6 +3233,7 @@ function App() {
   const [appMode, setAppMode] = React.useState('word');
   const [presentationDeck, setPresentationDeck] = React.useState(null);
   const [presentationBusy, setPresentationBusy] = React.useState(false);
+  const [pptxDraft, setPptxDraft] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [authenticityOpen, setAuthenticityOpen] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
@@ -5472,6 +5476,7 @@ ${sidebarReviewContext}`
     const instructionFileName = String(payload.instructionFileName || '').trim();
     const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
     const additionalReviewRounds = Math.max(0, Math.min(2, Number(payload.additionalReviewRounds) || 0));
+    const humanizeLoop = payload.humanizeLoop && typeof payload.humanizeLoop === 'object' ? payload.humanizeLoop : null;
     const suppressDeferredReviewOffer = payload.suppressDeferredReviewOffer === true;
     const forceDirectMode = payload.forceDirectMode === true;
     const skipWorkflowAutomation = payload.skipWorkflowAutomation === true;
@@ -5594,11 +5599,12 @@ ${sidebarReviewContext}`
             selectedProviderId,
             selectedProviderModel,
             additionalReviewRounds,
+            humanizeLoop,
             forceDirectMode,
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -7146,15 +7152,17 @@ ${sidebarReviewContext}`
 
         const picker = document.createElement('input');
         picker.type = 'file';
-        picker.accept = '.txt,.md,.markdown,.html,.htm';
+        picker.accept = BROWSER_DOC_ACCEPT;
         picker.onchange = async (event) => {
           const file = event.target.files?.[0];
           if (!file) return;
-          const text = await file.text();
-          const html = /<(html|body|p|h1|h2|div|span|br|ul|ol|li)\b/i.test(text)
-            ? text
-            : text.split(/\n{2,}/).map((block) => `<p>${escHtml(block).replace(/\n/g, '<br />')}</p>`).join('');
-          applyImportedDocument({ title: file.name, html });
+          try {
+            // קורא Word‏ (docx), PDF, וגם טקסט/HTML דרך המחלץ של הדפדפן (כמו בדסקטופ).
+            const doc = await readBrowserDocumentFile(file);
+            if (doc) applyImportedDocument(doc);
+          } catch (error) {
+            showToast(error?.message || 'לא ניתן לפתוח את הקובץ שנבחר.', { tone: 'error' });
+          }
         };
         picker.click();
         break;
@@ -7672,6 +7680,26 @@ ${sidebarReviewContext}`
     if (!payload) { setPresentationDeck(null); return; }
     return generatePresentationDeck(payload);
   }, [generatePresentationDeck]);
+
+  // העלאת מצגת קיימת (.pptx) כטיוטה לעריכת טקסט/שכתוב — נכנס למצב טיוטת מצגת.
+  const handleUploadPptxDraft = React.useCallback(async (file) => {
+    if (!file) return false;
+    setShowStartScreen(false);
+    setAppMode('presentation');
+    setPresentationBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const draft = await importPptxDraft(new Uint8Array(buf), file.name || 'presentation.pptx');
+      setPresentationDeck(null);
+      setPptxDraft(draft);
+      return true;
+    } catch (error) {
+      showToast(error?.message || 'טעינת המצגת נכשלה', { tone: 'error' });
+      return false;
+    } finally {
+      setPresentationBusy(false);
+    }
+  }, []);
   const isNonDocumentMode = !isWordMode;
   const isInputDialogVisible = inputDialog.open && isWordMode;
   const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && isWordMode;
@@ -7765,12 +7793,23 @@ ${sidebarReviewContext}`
           </div>
         )}
 
-        {isPresentationMode && (
+        {isPresentationMode && pptxDraft && (
+          <div className="min-w-0 flex-1 flex">
+            <PptxDraftStudio
+              draft={pptxDraft}
+              onExit={() => { setPptxDraft(null); setAppMode('word'); }}
+              showToast={showToast}
+            />
+          </div>
+        )}
+
+        {isPresentationMode && !pptxDraft && (
           <div className="min-w-0 flex-1 flex">
             <PresentationStudio
               deck={presentationDeck}
               onDeckChange={setPresentationDeck}
               onGenerate={handleStudioGenerate}
+              onUploadPptx={handleUploadPptxDraft}
               onExit={() => setAppMode('word')}
               busy={presentationBusy}
               hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}

@@ -1701,6 +1701,49 @@ const getSpssCommands = (input = '') => (Array.isArray(input) ? input : tokenize
   .map((command) => String(command || '').trim())
   .filter(Boolean);
 
+const isSpssSubcommandContinuationLine = (line = '') => {
+  const trimmed = String(line || '').trim();
+  return !trimmed || trimmed.startsWith('/') || trimmed.startsWith('+') || /^(?:ELSE|ELSE\s+IF|END\s+IF|END\s+REPEAT|END\s+LOOP|END\s+GPL|END\s+MATRIX|END\s+PROGRAM|END\s+DATA)\b/i.test(trimmed);
+};
+
+const findSpssCommandTerminatorIssue = (text = '') => {
+  const source = stripSpssCommentLines(text);
+  const lines = source.split(/\r?\n/);
+  let insideOpenCommand = false;
+  let quoteCharacter = '';
+  let openCommandLine = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = String(line || '').trim();
+    if (!trimmed) continue;
+
+    if (insideOpenCommand && isLikelySpssCommandStartLine(trimmed) && !isSpssSubcommandContinuationLine(trimmed)) {
+      return `Missing period before line ${index + 1}; SPSS command started on line ${openCommandLine} was not terminated with ".".`;
+    }
+
+    if (!insideOpenCommand) {
+      insideOpenCommand = true;
+      quoteCharacter = '';
+      openCommandLine = index + 1;
+    }
+
+    const nextState = scanSpssCommandLine(line, quoteCharacter);
+    quoteCharacter = nextState.quoteCharacter;
+    if (nextState.terminated) {
+      insideOpenCommand = false;
+      quoteCharacter = '';
+      openCommandLine = 0;
+    }
+  }
+
+  if (insideOpenCommand) {
+    return `Missing period at the end of the SPSS command that starts on line ${openCommandLine}.`;
+  }
+
+  return '';
+};
+
 const findFirstSubcommandIndex = (text = '') => {
   const source = String(text || '');
   let quoteCharacter = '';
@@ -2110,6 +2153,11 @@ export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysi
 
   const allowedTokens = new Set(Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token) : []);
   const syntaxOnly = stripSpssCommentLines(cleaned);
+  const terminatorIssue = findSpssCommandTerminatorIssue(cleaned);
+  if (terminatorIssue) {
+    return buildErrorLine(terminatorIssue);
+  }
+
   const syntaxCommands = getSpssCommands(syntaxOnly);
   if (!syntaxCommands.length) {
     return buildErrorLine('The model returned comments without executable SPSS commands.');
@@ -2431,6 +2479,39 @@ const buildSpssErrorDigest = (parsed = null, analysis = null) => {
   return lines.join('\n');
 };
 
+const buildSuspectedMissingDigest = (analysis = null) => {
+  const columns = Array.isArray(analysis?.columns) ? analysis.columns : [];
+  const flagged = columns
+    .filter((column) => Array.isArray(column?.suspectedMissingCodes) && column.suspectedMissingCodes.length)
+    .map((column) => {
+      const codes = column.suspectedMissingCodes.map((value) => formatNumericLiteral(value)).join(', ');
+      const range = column.numericStats && column.numericStats.min !== null && column.numericStats.max !== null
+        ? `; observed range ${formatNumericLiteral(column.numericStats.min)}..${formatNumericLiteral(column.numericStats.max)}`
+        : '';
+      return `- ${column.token}${column.originalName ? ` (${column.originalName})` : ''}: suspected missing codes [${codes}]${range}`;
+    });
+  return flagged.length ? flagged.join('\n') : '';
+};
+
+const buildSpssOutputPreflightDigest = ({ output = '', analysis = null } = {}) => {
+  const parsedErrors = parseSpssOutputErrors(output);
+  const lines = [];
+  if (parsedErrors.diagnostics.length) {
+    lines.push('SPSS diagnostics detected in pasted output:');
+    lines.push(buildSpssErrorDigest(parsedErrors, analysis));
+    lines.push('Interpretation rule: if fatal Errors are present, do not interpret downstream tables as final results until the syntax is fixed and rerun.');
+  }
+
+  const missingDigest = buildSuspectedMissingDigest(analysis);
+  if (missingDigest) {
+    lines.push('Dataset-level missing-value risk from metadata:');
+    lines.push(missingDigest);
+    lines.push('Interpretation rule: if pasted descriptive or inferential output uses any flagged variable and shows implausible means, SDs, min/max, correlations, t/F/regression estimates, warn that results may be contaminated by undeclared missing codes and should be rerun after MISSING VALUES.');
+  }
+
+  return lines.join('\n');
+};
+
 const buildSpssRepairSystemPrompt = ({ analysis = null } = {}) => {
   const allowedTokens = Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token).join(', ') : '';
   return [
@@ -2655,10 +2736,13 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
     const tokenizedOutput = tokenizeSpssRequest(cleanOutput, analysis);
     const tokenizedQuestion = tokenizeSpssRequest(String(question || '').trim(), analysis);
     const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
+    const preflightDigest = buildSpssOutputPreflightDigest({ output: cleanOutput, analysis });
+    const tokenizedPreflightDigest = tokenizeSpssRequest(preflightDigest, analysis);
 
     const systemPrompt = [
       'אתה מומחה SPSS ש-מסביר בעברית ברורה פלט (Output) שמשתמש הדביק.',
       'הסבר: מה הטבלה מציגה, מה הערכים המרכזיים (למשל t, F, χ², r, p, df, גודל אפקט), האם התוצאה מובהקת ומה המשמעות המהותית, ואזהרות על הפרת הנחות אם נראות.',
+      'לפני כל פירוש, קרא את "בדיקת WordFlow לפני פירוש" אם צורפה. אם היא מזהה Error פטאלי, פתח בכך שההרצה לא תקינה ושאין לפרש תוצאות המשך כתוצאות סופיות. אם היא מזהה missing חשוד, הצלֵב זאת מול הפלט והזהר לפני ניסוח APA.',
       'בדיקת שפיות חובה לפני שאתה מסביר: ודא שהסטטיסטיקה התיאורית הגיונית ביחס לסוג המשתנה. דגל אדום קלאסי — סטיית תקן (SD) גדולה מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם הצפוי (למשל M≈9 או SD≈20 בסולם 0–10, או SD שגדול מהממוצע במשתנה חסום). זה כמעט תמיד אומר ערכי missing לא-מוגדרים (קודים כמו 98/99) שנכנסים לחישוב ומנפחים את התוצאות. אם יש metadata — הצלב מול ה-range וה-observedValues של המשתנה (קודים כמו 98/99 = חשד מיידי).',
       'ה-metadata כבר עשה חלק מהעבודה: שדה suspectedUndeclaredMissing=[...] במשתנה = WordFlow זיהה קוד sentinel (98/99/-9) שלא הוגדר כ-missing וכנראה מזהם את הסטטיסטיקה — התייחס לזה כדגל אדום ודאי. שדה declaredMissing=[...] = הקודים האלה כבר מוגדרים כ-user-missing ו-SPSS מתעלם מהם, אז הם תקינים.',
       'כשאתה מזהה דגל אדום כזה: פתח את הפירוש באזהרה מפורשת, הסבר שכל התוצאות שמבוססות על הממוצעים האלה (t-test/ANOVA/מתאם/רגרסיה) אינן אמינות עד שמגדירים את הקודים כ-user-missing (MISSING VALUES או Variable View → Missing) ומריצים מחדש, ואל תדווח את הערכים המזוהמים ב-APA כאילו הם תקינים.',
@@ -2672,6 +2756,7 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
     const message = [
       tokenizedDraft ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}` : '',
       tokenizedQuestion ? `שאלה ממוקדת: ${tokenizedQuestion}` : '',
+      tokenizedPreflightDigest ? `בדיקת WordFlow לפני פירוש:\n${tokenizedPreflightDigest}` : '',
       'פלט SPSS להסבר:',
       tokenizedOutput,
     ].filter(Boolean).join('\n\n');

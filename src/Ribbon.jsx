@@ -492,6 +492,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
           {[
             { id: 'checkUpdates', label: 'בדוק עדכונים', icon: 'ph-arrows-clockwise' },
             { id: 'guideUser', label: 'מדריך למשתמש', icon: 'ph-book-open' },
+            { id: 'studios', label: 'מדריך כלים מתקדמים', icon: 'ph-sparkle' },
             { id: 'guideAPIKeys', label: 'מדריך מפתחות API', icon: 'ph-key' },
             { id: 'tsDocs', label: 'פתרון תקלות - יצירת מסמך', icon: 'ph-wrench' },
             { id: 'tsAPI', label: 'פתרון תקלות - API', icon: 'ph-plugs-connected' },

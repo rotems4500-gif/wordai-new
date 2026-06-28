@@ -30,29 +30,32 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
 });
 
 // ── טופס יצירה (מצב ללא deck) ────────────────────────────────────
-function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
+function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle }) {
   const prefs = useMemo(() => getPresentationPreferences(), []);
+  const uploadRef = useRef(null);
   const [source, setSource] = useState('topic');
   const [topic, setTopic] = useState('');
   const [audience, setAudience] = useState(prefs.defaultAudience || '');
   const [goal, setGoal] = useState(prefs.defaultGoal || '');
-  const [slideCount, setSlideCount] = useState(prefs.defaultSlideCount || 10);
+  const [slideCount, setSlideCount] = useState(prefs.defaultSlideCount === 'auto' ? 10 : (prefs.defaultSlideCount || 10));
+  const [slideAuto, setSlideAuto] = useState(prefs.defaultSlideCount === 'auto');
   const [themeId, setThemeId] = useState(prefs.defaultThemeId || 'premium');
   const [density, setDensity] = useState(prefs.defaultDensity || 'balanced');
   const [imageIntensity, setImageIntensity] = useState(prefs.defaultImageIntensity || 'high');
 
   const fromDocument = source === 'document';
+  const fromUpload = source === 'upload';
   const canGenerate = (fromDocument ? hasDocument : Boolean(topic.trim())) && !busy;
 
   const submit = () => {
     if (!canGenerate) return;
-    const resolvedSlideCount = Math.max(4, Math.min(20, Number(slideCount) || 10));
+    const resolvedSlideCount = Math.max(4, Math.min(40, Number(slideCount) || 10));
     if (prefs.rememberLastChoices !== false) {
       savePresentationPreferences({
         ...prefs,
         defaultThemeId: themeId,
         defaultDensity: density,
-        defaultSlideCount: resolvedSlideCount,
+        defaultSlideCount: slideAuto ? 'auto' : resolvedSlideCount,
         defaultImageIntensity: imageIntensity,
         defaultAudience: audience.trim(),
         defaultGoal: goal.trim(),
@@ -60,7 +63,7 @@ function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
     }
     onGenerate({
       source, topic: topic.trim(), audience: audience.trim(), goal: goal.trim(),
-      slideCount: resolvedSlideCount,
+      slideCount: slideAuto ? 'auto' : resolvedSlideCount,
       themeId, density, imageIntensity,
     });
   };
@@ -74,16 +77,31 @@ function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
       </div>
 
       <div className="inline-flex w-fit rounded-2xl border border-slate-700 bg-slate-800/60 p-1">
-        <button type="button" onClick={() => setSource('topic')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${!fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>נושא חופשי</button>
+        <button type="button" onClick={() => setSource('topic')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${source === 'topic' ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>נושא חופשי</button>
         <button type="button" onClick={() => setSource('document')} disabled={!hasDocument} title={hasDocument ? '' : 'אין מסמך פתוח'} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'} ${!hasDocument ? 'cursor-not-allowed opacity-40' : ''}`}>מהמסמך הפתוח</button>
+        <button type="button" onClick={() => setSource('upload')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromUpload ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>העלאת מצגת (טיוטה)</button>
       </div>
 
-      {fromDocument && (
+      {fromUpload && (
+        <div className="flex flex-col gap-3">
+          <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm leading-7 text-slate-300">
+            העלה מצגת קיימת (<b className="text-white">.pptx</b>) כדי לערוך ולשכתב את הטקסט לסגנון שלך.
+            <br />העיצוב המקורי — צבעים, מיקומים, תמונות, פונטים — נשמר במלואו בקובץ המיוצא.
+          </div>
+          <input ref={uploadRef} type="file" accept=".pptx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onUploadPptx?.(f); e.target.value = ''; }} />
+          <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy} className="rounded-2xl border-2 border-dashed border-slate-600 py-12 text-sm font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-50">
+            {busy ? 'טוען מצגת...' : '📥 לחץ לבחירת קובץ PowerPoint (.pptx)'}
+          </button>
+        </div>
+      )}
+
+      {!fromUpload && fromDocument && (
         <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm text-slate-300">
           {hasDocument ? <>המצגת תיבנה מהמסמך הפתוח{documentTitle ? <>: <b className="text-white">{documentTitle}</b></> : ''}. שדה הנושא אופציונלי — זווית או דגש.</> : 'אין מסמך פתוח.'}
         </div>
       )}
 
+      {!fromUpload && (<>
       <label className="flex flex-col gap-2">
         <span className="text-sm font-bold text-slate-200">{fromDocument ? 'זווית או דגש (אופציונלי)' : 'נושא המצגת'}</span>
         <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={fromDocument ? 'על מה להדגיש מהמסמך?' : 'על מה המצגת? מה צריך להעביר?'} className="min-h-[96px] rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm leading-7 text-slate-100 outline-none focus:border-cyan-400" />
@@ -94,8 +112,11 @@ function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
           <input value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="משקיעים, מרצה, לקוח..." className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
         <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">מטרה</span>
           <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="לשכנע, להסביר, למכור..." className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
-        <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">מספר שקופיות</span>
-          <input type="number" min="4" max="20" value={slideCount} onChange={(e) => setSlideCount(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+        <label className="flex flex-col gap-2">
+          <span className="flex items-center justify-between text-sm font-bold text-slate-200">מספר שקופיות
+            <button type="button" onClick={() => setSlideAuto((v) => !v)} className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${slideAuto ? 'bg-cyan-400 text-slate-900' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>✨ אוטומטי</button>
+          </span>
+          <input type="number" min="4" max="40" value={slideAuto ? '' : slideCount} disabled={slideAuto} placeholder={slideAuto ? 'ה-AI יחליט לפי התוכן' : ''} onChange={(e) => setSlideCount(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400 disabled:opacity-50 placeholder:text-slate-500 placeholder:text-xs" /></label>
         <label className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">דגש על תמונות</span>
           <select value={imageIntensity} onChange={(e) => setImageIntensity(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400">
             <option value="high">גבוה</option><option value="medium">בינוני</option><option value="low">נמוך</option>
@@ -122,6 +143,7 @@ function CreateForm({ onGenerate, busy, hasDocument, documentTitle }) {
       <button type="button" onClick={submit} disabled={!canGenerate} className={`mt-2 rounded-2xl px-6 py-3.5 text-sm font-bold text-white transition ${canGenerate ? 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400' : 'cursor-not-allowed bg-slate-700 text-slate-400'}`}>
         {busy ? 'בונה מצגת...' : '📊 צור מצגת'}
       </button>
+      </>)}
     </div>
   );
 }
@@ -353,6 +375,7 @@ export default function PresentationStudio({
   deck = null,
   onDeckChange = () => {},
   onGenerate = () => {},
+  onUploadPptx = () => {},
   onExit = () => {},
   busy = false,
   hasDocument = false,
@@ -382,7 +405,7 @@ export default function PresentationStudio({
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
                 <div className="text-sm font-semibold">בונה את המצגת...</div>
               </div>
-            : <CreateForm onGenerate={onGenerate} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
+            : <CreateForm onGenerate={onGenerate} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
         </div>
       </div>
     );

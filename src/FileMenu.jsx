@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ProfileOnboarding from './ProfileOnboarding';
-import { normalizeDelimitedList, useDelimitedListInput } from './delimitedListInput';
+import { normalizeDelimitedList } from './delimitedListInput';
+import { useDelimitedListInput } from './useDelimitedListInput';
 import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import { saveBlobInBrowser } from './services/browserDocxExport';
@@ -2307,9 +2308,9 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
             <input
               type="number"
               min="4"
-              max="20"
+              max="40"
               value={prefs.defaultSlideCount ?? 10}
-              onChange={(e) => set('defaultSlideCount', Math.max(4, Math.min(20, Number(e.target.value) || 10)))}
+              onChange={(e) => set('defaultSlideCount', Math.max(4, Math.min(40, Number(e.target.value) || 10)))}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
             />
           </div>
@@ -3843,7 +3844,7 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
 
   const formatSyllabusImportError = (error) => {
     const code = String(error?.message || '').trim();
-    if (code === 'unsupported-binary-file') return 'הקובץ לא נתמך בסביבה הזו. אפשר להעלות docx, txt, md, html או pdf, ובגרסת desktop גם Excel ותמונות עם OCR.';
+    if (code === 'unsupported-binary-file') return 'סוג הקובץ לא נתמך. אפשר להעלות docx, pdf, txt, md, html, מצגות (pptx), Excel‏ (xls/xlsx) ותמונות עם OCR. פורמטים ישנים כמו .doc/.ppt או קבצי ארכיון (zip/rar) לא נתמכים — המר אותם קודם.';
     if (code === 'empty-pdf-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-PDF.';
     if (code === 'empty-docx-text') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-DOCX.';
     if (code === 'empty-spreadsheet-text' || code === 'spreadsheet-read-failed') return 'לא הצלחתי לחלץ טקסט קריא מתוך קובץ ה-Excel.';

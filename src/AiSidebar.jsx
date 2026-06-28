@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse } from "./services/aiService";
+import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse, getHumanizerPreferences, saveHumanizerPreferences, getPersonalStyleProfile } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/styleAuthenticityService";
+import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLoopService";
 import { showToast } from "./services/uiFeedback";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
@@ -893,6 +894,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
   const [selectedSkillId, setSelectedSkillId] = useState(() => getAppMemory().lastSelectedSkillId || 'none');
   const [configuredSplitCallCount, setConfiguredSplitCallCount] = useState(() => clampSplitCallCount(getAppMemory().sidebarSplitCallCount || 0));
+  const [humanizerPrefs, setHumanizerPrefs] = useState(() => getHumanizerPreferences());
+  const updateHumanizerPrefs = useCallback((patch) => {
+    setHumanizerPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      saveHumanizerPreferences(next);
+      return next;
+    });
+  }, []);
   const [composerMode, setComposerMode] = useState(() => normalizeComposerMode(getAppMemory().sidebarComposerMode || 'chat'));
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [requestSnapshot, setRequestSnapshot] = useState(null);
@@ -2332,8 +2341,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           { phase: 'humanize-document', stepIndex: 2, stepCount: normalizedCount },
         ) || '').trim();
       } catch {}
-      onProgress({ progress: 68, message: 'מבצע האנשה מלאה לפי הסגנון והמסמך' });
-      return await invokeCall(
+      onProgress({ progress: 60, message: 'מבצע האנשה מלאה לפי הסגנון והמסמך' });
+      const firstHumanized = await invokeCall(
         [
           'בצע עכשיו האנשה מלאה ומורגשת לטקסט.',
           `בקשת המשתמש:\n${normalizedPrompt}`,
@@ -2345,6 +2354,32 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         finalSystemPrompt,
         { phase: 'humanize-final', stepIndex: normalizedCount, stepCount: normalizedCount },
       );
+
+      // לולאת האנשה יריבה: מזקקים את הפלט מול הגלאי המקומי עד שהציון יורד מתחת ליעד.
+      const humanizerPrefs = getHumanizerPreferences();
+      if (humanizerPrefs.enabled && humanizerPrefs.maxPasses > 0 && String(firstHumanized || '').trim()) {
+        try {
+          const loop = await runHumanizerLoop({
+            text: firstHumanized,
+            context: boundedBaseContext,
+            target: humanizerPrefs.target,
+            maxPasses: humanizerPrefs.maxPasses,
+            profile: getPersonalStyleProfile(),
+            onProgress: ({ pass, maxPasses, score, target }) => onProgress({
+              progress: Math.min(94, 68 + Math.round((pass / Math.max(1, maxPasses)) * 26)),
+              message: `מזקק מול הגלאי — סבב ${pass}/${maxPasses} (ציון ${score}, יעד <${target})`,
+            }),
+            invokeModel: (prompt, ctx) => invokeCall(
+              prompt,
+              ctx,
+              [finalSystemPrompt, STEALTH_HUMANIZE_GUIDE].filter(Boolean).join('\n\n'),
+              { phase: 'humanize-repair', stepIndex: normalizedCount, stepCount: normalizedCount },
+            ),
+          });
+          if (loop?.text) return loop.text;
+        } catch {}
+      }
+      return firstHumanized;
     }
 
     onProgress({ progress: 12, message: `מפעיל ${normalizedCount} קריאות במצב בדיקה ואז עריכה` });
@@ -5730,6 +5765,47 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             <div style={{ ...controlHelperStyle, marginTop: 8 }}>
               טיפ: אפשר לעקוף זמנית מהקלט עצמו עם נוסח כמו "פצל ל-3 קריאות".
             </div>
+          </div>
+
+          <div style={controlCardStyle}>
+            <div style={controlLabelStyle}>🧬 לולאת האנשה (anti-AI)</div>
+            <div style={controlHelperStyle}>
+              אחרי האנשה, הטקסט נמדד מול הגלאי המקומי ומשוכתב שוב ושוב עד שהציון ("נשמע גנרי/מכונה") יורד מתחת ליעד. ככל שהיעד נמוך — אנושי יותר, אך יותר קריאות מודל.
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, ...controlHelperStyle, marginTop: 4, cursor: isSettingsLocked ? 'not-allowed' : 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={humanizerPrefs.enabled}
+                disabled={isSettingsLocked}
+                onChange={(e) => updateHumanizerPrefs({ enabled: e.target.checked })}
+              />
+              הפעל לולאת האנשה יריבה
+            </label>
+            <div style={{ ...controlHelperStyle, marginTop: 10, display: 'flex', justifyContent: 'space-between' }}>
+              <span>יעד ציון: {humanizerPrefs.target}</span>
+              <span>{humanizerPrefs.target <= 25 ? 'אגרסיבי' : humanizerPrefs.target <= 40 ? 'מאוזן' : 'עדין'}</span>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={60}
+              step={5}
+              value={humanizerPrefs.target}
+              disabled={isSettingsLocked || !humanizerPrefs.enabled}
+              onChange={(e) => updateHumanizerPrefs({ target: Number(e.target.value) })}
+              style={{ width: '100%' }}
+            />
+            <div style={{ ...controlHelperStyle, marginTop: 10 }}>מקס' סבבי שכתוב</div>
+            <select
+              value={humanizerPrefs.maxPasses}
+              disabled={isSettingsLocked || !humanizerPrefs.enabled}
+              onChange={(e) => updateHumanizerPrefs({ maxPasses: Number(e.target.value) })}
+              style={{ ...controlSelectStyle, ...lockedControlStyle }}
+            >
+              {[1, 2, 3, 4, 5, 6].map((n) => (
+                <option key={n} value={n} style={{ color: '#1F2937' }}>{n} סבבים</option>
+              ))}
+            </select>
           </div>
 
           <div style={controlCardStyle}>

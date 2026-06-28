@@ -1,3 +1,5 @@
+import { shouldRelayHostViaFunction, relayHttpRequestViaFunction } from './webProxyService';
+
 export const COPYLEAKS_LOGIN_URL = 'https://id.copyleaks.com/v3/account/login/api';
 export const COPYLEAKS_WRITER_DETECTOR_BASE_URL = 'https://api.copyleaks.com/v2/writer-detector';
 export const COPYLEAKS_TEXT_MIN_CHARS = 255;
@@ -225,7 +227,13 @@ const extractErrorMessage = (payload, status = 0, fallback = 'Copyleaks החזי
 };
 
 const proxyDesktopHttpRequest = async ({ url, method = 'POST', headers = {}, body, timeoutMs = 0 } = {}, signal) => {
-  if (!(typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest)) return null;
+  if (!(typeof window !== 'undefined' && window.desktopApp?.proxyHttpRequest)) {
+    // אתר: Copyleaks חסום ב-CORS בדפדפן — עובר דרך ה-relay בשרת (כמו בדסקטופ דרך ה-proxy).
+    if (shouldRelayHostViaFunction(url)) {
+      return relayHttpRequestViaFunction({ url, method, headers, body, timeoutMs }, signal);
+    }
+    return null;
+  }
   if (signal?.aborted) throw createAbortError();
 
   const requestId = createRequestId();

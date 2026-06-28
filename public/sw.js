@@ -1,5 +1,5 @@
-const STATIC_CACHE = 'wordflow-static-v4';
-const RUNTIME_CACHE = 'wordflow-runtime-v4';
+const STATIC_CACHE = 'wordflow-static-v21';
+const RUNTIME_CACHE = 'wordflow-runtime-v21';
 
 const getAppUrls = () => {
   const scope = self.registration?.scope || self.location.origin + '/';
@@ -55,6 +55,9 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const requestUrl = new URL(event.request.url);
+  // אל תיגע בבקשות שאינן http(s) — בעיקר blob: ו-data: (הורדות קבצים).
+  // יירוט שלהן שובר הורדות (createObjectURL) עם "Failed to fetch".
+  if (requestUrl.protocol !== 'http:' && requestUrl.protocol !== 'https:') return;
   if (requestUrl.origin !== self.location.origin) return;
 
   if (isNavigationRequest(event.request)) {

@@ -1,0 +1,179 @@
+// humanizerLoopService — לולאת האנשה יריבה (adversarial humanizer).
+// במקום shot אחד עיוור: צור/האנש → נקד מול הגלאי המקומי (styleAuthenticityService)
+// → אם הציון מעל היעד, הזרק את ה-markers הספציפיים שנתפסו לתוך prompt תיקון ממוקד
+// → שכתב שוב → נקד שוב → שמור את הטוב ביותר (ציון נמוך = אנושי) עד יעד או max passes.
+//
+// המדד שמנצחים עליו הוא בדיוק הגלאי שהמשתמש רואה ב-MagicWand/AiSidebar — כך
+// שהפלט נשמע אנושי גם לפי המודד הפנימי, לא רק "בתחושה".
+//
+// invokeModel(prompt, context) => Promise<string>. הקורא עוטף את ספק ה-AI הפעיל.
+
+import { scoreTextAuthenticity } from './styleAuthenticityService';
+
+export const DEFAULT_HUMANIZER_LOOP = { target: 35, maxPasses: 4 };
+
+// תוספת system חזקה לכתיבה "בלתי ניתנת לזיהוי". מנוסחת כדי לסתור ישירות את
+// הסיגנלים שהגלאי מודד: אחידות אורך משפט, מחברים פורמליים, קלישאות, מבנה מלוטש-מדי,
+// אוצר מילים דל, ופתיחי משפט חוזרים.
+export const STEALTH_HUMANIZE_GUIDE = [
+  'כתוב כך שאדם אמיתי כתב את זה ולא מערכת. שמור על המשמעות, הטיעון, העובדות והדיוק — שנה רק איך זה נשמע.',
+  'קצב לא אחיד (burstiness): ערבב משפטים קצרים מאוד (3-6 מילים) עם משפטים ארוכים. אסור שכל המשפטים יהיו באותו אורך.',
+  'גוון פתיחי משפט: אל תפתח שני משפטים סמוכים באותה מילה או מבנה. הימנע מ"בנוסף", "כמו כן", "יתרה מכך" כפתיח חוזר.',
+  'הימנע ממחברים פורמליים שחוקים: "יתרה מכך", "זאת ועוד", "חשוב לציין", "ראוי לציין", "בסופו של דבר", "במילים אחרות", "לאור האמור", "אשר על כן", "לפיכך", "כתוצאה מכך", "בהקשר זה". אם צריך קשר — השתמש בקשר טבעי ופשוט או בלי מחבר בכלל.',
+  'הימנע מקלישאות AI: "מגוון רחב", "ממלא תפקיד מרכזי", "אבן יסוד", "בעולם של ימינו", "בעידן הדיגיטלי", "חלק בלתי נפרד", "כלי רב עוצמה", "נדבך מרכזי", "תפקיד חיוני".',
+  'מבנה לא מלוטש-מדי: מעט מאוד מקפים ארוכים (–/—), כמעט בלי הערות בסוגריים מבארות, בלי מרכאות-הדגשה ("scare quotes"), בלי נקודה-פסיק. כתוב ישיר.',
+  'אוצר מילים חי ומגוון: אל תחזור על אותן מילות תוכן. העדף מילים קונקרטיות וספציפיות על פני מופשטות וכלליות.',
+  'העדף משפט פעיל על סביל. שלב פנייה אנושית טבעית, אסוציאציה קצרה או דוגמה ממשית כשזה מתאים — בלי להמציא עובדות.',
+  'מותר אי-סדר אנושי קל: משפט שמתחיל בקישור, פסקה לא סימטרית, אורך לא צפוי. זה מה שמבדיל אדם ממכונה.',
+  'החזר רק את הטקסט עצמו — בלי כותרות, בלי הסברים, בלי הקדמות, בלי "הנה הגרסה".',
+].join('\n');
+
+// ממפה את ה-markers שהגלאי החזיר להוראות תיקון ממוקדות וקונקרטיות.
+const MARKER_REPAIR = {
+  uniformity: (d) => `אורך המשפטים אחיד מדי${d ? ` (${d})` : ''} — שבור את האחידות: הכנס כמה משפטים קצרים מאוד (3-6 מילים) לצד ארוכים.`,
+  formalConnector: (d) => `יש עומס מחברים פורמליים${d ? `: ${d}` : ''} — מחק או החלף אותם בקשר טבעי ופשוט, או הסר את המחבר לגמרי.`,
+  cliche: (d) => `יש קלישאות שחוקות${d ? `: ${d}` : ''} — נסח אותן מחדש במילים קונקרטיות ומקוריות.`,
+  structural: (d) => `המבנה מלוטש-מדי${d ? ` (${d})` : ''} — הורד מקפים ארוכים, סוגריים מבארות, מרכאות-הדגשה ונקודה-פסיק. כתוב ישיר.`,
+  lowRichness: (d) => `אוצר המילים חוזר/דל${d ? ` (${d})` : ''} — גוון את הניסוח והמילים, אל תחזור על אותם ביטויים.`,
+  openerRepeat: (d) => `פתיחי משפט חוזרים${d ? ` (${d})` : ''} — פתח כל משפט אחרת, בלי אותה מילה/מבנה פעמיים ברצף.`,
+  personalMismatch: (d) => `הטקסט לא תואם את הקול האישי שנלמד${d ? ` (${d})` : ''} — קרב אותו לאוצר המילים ולקצב האישי.`,
+};
+
+const buildRepairPrompt = (currentText, scoreResult, passNumber, htmlMode = false) => {
+  const markers = Array.isArray(scoreResult?.markers) ? scoreResult.markers : [];
+  const directives = markers
+    .map((m) => (MARKER_REPAIR[m.key] ? `• ${MARKER_REPAIR[m.key](m.detail)}` : `• ${m.label}`))
+    .slice(0, 7);
+
+  return [
+    `שכתוב האנשה ממוקד (סבב ${passNumber}). הגלאי האוטומטי עדיין מזהה את הטקסט כגנרי/מכונה (ציון ${scoreResult?.score ?? '?'}/100).`,
+    'תקן בדיוק את הסימנים שנתפסו, בלי לשנות את המשמעות, הטיעון, העובדות או הנתונים:',
+    directives.length ? directives.join('\n') : '• המשפטים אחידים ומלוטשים מדי — הוסף קצב אנושי לא צפוי וגיוון.',
+    htmlMode
+      ? 'שמר בדיוק על כל תגיות ה-HTML, הכותרות, הרשימות ומבנה המסמך — שכתב רק את הטקסט הקריא בתוך התגיות. אל תוסיף ואל תסיר תגיות.'
+      : '',
+    htmlMode ? 'ה-HTML לשכתוב:' : 'הטקסט לשכתוב:',
+    `"""\n${currentText}\n"""`,
+    htmlMode
+      ? 'החזר רק את ה-HTML המעודכן, בלי הסברים, בלי markdown ובלי הקדמה.'
+      : 'החזר רק את הנוסח החדש, בלי הסברים ובלי הקדמה.',
+  ].filter(Boolean).join('\n\n');
+};
+
+const safeScore = (text, profile) => {
+  try {
+    return scoreTextAuthenticity(text, profile ? { profile } : {});
+  } catch {
+    return { ok: false };
+  }
+};
+
+// אורך הטקסט הנקי (בלי תגיות) — להשוואת מועמד מול מקור גם במצב HTML.
+const plainLen = (value = '') => String(value || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+
+const clampNum = (v, min, max, fallback) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+};
+
+// כמה סבבים רצופים בלי שיפור עוצרים את מצב ההתכנסות.
+const DEFAULT_NO_IMPROVE_STOP = 2;
+// תקרת בטיחות קשיחה למצב התכנסות (מונע לולאה אינסופית/עלות חורגת).
+const DEFAULT_SAFETY_CAP = 10;
+
+// הלולאה. מקבלת טקסט שכבר עבר האנשה ראשונית, ומזקקת אותו מול הגלאי.
+// מחזירה את הגרסה עם הציון הנמוך ביותר (= הכי אנושית) שנמצאה.
+//
+// שני מצבי עצירה:
+// - convergence=false (ברירת מחדל): עד ציון < target או עד maxPasses סבבים.
+// - convergence=true: ממשיך כל עוד יש שיפור; עוצר כשאין שיפור ב-noImproveStop סבבים
+//   רצופים, או כשהציון < target, או בתקרת הבטיחות safetyCap. ("עד תוצאה מספקת").
+//
+// htmlMode=true: שומר על מבנה HTML בשכתוב (לטקסט שלם מהמסמך).
+export async function runHumanizerLoop({
+  text = '',
+  context = '',
+  invokeModel,
+  target = DEFAULT_HUMANIZER_LOOP.target,
+  maxPasses = DEFAULT_HUMANIZER_LOOP.maxPasses,
+  convergence = false,
+  noImproveStop = DEFAULT_NO_IMPROVE_STOP,
+  safetyCap = DEFAULT_SAFETY_CAP,
+  htmlMode = false,
+  profile = null,
+  onProgress = () => {},
+} = {}) {
+  const start = String(text || '').trim();
+  if (typeof invokeModel !== 'function' || !start) {
+    return { text: start, score: null, passes: 0, hitTarget: false, trace: [] };
+  }
+
+  const goal = clampNum(target, 0, 100, DEFAULT_HUMANIZER_LOOP.target);
+  const hardLimit = convergence
+    ? clampNum(safetyCap, 1, 16, DEFAULT_SAFETY_CAP)
+    : clampNum(maxPasses, 0, 8, DEFAULT_HUMANIZER_LOOP.maxPasses);
+  const noImproveLimit = clampNum(noImproveStop, 1, 5, DEFAULT_NO_IMPROVE_STOP);
+  const startLen = plainLen(start);
+
+  let best = start;
+  let bestResult = safeScore(start, profile);
+  let bestScore = bestResult.ok ? bestResult.score : 100;
+  let noImprove = 0;
+  const trace = [{ pass: 0, score: bestResult.ok ? bestResult.score : null }];
+
+  for (let pass = 1; pass <= hardLimit; pass += 1) {
+    // עוצרים כשהגרסה הטובה מספקת (מתחת ליעד) או כשהטקסט קצר מדי לניתוח אמין.
+    if (!bestResult.ok || bestScore < goal) break;
+
+    onProgress({
+      pass,
+      maxPasses: hardLimit,
+      score: bestScore,
+      target: goal,
+      convergence,
+      message: convergence
+        ? `מזקק עד התכנסות — סבב ${pass} (ציון ${bestScore}, יעד <${goal})`
+        : `סבב האנשה ${pass}/${hardLimit} — ציון נוכחי ${bestScore}, יעד <${goal}`,
+    });
+
+    let candidate = '';
+    try {
+      candidate = String(await invokeModel(buildRepairPrompt(best, bestResult, pass, htmlMode), context) || '').trim();
+    } catch {
+      break; // כשל מודל — נשארים עם הטוב ביותר עד כה.
+    }
+    // מגן מפני פלט ריק או קצר בצורה חשודה (פחות מ-40% מהמקור = כנראה נחתך/הוסבר).
+    if (!candidate || plainLen(candidate) < startLen * 0.4) {
+      trace.push({ pass, score: null, rejected: 'too-short-or-empty' });
+      noImprove += 1;
+      if (convergence && noImprove >= noImproveLimit) break;
+      continue;
+    }
+
+    const candResult = safeScore(candidate, profile);
+    const candScore = candResult.ok ? candResult.score : 100;
+    trace.push({ pass, score: candResult.ok ? candResult.score : null });
+
+    if (candScore < bestScore) {
+      best = candidate;
+      bestResult = candResult;
+      bestScore = candScore;
+      noImprove = 0;
+    } else {
+      noImprove += 1;
+      // במצב התכנסות עוצרים כשאין שיפור ברצף. במצב רגיל ממשיכים עד התקרה.
+      if (convergence && noImprove >= noImproveLimit) break;
+    }
+  }
+
+  return {
+    text: best,
+    score: bestResult.ok ? bestResult.score : null,
+    label: bestResult.ok ? bestResult.label : null,
+    passes: trace.length - 1,
+    hitTarget: bestResult.ok ? bestResult.score < goal : false,
+    converged: convergence && noImprove >= noImproveLimit,
+    trace,
+  };
+}

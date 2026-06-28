@@ -1,6 +1,6 @@
 {
   "name": "wordflow-ai",
-  "version": "1.0.131",
+  "version": "1.0.132",
   "description": "WordFlow AI built with Vite",
   "author": "Rotem",
   "repository": {
@@ -17,6 +17,8 @@
     "firebase:login": "firebase login",
     "firebase:deploy": "npm run build && firebase deploy",
     "firebase:deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "firebase:deploy:functions": "firebase deploy --only functions",
+    "firebase:deploy:web": "npm run build && firebase deploy --only functions,hosting",
     "firebase:deploy:rules": "firebase deploy --only firestore:rules",
     "smoke:article-retrieval": "node scripts/news-site-article-retrieval-smoke.mjs",
     "sync:storage": "node scripts/sync-storage-to-local.mjs",

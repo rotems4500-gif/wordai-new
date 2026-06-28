@@ -10,6 +10,8 @@ import {
   buildWorkspaceV2RunContext,
   validateWorkspaceV2RunContext,
 } from './aiService';
+import { extractMaterialTextFromBytes } from './materialExtractBrowser';
+import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const BROWSER_MATERIALS_KEY = 'wordai_browser_uploaded_materials';
@@ -23,7 +25,10 @@ const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
-const MATERIAL_PREVIEW_MAX_LENGTH = 5000;
+const MATERIAL_PREVIEW_MAX_LENGTH = 5000; // טקסט קצר לתצוגת UI בלבד.
+// התוכן המלא של חומר עזר שמוזרם ל-AI (לא רק תצוגה מקדימה). 48k תווים ≈ 12k טוקנים —
+// תקרה בטוחה לספקים מודרניים (זהה ל-FEEDBACK_CONTEXT_TOTAL_LIMIT). מונע חיתוך מצגת/מסמך שלם.
+const MATERIAL_CONTENT_MAX_LENGTH = 48000;
 // מספר סבבי הסקירה הנוספים המרבי שאפשר לבקש על מסמך (מעבר לסבב הבסיס).
 const MAX_ADDITIONAL_REVIEW_ROUNDS = 2;
 const HISTORY_STYLE_SAMPLE_MAX_LENGTH = 3600;
@@ -35,7 +40,7 @@ const BROWSER_MATERIAL_STORAGE_LIMIT = 60;
 const FEEDBACK_CONTEXT_TOTAL_LIMIT = 48000;
 const FEEDBACK_CONTEXT_TOPIC_LIMIT = 320;
 const FEEDBACK_CONTEXT_SUPPORTING_LIMIT = 1100;
-const FEEDBACK_CONTEXT_MATERIALS_LIMIT = 1600;
+const FEEDBACK_CONTEXT_MATERIALS_LIMIT = 8000;
 const FEEDBACK_CONTEXT_HTML_MIN_LIMIT = 8000;
 const FEEDBACK_CONTEXT_HTML_MAX_LIMIT = 44000;
 const FEEDBACK_CONTEXT_HTML_GAP = '\n\n[... קוצר אמצע ה-HTML כדי לשמור גם את ההתחלה וגם את הסוף ...]\n\n';
@@ -57,14 +62,16 @@ const HTML_TAG_TOKEN_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z0-9-]+)\b[^>]*?>/gi;
 const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 const textLikeExtensions = new Set(['txt', 'md', 'markdown', 'html', 'htm', 'json', 'csv', 'tsv', 'rtf', 'xml', 'yml', 'yaml', 'log', 'svg', 'docx']);
-const DESKTOP_EXTRACTION_EXTENSIONS = new Set(['pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
+// פורמטים "עשירים" (בינאריים) שדורשים חילוץ ייעודי. נתמכים בשתי הפלטפורמות:
+// בדסקטופ דרך הגשר הנייטיב, בדפדפן דרך materialExtractBrowser (jszip/xlsx/tesseract).
+const RICH_EXTRACTION_EXTENSIONS = new Set(['pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
 const MATERIAL_PARTIAL_EXTRACTION_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'xls', 'xlsx']);
 const HELPER_MATERIAL_ACCEPT_LIST = '.pdf,.doc,.docx,.txt,.md,.markdown,.html,.htm,.json,.csv,.tsv,.rtf,.xml,.yml,.yaml,.log,.svg';
-const HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.png,.jpg,.jpeg,.webp,.xls,.xlsx';
+const HELPER_MATERIAL_RICH_ACCEPT_SUFFIX = ',.pptx,.png,.jpg,.jpeg,.webp,.xls,.xlsx';
 const INSTRUCTION_FILE_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.json,.pdf,.csv,.tsv,.rtf,.xml,.yml,.yaml,.log,.svg';
-const INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+const INSTRUCTION_FILE_RICH_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv,.rtf,.xml';
-const SYLLABUS_DESKTOP_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+const SYLLABUS_RICH_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
 const LOCAL_FALLBACK_RICH_REQUEST_PATTERN = /(מקור(?:ות)?|ביבליוגרפ|ציטוט|references?|citation|doi|מאמר(?:ים)?|סקיר(?:ת)?\s+ספרות|מחקר|מסמך\s+מלא|מסמך\s+עשיר|מקיף|מעמיק|literature\s+review|comprehensive|rich)/i;
 const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה', 'המשתמש', 'ביקש', 'בקשה', 'החל', 'יישם', 'תיקון', 'תיקונים', 'המלצה', 'המלצות', 'הערה', 'הערות', 'מרצה', 'המרצה', 'מסמך', 'המסמך', 'עבודה', 'העבודה']);
@@ -85,22 +92,21 @@ export function hasDesktopMaterialTextExtraction() {
   return Boolean(typeof window !== 'undefined' && window.desktopApp?.extractMaterialText);
 }
 
+// חילוץ הפורמטים העשירים זמין תמיד: דסקטופ דרך הגשר, דפדפן דרך materialExtractBrowser.
+export function hasMaterialTextExtraction() {
+  return true;
+}
+
 export function getHelperMaterialAcceptList() {
-  return hasDesktopMaterialTextExtraction()
-    ? `${HELPER_MATERIAL_ACCEPT_LIST}${HELPER_MATERIAL_DESKTOP_ACCEPT_SUFFIX}`
-    : HELPER_MATERIAL_ACCEPT_LIST;
+  return `${HELPER_MATERIAL_ACCEPT_LIST}${HELPER_MATERIAL_RICH_ACCEPT_SUFFIX}`;
 }
 
 export function getInstructionFileAcceptList() {
-  return hasDesktopMaterialTextExtraction()
-    ? `${INSTRUCTION_FILE_ACCEPT_LIST}${INSTRUCTION_FILE_DESKTOP_ACCEPT_SUFFIX}`
-    : INSTRUCTION_FILE_ACCEPT_LIST;
+  return `${INSTRUCTION_FILE_ACCEPT_LIST}${INSTRUCTION_FILE_RICH_ACCEPT_SUFFIX}`;
 }
 
 export function getSyllabusFileAcceptList() {
-  return hasDesktopMaterialTextExtraction()
-    ? `${SYLLABUS_ACCEPT_LIST}${SYLLABUS_DESKTOP_ACCEPT_SUFFIX}`
-    : SYLLABUS_ACCEPT_LIST;
+  return `${SYLLABUS_ACCEPT_LIST}${SYLLABUS_RICH_ACCEPT_SUFFIX}`;
 }
 
 function normalizeExplicitSourceUrl(value = '') {
@@ -219,6 +225,7 @@ function resolveMaterialExtractionState({ fileName = '', text = '', error = '', 
 
 function buildMaterialPreviewMeta({ text = '', source = '', error = '', fileName = '', previewMaxLength = MATERIAL_PREVIEW_MAX_LENGTH } = {}) {
   const extractedText = sanitizeMaterialPreviewText(text, MATERIAL_EXTRACTION_AUDIT_LIMIT);
+  const contentText = sanitizeMaterialPreviewText(extractedText, MATERIAL_CONTENT_MAX_LENGTH);
   const previewText = sanitizeMaterialPreviewText(extractedText, previewMaxLength);
   const cleanError = String(error || '').trim();
   const extractionTruncated = Boolean(extractedText) && extractedText.length >= MATERIAL_EXTRACTION_AUDIT_LIMIT;
@@ -238,6 +245,7 @@ function buildMaterialPreviewMeta({ text = '', source = '', error = '', fileName
 
   return {
     previewText,
+    contentText,
     previewChars: previewText.length,
     previewStatus,
     previewSource: previewText ? String(source || '').trim() : '',
@@ -249,9 +257,10 @@ function buildMaterialPreviewMeta({ text = '', source = '', error = '', fileName
   };
 }
 
-function getStoredMaterialPreviewText(material = {}, maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
+function getStoredMaterialPreviewText(material = {}, maxLength = MATERIAL_CONTENT_MAX_LENGTH) {
   return sanitizeMaterialPreviewText(
-    material?.previewText
+    material?.contentText
+      || material?.previewText
       || material?.excerptText
       || material?.preview
       || material?.extractedText
@@ -273,7 +282,8 @@ function cacheMaterialPreviewOnItem(material, { text = '', source = '' } = {}) {
   Object.assign(material, previewMeta, {
     canPreviewText: canPreviewMaterialText(material?.type) || Boolean(previewMeta.previewText),
   });
-  return previewMeta.previewText;
+  // מחזירים את התוכן המלא (ולא רק את התצוגה המקדימה) כי הערך הזה מוזרם ל-context של ה-AI.
+  return previewMeta.contentText || previewMeta.previewText;
 }
 
 async function extractHelperMaterialPreview(file, maxLength = MATERIAL_PREVIEW_MAX_LENGTH) {
@@ -299,16 +309,26 @@ function canPreviewMaterialText(type = '') {
   const normalizedType = String(type || '').toLowerCase();
   return textLikeExtensions.has(normalizedType)
     || normalizedType === 'pdf'
-    || (hasDesktopMaterialTextExtraction() && DESKTOP_EXTRACTION_EXTENSIONS.has(normalizedType));
+    || RICH_EXTRACTION_EXTENSIONS.has(normalizedType);
 }
 
-async function extractDesktopMaterialTextFromArrayBuffer(buffer, fileName = '', maxLength = 6000) {
-  if (!hasDesktopMaterialTextExtraction()) return '';
-  const result = await window.desktopApp.extractMaterialText({
-    dataBase64: arrayBufferToBase64(buffer),
-    fileName,
-    maxLength,
-  });
+// חילוץ טקסט מקובץ "עשיר" (pptx/xls/xlsx/תמונות). בדסקטופ דרך הגשר הנייטיב,
+// אחרת דרך המחלץ של הדפדפן — כך החילוץ זהה גם באתר וגם בדסקטופ.
+async function extractRichMaterialTextFromArrayBuffer(buffer, fileName = '', maxLength = 6000) {
+  if (hasDesktopMaterialTextExtraction()) {
+    const result = await window.desktopApp.extractMaterialText({
+      dataBase64: arrayBufferToBase64(buffer),
+      fileName,
+      maxLength,
+    });
+    if (!result?.ok) {
+      throw new Error(String(result?.error || 'material-extraction-failed').trim() || 'material-extraction-failed');
+    }
+    return String(result.text || '').trim();
+  }
+
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const result = await extractMaterialTextFromBytes(fileName, bytes, maxLength);
   if (!result?.ok) {
     throw new Error(String(result?.error || 'material-extraction-failed').trim() || 'material-extraction-failed');
   }
@@ -779,6 +799,7 @@ export async function loadProjectMaterials() {
       const type = String(item.type || '').toLowerCase();
       const inferred = classifyDocName(name);
       const previewText = getStoredMaterialPreviewText(item, MATERIAL_PREVIEW_MAX_LENGTH);
+      const contentText = getStoredMaterialPreviewText(item, MATERIAL_CONTENT_MAX_LENGTH);
       const extractedCharsRaw = Number(item?.extractedChars);
       const extractedChars = Number.isFinite(extractedCharsRaw) && extractedCharsRaw >= 0
         ? extractedCharsRaw
@@ -805,6 +826,7 @@ export async function loadProjectMaterials() {
         templateId: item.templateId || inferred.templateId,
         learningHint: item.learningHint || '',
         previewText,
+        contentText,
         previewChars,
         previewStatus: normalizeMaterialPreviewStatus(item.previewStatus || (previewText ? 'ready' : '')),
         previewSource: String(item.previewSource || '').trim(),
@@ -1328,9 +1350,8 @@ export async function readInstructionFile(file, maxLength = 6000) {
 
   const buffer = await file.arrayBuffer();
 
-  if (DESKTOP_EXTRACTION_EXTENSIONS.has(ext)) {
-    if (!hasDesktopMaterialTextExtraction()) throw new Error('unsupported-binary-file');
-    return extractDesktopMaterialTextFromArrayBuffer(buffer, file.name, resolvedMaxLength);
+  if (RICH_EXTRACTION_EXTENSIONS.has(ext)) {
+    return extractRichMaterialTextFromArrayBuffer(buffer, file.name, resolvedMaxLength);
   }
 
   if (ext === 'pdf') {
@@ -1358,7 +1379,7 @@ export async function readInstructionFile(file, maxLength = 6000) {
 }
 
 async function loadMaterialPreview(material) {
-  const cachedPreview = getStoredMaterialPreviewText(material, MATERIAL_PREVIEW_MAX_LENGTH);
+  const cachedPreview = getStoredMaterialPreviewText(material, MATERIAL_CONTENT_MAX_LENGTH);
   if (cachedPreview) return cachedPreview;
 
   const previewStatus = normalizeMaterialPreviewStatus(material?.previewStatus);
@@ -1388,10 +1409,10 @@ async function loadMaterialPreview(material) {
         return storePreview(await extractDocxTextFromBuffer(buffer), 'extractDocxTextFromBuffer');
       }
 
-      if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
+      if (RICH_EXTRACTION_EXTENSIONS.has(material.type)) {
         return storePreview(
-          await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_PREVIEW_MAX_LENGTH),
-          'extractDesktopMaterialTextFromArrayBuffer',
+          await extractRichMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_CONTENT_MAX_LENGTH),
+          'extractRichMaterialTextFromArrayBuffer',
         );
       }
 
@@ -1412,10 +1433,10 @@ async function loadMaterialPreview(material) {
       return storePreview(await extractDocxTextFromBuffer(buffer), 'extractDocxTextFromBuffer');
     }
 
-    if (DESKTOP_EXTRACTION_EXTENSIONS.has(material.type) && hasDesktopMaterialTextExtraction()) {
+    if (RICH_EXTRACTION_EXTENSIONS.has(material.type)) {
       return storePreview(
-        await extractDesktopMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_PREVIEW_MAX_LENGTH),
-        'extractDesktopMaterialTextFromArrayBuffer',
+        await extractRichMaterialTextFromArrayBuffer(buffer, material.file || material.title || `material.${material.type}`, MATERIAL_CONTENT_MAX_LENGTH),
+        'extractRichMaterialTextFromArrayBuffer',
       );
     }
     const text = decodeTextBuffer(buffer);
@@ -2848,6 +2869,8 @@ async function runWorkspaceV2DocumentGeneration({
   normalizedAdditionalReviewRounds = 0,
   workspaceV2TemplateId = '',
   returnMeta = false,
+  humanizeLoop = null,
+  onHumanizeProgress = null,
 }) {
   const personalStyleProfile = getPersonalStyleProfile();
   const runContext = buildWorkspaceV2RunContext({
@@ -2929,6 +2952,7 @@ async function runWorkspaceV2DocumentGeneration({
 
   const previousStepOutputs = [];
   let cleanedResponse = '';
+  let finalStepRequestOptions = null;
 
   for (let stepIndex = 0; stepIndex < pipeline.length; stepIndex += 1) {
     const step = pipeline[stepIndex] || {};
@@ -2992,15 +3016,16 @@ async function runWorkspaceV2DocumentGeneration({
     });
 
     if (isFinalStep) {
+      finalStepRequestOptions = {
+        ...stepRequestOptions,
+        expectDocumentOutput: true,
+        maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
+      };
       cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
         userPrompt: userRequestSections.join('\n\n'),
         context: stepContext,
         systemPrompt: stepSystemPrompt,
-        requestOptions: {
-          ...stepRequestOptions,
-          expectDocumentOutput: true,
-          maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
-        },
+        requestOptions: finalStepRequestOptions,
         operationLabel: `Workspace v2 ${workspaceLabel}`,
         continuationPrompt: 'השלם רק את המשך ה-HTML החסר של המסמך, בלי לחזור על ההתחלה ובלי markdown.',
         runId,
@@ -3061,9 +3086,22 @@ async function runWorkspaceV2DocumentGeneration({
     ...requestLogContext,
   });
 
+  // לולאת האנשה "עד תוצאה מספקת" על תוצר ה-Workspace v2, אם המשתמש סימן זאת.
+  const humanizedV2Response = await applyDocumentHumanizeLoop({
+    html: validatedFinalResponse,
+    humanizeLoop,
+    materialsText,
+    requestOptions: finalStepRequestOptions || { runId, agentLabel: workspaceLabel, activeWorkspaceId: runContext.workspaceId, workspaceName: workspaceLabel, expectDocumentOutput: true },
+    runId,
+    agentLabel: workspaceLabel,
+    requestLogContext,
+    onHumanizeProgress,
+    operationLabel: `האנשת ${workspaceLabel}`,
+  });
+
   return returnMeta
     ? {
-      html: validatedFinalResponse,
+      html: humanizedV2Response,
       usedFallback: false,
       runId,
       errorMessage: '',
@@ -3074,7 +3112,7 @@ async function runWorkspaceV2DocumentGeneration({
         classification: runContext.classification,
       },
     }
-    : validatedFinalResponse;
+    : humanizedV2Response;
 }
 
 function normalizeJsonOnlyResponse(response = '') {
@@ -3798,9 +3836,67 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
   return next.replace(/(?:\s*\n){3,}/g, '\n\n').trim();
 }
 
+// לולאת האנשה "עד תוצאה מספקת" (התכנסות) על מסמך HTML שלם, משותפת ליצירה ולעדכון.
+// שומרת על מבנה ה-HTML ומזקקת מול הגלאי המקומי עד שאין שיפור. מחזירה HTML מואנש,
+// או את המקור אם הלולאה כבויה/נכשלה.
+async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '', requestOptions = {}, runId = '', agentLabel = '', requestLogContext = {}, onHumanizeProgress = null, operationLabel = 'האנשת המסמך' }) {
+  const loopOptions = humanizeLoop && humanizeLoop.enabled !== false ? humanizeLoop : null;
+  if (!loopOptions || !String(html || '').trim()) return html;
+  try {
+    const humanizeSystemPrompt = `${STEALTH_HUMANIZE_GUIDE}\n\nשמור בדיוק על כל תגיות ה-HTML, הכותרות, הרשימות ומבנה המסמך. שכתב רק את הטקסט הקריא בתוך התגיות. החזר HTML תקין בלבד, בלי markdown ובלי הסברים.`;
+    const loopResult = await runHumanizerLoop({
+      text: html,
+      context: materialsText,
+      htmlMode: true,
+      convergence: loopOptions.convergence !== false,
+      target: Number(loopOptions.target) || 35,
+      safetyCap: Number(loopOptions.safetyCap) || 8,
+      profile: getPersonalStyleProfile(),
+      onProgress: typeof onHumanizeProgress === 'function' ? onHumanizeProgress : undefined,
+      invokeModel: async (humanizePrompt, ctx) => {
+        const repaired = await requestGeneratedHtmlResponseWithSingleContinuation({
+          userPrompt: humanizePrompt,
+          context: ctx,
+          systemPrompt: humanizeSystemPrompt,
+          requestOptions: { ...requestOptions, strictFormatting: true },
+          operationLabel,
+          continuationPrompt: 'השלם רק את המשך ה-HTML החסר של אותה גרסה מואנשת, בלי לחזור על ההתחלה ובלי markdown.',
+          runId,
+          agentLabel,
+          requestLogContext,
+        });
+        return ensureCompleteGeneratedHtmlResponse(repaired, operationLabel);
+      },
+    });
+    if (loopResult?.text && stripHtmlTags(loopResult.text).length >= 10) {
+      logAgentDebugEvent({
+        type: 'doc-humanize-loop',
+        state: 'success',
+        runId,
+        agentLabel,
+        message: `לולאת האנשה הושלמה: ${loopResult.passes} סבבים, ציון ${loopResult.score}${loopResult.converged ? ' (התכנסות)' : ''}`,
+        outputChars: loopResult.text.length,
+        ...requestLogContext,
+      });
+      return loopResult.text;
+    }
+  } catch (humanizeError) {
+    logAgentDebugEvent({
+      type: 'doc-humanize-loop',
+      state: 'error',
+      runId,
+      agentLabel,
+      message: 'לולאת ההאנשה נכשלה — מוחזר המסמך המקורי',
+      errorMessage: humanizeError?.message || 'שגיאה לא ידועה',
+      ...requestLogContext,
+    });
+  }
+  return html;
+}
+
 // forceDirectMode=false כברירת מחדל: יצירה חדשה רשאית לרוץ ב-workflow automation (ריבוי סוכנים)
 // כשסביבת העבודה מאפשרת. בכוונה שונה מ-reviseDocumentWithFeedback (true) — עריכה ממוקדת לא מצדיקה ריבוי סוכנים.
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false, humanizeLoop = null, onHumanizeProgress = null }) {
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
@@ -3908,6 +4004,8 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         normalizedAdditionalReviewRounds,
         workspaceV2TemplateId,
         returnMeta,
+        humanizeLoop,
+        onHumanizeProgress,
       });
     }
 
@@ -4030,9 +4128,22 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
+    // לולאת האנשה "עד תוצאה מספקת" על המסמך השלם, אם המשתמש סימן זאת לפני היצירה.
+    const humanizedResponse = await applyDocumentHumanizeLoop({
+      html: validatedFinalResponse,
+      humanizeLoop,
+      materialsText,
+      requestOptions,
+      runId,
+      agentLabel: documentRunLabel,
+      requestLogContext,
+      onHumanizeProgress,
+      operationLabel: 'האנשת המסמך',
+    });
+
     return returnMeta
-      ? { html: validatedFinalResponse, usedFallback: false, runId, errorMessage: '', title }
-      : validatedFinalResponse;
+      ? { html: humanizedResponse, usedFallback: false, runId, errorMessage: '', title }
+      : humanizedResponse;
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-generation-api-error',
@@ -4152,7 +4263,7 @@ async function prepareFeedbackDrivenDocumentContext({
 
 // forceDirectMode=true כברירת מחדל: שכתוב לפי feedback הוא עריכה ממוקדת — רץ ישירות במודל יחיד
 // בלי workflow automation. בכוונה שונה מ-generateDocumentFromPrompt (false) שמאפשר ריבוי סוכנים ביצירה חדשה.
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '' }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null }) {
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
@@ -4220,6 +4331,8 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       normalizedAdditionalReviewRounds,
       workspaceV2TemplateId,
       returnMeta,
+      humanizeLoop,
+      onHumanizeProgress,
     });
   }
 
@@ -4326,9 +4439,22 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       ...requestLogContext,
     });
 
+    // לולאת האנשה "עד תוצאה מספקת" גם על מסמך שעודכן מטיוטה, אם המשתמש סימן זאת.
+    const humanizedRevision = await applyDocumentHumanizeLoop({
+      html: validatedResponse,
+      humanizeLoop,
+      materialsText,
+      requestOptions,
+      runId,
+      agentLabel: documentUpdateLabel,
+      requestLogContext,
+      onHumanizeProgress,
+      operationLabel: 'האנשת העדכון',
+    });
+
     return returnMeta
-      ? { html: validatedResponse, usedFallback: false, runId, errorMessage: '' }
-      : validatedResponse;
+      ? { html: humanizedRevision, usedFallback: false, runId, errorMessage: '' }
+      : humanizedRevision;
   } catch (error) {
     const revisionErrorMessage = error?.message || 'שגיאה לא ידועה';
     const safeRevisionErrorMessage = /^MISSING\/full-revision-failed/i.test(revisionErrorMessage)
@@ -4786,11 +4912,28 @@ function getBrowserUploadedMaterials() {
 
 function saveBrowserUploadedMaterialEntry(entry = {}) {
   const existing = getBrowserUploadedMaterials();
-  const next = [
+  let next = [
     ...existing.filter((item) => item?.id !== entry.id && item?.file !== entry.file),
     entry,
   ].slice(-BROWSER_MATERIAL_STORAGE_LIMIT);
-  localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+
+  // localStorage מוגבל (~5MB) והתוכן המלא של חומרים עלול לחרוג. אם הכתיבה נכשלת:
+  // קודם מפנים את החומר הישן ביותר וחוזרים; אם נשאר רק החומר הנוכחי והוא עדיין גדול מדי —
+  // שומרים אותו בלי התוכן המלא (תצוגה מקדימה בלבד), כדי שההעלאה לא תיכשל לגמרי.
+  while (next.length) {
+    try {
+      localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+      return;
+    } catch (err) {
+      if (next.length > 1) {
+        next = next.slice(1);
+        continue;
+      }
+      const trimmed = { ...next[0], contentText: '' };
+      try { localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify([trimmed])); } catch { /* no-op */ }
+      return;
+    }
+  }
 }
 
 function removeBrowserUploadedMaterialEntry(material = {}) {
@@ -4858,6 +5001,7 @@ function buildUploadedMaterialEntry(payload = {}) {
     templateId: String(payload?.templateId || 'blank'),
     learningHint: String(payload?.learningHint || ''),
     previewText: String(payload?.previewText || '').trim(),
+    contentText: String(payload?.contentText || payload?.previewText || '').trim(),
     previewChars: Math.max(0, Number(payload?.previewChars) || 0),
     previewStatus: String(payload?.previewStatus || '').trim(),
     previewSource: String(payload?.previewSource || '').trim(),
@@ -4885,6 +5029,7 @@ export async function saveHelperMaterial(file, options = {}) {
     templateId: meta.templateId,
     learningHint: meta.learningHint,
     previewText: previewMeta.previewText,
+    contentText: previewMeta.contentText,
     previewChars: previewMeta.previewChars,
     previewStatus: previewMeta.previewStatus,
     previewSource: previewMeta.previewSource,

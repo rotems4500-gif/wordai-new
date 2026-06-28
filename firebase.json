@@ -5,6 +5,10 @@
   "storage": {
     "rules": "storage.rules"
   },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22"
+  },
   "hosting": {
     "site": "wordai-website",
     "public": "dist",
@@ -14,6 +18,13 @@
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/api/proxy",
+        "function": {
+          "functionId": "proxy",
+          "region": "us-central1"
+        }
+      },
       {
         "source": "**",
         "destination": "/index.html"

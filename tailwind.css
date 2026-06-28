@@ -324,6 +324,36 @@
             .r-btn-large i { font-size: 22px; }
             .styles-gallery { max-width: 320px; }
         }
+        /* Phone (≤600px): reclaim vertical/horizontal space taken by the chrome.
+           Scoped to max-width so desktop is never touched; CSS-only so zero perf cost.
+           Reuses the same class names the 900px block targets. */
+        @media (max-width: 600px) {
+            /* TopBar: tighter padding/gaps so it wraps to fewer rows.
+               header.bg-chrome (0,1,1) outranks the Tailwind px-/py-/gap- utilities (0,1,0). */
+            header.bg-chrome { padding-block: 5px; padding-inline: 8px; gap: 5px; row-gap: 5px; }
+
+            /* Ribbon: smaller tabs + toolbar so it stops eating half the screen. */
+            #tabs-row { padding-inline: 4px; }
+            .tab-btn { padding: 6px 10px; font-size: 0.72rem; }
+            .toolbar-panel { min-height: 66px; padding: 5px 4px; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+            .toolbar-panel::-webkit-scrollbar { display: none; }
+            .toolbar-group { height: 58px; padding: 0 6px; }
+            .toolbar-group-items { gap: 3px; }
+            .r-btn-large { min-width: 44px; height: 50px; font-size: 9px; gap: 3px; padding: 4px 6px; }
+            .r-btn-large i { font-size: 18px; }
+            .styles-gallery { max-width: 200px; height: 54px; }
+
+            /* Editor: more reading width on a narrow screen. */
+            #editor-wrapper { padding-inline: 6px; padding-top: 10px; }
+            .page-surface[data-view-mode="print"] {
+                padding: 16px !important;
+                font-size: 14.5px !important;
+                line-height: 1.6 !important;
+            }
+            .page-surface[data-view-mode="print"] h1 { font-size: 23px; }
+            .page-surface[data-view-mode="print"] h2 { font-size: 20px; }
+            .page-surface[data-view-mode="print"] h3 { font-size: 17px; }
+        }
         .page-surface[data-active-template]:not([data-active-template="blank"]) > p:first-child {
             text-align: center;
             font-size: 11pt;
