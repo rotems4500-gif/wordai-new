@@ -6,6 +6,7 @@ import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLo
 import { showToast } from "./services/uiFeedback";
 import { AGENTS_CONFIG } from "./agentConfig";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
+import { toggleTheme, getTheme, onThemeChange } from './theme';
 
 const CONTEXT_PROMPTS = [
   '🤔 נראה ארוך אה?',
@@ -183,8 +184,8 @@ const getLegacyChatMemoryStorageKey = (workspaceId = '', documentId = '') => {
 const PROMPT_HISTORY_STORAGE_KEY = 'wordai_sidebar_prompt_history';
 const PROMPT_HISTORY_LIMIT = 100;
 const COMPOSER_MODES = [
-  { id: 'chat', label: 'צ׳אט' },
-  { id: 'edit', label: 'עריכה' },
+  { id: 'chat', label: 'צ׳אט', icon: '💬' },
+  { id: 'edit', label: 'עריכה מובנית', icon: '🧩' },
 ];
 
 const normalizeComposerMode = (value = '') => (String(value || '').trim() === 'edit' ? 'edit' : 'chat');
@@ -697,19 +698,19 @@ const persistMessagesForDocumentIds = (workspaceId = '', documentIds = [], messa
 const bbl = (isUser, compactMode = false) => ({
   maxWidth: compactMode ? '96%' : '90%',
   padding: compactMode ? '9px 11px' : '11px 14px',
-  borderRadius: isUser ? '18px 6px 18px 18px' : '6px 18px 18px 18px',
-  background: isUser ? 'linear-gradient(135deg,#2B579A 0%,#106EBE 100%)' : '#F8FAFC',
-  border: isUser ? 'none' : '1px solid #E2E8F0',
-  color: isUser ? 'white' : '#0F172A',
+  borderRadius: isUser ? '15px 15px 15px 5px' : '15px 15px 5px 15px',
+  background: isUser ? 'color-mix(in srgb, var(--chat-accent) 16%, transparent)' : 'var(--chat-bubble-ai)',
+  border: isUser ? '1px solid color-mix(in srgb, var(--chat-accent) 28%, transparent)' : '1px solid var(--chat-border)',
+  color: isUser ? 'var(--chat-ink)' : 'var(--chat-ink2, var(--chat-ink))',
   fontSize: compactMode ? 12 : 13,
-  lineHeight: compactMode ? 1.5 : 1.6,
+  lineHeight: compactMode ? 1.5 : 1.65,
   whiteSpace: 'pre-wrap',
-  boxShadow: isUser ? '0 8px 18px rgba(43,87,154,0.16)' : '0 4px 12px rgba(15,23,42,0.06)',
+  boxShadow: isUser ? 'none' : '0 4px 12px rgba(15,23,42,0.06)',
   direction: 'rtl',
   textAlign: 'right',
 });
 
-const actBtn = { padding: '8px 6px', border: '1px solid #E1DFDD', borderRadius: 10, background: 'white', cursor: 'pointer', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: '#323130', transition: 'all 0.12s' };
+const actBtn = { padding: '8px 6px', border: '1px solid var(--chat-border)', borderRadius: 10, background: 'var(--chat-bubble-ai)', cursor: 'pointer', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: 'var(--chat-ink)', transition: 'all 0.12s' };
 
 const CLOSING_LINK_DELIMITERS = {
   ')': '(',
@@ -869,6 +870,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
   const [tab, setTab] = useState('chat');
+  const [isDarkTheme, setIsDarkTheme] = useState(() => getTheme() === 'dark');
+  useEffect(() => onThemeChange((t) => setIsDarkTheme(t === 'dark')), []);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
   const [messages, setMessages] = useState(() => getSavedMessagesForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
@@ -1082,6 +1086,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const effectiveProviderSummary = loading && requestSnapshot?.providerLabel ? requestSnapshot.providerLabel : activeProviderSummary;
   const effectiveAgentSummary = loading && requestSnapshot?.agentLabel ? requestSnapshot.agentLabel : (activeAgent ? activeAgent.name : 'צ׳אט ישיר');
   const effectiveSkillSummary = loading && requestSnapshot?.skillLabel ? requestSnapshot.skillLabel : (activeSkill ? activeSkill.label : inactiveSkillSummaryLabel);
+  const chatHeaderButtons = [
+    { key: 'theme', icon: isDarkTheme ? '☀️' : '🌙', title: 'מצב תצוגה (בהיר/כהה)', onClick: () => toggleTheme() },
+    { key: 'style', icon: '🎨', title: 'סגנון אישי', onClick: () => onOpenSettingsTab('personal') },
+    { key: 'settings', icon: '⚙️', title: 'הגדרות', onClick: () => setTab((prev) => prev === 'settings' ? 'chat' : 'settings') },
+    ...(mode === 'sidebar' ? [{ key: 'compact', icon: compactMode ? '⤢' : '⤡', title: compactMode ? 'הרחב חלונית' : 'כווץ חלונית', onClick: onToggleCompact }] : []),
+    { key: 'close', icon: '✕', title: 'סגור', onClick: onClose },
+  ];
   const composerModeLabel = isEditComposerMode ? 'מצב עריכה' : 'מצב צ׳אט';
   const composerModeHelpText = isEditComposerMode
       ? 'עבודה ישירה על הטקסט הנבחר, הפסקה הפעילה או סעיף שמוזכר במפורש בבקשה. בברירת מחדל אין כאן סוכן או סקיל קבועים; לזימון מפורש השתמש ב-@agent או /skill בתחילת הבקשה.'
@@ -4255,51 +4266,57 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
   if (useClassicTaskpaneShell) {
     return (
-      <div style={{ ...getShellStyle(mode, compactMode), background: '#F3F2F1', fontFamily: '"Segoe UI", Tahoma, sans-serif' }} dir="rtl">
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#F3F2F1' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 8px', background: '#0078D4', color: 'white', flexShrink: 0 }}>
-            <div style={{ fontSize: '1rem', fontWeight: 600, letterSpacing: '0.3px' }}>✍️ Word AI</div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <button
-                type="button"
-                onClick={() => onOpenSettingsTab('personal')}
-                title="סגנון אישי"
-                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
-              >
-                🎨
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab((prev) => prev === 'settings' ? 'chat' : 'settings')}
-                title="הגדרות"
-                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
-              >
-                ⚙️
-              </button>
-              {mode === 'sidebar' && (
+      <div style={{ ...getShellStyle(mode, compactMode), background: 'var(--chat-bg)', fontFamily: '"Segoe UI", Tahoma, sans-serif' }} dir="rtl">
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--chat-bg)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '13px 15px 11px', background: 'var(--chat-header)', color: 'var(--chat-ink)', flexShrink: 0, borderBottom: '1px solid var(--chat-border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg, var(--chat-accent), var(--chat-accent-strong))', display: 'grid', placeItems: 'center', flexShrink: 0, boxShadow: '0 6px 16px var(--chat-accent-soft)' }}>
+                <div style={{ width: 11, height: 11, borderRadius: '50%', background: 'var(--chat-accent-ink)' }} />
+              </div>
+              <div style={{ minWidth: 0, lineHeight: 1.2 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--chat-ink)' }}>עוזר הכתיבה</div>
+                <div style={{ fontSize: 11, color: 'var(--chat-ink-soft)', display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--chat-accent)', flexShrink: 0 }} />{activeProviderSummary || 'מחובר'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              {chatHeaderButtons.map((btn) => (
                 <button
+                  key={btn.key}
                   type="button"
-                  onClick={onToggleCompact}
-                  title={compactMode ? 'הרחב חלונית' : 'כווץ חלונית'}
-                  style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
+                  onClick={btn.onClick}
+                  title={btn.title}
+                  style={{ background: 'var(--chat-bubble-ai)', border: '1px solid var(--chat-border)', width: 30, height: 30, borderRadius: 8, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--chat-ink-soft)' }}
                 >
-                  {compactMode ? '⤢' : '⤡'}
+                  {btn.icon}
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={onClose}
-                title="סגור"
-                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', width: 30, height: 30, fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}
-              >
-                ✕
-              </button>
+              ))}
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#FFFFFF', borderBottom: '1px solid #EDEBE9', flexShrink: 0 }}>
+          {tab === 'chat' && (
+            <div style={{ display: 'flex', gap: 4, margin: '10px 12px 2px', background: 'var(--chat-bubble-ai)', border: '1px solid var(--chat-border)', borderRadius: 11, padding: 3, flexShrink: 0 }}>
+              {COMPOSER_MODES.map((m) => {
+                const active = composerMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setComposerMode(m.id)}
+                    title={m.label}
+                    style={{ flex: 1, border: 0, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: active ? 800 : 700, padding: 7, borderRadius: 8, background: active ? 'var(--chat-accent)' : 'transparent', color: active ? 'var(--chat-accent-ink)' : 'var(--chat-ink-soft)', boxShadow: active ? '0 2px 7px var(--chat-accent-soft)' : 'none', transition: 'background .15s, color .15s' }}
+                  >
+                    {m.icon} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--chat-surface)', borderBottom: '1px solid var(--chat-border)', flexShrink: 0 }}>
             <span style={{ fontSize: 12 }}>📄</span>
-            <div style={{ flex: 1, fontSize: 12, color: localContext ? '#242424' : '#605E5C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ flex: 1, fontSize: 12, color: localContext ? 'var(--chat-ink)' : 'var(--chat-ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {selectionPreviewText}
             </div>
             <span style={{ fontSize: 10, background: '#E8F1FB', color: '#0F4C81', padding: '4px 8px', borderRadius: 999, fontWeight: 700, whiteSpace: 'nowrap' }}>
@@ -4387,7 +4404,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           </div>
 
             {tab === 'settings' ? (
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'var(--chat-surface)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#F8FAFC' }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', marginBottom: 4 }}>⚙️ הגדרות השיחה בצד</div>
                   <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.6 }}>
@@ -4422,7 +4439,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             ) : tab === 'history' ? (
               renderChatHistoryPanel('light')
             ) : (
-              <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: '#FFFFFF', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'var(--chat-surface)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {messages.map((msg, index) => {
                   const isEditMessage = normalizeComposerMode(msg.composerMode || '') === 'edit';
                   const documentActionTone = msg.documentActionStatus === 'failed'
@@ -4443,33 +4460,34 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                       )}
                       {renderDocumentActionCompletionButton(msg, 'light')}
                       {(msg.content || '').trim() && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                          <button
-                            type="button"
-                            onClick={() => copyMessageToClipboard(msg.content)}
-                            style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#4B5563', fontSize: 11, cursor: 'pointer' }}
-                          >
-                            העתק
-                          </button>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 7 }}>
                           {msg.role === 'assistant' && !msg.error && !isEditMessage && onApplyDocumentPlan && (
                             <button
                               type="button"
                               onClick={() => applyChatMessageToDocument(msg)}
                               disabled={loading}
-                              style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #A7F3D0', background: '#ECFDF5', color: '#047857', fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
+                              style={{ padding: '7px 13px', borderRadius: 9, border: 0, background: 'var(--chat-accent)', color: 'var(--chat-accent-ink)', fontSize: 12, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
                             >
-                              החל במיקומים
+                              ↪ החל במיקומים
                             </button>
                           )}
                           {msg.role === 'assistant' && !msg.error && !isEditMessage && onInsert && (
                             <button
                               type="button"
                               onClick={() => onInsert(msg.content)}
-                              style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', fontSize: 11, cursor: 'pointer' }}
+                              style={{ padding: '7px 13px', borderRadius: 9, border: '1px solid color-mix(in srgb, var(--chat-accent) 30%, transparent)', background: 'color-mix(in srgb, var(--chat-accent) 11%, transparent)', color: 'var(--chat-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
                             >
-                              הוסף למסמך
+                              ＋ הוסף למסמך
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => copyMessageToClipboard(msg.content)}
+                            title="העתק"
+                            style={{ padding: '7px 11px', borderRadius: 9, border: '1px solid var(--chat-border)', background: 'var(--chat-bubble-ai)', color: 'var(--chat-ink-soft)', fontSize: 13, cursor: 'pointer' }}
+                          >
+                            ⧉
+                          </button>
                         </div>
                       )}
                     </div>
@@ -4478,31 +4496,18 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
                 {loading && (
                   <div style={{ alignSelf: 'flex-start', maxWidth: compactMode ? '98%' : '94%' }}>
-                    <div style={{ ...bbl(false, compactMode), display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 14 }}>⏳</span>
-                      <span>{progressStatusLabel}</span>
+                    <div style={{ ...bbl(false, compactMode) }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, color: 'var(--chat-accent)', background: 'var(--chat-accent-soft)', padding: '3px 9px', borderRadius: 999 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--chat-accent)', animation: 'wf-glowDot 1.3s ease-in-out infinite' }} />
+                        {progressStatusLabel}
+                      </span>
                     </div>
                   </div>
                 )}
               </div>
             )}
 
-          <div style={{ padding: '8px 12px 10px', background: '#FFFFFF', borderTop: '1px solid #EDEBE9', flexShrink: 0 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-              {classicTaskpaneAgents.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  onClick={() => toggleClassicTaskpaneAgent(agent.id)}
-                  title={agent.unavailableReason || agent.label}
-                  disabled={loading || agent.providerAvailable === false}
-                  style={{ padding: '7px 10px', background: activeClassicAgentId === agent.id ? '#0F766E' : '#FFFFFF', border: '1px solid #D1D5DB', borderRadius: 999, fontSize: 12, fontWeight: 600, color: activeClassicAgentId === agent.id ? '#FFFFFF' : '#323130', cursor: loading || agent.providerAvailable === false ? 'not-allowed' : 'pointer', opacity: loading || agent.providerAvailable === false ? 0.55 : 1, whiteSpace: 'nowrap' }}
-                >
-                  {agent.label}
-                </button>
-              ))}
-            </div>
-
+          <div style={{ padding: '8px 12px 10px', background: 'var(--chat-surface)', borderTop: '1px solid var(--chat-border)', flexShrink: 0 }}>
             {activeClassicAgent && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: '#F0FDFA', border: '1px solid #0D9488', borderRadius: 8, margin: '8px 0', color: '#0F766E', fontSize: 13, fontWeight: 600 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -4511,33 +4516,68 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 <button type="button" onClick={() => setActiveClassicAgentId(null)} style={{ background: 'transparent', border: 'none', color: '#0F766E', cursor: 'pointer', fontSize: 14 }}>✕</button>
               </div>
             )}
-              <div style={{ padding: '6px 12px 2px', color: '#605E5C', fontSize: '0.74rem', textAlign: 'center', borderTop: '1px solid #EDEBE9', background: '#FAF9F8', margin: '0 -12px 8px' }}>
-              ⌨️ Enter לשליחה, Shift+Enter לשורה חדשה, / לסקילים
-            </div>
+            {/* שורת צ'יפי פעולה (פריסת המוקאפ) — תקן / סכם / הרחב / חידוד… + "עוד" שפותח גריד כל הפעולות */}
+            {visibleActions.length > 0 && (
+              <>
+                {moreActionsOpen && (
+                  <div style={{ marginBottom: 9, padding: 11, borderRadius: 14, background: 'var(--chat-bubble-ai)', border: '1px solid var(--chat-border)' }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--chat-muted2, var(--chat-ink-soft))', letterSpacing: '.03em', margin: '0 2px 8px' }}>כל הפעולות</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 7 }}>
+                      {visibleActions.map((action) => (
+                        <button
+                          key={action.id}
+                          type="button"
+                          onClick={() => { runAction(action); setMoreActionsOpen(false); }}
+                          disabled={loading}
+                          title={action.label}
+                          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '9px 4px', borderRadius: 11, background: 'var(--chat-surface)', border: '1px solid var(--chat-border)', color: 'var(--chat-ink3, var(--chat-ink))', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
+                        >
+                          <span style={{ fontSize: 16 }}>{action.icon}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, textAlign: 'center', lineHeight: 1.2 }}>{action.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="nicebar" style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 0 9px' }}>
+                  {visibleActions.slice(0, 4).map((action) => (
+                    <button
+                      key={action.id}
+                      type="button"
+                      onClick={() => runAction(action)}
+                      disabled={loading}
+                      title={action.label}
+                      style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, border: '1px solid var(--chat-border)', background: 'var(--chat-bubble-ai)', color: 'var(--chat-ink)', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                    >
+                      <span>{action.icon}</span>{action.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setMoreActionsOpen((v) => !v)}
+                    title="כל הפעולות"
+                    style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 13px', borderRadius: 999, border: '1px solid color-mix(in srgb, var(--chat-accent) 30%, transparent)', background: 'color-mix(in srgb, var(--chat-accent) 11%, transparent)', color: 'var(--chat-accent)', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    ⊕ {moreActionsOpen ? 'פחות' : 'עוד'}
+                  </button>
+                </div>
+              </>
+            )}
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <button
                   type="button"
-                  onClick={() => onOpenSettingsTab('onboarding')}
-                  title="הגדרות הנחיות וסגנון"
-                  style={{ padding: '4px 10px', background: '#FFFFFF', border: '1px solid #C8B84A', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#7A6010', cursor: 'pointer', whiteSpace: 'nowrap', height: 26, width: '100%' }}
-                >
-                  ⚙️ הנחיות
-                </button>
-                <button
-                  type="button"
                   onClick={() => fileInputRef.current?.click()}
                   title="העלאת קובץ כהקשר לצ'אט"
-                  style={{ padding: '4px 10px', background: '#F3F4F6', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#4B5563', cursor: 'pointer', whiteSpace: 'nowrap', height: 26, width: '100%' }}
+                  style={{ width: 40, height: 44, background: 'var(--chat-bubble-ai)', border: '1px solid var(--chat-border)', borderRadius: 13, fontSize: 16, color: 'var(--chat-ink-soft)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
-                  📎 צירוף קובץ
+                  📎
                 </button>
                 <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".docx,.txt,.md,.pdf,.json" onChange={handleFileUpload} />
               </div>
 
               <div style={{ flex: 1, position: 'relative' }}>
-                {renderComposerModeToggle('classic')}
                 {attachedFiles.map((file, idx) => (
                   <div key={idx} style={{
                     marginBottom: 8,
@@ -4623,7 +4663,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   }}
                   placeholder={composerPlaceholder}
                   rows={2}
-                  style={{ width: '100%', minHeight: 44, maxHeight: 120, resize: 'vertical', padding: '9px 12px', border: '1px solid #C8C6C4', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, background: 'white', direction: 'rtl' }}
+                  style={{ width: '100%', minHeight: 44, maxHeight: 120, resize: 'vertical', padding: '9px 12px', border: '1px solid var(--chat-border)', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, background: 'var(--chat-input-bg)', color: 'var(--chat-ink)', direction: 'rtl' }}
                 />
 
                 {mentionMenu.open && (
@@ -4657,9 +4697,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 onClick={() => send()}
                 disabled={!canSendCurrentInput}
                 title="שלח"
-                style={{ width: 42, height: 42, border: 'none', borderRadius: 8, background: canSendCurrentInput ? '#0078D4' : '#CBD5E1', color: 'white', cursor: canSendCurrentInput ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                style={{ width: 44, height: 44, border: 'none', borderRadius: 13, background: canSendCurrentInput ? 'linear-gradient(135deg, var(--chat-accent), var(--chat-accent-strong))' : 'var(--chat-bubble-ai)', color: canSendCurrentInput ? 'var(--chat-accent-ink)' : 'var(--chat-ink-soft)', fontSize: 18, fontWeight: 800, cursor: canSendCurrentInput ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: canSendCurrentInput ? '0 8px 20px var(--chat-accent-soft)' : 'none' }}
               >
-                {loading ? '…' : '➤'}
+                {loading ? '…' : '↑'}
               </button>
             </div>
 

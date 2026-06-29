@@ -117,10 +117,10 @@ export default function Modal({
         aria-labelledby={labelledBy || (title ? titleId : undefined)}
         aria-describedby={describedBy}
         tabIndex={-1}
-        className={`relative w-full ${SIZES[size] || SIZES.md} max-h-[90vh] overflow-auto rounded-card bg-white shadow-2xl outline-none ${className}`}
+        className={`relative w-full ${SIZES[size] || SIZES.md} max-h-[90vh] overflow-auto rounded-card bg-white shadow-2xl outline-none dark:bg-[#13212f] dark:text-ink dark:ring-1 dark:ring-white/10 ${className}`}
       >
         {title && (
-          <div className="flex items-center justify-between gap-4 border-b border-black/5 px-5 py-4">
+          <div className="flex items-center justify-between gap-4 border-b border-black/5 px-5 py-4 dark:border-white/10">
             <h2 id={titleId} className="text-[15px] font-bold text-ink">
               {title}
             </h2>
@@ -128,14 +128,14 @@ export default function Modal({
               type="button"
               onClick={onClose}
               aria-label="סגירה"
-              className="flex h-8 w-8 items-center justify-center rounded-pill text-muted transition hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+              className="flex h-8 w-8 items-center justify-center rounded-pill text-muted transition hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 dark:hover:bg-white/10"
             >
               <i className="ph ph-x text-[18px]" aria-hidden="true" />
             </button>
           </div>
         )}
         <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-start gap-2 border-t border-black/5 px-5 py-4">{footer}</div>}
+        {footer && <div className="flex justify-start gap-2 border-t border-black/5 px-5 py-4 dark:border-white/10">{footer}</div>}
       </div>
     </div>,
     document.body,

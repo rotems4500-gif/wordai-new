@@ -5,6 +5,11 @@
   themes: corporate --default, light;
 }
 
+/* Dark theme variant — class-based, נדלק כש-<html> נושא class="dark"
+   (מנוהל ע"י src/theme.js). מאפשר dark:bg-… utilities ברכיבים חדשים.
+   נפרד מ-data-theme של daisyUI כדי לא להתנגש בערכת corporate. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ─────────────────────────────────────────────────────────────
    Design tokens (Tailwind v4 @theme) — Wave A, Batch 1.
    Additive only: defines NEW token names so Tailwind emits utilities
@@ -850,3 +855,350 @@
         animation: none !important;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   DARK THEME — ערכת כהה (navy + teal) כתוספת לערכה הבהירה.
+   מופעלת ע"י class="dark" על <html> (src/theme.js + init ב-index.html).
+   הפלטה נגזרת מהעיצובים החדשים (מסך הבית / חלונית הצ'אט):
+     רקע navy #0d1b2e · accent teal #2dd4bf · טקסט #eaf2fb.
+   העיקרון: רק ה-chrome (top-bar/ribbon/taskpane/סטטוס) הופך כהה —
+   "דף" המסמך (page-surface) נשאר לבן, כמו במעבד תמלילים אמיתי.
+   ═══════════════════════════════════════════════════════════════ */
+html.dark {
+    /* tokens — האליאסים הישנים (--word-blue וכו') עוקבים אוטומטית */
+    --color-brand: #2dd4bf;
+    --color-brand-light: #7fd4c4;
+    --color-ink: #eaf2fb;
+    --color-muted: #8ba3bd;
+    --color-page: #0d1b2e;
+    --color-surface: #13212f;
+
+    --ribbon-bg: rgba(10, 20, 34, 0.55);
+    --ribbon-border: rgba(255, 255, 255, 0.08);
+    --ribbon-hover: rgba(255, 255, 255, 0.07);
+    --text-color: var(--color-ink);
+    --group-label: var(--color-muted);
+    --page-bg: var(--color-page);
+}
+
+/* משתני חלונית הצ'אט (AiSidebar) — מוגדרים inline ב-style ולכן מתהפכים
+   אוטומטית עם html.dark בלי re-render. ערכי ברירת מחדל (בהיר) ב-:root. */
+/* חלונית הצ'אט — theme-aware: בהיר כברירת מחדל, navy רק במצב כהה. הפריסה זהה בשניהם. */
+:root {
+    --chat-bg: #eef1f6;
+    --chat-surface: #FFFFFF;
+    --chat-bubble-ai: #f5f7fa;
+    --chat-ink: #1d2a3a;
+    --chat-ink-soft: #647688;
+    --chat-border: #e3e8ef;
+    --chat-header: #FFFFFF;
+    --chat-input-bg: #FFFFFF;
+    /* אקסנט טורקיז לחלונית הצ'אט (עיצוב המוקאפ) + דרגות טקסט */
+    --chat-accent: #0d9488;
+    --chat-accent-strong: #0f766e;
+    --chat-accent-ink: #ffffff;
+    --chat-accent-soft: rgba(13, 148, 136, 0.12);
+    --chat-ink2: #27384b;
+    --chat-ink3: #3a4c60;
+    --chat-muted2: #78899a;
+}
+html.dark {
+    --chat-bg: #0a1422;
+    --chat-surface: #0d1b2e;
+    --chat-bubble-ai: rgba(255, 255, 255, 0.055);
+    --chat-ink: #eaf2fb;
+    --chat-ink-soft: #8ba3bd;
+    --chat-border: rgba(255, 255, 255, 0.1);
+    --chat-header: #0a1422;
+    --chat-input-bg: rgba(255, 255, 255, 0.06);
+    --chat-accent: #2dd4bf;
+    --chat-accent-strong: #1c9f8f;
+    --chat-accent-ink: #06231f;
+    --chat-accent-soft: rgba(45, 212, 191, 0.12);
+    --chat-ink2: #dce8f4;
+    --chat-ink3: #cfe0ef;
+    --chat-muted2: #7e96b0;
+}
+@keyframes wf-glowDot { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+html.dark body {
+    background: radial-gradient(125% 120% at 82% -8%, #14304a 0%, #0d1b2e 46%, #0a1422 100%);
+    background-attachment: fixed;
+    color: var(--color-ink);
+}
+
+/* scrollbars */
+html.dark ::-webkit-scrollbar { width: 10px; height: 10px; }
+html.dark ::-webkit-scrollbar-thumb { background: rgba(45, 212, 191, 0.22); border-radius: 999px; }
+html.dark ::-webkit-scrollbar-track { background: transparent; }
+
+/* Top bar */
+html.dark #top-bar {
+    background: rgba(13, 27, 46, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25);
+}
+html.dark .top-search {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: none;
+}
+html.dark .top-search:focus-within {
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18);
+}
+html.dark .top-search input::placeholder { color: rgba(234, 242, 251, 0.45); }
+
+/* Ribbon */
+html.dark #ribbon-container { box-shadow: 0 4px 30px rgba(0, 0, 0, 0.25); }
+html.dark .tab-btn.active { background-color: rgba(255, 255, 255, 0.06); }
+html.dark .tab-btn.file-tab { color: #06231f; }
+html.dark .toolbar-group { border-left-color: rgba(255, 255, 255, 0.07); }
+html.dark .r-select {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--color-ink);
+}
+html.dark .styles-gallery {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+html.dark .style-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: none;
+}
+html.dark .input-row input {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--color-ink);
+}
+
+/* Taskpane (AI assistant chrome — תוכן הצ'אט מעוצב ברכיב עצמו) */
+html.dark #taskpane {
+    background: rgba(10, 20, 34, 0.6);
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.2);
+}
+html.dark .taskpane-header { border-bottom-color: rgba(255, 255, 255, 0.07); }
+html.dark .tp-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+html.dark .tp-card:hover { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28); }
+html.dark .tp-card-title { border-bottom-color: rgba(255, 255, 255, 0.08); }
+html.dark .tp-item:hover { background: rgba(45, 212, 191, 0.1); }
+
+/* Dropdowns */
+html.dark .dropdown-menu {
+    background: rgba(19, 33, 47, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 14px 38px rgba(0, 0, 0, 0.4);
+}
+html.dark .table-box { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); }
+
+/* Status bar — נשאר ב-accent אבל מתאים לכהה */
+html.dark #status-bar { background: #0a1422; color: var(--color-muted); border-top: 1px solid rgba(255, 255, 255, 0.06); }
+
+/* File menu */
+html.dark #file-menu { background: rgba(10, 20, 34, 0.97); border-top: 1px solid rgba(255, 255, 255, 0.08); }
+html.dark .file-content { background: transparent; color: var(--color-ink); }
+html.dark .file-title { color: var(--color-ink); }
+html.dark .action-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+html.dark .action-card span { color: var(--color-ink); }
+
+/* shared UI Modal (components/ui) — רקע כהה כללי */
+html.dark .wf-modal-surface,
+html.dark [data-ui="modal-surface"] {
+    background: #13212f;
+    color: var(--color-ink);
+}
+
+/* ערכת כהה לפאנלי ההגדרות — "סקין" כללי מעל ה-utilities הבהירים,
+   כדי שכל הטאבים (מנועי AI, סקילים, מצגות…) יהפכו כהים בלי לערוך כל רכיב.
+   scoped ל-html.dark .wf-settings-pane כדי לא להשפיע על שאר האפליקציה. */
+/* מעטפת מודאל ההגדרות (header/nav/footer — Tailwind-classed) — כהה תמיד, עיצוב המוקאפ */
+html.dark .wf-settings-modal { background-color: #0d1b2e; }
+html.dark .wf-settings-modal .bg-white,
+html.dark .wf-settings-modal .bg-slate-50,
+html.dark .wf-settings-modal .bg-slate-100 { background-color: #0a1422 !important; }
+html.dark .wf-settings-modal .text-slate-800,
+html.dark .wf-settings-modal .text-slate-700,
+html.dark .wf-settings-modal .text-slate-900 { color: #f1f6fb !important; }
+html.dark .wf-settings-modal .text-slate-400,
+html.dark .wf-settings-modal .text-slate-500,
+html.dark .wf-settings-modal .text-slate-600 { color: #8ba3bd !important; }
+html.dark .wf-settings-modal .border-slate-200,
+html.dark .wf-settings-modal .border-slate-100,
+html.dark .wf-settings-modal .border-slate-300 { border-color: rgba(255, 255, 255, 0.1) !important; }
+
+html.dark .wf-settings-pane {
+    color: #eaf2fb;
+    /* override ה-vars הניטרליים לכהה תמיד — תוכן ההגדרות מציג את עיצוב המוקאפ בכל theme */
+    --s-text: #eaf2fb;
+    --s-text-strong: #f1f6fb;
+    --s-muted: #8ba3bd;
+    --s-surface: #13212f;
+    --s-surface-2: #0f1d2e;
+    --s-border: rgba(255, 255, 255, 0.1);
+}
+html.dark .wf-settings-pane .text-slate-900,
+html.dark .wf-settings-pane .text-slate-800,
+html.dark .wf-settings-pane .text-slate-700,
+html.dark .wf-settings-pane .text-gray-900,
+html.dark .wf-settings-pane .text-gray-800,
+html.dark .wf-settings-pane .text-gray-700 { color: #eaf2fb !important; }
+html.dark .wf-settings-pane .text-slate-600,
+html.dark .wf-settings-pane .text-slate-500,
+html.dark .wf-settings-pane .text-slate-400,
+html.dark .wf-settings-pane .text-gray-600,
+html.dark .wf-settings-pane .text-gray-500,
+html.dark .wf-settings-pane .text-gray-400 { color: #8ba3bd !important; }
+html.dark .wf-settings-pane .bg-white,
+html.dark .wf-settings-pane .bg-slate-50,
+html.dark .wf-settings-pane .bg-slate-100,
+html.dark .wf-settings-pane .bg-gray-50,
+html.dark .wf-settings-pane .bg-gray-100 { background-color: rgba(255, 255, 255, 0.04) !important; }
+html.dark .wf-settings-pane .border-slate-200,
+html.dark .wf-settings-pane .border-slate-100,
+html.dark .wf-settings-pane .border-gray-200,
+html.dark .wf-settings-pane .border-gray-100,
+html.dark .wf-settings-pane .border-slate-300 { border-color: rgba(255, 255, 255, 0.1) !important; }
+/* inputs/selects/textarea בתוך ההגדרות */
+html.dark .wf-settings-pane input,
+html.dark .wf-settings-pane select,
+html.dark .wf-settings-pane textarea {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #eaf2fb;
+    border-color: rgba(255, 255, 255, 0.12);
+}
+html.dark .wf-settings-pane input::placeholder,
+html.dark .wf-settings-pane textarea::placeholder { color: #7e96b0; }
+
+/* ניטרלים של FileMenu (הגדרות + תפריט קובץ) — inline styles הומרו ל-vars.
+   בהיר = הערכים המקוריים (ללא שינוי), כהה = navy. צבעים סמנטיים (ירוק/כתום/כחול) לא מומרים. */
+:root {
+    --s-text: #334155;
+    --s-text-strong: #0F172A;
+    --s-muted: #64748B;
+    --s-surface: #FFFFFF;
+    --s-surface-2: #F8FAFC;
+    --s-border: #E2E8F0;
+}
+html.dark {
+    --s-text: #eaf2fb;
+    --s-text-strong: #f1f6fb;
+    --s-muted: #8ba3bd;
+    --s-surface: #13212f;
+    --s-surface-2: #0f1d2e;
+    --s-border: rgba(255, 255, 255, 0.1);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   עיצוב "הגדרות" — ערכת Linen (בהיר/חמים). מיושם כ"סקין" מעל ה-utilities
+   הבהירים של Tailwind, בדיוק כמו סקין הכהה למעלה — כך כל הטאבים מקבלים
+   את הגוון החמים בלי לערוך כל רכיב. scoped ל-html:not(.dark) בלבד,
+   כך שמצב כהה נשאר לגמרי כפי שהיה (navy/teal). העיצוב מתוך הגדרות.dc.html.
+   ════════════════════════════════════════════════════════════════ */
+
+/* טוקני אקסנט לרכיבים החדשים (gear tile, command-search, footer, rail).
+   נצרכים דרך var(--wf-accent) ב-JSX — מוגדרים לשני המצבים כדי שהרכיבים
+   החדשים יישארו עקביים גם בכהה. */
+.wf-settings-modal {
+    --wf-accent: #cf7a33;
+    --wf-accent-strong: #a85f22;
+    --wf-accent-text: #fffdf8;
+    --wf-accent-soft: #f4e7d6;
+    --wf-surface: #fffdf8;
+    --wf-surface-2: #faf4e9;
+    --wf-rail: #f6efe2;
+    --wf-border: #e9ddc9;
+    --wf-text: #2d2620;
+    --wf-muted: #8d7d68;
+    --wf-field: #fffdf8;
+}
+html.dark .wf-settings-modal {
+    --wf-accent: #2dd4bf;
+    --wf-accent-strong: #1c9f8f;
+    --wf-accent-text: #06231f;
+    --wf-accent-soft: rgba(45, 212, 191, 0.15);
+    --wf-surface: #0d1b2e;
+    --wf-surface-2: #0f1d2e;
+    --wf-rail: #0a1422;
+    --wf-border: rgba(255, 255, 255, 0.1);
+    --wf-text: #eaf2fb;
+    --wf-muted: #8ba3bd;
+    --wf-field: rgba(255, 255, 255, 0.05);
+}
+
+/* — מעטפת המודאל (header/rail/footer) — */
+html:not(.dark) .wf-settings-modal { background-color: var(--wf-surface-2); }
+html:not(.dark) .wf-settings-modal .bg-white { background-color: var(--wf-surface) !important; }
+html:not(.dark) .wf-settings-modal .bg-slate-50,
+html:not(.dark) .wf-settings-modal .bg-slate-100 { background-color: var(--wf-surface-2) !important; }
+html:not(.dark) .wf-settings-modal .text-slate-800,
+html:not(.dark) .wf-settings-modal .text-slate-700,
+html:not(.dark) .wf-settings-modal .text-slate-900 { color: var(--wf-text) !important; }
+html:not(.dark) .wf-settings-modal .text-slate-400,
+html:not(.dark) .wf-settings-modal .text-slate-500,
+html:not(.dark) .wf-settings-modal .text-slate-600 { color: var(--wf-muted) !important; }
+html:not(.dark) .wf-settings-modal .border-slate-100,
+html:not(.dark) .wf-settings-modal .border-slate-200,
+html:not(.dark) .wf-settings-modal .border-slate-300 { border-color: var(--wf-border) !important; }
+
+/* — תוכן הטאבים (.wf-settings-pane) מקבל גוון חמים + אקסנט כתום — */
+html:not(.dark) .wf-settings-pane {
+    color: var(--wf-text);
+    --s-text: var(--wf-text);
+    --s-text-strong: var(--wf-text);
+    --s-muted: var(--wf-muted);
+    --s-surface: var(--wf-surface);
+    --s-surface-2: var(--wf-surface-2);
+    --s-border: var(--wf-border);
+}
+html:not(.dark) .wf-settings-pane .bg-white { background-color: var(--wf-surface) !important; }
+html:not(.dark) .wf-settings-pane .bg-slate-50,
+html:not(.dark) .wf-settings-pane .bg-slate-100,
+html:not(.dark) .wf-settings-pane .bg-gray-50,
+html:not(.dark) .wf-settings-pane .bg-gray-100 { background-color: var(--wf-surface-2) !important; }
+html:not(.dark) .wf-settings-pane .text-slate-900,
+html:not(.dark) .wf-settings-pane .text-slate-800,
+html:not(.dark) .wf-settings-pane .text-slate-700,
+html:not(.dark) .wf-settings-pane .text-gray-900,
+html:not(.dark) .wf-settings-pane .text-gray-800,
+html:not(.dark) .wf-settings-pane .text-gray-700 { color: var(--wf-text) !important; }
+html:not(.dark) .wf-settings-pane .text-slate-600,
+html:not(.dark) .wf-settings-pane .text-slate-500,
+html:not(.dark) .wf-settings-pane .text-slate-400,
+html:not(.dark) .wf-settings-pane .text-gray-600,
+html:not(.dark) .wf-settings-pane .text-gray-500 { color: var(--wf-muted) !important; }
+html:not(.dark) .wf-settings-pane .border-slate-100,
+html:not(.dark) .wf-settings-pane .border-slate-200,
+html:not(.dark) .wf-settings-pane .border-slate-300,
+html:not(.dark) .wf-settings-pane .border-gray-100,
+html:not(.dark) .wf-settings-pane .border-gray-200 { border-color: var(--wf-border) !important; }
+
+/* — האקסנט: אינדיגו/סגול → כתום linen (גבולי ומדויק) — */
+html:not(.dark) .wf-settings-modal .bg-indigo-600,
+html:not(.dark) .wf-settings-modal .bg-indigo-500,
+html:not(.dark) .wf-settings-pane .bg-indigo-600,
+html:not(.dark) .wf-settings-pane .bg-indigo-500,
+html:not(.dark) .wf-settings-pane .bg-purple-600 { background-color: var(--wf-accent) !important; }
+html:not(.dark) .wf-settings-modal .text-indigo-600,
+html:not(.dark) .wf-settings-modal .text-indigo-700,
+html:not(.dark) .wf-settings-pane .text-indigo-600,
+html:not(.dark) .wf-settings-pane .text-indigo-700,
+html:not(.dark) .wf-settings-pane .text-purple-600 { color: var(--wf-accent) !important; }
+html:not(.dark) .wf-settings-modal .bg-indigo-50,
+html:not(.dark) .wf-settings-pane .bg-indigo-50,
+html:not(.dark) .wf-settings-pane .bg-indigo-100 { background-color: var(--wf-accent-soft) !important; }
+html:not(.dark) .wf-settings-modal .border-indigo-100,
+html:not(.dark) .wf-settings-modal .border-indigo-200,
+html:not(.dark) .wf-settings-pane .border-indigo-200,
+html:not(.dark) .wf-settings-pane .border-indigo-300 { border-color: color-mix(in srgb, var(--wf-accent) 35%, transparent) !important; }
+html:not(.dark) .wf-settings-modal .hover\:bg-indigo-50:hover,
+html:not(.dark) .wf-settings-pane .hover\:bg-indigo-50:hover { background-color: var(--wf-accent-soft) !important; }

@@ -1,4 +1,5 @@
 import React from 'react';
+import { getTheme, toggleTheme, onThemeChange } from './theme';
 
 export default function TopBar({
   onSave = () => {},
@@ -34,6 +35,8 @@ export default function TopBar({
   const isSpssMode = appMode === 'spss';
   const isPresentationsMode = appMode === 'presentation';
   const isWordMode = appMode === 'word';
+  const [theme, setThemeState] = React.useState(getTheme);
+  React.useEffect(() => onThemeChange(setThemeState), []);
   const cloudInitials = String(cloudUser?.displayName || cloudUser?.email || 'CL')
     .trim()
     .split(/\s+/)
@@ -135,6 +138,15 @@ export default function TopBar({
         </div>
       )}
       <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 lg:flex-nowrap lg:shrink-0">
+        <button
+          type="button"
+          onClick={() => toggleTheme()}
+          title={theme === 'dark' ? 'עבור למצב בהיר' : 'עבור למצב כהה'}
+          aria-label="החלפת ערכת נושא (בהיר/כהה)"
+          className="flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-white/20"
+        >
+          <i className={`ph ${theme === 'dark' ? 'ph-sun' : 'ph-moon'} text-lg text-amber-100`}></i>
+        </button>
         <div className="flex lg:hidden items-center gap-1 rounded-full bg-white/10 p-1">
           {modeBtn('word', 'Word')}
           {modeBtn('spss', 'SPSS')}

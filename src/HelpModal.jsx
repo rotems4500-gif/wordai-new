@@ -1,6 +1,7 @@
 import React from 'react';
 import { APP_VERSION_LABEL } from './appVersion';
 import { Modal, Button } from './components/ui';
+import UserGuide from './UserGuide';
 
 const GUIDE_CONTENT = {
   checkUpdates: {
@@ -14,36 +15,8 @@ const GUIDE_CONTENT = {
   },
   guideUser: {
     title: 'מדריך למשתמש',
-    content: (
-      <div>
-        <div className="mb-4">
-          <h3 className="text-lg font-bold mb-2">ברוכים הבאים ל-WordFlow AI</h3>
-          <p className="leading-relaxed">
-            תוכנה זו מיועדת לכתיבה ועריכה של מסמכים בסיוע סוכני AI מתקדמים.
-            המערכת מאפשרת לכם ליצור מסמך מאפס, לערוך טקסט קיים, ולהיעזר בעוזר החכם כדי לשפר, לתקן, ולנסח מחדש.
-          </p>
-        </div>
-        <div className="mb-4">
-          <h3 className="text-lg font-bold mb-2">יצירת עבודה או מסמך שלם</h3>
-          <p className="leading-relaxed">
-            כדי ליצור מסמך שלם באופן אוטומטי, התחילו ממסך הבית: הזינו את נושא העבודה והנחיות ספציפיות, ותנו לצוות הסוכנים לתכנן ולכתוב את העבודה פרק אחרי פרק.<br/>
-            המערכת תחלק את המטלה למספר סוכנים שיכתבו את חלקי המסמך במקביל ואז יאחדו הכל למסמך אחד מסודר. לליטוש נקודתי תוך כדי כתיבה אפשר להשתמש ב"עט הקסמים" (Ctrl+Space).
-          </p>
-        </div>
-        <div className="mb-4">
-          <h3 className="text-lg font-bold mb-2">עריכת טקסט</h3>
-          <p className="leading-relaxed">
-            בלחיצה על לשוניות הפריסה (בית, הוספה, עיצוב, פריסה) תוכלו לעצב את הטקסט, לשנות פונטים, להוסיף תמונות, טבלאות וכו' בדיוק כמו במעבד תמלילים רגיל.
-          </p>
-        </div>
-        <div className="mb-4">
-          <h3 className="text-lg font-bold mb-2">כלים מתקדמים חדשים</h3>
-          <p className="leading-relaxed">
-            מעבר לכתיבת מסמכים, מסך הבית פותח גם סטודיו <b>מצגות</b>, <b>עבודת SPSS</b> והעלאת <b>טיוטת מצגת</b> לשכתוב. בנוסף, סוכן ה<b>האנשה</b> כולל מצב אנטי-זיהוי-AI בלולאה. לפירוט מלא ראו את הלשונית "מדריך כלים מתקדמים" בתפריט העזרה.
-          </p>
-        </div>
-      </div>
-    )
+    full: true,
+    content: <UserGuide />,
   },
   studios: {
     title: 'מדריך כלים מתקדמים',
@@ -231,10 +204,12 @@ export default function HelpModal({ isOpen, onClose, topic }) {
       open={isOpen}
       onClose={onClose}
       title={doc.title}
-      size="lg"
+      size={doc.full ? 'xl' : 'lg'}
       footer={<Button onClick={onClose}>הבנתי, תודה</Button>}
     >
-      <div className="text-[15px] text-slate-700">{doc.content}</div>
+      {doc.full
+        ? <div className="-mx-5 -my-4">{doc.content}</div>
+        : <div className="text-[15px] text-slate-700">{doc.content}</div>}
     </Modal>
   );
 }

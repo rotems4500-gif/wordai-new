@@ -7,6 +7,7 @@ import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/c
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { APP_VERSION_LABEL } from './appVersion';
+import { getTheme, setTheme as setAppTheme, onThemeChange } from './theme';
 import { DECK_THEMES } from './presentation/deckThemes';
 import {
   DEFAULT_WORKSPACES_LIBRARY,
@@ -563,6 +564,25 @@ const SETTINGS_TAB_GROUPS = [
   },
 ];
 
+// כותרת + תיאור לכל טאב (לכותרת העמוד מעל התוכן) — מתוך עיצוב "הגדרות" (linen).
+const SETTINGS_TAB_META = {
+  ai: { icon: '🤖', title: 'מנועי AI', desc: 'מפתחות ומודלים לכל ספק. אפשר לשמור כמה מנועים במקביל ולבחור ברירת מחדל אחת.' },
+  sidebar: { icon: '💬', title: 'העוזר והצ׳אט', desc: 'איך העוזר החכם מתנהג ומה קורה בחלונית הצד.' },
+  skills: { icon: '🧠', title: 'סקילים', desc: 'איזה סקיל פועל אוטומטית, איזה נשאר ידני, ואיך כל אחד עובד.' },
+  workspaceV2: { icon: '🧩', title: 'סביבות עבודה', desc: 'הצוותים שמופיעים במסך הבית — תפקיד, יעד ותוצר לכל סוכן.' },
+  onboarding: { icon: '👤', title: 'פרופיל הכתיבה שלך', desc: 'הפרטים שמלמדים את WordAI לכתוב בדיוק כמוך.' },
+  personal: { icon: '🧬', title: 'עריכת הסגנון', desc: 'כיוונון עדין של איך הכתיבה נשמעת ונראית — וכל שינוי כאן נכנס מיד לפרומפט הסגנון שבתחתית.' },
+  prompt: { icon: '📌', title: 'הנחיות קבועות', desc: 'הנחיות שמצורפות לכל ספקי ה-AI, וייבוא ניתוח סגנון חיצוני.' },
+  writing: { icon: '✍️', title: 'ברירות מחדל למסמך', desc: 'טיפוגרפיה, בדיקות, עריכה חכמה ושמירה אוטומטית.' },
+  media: { icon: '🖼️', title: 'תמונות וגרפים', desc: 'ה-API שמייצרים תוכן ויזואלי: תמונות סטוק וגרפים מנתוני SPSS.' },
+  presentation: { icon: '📊', title: 'ברירות מחדל למצגות', desc: 'מה ימולא אוטומטית בטופס יצירת מצגת חדשה.' },
+  spss: { icon: '📈', title: 'ברירות מחדל ל-SPSS', desc: 'הערכים שחלים בכל כניסה לסטודיו ה-SPSS.' },
+  appearance: { icon: '🎨', title: 'מראה', desc: 'ערכת הנושא של ההגדרות וצבעי המסמך.' },
+  updates: { icon: '⬆️', title: 'עדכונים', desc: 'גרסה, ערוץ עדכון ובדיקה ידנית.' },
+  guide: { icon: '📘', title: 'מדריך', desc: 'הסברים מלאים לכל מה שאפשר לעשות ב-WordAI.' },
+  developer: { icon: '🛠️', title: 'תחזוקה וכלים מתקדמים', desc: 'timeout, איפוסים ולוגים — רק אם אתה יודע מה אתה עושה.' },
+};
+
 const SETTINGS_TAB_SEARCH_INDEX = [
   ...SETTINGS_TAB_GROUPS.flatMap((group) => group.tabs.map(([id, label]) => ({
     id,
@@ -739,7 +759,7 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint, op
     .filter(Boolean))];
   return (
     <div style={{ marginBottom: 10 }}>
-      <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>{label}</label>
+      <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>{label}</label>
       <div style={{ display: 'flex', gap: 6 }}>
         <input
           type={type === 'password' && !show ? 'password' : 'text'}
@@ -760,7 +780,7 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint, op
           ))}
         </datalist>
       ) : null}
-      {hint && <div style={{ fontSize: 10, color: '#919191', marginTop: 2 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 2 }}>{hint}</div>}
     </div>
   );
 }
@@ -804,8 +824,8 @@ function ApiTestButton({ providerId, providerConfig }) {
   };
 
   const btnColor = status === 'ok' ? '#D1FAE5' : status === 'fail' ? '#FEE2E2' : '#F1F5F9';
-  const btnBorder = status === 'ok' ? '#6EE7B7' : status === 'fail' ? '#FCA5A5' : '#CBD5E1';
-  const btnTextColor = status === 'ok' ? '#065F46' : status === 'fail' ? '#991B1B' : '#334155';
+  const btnBorder = status === 'ok' ? '#6EE7B7' : status === 'fail' ? '#FCA5A5' : 'var(--s-border)';
+  const btnTextColor = status === 'ok' ? '#065F46' : status === 'fail' ? '#991B1B' : 'var(--s-text)';
 
   return (
     <div style={{ marginTop: 4 }}>
@@ -852,8 +872,9 @@ const isProviderConfigured = (config, providerId) => {
   }
 };
 
-function ProviderSection({ title, icon, description, active, configured, onActivate, children, allowActivate = true, expandedHint = false }) {
+function ProviderSection({ title, icon, description, active, configured, onActivate, children, allowActivate = true, expandedHint = false, guideId = '' }) {
   const [expanded, setExpanded] = useState(active || configured);
+  const guide = guideId ? PROVIDER_SETUP_INDEX[guideId] : null;
 
   useEffect(() => {
     if (active) setExpanded(true);
@@ -864,41 +885,49 @@ function ProviderSection({ title, icon, description, active, configured, onActiv
   }, [expandedHint]);
 
   return (
-    <div style={{ border: `2px solid ${active ? 'var(--color-chrome)' : '#E1DFDD'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
+    <div style={{ border: `2px solid ${active ? 'var(--color-chrome)' : 'var(--s-border)'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 10, background: active ? '#FAFCFF' : 'white', transition: 'all 0.15s' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 18 }}>{icon}</span>
-          <span style={{ fontWeight: 700, fontSize: 13, color: '#323130' }}>{title}</span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--s-text-strong)' }}>{title}</span>
           {active && <span style={{ fontSize: 10, background: 'var(--color-chrome)', color: 'white', padding: '2px 8px', borderRadius: 10 }}>ברירת מחדל</span>}
           {configured && <span style={{ fontSize: 10, background: '#DCFCE7', color: '#166534', padding: '2px 8px', borderRadius: 10 }}>מוגדר</span>}
           {!configured && <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 10 }}>חסר מפתח/הגדרה</span>}
+          {guide?.badge && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--s-muted)', background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', padding: '2px 8px', borderRadius: 999 }}>{guide.badge}</span>}
         </div>
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setExpanded((prev) => !prev)}
-            style={{ fontSize: 11, padding: '4px 10px', background: 'white', color: '#334155', border: '1px solid #CBD5E1', borderRadius: 6, cursor: 'pointer' }}
+            style={{ fontSize: 11, padding: '4px 10px', background: 'white', color: 'var(--s-text)', border: '1px solid var(--s-border)', borderRadius: 6, cursor: 'pointer' }}
           >
             {expanded ? 'הסתר פרטים' : 'הצג פרטים'}
           </button>
           {allowActivate && (
             <button onClick={onActivate}
               disabled={!configured}
-              style={{ fontSize: 11, padding: '4px 12px', background: active ? '#E1DFDD' : 'var(--color-chrome)', color: active ? '#605E5C' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
+              style={{ fontSize: 11, padding: '4px 12px', background: active ? 'var(--s-border)' : 'var(--color-chrome)', color: active ? 'var(--s-muted)' : 'white', border: 'none', borderRadius: 6, cursor: !configured ? 'not-allowed' : 'pointer', opacity: !configured ? 0.55 : 1 }}>
               {active ? 'ברירת מחדל פעילה' : 'קבע כברירת מחדל'}
             </button>
           )}
         </div>
       </div>
 
+      {guide?.recommendation?.length ? (
+        <div style={{ marginTop: 9, padding: '9px 11px', borderRadius: 10, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)' }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--s-text)', lineHeight: 1.6 }}>{guide.recommendation[0]}</div>
+          {guide.recommendation[1] && <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginTop: 3 }}>{guide.recommendation[1]}</div>}
+        </div>
+      ) : null}
+
       {expanded ? (
         <>
-          {description && <p style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, marginTop: 8 }}>{linkifyText(description)}</p>}
+          {description && <p style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 10, marginTop: 8 }}>{linkifyText(description)}</p>}
           <div>{children}</div>
         </>
       ) : (
-        <div style={{ fontSize: 10, color: '#64748B', marginTop: 8, lineHeight: 1.6, opacity: 0.9 }}>
+        <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 8, lineHeight: 1.6, opacity: 0.9 }}>
           {configured ? 'הספק מוכן לעבודה. אפשר לפתוח כדי לראות או לערוך את ההגדרות.' : 'פתח את הכרטיס כדי להגדיר מפתח API, כתובת או מודל.'}
         </div>
       )}
@@ -914,7 +943,7 @@ function MediaVisualsSettings({ config, setConfig }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16, lineHeight: 1.7 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16, lineHeight: 1.7 }}>
         כאן מגדירים את כל ה-API שמייצרים תוכן ויזואלי: תמונות לסטודיו המצגות, וגרפים אמיתיים מנתוני SPSS.
         מנוע הגרפים מרנדר תרשים מדויק מהמספרים שבפלט — לא תמונה ש-AI ממציא.
       </p>
@@ -924,7 +953,7 @@ function MediaVisualsSettings({ config, setConfig }) {
         onActivate={() => {}}
         description="חיפוש תמונות סטוק (Pexels/Unsplash — חינמי). יצירת תמונות ב-AI עברה לכרטיס 'יצירת תמונות AI' בטאב 'מנועי AI'.">
         <div style={{ marginBottom: 10 }}>
-          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק תמונות סטוק פעיל</label>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק תמונות סטוק פעיל</label>
           <select value={config.imageProvider || 'pexels'} onChange={(e) => setConfig((prev) => ({ ...prev, imageProvider: e.target.value }))} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
             <option value="pexels">Pexels</option>
             <option value="unsplash">Unsplash</option>
@@ -941,7 +970,7 @@ function MediaVisualsSettings({ config, setConfig }) {
         onActivate={() => {}}
         description="מנוע גרפים אמיתי. AI מחלץ את המספרים מפלט ה-SPSS, ו-QuickChart מרנדר תרשים PNG מדויק (עמודות / קו / עוגה / פיזור). עובד חינם ללא מפתח; אפשר מפתח להגבלות גבוהות יותר.">
         <div style={{ marginBottom: 10 }}>
-          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>מנוע גרפים</label>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>מנוע גרפים</label>
           <select value={chartEngine.provider || 'quickchart'} onChange={(e) => update('chartEngine', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
             <option value="quickchart">QuickChart (Chart.js — מדויק)</option>
           </select>
@@ -950,7 +979,7 @@ function MediaVisualsSettings({ config, setConfig }) {
           onChange={(v) => update('chartEngine', 'baseUrl', v)} hint="ברירת מחדל: quickchart.io הציבורי. אפשר להפנות ל-self-host." />
         <FieldRow label="מפתח QuickChart (אופציונלי)" type="password" placeholder="leave empty for free tier" value={chartEngine.key || ''}
           onChange={(v) => update('chartEngine', 'key', v)} hint="ריק = שכבה חינמית. מפתח מ-quickchart.io מסיר הגבלות קצב." />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginTop: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginTop: 10 }}>
           <input type="checkbox" checked={chartEngine.fallbackToAi !== false} onChange={(e) => update('chartEngine', 'fallbackToAi', e.target.checked)} />
           גיבוי AI — אם רינדור הגרף נכשל, צור תמונת המחשה ב-AI (לא מדויקת מספרית)
         </label>
@@ -961,8 +990,7 @@ function MediaVisualsSettings({ config, setConfig }) {
 
 function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
-  const [selectedGuideId, setSelectedGuideId] = useState(() => deriveProviderGuideId(config));
-  const [openedGuideProviderId, setOpenedGuideProviderId] = useState('');
+  const [openedGuideProviderId] = useState('');
   const [quickKeyPopup, setQuickKeyPopup] = useState(null); // { providerId, label, keyField, baseUrlField? }
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
@@ -1023,126 +1051,34 @@ function AiSettings({ config, setConfig }) {
       };
     });
   };
-  useEffect(() => {
-    setSelectedGuideId((currentGuideId) => {
-      const currentGuide = PROVIDER_SETUP_INDEX[currentGuideId];
-      const nextGuideId = currentGuide && currentGuide.setupMode !== 'builtin'
-        ? deriveProviderGuideId({ ...config, active: 'custom' })
-        : deriveProviderGuideId(config);
-      return nextGuideId === currentGuideId ? currentGuideId : nextGuideId;
-    });
-  }, [config.active, config.custom?.name, config.custom?.baseUrl]);
-  const providerGuide = PROVIDER_SETUP_INDEX[selectedGuideId] || PROVIDER_SETUP_INDEX.gemini;
-  const applyGuidePreset = (guide) => {
-    if (!guide) return;
-    setSelectedGuideId(guide.id);
-    if (guide.setupMode === 'builtin') {
-      setOpenedGuideProviderId(guide.id);
-      return;
-    }
-
-    setConfig((prev) => {
-      const nextCustomName = guide.customConfig?.name || prev.custom?.name || '';
-      const nextCustomBaseUrl = guide.customConfig?.baseUrl || prev.custom?.baseUrl || '';
-      const preserveExistingKey = !guide.customConfig || (
-        normalizeProviderIdentity(prev.custom?.name || '') === normalizeProviderIdentity(nextCustomName)
-        && normalizeProviderIdentity(prev.custom?.baseUrl || '') === normalizeProviderIdentity(nextCustomBaseUrl)
-      );
-
-      return {
-        ...prev,
-        custom: {
-          ...prev.custom,
-          name: nextCustomName,
-          baseUrl: nextCustomBaseUrl,
-          key: preserveExistingKey ? (prev.custom?.key || '') : '',
-          model: guide.customConfig?.model || prev.custom?.model || '',
-        },
-      };
-    });
-    setShowCustomHelp(true);
-  };
-
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 12, lineHeight: 1.6 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 12, lineHeight: 1.6 }}>
         אפשר לשמור כמה מנועי AI במקביל. במסך הזה יש רק <strong>ברירת מחדל אחת</strong>, אבל בתוך סוכני התפקיד אפשר לבחור מנוע אחר לכל סוכן וכך לעבוד עם כמה מודלים יחד.
       </p>
 
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '10px 12px', background: '#F8FBFF', marginBottom: 12, fontSize: 11, color: '#1E3A8A', lineHeight: 1.7 }}>
+      {/* כרטיס "מנוע ברירת המחדל" — פריסת המוקאפ */}
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 16, background: 'var(--s-surface)', marginBottom: 14 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 4 }}>מנוע ברירת המחדל</div>
+        <div style={{ fontSize: 12, color: 'var(--s-muted)', marginBottom: 12, lineHeight: 1.6 }}>המנוע שמריץ כל בקשה כברירת מחדל. אפשר לבחור מנוע אחר לכל סוכן בהמשך.</div>
+        <select
+          value={config.active || 'gemini'}
+          onChange={(e) => activate(e.target.value)}
+          style={{ width: '100%', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--s-border)', background: 'var(--s-surface-2)', color: 'var(--s-text)', fontSize: 14, fontWeight: 600, outline: 'none', cursor: 'pointer' }}
+        >
+          {[['gemini', 'Google Gemini'], ['openai', 'OpenAI (GPT)'], ['claude', 'Claude (Anthropic)'], ['groq', 'Groq'], ['perplexity', 'Perplexity'], ['ollama', 'Ollama (מקומי)'], ['custom', config.custom?.name || 'מותאם']].map(([id, label]) => (
+            <option key={id} value={id}>{label}{config.active === id ? ' · פעיל' : ''}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '10px 12px', background: 'var(--s-surface-2)', marginBottom: 12, fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>
         לדוגמה: אפשר להפעיל ביחד Gemini + Claude, וכל בקשה תעבור דרך שניהם ואז תאוחד לתשובה אחת.
       </div>
 
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 16, padding: '14px', background: 'white', marginBottom: 18 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>בחר מדריך הגדרה לפי השימוש הצפוי</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
-              הבחירה כאן לא מחליפה את ברירת המחדל הפעילה. ספקים מובנים יפתחו את הכרטיס שלהם, וספקים תואמי OpenAI ימלאו אוטומטית את אזור Custom עם הכתובת והמודל הראשוני.
-            </div>
-          </div>
-          <a
-            href={providerGuide.keyUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: 11, color: '#1D4ED8', textDecoration: 'underline', fontWeight: 700 }}
-          >
-            {providerGuide.keyCta}
-          </a>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 12 }}>
-          {PROVIDER_SETUP_CATALOG.map((guide) => {
-            const selected = providerGuide.id === guide.id;
-            return (
-              <button
-                key={guide.id}
-                type="button"
-                onClick={() => setSelectedGuideId(guide.id)}
-                style={{
-                  textAlign: 'right',
-                  border: `1px solid ${selected ? '#93C5FD' : '#E5E7EB'}`,
-                  borderRadius: 14,
-                  padding: '12px 12px 10px',
-                  background: selected ? '#EFF6FF' : '#F8FAFC',
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                  <strong style={{ fontSize: 13, color: '#0F172A' }}>{guide.label}</strong>
-                  <span style={{ fontSize: 10, color: selected ? '#1D4ED8' : '#475569', background: selected ? '#DBEAFE' : 'white', border: '1px solid #CBD5E1', borderRadius: 999, padding: '2px 8px' }}>{guide.badge}</span>
-                </div>
-                <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.6 }}>{guide.recommendation[0]}</div>
-                <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginTop: 4 }}>{guide.recommendation[1]}</div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, padding: '12px 14px', background: '#F8FBFF' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 8 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>איך משיגים גישה ל-{providerGuide.label}</div>
-              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{providerGuide.keyHint}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => applyGuidePreset(providerGuide)}
-              style={{ fontSize: 11, padding: '7px 12px', background: '#1D4ED8', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-            >
-              {providerGuide.setupMode === 'builtin' ? 'פתח את הכרטיס המתאים' : 'מלא הגדרות עזר ב-Custom'}
-            </button>
-          </div>
-          <ol style={{ margin: 0, paddingRight: 18, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, color: '#334155', lineHeight: 1.7 }}>
-            {providerGuide.setupSteps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </div>
-      </div>
-
-      <div style={{ border: '1px solid #D1FAE5', borderRadius: 12, padding: '12px', background: '#F0FDF4', marginBottom: 18 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#166534', fontWeight: 700, marginBottom: 8 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: '14px 16px', background: 'var(--s-surface)', marginBottom: 18 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 8 }}>מצב Multi-Model</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--s-text)', fontWeight: 700, marginBottom: 8 }}>
           <input
             type="checkbox"
             checked={config.multiModelEnabled === true}
@@ -1162,7 +1098,7 @@ function AiSettings({ config, setConfig }) {
           הפעל מצב Multi-Model
         </label>
 
-        <div style={{ fontSize: 11, color: '#166534', lineHeight: 1.7, marginBottom: 8 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 8 }}>
           סמן כאן כמה מנועים שירוצו על אותה בקשה. מנוע ברירת המחדל יבצע גם את האיחוד הסופי של התוצאה.
         </div>
 
@@ -1202,9 +1138,9 @@ function AiSettings({ config, setConfig }) {
                 }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-                  color: isDisabled ? '#64748B' : showWarning ? '#92400E' : '#14532D',
+                  color: isDisabled ? 'var(--s-muted)' : showWarning ? '#92400E' : '#14532D',
                   background: showWarning ? '#FFFBEB' : 'white',
-                  border: `1px solid ${isDisabled ? '#E5E7EB' : showWarning ? '#FCD34D' : '#BBF7D0'}`,
+                  border: `1px solid ${isDisabled ? 'var(--s-border)' : showWarning ? '#FCD34D' : '#BBF7D0'}`,
                   borderRadius: 999, padding: '6px 10px',
                   opacity: isDisabled ? 0.6 : 1,
                   cursor: isDisabled ? 'not-allowed' : 'pointer',
@@ -1219,7 +1155,7 @@ function AiSettings({ config, setConfig }) {
                 />
                 {label}
                 {showWarning && <span style={{ fontSize: 10, marginRight: 2 }}>⚠️ חסר מפתח</span>}
-                {!configured && !isSelected && <span style={{ fontSize: 10, color: '#94A3B8' }}> (לא מוגדר)</span>}
+                {!configured && !isSelected && <span style={{ fontSize: 10, color: 'var(--s-muted)' }}> (לא מוגדר)</span>}
               </label>
             );
           })}
@@ -1229,35 +1165,35 @@ function AiSettings({ config, setConfig }) {
             <div style={{ border: '1px solid #FCD34D', borderRadius: 12, padding: '14px', background: '#FFFBEB', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E' }}>⚡ הגדרת מפתח מהיר — {quickKeyPopup.label}</div>
-                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#64748B', lineHeight: 1 }}>✕</button>
+                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: 'var(--s-muted)', lineHeight: 1 }}>✕</button>
               </div>
               <div style={{ fontSize: 11, color: '#78350F' }}>{quickKeyPopup.hint} — אחרי השמירה, לחץ על "בדוק חיבור" בכרטיס הספק למטה.</div>
               {quickKeyPopup.baseUrlField && (
                 <div>
-                  <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>Base URL</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>Base URL</div>
                   <input
                     type="text"
                     placeholder={quickKeyPopup.baseUrlPlaceholder}
                     value={config[quickKeyPopup.providerId]?.[quickKeyPopup.baseUrlField] || ''}
                     onChange={(e) => update(quickKeyPopup.providerId, quickKeyPopup.baseUrlField, e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
                   />
                 </div>
               )}
               {quickKeyPopup.keyField && (
                 <div>
-                  <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>API Key</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>API Key</div>
                   <input
                     type="password"
                     placeholder={quickKeyPopup.keyPlaceholder}
                     value={config[quickKeyPopup.providerId]?.[quickKeyPopup.keyField] || ''}
                     onChange={(e) => update(quickKeyPopup.providerId, quickKeyPopup.keyField, e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 8, fontSize: 12, direction: 'ltr' }}
                   />
                 </div>
               )}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ padding: '6px 14px', border: '1px solid #D1D5DB', borderRadius: 8, background: 'white', fontSize: 12, cursor: 'pointer', color: '#374151' }}>סגור</button>
+                <button type="button" onClick={() => setQuickKeyPopup(null)} style={{ padding: '6px 14px', border: '1px solid var(--s-border)', borderRadius: 8, background: 'white', fontSize: 12, cursor: 'pointer', color: 'var(--s-muted)' }}>סגור</button>
                 <button type="button" onClick={() => { setOpenedGuideProviderId(quickKeyPopup.providerId); setQuickKeyPopup(null); }} style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#D97706', color: 'white', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>פתח כרטיס מלא ↓</button>
               </div>
             </div>
@@ -1269,7 +1205,7 @@ function AiSettings({ config, setConfig }) {
       </div>
 
       {/* Gemini */}
-      <ProviderSection title="Google Gemini" icon="🔵" active={config.active === 'gemini'} configured={isProviderConfigured(config, 'gemini')} onActivate={() => activate('gemini')} expandedHint={openedGuideProviderId === 'gemini'}
+      <ProviderSection title="Google Gemini" icon="🔵" active={config.active === 'gemini'} configured={isProviderConfigured(config, 'gemini')} onActivate={() => activate('gemini')} expandedHint={openedGuideProviderId === 'gemini'} guideId="gemini"
         description="קבל מפתח API חינמי ב: aistudio.google.com/app/apikey">
         <FieldRow label="מפתח API" type="password" placeholder="AIza..." value={config.gemini?.key}
           onChange={v => update('gemini', 'key', v)} hint="מתחיל ב-AIza" />
@@ -1285,7 +1221,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* OpenAI */}
-      <ProviderSection title="OpenAI (ChatGPT / GPT-4)" icon="🟢" active={config.active === 'openai'} configured={isProviderConfigured(config, 'openai')} onActivate={() => activate('openai')} expandedHint={openedGuideProviderId === 'openai'}
+      <ProviderSection title="OpenAI (ChatGPT / GPT-4)" icon="🟢" active={config.active === 'openai'} configured={isProviderConfigured(config, 'openai')} onActivate={() => activate('openai')} expandedHint={openedGuideProviderId === 'openai'} guideId="openai"
         description="קבל מפתח API ב: platform.openai.com/api-keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-..." value={config.openai?.key}
           onChange={v => update('openai', 'key', v)} hint="מתחיל ב-sk-" />
@@ -1301,7 +1237,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Claude */}
-      <ProviderSection title="Claude (Anthropic)" icon="🟠" active={config.active === 'claude'} configured={isProviderConfigured(config, 'claude')} onActivate={() => activate('claude')} expandedHint={openedGuideProviderId === 'claude'}
+      <ProviderSection title="Claude (Anthropic)" icon="🟠" active={config.active === 'claude'} configured={isProviderConfigured(config, 'claude')} onActivate={() => activate('claude')} expandedHint={openedGuideProviderId === 'claude'} guideId="claude"
         description="קבל מפתח API ב: console.anthropic.com/settings/keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-ant-..." value={config.claude?.key}
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
@@ -1317,7 +1253,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Groq */}
-      <ProviderSection title="Groq (מהיר ובחינם)" icon="⚡" active={config.active === 'groq'} configured={isProviderConfigured(config, 'groq')} onActivate={() => activate('groq')} expandedHint={openedGuideProviderId === 'groq'}
+      <ProviderSection title="Groq (מהיר ובחינם)" icon="⚡" active={config.active === 'groq'} configured={isProviderConfigured(config, 'groq')} onActivate={() => activate('groq')} expandedHint={openedGuideProviderId === 'groq'} guideId="groq"
         description="מהיר מאוד ובחינם! קבל מפתח API ב: console.groq.com — לא דורש כרטיס אשראי">
         <FieldRow label="מפתח API" type="password" placeholder="gsk_..." value={config.groq?.key}
           onChange={v => update('groq', 'key', v)} hint="מתחיל ב-gsk_" />
@@ -1333,7 +1269,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Perplexity */}
-      <ProviderSection title="Perplexity AI" icon="🔍" active={config.active === 'perplexity'} configured={isProviderConfigured(config, 'perplexity')} onActivate={() => activate('perplexity')} expandedHint={openedGuideProviderId === 'perplexity'}
+      <ProviderSection title="Perplexity AI" icon="🔍" active={config.active === 'perplexity'} configured={isProviderConfigured(config, 'perplexity')} onActivate={() => activate('perplexity')} expandedHint={openedGuideProviderId === 'perplexity'} guideId="perplexity"
         description="AI עם גישה לאינטרנט בזמן אמת. מפתח ב: perplexity.ai/settings/api">
         <FieldRow label="מפתח API" type="password" placeholder="pplx-..." value={config.perplexity?.key}
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
@@ -1349,7 +1285,7 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Ollama */}
-      <ProviderSection title="Ollama (מקומי — חינמי לחלוטין)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')} expandedHint={openedGuideProviderId === 'ollama'}
+      <ProviderSection title="Ollama (מקומי — חינמי לחלוטין)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')} expandedHint={openedGuideProviderId === 'ollama'} guideId="ollama"
         description="הרץ AI ישירות על המחשב שלך! הורד מ-ollama.com — פרטי, חינמי, ללא אינטרנט">
         <FieldRow label="כתובת שרת" placeholder="http://localhost:11434/v1" value={config.ollama?.baseUrl}
           onChange={v => update('ollama', 'baseUrl', v)} hint="ברירת מחדל כשאולמה רץ על המחשב" />
@@ -1364,7 +1300,7 @@ function AiSettings({ config, setConfig }) {
         <ApiTestButton providerId="ollama" providerConfig={{ baseUrl: config.ollama?.baseUrl, model: config.ollama?.model }} />
       </ProviderSection>
 
-      <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false}
+      <ProviderSection title="Google Scholar / SerpAPI" icon="🎓" active={false} configured={isProviderConfigured(config, 'scholar')} onActivate={() => {}} allowActivate={false} guideId="scholar"
         description="מנוע מאמרים ומקורות אקדמיים דרך Google Scholar. שמירת מפתח SerpAPI כאן מאפשרת לבקשות כמו מקורות אקדמיים, bibliography או peer reviewed לעבור למסלול Scholar. הוצא מפתח מכאן: https://serpapi.com/google-scholar-api">
         <FieldRow label="מפתח SerpAPI" type="password" placeholder="your_serpapi_key" value={config.scholar?.key}
           onChange={v => update('scholar', 'key', v)} hint="המפתח משמש לשליפת מאמרים ומקורות אקדמיים מ-Google Scholar במסלול מקורות מאומתים" />
@@ -1372,7 +1308,7 @@ function AiSettings({ config, setConfig }) {
 
       <ProviderSection title="Copyleaks לזיהוי AI" icon="🛡️" active={false} configured={isProviderConfigured(config, 'copyleaks')} onActivate={() => {}} allowActivate={false}
         description="בדיקת טקסט דרך Copyleaks למסמך, לפסקה או לטקסט מסומן. ממלאים את הפרטים כאן, ואפשר לבדוק חיבור כדי לוודא שהכל מוכן לפני ההרצה הראשונה.">
-        <div style={{ border: '1px solid #DBEAFE', borderRadius: 10, padding: '10px 12px', background: '#F8FBFF', color: '#1E3A8A', fontSize: 11, lineHeight: 1.7, marginBottom: 12 }}>
+        <div style={{ border: '1px solid #DBEAFE', borderRadius: 10, padding: '10px 12px', background: 'var(--s-surface-2)', color: '#1E3A8A', fontSize: 11, lineHeight: 1.7, marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>מה זה?</div>
           <div>זה כלי שבודק אם טקסט נראה אנושי או נראה כתוכן שנוצר בעזרת AI דרך Copyleaks. הוא לא כותב טקסט ולא מחליף את מנוע הכתיבה.</div>
           <div style={{ marginTop: 8 }}>1. כתבו את האימייל של חשבון Copyleaks.</div>
@@ -1393,7 +1329,7 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('copyleaks', 'language', v)} hint="אפשר להשאיר ריק כדי ש-Copyleaks יזהה את השפה לבד." />
 
         <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text)', fontWeight: 600 }}>
             <input
               type="checkbox"
               checked={config.copyleaks?.explain === true}
@@ -1401,7 +1337,7 @@ function AiSettings({ config, setConfig }) {
             />
             פירוט נוסף: מוסיף הסבר מפורט יותר למה Copyleaks סימן את הטקסט
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text)', fontWeight: 600 }}>
             <input
               type="checkbox"
               checked={config.copyleaks?.sandbox === true}
@@ -1411,7 +1347,7 @@ function AiSettings({ config, setConfig }) {
           </label>
         </div>
 
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px', background: '#F8FAFC', color: '#475569', fontSize: 11, lineHeight: 1.7, marginBottom: 10 }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, padding: '10px 12px', background: 'var(--s-surface-2)', color: 'var(--s-muted)', fontSize: 11, lineHeight: 1.7, marginBottom: 10 }}>
           חשוב: זה כלי בדיקה בלבד. הוא לא ספק הכתיבה הפעיל, לא יוצר טקסט, ופועל רק מטאב "זיהוי AI" ב-Ribbon או מתוך חלון הבדיקה.
         </div>
 
@@ -1430,7 +1366,7 @@ function AiSettings({ config, setConfig }) {
         onActivate={() => {}}
         description="יצירת תמונות מקור ב-AI לסטודיו המצגות (Imagen של Gemini, gpt-image של OpenAI, Stability, xAI Grok או FLUX).">
         <div style={{ marginBottom: 10 }}>
-          <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות</label>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות</label>
           <select value={config.imageGen?.provider || 'gemini'} onChange={(e) => update('imageGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
             <option value="gemini">Gemini (Imagen)</option>
             <option value="openai">OpenAI (gpt-image)</option>
@@ -1455,7 +1391,7 @@ function AiSettings({ config, setConfig }) {
             onActivate={() => {}}
             description="ספק ומודל ייעודיים ליצירת SPSS syntax. ריק = הספק הפעיל הרגיל. אפשר גם לבחור מודל ישירות במסך ה-SPSS Studio בכל הרצה.">
             <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, color: '#605E5C', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק ל-SPSS</label>
+              <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק ל-SPSS</label>
               <select
                 value={providerId}
                 onChange={(e) => {
@@ -1494,17 +1430,17 @@ function AiSettings({ config, setConfig }) {
         );
       })()}
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#FAFAFA', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ fontSize: 20 }}>🖼️</span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>תמונות סטוק וגרפים</div>
-          <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>מפתחות תמונות סטוק (Pexels/Unsplash) ומנוע הגרפים ל-SPSS נמצאים בטאב "תמונות וגרפים".</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)' }}>תמונות סטוק וגרפים</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>מפתחות תמונות סטוק (Pexels/Unsplash) ומנוע הגרפים ל-SPSS נמצאים בטאב "תמונות וגרפים".</div>
         </div>
       </div>
 
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: '#F8FBFF', marginBottom: 16 }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface-2)', marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>קישורי תוספות בסרגל</div>
-        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 10 }}>
           כאן אפשר לשנות גם את שם הכפתור וגם את הכתובת של כל קישור. בשדות חיפוש אפשר להשתמש ב־{'{query}'} כדי לשלב את מה שסימנת או כתבת, וב־{'{serpapiKey}'} כדי לשלב אוטומטית את מפתח SerpAPI ששמרת.
         </div>
         {[
@@ -1514,7 +1450,7 @@ function AiSettings({ config, setConfig }) {
           ['orbit', 'Orbit'],
         ].map(([toolId, fallbackLabel]) => (
           <div key={toolId} style={{ borderTop: '1px solid #DBEAFE', paddingTop: 10, marginTop: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 6 }}>{fallbackLabel}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text)', marginBottom: 6 }}>{fallbackLabel}</div>
             <FieldRow
               label="כותרת כפתור"
               placeholder={fallbackLabel}
@@ -1535,6 +1471,7 @@ function AiSettings({ config, setConfig }) {
       <ProviderSection title={config.custom?.name || 'מנוע אחר (מותאם אישית)'} icon="🔌"
         active={config.active === 'custom'} configured={isProviderConfigured(config, 'custom')} onActivate={() => activate('custom')}
         expandedHint={showCustomHelp}
+        guideId="custom"
         description="">
 
         {/* כפתור הסבר */}
@@ -1545,24 +1482,24 @@ function AiSettings({ config, setConfig }) {
 
         {/* הסבר מפורט */}
         {showCustomHelp && (
-          <div style={{ background: '#F8F7F6', border: '1px solid #E1DFDD', borderRadius: 8, padding: '14px 16px', marginBottom: 14, fontSize: 12, lineHeight: 1.7, color: '#323130' }}>
+          <div style={{ background: 'var(--s-surface)', border: '1px solid var(--s-border)', borderRadius: 8, padding: '14px 16px', marginBottom: 14, fontSize: 12, lineHeight: 1.7, color: 'var(--s-text-strong)' }}>
             <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>🔌 מנוע מותאם אישית — OpenAI-Compatible API</div>
-            <p style={{ marginBottom: 10, color: '#605E5C' }}>
+            <p style={{ marginBottom: 10, color: 'var(--s-muted)' }}>
               רוב ספקי ה-AI הקטנים והמקומיים מספקים API התואם לפרוטוקול של OpenAI.
               בדרך כלל, בדשבורד של הספק תמצא <strong>שלושה דברים</strong> שצריך להעתיק לכאן:
             </p>
             <ul style={{ paddingRight: 18, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <li><strong>כתובת API (Base URL)</strong> — מופיעה בתיעוד תחת &ldquo;API Reference&rdquo; או &ldquo;Endpoint&rdquo;. נראית כך: <code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>https://api.groq.com/openai/v1</code></li>
-              <li><strong>מפתח API</strong> — מחרוזת שהספק נותן, לפעמים מתחילה ב-<code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>sk-</code>. <em>ללא מפתח נתמך רק ב-loopback מקומי מאושר של Ollama או LM Studio על פורטים 11434 או 1234.</em></li>
-              <li><strong>שם מודל</strong> — השם הטכני כמו <code style={{ background: '#E8E8E8', padding: '1px 5px', borderRadius: 3 }}>llama-3.3-70b-versatile</code>. מופיע ברשימת Models בתיעוד.</li>
+              <li><strong>כתובת API (Base URL)</strong> — מופיעה בתיעוד תחת &ldquo;API Reference&rdquo; או &ldquo;Endpoint&rdquo;. נראית כך: <code style={{ background: 'var(--s-border)', padding: '1px 5px', borderRadius: 3 }}>https://api.groq.com/openai/v1</code></li>
+              <li><strong>מפתח API</strong> — מחרוזת שהספק נותן, לפעמים מתחילה ב-<code style={{ background: 'var(--s-border)', padding: '1px 5px', borderRadius: 3 }}>sk-</code>. <em>ללא מפתח נתמך רק ב-loopback מקומי מאושר של Ollama או LM Studio על פורטים 11434 או 1234.</em></li>
+              <li><strong>שם מודל</strong> — השם הטכני כמו <code style={{ background: 'var(--s-border)', padding: '1px 5px', borderRadius: 3 }}>llama-3.3-70b-versatile</code>. מופיע ברשימת Models בתיעוד.</li>
             </ul>
 
             <div style={{ fontWeight: 700, marginBottom: 8 }}>🌐 ספקים נפוצים — לחץ להעתקה מהירה:</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {POPULAR_CUSTOM.map(p => (
-                <div key={p.name} style={{ background: 'white', border: '1px solid #E1DFDD', borderRadius: 8, padding: '10px 12px' }}>
+                <div key={p.name} style={{ background: 'white', border: '1px solid var(--s-border)', borderRadius: 8, padding: '10px 12px' }}>
                   <div style={{ fontWeight: 600, color: 'var(--color-chrome)', marginBottom: 4 }}>{p.name}</div>
-                  <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6 }}>📌 {linkifyText(p.note)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6 }}>📌 {linkifyText(p.note)}</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     <button onClick={() => update('custom', 'baseUrl', p.url)}
                       style={{ fontSize: 11, padding: '3px 10px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, cursor: 'pointer', color: '#1D4ED8' }}>
@@ -1576,13 +1513,44 @@ function AiSettings({ config, setConfig }) {
                       style={{ fontSize: 11, padding: '3px 10px', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 4, cursor: 'pointer', color: '#92400E' }}>
                       ⚡ מלא הכל
                     </button>
-                    <span style={{ fontSize: 10, color: '#919191', alignSelf: 'center' }}>מפתח: {p.keyNote}</span>
+                    <span style={{ fontSize: 10, color: 'var(--s-muted)', alignSelf: 'center' }}>מפתח: {p.keyNote}</span>
                   </div>
                 </div>
               ))}
             </div>
           </div>
         )}
+
+        {/* תואמים גם — ספקים תואמי OpenAI שמוגדרים דרך הכרטיס הזה */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 8 }}>תואמים גם — מלא בלחיצה:</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+            {['deepseek', 'mistral', 'together', 'openrouter', 'xai', 'lmstudio'].map((cid) => {
+              const g = PROVIDER_SETUP_INDEX[cid];
+              if (!g) return null;
+              const cc = g.customConfig || {};
+              return (
+                <div key={cid} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '10px 12px', background: 'var(--s-surface-2)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <strong style={{ fontSize: 12.5, color: 'var(--s-text-strong)' }}>{g.label}</strong>
+                    {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--s-muted)', background: 'var(--s-surface)', border: '1px solid var(--s-border)', padding: '2px 8px', borderRadius: 999 }}>{g.badge}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 8 }}>{g.recommendation?.[0]}</div>
+                  <button
+                    type="button"
+                    onClick={() => { update('custom', 'name', cc.name || g.label); update('custom', 'baseUrl', cc.baseUrl || ''); update('custom', 'model', cc.model || ''); }}
+                    style={{ fontSize: 11, fontWeight: 700, padding: '5px 12px', background: 'var(--color-chrome)', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+                  >
+                    ⚡ מלא ב-Custom
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--s-muted)', marginTop: 8, lineHeight: 1.6 }}>
+            אחרי המילוי הוסף את מפתח ה-API של הספק בשדה למטה ולחץ "בדוק חיבור".
+          </div>
+        </div>
 
         <FieldRow label="שם לתצוגה" placeholder="Groq / Ollama / DeepSeek ..." value={config.custom?.name}
           onChange={v => update('custom', 'name', v)} />
@@ -1598,7 +1566,7 @@ function AiSettings({ config, setConfig }) {
       {/* API ייעודי לפי פיצ'ר — SPSS ומצגות */}
       <div style={{ border: '1px solid #DDD6FE', borderRadius: 12, padding: '14px 16px', background: '#FAF5FF', marginTop: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#5B21B6', marginBottom: 4 }}>🎯 API ייעודי למצגות</div>
-        <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.7, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 12 }}>
           אפשר להקצות למצגות ספק/מודל/מפתח נפרדים מהספק הגלובלי. כשכבוי — הפיצ'ר משתמש בספק הפעיל הרגיל. מפתח או מודל ריקים נופלים אוטומטית לערך הגלובלי. ל-SPSS יש כרטיס ייעודי משלו ("קוד (SPSS Syntax)") למעלה.
         </div>
         {[
@@ -1621,7 +1589,7 @@ function AiSettings({ config, setConfig }) {
               {enabled && (
                 <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
                   <div>
-                    <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>ספק ייעודי</div>
+                    <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>ספק ייעודי</div>
                     <select
                       value={providerId}
                       onChange={(e) => updateFeatureOverride(id, { providerId: e.target.value, model: '' })}
@@ -1702,7 +1670,7 @@ function AiSettings({ config, setConfig }) {
                         <div style={{ fontSize: 10, color: '#7C3AED' }}>שדה ריק נופל להגדרת התמונות הגלובלית.</div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                           <div>
-                            <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>תמונות סטוק</div>
+                            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>תמונות סטוק</div>
                             <select
                               value={im.stockProvider || ''}
                               onChange={(e) => updateFeatureImage(id, { stockProvider: e.target.value })}
@@ -1714,7 +1682,7 @@ function AiSettings({ config, setConfig }) {
                             </select>
                           </div>
                           <div>
-                            <div style={{ fontSize: 11, color: '#374151', marginBottom: 4 }}>יצירת תמונות AI</div>
+                            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>יצירת תמונות AI</div>
                             <select
                               value={genProvider}
                               onChange={(e) => updateFeatureImage(id, { genProvider: e.target.value, genModel: '' })}
@@ -1774,12 +1742,12 @@ function AiSettings({ config, setConfig }) {
 function AssistantBehaviorSettings({ behavior, setBehavior }) {
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         כשהכתיבה נתקעת, העוזר נפתח אוטומטית כסיידבר קבוע בצד ימין כדי לעזור בלי לחסום את המסמך.
       </p>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#323130', fontWeight: 600 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--s-text-strong)', fontWeight: 600 }}>
           <input
             type="checkbox"
             checked={behavior.autoPopup !== false}
@@ -1789,8 +1757,8 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
         </label>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#323130', marginBottom: 6 }}>זמן המתנה לפני קפיצה</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'var(--s-surface)' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--s-text-strong)', marginBottom: 6 }}>זמן המתנה לפני קפיצה</div>
         <input
           type="number"
           min="3"
@@ -1799,7 +1767,7 @@ function AssistantBehaviorSettings({ behavior, setBehavior }) {
           onChange={(e) => setBehavior(prev => ({ ...prev, idleSeconds: Math.max(3, Number(e.target.value) || 5) }))}
           style={{ width: 110, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
         />
-        <span style={{ marginRight: 8, fontSize: 12, color: '#605E5C' }}>שניות</span>
+        <span style={{ marginRight: 8, fontSize: 12, color: 'var(--s-muted)' }}>שניות</span>
       </div>
     </div>
   );
@@ -1884,7 +1852,7 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, padding: '14px', background: '#F8FBFF' }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, padding: '14px', background: 'var(--s-surface-2)' }}>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>
           <input
             type="checkbox"
@@ -1894,25 +1862,25 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
           />
           <span>
             השתמש תמיד בספק ובמודל הכלליים מהגדרות מנועי AI
-            <span style={{ display: 'block', marginTop: 4, fontSize: 11, color: '#475569', lineHeight: 1.6, fontWeight: 500 }}>
+            <span style={{ display: 'block', marginTop: 4, fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, fontWeight: 500 }}>
               כשזה פעיל, כל שליחה מהחלונית מתעלמת מהגדרות מצב, מהבחירה המקומית בחלונית ומניתוב הסוכן, ורצה דרך הספק הפעיל בטאב מנועי AI.
             </span>
           </span>
         </label>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 14, padding: '14px', background: 'white' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'white' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>מצבים בחלונית</div>
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>הסדר כאן הוא הסדר שיופיע בשורת הכפתורים של הצ׳אט הקלאסי.</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--s-text-strong)' }}>מצבים בחלונית</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 4, lineHeight: 1.6 }}>הסדר כאן הוא הסדר שיופיע בשורת הכפתורים של הצ׳אט הקלאסי.</div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <select
               value={modeToAdd}
               onChange={(e) => setModeToAdd(e.target.value)}
               disabled={!availableModes.length}
-              style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white', minWidth: 180 }}
+              style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: 'white', minWidth: 180 }}
             >
               {availableModes.length ? availableModes.map((mode) => (
                 <option key={mode.id} value={mode.id}>{mode.label}</option>
@@ -1922,7 +1890,7 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
               type="button"
               onClick={addMode}
               disabled={!modeToAdd}
-              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #93C5FD', background: modeToAdd ? '#EFF6FF' : '#F8FAFC', color: modeToAdd ? '#1D4ED8' : '#94A3B8', cursor: modeToAdd ? 'pointer' : 'default', fontSize: 12, fontWeight: 700 }}
+              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #93C5FD', background: modeToAdd ? '#EFF6FF' : 'var(--s-surface-2)', color: modeToAdd ? '#1D4ED8' : 'var(--s-muted)', cursor: modeToAdd ? 'pointer' : 'default', fontSize: 12, fontWeight: 700 }}
             >
               + הוסף מצב
             </button>
@@ -1935,23 +1903,23 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
             const modelChoices = getProviderModelChoices(providerId, config);
             const configured = providerId ? isProviderConfigured(config, providerId) : true;
             return (
-              <div key={mode.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '12px', background: mode.enabled === false ? '#F8FAFC' : '#FFFFFF' }}>
+              <div key={mode.id} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px', background: mode.enabled === false ? 'var(--s-surface-2)' : 'var(--s-surface)' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(120px, 0.9fr) minmax(160px, 1.1fr) auto', gap: 8, alignItems: 'end' }}>
                   <label style={{ display: 'grid', gap: 4 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>שם מצב</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--s-muted)' }}>שם מצב</span>
                     <input
                       value={mode.label || ''}
                       onChange={(e) => updateMode(mode.id, { label: e.target.value })}
-                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                      style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12 }}
                     />
                   </label>
                   <label style={{ display: 'grid', gap: 4 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>ספק</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--s-muted)' }}>ספק</span>
                     <select
                       value={providerId}
                       onChange={(e) => updateMode(mode.id, { providerId: e.target.value })}
                       disabled={sidebarSettings.forceGlobalProvider === true}
-                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true ? '#F8FAFC' : 'white' }}
+                      style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true ? 'var(--s-surface-2)' : 'white' }}
                     >
                       <option value="">ברירת מחדל כללית</option>
                       {providerOptions.map(([id, label]) => (
@@ -1960,12 +1928,12 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
                     </select>
                   </label>
                   <label style={{ display: 'grid', gap: 4 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>מודל</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--s-muted)' }}>מודל</span>
                     <select
                       value={providerId && modelChoices.includes(mode.model) ? mode.model : ''}
                       onChange={(e) => updateMode(mode.id, { model: e.target.value })}
                       disabled={sidebarSettings.forceGlobalProvider === true || !providerId || !modelChoices.length}
-                      style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true || !providerId ? '#F8FAFC' : 'white' }}
+                      style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: sidebarSettings.forceGlobalProvider === true || !providerId ? 'var(--s-surface-2)' : 'white' }}
                     >
                       <option value="">מודל ברירת מחדל של הספק</option>
                       {modelChoices.map((modelName) => <option key={modelName} value={modelName}>{modelName}</option>)}
@@ -1980,11 +1948,11 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
                   </button>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#334155', fontWeight: 600 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--s-text)', fontWeight: 600 }}>
                     <input type="checkbox" checked={mode.enabled !== false} onChange={(e) => updateMode(mode.id, { enabled: e.target.checked })} />
                     מוצג בחלונית
                   </label>
-                  <div style={{ fontSize: 10, color: configured ? '#64748B' : '#B45309' }}>
+                  <div style={{ fontSize: 10, color: configured ? 'var(--s-muted)' : '#B45309' }}>
                     #{index + 1} · {AGENTS_CONFIG[mode.id]?.placeholder || mode.id}{configured ? '' : ' · הספק עדיין לא מוגדר בטאב מנועי AI'}
                   </div>
                 </div>
@@ -2068,7 +2036,7 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 0, lineHeight: 1.7 }}>
         כאן מגדירים הנחיות קבועות לכל ספקי AI, ואפשר גם לנתח עבודות קיימות דרך AI חיצוני ולייבא את הממצאים לפרופיל.
       </p>
       {!promptsReady && (
@@ -2078,8 +2046,8 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
       )}
 
       {/* הנחיות משותפות */}
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>הנחיות משותפות לכל ספקי AI</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 8 }}>הנחיות משותפות לכל ספקי AI</div>
         <textarea
           value={sharedInstructions}
           onChange={(e) => setSharedInstructions(e.target.value)}
@@ -2087,13 +2055,13 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
           placeholder="למשל: כתוב בעברית תקנית, אל תמציא מקורות, שמור על טון ענייני, אל תוסיף מבוא אם לא ביקשו"
           style={{ width: '100%', padding: '10px 12px', border: '1px solid #C8C6C4', borderRadius: 10, fontSize: 12, resize: 'vertical', marginBottom: 6 }}
         />
-        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>הפרופיל האישי והלמידה הקיימת מצטרפים אוטומטית ל-Portable Prompt למטה.</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>הפרופיל האישי והלמידה הקיימת מצטרפים אוטומטית ל-Portable Prompt למטה.</div>
       </div>
 
       {/* ניתוח סגנון דרך AI חיצוני */}
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF' }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>🔍 ניתוח סגנון דרך AI חיצוני → ייבוא לפרופיל</div>
-        <div style={{ fontSize: 11, color: '#475569', marginBottom: 12, lineHeight: 1.7 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 12, lineHeight: 1.7 }}>
           העתק את פרומפט הניתוח, הדבק אותו ב-Claude / Gemini / ChatGPT יחד עם 2-3 עבודות לדוגמה, ואז הדבק כאן את הפלט JSON שתקבל.
         </div>
 
@@ -2113,9 +2081,9 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
             readOnly
             value={analysisPrompt}
             rows={6}
-            style={{ width: '100%', padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 11, resize: 'vertical', background: 'white', color: '#0F172A', direction: 'ltr' }}
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 11, resize: 'vertical', background: 'white', color: 'var(--s-text-strong)', direction: 'ltr' }}
           />
-          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>צרף לפרומפט גם 2-3 עבודות שכתבת בעבר — ככה הניתוח יהיה מדויק יותר.</div>
+          <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>צרף לפרומפט גם 2-3 עבודות שכתבת בעבר — ככה הניתוח יהיה מדויק יותר.</div>
         </div>
 
         {/* שלב 2 */}
@@ -2133,7 +2101,7 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
               type="button"
               onClick={applyAnalysisOutput}
               disabled={!analysisOutput.trim()}
-              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: analysisOutput.trim() ? '#1D4ED8' : '#CBD5E1', color: 'white', cursor: analysisOutput.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 700 }}
+              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: analysisOutput.trim() ? '#1D4ED8' : 'var(--s-border)', color: 'white', cursor: analysisOutput.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 700 }}
             >
               ✅ החל על הפרופיל
             </button>
@@ -2145,11 +2113,11 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
       </div>
 
       {/* Portable Prompt */}
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'var(--s-surface)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>Portable Prompt מוכן להעתקה</div>
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>יעבוד גם ב-Claude, Gemini, ChatGPT או כל ספק אחר.</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)' }}>Portable Prompt מוכן להעתקה</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 3 }}>יעבוד גם ב-Claude, Gemini, ChatGPT או כל ספק אחר.</div>
           </div>
           <button
             type="button"
@@ -2167,13 +2135,13 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
             readOnly
             value={portablePrompt}
             rows={10}
-            style={{ width: '100%', padding: '10px 12px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: '#0F172A' }}
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white', color: 'var(--s-text-strong)' }}
           />
         ) : (
           <button
             type="button"
             onClick={buildPortablePromptDraft}
-            style={{ width: '100%', padding: '12px', borderRadius: 10, border: '1px dashed #CBD5E1', background: 'white', color: '#475569', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+            style={{ width: '100%', padding: '12px', borderRadius: 10, border: '1px dashed var(--s-border)', background: 'white', color: 'var(--s-muted)', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
           >
             הצג Portable Prompt
           </button>
@@ -2244,12 +2212,12 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         ברירות המחדל של סטודיו המצגות. הערכים האלה ימולאו אוטומטית בטופס יצירת מצגת חדשה.
       </p>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>סגנון ברירת מחדל</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>סגנון ברירת מחדל</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           {DECK_THEMES.map((theme) => (
             <button
@@ -2259,13 +2227,13 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
               title={theme.blurb || ''}
               style={{
                 textAlign: 'right',
-                border: `1px solid ${prefs.defaultThemeId === theme.id ? '#2563EB' : '#E5E7EB'}`,
-                background: prefs.defaultThemeId === theme.id ? '#EFF6FF' : '#FAFAFA',
+                border: `1px solid ${prefs.defaultThemeId === theme.id ? '#2563EB' : 'var(--s-border)'}`,
+                background: prefs.defaultThemeId === theme.id ? '#EFF6FF' : 'var(--s-surface)',
                 borderRadius: 10,
                 padding: '10px 12px',
                 fontSize: 12,
                 fontWeight: 700,
-                color: '#323130',
+                color: 'var(--s-text-strong)',
                 cursor: 'pointer',
               }}
             >
@@ -2275,11 +2243,11 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>מבנה ברירת מחדל</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>מבנה ברירת מחדל</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 10, marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>רמת עומס</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>רמת עומס</div>
             <div style={{ display: 'flex', gap: 6 }}>
               {densityOptions.map(([id, label]) => (
                 <button
@@ -2294,7 +2262,7 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
                     padding: '7px 4px',
                     fontSize: 12,
                     fontWeight: 700,
-                    color: '#323130',
+                    color: 'var(--s-text-strong)',
                     cursor: 'pointer',
                   }}
                 >
@@ -2304,7 +2272,7 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>מספר שקופיות</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מספר שקופיות</div>
             <input
               type="number"
               min="4"
@@ -2316,7 +2284,7 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>דגש על תמונות</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>דגש על תמונות</div>
           <div style={{ display: 'flex', gap: 6 }}>
             {imageOptions.map(([id, label]) => (
               <button
@@ -2331,7 +2299,7 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
                   padding: '7px 4px',
                   fontSize: 12,
                   fontWeight: 700,
-                  color: '#323130',
+                  color: 'var(--s-text-strong)',
                   cursor: 'pointer',
                 }}
               >
@@ -2342,11 +2310,11 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>קהל ומטרה ברירת מחדל</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>קהל ומטרה ברירת מחדל</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>קהל יעד</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>קהל יעד</div>
             <input
               type="text"
               value={prefs.defaultAudience || ''}
@@ -2356,7 +2324,7 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
             />
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>מטרה</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מטרה</div>
             <input
               type="text"
               value={prefs.defaultGoal || ''}
@@ -2368,8 +2336,8 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'var(--s-surface)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
           <input type="checkbox" checked={prefs.rememberLastChoices !== false} onChange={(e) => set('rememberLastChoices', e.target.checked)} />
           זכור את הבחירות האחרונות שלי בטופס היצירה
         </label>
@@ -2391,13 +2359,13 @@ function SpssDefaultsSettings({ prefs, setPrefs }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         ברירות המחדל של סטודיו ה-SPSS. הערכים חלים בכל פעם שנכנסים לסטודיו.
       </p>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 6 }}>מצב יצירה ברירת מחדל</div>
-        <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, lineHeight: 1.6 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>מצב יצירה ברירת מחדל</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 10, lineHeight: 1.6 }}>
           איזה מצב יהיה פעיל כשפותחים את הסטודיו.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -2408,22 +2376,22 @@ function SpssDefaultsSettings({ prefs, setPrefs }) {
               onClick={() => set('defaultGenMode', id)}
               style={{
                 textAlign: 'right',
-                border: `1px solid ${prefs.defaultGenMode === id ? '#2563EB' : '#E5E7EB'}`,
-                background: prefs.defaultGenMode === id ? '#EFF6FF' : '#FAFAFA',
+                border: `1px solid ${prefs.defaultGenMode === id ? '#2563EB' : 'var(--s-border)'}`,
+                background: prefs.defaultGenMode === id ? '#EFF6FF' : 'var(--s-surface)',
                 borderRadius: 10,
                 padding: '10px 12px',
                 cursor: 'pointer',
               }}
             >
-              <strong style={{ display: 'block', fontSize: 12, color: '#323130', marginBottom: 2 }}>{label}</strong>
-              <span style={{ fontSize: 10, color: '#64748B' }}>{hint}</span>
+              <strong style={{ display: 'block', fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 2 }}>{label}</strong>
+              <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>{hint}</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>תצוגת סינטקס ברירת מחדל</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>תצוגת סינטקס ברירת מחדל</div>
         <div style={{ display: 'flex', gap: 6 }}>
           {viewOptions.map(([id, label]) => (
             <button
@@ -2438,7 +2406,7 @@ function SpssDefaultsSettings({ prefs, setPrefs }) {
                 padding: '7px 4px',
                 fontSize: 12,
                 fontWeight: 700,
-                color: '#323130',
+                color: 'var(--s-text-strong)',
                 cursor: 'pointer',
               }}
             >
@@ -2448,13 +2416,13 @@ function SpssDefaultsSettings({ prefs, setPrefs }) {
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>הסברים והתנהגות</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'var(--s-surface)' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>הסברים והתנהגות</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 10 }}>
           <input type="checkbox" checked={prefs.tutorMode !== false} onChange={(e) => set('tutorMode', e.target.checked)} />
           מצב לימוד — הוסף הסברים לכל בלוק syntax כברירת מחדל
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
           <input type="checkbox" checked={prefs.autoSwitchPrepForReliability !== false} onChange={(e) => set('autoSwitchPrepForReliability', e.target.checked)} />
           עבור אוטומטית למצב הכנת נתונים בבקשות מהימנות / recode / היפוך סולם
         </label>
@@ -2475,15 +2443,15 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         סימנתי כברירת מחדל את האפשרויות המרכזיות שסומנו אצלך ב-Word המקורי.
       </p>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>טיפוגרפיה ברירת מחדל</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>טיפוגרפיה ברירת מחדל</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 10, marginBottom: 10 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>גופן כללי למסמכים חדשים</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>גופן כללי למסמכים חדשים</div>
             <select
               value={prefs.defaultFontFamily || 'Alef'}
               onChange={(e) => setPrefs(prev => ({ ...prev, defaultFontFamily: e.target.value, defaultFontStack: getDefaultFontStack(e.target.value) }))}
@@ -2493,7 +2461,7 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
             </select>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>גודל ברירת מחדל</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>גודל ברירת מחדל</div>
             <input
               type="text"
               value={prefs.defaultFontSize || '12pt'}
@@ -2503,25 +2471,25 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
             />
           </div>
         </div>
-        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>אפשר להגדיר כאן ברירת מחדל כללית, ובמסך הבית לערוך סגנון ספציפי עם אייקון העיפרון.</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>אפשר להגדיר כאן ברירת מחדל כללית, ובמסך הבית לערוך סגנון ספציפי עם אייקון העיפרון.</div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>בדיקות בזמן כתיבה</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>בדיקות בזמן כתיבה</div>
         {[
           ['checkSpellingAsYouType', 'בדיקת איות תוך כדי כתיבה'],
           ['markGrammarAsYouType', 'סימון שגיאות דקדוק תוך כדי כתיבה'],
           ['grammarWithSpelling', 'בדיקת דקדוק יחד עם איות'],
         ].map(([field, label]) => (
-          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 8 }}>
+          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 8 }}>
             <input type="checkbox" checked={prefs[field] !== false} onChange={(e) => setFlag(field, e.target.checked)} />
             {label}
           </label>
         ))}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>עריכה חכמה</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>עריכה חכמה</div>
         {[
           ['replaceSelectionOnType', 'החלף טקסט מסומן כשמתחילים להקליד'],
           ['selectWholeWord', 'בחר אוטומטית מילה שלמה'],
@@ -2530,36 +2498,36 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
           ['showPasteOptions', 'הצג אפשרויות הדבקה'],
           ['smartCutPaste', 'הדבקה וחיתוך חכמים'],
         ].map(([field, label]) => (
-          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 8 }}>
+          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 8 }}>
             <input type="checkbox" checked={prefs[field] !== false} onChange={(e) => setFlag(field, e.target.checked)} />
             {label}
           </label>
         ))}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>הדפסה ותצוגה</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>הדפסה ותצוגה</div>
         {[
           ['showDrawings', 'הצג ציורים ותיבות טקסט על המסך'],
           ['showTextHighlighting', 'הצג סימון טקסט'],
           ['printBackgrounds', 'הדפס צבעי רקע ותמונות'],
           ['updateFieldsBeforePrint', 'עדכן שדות לפני הדפסה'],
         ].map(([field, label]) => (
-          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 8 }}>
+          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 8 }}>
             <input type="checkbox" checked={prefs[field] !== false} onChange={(e) => setFlag(field, e.target.checked)} />
             {label}
           </label>
         ))}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 6 }}>התאמה אישית של פעולות AI</div>
-        <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 10, lineHeight: 1.6 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>התאמה אישית של פעולות AI</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 10, lineHeight: 1.6 }}>
           בחר אילו פעולות יופיעו בסרגל האקדמי ובחלונית ה-AI. השינויים חלים מיד.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           {ACTION_VISIBILITY_OPTIONS.map((action) => (
-            <label key={action.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#323130', border: '1px solid #E5E7EB', borderRadius: 10, padding: '8px 10px', background: '#FAFAFA' }}>
+            <label key={action.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', border: '1px solid var(--s-border)', borderRadius: 10, padding: '8px 10px', background: 'var(--s-surface)' }}>
               <input
                 type="checkbox"
                 checked={prefs.aiQuickActions?.[action.id] !== false}
@@ -2568,33 +2536,33 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
               />
               <span>
                 <strong style={{ display: 'block', marginBottom: 2 }}>{action.label}</strong>
-                <span style={{ fontSize: 10, color: '#64748B' }}>{action.hint}</span>
+                <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>{action.hint}</span>
               </span>
             </label>
           ))}
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#FAFAFA' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>שמירה ושחזור</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'var(--s-surface)' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>שמירה ושחזור</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 10 }}>
           <input type="checkbox" checked={prefs.autoSave !== false} onChange={(e) => setFlag('autoSave', e.target.checked)} />
           שמירה אוטומטית פעילה כברירת מחדל
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 10 }}>
           <input type="checkbox" checked={prefs.keepLastAutosavedVersion !== false} onChange={(e) => setFlag('keepLastAutosavedVersion', e.target.checked)} />
           שמור את הגרסה האחרונה לשחזור
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 10 }}>
           <input type="checkbox" checked={prefs.allowBackgroundSave !== false} onChange={(e) => setFlag('allowBackgroundSave', e.target.checked)} />
           אפשר שמירה ברקע
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', marginBottom: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 10 }}>
           <input type="checkbox" checked={prefs.savePreview !== false} onChange={(e) => setFlag('savePreview', e.target.checked)} />
           שמור תמונת תצוגה למסמך
         </label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <span style={{ fontSize: 12, color: '#605E5C' }}>שמור כל</span>
+          <span style={{ fontSize: 12, color: 'var(--s-muted)' }}>שמור כל</span>
           <input
             type="number"
             min="1"
@@ -2603,10 +2571,10 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
             onChange={(e) => setFlag('autoSaveMinutes', Math.max(1, Number(e.target.value) || 10))}
             style={{ width: 90, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
           />
-          <span style={{ fontSize: 12, color: '#605E5C' }}>דקות</span>
+          <span style={{ fontSize: 12, color: 'var(--s-muted)' }}>דקות</span>
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
           <input type="checkbox" checked={prefs.showStartExperience !== false} onChange={(e) => setFlag('showStartExperience', e.target.checked)} />
           הצג את מסך הבית בעת הפתיחה
         </label>
@@ -2651,14 +2619,14 @@ function SkillsSettings({ skillsState, setSkillsState }) {
 
   return (
     <div>
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 8 }}>שליטה מלאה בסקילים</div>
-        <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6, marginBottom: 10 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 8 }}>שליטה מלאה בסקילים</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 10 }}>
           כאן בוחרים איזה סקיל יפעל אוטומטית, איזה יישאר ידני בלבד, ואיך כל סקיל ידבר ויעבוד בדיוק בדרך שמתאימה לך.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10, marginBottom: 10 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4 }}>סקיל ברירת מחדל</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>סקיל ברירת מחדל</div>
             <select
               value={skillsState.defaultSkillId || 'style-guardian'}
               onChange={(e) => setSkillsState((prev) => ({ ...prev, defaultSkillId: e.target.value }))}
@@ -2667,7 +2635,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
               {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
             </select>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130', alignSelf: 'end', marginBottom: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', alignSelf: 'end', marginBottom: 8 }}>
             <input
               type="checkbox"
               checked={skillsState.autoApplyDefault === true}
@@ -2676,7 +2644,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
             החל אוטומטית את ברירת המחדל
           </label>
         </div>
-        <div style={{ fontSize: 10, color: '#64748B' }}>טיפ: אם אתה רוצה שליטה גבוהה, השאר את הסקילים על מצב ידני והפעל אותם דרך / בחלונית ה-AI.</div>
+        <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>טיפ: אם אתה רוצה שליטה גבוהה, השאר את הסקילים על מצב ידני והפעל אותם דרך / בחלונית ה-AI.</div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -2687,13 +2655,13 @@ function SkillsSettings({ skillsState, setSkillsState }) {
             ? skillsState.skills?.[skill.id]?.customKeywords.join(', ')
             : String(skillsState.skills?.[skill.id]?.customKeywords || '');
           return (
-            <div key={skill.id} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
+            <div key={skill.id} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', marginBottom: 8, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 4 }}>{skill.label}</div>
-                  <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.6 }}>{skill.description}</div>
-                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>מתאים במיוחד ל: {skill.usageHint}</div>
-                  <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>טריגרים קיימים: {(skill.keywords || []).slice(0, 5).join(' • ')}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>{skill.label}</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>{skill.description}</div>
+                  <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>מתאים במיוחד ל: {skill.usageHint}</div>
+                  <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>טריגרים קיימים: {(skill.keywords || []).slice(0, 5).join(' • ')}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <select
@@ -2705,7 +2673,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
                     <option value="auto">אוטומטי כשמתאים</option>
                     <option value="off">כבוי</option>
                   </select>
-                  <button type="button" onClick={() => resetSkill(skill.id)} style={{ border: '1px solid #CBD5E1', background: '#F8FAFC', color: '#334155', borderRadius: 8, padding: '8px 10px', fontSize: 11, cursor: 'pointer' }}>
+                  <button type="button" onClick={() => resetSkill(skill.id)} style={{ border: '1px solid var(--s-border)', background: 'var(--s-surface-2)', color: 'var(--s-text)', borderRadius: 8, padding: '8px 10px', fontSize: 11, cursor: 'pointer' }}>
                     אפס התאמה
                   </button>
                 </div>
@@ -2713,7 +2681,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>איך אתה רוצה שהסקיל יעבוד?</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>איך אתה רוצה שהסקיל יעבוד?</div>
                   <textarea
                     value={customInstruction}
                     onChange={(e) => updateSkillField(skill.id, 'customInstruction', e.target.value)}
@@ -2723,7 +2691,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
                   />
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מילות זיהוי שאתה רוצה להוסיף</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מילות זיהוי שאתה רוצה להוסיף</div>
                   <textarea
                     value={customKeywords}
                     onChange={(e) => updateSkillField(skill.id, 'customKeywords', e.target.value)}
@@ -2935,14 +2903,14 @@ function WorkspaceV2Settings({ config }) {
 
   return (
     <div dir="rtl" style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 320px) 1fr', gap: 16 }}>
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 14, background: '#F8FAFC', alignSelf: 'start' }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>סביבות עבודה</div>
-        <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 14, background: 'var(--s-surface-2)', alignSelf: 'start' }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>סביבות עבודה</div>
+        <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
           כאן מנהלים את הצוותים שמופיעים במסך הבית. המסלול הישיר נשאר נפרד ולא מושפע מהטאב הזה.
         </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <button type="button" onClick={handleCreate} style={{ border: '1px solid #2563EB', background: '#2563EB', color: 'white', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>צור חדשה</button>
-          <button type="button" onClick={handleDuplicate} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>שכפל</button>
+          <button type="button" onClick={handleDuplicate} style={{ border: '1px solid var(--s-border)', background: 'white', color: 'var(--s-text)', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>שכפל</button>
           <button type="button" onClick={handleResetAll} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 10, padding: '8px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>אפס הכל</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2953,9 +2921,9 @@ function WorkspaceV2Settings({ config }) {
               onClick={() => selectTemplate(template.id)}
               style={{
                 textAlign: 'right',
-                border: selectedId === template.id ? '1px solid #2563EB' : '1px solid #E2E8F0',
+                border: selectedId === template.id ? '1px solid #2563EB' : '1px solid var(--s-border)',
                 background: selectedId === template.id ? '#EFF6FF' : 'white',
-                color: '#0F172A',
+                color: 'var(--s-text-strong)',
                 borderRadius: 12,
                 padding: 12,
                 cursor: 'pointer',
@@ -2963,12 +2931,12 @@ function WorkspaceV2Settings({ config }) {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                 <strong style={{ fontSize: 13 }}>{template.label}</strong>
-                <span style={{ fontSize: 10, color: template.builtIn ? '#475569' : '#047857', border: '1px solid #CBD5E1', borderRadius: 999, padding: '2px 7px', background: 'white' }}>
+                <span style={{ fontSize: 10, color: template.builtIn ? 'var(--s-muted)' : '#047857', border: '1px solid var(--s-border)', borderRadius: 999, padding: '2px 7px', background: 'white' }}>
                   {template.builtIn ? 'מובנית' : 'מותאמת'}
                 </span>
               </div>
-              <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.5, marginTop: 4 }}>{template.mission}</div>
-              <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.5, marginTop: 4 }}>{template.mission}</div>
+              <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 6 }}>
                 {template.pipeline?.length || 0} תפקידים · {template.providerId || 'ספק לפי מסך הבית'}
                 {(template.pipeline || []).some((step) => step.providerId || step.model) ? ' · מודלים לפי תפקיד' : ''}
               </div>
@@ -2978,11 +2946,11 @@ function WorkspaceV2Settings({ config }) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 16, background: 'white' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start', marginBottom: 12, flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A' }}>עריכת סביבת עבודה</div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>כל שינוי כאן משפיע על Workspace v2 בלבד. Direct נשאר נקי.</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--s-text-strong)' }}>עריכת סביבת עבודה</div>
+              <div style={{ fontSize: 12, color: 'var(--s-muted)', marginTop: 4 }}>כל שינוי כאן משפיע על Workspace v2 בלבד. Direct נשאר נקי.</div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button type="button" onClick={handleDelete} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 10, padding: '9px 12px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
@@ -2994,119 +2962,119 @@ function WorkspaceV2Settings({ config }) {
           {status && <div style={{ border: '1px solid #BBF7D0', background: '#F0FDF4', color: '#166534', borderRadius: 10, padding: '9px 11px', fontSize: 12, marginBottom: 12 }}>{status}</div>}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>שם הסביבה</div>
-              <input value={draft?.label || ''} onChange={(e) => updateDraft({ label: e.target.value })} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>שם הסביבה</div>
+              <input value={draft?.label || ''} onChange={(e) => updateDraft({ label: e.target.value })} style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
             </div>
             <div>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מזהה פנימי</div>
-              <input value={draft?.id || 'ייווצר בשמירה'} readOnly style={{ width: '100%', border: '1px solid #E2E8F0', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: '#F8FAFC', color: '#64748B' }} />
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מזהה פנימי</div>
+              <input value={draft?.id || 'ייווצר בשמירה'} readOnly style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'var(--s-surface-2)', color: 'var(--s-muted)' }} />
             </div>
             <div style={{ gridColumn: '1 / -1' }}>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>ייעוד הסביבה</div>
-              <textarea value={draft?.mission || ''} onChange={(e) => updateDraft({ mission: e.target.value })} rows={3} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>ייעוד הסביבה</div>
+              <textarea value={draft?.mission || ''} onChange={(e) => updateDraft({ mission: e.target.value })} rows={3} style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
             </div>
             <div>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>ספק AI</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>ספק AI</div>
               <select
                 value={selectedProviderId}
                 onChange={(e) => updateDraft({ providerId: e.target.value, model: '' })}
-                style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
+                style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
               >
                 <option value="">לפי הבחירה במסך הבית</option>
                 {providerChoices.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}
               </select>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מודל</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מודל</div>
               <select
                 value={draft?.model || ''}
                 disabled={!selectedProviderId}
                 onChange={(e) => updateDraft({ model: e.target.value })}
-                style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: selectedProviderId ? 'white' : '#F8FAFC' }}
+                style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: selectedProviderId ? 'white' : 'var(--s-surface-2)' }}
               >
                 <option value="">ברירת המחדל של הספק</option>
                 {modelChoices.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </div>
             <div style={{ gridColumn: '1 / -1' }}>
-              <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מילות זיהוי לסיווג אוטומטי, שורה לכל סימן</div>
-              <textarea value={workspaceListToText(draft?.taskSignals)} onChange={(e) => updateDraft({ taskSignals: workspaceTextToList(e.target.value) })} rows={3} style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מילות זיהוי לסיווג אוטומטי, שורה לכל סימן</div>
+              <textarea value={workspaceListToText(draft?.taskSignals)} onChange={(e) => updateDraft({ taskSignals: workspaceTextToList(e.target.value) })} rows={3} style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
             </div>
           </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-          <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>מקורות וציטוטים</div>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 16, background: 'white' }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 10 }}>מקורות וציטוטים</div>
             <div style={{ display: 'grid', gap: 10 }}>
-              <label style={{ fontSize: 11, color: '#475569' }}>מדיניות מקורות
-                <select value={draft?.sourcePolicy?.mode || 'context-aware'} onChange={(e) => updateNestedDraft('sourcePolicy', { mode: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}>
+              <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>מדיניות מקורות
+                <select value={draft?.sourcePolicy?.mode || 'context-aware'} onChange={(e) => updateNestedDraft('sourcePolicy', { mode: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}>
                   <option value="context-aware">לפי הקשר</option>
                   <option value="required">חובה כשאפשר</option>
                   <option value="optional">אופציונלי</option>
                 </select>
               </label>
-              <label style={{ fontSize: 11, color: '#475569' }}>סגנון ציטוט
-                <input value={draft?.sourcePolicy?.citationStyle || ''} onChange={(e) => updateNestedDraft('sourcePolicy', { citationStyle: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+              <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>סגנון ציטוט
+                <input value={draft?.sourcePolicy?.citationStyle || ''} onChange={(e) => updateNestedDraft('sourcePolicy', { citationStyle: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
               </label>
-              <label style={{ fontSize: 11, color: '#475569' }}>מתי חייבים מקורות, שורה לכל תנאי
-                <textarea value={workspaceListToText(draft?.sourcePolicy?.requireSourcesWhen)} onChange={(e) => updateNestedDraft('sourcePolicy', { requireSourcesWhen: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+              <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>מתי חייבים מקורות, שורה לכל תנאי
+                <textarea value={workspaceListToText(draft?.sourcePolicy?.requireSourcesWhen)} onChange={(e) => updateNestedDraft('sourcePolicy', { requireSourcesWhen: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
               </label>
             </div>
           </div>
 
-          <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>סגנון אישי ובטיחות</div>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#334155', marginBottom: 8 }}>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 16, background: 'white' }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 10 }}>סגנון אישי ובטיחות</div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--s-text)', marginBottom: 8 }}>
               <input type="checkbox" checked={draft?.stylePolicy?.preservePersonalStyle !== false} onChange={(e) => updateNestedDraft('stylePolicy', { preservePersonalStyle: e.target.checked })} />
               לשמור על הסגנון האישי כברירת חובה
             </label>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#334155', marginBottom: 10 }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--s-text)', marginBottom: 10 }}>
               <input type="checkbox" checked={draft?.stylePolicy?.allowPersuasiveReframing === true} onChange={(e) => updateNestedDraft('stylePolicy', { allowPersuasiveReframing: e.target.checked })} />
               לאפשר ניסוח שכנועי אגרסיבי יותר כשזה מתאים
             </label>
-            <label style={{ fontSize: 11, color: '#475569' }}>ממה להימנע, שורה לכל כלל
-              <textarea value={workspaceListToText(draft?.stylePolicy?.avoid)} onChange={(e) => updateNestedDraft('stylePolicy', { avoid: workspaceTextToList(e.target.value) })} rows={5} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+            <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>ממה להימנע, שורה לכל כלל
+              <textarea value={workspaceListToText(draft?.stylePolicy?.avoid)} onChange={(e) => updateNestedDraft('stylePolicy', { avoid: workspaceTextToList(e.target.value) })} rows={5} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
             </label>
           </div>
         </div>
 
-        <div style={{ border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, background: 'white' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 16, padding: 16, background: 'white' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 12 }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 900, color: '#0F172A' }}>תפקידי הצוות</div>
-              <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>כל כרטיס הוא “סוכן” בתוך הפרומפט: תפקיד, יעד, הוראות ותוצר צפוי.</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: 'var(--s-text-strong)' }}>תפקידי הצוות</div>
+              <div style={{ fontSize: 12, color: 'var(--s-muted)', marginTop: 3 }}>כל כרטיס הוא “סוכן” בתוך הפרומפט: תפקיד, יעד, הוראות ותוצר צפוי.</div>
             </div>
             <button type="button" onClick={addStep} style={{ border: '1px solid #2563EB', background: '#EFF6FF', color: '#1D4ED8', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>הוסף תפקיד</button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {(draft?.pipeline || []).map((step, index) => (
-              <div key={step.id || index} style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: 14, background: '#F8FAFC' }}>
+              <div key={step.id || index} style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: 14, background: 'var(--s-surface-2)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-                  <strong style={{ fontSize: 13, color: '#0F172A' }}>שלב {index + 1}</strong>
+                  <strong style={{ fontSize: 13, color: 'var(--s-text-strong)' }}>שלב {index + 1}</strong>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button type="button" onClick={() => moveStep(index, -1)} disabled={index === 0} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === 0 ? 'not-allowed' : 'pointer', opacity: index === 0 ? 0.5 : 1 }}>למעלה</button>
-                    <button type="button" onClick={() => moveStep(index, 1)} disabled={index === (draft?.pipeline || []).length - 1} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#334155', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === (draft?.pipeline || []).length - 1 ? 'not-allowed' : 'pointer', opacity: index === (draft?.pipeline || []).length - 1 ? 0.5 : 1 }}>למטה</button>
+                    <button type="button" onClick={() => moveStep(index, -1)} disabled={index === 0} style={{ border: '1px solid var(--s-border)', background: 'white', color: 'var(--s-text)', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === 0 ? 'not-allowed' : 'pointer', opacity: index === 0 ? 0.5 : 1 }}>למעלה</button>
+                    <button type="button" onClick={() => moveStep(index, 1)} disabled={index === (draft?.pipeline || []).length - 1} style={{ border: '1px solid var(--s-border)', background: 'white', color: 'var(--s-text)', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: index === (draft?.pipeline || []).length - 1 ? 'not-allowed' : 'pointer', opacity: index === (draft?.pipeline || []).length - 1 ? 0.5 : 1 }}>למטה</button>
                     <button type="button" onClick={() => removeStep(index)} style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', borderRadius: 8, padding: '6px 9px', fontSize: 11, cursor: 'pointer' }}>הסר</button>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <label style={{ fontSize: 11, color: '#475569' }}>ספק לשלב הזה
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>ספק לשלב הזה
                     <select
                       value={step.providerId || ''}
                       onChange={(e) => updateStep(index, { providerId: e.target.value, model: '' })}
-                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
+                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: 'white' }}
                     >
                       <option value="">יורש מהסביבה / מסך הבית</option>
                       {providerChoices.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.id}</option>)}
                     </select>
                   </label>
-                  <label style={{ fontSize: 11, color: '#475569' }}>מודל לשלב הזה
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>מודל לשלב הזה
                     <select
                       value={step.model || ''}
                       disabled={!step.providerId}
                       onChange={(e) => updateStep(index, { model: e.target.value })}
-                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: step.providerId ? 'white' : '#F8FAFC' }}
+                      style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, background: step.providerId ? 'white' : 'var(--s-surface-2)' }}
                     >
                       <option value="">ברירת המחדל של הספק/הסביבה</option>
                       {getProviderModelChoices(step.providerId || '', config, [step.model].filter(Boolean)).map((modelName) => (
@@ -3114,17 +3082,17 @@ function WorkspaceV2Settings({ config }) {
                       ))}
                     </select>
                   </label>
-                  <label style={{ fontSize: 11, color: '#475569' }}>תפקיד
-                    <input value={step.role || ''} onChange={(e) => updateStep(index, { role: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>תפקיד
+                    <input value={step.role || ''} onChange={(e) => updateStep(index, { role: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
                   </label>
-                  <label style={{ fontSize: 11, color: '#475569' }}>תוצר צפוי
-                    <input value={step.output || ''} onChange={(e) => updateStep(index, { output: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)' }}>תוצר צפוי
+                    <input value={step.output || ''} onChange={(e) => updateStep(index, { output: e.target.value })} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13 }} />
                   </label>
-                  <label style={{ fontSize: 11, color: '#475569', gridColumn: '1 / -1' }}>מטרה
-                    <textarea value={step.goal || ''} onChange={(e) => updateStep(index, { goal: e.target.value })} rows={2} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)', gridColumn: '1 / -1' }}>מטרה
+                    <textarea value={step.goal || ''} onChange={(e) => updateStep(index, { goal: e.target.value })} rows={2} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
                   </label>
-                  <label style={{ fontSize: 11, color: '#475569', gridColumn: '1 / -1' }}>הוראות לתפקיד, שורה לכל הוראה
-                    <textarea value={workspaceListToText(step.instructions)} onChange={(e) => updateStep(index, { instructions: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid #CBD5E1', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
+                  <label style={{ fontSize: 11, color: 'var(--s-muted)', gridColumn: '1 / -1' }}>הוראות לתפקיד, שורה לכל הוראה
+                    <textarea value={workspaceListToText(step.instructions)} onChange={(e) => updateStep(index, { instructions: workspaceTextToList(e.target.value) })} rows={4} style={{ display: 'block', marginTop: 4, width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical' }} />
                   </label>
                 </div>
               </div>
@@ -3199,12 +3167,12 @@ function InstallAppSettingsCard() {
   const installButtonDisabled = !installState?.canInstall || installState?.installed || !installState?.supported;
 
   return (
-    <div style={{ border: '1px solid #D1FAE5', borderRadius: 20, padding: '16px', background: 'linear-gradient(135deg, #ECFDF5 0%, #F8FAFC 100%)' }}>
+    <div style={{ border: '1px solid #D1FAE5', borderRadius: 20, padding: '16px', background: 'linear-gradient(135deg, #ECFDF5 0%, var(--s-surface-2) 100%)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 800, color: '#047857', marginBottom: 6, letterSpacing: '0.08em' }}>INSTALL ON PHONE</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>התקנת האתר כאפליקציה בטלפון</div>
-          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.75, maxWidth: 760 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>התקנת האתר כאפליקציה בטלפון</div>
+          <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.75, maxWidth: 760 }}>
             אחרי ההתקנה האתר נפתח מהמסך הראשי כמו אפליקציה, עם מסך מלא וגישה מהירה יותר.
           </div>
         </div>
@@ -3213,8 +3181,8 @@ function InstallAppSettingsCard() {
           fontWeight: 700,
           borderRadius: 999,
           padding: '6px 10px',
-          background: installState?.installed ? '#DCFCE7' : installState?.canInstall ? '#DBEAFE' : '#E2E8F0',
-          color: installState?.installed ? '#166534' : installState?.canInstall ? '#1D4ED8' : '#475569',
+          background: installState?.installed ? '#DCFCE7' : installState?.canInstall ? '#DBEAFE' : 'var(--s-border)',
+          color: installState?.installed ? '#166534' : installState?.canInstall ? '#1D4ED8' : 'var(--s-muted)',
         }}>
           {installState?.statusLabel || 'בודק זמינות התקנה'}
         </span>
@@ -3222,12 +3190,12 @@ function InstallAppSettingsCard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
         <div style={{ border: '1px solid #D1FAE5', borderRadius: 14, background: 'white', padding: '11px 12px' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה מקבלים</div>
-          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>אייקון על מסך הבית, פתיחה מהירה, תחושה של אפליקציה מלאה ושימוש נוח יותר במובייל.</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 5 }}>מה מקבלים</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>אייקון על מסך הבית, פתיחה מהירה, תחושה של אפליקציה מלאה ושימוש נוח יותר במובייל.</div>
         </div>
         <div style={{ border: '1px solid #D1FAE5', borderRadius: 14, background: 'white', padding: '11px 12px' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>אם אין כפתור התקנה</div>
-          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{installState?.instructions || 'בדרך כלל אפשר לפתוח את תפריט הדפדפן ולבחור Add to Home Screen.'}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 5 }}>אם אין כפתור התקנה</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>{installState?.instructions || 'בדרך כלל אפשר לפתוח את תפריט הדפדפן ולבחור Add to Home Screen.'}</div>
         </div>
       </div>
 
@@ -3237,9 +3205,9 @@ function InstallAppSettingsCard() {
           onClick={handleInstallClick}
           disabled={installButtonDisabled}
           style={{
-            border: installButtonDisabled ? '1px solid #CBD5E1' : '1px solid #0EA5E9',
-            background: installButtonDisabled ? '#F8FAFC' : '#0EA5E9',
-            color: installButtonDisabled ? '#94A3B8' : 'white',
+            border: installButtonDisabled ? '1px solid var(--s-border)' : '1px solid #0EA5E9',
+            background: installButtonDisabled ? 'var(--s-surface-2)' : '#0EA5E9',
+            color: installButtonDisabled ? 'var(--s-muted)' : 'white',
             borderRadius: 12,
             padding: '10px 14px',
             fontSize: 12,
@@ -3250,7 +3218,7 @@ function InstallAppSettingsCard() {
           {installState?.installed ? 'כבר מותקן' : installState?.canInstall ? 'התקן עכשיו' : 'התקנה ידנית מהדפדפן'}
         </button>
         {installFeedback ? (
-          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>{installFeedback}</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>{installFeedback}</div>
         ) : null}
       </div>
     </div>
@@ -3368,19 +3336,19 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <div style={{ border: '1px solid #C7D2FE', borderRadius: 20, padding: '18px 18px 16px', background: 'linear-gradient(135deg, #EEF2FF 0%, #F8FAFC 45%, #ECFEFF 100%)' }}>
+      <div style={{ border: '1px solid #C7D2FE', borderRadius: 20, padding: '18px 18px 16px', background: 'linear-gradient(135deg, #EEF2FF 0%, var(--s-surface-2) 45%, #ECFEFF 100%)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 800, color: '#4338CA', marginBottom: 6, letterSpacing: '0.08em' }}>GUIDED TOUR</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>סיור מודרך ב-WordFlow AI</div>
-            <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.8, maxWidth: 760 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>סיור מודרך ב-WordFlow AI</div>
+            <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.8, maxWidth: 760 }}>
               במקום מדריך סטטי, הטאב הזה מוביל אותך שלב-שלב דרך המסך הראשי, הסביבות, הספקים, הסקילים וההגדרות. אפשר להתקדם בסדר, או לקפוץ ישר לאזור הרלוונטי.
             </div>
           </div>
           <div style={{ minWidth: 180, padding: '12px 14px', borderRadius: 16, background: 'rgba(255,255,255,0.8)', border: '1px solid #DBEAFE' }}>
             <div style={{ fontSize: 11, color: '#6366F1', fontWeight: 700, marginBottom: 6 }}>התקדמות בסיור</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#1E293B' }}>{activeStepIndex + 1}<span style={{ fontSize: 15, color: '#64748B' }}> / {guidedTourSteps.length}</span></div>
-            <div style={{ marginTop: 10, height: 8, borderRadius: 999, background: '#E2E8F0', overflow: 'hidden' }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#1E293B' }}>{activeStepIndex + 1}<span style={{ fontSize: 15, color: 'var(--s-muted)' }}> / {guidedTourSteps.length}</span></div>
+            <div style={{ marginTop: 10, height: 8, borderRadius: 999, background: 'var(--s-border)', overflow: 'hidden' }}>
               <div style={{ width: `${((activeStepIndex + 1) / guidedTourSteps.length) * 100}%`, height: '100%', background: 'linear-gradient(90deg, #4F46E5 0%, #06B6D4 100%)' }} />
             </div>
           </div>
@@ -3395,9 +3363,9 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
                 type="button"
                 onClick={() => setActiveStepIndex(index)}
                 style={{
-                  border: selected ? '1px solid #4F46E5' : '1px solid #CBD5E1',
+                  border: selected ? '1px solid #4F46E5' : '1px solid var(--s-border)',
                   background: selected ? '#EEF2FF' : 'rgba(255,255,255,0.75)',
-                  color: selected ? '#312E81' : '#334155',
+                  color: selected ? '#312E81' : 'var(--s-text)',
                   borderRadius: 999,
                   padding: '8px 12px',
                   fontSize: 11,
@@ -3412,17 +3380,17 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '16px', background: 'white' }}>
         <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>מתחילים כאן</div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>מילון מושגים למתחילים</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 8 }}>מילון מושגים למתחילים</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה API key?</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>API key הוא מפתח גישה אישי לספק ה-AI שלך. האפליקציה משתמשת בו כדי להתחבר לחשבון שלך ולהפעיל מודלים.</div>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, background: 'var(--s-surface-2)', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 5 }}>מה זה API key?</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>API key הוא מפתח גישה אישי לספק ה-AI שלך. האפליקציה משתמשת בו כדי להתחבר לחשבון שלך ולהפעיל מודלים.</div>
           </div>
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, background: '#F8FAFC', padding: '11px 12px' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 5 }}>מה זה Provider?</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>Provider הוא ספק השירות שמריץ את מודל ה-AI בפועל, כמו Gemini או OpenAI. אפשר לבחור ספק אחר לפי מהירות, מחיר וסוג המשימה.</div>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, background: 'var(--s-surface-2)', padding: '11px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 5 }}>מה זה Provider?</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>Provider הוא ספק השירות שמריץ את מודל ה-AI בפועל, כמו Gemini או OpenAI. אפשר לבחור ספק אחר לפי מהירות, מחיר וסוג המשימה.</div>
           </div>
         </div>
         <div style={{ border: '1px solid #DBEAFE', borderRadius: 14, background: '#EFF6FF', padding: '10px 12px', marginBottom: 12 }}>
@@ -3461,15 +3429,15 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
       <InstallAppSettingsCard />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '18px', background: 'white' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '18px', background: 'white' }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: '#0284C7', marginBottom: 6, letterSpacing: '0.08em' }}>{activeStep.eyebrow}</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>{activeStep.title}</div>
-          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.8, marginBottom: 14 }}>{activeStep.description}</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 8 }}>{activeStep.title}</div>
+          <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.8, marginBottom: 14 }}>{activeStep.description}</div>
           <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
             {activeStep.bullets.map((item) => (
-              <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderRadius: 12, background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '10px 12px' }}>
+              <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderRadius: 12, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', padding: '10px 12px' }}>
                 <span style={{ color: '#4F46E5', fontWeight: 900, lineHeight: 1.5 }}>•</span>
-                <span style={{ fontSize: 12, color: '#334155', lineHeight: 1.75 }}>{item}</span>
+                <span style={{ fontSize: 12, color: 'var(--s-text)', lineHeight: 1.75 }}>{item}</span>
               </div>
             ))}
           </div>
@@ -3506,7 +3474,7 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
               type="button"
               onClick={() => setActiveStepIndex((prev) => Math.max(0, prev - 1))}
               disabled={activeStepIndex === 0}
-              style={{ border: '1px solid #CBD5E1', background: activeStepIndex === 0 ? '#F8FAFC' : 'white', color: activeStepIndex === 0 ? '#94A3B8' : '#334155', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === 0 ? 'not-allowed' : 'pointer' }}
+              style={{ border: '1px solid var(--s-border)', background: activeStepIndex === 0 ? 'var(--s-surface-2)' : 'white', color: activeStepIndex === 0 ? 'var(--s-muted)' : 'var(--s-text)', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === 0 ? 'not-allowed' : 'pointer' }}
             >
               השלב הקודם
             </button>
@@ -3514,7 +3482,7 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
               type="button"
               onClick={() => setActiveStepIndex((prev) => Math.min(guidedTourSteps.length - 1, prev + 1))}
               disabled={activeStepIndex === guidedTourSteps.length - 1}
-              style={{ border: '1px solid #0EA5E9', background: activeStepIndex === guidedTourSteps.length - 1 ? '#E2E8F0' : '#0EA5E9', color: activeStepIndex === guidedTourSteps.length - 1 ? '#64748B' : 'white', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === guidedTourSteps.length - 1 ? 'not-allowed' : 'pointer' }}
+              style={{ border: '1px solid #0EA5E9', background: activeStepIndex === guidedTourSteps.length - 1 ? 'var(--s-border)' : '#0EA5E9', color: activeStepIndex === guidedTourSteps.length - 1 ? 'var(--s-muted)' : 'white', borderRadius: 12, padding: '9px 12px', fontSize: 11, fontWeight: 700, cursor: activeStepIndex === guidedTourSteps.length - 1 ? 'not-allowed' : 'pointer' }}
             >
               השלב הבא
             </button>
@@ -3522,49 +3490,49 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
         </div>
 
         <div style={{ display: 'grid', gap: 14 }}>
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>קפיצה מהירה להגדרות</div>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '16px', background: 'white' }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 10 }}>קפיצה מהירה להגדרות</div>
             <div style={{ display: 'grid', gap: 8 }}>
               {quickRoutes.map((route) => (
                 <button
                   key={route.tab}
                   type="button"
                   onClick={() => onNavigate(route.tab)}
-                  style={{ textAlign: 'right', border: '1px solid #E2E8F0', background: route.tab === activeTab ? '#EEF2FF' : '#F8FAFC', borderRadius: 14, padding: '11px 12px', cursor: 'pointer' }}
+                  style={{ textAlign: 'right', border: '1px solid var(--s-border)', background: route.tab === activeTab ? '#EEF2FF' : 'var(--s-surface-2)', borderRadius: 14, padding: '11px 12px', cursor: 'pointer' }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>{route.title}</div>
-                  <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>{route.text}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>{route.title}</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>{route.text}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '16px', background: 'white' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>זיכרון מתמשך</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)' }}>זיכרון מתמשך</div>
               <button onClick={resetSavedMemory} style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', borderRadius: 10, padding: '7px 10px', fontSize: 11, cursor: 'pointer' }}>
                 אפס זיכרון שמור
               </button>
             </div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 10 }}>
               האפליקציה זוכרת מקומית שיחות אחרונות, סקילים והעדפות, כדי להמשיך מאותה נקודה במקום להתחיל מחדש בכל פתיחה.
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <span style={{ fontSize: 10, background: '#EEF2FF', color: '#3730A3', padding: '4px 8px', borderRadius: 999 }}>שיחות שמורות: {(memorySnapshot.recentChats || []).length}</span>
               <span style={{ fontSize: 10, background: '#ECFDF5', color: '#166534', padding: '4px 8px', borderRadius: 999 }}>תזכורות פעילות: {(memorySnapshot.memoryNotes || []).length}</span>
-              <span style={{ fontSize: 10, background: '#F8FAFC', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>סקיל אחרון: {memorySnapshot.lastSelectedSkillId || 'ללא'}</span>
+              <span style={{ fontSize: 10, background: 'var(--s-surface-2)', color: 'var(--s-text)', padding: '4px 8px', borderRadius: 999 }}>סקיל אחרון: {memorySnapshot.lastSelectedSkillId || 'ללא'}</span>
             </div>
           </div>
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 20, padding: '16px', background: 'white' }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>הדגמות מוכנות להעתקה לחלונית ה-AI</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '16px', background: 'white' }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 10 }}>הדגמות מוכנות להעתקה לחלונית ה-AI</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
           {demoPrompts.map((item) => (
-            <div key={item.title} style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '12px', background: '#F8FAFC' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>{item.title}</div>
-              <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed #CBD5E1', borderRadius: 10, padding: '9px 10px' }}>
+            <div key={item.title} style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '12px', background: 'var(--s-surface-2)' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>{item.title}</div>
+              <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed var(--s-border)', borderRadius: 10, padding: '9px 10px' }}>
                 {item.text}
               </div>
             </div>
@@ -3957,6 +3925,8 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       onImportSyllabusFile={handleSyllabusImport}
       onComplete={markOnboardingComplete}
       onDismiss={onDismiss}
+      providerConfig={providerConfig}
+      setProviderConfig={setProviderConfig}
     />
   );
 }
@@ -4091,13 +4061,13 @@ function PersonalStyleSettings({ profile, setProfile }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         הקובץ האישי שלך מחובר עכשיו לעוזר, כך שהוא יכתוב בהתאם לרמה, למונחים ולהעדפות שלך.
       </p>
 
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: onboardingDone ? '#F8FBFF' : '#FFF7ED', marginBottom: 12 }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: onboardingDone ? 'var(--s-surface-2)' : '#FFF7ED', marginBottom: 12 }}>
         <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700, marginBottom: 6 }}>היכרות אישית עם הסוכן</div>
-        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
           {onboardingDone
             ? 'ההיכרות הושלמה. הסוכן מתאים את עצמו אליך ויכול להמשיך ללמוד מהחומרים המקומיים שלך לאורך הזמן.'
             : 'עדיין לא בוצעה היכרות מלאה. אפשר למלא כאן את המידע הידני, או לפתוח את מסך הבית ולבצע היכרות מהירה.'}
@@ -4107,7 +4077,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
             {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
             {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
             {profile.userBackground ? <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>{profile.userBackground}</span> : null}
-            {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: '#334155', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
+            {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: 'var(--s-text)', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
             {(profile.tonePreferences || []).slice(0, 4).map((tone) => (
               <span key={tone} style={{ fontSize: 10, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999 }}>{tone}</span>
             ))}
@@ -4123,13 +4093,13 @@ function PersonalStyleSettings({ profile, setProfile }) {
             >
               אפס פרופיל בלבד
             </button>
-            <div style={{ fontSize: 11, color: '#64748B' }}>מאפס העדפות, onboarding ולמידה שמורה בפרופיל בלבד. חומרי מקור והיסטוריית למידה מקומית נשארים כפי שהם.</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>מאפס העדפות, onboarding ולמידה שמורה בפרופיל בלבד. חומרי מקור והיסטוריית למידה מקומית נשארים כפי שהם.</div>
           </div>
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>פרופיל היכרות</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>פרופיל היכרות</div>
 
         <input
           value={profile.displayName || ''}
@@ -4220,10 +4190,10 @@ function PersonalStyleSettings({ profile, setProfile }) {
           style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
         />
 
-        <div style={{ borderTop: '1px solid #E5E7EB', marginTop: 10, paddingTop: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>התאמת סגנונות אישית</div>
+        <div style={{ borderTop: '1px solid var(--s-border)', marginTop: 10, paddingTop: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>התאמת סגנונות אישית</div>
 
-          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 6 }}>סגנונות מועדפים במסך הבית</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6 }}>סגנונות מועדפים במסך הבית</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
             {STYLE_PRESET_OPTIONS.map((style) => {
               const active = (profile.preferredHomeStyleIds || []).includes(style.id);
@@ -4232,7 +4202,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
                   key={style.id}
                   type="button"
                   onClick={() => toggleStyle(style.id)}
-                  style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${active ? '#1D4ED8' : '#CBD5E1'}`, background: active ? '#DBEAFE' : 'white', color: active ? '#1D4ED8' : '#334155', cursor: 'pointer', fontSize: 12 }}
+                  style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${active ? '#1D4ED8' : 'var(--s-border)'}`, background: active ? '#DBEAFE' : 'white', color: active ? '#1D4ED8' : 'var(--s-text)', cursor: 'pointer', fontSize: 12 }}
                 >
                   {style.label}
                 </button>
@@ -4277,12 +4247,12 @@ function PersonalStyleSettings({ profile, setProfile }) {
           />
         </div>
 
-        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7, background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '8px 10px', marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', borderRadius: 10, padding: '8px 10px', marginBottom: 10 }}>
           סקיל הסגנון הקיים משתמש עכשיו גם בלמידה אוטומטית מהרקע. כשהאפשרות פעילה, האפליקציה לומדת מקומית מהמסמך הפעיל ומהתיקונים שלך לאורך הזמן.
-          {profile.autoLearnedFromEditorAt ? <div style={{ marginTop: 4, color: '#64748B' }}>עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}</div> : null}
+          {profile.autoLearnedFromEditorAt ? <div style={{ marginTop: 4, color: 'var(--s-muted)' }}>עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}</div> : null}
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
           <input type="checkbox" checked={profile.learningConsent === true} onChange={(e) => updateField('learningConsent', e.target.checked)} />
           אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
         </label>
@@ -4292,7 +4262,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 13, color: '#3730A3', fontWeight: 800 }}>דוגמת זהב לסגנון אישי</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>העוזר משתמש בדוגמה הזו כדי לחקות קצב, טון ומבני משפטים בלי להעתיק משפטים.</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>העוזר משתמש בדוגמה הזו כדי לחקות קצב, טון ומבני משפטים בלי להעתיק משפטים.</div>
           </div>
           <button
             type="button"
@@ -4311,7 +4281,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
           style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
         />
         {profile.styleGoldenExampleBuiltAt ? (
-          <div style={{ marginTop: 8, fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
             נבנתה לאחרונה: {new Date(profile.styleGoldenExampleBuiltAt).toLocaleString('he-IL')}
             {profile.styleGoldenExampleSources?.length ? ` · מקורות: ${profile.styleGoldenExampleSources.slice(0, 3).join(', ')}` : ''}
           </div>
@@ -4322,7 +4292,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 13, color: '#9D174D', fontWeight: 800 }}>בדיקת השפעת הסגנון</div>
-            <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>מפיק שני פלטים על אותה בקשה — אחד עם הפרופיל ואחד בלעדיו — ומשווה כדי לבדוק כמה הסגנון באמת משפיע.</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>מפיק שני פלטים על אותה בקשה — אחד עם הפרופיל ואחד בלעדיו — ומשווה כדי לבדוק כמה הסגנון באמת משפיע.</div>
           </div>
           <button
             type="button"
@@ -4345,7 +4315,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
             <div style={{ fontSize: 12, fontWeight: 700, color: styleProbeResult.negligible ? '#B91C1C' : '#047857', marginBottom: 6 }}>
               {styleProbeResult.verdict}
             </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11, color: '#334155', marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11, color: 'var(--s-text)', marginBottom: 8 }}>
               <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>חפיפת אוצר מילים: {Math.round(styleProbeResult.metrics.vocabularyOverlap * 100)}%</span>
               <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>הפרש מילים למשפט: {styleProbeResult.metrics.sentenceDelta}</span>
               <span style={{ background: '#F1F5F9', padding: '4px 8px', borderRadius: 999 }}>הפרש מילים לפסקה: {styleProbeResult.metrics.paragraphDelta}</span>
@@ -4353,18 +4323,18 @@ function PersonalStyleSettings({ profile, setProfile }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <div style={{ border: '1px solid #FBCFE8', borderRadius: 8, padding: 8, background: 'white' }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: '#9D174D', marginBottom: 4 }}>עם הפרופיל</div>
-                <div style={{ fontSize: 11, color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withStyleText}</div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withStyleText}</div>
               </div>
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: 8, background: 'white' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>בלי הפרופיל</div>
-                <div style={{ fontSize: 11, color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withoutStyleText}</div>
+              <div style={{ border: '1px solid var(--s-border)', borderRadius: 8, padding: 8, background: 'white' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--s-muted)', marginBottom: 4 }}>בלי הפרופיל</div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{styleProbeResult.withoutStyleText}</div>
               </div>
             </div>
           </div>
         ) : null}
       </div>
 
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 12 }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>העלה קבצים ללמידת סגנון</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -4392,10 +4362,10 @@ function PersonalStyleSettings({ profile, setProfile }) {
           </div>
           <input ref={fileInputRef} type="file" multiple accept={getHelperMaterialAcceptList()} style={{ display: 'none' }} onChange={handleUpload} />
         </div>
-        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
           אפשר לצרף עבודות קודמות, סיכומים, PDF, מצגות, דפי שער לדוגמה, תבניות מסמך או טיוטות. בחר את סוג הקובץ לפני ההעלאה כדי שהסוכן ילמד בדיוק ממה להשתמש.
         </div>
-        <div style={{ marginTop: 10, fontSize: 11, color: '#334155', background: 'white', border: '1px solid #DBEAFE', borderRadius: 10, padding: '8px 10px' }}>
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--s-text)', background: 'white', border: '1px solid #DBEAFE', borderRadius: 10, padding: '8px 10px' }}>
           נסרקו: {profile.scanStats?.totalScanned || 0} מתוך {profile.scanStats?.totalKnown || 0} • חדשים בריענון האחרון: {profile.scanStats?.newlyScanned || 0}
         </div>
         {lastUploadedMaterials.length ? (
@@ -4448,8 +4418,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
         ) : null}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>רמה אקדמית</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>רמה אקדמית</div>
         <select
           value={profile.academic_level || 'undergraduate'}
           onChange={(e) => updateField('academic_level', e.target.value)}
@@ -4514,9 +4484,9 @@ function PersonalStyleSettings({ profile, setProfile }) {
         style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
       />
 
-      <div style={{ marginTop: 12, border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px', background: '#F9FAFB' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#323130', marginBottom: 6 }}>מה נלמד אוטומטית מהקבצים</div>
-        <div style={{ fontSize: 11, color: '#605E5C', lineHeight: 1.8 }}>
+      <div style={{ marginTop: 12, border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px', background: '#F9FAFB' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>מה נלמד אוטומטית מהקבצים</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.8 }}>
           מונחים בולטים: {(profile.learnedVocabulary || []).slice(0, 8).join(', ') || 'עדיין אין'}
           <br />
           פתיחות משפט: {(profile.preferredSentenceOpeners || []).slice(0, 4).join(', ') || 'עדיין אין'}
@@ -4786,7 +4756,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
   };
 
   return (
-    <div style={{ marginBottom: 20, border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: '#F9FAFB' }}>
+    <div style={{ marginBottom: 20, border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: '#F9FAFB' }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 12 }}>
         📦 יצירה ושמירה של סביבות עבודה
       </div>
@@ -4797,7 +4767,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
       ) : null}
 
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.7 }}>
+        <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.7 }}>
           כאן יוצרים סביבות עבודה ומגדירים להן סוכנים ישירות, בלי תלות בדף הבית.
         </div>
       </div>
@@ -4877,12 +4847,12 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                 }
               }}
             />
-            <div style={{ marginTop: 6, fontSize: 10, color: '#475569' }}>
+            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--s-muted)' }}>
               שם בפועל: <strong>{String(newWorkspaceName ?? '').trim() ? String(newWorkspaceName ?? '') : getWorkspaceFallbackName()}</strong>
             </div>
           </div>
 
-          <div style={{ marginBottom: 10, fontSize: 10, color: '#475569', lineHeight: 1.6 }}>
+          <div style={{ marginBottom: 10, fontSize: 10, color: 'var(--s-muted)', lineHeight: 1.6 }}>
             הסביבה החדשה תיווצר עם הגדרות ברירת מחדל ותהפוך מיד לסביבה הפעילה לעריכת סוכנים.
           </div>
 
@@ -4905,17 +4875,17 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
         </div>
       )}
 
-      <div style={{ marginBottom: 12, background: 'white', border: '1px solid #D1D5DB', borderRadius: 8, padding: '10px 12px' }}>
-        <div style={{ fontSize: 12, color: '#374151', fontWeight: 700, marginBottom: 8 }}>
+      <div style={{ marginBottom: 12, background: 'white', border: '1px solid var(--s-border)', borderRadius: 8, padding: '10px 12px' }}>
+        <div style={{ fontSize: 12, color: 'var(--s-muted)', fontWeight: 700, marginBottom: 8 }}>
           סביבות שמורות ({savedWorkspaces.length})
         </div>
         <div style={{ display: 'grid', gap: 6, maxHeight: 170, overflow: 'auto' }}>
           {savedWorkspaces.map((ws) => (
-              <div key={ws.id} style={{ fontSize: 11, color: '#4B5563', border: '1px solid #E5E7EB', borderRadius: 8, padding: '10px', background: '#F9FAFB' }}>
+              <div key={ws.id} style={{ fontSize: 11, color: '#4B5563', border: '1px solid var(--s-border)', borderRadius: 8, padding: '10px', background: '#F9FAFB' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <strong style={{ color: '#111827', display: 'block' }}>{ws.name || ws.id}</strong>
-                    <div style={{ color: '#6B7280', marginTop: 4 }}>
+                    <div style={{ color: 'var(--s-muted)', marginTop: 4 }}>
                       {formatWorkflowLabel(ws?.automation)} · {(Array.isArray(ws?.agents) ? ws.agents.length : 0)} סוכנים
                     </div>
                   </div>
@@ -4947,11 +4917,11 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
                     ) : null}
                   </div>
               </div>
-              <div style={{ color: '#6B7280', marginTop: 4 }}>
+              <div style={{ color: 'var(--s-muted)', marginTop: 4 }}>
                 עודכנה: {new Date(ws.lastModified || Date.now()).toLocaleDateString('he-IL')}
               </div>
                 {ws?.automation?.sharedGoal ? (
-                  <div style={{ color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                  <div style={{ color: 'var(--s-muted)', marginTop: 6, lineHeight: 1.5 }}>
                     מטרה: {String(ws.automation.sharedGoal).slice(0, 80)}{String(ws.automation.sharedGoal).length > 80 ? '…' : ''}
                   </div>
                 ) : null}
@@ -4962,35 +4932,35 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
         {previewWorkspace ? (
           <div style={{ position: 'fixed', inset: 0, zIndex: 1700, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div style={{ width: 'min(680px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid #CBD5E1', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
+            <div style={{ width: 'min(680px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid var(--s-border)', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{previewWorkspace.name || previewWorkspace.id}</div>
-                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{formatWorkflowLabel(previewWorkspace?.automation)}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--s-text-strong)' }}>{previewWorkspace.name || previewWorkspace.id}</div>
+                  <div style={{ fontSize: 12, color: 'var(--s-muted)', marginTop: 4 }}>{formatWorkflowLabel(previewWorkspace?.automation)}</div>
                 </div>
-                <button type="button" onClick={() => setPreviewWorkspaceId('')} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+                <button type="button" onClick={() => setPreviewWorkspaceId('')} style={{ border: '1px solid var(--s-border)', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: 'var(--s-text)' }}>סגור</button>
               </div>
 
               <div style={{ display: 'grid', gap: 12 }}>
-                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
-                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>שם</div>
+                <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface-2)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>שם</div>
                   <div style={{ fontSize: 13, color: '#111827', fontWeight: 700 }}>{previewWorkspace.name || previewWorkspace.id}</div>
                 </div>
 
-                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
-                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>מטרה משותפת</div>
+                <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface-2)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מטרה משותפת</div>
                   <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.7 }}>{previewWorkspace?.automation?.sharedGoal || 'לא הוגדרה מטרה משותפת.'}</div>
                 </div>
 
-                <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '12px 14px', background: '#F8FAFC' }}>
-                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 8 }}>סוכנים בסביבה</div>
+                <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface-2)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 8 }}>סוכנים בסביבה</div>
                   <div style={{ display: 'grid', gap: 8 }}>
                     {(Array.isArray(previewWorkspace?.agents) ? previewWorkspace.agents : []).length ? (previewWorkspace.agents || []).map((agent) => (
-                      <div key={`${previewWorkspace.id}-${agent.id}`} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: '8px 10px', background: 'white' }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{agent.name || agent.id}</div>
-                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{agent.provider || 'ברירת מחדל'}{agent.model ? ` · ${agent.model}` : ''}</div>
+                      <div key={`${previewWorkspace.id}-${agent.id}`} style={{ border: '1px solid var(--s-border)', borderRadius: 10, padding: '8px 10px', background: 'white' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)' }}>{agent.name || agent.id}</div>
+                        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 3 }}>{agent.provider || 'ברירת מחדל'}{agent.model ? ` · ${agent.model}` : ''}</div>
                       </div>
-                    )) : <div style={{ fontSize: 12, color: '#64748B' }}>אין סוכנים שמורים בסביבה זו.</div>}
+                    )) : <div style={{ fontSize: 12, color: 'var(--s-muted)' }}>אין סוכנים שמורים בסביבה זו.</div>}
                   </div>
                 </div>
               </div>
@@ -5011,33 +4981,33 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
         {editingWorkspace ? (
           <div style={{ position: 'fixed', inset: 0, zIndex: 1700, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div style={{ width: 'min(620px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid #CBD5E1', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
+            <div style={{ width: 'min(620px, 94vw)', background: 'white', borderRadius: 18, border: '1px solid var(--s-border)', boxShadow: '0 24px 64px rgba(15,23,42,0.28)', padding: '18px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>עריכה בסיסית של סביבת עבודה</div>
-                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{editingWorkspace.name || editingWorkspace.id}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--s-text-strong)' }}>עריכה בסיסית של סביבת עבודה</div>
+                  <div style={{ fontSize: 12, color: 'var(--s-muted)', marginTop: 4 }}>{editingWorkspace.name || editingWorkspace.id}</div>
                 </div>
-                <button type="button" onClick={closeEditWorkspace} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+                <button type="button" onClick={closeEditWorkspace} style={{ border: '1px solid var(--s-border)', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: 'var(--s-text)' }}>סגור</button>
               </div>
 
               <div style={{ display: 'grid', gap: 12 }}>
                 <div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>שם הסביבה</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>שם הסביבה</div>
                   <input
                     value={editWorkspaceState.name}
                     onChange={(e) => setEditWorkspaceState((prev) => ({ ...prev, name: e.target.value }))}
-                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12 }}
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid var(--s-border)', borderRadius: 8, fontSize: 12 }}
                   />
                 </div>
 
                 <div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מטרה משותפת</div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מטרה משותפת</div>
                   <textarea
                     value={editWorkspaceState.sharedGoal}
                     onChange={(e) => setEditWorkspaceState((prev) => ({ ...prev, sharedGoal: e.target.value }))}
                     rows={5}
                     placeholder="למשל: לבנות טיוטות אקדמיות קצרות עם דגש על מקורות ומבנה ברור"
-                    style={{ width: '100%', padding: '9px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
+                    style={{ width: '100%', padding: '9px 10px', border: '1px solid var(--s-border)', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
                   />
                 </div>
               </div>
@@ -5051,7 +5021,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => openDeepWorkspaceEdit(editingWorkspace)} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontWeight: 700 }}>פתח עריכה מלאה</button>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" onClick={closeEditWorkspace} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #CBD5E1', background: 'white', color: '#334155', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
+                  <button type="button" onClick={closeEditWorkspace} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid var(--s-border)', background: 'white', color: 'var(--s-text)', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
                   <button type="button" onClick={saveWorkspaceDetails} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: 'pointer', fontWeight: 700 }}>שמור שינויים</button>
                 </div>
               </div>
@@ -5061,16 +5031,16 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
 
         {deepEditingWorkspace ? (
           <div style={{ position: 'fixed', inset: 0, zIndex: 1710, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div style={{ width: 'min(1040px, 96vw)', maxHeight: '92vh', background: 'white', borderRadius: 20, border: '1px solid #CBD5E1', boxShadow: '0 28px 72px rgba(15,23,42,0.32)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ width: 'min(1040px, 96vw)', maxHeight: '92vh', background: 'white', borderRadius: 20, border: '1px solid var(--s-border)', boxShadow: '0 28px 72px rgba(15,23,42,0.32)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12 }}>
                 <div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#0F172A' }}>עריכה מלאה של סביבת עבודה</div>
-                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>{deepEditWorkspaceState.automation?.workspaceName || deepEditingWorkspace.name || deepEditingWorkspace.id}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--s-text-strong)' }}>עריכה מלאה של סביבת עבודה</div>
+                  <div style={{ fontSize: 12, color: 'var(--s-muted)', marginTop: 4 }}>{deepEditWorkspaceState.automation?.workspaceName || deepEditingWorkspace.name || deepEditingWorkspace.id}</div>
                 </div>
-                <button type="button" onClick={closeDeepWorkspaceEdit} style={{ border: '1px solid #CBD5E1', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: '#334155' }}>סגור</button>
+                <button type="button" onClick={closeDeepWorkspaceEdit} style={{ border: '1px solid var(--s-border)', background: 'white', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', color: 'var(--s-text)' }}>סגור</button>
               </div>
 
-              <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.7 }}>
+              <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.7 }}>
                 העריכה כאן נפתחת בפופאפ ייעודי ונשמרת רק בלחיצה על "שמור סביבת עבודה".
               </div>
 
@@ -5091,11 +5061,11 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
               ) : null}
 
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 11, color: '#64748B' }}>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>
                   השינויים בפופאפ הזה לא מחליפים את סביבת העבודה הפעילה עד לשמירה.
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" onClick={closeDeepWorkspaceEdit} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #CBD5E1', background: 'white', color: '#334155', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
+                  <button type="button" onClick={closeDeepWorkspaceEdit} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid var(--s-border)', background: 'white', color: 'var(--s-text)', cursor: 'pointer', fontWeight: 700 }}>ביטול</button>
                   <button type="button" onClick={saveDeepWorkspaceEdit} style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: 'pointer', fontWeight: 700 }}>שמור סביבת עבודה</button>
                 </div>
               </div>
@@ -5103,7 +5073,7 @@ function WorkspacesManager({ automation, setAutomation, onWorkspaceChange, setAg
           </div>
         ) : null}
 
-      <div style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
+      <div style={{ fontSize: 11, color: 'var(--s-muted)', background: '#F3F4F6', padding: '10px', borderRadius: 6 }}>
         💡 <strong>טיפ:</strong> לחץ על <strong>עריכה מלאה</strong> בסביבה שמורה לעריכת הסוכנים שלה, או השתמש בהגדרות הסוכנים למטה לעריכת הסביבה הפעילה.
       </div>
     </div>
@@ -5224,7 +5194,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 10 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 10 }}>
         הוסף סוכני AI לפי תפקידים, וקבע לכל אחד מהם הוראות עבודה משלו.
       </p>
 
@@ -5239,11 +5209,11 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
       ) : null}
 
-      <div style={{ border: `1px solid ${isAutopilotManagerMode ? '#BFDBFE' : '#DDD6FE'}`, borderRadius: 12, padding: '12px 14px', background: isAutopilotManagerMode ? '#F8FBFF' : '#F8F7FF', marginBottom: 14 }}>
+      <div style={{ border: `1px solid ${isAutopilotManagerMode ? '#BFDBFE' : '#DDD6FE'}`, borderRadius: 12, padding: '12px 14px', background: isAutopilotManagerMode ? 'var(--s-surface-2)' : '#F8F7FF', marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: isAutopilotManagerMode ? '#1E3A8A' : '#6D28D9', marginBottom: 6 }}>
           חוקי ההכרעה הפעילים
         </div>
-        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>
           {isAutopilotManagerMode
             ? automation?.workflowMode === 'autopilot-full'
               ? 'במצב הזה מתבצעת קריאת preflight: מנהל הצוות בוחר דינמית סוכנים, ספקים, מודלים, הנחיות שלב ומספר סבבים לפני ההרצה עצמה.'
@@ -5252,8 +5222,8 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         </div>
       </div>
 
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: bypassActive ? '#94A3B8' : '#1E3A8A', fontWeight: 700, marginBottom: 12 }}>
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)', marginBottom: 14 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: bypassActive ? 'var(--s-muted)' : '#1E3A8A', fontWeight: 700, marginBottom: 12 }}>
           <input
             type="checkbox"
             checked={automation?.enabled !== false}
@@ -5265,7 +5235,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 8, alignItems: 'end' }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>Preset</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>Preset</div>
             <select
               value={automation?.preset || 'content-studio'}
               onChange={(e) => setAutomation(prev => ({ ...prev, preset: e.target.value }))}
@@ -5278,7 +5248,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           </div>
 
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>סדר עבודה</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>סדר עבודה</div>
             <select
               value={selectedWorkflowMode}
               onChange={(e) => {
@@ -5328,7 +5298,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>שם סביבת העבודה</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>שם סביבת העבודה</div>
             <input
               value={workspaceNameDraft}
               onChange={(e) => setWorkspaceNameDraft(e.target.value)}
@@ -5342,12 +5312,12 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               placeholder="למשל: צוות כתיבה אקדמי"
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
             />
-            <div style={{ marginTop: 4, fontSize: 10, color: '#64748B' }}>אפשר להקליד שם עם רווחים. השמירה מתבצעת ב-Enter או ביציאה מהשדה.</div>
+            <div style={{ marginTop: 4, fontSize: 10, color: 'var(--s-muted)' }}>אפשר להקליד שם עם רווחים. השמירה מתבצעת ב-Enter או ביציאה מהשדה.</div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>Retry אוטומטי</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>Retry אוטומטי</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: 'white', border: '1px solid #C8C6C4', borderRadius: 6, padding: '8px 10px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--s-text-strong)' }}>
                 <input
                   type="checkbox"
                   checked={automation?.retryEnabled !== false}
@@ -5355,7 +5325,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 />
                 פעיל
               </label>
-              <span style={{ fontSize: 12, color: '#605E5C' }}>עד</span>
+              <span style={{ fontSize: 12, color: 'var(--s-muted)' }}>עד</span>
               <input
                 type="number"
                 min="0"
@@ -5364,7 +5334,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 onChange={(e) => setAutomation(prev => ({ ...prev, maxRetries: Math.max(0, Number(e.target.value) || 0) }))}
                 style={{ width: 60, padding: '6px 8px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12 }}
               />
-              <span style={{ fontSize: 12, color: '#605E5C' }}>ניסיונות</span>
+              <span style={{ fontSize: 12, color: 'var(--s-muted)' }}>ניסיונות</span>
             </div>
           </div>
         </div>
@@ -5382,7 +5352,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             {automation?.workflowMode === 'autopilot-full'
               ? 'כשהאפשרות פעילה, מנהל העבודה מבצע קריאת preflight ובוחר לבד מי צריך לעבוד, באיזה סדר, עם איזה ספק או מודל, אילו הנחיות stage-level נדרשות וכמה סבבים להקצות.'
               : 'כשהאפשרות פעילה, מנהל העבודה מחליט לבד מי צריך לעבוד, באיזה סדר, ואיזה תפקיד זמני יהיה לכל שלב.'}
-            <div style={{ marginTop: 6, color: '#334155' }}>
+            <div style={{ marginTop: 6, color: 'var(--s-text)' }}>
               {automation?.workflowMode === 'autopilot-full'
                 ? 'האלגוריתם לא חייב למחזר אותו pipeline לכל מטלה, ולכן הוא יכול גם לבחור מסלול קצר, עמוק או מרובה-בדיקות לפי סוג המשימה.'
                 : 'במצב מעגלי, אם מתגלים פערים, הסוכן הכותב או סוכנים אחרים יכולים לחזור לעוד סבב שיפור.'}
@@ -5397,7 +5367,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   />
                   אפשר חזרה לסוכן קודם
                 </label>
-                <span style={{ color: '#605E5C' }}>מקסימום סבבים לכל סוכן</span>
+                <span style={{ color: 'var(--s-muted)' }}>מקסימום סבבים לכל סוכן</span>
                 <input
                   type="number"
                   min="1"
@@ -5418,7 +5388,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
         )}
 
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מטרה והנחיה משותפת לסביבת הסוכנים</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>מטרה והנחיה משותפת לסביבת הסוכנים</div>
           <textarea
             value={automation?.sharedGoal || ''}
             onChange={(e) => setAutomation(prev => ({ ...prev, sharedGoal: e.target.value }))}
@@ -5428,7 +5398,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           />
         </div>
 
-        <div style={{ marginTop: 10, border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px', background: '#FFFFFF' }}>
+        <div style={{ marginTop: 10, border: '1px solid var(--s-border)', borderRadius: 10, padding: '10px 12px', background: 'var(--s-surface)' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1E293B', fontWeight: 700, marginBottom: 8 }}>
             <input
               type="checkbox"
@@ -5437,21 +5407,21 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             />
             צרף בסוף המסמך נספח הערות סוכנים (כולל סיכום מנהל ואינדיקציה פנימית להגשה)
           </label>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.7, marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 8 }}>
             כשפעיל, המסמך יקבל בסוף נספח שמרכז הערות לפי סוכן, המלצות מנהל עבודה והערכת היצמדות להנחיות.
           </div>
-          <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>הנחיה מותאמת להערות הסוכן בסוף העבודה</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>הנחיה מותאמת להערות הסוכן בסוף העבודה</div>
           <textarea
             value={automation?.agentNotesInstruction || ''}
             onChange={(e) => setAutomation(prev => ({ ...prev, agentNotesInstruction: e.target.value }))}
             placeholder="למשל: ציין פערים מתודולוגיים, מה לתקן לפני הגשה, ומה נשמר מצוין לפי ההנחיות"
             rows={2}
-            style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 8, fontSize: 12, resize: 'vertical', background: 'white' }}
           />
         </div>
 
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: bypassActive ? '#94A3B8' : '#323130' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: bypassActive ? 'var(--s-muted)' : 'var(--s-text-strong)' }}>
             <input
               type="checkbox"
               checked={automation?.autoDispatch !== false}
@@ -5460,7 +5430,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             />
             הפעלה אוטומטית בין הסוכנים
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--s-text-strong)' }}>
             <input
               type="checkbox"
               checked={automation?.showProgress !== false}
@@ -5468,7 +5438,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             />
             הצג חיווי התקדמות וסטטוס חי
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#323130' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--s-text-strong)' }}>
             <input
               type="checkbox"
               checked={automation?.timeoutEnabled === true}
@@ -5477,7 +5447,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             הפעל timeout לסוכנים
           </label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: automation?.timeoutEnabled === true ? '#323130' : '#94A3B8' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: automation?.timeoutEnabled === true ? 'var(--s-text-strong)' : 'var(--s-muted)' }}>
               <span>Timeout</span>
               <input
                 type="number"
@@ -5493,14 +5463,14 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                   border: '1px solid #C8C6C4',
                   borderRadius: 6,
                   fontSize: 12,
-                  background: automation?.timeoutEnabled === true ? 'white' : '#F8FAFC',
-                  color: automation?.timeoutEnabled === true ? '#323130' : '#94A3B8',
+                  background: automation?.timeoutEnabled === true ? 'white' : 'var(--s-surface-2)',
+                  color: automation?.timeoutEnabled === true ? 'var(--s-text-strong)' : 'var(--s-muted)',
                   opacity: automation?.timeoutEnabled === true ? 1 : 0.75,
                 }}
               />
               <span>ms</span>
             </div>
-            <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? '#475569' : '#0F766E', lineHeight: 1.6 }}>
+            <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? 'var(--s-muted)' : '#0F766E', lineHeight: 1.6 }}>
               {automation?.timeoutEnabled === true
                 ? 'המערכת תעצור ריצת סוכנים ארוכה במיוחד לפי הערך שהוגדר במילישניות.'
                 : 'כבוי כברירת מחדל. ריצות סוכנים ימשיכו ללא timeout אוטומטי.'}
@@ -5508,24 +5478,24 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           </div>
         </div>
 
-        <div style={{ marginTop: 10, fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>
           אפשר לבנות כאן סביבת עבודה משלך: לבחור שם לסביבה, מטרה, להוסיף או למחוק סוכנים, ולהגדיר לכל סוכן מודל ותפקיד שונים. במצב AUTOPILOT המערכת גם תקבע לבד מי יעבוד, באיזה סדר, ומה יהיה התפקיד המעשי של כל שלב לפי ההנחיה והחומרים.
         </div>
       </div>
 
       {isAutopilotManagerMode && managerAgent && (
-        <div style={{ border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px', background: '#F8FBFF', marginBottom: 14 }}>
+        <div style={{ border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)', marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A' }}>בקרת מנהל העבודה</div>
-              <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>כאן בוחרים מהר את המנוע והמודל של מי שמנהל את כל תהליך ה-AUTOPILOT.</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 4 }}>כאן בוחרים מהר את המנוע והמודל של מי שמנהל את כל תהליך ה-AUTOPILOT.</div>
             </div>
             <span style={{ fontSize: 10, background: '#DBEAFE', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999, fontWeight: 700 }}>AUTOPILOT</span>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 8 }}>
             <div>
-              <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>ספק למנהל</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>ספק למנהל</div>
               <select
                 value={managerAgent.provider || ''}
                 onChange={(e) => updateManager('provider', e.target.value)}
@@ -5544,7 +5514,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             </div>
 
             <div>
-              <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל למנהל</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>מודל למנהל</div>
               <input
                 value={managerAgent.model || ''}
                 onChange={(e) => updateManager('model', e.target.value)}
@@ -5554,7 +5524,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
             </div>
           </div>
 
-          <div style={{ marginTop: 8, fontSize: 11, color: '#334155', lineHeight: 1.6 }}>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--s-text)', lineHeight: 1.6 }}>
             ההנחיות המלאות של המנהל זמינות לעריכה בכרטיס שלו למטה, אבל בחירת המוח המנהל עכשיו הרבה יותר ישירה.
           </div>
         </div>
@@ -5565,7 +5535,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
           const compatibleAgentModel = agent.provider && isProviderModelChoiceCompatible(agent.provider, agent.model, config) ? agent.model : '';
           const agentModelChoices = getProviderModelChoices(agent.provider, config, compatibleAgentModel ? [compatibleAgentModel] : []);
           return (
-          <div key={agent.id || index} style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
+          <div key={agent.id || index} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
               <span style={{ minWidth: 28, height: 28, borderRadius: 999, background: '#EEF4FF', color: 'var(--color-chrome)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>
                 {index + 1}
@@ -5580,7 +5550,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 type="button"
                 disabled={index === 0}
                 onClick={() => moveAgent(index, -1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === 0 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === 0 ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === 0 ? 'var(--s-surface-2)' : '#EFF6FF', color: '#1D4ED8', cursor: index === 0 ? 'default' : 'pointer' }}
               >
                 ↑
               </button>
@@ -5588,7 +5558,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
                 type="button"
                 disabled={index === agents.length - 1}
                 onClick={() => moveAgent(index, 1)}
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === agents.length - 1 ? '#F8FAFC' : '#EFF6FF', color: '#1D4ED8', cursor: index === agents.length - 1 ? 'default' : 'pointer' }}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #BFDBFE', background: index === agents.length - 1 ? 'var(--s-surface-2)' : '#EFF6FF', color: '#1D4ED8', cursor: index === agents.length - 1 ? 'default' : 'pointer' }}
               >
                 ↓
               </button>
@@ -5619,7 +5589,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 8, marginBottom: 8 }}>
               <div>
-                <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>ספק מועדף</div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>ספק מועדף</div>
                 <select
                   value={agent.provider || ''}
                   onChange={(e) => updateAgent(index, 'provider', e.target.value)}
@@ -5638,7 +5608,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               </div>
 
               <div>
-                <div style={{ fontSize: 11, color: '#605E5C', marginBottom: 4, fontWeight: 500 }}>מודל מועדף לסוכן</div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>מודל מועדף לסוכן</div>
                 <select
                   value={(agent.provider && compatibleAgentModel && agentModelChoices.includes(compatibleAgentModel)) ? compatibleAgentModel : ''}
                   onChange={(e) => updateAgent(index, 'model', e.target.value)}
@@ -5658,7 +5628,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
               </div>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#323130' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
               <input
                 type="checkbox"
                 checked={agent.enabled !== false}
@@ -5679,7 +5649,7 @@ function RoleAgentsSettings({ agents, setAgents, automation, setAutomation, conf
       </button>
 
       {isAutopilotManagerMode && (
-        <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
           אפשר לערוך כאן חופשי את ההוראות והסדר. בזמן ריצה, מצב AUTOPILOT רשאי לסטות מהסדר אם מנהל העבודה מזהה צורך בכך.
         </div>
       )}
@@ -5761,21 +5731,21 @@ function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
     if (state === 'manual-download') return { color: '#92400E', bg: '#FFFBEB', border: '#FDE68A', title: 'נדרש עדכון ידני' };
     if (state === 'dev-mode' || state === 'web' || state === 'unavailable') return { color: '#92400E', bg: '#FFFBEB', border: '#FDE68A', title: 'עדכון לא זמין כרגע' };
     if (state === 'error') return { color: '#991B1B', bg: '#FEF2F2', border: '#FECACA', title: 'אירעה שגיאה בעדכון' };
-    return { color: '#475569', bg: '#F8FAFC', border: '#CBD5E1', title: 'בדיקת עדכונים' };
+    return { color: 'var(--s-muted)', bg: 'var(--s-surface-2)', border: 'var(--s-border)', title: 'בדיקת עדכונים' };
   };
 
   const meta = getStatusMeta(updateInfo.status);
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 14, lineHeight: 1.7 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 14, lineHeight: 1.7 }}>
         כאן אפשר לבדוק ידנית אם יש גרסה חדשה, ולהתקין אותה מתוך האפליקציה ברגע שהיא מוכנה.
       </p>
 
       <div style={{ border: `1px solid ${meta.border}`, background: meta.bg, borderRadius: 14, padding: '14px', marginBottom: 14 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: meta.color, marginBottom: 6 }}>{meta.title}</div>
-        <div style={{ fontSize: 12, color: '#334155', marginBottom: 8 }}>{updateInfo.message || 'מוכן לבדיקת עדכונים'}</div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: '#475569' }}>
+        <div style={{ fontSize: 12, color: 'var(--s-text)', marginBottom: 8 }}>{updateInfo.message || 'מוכן לבדיקת עדכונים'}</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--s-muted)' }}>
           <span>גרסה נוכחית: {updateInfo.currentVersion || '—'}</span>
           {updateInfo.availableVersion && <span>גרסה זמינה: {updateInfo.availableVersion}</span>}
           {(updateInfo.status === 'downloading' || updateInfo.status === 'checking') && <span>התקדמות: {Math.round(Number(updateInfo.percent || 0))}%</span>}
@@ -5786,7 +5756,7 @@ function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
         <button
           onClick={checkNow}
           disabled={busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading' || !window.desktopApp?.checkForAppUpdates}
-          style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #93C5FD', background: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? '#E5E7EB' : '#EFF6FF', color: '#1D4ED8', cursor: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? 'default' : 'pointer', fontWeight: 700 }}
+          style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #93C5FD', background: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? 'var(--s-border)' : '#EFF6FF', color: '#1D4ED8', cursor: (busy || updateInfo.status === 'checking' || updateInfo.status === 'downloading') ? 'default' : 'pointer', fontWeight: 700 }}
         >
           {busy ? 'בודק…' : 'בדוק אם יש עדכון'}
         </button>
@@ -5845,7 +5815,7 @@ function DebugConsoleSettings({ automation }) {
   const getStatusMeta = (state) => {
     if (state === 'success') return { icon: '✓', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' };
     if (state === 'running') return { icon: '…', color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE' };
-    if (state === 'idle') return { icon: '✗', color: '#475569', bg: '#F8FAFC', border: '#CBD5E1' };
+    if (state === 'idle') return { icon: '✗', color: 'var(--s-muted)', bg: 'var(--s-surface-2)', border: 'var(--s-border)' };
     return { icon: '✗', color: '#991B1B', bg: '#FEF2F2', border: '#FECACA' };
   };
 
@@ -5884,11 +5854,11 @@ function DebugConsoleSettings({ automation }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 14, lineHeight: 1.7 }}>
+      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 14, lineHeight: 1.7 }}>
         כאן אפשר לראות בדיוק מה קרה בהרצה האחרונה: האם הופעל API, האם AUTOPILOT ניהל את הצוות, ואילו שלבים הושלמו או נכשלו.
       </p>
 
-      <div style={{ marginBottom: 14, border: '1px solid #E2E8F0', background: '#F8FAFC', borderRadius: 10, padding: '8px 10px', fontSize: 11, color: '#334155' }}>
+      <div style={{ marginBottom: 14, border: '1px solid var(--s-border)', background: 'var(--s-surface-2)', borderRadius: 10, padding: '8px 10px', fontSize: 11, color: 'var(--s-text)' }}>
         סביבת עבודה פעילה בלוגים: <strong>{summary?.workspaceName || automation?.workspaceName || 'ללא שם'}</strong> ({summary?.workspaceId || activeWorkspaceId})
       </div>
 
@@ -5901,14 +5871,14 @@ function DebugConsoleSettings({ automation }) {
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#1F2937' }}>{item.label}</span>
                 <span style={{ width: 26, height: 26, borderRadius: 999, background: 'white', color: meta.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{meta.icon}</span>
               </div>
-              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>{item.details}</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>{item.details}</div>
             </div>
           );
         })}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#323130', marginBottom: 10 }}>מצב שלבים</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>מצב שלבים</div>
         <div style={{ display: 'grid', gap: 8 }}>
           {(summary?.stages || []).map((stage) => {
             const meta = getStatusMeta(stage.state);
@@ -5917,12 +5887,12 @@ function DebugConsoleSettings({ automation }) {
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937' }}>{stage.label}</div>
                   {stage.configuredName && stage.configuredName !== stage.label && (
-                    <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>שם מוגדר: {stage.configuredName}</div>
+                    <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 2 }}>שם מוגדר: {stage.configuredName}</div>
                   )}
-                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>{stage.details || 'לא הופעל'}</div>
+                  <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 2 }}>{stage.details || 'לא הופעל'}</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {(stage.provider || stage.model) && <span style={{ fontSize: 10, color: '#475569' }}>{[stage.provider, stage.model].filter(Boolean).join(' · ')}</span>}
+                  {(stage.provider || stage.model) && <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>{[stage.provider, stage.model].filter(Boolean).join(' · ')}</span>}
                   <span style={{ width: 24, height: 24, borderRadius: 999, background: 'white', color: meta.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{meta.icon}</span>
                 </div>
               </div>
@@ -5936,35 +5906,35 @@ function DebugConsoleSettings({ automation }) {
         )}
       </div>
 
-      <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: '14px', background: 'white' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#323130' }}>קונסולת לוגים</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)' }}>קונסולת לוגים</div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={copyLogs} style={{ padding: '6px 10px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11 }}>העתק</button>
+            <button onClick={copyLogs} style={{ padding: '6px 10px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11 }}>העתק</button>
             <button onClick={resetLogs} style={{ padding: '6px 10px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11 }}>נקה</button>
           </div>
         </div>
 
-        <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, background: '#0F172A', borderRadius: 12, padding: '10px' }}>
+        <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--s-text-strong)', borderRadius: 12, padding: '10px' }}>
           {logs.length ? logs.map((log) => {
             const meta = getStatusMeta(log.state);
             return (
               <div key={log.id} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: '8px 10px', background: 'rgba(255,255,255,0.04)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#E2E8F0' }}>{getAgentTitle(log)}</span>
-                  <span style={{ fontSize: 10, color: '#94A3B8' }}>{formatTime(log.ts)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--s-border)' }}>{getAgentTitle(log)}</span>
+                  <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>{formatTime(log.ts)}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <span style={{ width: 20, height: 20, borderRadius: 999, background: 'white', color: meta.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{meta.icon}</span>
-                  <span style={{ fontSize: 11, color: '#F8FAFC', lineHeight: 1.5 }}>{log.message || 'ללא הודעה'}</span>
+                  <span style={{ fontSize: 11, color: 'var(--s-surface-2)', lineHeight: 1.5 }}>{log.message || 'ללא הודעה'}</span>
                 </div>
-                <div style={{ fontSize: 10, color: '#94A3B8' }}>
+                <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>
                   {[log.workspaceName ? `סביבה: ${log.workspaceName}` : '', log.provider, log.model, log.errorMessage].filter(Boolean).join(' • ')}
                 </div>
               </div>
             );
           }) : (
-            <div style={{ fontSize: 11, color: '#94A3B8', padding: '8px 4px' }}>עדיין אין לוגים להצגה.</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', padding: '8px 4px' }}>עדיין אין לוגים להצגה.</div>
           )}
         </div>
       </div>
@@ -6157,9 +6127,9 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
 
   if (!snapshot) {
     return (
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)', gridColumn: 'span 2' }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Generation Inspector</div>
-        <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>עדיין לא נשמר snapshot של generation או revise להצגה.</div>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>עדיין לא נשמר snapshot של generation או revise להצגה.</div>
       </div>
     );
   }
@@ -6195,17 +6165,17 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
   };
 
   return (
-    <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+    <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)', gridColumn: 'span 2' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 4 }}>Generation Inspector</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
             snapshot מינימלי של מה שנשלח למסלול generation ומה באמת נפתר בזמן הריצה האחרונה.
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={copySummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Copy summary</button>
-          <button onClick={exportSummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: '#F8FAFC', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Export JSON</button>
+          <button onClick={copySummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Copy summary</button>
+          <button onClick={exportSummary} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'var(--s-surface-2)', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>Export JSON</button>
         </div>
       </div>
 
@@ -6218,16 +6188,16 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
           { label: 'runId', value: snapshot.runId || 'לא זוהה' },
           { label: 'instructions chars', value: String(snapshot.instructionsChars || 0) },
         ].map((item) => (
-          <div key={item.label} style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
-            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>{item.label}</div>
+          <div key={item.label} style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface-2)', padding: '10px 12px' }}>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>{item.label}</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937', lineHeight: 1.5, wordBreak: 'break-word' }}>{item.value}</div>
           </div>
         ))}
       </div>
 
       <div style={{ display: 'grid', gap: 10, marginBottom: 12 }}>
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
-          <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>Base draft</div>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface-2)', padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>Base draft</div>
           <div style={{ fontSize: 12, color: '#1F2937', lineHeight: 1.6 }}>
             {snapshot.baseDraft
               ? `${snapshot.baseDraft.title || 'טיוטת בסיס'} · html ${snapshot.baseDraft.htmlChars || 0} chars · text ${snapshot.baseDraft.textChars || 0} chars`
@@ -6235,18 +6205,18 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
           </div>
         </div>
 
-        <div style={{ border: `1px solid ${snapshot.errorMessage ? '#FECACA' : snapshot.usedFallback ? '#FDE68A' : '#E2E8F0'}`, borderRadius: 10, background: snapshot.errorMessage ? '#FEF2F2' : snapshot.usedFallback ? '#FFFBEB' : '#F8FAFC', padding: '10px 12px' }}>
-          <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>Fallback / Error</div>
+        <div style={{ border: `1px solid ${snapshot.errorMessage ? '#FECACA' : snapshot.usedFallback ? '#FDE68A' : 'var(--s-border)'}`, borderRadius: 10, background: snapshot.errorMessage ? '#FEF2F2' : snapshot.usedFallback ? '#FFFBEB' : 'var(--s-surface-2)', padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>Fallback / Error</div>
           <div style={{ fontSize: 12, color: snapshot.errorMessage ? '#991B1B' : '#1F2937', lineHeight: 1.6 }}>
             {snapshot.errorMessage || (snapshot.usedFallback ? 'ההרצה חזרה ל-fallback בטוח.' : 'לא נרשם fallback או error בהרצה האחרונה.')}
           </div>
           {snapshot.routeModeReason ? (
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>route hint: {snapshot.routeModeReason}</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 6 }}>route hint: {snapshot.routeModeReason}</div>
           ) : null}
         </div>
       </div>
 
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#FFFFFF', padding: '12px 12px 4px' }}>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface)', padding: '12px 12px 4px' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937', marginBottom: 10 }}>Selected materials</div>
         {snapshot.selectedMaterials.length ? snapshot.selectedMaterials.map((item) => {
           const previewLabel = item.hasPreview
@@ -6258,18 +6228,18 @@ function GenerationInspectorCard({ lastGenerationAction, liveGeneration }) {
             <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, borderTop: '1px solid #F1F5F9', padding: '10px 0' }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#1F2937' }}>{item.title || 'חומר עזר'}</div>
-                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{item.label || 'ללא label'}</div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 3 }}>{item.label || 'ללא label'}</div>
                 {item.previewError ? (
                   <div style={{ fontSize: 11, color: '#B91C1C', marginTop: 4 }}>preview error: {item.previewError}</div>
                 ) : null}
               </div>
-              <div style={{ fontSize: 11, color: item.hasPreview ? '#166534' : '#475569', background: item.hasPreview ? '#F0FDF4' : '#F8FAFC', border: `1px solid ${item.hasPreview ? '#BBF7D0' : '#E2E8F0'}`, borderRadius: 999, padding: '4px 8px', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 11, color: item.hasPreview ? '#166534' : 'var(--s-muted)', background: item.hasPreview ? '#F0FDF4' : 'var(--s-surface-2)', border: `1px solid ${item.hasPreview ? '#BBF7D0' : 'var(--s-border)'}`, borderRadius: 999, padding: '4px 8px', whiteSpace: 'nowrap' }}>
                 {previewLabel}
               </div>
             </div>
           );
         }) : (
-          <div style={{ fontSize: 11, color: '#94A3B8', paddingBottom: 8 }}>לא נבחרו חומרי עזר בהרצה האחרונה.</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', paddingBottom: 8 }}>לא נבחרו חומרי עזר בהרצה האחרונה.</div>
         )}
       </div>
     </div>
@@ -6407,36 +6377,36 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <p style={{ fontSize: 13, color: '#605E5C', marginBottom: 0, lineHeight: 1.7, flex: '1 1 320px' }}>
+        <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 0, lineHeight: 1.7, flex: '1 1 320px' }}>
           אזור מרוכז למשתמש מתקדם: שליטה מהירה על provider/model פעיל, shell של חלונית הצ׳אט, guardrails למחקר ומקורות, timeout במילישניות, ו-debug בסיסי בלי לטייל בין כמה טאבים.
         </p>
         <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
           <button
             onClick={resetDeveloperDefaults}
-            style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+            style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
           >
             Reset to defaults
           </button>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
             מחזיר provider/model, preset חלונית, כללי מקורות, timeout ונספח הערות סוכנים לברירת המחדל. מפתחות API לא נמחקים.
           </div>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Provider / Model פעיל</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             זהו ה-override הזמין ביותר למסלול הישיר ולכל מקום שנשען על הספק הפעיל בהגדרות.
           </div>
 
           <div style={{ display: 'grid', gap: 10 }}>
             <label style={{ display: 'grid', gap: 4 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>ספק פעיל</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>ספק פעיל</span>
               <select
                 value={activeProviderId}
                 onChange={(e) => setConfig((prev) => ({ ...prev, active: e.target.value }))}
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: 'white' }}
               >
                 {DEVELOPER_PROVIDER_OPTIONS.map(([providerId, label]) => (
                   <option key={providerId} value={providerId} disabled={!isProviderConfigured(config, providerId) && activeProviderId !== providerId}>
@@ -6447,7 +6417,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
             </label>
 
             <label style={{ display: 'grid', gap: 4 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מודל פעיל</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>מודל פעיל</span>
               <select
                 value={activeModelChoices.includes(activeProviderModel) ? activeProviderModel : ''}
                 onChange={(e) => setConfig((prev) => ({
@@ -6457,7 +6427,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                     model: e.target.value,
                   },
                 }))}
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white', marginBottom: 6 }}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: 'white', marginBottom: 6 }}
               >
                 <option value="">בחר מודל מוכן</option>
                 {activeModelChoices.map((modelName) => (
@@ -6474,25 +6444,25 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                   },
                 }))}
                 placeholder="אפשר גם להקליד ידנית model id"
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, direction: 'ltr', background: 'white' }}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, direction: 'ltr', background: 'white' }}
               />
             </label>
           </div>
         </div>
 
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Chat Pane Shell & Grounding</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             כאן בוחרים איזה shell המשתמש רואה בתוך ה-sidebar, ואיך בקשות למקורות מטופלות כדי לצמצם הזיות, URLs שבורים והמצאת כתבות.
           </div>
 
           <div style={{ display: 'grid', gap: 10 }}>
             <label style={{ display: 'grid', gap: 4 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>Preset לחלונית הצ׳אט</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>Preset לחלונית הצ׳אט</span>
               <select
                 value={sidebarPreset}
                 onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, sidebarPreset: e.target.value }))}
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: 'white' }}
               >
                 {SIDEBAR_PRESET_OPTIONS.map(([presetId, label]) => (
                   <option key={presetId} value={presetId}>{label}</option>
@@ -6526,7 +6496,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
             </label>
           </div>
 
-          <div style={{ fontSize: 11, color: verifiedRetrievalConfigured ? '#475569' : '#B45309', lineHeight: 1.6, marginTop: 10 }}>
+          <div style={{ fontSize: 11, color: verifiedRetrievalConfigured ? 'var(--s-muted)' : '#B45309', lineHeight: 1.6, marginTop: 10 }}>
             {perplexityConfigured && scholarConfigured
               ? 'Perplexity ו-SerpAPI Scholar מוגדרים: Perplexity זמין למחקר כללי ולבקשות משולבות, ו-Scholar זמין לבקשות מקורות אקדמיים מאומתים.'
               : perplexityConfigured
@@ -6537,9 +6507,9 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
           </div>
         </div>
 
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Timeout לסוכנים</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             כאן משנים את timeout ברמת orchestration. הערך נשמר במילישניות ומוחל בכל הריצות הבאות.
           </div>
 
@@ -6553,7 +6523,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: automation?.timeoutEnabled === true ? '#475569' : '#94A3B8' }}>Timeout במילישניות</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: automation?.timeoutEnabled === true ? 'var(--s-muted)' : 'var(--s-muted)' }}>Timeout במילישניות</span>
             <input
               type="number"
               min="10000"
@@ -6562,20 +6532,20 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
               disabled={automation?.timeoutEnabled !== true}
               value={automation?.requestTimeoutMs ?? 45000}
               onChange={(e) => setAutomation((prev) => ({ ...prev, requestTimeoutMs: Math.max(10000, Number(e.target.value) || 45000) }))}
-              style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: automation?.timeoutEnabled === true ? 'white' : '#F8FAFC', color: automation?.timeoutEnabled === true ? '#1F2937' : '#94A3B8' }}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: automation?.timeoutEnabled === true ? 'white' : 'var(--s-surface-2)', color: automation?.timeoutEnabled === true ? '#1F2937' : 'var(--s-muted)' }}
             />
           </label>
 
-          <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? '#475569' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: automation?.timeoutEnabled === true ? 'var(--s-muted)' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
             {automation?.timeoutEnabled === true
               ? 'הערך ייחתך אוטומטית למינימום 10000ms כדי למנוע timeout אגרסיבי מדי.'
               : 'כבוי כרגע. ריצות ארוכות ימשיכו ללא עצירה אוטומטית.'}
           </div>
         </div>
 
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Workspace automation</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             Override נקודתי למסלול העבודה הרב-סוכני כשבסוף הריצה מוחזר מסמך מלא.
           </div>
 
@@ -6589,34 +6559,34 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>הנחיה מותאמת לנספח</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>הנחיה מותאמת לנספח</span>
             <textarea
               value={automation?.agentNotesInstruction || ''}
               onChange={(e) => setAutomation((prev) => ({ ...prev, agentNotesInstruction: e.target.value }))}
               placeholder="למשל: ציין פערים מתודולוגיים, מה לתקן לפני הגשה, ומה נשמר מצוין לפי ההנחיות"
               rows={3}
-              style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white' }}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, resize: 'vertical', background: 'white' }}
             />
           </label>
 
-          <div style={{ fontSize: 11, color: automation?.appendAgentNotesToOutput === true ? '#475569' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: automation?.appendAgentNotesToOutput === true ? 'var(--s-muted)' : '#0F766E', lineHeight: 1.6, marginTop: 8 }}>
             {automation?.appendAgentNotesToOutput === true
               ? 'הנספח יצורף רק לריצות automation שמחזירות מסמך, עם ההנחיה הייעודית שנכתבה כאן.'
               : 'כבוי כרגע. הפלט יישאר נקי מנספח הערות עד שמפעילים את ההגדרה.'}
           </div>
         </div>
 
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>Debug Logs</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             ייצוא מהיר של הלוגים הפעילים או ניקוי מלא של סביבת העבודה הנוכחית.
           </div>
 
           <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, color: '#64748B' }}>סביבה פעילה</div>
+            <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface-2)', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>סביבה פעילה</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginTop: 4 }}>{summary?.workspaceName || automation?.workspaceName || 'ללא שם'}</div>
-              <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>לוגים שמורים: {logsCount}</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', marginTop: 6 }}>לוגים שמורים: {logsCount}</div>
             </div>
             {!!summary?.lastError && (
               <div style={{ border: '1px solid #FECACA', borderRadius: 10, background: '#FEF2F2', padding: '10px 12px', fontSize: 11, color: '#991B1B', lineHeight: 1.6 }}>
@@ -6626,7 +6596,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={exportLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>ייצא JSON</button>
+            <button onClick={exportLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>ייצא JSON</button>
             <button onClick={resetLogs} style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>נקה לוגים</button>
           </div>
         </div>
@@ -6634,15 +6604,15 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
         <GenerationInspectorCard lastGenerationAction={lastGenerationAction} liveGeneration={liveGeneration} />
 
         {/* ─── כרטיס: בדיקת חיבור ─── */}
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>בדיקת חיבור לספק</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             שולח בקשת ping לספק הפעיל ומציג תשובה, מודל שנענה, ועיכוב ברמת מילישניות.
           </div>
           <button
             onClick={runConnTest}
             disabled={connTest.status === 'running'}
-            style={{ padding: '9px 16px', borderRadius: 999, border: '1px solid #CBD5E1', background: connTest.status === 'running' ? '#F1F5F9' : 'white', cursor: connTest.status === 'running' ? 'wait' : 'pointer', fontSize: 12, fontWeight: 700, marginBottom: 12 }}
+            style={{ padding: '9px 16px', borderRadius: 999, border: '1px solid var(--s-border)', background: connTest.status === 'running' ? '#F1F5F9' : 'white', cursor: connTest.status === 'running' ? 'wait' : 'pointer', fontSize: 12, fontWeight: 700, marginBottom: 12 }}
           >
             {connTest.status === 'running' ? '⏳ בודק...' : '🔌 בדוק עכשיו'}
           </button>
@@ -6652,10 +6622,10 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                 {connTest.result.ok ? `✅ חיבור תקין — ${connTest.elapsed}ms` : `❌ שגיאה — ${connTest.elapsed}ms`}
               </div>
               {connTest.result.model && (
-                <div style={{ fontSize: 11, color: '#475569', marginBottom: 4 }}>מודל: <code style={{ background: '#E2E8F0', padding: '1px 5px', borderRadius: 4 }}>{connTest.result.model}</code></div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4 }}>מודל: <code style={{ background: 'var(--s-border)', padding: '1px 5px', borderRadius: 4 }}>{connTest.result.model}</code></div>
               )}
               {connTest.result.reply && (
-                <div style={{ fontSize: 11, color: '#475569', marginBottom: 4, lineHeight: 1.5 }}>תגובה: <em>{String(connTest.result.reply).slice(0, 120)}{connTest.result.reply.length > 120 ? '…' : ''}</em></div>
+                <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, lineHeight: 1.5 }}>תגובה: <em>{String(connTest.result.reply).slice(0, 120)}{connTest.result.reply.length > 120 ? '…' : ''}</em></div>
               )}
               {connTest.result.error && (
                 <div style={{ fontSize: 11, color: '#B91C1C', lineHeight: 1.5 }}>{connTest.result.error}</div>
@@ -6665,23 +6635,23 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
         </div>
 
         {/* ─── כרטיס: Storage Inspector ─── */}
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)', gridColumn: 'span 2' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', flex: 1 }}>Storage Inspector</div>
-            <div style={{ fontSize: 11, color: '#64748B' }}>סה"כ: {(totalStorageBytes / 1024).toFixed(1)} KB</div>
-            <button onClick={refreshStorageInfo} style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11 }}>רענן</button>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>סה"כ: {(totalStorageBytes / 1024).toFixed(1)} KB</div>
+            <button onClick={refreshStorageInfo} style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11 }}>רענן</button>
           </div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 10 }}>
             כל מפתחות ה-localStorage של WordFlow. לחץ על 🗑 למחיקת מפתח ספציפי.
           </div>
           <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #F1F5F9', borderRadius: 10 }}>
             {storageInfo.length === 0 && (
-              <div style={{ padding: 12, fontSize: 11, color: '#94A3B8', textAlign: 'center' }}>אין נתונים</div>
+              <div style={{ padding: 12, fontSize: 11, color: 'var(--s-muted)', textAlign: 'center' }}>אין נתונים</div>
             )}
             {storageInfo.map(({ key, sizeBytes }) => (
-              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid #F8FAFC', direction: 'ltr' }}>
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--s-surface-2)', direction: 'ltr' }}>
                 <div style={{ flex: 1, fontSize: 11, color: '#1F2937', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</div>
-                <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap' }}>{(sizeBytes / 1024).toFixed(1)} KB</div>
+                <div style={{ fontSize: 10, color: 'var(--s-muted)', whiteSpace: 'nowrap' }}>{(sizeBytes / 1024).toFixed(1)} KB</div>
                 <button onClick={() => clearStorageKey(key)} title="מחק מפתח" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#F87171', padding: '0 2px', lineHeight: 1 }}>🗑</button>
               </div>
             ))}
@@ -6689,18 +6659,18 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
         </div>
 
         {/* ─── כרטיס: App Memory & Chat History ─── */}
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>App Memory & Chat</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             זיכרון ה-AI (הערות + שיחות אחרונות) והיסטוריית Sidebar Chat.
           </div>
           <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, color: '#64748B' }}>הערות זיכרון</div>
+            <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface-2)', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>הערות זיכרון</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#1F2937' }}>{appMemory.memoryNotes?.length ?? 0}</div>
             </div>
-            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, background: '#F8FAFC', padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, color: '#64748B' }}>שיחות אחרונות שמורות</div>
+            <div style={{ border: '1px solid var(--s-border)', borderRadius: 10, background: 'var(--s-surface-2)', padding: '10px 12px' }}>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>שיחות אחרונות שמורות</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#1F2937' }}>{appMemory.recentChats?.length ?? 0}</div>
             </div>
           </div>
@@ -6713,14 +6683,14 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
         </div>
 
         {/* ─── כרטיס: Workflow Engine ─── */}
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🔄 Workflow Engine</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             שליטה מלאה על מנגנון ריצת הסוכנים: מצב, אוטומציה, ו-Bypass לסביבת עבודה.
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
             <label style={{ display: 'grid', gap: 4 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מצב Workflow</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>מצב Workflow</span>
               <select
                 value={automation?.workflowMode || 'manager-auto'}
                 onChange={(e) => {
@@ -6738,7 +6708,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                     });
                   }
                 }}
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: 'white' }}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: 'white' }}
               >
                 {WORKFLOW_MODE_OPTIONS.map(([val, label]) => (
                   <option key={val} value={val}>{label}</option>
@@ -6765,9 +6735,9 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
         </div>
 
         {/* ─── כרטיס: Circular + Retry ─── */}
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+        <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🔁 Circular Workflow & Retry</div>
-          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 12 }}>
             סבבי ביקורת (circular) ומדיניות ניסיונות חוזרים בכשל.
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
@@ -6781,19 +6751,19 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>סבבים מינימום</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>סבבים מינימום</span>
                 <input type="number" min={1} max={10}
                   value={automation?.circularMinRounds ?? 1}
                   onChange={(e) => setAutomation((prev) => ({ ...prev, circularMinRounds: Math.max(1, Number(e.target.value) || 1) }))}
-                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                  style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12 }}
                 />
               </label>
               <label style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>סבבים מקסימום</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>סבבים מקסימום</span>
                 <input type="number" min={1} max={10}
                   value={automation?.circularMaxRounds ?? 2}
                   onChange={(e) => setAutomation((prev) => ({ ...prev, circularMaxRounds: Math.max(1, Number(e.target.value) || 2) }))}
-                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12 }}
+                  style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12 }}
                 />
               </label>
             </div>
@@ -6807,12 +6777,12 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                 הפעל Retry בכשל בקשה
               </label>
               <label style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>מספר ניסיונות חוזרים</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>מספר ניסיונות חוזרים</span>
                 <input type="number" min={0} max={5}
                   disabled={automation?.retryEnabled === false}
                   value={automation?.maxRetries ?? 2}
                   onChange={(e) => setAutomation((prev) => ({ ...prev, maxRetries: Math.max(0, Number(e.target.value) || 0) }))}
-                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, background: automation?.retryEnabled === false ? '#F8FAFC' : 'white' }}
+                  style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, background: automation?.retryEnabled === false ? 'var(--s-surface-2)' : 'white' }}
                 />
               </label>
             </div>
@@ -6821,7 +6791,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
 
         {/* ─── כרטיס: Assistant Popup ─── */}
         {assistantBehavior && setAssistantBehavior && (
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF' }}>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)' }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', marginBottom: 8 }}>🤖 Assistant Popup</div>
             <div style={{ display: 'grid', gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
@@ -6833,12 +6803,12 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                 פתח עוזר אוטומטית כשנתקע בכתיבה
               </label>
               <label style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>זמן עצירה לפני קפיצה (שניות)</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--s-muted)' }}>זמן עצירה לפני קפיצה (שניות)</span>
                 <input type="number" min={2} max={60}
                   disabled={assistantBehavior?.autoPopup === false}
                   value={assistantBehavior?.idleSeconds ?? 5}
                   onChange={(e) => setAssistantBehavior((prev) => ({ ...prev, idleSeconds: Math.max(2, Number(e.target.value) || 5) }))}
-                  style={{ padding: '8px 10px', border: '1px solid #CBD5E1', borderRadius: 10, fontSize: 12, width: 120 }}
+                  style={{ padding: '8px 10px', border: '1px solid var(--s-border)', borderRadius: 10, fontSize: 12, width: 120 }}
                 />
               </label>
             </div>
@@ -6847,24 +6817,24 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
 
         {/* ─── כרטיס: AI Quick Actions ─── */}
         {wordPrefs?.aiQuickActions && setWordPrefs && (
-          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: '14px', background: '#FFFFFF', gridColumn: 'span 2' }}>
+          <div style={{ border: '1px solid var(--s-border)', borderRadius: 14, padding: '14px', background: 'var(--s-surface)', gridColumn: 'span 2' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1F2937', flex: 1 }}>⚡ AI Quick Actions בסרגל</div>
               <button
                 onClick={() => setWordPrefs((prev) => ({ ...prev, aiQuickActions: Object.fromEntries(Object.keys(prev.aiQuickActions || {}).map((k) => [k, true])) }))}
-                style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #CBD5E1', background: 'white', cursor: 'pointer', fontSize: 11 }}
+                style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'white', cursor: 'pointer', fontSize: 11 }}
               >הפעל הכל</button>
               <button
                 onClick={() => setWordPrefs((prev) => ({ ...prev, aiQuickActions: Object.fromEntries(Object.keys(prev.aiQuickActions || {}).map((k) => [k, false])) }))}
                 style={{ padding: '4px 10px', borderRadius: 999, border: '1px solid #FECACA', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer', fontSize: 11 }}
               >כבה הכל</button>
             </div>
-            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.6, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 10 }}>
               שלוט אילו כפתורי AI מהיר מוצגים בסרגל הכלים כשמסמנים טקסט.
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
               {Object.entries(wordPrefs.aiQuickActions).map(([key, enabled]) => (
-                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937', padding: '6px 10px', border: `1px solid ${enabled ? '#BFDBFE' : '#E2E8F0'}`, borderRadius: 8, background: enabled ? '#EFF6FF' : '#F8FAFC', cursor: 'pointer', userSelect: 'none' }}>
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937', padding: '6px 10px', border: `1px solid ${enabled ? '#BFDBFE' : 'var(--s-border)'}`, borderRadius: 8, background: enabled ? '#EFF6FF' : 'var(--s-surface-2)', cursor: 'pointer', userSelect: 'none' }}>
                   <input
                     type="checkbox"
                     checked={!!enabled}
@@ -6884,7 +6854,7 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
 // ─── הגדרות מראה ───
 function AppearanceSettings() {
   const themes = [
-    { name: 'Word Classic',    vars: { '--word-blue': '#2B579A', '--page-bg': '#E1DFDD', '--text-color': '#323130' }, preview: ['#2B579A', '#E1DFDD'] },
+    { name: 'Word Classic',    vars: { '--word-blue': '#2B579A', '--page-bg': 'var(--s-border)', '--text-color': 'var(--s-text-strong)' }, preview: ['#2B579A', 'var(--s-border)'] },
     { name: 'ירוק Office',     vars: { '--word-blue': '#217346', '--page-bg': '#D5E8D4', '--text-color': '#1E3A2B' }, preview: ['#217346', '#D5E8D4'] },
     { name: 'כהה (Dark)',      vars: { '--word-blue': '#3B82F6', '--page-bg': '#1E1E1E', '--text-color': '#D4D4D4' }, preview: ['#1E1E1E', '#2D2D2D'] },
     { name: 'מינימל לבן',     vars: { '--word-blue': '#4B5563', '--page-bg': '#F9FAFB', '--text-color': '#111827' }, preview: ['#4B5563', '#F9FAFB'] },
@@ -6893,15 +6863,42 @@ function AppearanceSettings() {
   ];
   const applyTheme = (vars) => Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
 
+  const [appTheme, setAppThemeState] = useState(getTheme);
+  useEffect(() => onThemeChange(setAppThemeState), []);
+  const themeModes = [
+    { id: 'light', label: 'בהיר', icon: 'ph-sun', blurb: 'ברירת מחדל — ממשק בהיר' },
+    { id: 'dark', label: 'כהה', icon: 'ph-moon', blurb: 'Navy + teal — נוח לעיניים' },
+  ];
+
   return (
     <div>
-      <p className="text-[13px] text-slate-500 mb-4 font-medium">ערכת נושא — תחול מיידית:</p>
+      <p className="text-[13px] text-slate-500 mb-3 font-medium dark:text-[#8ba3bd]">מצב תצוגה — תחול מיידית ונשמר:</p>
+      <div className="grid grid-cols-2 gap-3 mb-7">
+        {themeModes.map((m) => {
+          const active = appTheme === m.id;
+          return (
+            <button key={m.id} type="button" onClick={() => setAppTheme(m.id)}
+              className={`flex items-center gap-3 rounded-2xl border p-3.5 text-right transition-all outline-none focus:ring-2 ${active
+                ? 'border-indigo-300 bg-indigo-50 shadow-sm focus:ring-indigo-100 dark:border-[#2dd4bf]/60 dark:bg-[#2dd4bf]/10 dark:focus:ring-[#2dd4bf]/20'
+                : 'border-slate-200 bg-white hover:border-indigo-200 hover:shadow-sm focus:ring-slate-100 dark:border-white/12 dark:bg-white/5 dark:hover:border-white/20'}`}>
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[20px] ${active ? 'bg-indigo-600 text-white dark:bg-[#2dd4bf] dark:text-[#06231f]' : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-[#8ba3bd]'}`}>
+                <i className={`ph ${m.icon}`} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[14px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">{m.label}{active ? ' ✓' : ''}</span>
+                <span className="block text-[11.5px] text-slate-500 dark:text-[#8ba3bd]">{m.blurb}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[13px] text-slate-500 mb-4 font-medium dark:text-[#8ba3bd]">צבע מותג ודף — תחול מיידית:</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {themes.map(t => (
           <button key={t.name} onClick={() => applyTheme(t.vars)}
-            className="border border-slate-200 rounded-xl overflow-hidden bg-white text-center transition-all hover:border-indigo-200 hover:shadow-md outline-none focus:ring-2 focus:ring-indigo-100">
+            className="border border-slate-200 rounded-xl overflow-hidden bg-white text-center transition-all hover:border-indigo-200 hover:shadow-md outline-none focus:ring-2 focus:ring-indigo-100 dark:border-white/12 dark:bg-white/5 dark:hover:border-[#2dd4bf]/40">
             <div className="h-9" style={{ background: `linear-gradient(90deg, ${t.preview[0]} 50%, ${t.preview[1]} 50%)` }} />
-            <div className="px-1.5 py-2 text-[11px] text-slate-700 font-semibold">{t.name}</div>
+            <div className="px-1.5 py-2 text-[11px] text-slate-700 font-semibold dark:text-[#cfe0ef]">{t.name}</div>
           </button>
         ))}
       </div>
@@ -6920,6 +6917,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
   const [settingsTab, setSettingsTab] = useState(normalizeVisibleSettingsTab(initialSettingsTab));
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
+  const [settingsSearchOpen, setSettingsSearchOpen] = useState(false);
   const openedDirectlyInSettings = Boolean(initialSettingsTab);
   const onboardingSessionActiveRef = useRef(initialSettingsTab === 'onboarding');
   const [config, setConfig] = useState(getProviderConfig);
@@ -6960,6 +6958,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     : SETTINGS_TAB_GROUPS;
   const settingsSearchHasNoResults = settingsSearchTokens.length > 0 && settingsSearchResults.length === 0;
   const activeSettingsTabLabel = (SETTINGS_TAB_GROUPS.flatMap((group) => group.tabs).find(([id]) => id === settingsTab) || [])[1] || '';
+  const activeSettingsTabMeta = SETTINGS_TAB_META[settingsTab] || null;
 
   useEffect(() => {
     personalStyleStateRef.current = personalStyleState;
@@ -7382,21 +7381,70 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
       {/* ─── Settings Popup Modal ─── */}
       {activePanel === 'settings' && (
         <div className="absolute inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md transition-opacity duration-200" onClick={closeSettingsPanel}>
-          <div className={`${settingsTab === 'onboarding' ? 'bg-transparent w-full max-w-[1400px] h-[95vh] border-none shadow-none' : 'bg-slate-50 w-full max-w-[1280px] h-[90vh] sm:h-[85vh] rounded-[24px] shadow-2xl border border-slate-200/60'} flex flex-col overflow-hidden`} onClick={e => e.stopPropagation()}>
-             {/* POPUP HEADER */}
-             <div className="bg-white px-6 sm:px-8 py-4 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
-                <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 bg-indigo-50 rounded-2xl flex items-center justify-center shadow-inner border border-indigo-100/50">
-                        <i className="ph-fill ph-gear-fine text-[24px] text-indigo-600" />
+          <div className={`${settingsTab === 'onboarding' ? 'bg-transparent w-full max-w-[1400px] h-[95vh] border-none shadow-none' : 'wf-settings-modal bg-slate-50 w-full max-w-[1280px] h-[90vh] sm:h-[85vh] rounded-[24px] shadow-2xl border border-slate-200/60'} flex flex-col overflow-hidden`} onClick={e => e.stopPropagation()}>
+             {/* POPUP HEADER — עיצוב linen: gear tile + חיפוש-פקודה + סגירה */}
+             <div className="relative z-30 bg-white px-5 sm:px-6 py-3.5 border-b border-slate-200 flex items-center gap-4 shadow-sm shrink-0 dark:bg-[#0a1422] dark:border-white/10">
+                <div className="flex items-center gap-3 shrink-0">
+                    <div className="w-[42px] h-[42px] rounded-[13px] grid place-items-center"
+                         style={{ background: 'linear-gradient(145deg, var(--wf-accent), var(--wf-accent-strong))', boxShadow: '0 8px 20px color-mix(in srgb, var(--wf-accent) 38%, transparent)' }}>
+                        <span className="text-[20px] leading-none">⚙️</span>
                     </div>
-                    <div>
-                        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">הגדרות</h2>
-                        {settingsTab !== 'onboarding' && activeSettingsTabLabel && (
-                          <div className="text-[12px] sm:text-[13px] text-slate-400 font-semibold mt-0.5">{activeSettingsTabLabel}</div>
+                    <div className="leading-tight">
+                        <h2 className="text-[19px] font-extrabold text-slate-800 tracking-tight dark:text-[#f1f6fb]">הגדרות</h2>
+                        {settingsTab !== 'onboarding' && (activeSettingsTabMeta?.title || activeSettingsTabLabel) && (
+                          <div className="text-[12px] text-slate-400 font-semibold mt-0.5 dark:text-[#8ba3bd]">{activeSettingsTabMeta?.title || activeSettingsTabLabel}</div>
                         )}
                     </div>
                 </div>
-                <button onClick={closeSettingsPanel} className="w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200">
+
+                {/* חיפוש מהיר — קפיצה לכל טאב */}
+                {settingsTab !== 'onboarding' && (
+                  <div className="relative flex-1 max-w-[520px] mx-auto hidden sm:block">
+                    <div className="relative">
+                      <span className="absolute top-1/2 -translate-y-1/2 text-[15px] text-slate-400 pointer-events-none dark:text-[#8ba3bd]" style={{ insetInlineStart: 13 }}>🔍</span>
+                      <input
+                        type="text"
+                        dir="auto"
+                        value={settingsSearchQuery}
+                        onChange={(e) => { setSettingsSearchQuery(e.target.value); setSettingsSearchOpen(true); }}
+                        onFocus={() => setSettingsSearchOpen(true)}
+                        placeholder="חיפוש מהיר — קפיצה לכל הגדרה…"
+                        className="w-full text-[14px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-[13px] py-[11px] outline-none transition focus:border-[var(--wf-accent)] focus:ring-4 focus:ring-[color-mix(in_srgb,var(--wf-accent)_16%,transparent)] dark:text-[#eaf2fb] dark:bg-white/5 dark:border-white/12"
+                        style={{ paddingInlineStart: 40, paddingInlineEnd: 40 }}
+                      />
+                      <span className="absolute top-1/2 -translate-y-1/2 text-[11px] font-bold text-slate-400 border border-slate-200 rounded-md px-[7px] py-[2px] pointer-events-none dark:text-[#8ba3bd] dark:border-white/12" style={{ insetInlineEnd: 12 }}>⌘K</span>
+                    </div>
+                    {settingsSearchOpen && settingsSearchTokens.length > 0 && (
+                      <>
+                        <div className="absolute left-0 right-0 max-h-[340px] overflow-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-[7px] z-40 custom-scrollbar-slim dark:bg-[#0f1d2e] dark:border-white/10" style={{ top: 'calc(100% + 8px)' }}>
+                          {settingsSearchResults.length === 0 ? (
+                            <div className="px-3 py-4 text-center text-[13px] text-slate-400 dark:text-[#8ba3bd]">לא נמצאו הגדרות תואמות ל״{settingsSearchQuery}״</div>
+                          ) : (() => {
+                            const seen = new Set();
+                            return settingsSearchResults.filter((e) => { if (seen.has(e.id)) return false; seen.add(e.id); return true; });
+                          })().map((entry) => {
+                            const meta = SETTINGS_TAB_META[entry.id] || {};
+                            return (
+                              <button key={entry.id} type="button"
+                                onClick={() => { setSettingsTab(entry.id); setSettingsSearchQuery(''); setSettingsSearchOpen(false); }}
+                                className="w-full flex items-center gap-3 text-right rounded-xl px-3 py-2.5 transition-colors hover:bg-indigo-50 dark:hover:bg-white/5">
+                                <span className="shrink-0 w-8 h-8 rounded-[9px] grid place-items-center text-[16px]" style={{ background: 'color-mix(in srgb, var(--wf-accent) 14%, transparent)' }}>{meta.icon || '⚙️'}</span>
+                                <span className="flex-1 min-w-0">
+                                  <span className="block text-[13.5px] font-bold text-slate-800 dark:text-[#eaf2fb] truncate">{meta.title || entry.label}</span>
+                                  <span className="block text-[11.5px] text-slate-400 dark:text-[#8ba3bd] truncate">{entry.groupTitle}</span>
+                                </span>
+                                <span className="shrink-0 text-[13px] text-slate-400 dark:text-[#8ba3bd]">↵</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div onClick={() => setSettingsSearchOpen(false)} className="fixed inset-0 z-[35]" />
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <button onClick={closeSettingsPanel} className="shrink-0 w-10 h-10 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-full flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-rose-200 dark:bg-white/10 dark:text-[#8ba3bd] dark:hover:bg-rose-500/20 dark:hover:text-rose-200">
                     <i className="ph ph-x text-lg font-bold" />
                 </button>
              </div>
@@ -7421,41 +7469,25 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
              /* פריסת דו-פאנל: רייל ניווט + תוכן עם footer דביק */
              <div className="flex-1 flex flex-col md:flex-row min-h-0">
                 {/* ─── NAV RAIL ─── */}
-                <aside className="w-full md:w-64 shrink-0 bg-white border-b md:border-b-0 md:border-l border-slate-200 flex flex-col min-h-0 max-h-[40vh] md:max-h-none">
-                  <div className="p-3 border-b border-slate-100 shrink-0">
-                    <div className="relative">
-                      <i className="ph ph-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
-                      <input
-                        type="text"
-                        dir="auto"
-                        value={settingsSearchQuery}
-                        onChange={(e) => setSettingsSearchQuery(e.target.value)}
-                        placeholder="חיפוש בהגדרות…"
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pr-9 pl-8 text-[13px] font-medium text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-100/70"
-                      />
-                      {settingsSearchQuery && (
-                        <button type="button" onClick={() => setSettingsSearchQuery('')}
-                          className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center transition-colors outline-none focus:ring-2 focus:ring-slate-200">
-                          <i className="ph ph-x text-xs" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <nav className="flex-1 overflow-y-auto p-3 flex flex-col gap-4 custom-scrollbar-slim">
-                    {settingsSearchHasNoResults ? (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-700">
-                        לא נמצאו הגדרות תואמות
-                      </div>
-                    ) : visibleSettingsGroups.map((group) => (
+                <aside className="w-full md:w-64 shrink-0 bg-[var(--wf-rail)] border-b md:border-b-0 md:border-l border-slate-200 flex flex-col min-h-0 max-h-[40vh] md:max-h-none dark:border-white/10">
+                  <nav className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-4 custom-scrollbar-slim">
+                    {SETTINGS_TAB_GROUPS.map((group) => (
                       <div key={group.title}>
-                        <div className="px-2 mb-1.5 text-[10px] font-bold text-slate-400 tracking-widest">{group.title}</div>
+                        <div className="px-2.5 mb-2 text-[10.5px] font-extrabold text-slate-400 tracking-[0.12em] uppercase dark:text-[#7e96b0]">{group.title}</div>
                         <div className="flex flex-col gap-1">
-                          {group.tabs.map(([id, label]) => (
-                            <button key={id} onClick={() => setSettingsTab(id)}
-                              className={`w-full text-right px-3 py-2 rounded-xl text-[13px] font-semibold transition-all outline-none focus:ring-2 ${settingsTab === id ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20 focus:ring-indigo-200' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 focus:ring-slate-100'}`}>
-                              {label}
-                            </button>
-                          ))}
+                          {group.tabs.map(([id, label]) => {
+                            const sp = label.indexOf(' ');
+                            const ic = sp > 0 ? label.slice(0, sp) : '';
+                            const tx = sp > 0 ? label.slice(sp + 1) : label;
+                            const active = settingsTab === id;
+                            return (
+                              <button key={id} onClick={() => setSettingsTab(id)}
+                                className={`w-full flex items-center gap-3 text-right px-3 py-2.5 rounded-xl text-[13.5px] font-semibold transition-all outline-none focus:ring-2 ${active ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20 focus:ring-indigo-200 dark:bg-[#2dd4bf] dark:text-[#06231f] dark:shadow-[#2dd4bf]/20 dark:focus:ring-[#2dd4bf]/30' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 focus:ring-slate-100 dark:text-[#cfe0ef] dark:hover:bg-white/5 dark:hover:text-[#2dd4bf] dark:focus:ring-white/10'}`}>
+                                <span className="w-[22px] text-center text-[16px] leading-none shrink-0">{ic}</span>
+                                <span className="flex-1 text-right">{tx}</span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -7463,9 +7495,19 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 </aside>
 
                 {/* ─── CONTENT + STICKY FOOTER ─── */}
-                <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50">
+                <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50 dark:bg-transparent">
                   <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 custom-scrollbar-slim">
-                    <div className="bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm">
+                    {/* כותרת העמוד — אייקון, כותרת ותיאור לכל טאב (עיצוב linen) */}
+                    {activeSettingsTabMeta && (
+                      <div className="mb-5 px-1">
+                        <h1 className="m-0 flex items-center gap-3 text-[26px] sm:text-[30px] font-extrabold tracking-tight text-slate-800 dark:text-[#f1f6fb]">
+                          <span className="text-[24px] leading-none">{activeSettingsTabMeta.icon}</span>{activeSettingsTabMeta.title}
+                        </h1>
+                        <p className="mt-2 max-w-[70ch] text-[14px] leading-relaxed text-slate-400 dark:text-[#8ba3bd]">{activeSettingsTabMeta.desc}</p>
+                      </div>
+                    )}
+                    {/* wf-settings-pane מפעיל "סקין" כהה/linen כללי על תוכן הפאנלים (tailwind.css) */}
+                    <div className="wf-settings-pane bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm dark:bg-[#0f1d2e] dark:border-white/10 dark:shadow-black/30">
                       {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                       {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
                       {settingsTab === 'media'       && <MediaVisualsSettings config={config} setConfig={setConfig} />}
@@ -7511,16 +7553,17 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                   </div>
 
                   {/* Sticky Footer */}
-                  <div className="shrink-0 flex flex-wrap gap-3 items-center justify-end bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-[0_-2px_8px_rgba(0,0,0,0.04)]">
-                    <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2 min-w-0">
+                  <div className="shrink-0 flex flex-wrap gap-3 items-center justify-end bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-[0_-2px_8px_rgba(0,0,0,0.04)] dark:bg-[#0a1422] dark:border-white/10">
+                    <div className="flex-1 text-[12px] text-slate-400 font-semibold px-2 min-w-0 dark:text-[#7e96b0]">
                        * שינויים מוחלים בלחיצה על שמירה.
                     </div>
                     <button onClick={closeSettingsPanel}
-                      className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none">
+                      className="px-6 py-2.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold hover:bg-slate-100 transition-colors shadow-sm focus:ring-2 focus:ring-slate-200 outline-none dark:bg-white/5 dark:text-[#cfe0ef] dark:border-white/12 dark:hover:bg-white/10">
                       בטל וחזור לתפריט
                     </button>
                     <button onClick={handleSave}
-                      className={`px-8 py-2.5 text-white rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-bold transition-all shadow-md outline-none focus:ring-2 ${saved ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 shadow-emerald-600/30 focus:ring-emerald-200' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 border border-indigo-500 shadow-indigo-600/30 focus:ring-indigo-200'}`}>
+                      style={!saved ? { boxShadow: '0 10px 22px color-mix(in srgb, var(--wf-accent) 30%, transparent)' } : undefined}
+                      className={`px-8 py-2.5 rounded-xl cursor-pointer text-[13px] sm:text-[14px] font-extrabold transition-all shadow-md outline-none focus:ring-2 ${saved ? 'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 shadow-emerald-600/30 focus:ring-emerald-200' : 'bg-[var(--wf-accent)] hover:brightness-105 text-[var(--wf-accent-text)] border border-[var(--wf-accent)] focus:ring-[color-mix(in_srgb,var(--wf-accent)_30%,transparent)]'}`}>
                       {saved ? '✓ עודכן בהצלחה!' : 'שמור והחל שינויים'}
                     </button>
                   </div>
