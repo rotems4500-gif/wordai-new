@@ -14,6 +14,10 @@ export const SLIDE_LAYOUTS = [
   { id: 'image-left',    label: 'תמונה + טקסט',   hasImage: true,  fields: ['title', 'bullets'] },
   { id: 'image-full',    label: 'תמונה מלאה',     hasImage: true,  fields: ['title', 'subtitle'] },
   { id: 'two-column',    label: 'שתי עמודות',     hasImage: false, fields: ['title', 'columns'] },
+  { id: 'comparison',    label: 'השוואה',         hasImage: false, fields: ['title', 'columns'] },
+  { id: 'stat',          label: 'מספרים / נתונים', hasImage: false, fields: ['title', 'stats'] },
+  { id: 'steps',         label: 'שלבים / תהליך',  hasImage: false, fields: ['title', 'steps'] },
+  { id: 'big-statement', label: 'משפט מפתח',      hasImage: false, fields: ['body', 'subtitle'] },
   { id: 'quote',         label: 'ציטוט',          hasImage: false, fields: ['body', 'subtitle'] },
   { id: 'closing',       label: 'סיכום / סיום',   hasImage: true,  fields: ['title', 'bullets'] },
 ];
@@ -43,13 +47,17 @@ export const createSlide = (overrides = {}) => ({
   subtitle: '',
   bullets: [],            // string[]
   body: '',               // טקסט חופשי (ציטוט / פסקה)
-  columns: [              // לפריסת two-column: [{ heading, bullets[] }, ...]
+  columns: [              // לפריסת two-column/comparison: [{ heading, bullets[] }, ...]
     { heading: '', bullets: [] },
     { heading: '', bullets: [] },
   ],
+  stats: [],              // לפריסת stat: [{ value, label, caption }]
+  steps: [],              // לפריסת steps: [{ title, body }]
   image: null,            // { source:'stock'|'ai'|'upload', url, dataUrl, query, alt, attribution }
   notes: '',              // הערות מרצה
   accent: '',             // override צבע אקסנט (אופציונלי)
+  bgVariant: '',          // '' / 'auto' = רוטציה אוטומטית | id מתוך BG_VARIANTS
+  exportMode: '',         // '' = אוטומטי לפי הפריסה | 'image' | 'native'
   ...overrides,
 });
 
@@ -101,6 +109,21 @@ export const normalizeSlide = (raw = {}) => {
     }));
   }
 
+  const stats = Array.isArray(raw.stats)
+    ? raw.stats.slice(0, 4).map((s) => ({
+        value: String(s?.value == null ? '' : s.value).trim(),
+        label: String(s?.label || '').trim(),
+        caption: String(s?.caption || '').trim(),
+      })).filter((s) => s.value || s.label)
+    : [];
+
+  const steps = Array.isArray(raw.steps)
+    ? raw.steps.slice(0, 6).map((s) => ({
+        title: String(s?.title || '').trim(),
+        body: String(s?.body || '').trim(),
+      })).filter((s) => s.title || s.body)
+    : [];
+
   return {
     ...base,
     id: String(raw.id || base.id),
@@ -110,11 +133,62 @@ export const normalizeSlide = (raw = {}) => {
     bullets: toStringArray(raw.bullets),
     body: String(raw.body || '').trim(),
     columns,
+    stats,
+    steps,
     image: normalizeImage(raw.image),
     notes: String(raw.notes || '').trim(),
     accent: String(raw.accent || '').trim(),
+    bgVariant: BG_VARIANT_IDS.includes(raw.bgVariant) ? raw.bgVariant : '',
+    exportMode: ['image', 'native'].includes(raw.exportMode) ? raw.exportMode : '',
   };
 };
+
+// ── ספריית רקעי-שקף (variants) ───────────────────────────────────
+// כל variant הוא טיפול רקע בצבעי ה-theme. רוטציה אוטומטית נותנת נוכחות
+// שונה לכל שקף בלי שניים רצופים זהים. ה-render עצמו ב-slideBackgrounds.jsx.
+export const BG_VARIANTS = [
+  { id: 'auto', label: 'אוטומטי' },
+  { id: 'none', label: 'נקי' },
+  { id: 'mesh', label: 'ערפל' },
+  { id: 'glowTR', label: 'זוהר עליון' },
+  { id: 'glowBL', label: 'זוהר תחתון' },
+  { id: 'shapes', label: 'עיגולים' },
+  { id: 'grid', label: 'רשת נקודות' },
+  { id: 'band', label: 'רצועה' },
+  { id: 'arcTR', label: 'קשת ימין' },
+  { id: 'arcBL', label: 'קשת שמאל' },
+  { id: 'diagonal', label: 'אלכסון' },
+  { id: 'ring', label: 'טבעת' },
+  { id: 'stripes', label: 'פסים' },
+  { id: 'dotsCorner', label: 'אשכול נקודות' },
+];
+export const BG_VARIANT_IDS = BG_VARIANTS.map((v) => v.id);
+
+// רצף הרוטציה האוטומטית (אינדקס שקף → variant). אין שניים רצופים זהים.
+const AUTO_BG_SEQUENCE = ['mesh', 'arcTR', 'shapes', 'band', 'glowBL', 'grid', 'diagonal', 'ring', 'glowTR', 'stripes', 'dotsCorner'];
+// פריסות עם טיפול רקע חזק משלהן — לא מוסיפים variant.
+const OWN_BG_LAYOUTS = new Set(['cover', 'section', 'image-full']);
+
+export const resolveBgVariant = (slide, index = 0) => {
+  const v = slide?.bgVariant;
+  if (v && v !== 'auto' && BG_VARIANT_IDS.includes(v)) return v;
+  if (OWN_BG_LAYOUTS.has(slide?.layout)) return 'none';
+  const i = Number.isFinite(index) ? index : 0;
+  return AUTO_BG_SEQUENCE[((i % AUTO_BG_SEQUENCE.length) + AUTO_BG_SEQUENCE.length) % AUTO_BG_SEQUENCE.length];
+};
+
+// ── מסלול ייצוא (hybrid) ─────────────────────────────────────────
+// פריסות שמרונדרות כתמונה (חופש עיצוב מלא, פונט+bidi נצרבים נכון).
+// השאר נשאר native-editable כדי שהטקסט/בולטים יישארו עריכים ב-PowerPoint.
+export const IMAGE_EXPORT_LAYOUTS = new Set([
+  'cover', 'section', 'quote', 'image-full', 'closing',
+  'big-statement', 'stat', 'steps', 'comparison',
+]);
+
+export const getSlideExportMode = (slide) =>
+  (slide?.exportMode === 'image' || slide?.exportMode === 'native')
+    ? slide.exportMode
+    : (IMAGE_EXPORT_LAYOUTS.has(slide?.layout) ? 'image' : 'native');
 
 // ── נורמליזציה של דק שלם ─────────────────────────────────────────
 export const normalizeDeck = (raw = {}) => {

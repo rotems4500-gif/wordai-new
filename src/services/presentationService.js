@@ -32,14 +32,21 @@ const SLIDE_SHAPE = `{
   "title": "כותרת השקופית",
   "subtitle": "כותרת משנה קצרה (אופציונלי)",
   "bullets": ["נקודה קצרה", "נקודה קצרה"],
-  "body": "טקסט חופשי — רק לפריסת quote",
+  "body": "טקסט חופשי — לפריסות quote / big-statement",
   "columns": [{"heading":"...","bullets":["..."]}],
+  "stats": [{"value":"87%","label":"תיאור קצר","caption":"הקשר (אופציונלי)"}],
+  "steps": [{"title":"שם השלב","body":"תיאור קצר (אופציונלי)"}],
   "image": { "query": "תיאור באנגלית לחיפוש/יצירת תמונה", "alt": "תיאור בעברית" },
   "notes": "הערות מרצה קצרות (אופציונלי)"
 }`;
 
 const SLIDE_CONTENT_RULES = (imageIntensity) => [
-  '- השתמש במגוון פריסות (image-right/image-left/two-column/title-bullets) לפי התוכן.',
+  '- גוון פריסות לפי סוג התוכן — אל תשתמש ב-title-bullets לכל שקף. המר תוכן למבנה ויזואלי:',
+  '  • stat — כשיש מספרים/אחוזים/מדדים בולטים (שדה "stats", 1-4 פריטים). value קצר וחד.',
+  '  • steps — לתהליך/שלבים/שיטה (שדה "steps", 3-5 שלבים).',
+  '  • comparison — להשוואת שתי גישות/אפשרויות (שדה "columns", בדיוק 2 עמודות).',
+  '  • big-statement — למסר/תובנה מרכזית אחת (שדה "body", משפט אחד חד). בלי בולטים.',
+  '  • two-column — לחלוקה לשני נושאים מקבילים. quote — לציטוט.',
   '- שדה "image" רק בפריסות שתומכות בתמונה (cover, image-right, image-left, image-full, closing). ה-query באנגלית, קונקרטי ונקי.',
   `- ${imageRule(imageIntensity)}`,
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',

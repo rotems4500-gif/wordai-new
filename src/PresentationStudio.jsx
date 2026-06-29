@@ -4,12 +4,12 @@
 // מקור האמת הוא אובייקט ה-deck (deckModel). אין HTML, אין TipTap.
 // ═══════════════════════════════════════════════════════════════
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SlideFrame } from './presentation/SlideRenderer';
 import PresentMode from './presentation/PresentMode';
 import { DECK_THEMES } from './presentation/deckThemes';
 import {
-  SLIDE_LAYOUTS, getLayout, layoutHasImage,
+  SLIDE_LAYOUTS, getLayout, layoutHasImage, getSlideExportMode, BG_VARIANTS,
   createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide,
 } from './presentation/deckModel';
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
@@ -303,6 +303,14 @@ function Inspector({ slide, onChange, onOpenImagePicker }) {
   const addBullet = () => setField('bullets', [...slide.bullets, '']);
   const removeBullet = (i) => setField('bullets', slide.bullets.filter((_, idx) => idx !== i));
 
+  const setStat = (i, patch) => setField('stats', (slide.stats || []).map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const addStat = () => setField('stats', [...(slide.stats || []), { value: '', label: '', caption: '' }]);
+  const removeStat = (i) => setField('stats', (slide.stats || []).filter((_, idx) => idx !== i));
+
+  const setStep = (i, patch) => setField('steps', (slide.steps || []).map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const addStep = () => setField('steps', [...(slide.steps || []), { title: '', body: '' }]);
+  const removeStep = (i) => setField('steps', (slide.steps || []).filter((_, idx) => idx !== i));
+
   const fields = layoutDef.fields;
 
   return (
@@ -312,6 +320,22 @@ function Inspector({ slide, onChange, onOpenImagePicker }) {
           {SLIDE_LAYOUTS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
         </select>
       </label>
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold text-slate-400">עיצוב רקע</span>
+        <div className="grid grid-cols-3 gap-1.5">
+          {BG_VARIANTS.map((v) => {
+            const cur = slide.bgVariant || 'auto';
+            return (
+              <button
+                key={v.id}
+                onClick={() => setField('bgVariant', v.id === 'auto' ? '' : v.id)}
+                className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition ${cur === v.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-500'}`}
+              >{v.label}</button>
+            );
+          })}
+        </div>
+      </div>
 
       {(fields.includes('title')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת</span>
@@ -351,6 +375,40 @@ function Inspector({ slide, onChange, onOpenImagePicker }) {
         </div>
       )}
 
+      {(fields.includes('stats')) && (
+        <div className="flex flex-col gap-3">
+          <span className="text-xs font-bold text-slate-400">מספרים</span>
+          {(slide.stats || []).map((st, si) => (
+            <div key={si} className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
+              <div className="mb-2 flex gap-1.5">
+                <input value={st.value} placeholder="87%" onChange={(e) => setStat(si, { value: e.target.value })} className="w-24 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm font-bold text-slate-100 outline-none focus:border-cyan-400" />
+                <input value={st.label} placeholder="תווית" onChange={(e) => setStat(si, { label: e.target.value })} className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+                <button onClick={() => removeStat(si)} className="rounded-lg px-2 text-slate-500 hover:text-rose-400">✕</button>
+              </div>
+              <input value={st.caption} placeholder="הסבר קצר (אופציונלי)" onChange={(e) => setStat(si, { caption: e.target.value })} className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-400" />
+            </div>
+          ))}
+          {(slide.stats || []).length < 4 && <button onClick={addStat} className="self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-cyan-400">+ מספר</button>}
+        </div>
+      )}
+
+      {(fields.includes('steps')) && (
+        <div className="flex flex-col gap-3">
+          <span className="text-xs font-bold text-slate-400">שלבים</span>
+          {(slide.steps || []).map((st, si) => (
+            <div key={si} className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
+              <div className="mb-2 flex gap-1.5">
+                <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-cyan-500/20 text-xs font-bold text-cyan-300">{si + 1}</span>
+                <input value={st.title} placeholder="כותרת השלב" onChange={(e) => setStep(si, { title: e.target.value })} className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+                <button onClick={() => removeStep(si)} className="rounded-lg px-2 text-slate-500 hover:text-rose-400">✕</button>
+              </div>
+              <textarea value={st.body} placeholder="תיאור קצר (אופציונלי)" onChange={(e) => setStep(si, { body: e.target.value })} className="min-h-[50px] w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400" />
+            </div>
+          ))}
+          {(slide.steps || []).length < 6 && <button onClick={addStep} className="self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-cyan-400">+ שלב</button>}
+        </div>
+      )}
+
       {layoutHasImage(slide.layout) && (
         <div className="flex flex-col gap-2">
           <span className="text-xs font-bold text-slate-400">תמונה</span>
@@ -363,6 +421,16 @@ function Inspector({ slide, onChange, onOpenImagePicker }) {
           <button onClick={onOpenImagePicker} className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-cyan-400">{slide.image ? 'החלף תמונה' : '+ הוסף תמונה'}</button>
         </div>
       )}
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold text-slate-400">מצב ייצוא ל-PPTX</span>
+        <select value={slide.exportMode || ''} onChange={(e) => setField('exportMode', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400">
+          <option value="">אוטומטי ({getSlideExportMode({ ...slide, exportMode: '' }) === 'image' ? 'תמונה' : 'עריך'})</option>
+          <option value="image">תמונה — עיצוב מלא</option>
+          <option value="native">עריך — טקסט ב-PowerPoint</option>
+        </select>
+        <span className="text-[11px] leading-5 text-slate-500">תמונה = נאמנות עיצוב מלאה אך לא ניתן לערוך ב-PowerPoint. עריך = טקסט/בולטים נשארים עריכים.</span>
+      </label>
 
       <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">הערות מרצה</span>
         <textarea value={slide.notes} onChange={(e) => setField('notes', e.target.value)} className="min-h-[60px] rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400" /></label>
@@ -386,10 +454,39 @@ export default function PresentationStudio({
   const [presenting, setPresenting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const slides = deck?.slides || [];
   const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
   const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
+  const selectedThumbRef = useRef(null);
+
+  // ניווט שקופיות בחיצים (כל עוד לא מקלידים בשדה). RTL: ימינה=הקודם, שמאלה=הבא.
+  useEffect(() => {
+    if (!deck) return undefined;
+    const onKey = (e) => {
+      if (presenting || pickerOpen || exportOpen) return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      const t = e.target;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+      const list = deck.slides || [];
+      const idx = list.findIndex((s) => s.id === selectedId);
+      let next = null;
+      if (['ArrowDown', 'PageDown', 'ArrowLeft'].includes(e.key)) next = Math.min(list.length - 1, idx + 1);
+      else if (['ArrowUp', 'PageUp', 'ArrowRight'].includes(e.key)) next = Math.max(0, idx - 1);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = list.length - 1;
+      if (next != null && next !== idx && list[next]) { e.preventDefault(); setSelectedId(list[next].id); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deck, presenting, pickerOpen, exportOpen, selectedId]);
+
+  // החזקת השקופית הנבחרת בתוך התצוגה בעת ניווט
+  useEffect(() => {
+    selectedThumbRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId]);
 
   // אם אין deck — טופס יצירה
   if (!deck) {
@@ -427,22 +524,31 @@ export default function PresentationStudio({
   };
   const handleMove = (dir) => onDeckChange(moveSlide(deck, selected.id, dir));
 
-  const handleExport = async () => {
+  const handleExport = async (profile = 'auto') => {
+    setExportOpen(false);
     setExporting(true);
     try {
-      const base64 = await buildPptxBase64(deck);
+      const base64 = await buildPptxBase64(deck, { profile });
       if (window.desktopApp?.saveDocumentDialog) {
         const res = await window.desktopApp.saveDocumentDialog({ title: deck.title || 'presentation', preferredExtension: 'pptx', base64 });
         if (res?.ok) showToast('המצגת נשמרה כ-PPTX ✓', { tone: 'success' });
         else if (!res?.canceled) showToast(res?.error || 'שמירה נכשלה', { tone: 'error' });
       } else {
-        // דפדפן: הורדה ישירה
-        const blob = await (await fetch(`data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,${base64}`)).blob();
+        // דפדפן: הורדה ישירה. מפענחים base64→Blob ישירות (fetch על data-URL
+        // ענק נכשל ב"Failed to fetch" כשהמצגת כבדה עם תמונות מוטמעות).
+        const byteChars = atob(base64);
+        const bytes = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i += 1) bytes[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        a.href = url;
         a.download = `${deck.title || 'presentation'}.pptx`;
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(a.href);
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        showToast('המצגת ירדה ✓', { tone: 'success' });
       }
     } catch (e) {
       showToast(e?.message || 'ייצוא נכשל', { tone: 'error' });
@@ -460,7 +566,28 @@ export default function PresentationStudio({
         <div className="flex-1" />
         <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
-        <button onClick={handleExport} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX'}</button>
+        <div className="relative">
+          <button onClick={() => setExportOpen((v) => !v)} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX ▾'}</button>
+          {exportOpen && !exporting && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setExportOpen(false)} />
+              <div className="absolute left-0 z-50 mt-1 w-64 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl">
+                <button onClick={() => handleExport('auto')} className="w-full rounded-lg px-3 py-2 text-right text-xs hover:bg-slate-800">
+                  <div className="font-bold text-white">מומלץ (מעורב)</div>
+                  <div className="mt-0.5 text-[11px] leading-4 text-slate-400">שקפי עיצוב כתמונה, שקפי טקסט עריכים — לפי ההגדרה של כל שקף.</div>
+                </button>
+                <button onClick={() => handleExport('editable')} className="w-full rounded-lg px-3 py-2 text-right text-xs hover:bg-slate-800">
+                  <div className="font-bold text-white">עריך (הכל)</div>
+                  <div className="mt-0.5 text-[11px] leading-4 text-slate-400">כל השקפים טקסט/צורות עריכים ב-PowerPoint. עיצוב פשוט יותר.</div>
+                </button>
+                <button onClick={() => handleExport('faithful')} className="w-full rounded-lg px-3 py-2 text-right text-xs hover:bg-slate-800">
+                  <div className="font-bold text-white">נאמן-עיצוב (הכל)</div>
+                  <div className="mt-0.5 text-[11px] leading-4 text-slate-400">כל השקפים כתמונה — נראים בדיוק כמו בעורך. לא ניתן לערוך טקסט.</div>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
       </div>
 
@@ -468,9 +595,9 @@ export default function PresentationStudio({
         {/* ניווט שקופיות */}
         <div className="flex w-52 flex-col gap-2 overflow-auto border-l border-slate-800 bg-slate-900/50 p-3">
           {slides.map((s, i) => (
-            <button key={s.id} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
+            <button key={s.id} ref={s.id === selected.id ? selectedThumbRef : null} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
               <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-              <SlideFrame slide={s} themeId={deck.themeId} shadow={false} />
+              <SlideFrame slide={s} themeId={deck.themeId} index={i} shadow={false} />
             </button>
           ))}
           <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
@@ -479,7 +606,7 @@ export default function PresentationStudio({
         {/* תצוגה מרכזית */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
           <div className="w-full max-w-3xl">
-            {selected && <SlideFrame slide={selected} themeId={deck.themeId} />}
+            {selected && <SlideFrame slide={selected} themeId={deck.themeId} index={selectedIndex} />}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
