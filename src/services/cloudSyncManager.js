@@ -3,9 +3,37 @@ import {
   getProviderConfig,
   saveProviderConfig,
 } from "./aiService";
-import { fetchSettingsFromCloud, syncSettingsToCloud } from "../firebase/services";
+import { fetchSettingsFromCloud, syncSettingsToCloud, fetchCloudCryptoMeta } from "../firebase/services";
+import {
+  isUnlocked,
+  encryptSecrets,
+  decryptSecrets,
+  hasEncryptedSecrets,
+} from "./cloudCryptoSession";
 
 const CLOUD_PROFILE_SCHEMA_VERSION = 2;
+
+// ---- E2EE flag ----
+// כבוי כברירת מחדל. מודלק רק אחרי שהמשתמש מגדיר passphrase (setCloudCryptoEnabled(true)).
+// כשכבוי — אפס שינוי בהתנהגות הקיימת: providerConfig עולה/יורד גלוי כמו היום.
+const CLOUD_CRYPTO_FLAG_KEY = "wordai_cloud_crypto_enabled";
+
+export function isCloudCryptoEnabled() {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(CLOUD_CRYPTO_FLAG_KEY) === "1";
+}
+
+export function setCloudCryptoEnabled(enabled) {
+  if (typeof window === "undefined") return;
+  if (enabled) localStorage.setItem(CLOUD_CRYPTO_FLAG_KEY, "1");
+  else localStorage.removeItem(CLOUD_CRYPTO_FLAG_KEY);
+}
+
+// אירוע ל-UI: נמשכו מהענן מפתחות מוצפנים אבל ה-session נעול → צריך passphrase.
+function emitNeedsPassphrase() {
+  if (typeof window === "undefined" || typeof CustomEvent === "undefined") return;
+  window.dispatchEvent(new CustomEvent("wordai-cloud-crypto-locked"));
+}
 const CLOUD_PROFILE_SYNC_META_KEY = "wordai_cloud_profile_sync_meta";
 const CLOUD_PROFILE_SYNC_DEBOUNCE_MS = 2000;
 const CLOUD_PROFILE_APP_SETTING_KEYS = [
@@ -210,15 +238,34 @@ export async function pullFromCloud(user, { force = false } = {}) {
   if (!user) return { ok: false, error: "לא מחובר לחשבון." };
   try {
     const cloudSettings = await fetchSettingsFromCloud(user);
-    const cloudProfile = normalizeCloudProfile(cloudSettings);
+    let cloudProfile = normalizeCloudProfile(cloudSettings);
     if (!cloudProfileHasData(cloudProfile)) {
       return { ok: true, applied: false, reason: "אין נתונים בענן לחשבון הזה." };
     }
+
+    // פענוח providerConfig אם הוא מוצפן. נעול / מפתח שגוי → משמיטים את providerConfig
+    // (שאר ההגדרות עדיין מוחלות) ומסמנים שצריך passphrase.
+    let needsPassphrase = false;
+    if (cloudProfile?.providerConfig && hasEncryptedSecrets(cloudProfile.providerConfig)) {
+      if (isUnlocked()) {
+        try {
+          cloudProfile = { ...cloudProfile, providerConfig: await decryptSecrets(cloudProfile.providerConfig) };
+        } catch {
+          cloudProfile = { ...cloudProfile, providerConfig: null };
+          needsPassphrase = true;
+        }
+      } else {
+        cloudProfile = { ...cloudProfile, providerConfig: null };
+        needsPassphrase = true;
+      }
+    }
+    if (needsPassphrase) emitNeedsPassphrase();
+
     if (force || shouldApplyCloudProfile(cloudProfile)) {
       const applied = applyCloudProfile(cloudProfile);
-      return { ok: true, applied, hadProviderConfig: Boolean(cloudProfile.providerConfig && Object.keys(cloudProfile.providerConfig || {}).length) };
+      return { ok: true, applied, needsPassphrase, hadProviderConfig: Boolean(cloudProfile.providerConfig && Object.keys(cloudProfile.providerConfig || {}).length) };
     }
-    return { ok: true, applied: false, reason: "הנתונים המקומיים חדשים יותר." };
+    return { ok: true, applied: false, needsPassphrase, reason: "הנתונים המקומיים חדשים יותר." };
   } catch (e) {
     console.error("pullFromCloud failed:", e);
     return { ok: false, error: e?.message || String(e) };
@@ -227,10 +274,34 @@ export async function pullFromCloud(user, { force = false } = {}) {
 
 export async function handleCloudAuthSuccess(user) {
   if (!user) return;
+  // קודם כל: אם לחשבון יש הצפנה פעילה (קיים bundle בענן) — להדליק את ה-flag במכשיר
+  // הזה *לפני* כל סנכרון, כדי שלא ייווצר חלון שבו מכשיר נעול מעלה גלוי ודורס מוצפן.
+  try {
+    const bundle = await fetchCloudCryptoMeta(user);
+    setCloudCryptoEnabled(Boolean(bundle));
+  } catch { /* בכישלון רשת לא נוגעים ב-flag */ }
+
   // מכשיר חדש (מעולם לא הוחל ענן כאן) → משיכה כפויה כדי שמפתחות/הגדרות יחזרו מהענן.
   const meta = readCloudSyncMeta();
   const neverAppliedHere = !Number(meta.lastAppliedCloudUpdatedAt || 0);
   await pullFromCloud(user, { force: neverAppliedHere });
+}
+
+// מכין את ה-payload לעלייה לענן בהתאם למצב ההצפנה:
+//  - הצפנה כבויה → ללא שינוי (גלוי, כמו היום).
+//  - הצפנה דלוקה + פתוח → מצפין את providerConfig לפני העלייה.
+//  - הצפנה דלוקה + נעול → משמיט providerConfig לגמרי (merge:true בענן שומר את
+//    הגרסה המוצפנת הקיימת; לעולם לא דורסים מפתחות מוצפנים בגלויים).
+async function buildUploadPayload(payload) {
+  if (!isCloudCryptoEnabled() || !payload || !payload.providerConfig) return payload;
+
+  if (isUnlocked()) {
+    return { ...payload, providerConfig: await encryptSecrets(payload.providerConfig) };
+  }
+
+  const guarded = { ...payload };
+  delete guarded.providerConfig;
+  return guarded;
 }
 
 export async function triggerCloudSync(user, options = {}) {
@@ -244,10 +315,11 @@ export async function triggerCloudSync(user, options = {}) {
     isSyncingToCloud = true;
     try {
       const payload = getLocalProfilePayload();
+      // חתימת dedup מחושבת על ה-payload הגלוי (ה-ciphertext משתנה בכל הצפנה בגלל IV אקראי).
       const signature = buildPayloadSignature(payload);
       if (!options?.force && signature && signature === lastQueuedSnapshotSignature) return payload;
 
-      await syncSettingsToCloud(user, payload);
+      await syncSettingsToCloud(user, await buildUploadPayload(payload));
       lastQueuedSnapshotSignature = signature;
       writeCloudSyncMeta({
         lastSuccessfulCloudSyncAt: Date.now(),

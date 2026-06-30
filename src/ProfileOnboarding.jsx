@@ -58,6 +58,7 @@ export default function ProfileOnboarding({
   selectLearningOption,
   resetLearningGame,
   onOpenAiSettings = () => {},
+  onOpenSecuritySettings = () => {},
   onOpenPersonalStyle = () => {},
   syllabusImport = {},
   onImportSyllabusFile = () => {},
@@ -1068,6 +1069,14 @@ export default function ProfileOnboarding({
                 <div className="rounded-2xl border border-[#efab4d]/16 bg-white/5 p-4 flex flex-col gap-2">
                   <div className="text-[12.5px] text-[#8f7e69] leading-relaxed">המפתחות נשמרים מוצפנים במכשיר שלך בלבד. אפשר לחבר כמה מנועים ולבחור ברירת מחדל מאוחר יותר.</div>
                   <button type="button" onClick={onOpenAiSettings} className="self-start text-[13px] font-bold text-[#efab4d] border-b border-[#efab4d]/40">הגדרות מנועי AI מתקדמות (מודלים, ברירת מחדל) ↗</button>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.08] p-4 flex flex-col gap-2">
+                  <div className="text-[13.5px] font-bold text-[#dff3e8] flex items-center gap-1.5">🔒 רוצה לסנכרן מפתחות בין מכשירים בבטחה?</div>
+                  <div className="text-[12.5px] text-[#9db8a8] leading-relaxed">
+                    הפעל הצפנת קצה-לקצה — המפתחות יעלו לענן מוצפנים, וניתנים לפענוח רק עם סיסמת הצפנה שאתה בוחר.
+                  </div>
+                  <button type="button" onClick={onOpenSecuritySettings} className="self-start text-[13px] font-bold text-emerald-300 border-b border-emerald-300/40">פתח הגדרות אבטחה והצפנה ↗</button>
                 </div>
               </div>
             )}

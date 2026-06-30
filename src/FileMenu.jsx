@@ -6,6 +6,22 @@ import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { showToast, showConfirm } from './services/uiFeedback';
+import { onCloudAuthChange, saveCloudCryptoMeta, fetchCloudCryptoMeta, deleteCloudCryptoMeta } from './firebase/services';
+import {
+  isCloudCryptoEnabled,
+  setCloudCryptoEnabled,
+  triggerCloudSync,
+  pullFromCloud,
+} from './services/cloudSyncManager';
+import {
+  isUnlocked as isCryptoUnlocked,
+  lockSession as lockCryptoSession,
+  initializePassphrase as initCryptoPassphrase,
+  unlockWithPassphrase as unlockCryptoPassphrase,
+  unlockWithRecoveryCode as unlockCryptoRecovery,
+  changePassphrase as changeCryptoPassphrase,
+  rotateRecoveryCode as rotateCryptoRecovery,
+} from './services/cloudCryptoSession';
 import { APP_VERSION_LABEL } from './appVersion';
 import { getTheme, setTheme as setAppTheme, onThemeChange } from './theme';
 import { DECK_THEMES } from './presentation/deckThemes';
@@ -525,6 +541,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   guide: ['guide', 'help', 'manual', 'docs', 'מדריך', 'עזרה'],
   assistant: ['assistant', 'helper', 'behavior', 'tone', 'assistant behavior', 'עוזר'],
   updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
+  security: ['security', 'encryption', 'encrypt', 'e2ee', 'passphrase', 'password', 'recovery', 'privacy', 'keys', 'api keys', 'cloud encryption', 'אבטחה', 'הצפנה', 'סיסמה', 'סיסמא', 'שחזור', 'פרטיות', 'מפתחות', 'הצפנת ענן'],
   ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'copyleaks', 'detector', 'detection', 'ai detector', 'ספק', 'מודל', 'מפתח', 'זיהוי ai', 'בדיקת ai'],
   media: ['media', 'images', 'image', 'photo', 'stock', 'pexels', 'unsplash', 'imagen', 'gpt-image', 'chart', 'charts', 'graph', 'quickchart', 'תמונות', 'תמונה', 'גרף', 'גרפים', 'תרשים', 'spss', 'ויזואל'],
   sidebar: ['sidebar', 'taskpane', 'chat panel', 'modes', 'provider', 'model', 'חלונית', 'צאט', 'צ׳אט', 'מצבים', 'ספק', 'מודל'],
@@ -559,8 +576,8 @@ const SETTINGS_TAB_GROUPS = [
   },
   {
     title: 'מערכת ועזרה',
-    desc: 'עדכונים, מדריך ותחזוקה',
-    tabs: [['updates', '⬆️ עדכונים'], ['guide', '📘 מדריך'], ['developer', '🛠️ תחזוקה']],
+    desc: 'אבטחה, עדכונים, מדריך ותחזוקה',
+    tabs: [['security', '🔒 אבטחה'], ['updates', '⬆️ עדכונים'], ['guide', '📘 מדריך'], ['developer', '🛠️ תחזוקה']],
   },
 ];
 
@@ -578,6 +595,7 @@ const SETTINGS_TAB_META = {
   presentation: { icon: '📊', title: 'ברירות מחדל למצגות', desc: 'מה ימולא אוטומטית בטופס יצירת מצגת חדשה.' },
   spss: { icon: '📈', title: 'ברירות מחדל ל-SPSS', desc: 'הערכים שחלים בכל כניסה לסטודיו ה-SPSS.' },
   appearance: { icon: '🎨', title: 'מראה', desc: 'ערכת הנושא של ההגדרות וצבעי המסמך.' },
+  security: { icon: '🔒', title: 'אבטחה והצפנה', desc: 'הצפנת קצה-לקצה למפתחות ה-API שלך בענן — סיסמת הצפנה וקוד שחזור.' },
   updates: { icon: '⬆️', title: 'עדכונים', desc: 'גרסה, ערוץ עדכון ובדיקה ידנית.' },
   guide: { icon: '📘', title: 'מדריך', desc: 'הסברים מלאים לכל מה שאפשר לעשות ב-WordAI.' },
   developer: { icon: '🛠️', title: 'תחזוקה וכלים מתקדמים', desc: 'timeout, איפוסים ולוגים — רק אם אתה יודע מה אתה עושה.' },
@@ -3543,7 +3561,7 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   );
 }
 
-function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onDismiss = () => {}, onSubmitExternalAnalysis = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
+function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onOpenSecuritySettings = () => {}, onDismiss = () => {}, onSubmitExternalAnalysis = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
   const persistProfileState = persistProfile || setProfile;
   const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
   const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
@@ -3921,6 +3939,7 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       resetLearningGame={resetLearningGame}
       onOpenAiSettings={onOpenAiSettings}
       onOpenPersonalStyle={onOpenPersonalStyle}
+      onOpenSecuritySettings={onOpenSecuritySettings}
       syllabusImport={syllabusImport}
       onImportSyllabusFile={handleSyllabusImport}
       onComplete={markOnboardingComplete}
@@ -6906,6 +6925,407 @@ function AppearanceSettings() {
   );
 }
 
+// ─── הגדרות אבטחה: הצפנת קצה-לקצה למפתחות בענן ───
+const MIN_PASSPHRASE_LEN = 8;
+
+function RecoveryCodeCard({ code, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1800); }
+    catch { showToast('ההעתקה נכשלה — העתק ידנית.', 'error'); }
+  };
+  return (
+    <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 dark:border-amber-400/40 dark:bg-amber-400/10">
+      <div className="text-[15px] font-extrabold text-amber-900 mb-2 dark:text-amber-200">🗝️ קוד השחזור שלך</div>
+      <p className="text-[13px] text-amber-800 leading-relaxed mb-3 dark:text-amber-100/80">
+        זו הדרך היחידה לשחזר גישה אם תשכח את הסיסמה. שמור אותו במקום בטוח (מנהל סיסמאות / דף מודפס).
+        <b> לא נציג אותו שוב.</b>
+      </p>
+      <div dir="ltr" className="font-mono text-[16px] sm:text-[18px] font-bold tracking-wider text-slate-800 bg-white rounded-xl border border-amber-200 px-4 py-3 text-center select-all break-all dark:bg-[#0f1d2e] dark:text-amber-100 dark:border-amber-400/30">
+        {code}
+      </div>
+      <div className="flex gap-2 mt-3">
+        <button type="button" onClick={copy}
+          className="px-4 py-2 rounded-lg bg-amber-600 text-white text-[13px] font-bold hover:bg-amber-500 transition-colors">
+          {copied ? '✓ הועתק' : 'העתק קוד'}
+        </button>
+        <button type="button" onClick={onClose}
+          className="px-4 py-2 rounded-lg bg-white text-amber-800 border border-amber-300 text-[13px] font-bold hover:bg-amber-100 transition-colors dark:bg-white/5 dark:text-amber-200 dark:border-amber-400/30">
+          שמרתי — סגור
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PassphraseField({ value, onChange, placeholder, autoFocus = false }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        type={show ? 'text' : 'password'} value={value} onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder} autoFocus={autoFocus} dir="ltr"
+        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pe-12 text-[14px] text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 dark:bg-white/5 dark:border-white/12 dark:text-[#f1f6fb]"
+      />
+      <button type="button" onClick={() => setShow((s) => !s)}
+        className="absolute inset-y-0 end-2 my-auto h-7 px-2 text-[11px] font-bold text-slate-400 hover:text-slate-600 dark:text-[#8ba3bd]">
+        {show ? 'הסתר' : 'הצג'}
+      </button>
+    </div>
+  );
+}
+
+function SecuritySettings() {
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [bundle, setBundle] = useState(null);
+  const [loadingMeta, setLoadingMeta] = useState(false);
+  const [unlocked, setUnlocked] = useState(isCryptoUnlocked());
+  const [busy, setBusy] = useState(false);
+  const [revealedRecovery, setRevealedRecovery] = useState(null);
+
+  // טפסים
+  const [setupPass, setSetupPass] = useState('');
+  const [setupPass2, setSetupPass2] = useState('');
+  const [unlockPass, setUnlockPass] = useState('');
+  const [showForgot, setShowForgot] = useState(false);
+  const [recoveryInput, setRecoveryInput] = useState('');
+  const [recoveryVerified, setRecoveryVerified] = useState(false);
+  const [changePass, setChangePass] = useState('');
+  const [changePass2, setChangePass2] = useState('');
+  const [showChange, setShowChange] = useState(false);
+
+  useEffect(() => onCloudAuthChange((u) => { setUser(u || null); setAuthReady(true); }), []);
+
+  // משיכת ה-bundle מהענן כשהמשתמש מתחבר. נוכחות bundle = הצפנה פעילה לחשבון.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) { setBundle(null); return undefined; }
+    setLoadingMeta(true);
+    fetchCloudCryptoMeta(user)
+      .then((b) => {
+        if (cancelled) return;
+        setBundle(b || null);
+        if (b) setCloudCryptoEnabled(true); // מכשיר זה משתתף בהצפנה
+        setUnlocked(isCryptoUnlocked());
+      })
+      .catch(() => { if (!cancelled) setBundle(null); })
+      .finally(() => { if (!cancelled) setLoadingMeta(false); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // אם הסנכרון גילה נתונים מוצפנים ואין מפתח פתוח — לעדכן את ה-UI.
+  useEffect(() => {
+    const onLocked = () => setUnlocked(false);
+    window.addEventListener('wordai-cloud-crypto-locked', onLocked);
+    return () => window.removeEventListener('wordai-cloud-crypto-locked', onLocked);
+  }, []);
+
+  const validatePair = (a, b) => {
+    if (a.length < MIN_PASSPHRASE_LEN) { showToast(`הסיסמה חייבת באורך ${MIN_PASSPHRASE_LEN} תווים לפחות.`, 'error'); return false; }
+    if (a !== b) { showToast('הסיסמאות לא תואמות.', 'error'); return false; }
+    return true;
+  };
+
+  const handleEnable = async () => {
+    if (!validatePair(setupPass, setupPass2)) return;
+    setBusy(true);
+    try {
+      const { bundle: b, recoveryCode } = await initCryptoPassphrase(setupPass);
+      await saveCloudCryptoMeta(user, b);
+      setCloudCryptoEnabled(true);
+      setBundle(b); setUnlocked(true); setRevealedRecovery(recoveryCode);
+      setSetupPass(''); setSetupPass2('');
+      // מיגרציה: סנכרון כפוי שמצפין את המפתחות שכבר בענן.
+      await triggerCloudSync(user, { immediate: true, force: true });
+      showToast('הצפנת ענן הופעלה.', 'success');
+    } catch (e) {
+      showToast('שגיאה בהפעלת ההצפנה: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleUnlock = async () => {
+    setBusy(true);
+    try {
+      const ok = await unlockCryptoPassphrase(unlockPass, bundle);
+      if (!ok) { showToast('סיסמה שגויה.', 'error'); return; }
+      setUnlocked(true); setUnlockPass('');
+      await pullFromCloud(user, { force: true }); // פענוח והחלת המפתחות מהענן
+      showToast('נפתח. המפתחות נטענו מהענן.', 'success');
+    } catch (e) {
+      showToast('שגיאה בפתיחה: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleRecoveryVerify = async () => {
+    setBusy(true);
+    try {
+      const ok = await unlockCryptoRecovery(recoveryInput, bundle);
+      if (!ok) { showToast('קוד שחזור שגוי.', 'error'); return; }
+      setUnlocked(true); setRecoveryVerified(true);
+      await pullFromCloud(user, { force: true });
+      showToast('הקוד אומת. כעת קבע סיסמה חדשה.', 'success');
+    } catch (e) {
+      showToast('שגיאה בשחזור: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleRecoverySetNewPass = async () => {
+    if (!validatePair(changePass, changePass2)) return;
+    setBusy(true);
+    try {
+      const b2 = await changeCryptoPassphrase(bundle, changePass);
+      await saveCloudCryptoMeta(user, b2);
+      setBundle(b2);
+      setShowForgot(false); setRecoveryVerified(false); setRecoveryInput('');
+      setChangePass(''); setChangePass2('');
+      showToast('סיסמה חדשה נקבעה.', 'success');
+    } catch (e) {
+      showToast('שגיאה בקביעת סיסמה: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleChangePassphrase = async () => {
+    if (!validatePair(changePass, changePass2)) return;
+    setBusy(true);
+    try {
+      const b2 = await changeCryptoPassphrase(bundle, changePass);
+      await saveCloudCryptoMeta(user, b2);
+      setBundle(b2); setShowChange(false); setChangePass(''); setChangePass2('');
+      showToast('הסיסמה עודכנה.', 'success');
+    } catch (e) {
+      showToast('שגיאה בעדכון הסיסמה: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleRotateRecovery = async () => {
+    const confirmed = await showConfirm('ליצור קוד שחזור חדש? הקוד הישן יפסיק לעבוד.', { title: 'קוד שחזור חדש', confirmLabel: 'צור חדש' });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      const { bundle: b2, recoveryCode } = await rotateCryptoRecovery(bundle);
+      await saveCloudCryptoMeta(user, b2);
+      setBundle(b2); setRevealedRecovery(recoveryCode);
+    } catch (e) {
+      showToast('שגיאה ביצירת קוד: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleDisable = async () => {
+    const confirmed = await showConfirm(
+      'להשבית הצפנת ענן? מפתחות ה-API יחזרו להישמר בענן ללא הצפנה (גלויים בקונסולת Firebase). המפתחות במכשיר הזה לא נמחקים.',
+      { title: 'השבת הצפנת ענן', confirmLabel: 'השבת', tone: 'danger' },
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await deleteCloudCryptoMeta(user);
+      setCloudCryptoEnabled(false);
+      lockCryptoSession();
+      setBundle(null); setUnlocked(false);
+      await triggerCloudSync(user, { immediate: true, force: true }); // העלאת גלוי במקום המוצפן
+      showToast('הצפנת ענן הושבתה.', 'info');
+    } catch (e) {
+      showToast('שגיאה בהשבתה: ' + (e?.message || e), 'error');
+    } finally { setBusy(false); }
+  };
+
+  const card = 'rounded-2xl border border-slate-200 bg-white p-5 dark:border-white/12 dark:bg-white/5';
+  const primaryBtn = 'px-5 py-2.5 rounded-xl bg-[var(--wf-accent)] text-[var(--wf-accent-text)] text-[13px] font-extrabold hover:brightness-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed';
+  const ghostBtn = 'px-4 py-2.5 rounded-xl bg-slate-50 text-slate-600 border border-slate-200 text-[13px] font-bold hover:bg-slate-100 transition-colors disabled:opacity-50 dark:bg-white/5 dark:text-[#cfe0ef] dark:border-white/12';
+  const label = 'block text-[12px] font-bold text-slate-500 mb-1.5 dark:text-[#8ba3bd]';
+
+  // הסבר קבוע בראש
+  const intro = (
+    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 mb-5 dark:bg-white/5 dark:border-white/10">
+      <p className="text-[13px] text-slate-600 leading-relaxed dark:text-[#cfe0ef]">
+        הצפנת קצה-לקצה מגנה על מפתחות ה-API שלך כשהם מסתנכרנים לענן: הם נשמרים מעורבבים,
+        וניתנים לפענוח רק עם סיסמת ההצפנה שלך. <b>הסיסמה לא נשמרת בשום מקום</b> — גם לא אצלנו.
+        במכשיר חדש תתבקש להקליד אותה פעם אחת.
+      </p>
+    </div>
+  );
+
+  if (!authReady) return <div className="text-[14px] text-slate-500 dark:text-[#8ba3bd]">טוען…</div>;
+
+  if (!user) {
+    return (
+      <div>
+        {intro}
+        <div className={card}>
+          <div className="text-[15px] font-extrabold text-slate-800 mb-2 dark:text-[#f1f6fb]">🔌 צריך חיבור לענן</div>
+          <p className="text-[13px] text-slate-500 leading-relaxed dark:text-[#8ba3bd]">
+            התחבר לחשבון הענן (דרך תפריט המשתמש בראש המסך) כדי להפעיל הצפנה ולסנכרן מפתחות בין מכשירים.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadingMeta) return <div className="text-[14px] text-slate-500 dark:text-[#8ba3bd]">בודק מצב הצפנה…</div>;
+
+  // קוד שחזור מוצג (אחרי הפעלה/יצירה מחדש) — חוסם עד אישור
+  if (revealedRecovery) {
+    return (
+      <div>
+        {intro}
+        <RecoveryCodeCard code={revealedRecovery} onClose={() => setRevealedRecovery(null)} />
+      </div>
+    );
+  }
+
+  // לא הופעל עדיין
+  if (!bundle) {
+    return (
+      <div>
+        {intro}
+        <div className={card}>
+          <div className="text-[15px] font-extrabold text-slate-800 mb-1 dark:text-[#f1f6fb]">הפעלת הצפנת ענן</div>
+          <p className="text-[13px] text-slate-500 leading-relaxed mb-4 dark:text-[#8ba3bd]">
+            בחר סיסמת הצפנה. תקבל קוד שחזור לשמירה. ⚠️ אם תשכח את שניהם — המפתחות בענן יאבדו ותצטרך להזין אותם מחדש.
+          </p>
+          <div className="grid gap-3 max-w-md">
+            <div>
+              <label className={label}>סיסמת הצפנה (לפחות {MIN_PASSPHRASE_LEN} תווים)</label>
+              <PassphraseField value={setupPass} onChange={setSetupPass} placeholder="סיסמה" />
+            </div>
+            <div>
+              <label className={label}>אימות סיסמה</label>
+              <PassphraseField value={setupPass2} onChange={setSetupPass2} placeholder="שוב" />
+            </div>
+            <div>
+              <button type="button" onClick={handleEnable} disabled={busy} className={primaryBtn}>
+                {busy ? 'מפעיל…' : '🔒 הפעל הצפנה'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // הופעל אבל נעול
+  if (!unlocked) {
+    return (
+      <div>
+        {intro}
+        <div className={card}>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[15px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">🔐 נעול</span>
+            <span className="text-[11px] font-bold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 dark:bg-amber-400/15 dark:text-amber-200">הצפנה פעילה</span>
+          </div>
+          <p className="text-[13px] text-slate-500 leading-relaxed mb-4 dark:text-[#8ba3bd]">
+            הקלד את סיסמת ההצפנה כדי לטעון את המפתחות מהענן למכשיר הזה.
+          </p>
+
+          {!showForgot && (
+            <div className="grid gap-3 max-w-md">
+              <PassphraseField value={unlockPass} onChange={setUnlockPass} placeholder="סיסמת הצפנה" autoFocus />
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={handleUnlock} disabled={busy || !unlockPass} className={primaryBtn}>
+                  {busy ? 'פותח…' : 'פתח'}
+                </button>
+                <button type="button" onClick={() => setShowForgot(true)} className="text-[12px] font-bold text-indigo-600 hover:underline dark:text-[#2dd4bf]">
+                  שכחתי את הסיסמה
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showForgot && !recoveryVerified && (
+            <div className="grid gap-3 max-w-md">
+              <label className={label}>הקלד את קוד השחזור</label>
+              <input value={recoveryInput} onChange={(e) => setRecoveryInput(e.target.value)} dir="ltr"
+                placeholder="XXXXX-XXXXX-…"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 font-mono text-[14px] text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100 dark:bg-white/5 dark:border-white/12 dark:text-[#f1f6fb]" />
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={handleRecoveryVerify} disabled={busy || !recoveryInput} className={primaryBtn}>
+                  {busy ? 'מאמת…' : 'אמת קוד'}
+                </button>
+                <button type="button" onClick={() => { setShowForgot(false); setRecoveryInput(''); }} className="text-[12px] font-bold text-slate-400 hover:underline dark:text-[#8ba3bd]">
+                  חזור
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showForgot && recoveryVerified && (
+            <div className="grid gap-3 max-w-md">
+              <div className="text-[13px] font-bold text-emerald-700 dark:text-emerald-300">✓ הקוד אומת. קבע סיסמה חדשה:</div>
+              <div>
+                <label className={label}>סיסמה חדשה (לפחות {MIN_PASSPHRASE_LEN} תווים)</label>
+                <PassphraseField value={changePass} onChange={setChangePass} placeholder="סיסמה חדשה" />
+              </div>
+              <div>
+                <label className={label}>אימות</label>
+                <PassphraseField value={changePass2} onChange={setChangePass2} placeholder="שוב" />
+              </div>
+              <button type="button" onClick={handleRecoverySetNewPass} disabled={busy} className={primaryBtn}>
+                {busy ? 'שומר…' : 'קבע סיסמה חדשה'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // הופעל ופתוח
+  return (
+    <div className="flex flex-col gap-5">
+      {intro}
+      <div className={card}>
+        <div className="flex items-center gap-2">
+          <span className="text-[15px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">🔓 פעיל ופתוח</span>
+          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 rounded-full px-2 py-0.5 dark:bg-emerald-400/15 dark:text-emerald-200">מפתחות מוצפנים בענן</span>
+        </div>
+        <p className="text-[13px] text-slate-500 leading-relaxed mt-2 dark:text-[#8ba3bd]">
+          מפתחות ה-API מוצפנים לפני שהם עולים לענן. הסנכרון בין מכשירים פעיל.
+        </p>
+      </div>
+
+      <div className={card}>
+        <div className="text-[14px] font-extrabold text-slate-800 mb-3 dark:text-[#f1f6fb]">🔑 שינוי סיסמה</div>
+        {!showChange ? (
+          <button type="button" onClick={() => setShowChange(true)} className={ghostBtn}>שנה סיסמת הצפנה</button>
+        ) : (
+          <div className="grid gap-3 max-w-md">
+            <div>
+              <label className={label}>סיסמה חדשה (לפחות {MIN_PASSPHRASE_LEN} תווים)</label>
+              <PassphraseField value={changePass} onChange={setChangePass} placeholder="סיסמה חדשה" />
+            </div>
+            <div>
+              <label className={label}>אימות</label>
+              <PassphraseField value={changePass2} onChange={setChangePass2} placeholder="שוב" />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={handleChangePassphrase} disabled={busy} className={primaryBtn}>{busy ? 'שומר…' : 'עדכן סיסמה'}</button>
+              <button type="button" onClick={() => { setShowChange(false); setChangePass(''); setChangePass2(''); }} className={ghostBtn}>ביטול</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className={card}>
+        <div className="text-[14px] font-extrabold text-slate-800 mb-1 dark:text-[#f1f6fb]">🗝️ קוד שחזור</div>
+        <p className="text-[12px] text-slate-500 mb-3 dark:text-[#8ba3bd]">אם איבדת את קוד השחזור או שאתה חושד שנחשף — צור חדש. הישן יפסיק לעבוד.</p>
+        <button type="button" onClick={handleRotateRecovery} disabled={busy} className={ghostBtn}>צור קוד שחזור חדש</button>
+      </div>
+
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 dark:border-rose-400/30 dark:bg-rose-400/10">
+        <div className="text-[14px] font-extrabold text-rose-800 mb-1 dark:text-rose-200">השבתת הצפנה</div>
+        <p className="text-[12px] text-rose-700 mb-3 leading-relaxed dark:text-rose-200/80">
+          מפתחות ה-API יחזרו להישמר בענן ללא הצפנה. המפתחות במכשיר הזה לא יימחקו.
+        </p>
+        <button type="button" onClick={handleDisable} disabled={busy}
+          className="px-5 py-2.5 rounded-xl bg-rose-600 text-white text-[13px] font-extrabold hover:bg-rose-500 transition-colors disabled:opacity-50">
+          {busy ? 'משבית…' : 'השבת הצפנת ענן'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── FileMenu ראשי ───
 export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsChange, assistantBehavior, onAssistantBehaviorChange, wordPreferences, onWordPreferencesChange, initialSettingsTab = null, updateCheckToken = 0, lastGenerationAction = null, liveGeneration = null }) {
   const normalizeVisibleSettingsTab = (tab = '') => {
@@ -7461,6 +7881,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                    providerConfig={config}
                    onOpenAiSettings={() => setSettingsTab('ai')}
                    onOpenPersonalStyle={() => setSettingsTab('personal')}
+                   onOpenSecuritySettings={() => setSettingsTab('security')}
                    onDismiss={closeSettingsPanel}
                    onSubmitExternalAnalysis={() => runExternalAnalysisProcessing({ source: 'manual' })}
                  />
@@ -7526,6 +7947,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
                       {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                       {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
+                      {settingsTab === 'security'    && <SecuritySettings />}
                       {settingsTab === 'updates'     && (
                         <UpdateSettings
                           checkToken={pendingUpdateCheckToken}

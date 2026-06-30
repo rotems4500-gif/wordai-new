@@ -1,5 +1,5 @@
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
-import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
 import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getFirebaseApp, hasFirebaseConfig } from "./config";
@@ -215,10 +215,65 @@ export async function syncSettingsToCloud(user, settingsPayload) {
 export async function fetchSettingsFromCloud(user) {
     const clients = ensureFirebaseClients();
     if (!clients || !user?.uid) return null;
-    
+
     const docRef = doc(clients.db, "users", user.uid, "settings", "main");
     const snapshot = await getDoc(docRef);
     return snapshot.exists() ? snapshot.data() : null;
+}
+
+// ---- E2EE key bundle ----
+// נשמר במסמך נפרד: users/{uid}/settings/cryptoMeta. מכיל את מעטפות ה-DEK בלבד —
+// לא סודי: ה-salts גלויים בעיצוב, וה-wrapped* הם DEK מוצפן ב-passphrase/recovery code.
+// הסודות עצמם (passphrase, recovery code, DEK) אף פעם לא נשמרים. משמש לפתיחה במכשיר חדש.
+function isStorableBundle(bundle) {
+    return Boolean(
+        bundle
+        && bundle.passSalt
+        && bundle.recoverySalt
+        && bundle.wrappedByPass?.ct && bundle.wrappedByPass?.iv
+        && bundle.wrappedByRecovery?.ct && bundle.wrappedByRecovery?.iv,
+    );
+}
+
+export async function saveCloudCryptoMeta(user, bundle) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    if (!user?.uid) throw new Error("User must be signed in.");
+    if (!isStorableBundle(bundle)) throw new Error("Invalid crypto key bundle.");
+
+    const docRef = doc(clients.db, "users", user.uid, "settings", "cryptoMeta");
+    await setDoc(docRef, {
+        version: Number(bundle.version || 1),
+        passSalt: bundle.passSalt,
+        recoverySalt: bundle.recoverySalt,
+        wrappedByPass: bundle.wrappedByPass,
+        wrappedByRecovery: bundle.wrappedByRecovery,
+        updatedAt: serverTimestamp(),
+    }, { merge: true });
+}
+
+export async function fetchCloudCryptoMeta(user) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return null;
+
+    const snapshot = await getDoc(doc(clients.db, "users", user.uid, "settings", "cryptoMeta"));
+    if (!snapshot.exists()) return null;
+    const data = snapshot.data() || {};
+    if (!isStorableBundle(data)) return null;
+    return {
+        version: Number(data.version || 1),
+        passSalt: data.passSalt,
+        recoverySalt: data.recoverySalt,
+        wrappedByPass: data.wrappedByPass,
+        wrappedByRecovery: data.wrappedByRecovery,
+    };
+}
+
+// מחיקת ה-bundle מהענן = השבתת הצפנה לחשבון. אחרי זה הסנכרון יחזור לגלוי.
+export async function deleteCloudCryptoMeta(user) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return;
+    await deleteDoc(doc(clients.db, "users", user.uid, "settings", "cryptoMeta"));
 }
 
 export async function saveCloudDocument({

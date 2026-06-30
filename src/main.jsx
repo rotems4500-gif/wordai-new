@@ -13,6 +13,8 @@ import CommentsPanel from './CommentsPanel';
 import { removeCommentById } from './extensions/CommentMark';
 import { acceptInsertions, rejectInsertions } from './extensions/TrackChange';
 import FileMenu from './FileMenu';
+import CloudUnlockGate from './CloudUnlockGate';
+import WelcomeGate from './WelcomeGate';
 import MagicWand from './MagicWand';
 import AuthenticityModal from './components/AuthenticityModal';
 import StartScreen from './StartScreen';
@@ -3274,6 +3276,7 @@ function App() {
   });
   const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
+  const [showWelcome, setShowWelcome] = React.useState(false);
   const [assignmentBrief, setAssignmentBrief] = React.useState(() => getPersistedDocumentAssignmentBrief());
   const [assignmentBriefOpen, setAssignmentBriefOpen] = React.useState(false);
   const [assignmentBriefDraft, setAssignmentBriefDraft] = React.useState(() => getPersistedDocumentAssignmentBrief().text || '');
@@ -5333,8 +5336,15 @@ ${sidebarReviewContext}`
     }
 
     if (shouldAutoOpenOnboarding(profile)) {
-      setFileMenuTargetTab('onboarding');
-      setFileMenuOpen(true);
+      // הפעלה ראשונה: אם הענן זמין וטרם הוצג מסך הפתיחה — להציג אותו במקום לפתוח
+      // onboarding ישירות. WelcomeGate מנהל את הסדר (התחברות Google → הצפנה → onboarding).
+      const welcomeSeen = (typeof localStorage !== 'undefined') && localStorage.getItem('wordai_welcome_seen') === '1';
+      if (cloudAvailable && !welcomeSeen) {
+        setShowWelcome(true);
+      } else {
+        setFileMenuTargetTab('onboarding');
+        setFileMenuOpen(true);
+      }
     }
 
     initializedDocRef.current = true;
@@ -8871,6 +8881,24 @@ ${sidebarReviewContext}`
           topic={helpModalTopic}
         />
       )}
+
+      {showWelcome && (
+        <WelcomeGate
+          cloudUser={cloudUser}
+          cloudAvailable={cloudAvailable}
+          onSignIn={handleCloudGoogleSignIn}
+          onFinish={({ openOnboarding } = {}) => {
+            if (typeof localStorage !== 'undefined') localStorage.setItem('wordai_welcome_seen', '1');
+            setShowWelcome(false);
+            if (openOnboarding) {
+              setFileMenuTargetTab('onboarding');
+              setFileMenuOpen(true);
+            }
+          }}
+        />
+      )}
+
+      <CloudUnlockGate user={cloudUser} />
 
       {appMode === 'word' && findReplace.open && editor && (
         <FindReplace
