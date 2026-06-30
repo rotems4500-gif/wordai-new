@@ -33,8 +33,10 @@ npm run desktop:build # tauri build — installer NSIS + exe -> src-tauri/target
 
 - **אתר**: Vite dev על **3001 HTTPS** (cert ב-[vite.config.js](vite.config.js)). build → `firebase deploy`.
 - **דסקטופ (Tauri)**: dev על **1420 HTTP** (WebView2 דוחה self-signed; פורט נפרד מהאתר). config ב-[src-tauri/tauri.conf.json](src-tauri/tauri.conf.json).
-- Release דסקטופ: bump version → build חתום (env `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`) → להעלות installer + `.sig` + `latest.json` ל-GitHub release → auto-update.
-- מפתח חתימת updater: `~/.tauri/wordflow-updater.key` (סודי, לא בריפו). pubkey ב-tauri.conf.json.
+- Release דסקטופ: bump version (package.json **+** tauri.conf.json) → build חתום (env `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD=""`) → לבנות `latest.json` ביד (tauri לא מייצר אותו) → להעלות installer + `latest.json` ל-GitHub release → auto-update.
+- **מפתח חתימת updater: `~/.tauri/wordflow-updater-v2.key`** (passwordless, סודי, לא בריפו). pubkey (id `671C5AB827A204A2`) ב-tauri.conf.json.
+  - ⚠️ קיים גם `~/.tauri/wordflow-updater.key` ישן (v1) — **מת, אל תחתום איתו**. חתימה ב-v1 → ה-build מדפיס `Warn ... secret key does not match the public key` והעדכון יידחה אצל כל המשתמשים. build תקין = **בלי** האזהרה הזו. תמיד `-v2.key`.
+  - `latest.json`: השדה `signature` = **תוכן קובץ ה-`.sig` כמו שהוא** (כבר base64 — decode אחד נותן `untrusted comment...`). לא לקודד שוב. ה-`url` חייב להתאים בדיוק לשם ה-asset שהועלה (קונבנציה: `WordFlow-AI_<ver>_x64-setup.exe` עם מקף).
 
 ---
 
