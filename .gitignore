@@ -64,3 +64,8 @@ src-tauri/gen/schemas/
 # Local Claude Code settings (machine-specific)
 .claude/settings.local.json
 .claude/launch.json
+
+# ארטיפקטים/קבצי-עבודה בשורש: עיצובים מגיעים כ-zip ו-.dc.html, פלוס פתקי-עבודה ad-hoc
+*.zip
+*.dc.html
+תוכנית_עבודה_מצגות.md
