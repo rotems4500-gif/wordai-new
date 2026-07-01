@@ -3,6 +3,7 @@ import { DOMParser as ProseMirrorDOMParser, DOMSerializer } from "@tiptap/pm/mod
 import { AGENTS_CONFIG } from "../agentConfig";
 import { analyzeQuery as analyzeArticleQuery, buildArticleSearchQueryVariants, extractDomainFromUrl as extractArticleDomainFromUrl, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, validateArticleCandidate } from "./articleSourceValidation";
 import { fetchBrowserPageSnapshot, isDesktopBrowserRetrievalAvailable } from "./browserRetrievalService";
+import { bindClaimsToPassages } from "./sourceClaimBinding";
 import { shouldRelayHostViaFunction, relayHttpRequestViaFunction } from "./webProxyService";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService";
@@ -860,6 +861,7 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_spss_preferences',
   'wordai_personal_style',
   'wordai_workspace_automation',
+  'wordai_workspace_v2_templates',
   'wordai_workspaces_library',
   'wordai_shared_agent_instructions',
   'wordai_role_agents',
@@ -1058,6 +1060,45 @@ const normalizeToolLinkEntry = (entry = {}, fallback = {}) => {
 };
 
 let providerConfigCache = null;
+
+// cache אחזור-מקורות ברמת ריצה: ב-pipeline של workspace v2 כל שלב קורא ל-chatWithActiveProvider
+// בנפרד ולכן מאחזר את אותה שאילתה שוב ושוב. כאן ממסכמים תוצאה לפי runId+kind+query כדי לחסוך
+// קריאות API חוזרות. cap קטן עם eviction של הישן ביותר (Map שומר סדר הכנסה).
+const SOURCE_RETRIEVAL_RUN_CACHE = new Map();
+const SOURCE_RETRIEVAL_RUN_CACHE_MAX = 120;
+const getCachedSourceRetrieval = (key) => (key ? SOURCE_RETRIEVAL_RUN_CACHE.get(key) : undefined);
+const setCachedSourceRetrieval = (key, value) => {
+  if (!key) return value;
+  SOURCE_RETRIEVAL_RUN_CACHE.set(key, value);
+  if (SOURCE_RETRIEVAL_RUN_CACHE.size > SOURCE_RETRIEVAL_RUN_CACHE_MAX) {
+    const oldestKey = SOURCE_RETRIEVAL_RUN_CACHE.keys().next().value;
+    if (oldestKey !== undefined) SOURCE_RETRIEVAL_RUN_CACHE.delete(oldestKey);
+  }
+  return value;
+};
+// רק תשובות אחזור מוצלחות נכנסות ל-cache. כישלון/חסימה (טוקן NO_VERIFIED_SOURCES_FOUND או
+// providerId חוסם) הוא חד-פעמי ולרוב חולף (timeout/רשת) — אם נשמור אותו, כל שלב מאוחר יותר
+// באותה ריצה (runId משותף ל-pipeline) יקבל את הכישלון התקוע ומקורות שעבדו "יפסיקו לעבוד".
+// Stage 3-A של תוכנית העיגון (option B): report-only, כבוי כברירת מחדל. כשדולק, אחרי כל תשובה
+// מוצלחת מריצים binding טענה→קטע-מקור ופולטים דוח ל-log בלבד — לא נוגעים במסמך, לא חוסמים,
+// לא זורקים. מטרה: לראות אם ה-confidence/הסף שפויים על אמת לפני שנותנים ל-gate שיניים (B/C).
+const SOURCE_CLAIM_BINDING_REPORT_ENABLED = false;
+// אוסף מקורות-מעוגנים (url + groundedPassages) מתוך results, לצריכת ה-binder. ריק אם אין passages.
+const collectAnchoredSourcesFromResults = (results = []) => (Array.isArray(results) ? results : [])
+  .map((item) => ({
+    url: String(item?.url || '').trim(),
+    groundedPassages: Array.isArray(item?.groundedPassages) ? item.groundedPassages : [],
+  }))
+  .filter((item) => item.url && item.groundedPassages.length);
+
+const FAILURE_RETRIEVAL_PROVIDER_IDS = new Set(['verified-source-block', 'grounded-web-results-missing-query']);
+const isRetrievalReplyCacheable = (reply) => {
+  const text = String(reply?.text || '');
+  if (!text.trim()) return false;
+  if (text.includes(SOURCE_GROUNDING_FAILURE_TOKEN)) return false;
+  if (FAILURE_RETRIEVAL_PROVIDER_IDS.has(String(reply?.providerId || ''))) return false;
+  return true;
+};
 
 const resolveToolLinksConfigSource = (cfg = null) => {
   if (cfg && typeof cfg === 'object') return cfg;
@@ -2475,6 +2516,15 @@ const normalizeProviderConfig = (config = {}) => {
   merged.perplexity.model = normalizeProviderModelName('perplexity', merged.perplexity.model || DEFAULT_PROVIDER_CONFIG.perplexity.model);
   merged.ollama.model = normalizeProviderModelName('ollama', merged.ollama.model || DEFAULT_PROVIDER_CONFIG.ollama.model);
   merged.custom.model = normalizeProviderModelName('custom', merged.custom.model || '');
+  // ריפוי-עצמי: מודל של ספק ענן סגור שנתקע על משפחת מודלים מקומית (למשל llama3.2 שדלף מ-Ollama)
+  // מוחזר לברירת המחדל של אותו ספק — אחרת הוא נשלח כמו-שהוא וקורס ב-404.
+  const FOREIGN_CLOSED_MODEL_RE = /^(models\/)?(llama|codellama|mistral|mixtral|qwen|qwq|phi|deepseek|gemma|vicuna|tinyllama|dolphin|nous|openhermes|starling|falcon|wizardlm)/i;
+  ['gemini', 'openai', 'claude'].forEach((providerId) => {
+    const current = String(merged[providerId]?.model || '').trim();
+    if (current && FOREIGN_CLOSED_MODEL_RE.test(current)) {
+      merged[providerId].model = normalizeProviderModelName(providerId, DEFAULT_PROVIDER_CONFIG[providerId].model);
+    }
+  });
   merged.copyleaks = normalizeCopyleaksConfig(merged.copyleaks);
   merged.activeProviders = normalizeProviderIds(merged.activeProviders || [safeActive], safeActive);
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
@@ -2830,6 +2880,9 @@ const ACADEMIC_SOURCE_DISCOVERY_PATTERN = /(?:(?:מאמרים?\s+אקדמ(?:י(?
 const STRICT_VERIFIED_SOURCE_REQUEST_PATTERN = /(?:(?:כתבה|כתבות|כתבת\s+חדשות|ידיעה|ידיעות|מקור|מקורות|article|articles?|source|sources?)(?:\s+[^\s,.!?;:]+){0,3}\s+(?:מאומת(?:ת|ים|ות)?|verified)|(?:מאומת(?:ת|ים|ות)?|verified)(?:\s+[^\s,.!?;:]+){0,3}\s+(?:כתבה|כתבות|כתבת\s+חדשות|ידיעה|ידיעות|מקור|מקורות|article|articles?|source|sources?))/i;
 const SOURCE_GROUNDING_PROVIDER_IDS = new Set(['perplexity']);
 const INTERNET_BACKED_SOURCE_PROVIDER_IDS = new Set(['gemini', 'perplexity']);
+// ספקים שיש להם כלי חיפוש-רשת נייטיבי (route 1): המודל מחפש ומצטט בעצמו בזמן הכתיבה.
+// Claude — server-tool web_search; OpenAI — web_search דרך ה-Responses API.
+const NATIVE_WEB_SEARCH_PROVIDER_IDS = new Set(['claude', 'openai']);
 const SOURCE_GROUNDING_SKILL_IDS = new Set(['source-hunter', 'citation-weaver']);
 const SOURCE_GROUNDING_URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 const SOURCE_GROUNDING_FAKE_URL_REGEX = /(?:https?:\/\/|www\.)example\.(?:com|org|net)[^\s<>()]*|(?:^|[\s([{"'])\/example[^\s<>()\]]*/gi;
@@ -2851,6 +2904,10 @@ const SOURCE_UNCHOSEN_TOPIC_LIST_PATTERN = /(אחד\s+מהנושאים\s+הבא�
 const SOURCE_RESEARCH_SUBJECT_MARKER_PATTERNS = [
   /(?:הנושא\s+שנבחר|הנושא\s+הוא|בחרתי\s+בנושא|בחרתי\s+את\s+הנושא|שאלת\s+המחקר|מחקר\s+על|המחקר\s+עוסק\s+ב|עוסק(?:ת|ים)?\s+ב|עבודה\s+על)\s*[:：\-–]?\s*([^\n.;]+)/i,
   /(?:מקורות|כתבות|מאמרים|חומרים|דוחות|sources?|articles?|reports?)\s+(?:על|בנושא|אודות|about|on)\s+([^\n.;]+)/i,
+  // נושא מפורש בשורה ייעודית (מטלות אקדמיות): "נושא: ...", "נושא העבודה: ...", "בנושא: ...", "topic: ..."
+  /(?:^|\n)\s*(?:נושא\s+העבודה|נושא\s+המסמך|נושא\s+המטלה|נושא|בנושא|הנדון|topic|subject)\s*[:：\-–]\s*([^\n.;]+)/i,
+  // כותרת משימה נפוצה: "סיכום מקרה: ...", "ניתוח מקרה: ...", "עבודת חקר: ..."
+  /(?:^|\n)\s*(?:סיכום\s+מקרה|ניתוח\s+מקרה|חקר\s+מקרה|עבודת\s+חקר|case\s+study)\s*[:：\-–]\s*([^\n.;]+)/i,
 ];
 const SOURCE_DISCOVERY_ACTION_PATTERN = /(חפש|חיפוש|מצא|תן(?:י)?|תביא|הבא|שלח|צריך|צריכה|צריכים|מבקש|מבקשת|אסוף|אתר|תאתר|הוסף|צרף|שלב|show|give|need|find|send|collect|locate|provide|include|attach|add)/i;
 const SOURCE_DISCOVERY_TARGET_PATTERN = /(לינק(?:ים)?|links?|קישור(?:ים)?|urls?|מאמר(?:ים)?(?:\s+אקדמ(?:י(?:ים)?)?)?|מאמר|מאמרים|מחקר(?:ים)?|כתבה|כתבות|ידיעה|ידיעות|חדשות|אתר(?:י)?\s+חדשות|papers?|research\s+papers?|academic\s+articles?|academic\s+sources?|scholarly\s+sources?|peer[-\s]?reviewed|bibliograph(?:y|ies)|sources?|references?|citations?|journal(?:s)?(?:\s+articles?)?|מקור(?:ות)?)/i;
@@ -3077,6 +3134,23 @@ const buildVerifiedSourceFollowOnGroundingPrompt = (verifiedSourceText = '') => 
   ].join('\n');
 };
 
+// מסלול "אחזור מנותק מכתיבה" (route 2): כשהאחזור לא מילא את כל מכסת המקורות,
+// לא מחזירים הודעת שגיאה כמסמך. מזריקים את מה שכן נמצא (אם בכלל) כ-context,
+// והכותב ממשיך לכתוב את המסמך המלא, ומסמן [דרוש מקור] במקום שחסר מקור מאומת.
+const buildDegradedSourceGroundingPrompt = (verifiedSourceText = '') => {
+  const normalizedSourceText = stripSourceGroundingFailureToken(String(verifiedSourceText || '')).trim();
+  const hasPartialSources = Boolean(normalizedSourceText);
+  return [
+    'בוצע ניסיון אחזור של מקורות מאומתים, אך לא נמצאה מכסת מקורות מלאה לבקשה.',
+    hasPartialSources
+      ? `אלה המקורות המאומתים שכן נמצאו — מותר להסתמך רק עליהם כמקור חיצוני:\n${normalizedSourceText}`
+      : 'לא נמצאו כרגע מקורות מאומתים חיצוניים לבקשה הזו.',
+    'כתוב את המסמך המלא לפי הוראות המטלה והחומרים המצורפים. אל תחזיר הודעת שגיאה, אל תעצור ואל תבקש מקורות מהמשתמש.',
+    'במקום שבו נדרשת טענה עובדתית או ציטוט שאין לו מקור מאומת זמין — כתוב את הטקסט וסמן באותו מקום בדיוק את הסימון: [דרוש מקור]. אל תמציא URL, DOI, שם מאמר, מחבר, שנה או ציטוט.',
+    'הרשימה הביבליוגרפית תכלול אך ורק מקורות מאומתים שסופקו לעיל. אל תמלא אותה במקורות מומצאים; אם חסרים מקורות, ציין זאת בקצרה בסוף הרשימה.',
+  ].filter(Boolean).join('\n');
+};
+
 // מסיר URLs ב-prose שלא הופיעו באחזור המאומת, בלי לחסום את שאר הטקסט.
 // קישורי markdown: שומר את התווית, מסיר רק את היעד הלא-מאומת.
 const stripDisallowedInlineUrls = (text = '', allowedUrlSet = new Set()) => {
@@ -3196,6 +3270,23 @@ const stripSourceRetrievalFollowOnTail = (value = '', { includeDirectChatLightDe
   return normalizeSourceSearchText(normalizedValue.slice(0, followOnStartIndex));
 };
 
+// fallback לחילוץ נושא מחקר כשהטקסט הוא מטלה ואין מסמן מפורש ("נושא:", "סיכום מקרה:" וכו').
+// סורק שורות ובוחר את הראשונה שנראית ככותרת/נושא: קצרה, לא מטא-דאטה, לא הוראת-מטלה.
+const deriveFallbackResearchTopic = (value = '') => {
+  const lines = String(value || '').replace(/\r/g, '\n').split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !SOURCE_ASSIGNMENT_METADATA_LINE_PATTERN.test(line))
+    .filter((line) => !SOURCE_ASSIGNMENT_REQUIREMENT_SIGNAL_PATTERN.test(line));
+  for (const line of lines) {
+    const cleaned = cleanResearchSubjectQuery(line);
+    if (cleaned && cleaned.length >= 4 && cleaned.length <= 90 && !isLikelyAssignmentInstructionQuery(cleaned)) {
+      return cleaned;
+    }
+  }
+  return '';
+};
+
 const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = '', fallbackQuery = '', workspaceId = '', stripFollowOnWork = false, sourceQueryOverride = '', researchTopic = '', blockAssignmentPromptFallback = false } = {}) => {
   const overrideQuery = normalizeSourceQueryOverride(sourceQueryOverride || researchTopic);
   if (overrideQuery) return overrideQuery;
@@ -3226,7 +3317,10 @@ const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = '', fal
     ? [effectivePromptText, contextText].filter(Boolean).join(' ')
     : effectivePromptText;
   const query = String(merged || '').slice(0, 420).trim();
-  if (isLikelyAssignmentInstructionQuery(query)) return '';
+  if (isLikelyAssignmentInstructionQuery(query)) {
+    // לא משאירים את האחזור חסום: גוזרים נושא מכותרת/שורת-נושא במקום להחזיר ריק.
+    return deriveFallbackResearchTopic(userPrompt) || deriveFallbackResearchTopic(documentContext) || '';
+  }
   return query;
 };
 
@@ -3717,11 +3811,40 @@ const normalizeGeminiVerifiedArticleSource = (raw = {}) => {
   };
 };
 
+// עיגון ברמת-קטע (Stage 1, תוספתי): ממפה כל groundingChunk לרשימת קטעי-המקור (segment)
+// שהמודל הסתמך עליהם, עם ציון-ביטחון (0-1). הנתונים כבר בתשובת ה-grounding — רק מפסיקים
+// לזרוק אותם. אין כרגע consumer; ה-passages יושבים על אובייקט-המקור עד ששלב האימות יצרוך.
+const buildGeminiGroundingPassageMap = (groundingMetadata = {}) => {
+  const map = new Map();
+  const supports = Array.isArray(groundingMetadata?.groundingSupports) ? groundingMetadata.groundingSupports : [];
+  for (const support of supports) {
+    const text = normalizeSourceSearchText(support?.segment?.text || '');
+    if (!text) continue;
+    const chunkIndices = Array.isArray(support?.groundingChunkIndices) ? support.groundingChunkIndices : [];
+    const scores = Array.isArray(support?.confidenceScores) ? support.confidenceScores : [];
+    chunkIndices.forEach((chunkIdx, i) => {
+      const idx = Number(chunkIdx);
+      if (!Number.isInteger(idx) || idx < 0) return;
+      const scoreRaw = Number(scores[i]);
+      const confidence = Number.isFinite(scoreRaw) ? scoreRaw : null;
+      if (!map.has(idx)) map.set(idx, []);
+      map.get(idx).push({ text, confidence });
+    });
+  }
+  return map;
+};
+
 const extractGeminiVerifiedArticleSources = (response = {}, limit = VERIFIED_SOURCE_RESULT_LIMIT) => {
   const groundingMetadata = response?.candidates?.[0]?.groundingMetadata;
+  const passagesByChunk = buildGeminiGroundingPassageMap(groundingMetadata);
   const sources = Array.isArray(groundingMetadata?.groundingChunks)
     ? groundingMetadata.groundingChunks
-      .map((chunk) => normalizeGeminiVerifiedArticleSource(chunk?.web || chunk?.retrievedContext || chunk))
+      .map((chunk, idx) => {
+        const source = normalizeGeminiVerifiedArticleSource(chunk?.web || chunk?.retrievedContext || chunk);
+        if (!source) return null;
+        const passages = passagesByChunk.get(idx);
+        return (passages && passages.length) ? { ...source, groundedPassages: passages } : source;
+      })
       .filter(Boolean)
     : [];
   return dedupeVerifiedSourceResults(sources).slice(0, Math.max(1, Math.min(VERIFIED_SOURCE_RESULT_HARD_LIMIT, Number(limit) || VERIFIED_SOURCE_RESULT_LIMIT)));
@@ -3759,6 +3882,8 @@ const normalizeGroundedWebResult = (item = {}, providerId = '') => {
     summary,
     sourceName,
     providerId: providerId || item.providerId || '',
+    // עיגון ברמת-קטע (Stage 1) — נשמר דרך הנרמול כדי שיגיע ל-binder ב-Stage 3.
+    ...((Array.isArray(item.groundedPassages) && item.groundedPassages.length) ? { groundedPassages: item.groundedPassages } : {}),
   };
 };
 
@@ -3850,6 +3975,7 @@ const buildGroundedWebResultsSearchPrompt = (query = '', requestedCount = 3) => 
   const queryMeta = analyzeArticleQuery(query);
   return [
     `חפש ברשת ${requestedCount} תוצאות עדכניות ורלוונטיות לבקשה, אם קיימות מספיק תוצאות מקורקעות אמיתיות.`,
+    'בצע חיפוש Google בפועל לפני המענה ובסס את התשובה אך ורק על תוצאות חיפוש אמיתיות (grounding). אל תענה מהזיכרון הסטטי בלי לחפש.',
     queryMeta.expectsNewsArticle
       ? 'אם הבקשה מבקשת כתבות, ידיעות או חדשות, העדף כתבות חדשות ספציפיות מאתרי חדשות. אל תעדיף Wikipedia, דפי מוסדות, דפי בית, דפי קטגוריה או הודעות רשמיות אם קיימות כתבות עיתונאיות מתאימות.'
       : '',
@@ -4018,6 +4144,7 @@ const resolveGroundedWebResultsReply = async ({ userPrompt = '', documentContext
           providerId: attempt.providerId,
           model: attempt.model,
           urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+          anchoredSources: collectAnchoredSourcesFromResults(results),
           query,
           workspaceId,
         };
@@ -4302,6 +4429,25 @@ const createVerifiedArticleCanonicalUrlResolver = () => {
   };
 };
 
+// אימות-חיות אמיתי (דסקטופ בלבד): פקודת Rust check_url_live עושה HEAD→GET עם anti-SSRF
+// ומחזירה status. מחזיר true ל-2xx/3xx, false לקישור מת, ו-null כשהפקודה לא זמינה
+// (אתר/PWA או build ישן) — אז הקורא נופל לאימות המבני (JS) בלבד.
+const checkVerifiedArticleUrlLive = async (value = '') => {
+  const normalizedUrl = normalizeArticleUrl(value);
+  if (!normalizedUrl) return null;
+  const checkUrlLive = (typeof window !== 'undefined') ? window.desktopApp?.checkUrlLive : null;
+  if (typeof checkUrlLive !== 'function') return null;
+  try {
+    const res = await checkUrlLive({ url: normalizedUrl, timeoutMs: 5000 });
+    if (!res || typeof res !== 'object') return null;
+    if (typeof res.ok === 'boolean') return res.ok;
+    const status = Number(res.status) || 0;
+    return status >= 200 && status < 400;
+  } catch {
+    return null;
+  }
+};
+
 const prepareVerifiedArticleSourcesForFinalize = async ({
   article = {},
   sources = [],
@@ -4535,7 +4681,20 @@ const finalizeVerifiedArticleCandidate = async ({
     url: normalizedArticleUrl,
   };
 
-  const validationError = validateArticleCandidate(queryMeta, groundedArticle, reconciledSources, '');
+  // אימות-מבוסס-קישור (מחליף פסילה-לפי-reputation לאתרים לא-מוכרים):
+  // (א) URL כתבה-ישירה, (ב) תואם בדיוק למקור שהספק החזיר (לא מומצא). בדסקטופ מוסיפים
+  // (ג) קישור-חי בפועל. liveResult===false = קישור מת → לא סומכים; null = אימות-חי לא זמין
+  // (אתר/PWA/build ישן) → נופלים לאימות המבני בלבד.
+  const urlStructurallyVerified = Boolean(queryMeta?.expectsNewsArticle)
+    && isLikelyDirectVerifiedArticleUrl(normalizedArticleUrl)
+    && Boolean(findVerifiedArticleSourceByUrl(reconciledSources, normalizedArticleUrl));
+  let trustUrlVerification = false;
+  if (urlStructurallyVerified) {
+    const liveResult = await checkVerifiedArticleUrlLive(normalizedArticleUrl);
+    trustUrlVerification = liveResult !== false;
+  }
+
+  const validationError = validateArticleCandidate(queryMeta, groundedArticle, reconciledSources, '', trustUrlVerification);
   if (validationError && !canRelaxVerifiedArticleSecondaryDomainValidation({
     validationError,
     primarySource,
@@ -4904,7 +5063,7 @@ const formatVerifiedSourceItem = (item = {}, index = 0) => {
 const buildVerifiedSourceReply = ({ query = '', results = [], providerId = '', academic = false, articleRequest = false, requestedArticleCount = 1 } = {}) => {
   const providerLabel = providerId === 'serpapi-scholar'
     ? 'Google Scholar / SerpAPI'
-    : providerId === 'gemini-article-search'
+    : (providerId === 'gemini-article-search' || providerId === 'gemini-google-search')
       ? 'Gemini + Google Search'
       : 'Perplexity Search';
   const articleCount = clampRequestedVerifiedArticleCount(requestedArticleCount);
@@ -5005,6 +5164,7 @@ const resolveVerifiedArticleSourceReply = async ({ query = '', queryMeta = analy
             providerId: result?.providerId || attempt.providerId,
             model: result?.model || attempt.model,
             urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+            anchoredSources: collectAnchoredSourcesFromResults(results),
             query: baseQuery,
             workspaceId,
             academic: false,
@@ -5160,6 +5320,24 @@ const resolveVerifiedSourceReply = async ({
       endpoint: 'https://api.perplexity.ai/chat/completions',
     });
   }
+  // route 2 cascade — Gemini best-effort אחרון: כשאין Scholar/Perplexity (משתמש ברירת-מחדל),
+  // googleSearch של Gemini מחזיר מקורות אמיתיים מ-grounding (לא מומצאים). לאקדמי זה לא Scholar,
+  // ולכן ה-prompt מורה "אמת לפני הגשה", אבל זה מונע חסימה מוחלטת.
+  if ((!strictProviderOverride || normalizedPreferredProviderId === 'gemini') && isProviderConfiguredForUse('gemini', cfg)) {
+    const geminiSourceModel = resolveVerifiedArticleGeminiModel(cfg);
+    attempts.push({
+      providerId: 'gemini-google-search',
+      model: geminiSourceModel,
+      run: () => fetchGeminiGroundedWebResults({
+        query,
+        apiKey: cfg.gemini.key,
+        model: geminiSourceModel,
+        requestedCount: requestedSourceLimit,
+      }),
+      endpointHost: 'generativelanguage.googleapis.com',
+      endpoint: 'gemini-google-search-grounding',
+    });
+  }
 
   if (!attempts.length || !query) {
     emitSourceLog?.('verified-source-provider-missing', `אחזור מקורות נחסם: providerAvailable=false academic=${academic} scholarKeyMissing=${scholarKeyMissing} query="${query}"`, {
@@ -5219,6 +5397,7 @@ const resolveVerifiedSourceReply = async ({
           providerId: attempt.providerId,
           model: attempt.model,
           urls: new Set(results.map((item) => String(item?.url || '').trim()).filter(Boolean)),
+          anchoredSources: collectAnchoredSourcesFromResults(results),
           query,
           workspaceId,
           academic,
@@ -5812,8 +5991,15 @@ const resolveAssignmentSourceQuotaRoute = (requirements = {}, agentContext = {})
       : hasNonAcademicQuota
         ? 'groundedWeb'
         : 'none';
+  // dual-track: כשמטלה דורשת גם מקורות אקדמיים וגם כתבות/חדשות, מריצים את שני המסלולים.
+  // ה-route הראשי נשאר לתאימות/לוג, אבל needsAcademic/needsGeneral שולטים בפועל באחזור.
+  const needsAcademic = hasAcademicQuota && !explicitlyNonAcademicAgent;
+  const needsGeneral = hasNonAcademicQuota;
   return {
     route,
+    needsAcademic,
+    needsGeneral,
+    dualTrack: needsAcademic && needsGeneral,
     hasSourceQuota: hasAcademicQuota || hasNonAcademicQuota,
     contentItems: normalized.contentItems,
     sourceKinds,
@@ -8844,10 +9030,14 @@ const getModelNameForProvider = (provider, cfg, override = '') => {
     if (provider === 'custom' || provider === 'ollama') return false;
 
     const value = String(normalizedOverride).toLowerCase();
+    // משפחות מודלים מקומיים/Ollama — זרות לספקי הענן הסגורים (gemini/claude/openai).
+    // בלי זה מודל כמו "llama3.2" (ברירת המחדל של Ollama) דלף ל-Gemini ויצר 404 → שלד מקומי.
+    // לא מוסיפים ל-groq/perplexity: groq מריץ llama/mixtral/gemma לגיטימית, ול-perplexity יש llama-*-sonar.
+    const LOCAL_MODEL_FAMILY = 'llama|codellama|mistral|mixtral|qwen|qwq|phi|deepseek|gemma|vicuna|tinyllama|dolphin|nous|openhermes|starling|falcon|wizardlm';
     const foreignFamiliesByProvider = {
-      gemini: /^(claude|gpt|o\d+|sonar|pplx)/,
-      claude: /^(gemini|learnlm|gpt|o\d+|sonar|pplx)/,
-      openai: /^(claude|gemini|learnlm|sonar|pplx)/,
+      gemini: new RegExp(`^(claude|gpt|o\\d+|sonar|pplx|${LOCAL_MODEL_FAMILY})`),
+      claude: new RegExp(`^(gemini|learnlm|gpt|o\\d+|sonar|pplx|${LOCAL_MODEL_FAMILY})`),
+      openai: new RegExp(`^(claude|gemini|learnlm|sonar|pplx|${LOCAL_MODEL_FAMILY})`),
       perplexity: /^(claude|gemini|learnlm|gpt|o\d+)/,
       groq: /^(claude|gemini|learnlm|sonar|pplx)/,
     };
@@ -9234,11 +9424,120 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
   return buildResponse(data);
 };
 
+// route 1 — OpenAI web_search דרך ה-Responses API (/v1/responses). עובד עם מודלים רגילים
+// (gpt-4o/4.1/5) ולא רק search-preview, ומחזיר ציטוטי-URL ב-annotations.
+const extractOpenAIResponsesUrls = (data = {}) => {
+  const urls = new Set();
+  for (const item of (Array.isArray(data?.output) ? data.output : [])) {
+    if (item?.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        for (const annotation of (Array.isArray(part?.annotations) ? part.annotations : [])) {
+          const url = String(annotation?.url || '').trim();
+          if (url) urls.add(url);
+        }
+      }
+    }
+  }
+  return Array.from(urls).filter(Boolean);
+};
+
+const extractOpenAIResponsesText = (data = {}) => {
+  if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  const parts = [];
+  for (const item of (Array.isArray(data?.output) ? data.output : [])) {
+    if (item?.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if ((part?.type === 'output_text' || typeof part?.text === 'string') && part.text) parts.push(part.text);
+      }
+    }
+  }
+  return parts.join('').trim();
+};
+
+const callOpenAIResponsesWithWebSearch = async (apiKey, model, systemPrompt, userMessage, signal, options = {}) => {
+  const includeCompletionMetadata = options.includeCompletionMetadata === true;
+  const url = 'https://api.openai.com/v1/responses';
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  const bodyStr = JSON.stringify({
+    model: String(model || '').trim() || 'gpt-4o',
+    ...(String(systemPrompt || '').trim() ? { instructions: systemPrompt } : {}),
+    input: userMessage,
+    tools: [{ type: 'web_search' }],
+    max_output_tokens: 8192,
+  });
+  const buildResponse = (data = {}) => {
+    const allowedUrls = extractOpenAIResponsesUrls(data);
+    return finalizeProviderTextResponse({
+      text: extractOpenAIResponsesText(data),
+      completion: {
+        finishReason: data?.status || '',
+        ...(allowedUrls.length ? { allowedUrls } : {}),
+      },
+    }, '', includeCompletionMetadata);
+  };
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
+  if (desktopResult) {
+    if (!desktopResult.ok) {
+      throw new Error(`OpenAI API (${desktopResult.status}): ${String(desktopResult.body || '').slice(0, 300)}`);
+    }
+    return buildResponse(JSON.parse(desktopResult.body));
+  }
+  const res = await fetch(url, { method: 'POST', headers, signal, body: bodyStr });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`OpenAI API (${res.status}): ${txt.slice(0, 300)}`);
+  }
+  return buildResponse(await res.json());
+};
+
 // ═══════════════════════════════════════
 // Claude (Anthropic)
 // ═══════════════════════════════════════
+// בוחר את גרסת ה-server-tool של web_search לפי המודל: הגרסה החדשה (dynamic filtering)
+// נתמכת ב-Opus 4.6/4.7/4.8, Sonnet 4.6 ו-Fable/Mythos 5; מודלים ישנים יותר מקבלים את הבסיסית.
+const resolveClaudeWebSearchToolType = (model = '') => {
+  const normalized = String(model || '').toLowerCase();
+  return /(opus-4-(?:6|7|8)|sonnet-4-6|fable-5|mythos-5)/.test(normalized)
+    ? 'web_search_20260209'
+    : 'web_search_20250305';
+};
+
+// מחלץ את ה-URLs האמיתיים מתוצאות חיפוש-הרשת של Claude (server tool) ומהציטוטים בטקסט,
+// כדי שיוזרקו ל-allowedUrls ולא ייחתכו ע"י ה-sanitizer של מניעת-הזיות.
+const extractClaudeWebSearchUrls = (data = {}) => {
+  const urls = new Set();
+  for (const block of (Array.isArray(data?.content) ? data.content : [])) {
+    if (block?.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+      for (const item of block.content) {
+        const url = String(item?.url || '').trim();
+        if (url) urls.add(url);
+      }
+    }
+    if (block?.type === 'text' && Array.isArray(block.citations)) {
+      for (const citation of block.citations) {
+        const url = String(citation?.url || '').trim();
+        if (url) urls.add(url);
+      }
+    }
+  }
+  return Array.from(urls).filter(Boolean);
+};
+
+// מאחד את כל בלוקי הטקסט בתשובה (עם web_search הטקסט עלול להגיע אחרי בלוקי tool-result, לא ב-[0]).
+const extractClaudeResponseText = (data = {}) => {
+  const blocks = Array.isArray(data?.content) ? data.content : [];
+  const joined = blocks
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim();
+  return joined || String(data?.content?.[0]?.text || '');
+};
+
 export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, signal, options = {}) => {
   const includeCompletionMetadata = options.includeCompletionMetadata === true;
+  const enableWebSearch = options.enableWebSearch === true;
   const url = 'https://api.anthropic.com/v1/messages';
   const headers = {
     'Content-Type': 'application/json',
@@ -9248,40 +9547,53 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
     // בדסקטופ הקריאה ממילא עוברת ב-proxy, והheader לא מזיק שם.
     'anthropic-dangerous-direct-browser-access': 'true',
   };
-  const bodyStr = JSON.stringify({
-    model, max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-  });
-  const buildResponse = (data = {}) => finalizeProviderTextResponse({
-    text: data.content?.[0]?.text || '',
+  const webSearchTools = enableWebSearch
+    ? [{ type: resolveClaudeWebSearchToolType(model), name: 'web_search' }]
+    : null;
+
+  // קריאה בודדת ל-API (proxy בדסקטופ, אחרת fetch ישיר).
+  const runOnce = async (messages) => {
+    const bodyStr = JSON.stringify({
+      model,
+      max_tokens: enableWebSearch ? 8192 : 4096,
+      system: systemPrompt,
+      messages,
+      ...(webSearchTools ? { tools: webSearchTools } : {}),
+    });
+    const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
+    if (desktopResult) {
+      if (!desktopResult.ok) {
+        throw new Error(`Claude API (${desktopResult.status}): ${String(desktopResult.body || '').slice(0, 300)}`);
+      }
+      return JSON.parse(desktopResult.body);
+    }
+    const res = await fetch(url, { method: 'POST', signal, headers, body: bodyStr });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => res.statusText);
+      throw new Error(`Claude API (${res.status}): ${txt.slice(0, 300)}`);
+    }
+    return res.json();
+  };
+
+  // web_search רץ בלולאת sampling בצד השרת: stop_reason=pause_turn → לשלוח שוב כדי להמשיך.
+  let messages = [{ role: 'user', content: userMessage }];
+  let data = await runOnce(messages);
+  const allowedUrls = new Set(extractClaudeWebSearchUrls(data));
+  let continuations = 0;
+  while (data?.stop_reason === 'pause_turn' && continuations < 4) {
+    continuations += 1;
+    messages = [...messages, { role: 'assistant', content: data.content }];
+    data = await runOnce(messages);
+    extractClaudeWebSearchUrls(data).forEach((u) => allowedUrls.add(u));
+  }
+
+  return finalizeProviderTextResponse({
+    text: extractClaudeResponseText(data),
     completion: {
-      stopReason: data.stop_reason || '',
+      stopReason: data?.stop_reason || '',
+      allowedUrls: Array.from(allowedUrls),
     },
   }, '', includeCompletionMetadata);
-
-  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'POST', headers, body: bodyStr }, signal);
-  if (desktopResult) {
-    const result = desktopResult;
-    if (!result.ok) {
-      throw new Error(`Claude API (${result.status}): ${String(result.body || '').slice(0, 300)}`);
-    }
-    const data = JSON.parse(result.body);
-    return buildResponse(data);
-  }
-
-  const res = await fetch(url, {
-    method: 'POST',
-    signal,
-    headers,
-    body: bodyStr,
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => res.statusText);
-    throw new Error(`Claude API (${res.status}): ${txt.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  return buildResponse(data);
 };
 
 // ═══════════════════════════════════════
@@ -9459,7 +9771,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       agentName: options.agentName || '',
       skillId: activeSkill?.id || options.skillId || '',
     });
-  const sourceQuotaBypassesSkipAutomation = sourceFocusedWorkflowAgent && options.skipAutomation === true;
+  // מסמך אקדמי שנכתב במסלול ישיר (Chef/Direct → skipAutomation) לא מסווג כ-sourceFocusedWorkflowAgent,
+  // ולכן היה מדלג על אחזור מקורות למרות מכסה אקדמית מזוהה — מה שאיפשר לכותב להמציא מקורות.
+  // כשמזוהה מכסה אקדמית אמיתית יחד עם פלט-מסמך, כופים grounding גם ללא סוכן ייעודי.
+  const documentAcademicSourceQuota = options.expectDocumentOutput === true
+    && !suppressResearchRouting
+    && !directChatRequest
+    && assignmentSourceQuotaRoute.hasSourceQuota
+    && (assignmentSourceQuotaRoute.route === 'strict' || assignmentSourceQuotaRoute.needsAcademic);
+  const sourceQuotaBypassesSkipAutomation = (sourceFocusedWorkflowAgent || documentAcademicSourceQuota)
+    && options.skipAutomation === true;
   const promptSourceGroundingRequired = !suppressResearchRouting && shouldUseStrictSourceGrounding({
     userPrompt: cleanUserPrompt,
     documentContext,
@@ -9468,14 +9789,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   });
   const sourceGroundingRequired = forceVerifiedSourceFollowOn
     || promptSourceGroundingRequired
-    || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'strict');
+    || documentAcademicSourceQuota
+    || (sourceFocusedWorkflowAgent && (assignmentSourceQuotaRoute.route === 'strict' || assignmentSourceQuotaRoute.needsAcademic));
+  // dual-track: כשהמטלה דורשת גם כתבות/חדשות (needsGeneral), מריצים גם אחזור Web — גם אם המסלול האקדמי פעיל.
+  const dualTrackGeneralRequired = sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.needsGeneral === true;
   const promptGroundedWebResultsRequired = !suppressResearchRouting && !sourceGroundingRequired && (holeFillAgentRequest || shouldUseGroundedWebResults({
     userPrompt: cleanUserPrompt,
     extraSystemPrompt,
     skillId: activeSkill?.id || options.skillId || '',
   }));
-  const groundedWebResultsRequired = !sourceGroundingRequired
-    && (promptGroundedWebResultsRequired || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb'));
+  const groundedWebResultsRequired = (!sourceGroundingRequired
+    && (promptGroundedWebResultsRequired || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb')))
+    || dualTrackGeneralRequired;
   const strictSourceGroundingEnabled = true;
   const directChatSourceFollowOnRequested = hasSourceRetrievalFollowOnWork(cleanUserPrompt)
     || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(cleanUserPrompt);
@@ -9498,7 +9823,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const shouldRetrieveVerifiedSourcesFirst = strictSourceGroundingEnabled
     && sourceGroundingRequired
     && (options.skipAutomation !== true || directChatRequest || sourceFocusedWorkflowRequest || sourceQuotaBypassesSkipAutomation)
-    && (sourceOnlyGroundingRequest || sourceFocusedWorkflowRequest || assignmentSourceQuotaRoute.route === 'strict' || forceVerifiedSourceFollowOn);
+    && (sourceOnlyGroundingRequest || sourceFocusedWorkflowRequest || assignmentSourceQuotaRoute.route === 'strict' || assignmentSourceQuotaRoute.needsAcademic || forceVerifiedSourceFollowOn);
   const shouldUseVerifiedSourceFollowOnGrounding = shouldRetrieveVerifiedSourcesFirst
     && ((directChatRequest && directChatSourceFollowOnRequested) || forceVerifiedSourceFollowOn);
   const shouldRetrieveGroundedWebResultsFirst = groundedWebResultsRequired
@@ -9507,7 +9832,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       && (isGroundedWebResultsOnlyRequest({
         userPrompt: cleanUserPrompt,
         extraSystemPrompt,
-      }) || holeFillAgentRequest || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb')));
+      }) || holeFillAgentRequest || (sourceFocusedWorkflowAgent && (assignmentSourceQuotaRoute.route === 'groundedWeb' || assignmentSourceQuotaRoute.needsGeneral))));
   const internetBackedSourceWorkRequired = !suppressResearchRouting && (sourceGroundingRequired || groundedWebResultsRequired || shouldUseInternetBackedSourceWork({
     userPrompt: cleanUserPrompt,
     extraSystemPrompt,
@@ -9545,6 +9870,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
   const providerSupportsSourceGrounding = sourceGroundingRequired && isSourceGroundingProvider(activeProvider);
   let providerSupportsGeminiInternetBackedSourceTools = internetBackedSourceWorkRequired && supportsInternetBackedSourceRetrieval(activeProvider);
+  // route 1 — חיפוש-רשת נייטיבי בכותב עצמו (משלים את ההזרקה של route 2): כש-Claude הוא הכותב
+  // ועבודת המקורות דורשת אינטרנט, מפעילים את server-tool web_search שלו כדי שיחפש ויצטט בעצמו.
+  const providerSupportsNativeWebSearch = internetBackedSourceWorkRequired
+    && NATIVE_WEB_SEARCH_PROVIDER_IDS.has(activeProvider);
+  if (providerSupportsNativeWebSearch) providerSupportsGeminiInternetBackedSourceTools = true;
   const sourceGroundingWorkspaceId = String(options.activeWorkspaceId || getWorkspaceAutomation().activeWorkspaceId || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID;
   const recentVerifiedSourceAllowedUrls = getRecentVerifiedSourceAllowedUrls({ workspaceId: sourceGroundingWorkspaceId });
   let sourceGroundingAllowedUrls = buildVerifiedSourceAllowedUrlSet([
@@ -9577,6 +9907,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const currentInfoAnswerPrompt = currentInfoWithoutExplicitResults
     ? 'כאשר האינטרנט משמש רק כדי לענות על שאלה עדכנית נקודתית והמשתמש לא ביקש מקורות, קישורים או תוצאות חיפוש, ענה בקצרה בגוף התשובה בלבד ואל תציג URLs, ציטוטים, citations או רשימת מקורות.'
     : '';
+  // שלמות מסמך: מונע פלט קצר מדי (למשל מודל שמחזיר משפט/הערה במקום המסמך) בלי לכפות מילוי מומצא.
+  const documentCompletenessPrompt = options.expectDocumentOutput === true
+    ? 'כשמייצרים מסמך: החזר את גוף המסמך המלא ב-HTML לפי ההיקף שהתבקש — לא הערה קצרה, לא משפט בודד ולא בקשת חומרים בלבד. אם חסרים חומרי חובה, כתוב בכל זאת את כל מה שניתן לבסס (כולל מהמקורות המאומתים שסופקו) באורך סביר, וסמן חוסרים נקודתיים ב-[דרוש מקור] — בלי להמציא תוכן, מקורות או ציטוטים.'
+    : '';
   const appMemoryPrompt = options.includeAppMemory === false ? '' : buildAppMemoryInstructions(getAppMemory());
   const conversationHistoryPrompt = buildConversationHistoryPrompt(options.conversationHistory);
   const automation = getWorkspaceAutomation();
@@ -9586,9 +9920,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const includeCompletionMetadata = options.includeCompletionMetadata === true;
   const preserveProviderCompletionMetadata = includeCompletionMetadata || groundedWebResultsRequired || (strictSourceGroundingEnabled && sourceGroundingRequired);
   const requestTimeoutMs = Number(automation.requestTimeoutMs);
-  const timeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+  const baseTimeoutMs = automation.timeoutEnabled === true && Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
     ? Math.max(10000, Math.round(requestTimeoutMs))
     : 0;
+  // יצירת מסמך שלם (במיוחד מודלים איטיים כמו Claude עם המשכי-כתיבה) חורגת לגיטימית מ-45ש'.
+  // נותנים לשלב המסמך חלון נדיב יותר כדי שלא ייפול ל-fallback מקומי בלי צורך.
+  const timeoutMs = baseTimeoutMs && options.expectDocumentOutput === true
+    ? Math.max(baseTimeoutMs * 4, 180000)
+    : baseTimeoutMs;
   const retries = automation.retryEnabled === false ? 0 : Math.max(0, Number(automation.maxRetries || 0));
   const effectiveRetries = retries;
   const runId = options.runId || createRunId();
@@ -9656,6 +9995,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     internetBackedRequestAutoRouted,
     ...sourceQuotaLog,
   });
+  // מקורות-מעוגנים שנאספו בריצה הזו (מ-Gemini groundingSupports), לצריכת ה-binder ב-report.
+  let sourceBindingAnchoredSources = [];
   const rememberSuccessfulReply = (replyText = '', responseOptions = {}) => {
     const responseProvider = String(responseOptions.providerId || activeProvider || '').trim() || activeProvider;
     const normalizedReply = normalizeProviderTextResponse(replyText, responseProvider);
@@ -9705,6 +10046,26 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
         completion: safeCompletion,
       };
     }
+    // Stage 3-A: report-only binding טענה→קטע-מקור. flag כבוי כברירת מחדל; לא נוגע ב-safeReply,
+    // רק פולט דוח ל-log. עטוף try/catch — לעולם לא מפיל את מסלול-ההחזרה.
+    if (SOURCE_CLAIM_BINDING_REPORT_ENABLED && sourceBindingAnchoredSources.length && safeReply.text) {
+      try {
+        const bindingReport = bindClaimsToPassages(safeReply.text, sourceBindingAnchoredSources);
+        logEvent('source-claim-binding-report', 'דוח עיגון טענות→מקור (report-only, לא משנה פלט)', {
+          state: bindingReport.summary.unsupported > 0 ? 'warning' : 'info',
+          provider: responseProvider,
+          bindingSummary: bindingReport.summary,
+          unsupportedClaims: bindingReport.claims
+            .filter((claim) => claim.status === 'unsupported')
+            .slice(0, 8)
+            .map((claim) => ({
+              sentence: trimLogText(claim.sentence),
+              score: claim.bestPassage ? Number(claim.bestPassage.score.toFixed(2)) : 0,
+              confidence: claim.bestPassage?.confidence ?? null,
+            })),
+        });
+      } catch {}
+    }
     if (options.shouldPersistMemory === false) {
       return includeCompletionMetadata ? safeReply : safeReply.text;
     }
@@ -9719,6 +10080,9 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     } catch {}
     return includeCompletionMetadata ? safeReply : safeReply.text;
   };
+  // route 2 — האחזור מנותק מהכתיבה: אם הכותב נעול strict לספק שאין לו גישה לאינטרנט (claude/openai/groq/ollama/custom),
+  // עדיין מאפשרים לשלב האחזור לנדוד ל-Gemini/Perplexity/Scholar. הכתיבה עצמה נשארת נעולה לספק שהמשתמש בחר.
+  const sourceRetrievalStrictOverride = strictProviderOverride && supportsInternetBackedSourceRetrieval(requestedProvider);
   if (shouldRetrieveVerifiedSourcesFirst) {
     const verifiedSourceStartQuery = extractVerifiedSourceQuery({
       userPrompt: cleanUserPrompt,
@@ -9731,7 +10095,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     });
     const verifiedSourceStartsWithArticleRetrieval = analyzeArticleQuery(verifiedSourceStartQuery).expectsNewsArticle;
     const verifiedSourceStartProvider = verifiedSourceStartsWithArticleRetrieval
-      ? (getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId: requestedProvider, strictProviderOverride })[0] || activeProvider)
+      ? (getPreferredVerifiedArticleProviderIds({ cfg, preferredProviderId: requestedProvider, strictProviderOverride: sourceRetrievalStrictOverride })[0] || activeProvider)
       : activeProvider;
     const verifiedSourceStartModel = verifiedSourceStartsWithArticleRetrieval
       ? (verifiedSourceStartProvider === 'gemini'
@@ -9754,22 +10118,37 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       agentLabel,
       message: 'מאתר מקורות מאומתים',
     });
-    const verifiedSourceReply = await resolveVerifiedSourceReply({
-      userPrompt: cleanUserPrompt,
-      documentContext,
-      extraSystemPrompt,
-      skillId: activeSkill?.id || options.skillId || '',
-      isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
-      cfg,
-      timeoutMs,
-      preferredProviderId: requestedProvider,
-      strictProviderOverride,
-      stripFollowOnWork: shouldUseVerifiedSourceFollowOnGrounding,
-      logEvent,
-      assignmentRequirements,
-      sourceQueryOverride,
-      blockAssignmentPromptFallback,
-    });
+    const verifiedCacheKey = runId && verifiedSourceStartQuery
+      ? `${runId}|verified|${normalizeSourceSearchText(verifiedSourceStartQuery)}`
+      : '';
+    let verifiedSourceReply = getCachedSourceRetrieval(verifiedCacheKey);
+    if (verifiedSourceReply) {
+      logEvent('verified-source-retrieval-cache-hit', `שימוש חוזר במקורות שכבר נשלפו בריצה הזו: query="${verifiedSourceStartQuery}"`, {
+        state: 'info',
+        provider: verifiedSourceReply.providerId || verifiedSourceStartProvider,
+      });
+    } else {
+      verifiedSourceReply = await resolveVerifiedSourceReply({
+        userPrompt: cleanUserPrompt,
+        documentContext,
+        extraSystemPrompt,
+        skillId: activeSkill?.id || options.skillId || '',
+        isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+        cfg,
+        timeoutMs,
+        preferredProviderId: requestedProvider,
+        strictProviderOverride: sourceRetrievalStrictOverride,
+        stripFollowOnWork: shouldUseVerifiedSourceFollowOnGrounding,
+        logEvent,
+        assignmentRequirements,
+        sourceQueryOverride,
+        blockAssignmentPromptFallback,
+      });
+      if (isRetrievalReplyCacheable(verifiedSourceReply)) setCachedSourceRetrieval(verifiedCacheKey, verifiedSourceReply);
+    }
+    if (Array.isArray(verifiedSourceReply?.anchoredSources) && verifiedSourceReply.anchoredSources.length) {
+      sourceBindingAnchoredSources = verifiedSourceReply.anchoredSources;
+    }
     if (verifiedSourceReply?.text) {
       if (verifiedSourceReply.query) {
         try {
@@ -9808,16 +10187,25 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           errorMessage: verifiedSourceReply.error?.message || '',
         },
       );
-      if ((shouldUseVerifiedSourceFollowOnGrounding || holeFillAgentRequest) && !isFailure) {
-        verifiedSourceFollowOnGroundingPrompt = buildVerifiedSourceFollowOnGroundingPrompt(verifiedSourceReply.text);
+      // route 2 — אחזור מנותק מכתיבה: מזריקים את המקורות שנמצאו כ-context והכותב (כל ספק) ממשיך לכתוב.
+      const injectVerifiedSourcesAsDocumentContext = ({ degraded }) => {
+        verifiedSourceFollowOnGroundingPrompt = degraded
+          ? buildDegradedSourceGroundingPrompt(verifiedSourceReply.text)
+          : buildVerifiedSourceFollowOnGroundingPrompt(verifiedSourceReply.text);
         verifiedSourceFollowOnAllowedUrls = buildVerifiedSourceAllowedUrlSet(verifiedSourceReply.urls || []);
         sourceGroundingAllowedUrls = buildVerifiedSourceAllowedUrlSet([
           ...sourceGroundingAllowedUrls,
           ...Array.from(verifiedSourceFollowOnAllowedUrls),
         ]);
-        verifiedSourceFollowOnLocked = true;
+        // במצב מנוון לא נועלים נעילה קשיחה — הכותב חייב להיות חופשי לסמן [דרוש מקור] בחורים.
+        verifiedSourceFollowOnLocked = !degraded;
         providerSupportsGeminiInternetBackedSourceTools = false;
-      } else if (shouldUseVerifiedSourceFollowOnGrounding && expectDocumentOutput) {
+      };
+      if (!isFailure && (shouldUseVerifiedSourceFollowOnGrounding || holeFillAgentRequest || expectDocumentOutput)) {
+        // אחזור הצליח — מזריקים מקורות מאומתים כ-context והכותב ממשיך לכתוב את המסמך המלא.
+        injectVerifiedSourcesAsDocumentContext({ degraded: false });
+      } else if (isFailure && expectDocumentOutput && shouldUseVerifiedSourceFollowOnGrounding && exactSourceGroundingUrl) {
+        // נעילת מקור-מדויק שנכשלה: כל המסמך היה אמור להתבסס על אותו URL יחיד, לכן עוצרים במפורש.
         return rememberSuccessfulReply({
           text: buildForcedSourceGroundingFailureDocumentHtml({
             url: exactSourceGroundingUrl,
@@ -9831,7 +10219,11 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           providerId: verifiedSourceReply.providerId || activeProvider,
           providerSupportsGroundingOverride: true,
         });
+      } else if (expectDocumentOutput) {
+        // degrade: אחזור חלקי/נכשל — לא מחזירים שגיאה כמסמך. כותבים מה שאפשר ומסמנים [דרוש מקור].
+        injectVerifiedSourcesAsDocumentContext({ degraded: true });
       } else {
+        // בקשת מקורות טהורה ב-chat: מחזירים את רשימת המקורות עצמה כתשובה.
         return rememberSuccessfulReply({
           text: verifiedSourceReply.text,
           completion: {
@@ -9864,15 +10256,30 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       agentLabel,
       message: 'מאתר תוצאות Web מקורקעות',
     });
-    const groundedWebResultsReply = await resolveGroundedWebResultsReply({
-      userPrompt: cleanUserPrompt,
-      documentContext,
-      cfg,
-      timeoutMs,
-      preferredProviderId: activeProvider,
-      sourceQueryOverride,
-      blockAssignmentPromptFallback,
-    });
+    const groundedWebCacheKey = runId
+      ? `${runId}|web|${normalizeSourceSearchText(sourceQueryOverride || cleanUserPrompt).slice(0, 200)}`
+      : '';
+    let groundedWebResultsReply = getCachedSourceRetrieval(groundedWebCacheKey);
+    if (groundedWebResultsReply) {
+      logEvent('grounded-web-results-cache-hit', 'שימוש חוזר בתוצאות Web שכבר נשלפו בריצה הזו', {
+        state: 'info',
+        provider: groundedWebResultsReply.providerId || activeProvider,
+      });
+    } else {
+      groundedWebResultsReply = await resolveGroundedWebResultsReply({
+        userPrompt: cleanUserPrompt,
+        documentContext,
+        cfg,
+        timeoutMs,
+        preferredProviderId: activeProvider,
+        sourceQueryOverride,
+        blockAssignmentPromptFallback,
+      });
+      if (isRetrievalReplyCacheable(groundedWebResultsReply)) setCachedSourceRetrieval(groundedWebCacheKey, groundedWebResultsReply);
+    }
+    if (Array.isArray(groundedWebResultsReply?.anchoredSources) && groundedWebResultsReply.anchoredSources.length) {
+      sourceBindingAnchoredSources = groundedWebResultsReply.anchoredSources;
+    }
     if (groundedWebResultsReply?.text) {
       if (groundedWebResultsReply.query) {
         try {
@@ -9908,11 +10315,23 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           errorMessage: groundedWebResultsReply.error?.message || '',
         },
       );
-      if (holeFillAgentRequest && !isFailure) {
+      if (!isFailure && (holeFillAgentRequest || expectDocumentOutput)) {
+        // route 2: ממצאי Web נמצאו — מזריקים כ-context והכותב ממשיך לכתוב את המסמך.
         groundedWebResultsContextPrompt = [
-          'השתמש רק בממצאי ה-Web המקורקעים הבאים כדי למלא חורים במסמך. שלב אותם בטקסט עצמו, אל תחזיר רשימת תוצאות חיפוש ואל תמציא פרטים שלא מופיעים בממצאים.',
+          'השתמש רק בממצאי ה-Web המקורקעים הבאים כדי לבסס את המסמך. שלב אותם בטקסט עצמו, אל תחזיר רשימת תוצאות חיפוש ואל תמציא פרטים שלא מופיעים בממצאים.',
           groundedWebResultsReply.text,
         ].filter(Boolean).join('\n\n');
+        // dual-track: אם המסלול האקדמי נעל allowed-URLs, מצרפים גם את כתובות החדשות כדי שלא ייחתכו בפלט.
+        if (verifiedSourceFollowOnLocked) {
+          verifiedSourceFollowOnAllowedUrls = buildVerifiedSourceAllowedUrlSet([
+            ...Array.from(verifiedSourceFollowOnAllowedUrls),
+            ...(groundedWebResultsReply.urls || []),
+          ]);
+        }
+        providerSupportsGeminiInternetBackedSourceTools = false;
+      } else if (expectDocumentOutput) {
+        // degrade: לא נמצאו תוצאות Web — כותבים את המסמך מהחומרים ומסמנים [דרוש מקור] בחורים.
+        groundedWebResultsContextPrompt = buildDegradedSourceGroundingPrompt(groundedWebResultsReply.text);
         providerSupportsGeminiInternetBackedSourceTools = false;
       } else {
       return rememberSuccessfulReply({
@@ -9945,7 +10364,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${documentCompletenessPrompt ? `\n\nשלמות המסמך:\n${documentCompletenessPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
 
@@ -10997,6 +11416,12 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }
       case 'openai': {
         if (!cfg.openai.key) throw new Error('מפתח OpenAI לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
+        if (providerSupportsNativeWebSearch) {
+          // route 1: כשצריך אינטרנט — Responses API עם web_search כדי שהמודל יחפש ויצטט בעצמו.
+          return callOpenAIResponsesWithWebSearch(cfg.openai.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, {
+            includeCompletionMetadata: preserveProviderCompletionMetadata,
+          });
+        }
         return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
@@ -11004,7 +11429,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, {
+          includeCompletionMetadata: preserveProviderCompletionMetadata,
+          enableWebSearch: providerSupportsNativeWebSearch,
+        });
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
@@ -11233,15 +11661,48 @@ const buildPrompt = (agentConfig, selectedText, context = "") => {
     .filter(Boolean).join("\n\n");
 };
 
+// מחזיר את הספק/המודל הייעודיים לסוכן sidebar לפי הגדרות המשתמש (תפקידי הסרגל).
+// כך גם מסלול ה-inline (BubbleMenu) מכבד את בחירת הספק/המודל לכל סוכן, כמו מסלול ה-chat.
+// נופל בחזרה לספק הגלובלי כאשר forceGlobalProvider פעיל, אין בחירה, או הספק לא מוגדר.
+const resolveSidebarAgentRoute = (agentId = '') => {
+  const base = AGENTS_CONFIG[agentId] || {};
+  let settings;
+  try {
+    settings = getAssistantBehavior().sidebarModeSettings;
+  } catch {
+    settings = null;
+  }
+  if (settings?.forceGlobalProvider === true) return {};
+  const mode = Array.isArray(settings?.modes)
+    ? settings.modes.find((item) => item?.id === agentId)
+    : null;
+  const providerId = String(
+    (mode ? mode.providerId : (base.sidebarSelection?.providerId || base.route)) || '',
+  ).trim();
+  if (!providerId) return {};
+  const cfg = getProviderConfig();
+  if (!isProviderConfiguredForUse(providerId, cfg)) return {};
+  const rawModel = String((mode ? mode.model : base.sidebarSelection?.model) || '').trim();
+  const model = rawModel ? normalizeProviderModelName(providerId, rawModel) : '';
+  return {
+    providerOverride: providerId,
+    preferredProviders: [providerId],
+    ...(model ? { modelOverride: model } : {}),
+  };
+};
+
 export const callAiAgent = async (agentId, selectedText, context = "") => {
   const agentConf = AGENTS_CONFIG[agentId];
   if (!agentConf) throw new Error("Invalid agent ID");
   const fullPrompt = buildPrompt(agentConf, selectedText, context);
-  // משתמש במנוע הפעיל הנבחר (לא תמיד Gemini)
+  // משתמש בספק/מודל הייעודיים לסוכן (אם נבחרו), אחרת במנוע הפעיל הגלובלי.
   const baseOptions = {
     skipAutomation: true,
     skipMultiModel: true,
     strictFormatting: true,
+    agentId,
+    agentLabel: agentConf.label || agentId,
+    ...resolveSidebarAgentRoute(agentId),
   };
   const firstPass = await chatWithActiveProvider(fullPrompt, context, '', baseOptions);
 

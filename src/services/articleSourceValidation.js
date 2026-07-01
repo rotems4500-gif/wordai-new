@@ -478,7 +478,7 @@ const collectKnownNewsDomains = (sourceDomain = '', sources = []) => {
   return knownDomains;
 };
 
-export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article = {}, sources = [], rawText = '') => {
+export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article = {}, sources = [], rawText = '', trustUrlVerification = false) => {
   const normalizedUrl = normalizeUrl(article?.url);
   const normalizedUrlPath = extractNormalizedUrlPath(normalizedUrl);
 
@@ -495,13 +495,18 @@ export const validateArticleCandidate = (queryMeta = analyzeQuery(''), article =
       return 'המקור שנמצא אינו כתבת חדשות עיתונאית מאתר חדשות אלא מקור רשמי, מחקרי או חברתי.';
     }
 
-    if (!isLikelyNewsDomain(sourceDomain) && !hasKnownNewsSourceSignal(evidence.primaryEvidence)) {
-      return 'לא נמצאה אינדיקציה מספקת שמדובר בכתבת חדשות מאתר חדשות.';
-    }
+    // שערי-reputation (דומיין-מוכר + ≥2 דומיינים): נדלגים כשה-URL עבר אימות בפועל —
+    // direct-article + תואם למקור שהספק החזיר + (בדסקטופ) קישור-חי. ככה אתר-חדשות
+    // מקומי עם כתבה אמיתית לא נפסל רק כי אינו ברשימת הדומיינים המוכרים.
+    if (!trustUrlVerification) {
+      if (!isLikelyNewsDomain(sourceDomain) && !hasKnownNewsSourceSignal(evidence.primaryEvidence)) {
+        return 'לא נמצאה אינדיקציה מספקת שמדובר בכתבת חדשות מאתר חדשות.';
+      }
 
-    const knownNewsDomains = collectKnownNewsDomains(sourceDomain, sources);
-    if (knownNewsDomains.size < 2) {
-      return 'לא נמצא אימות משני דומיינים ייחודיים של אתרי חדשות מוכרים לכתבה זו.';
+      const knownNewsDomains = collectKnownNewsDomains(sourceDomain, sources);
+      if (knownNewsDomains.size < 2) {
+        return 'לא נמצא אימות משני דומיינים ייחודיים של אתרי חדשות מוכרים לכתבה זו.';
+      }
     }
   }
 

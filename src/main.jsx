@@ -5611,6 +5611,8 @@ ${sidebarReviewContext}`
             additionalReviewRounds,
             humanizeLoop,
             forceDirectMode,
+            useWorkspaceV2,
+            workspaceV2TemplateId,
             runId: generationRequest.runId,
             returnMeta: true,
           })
