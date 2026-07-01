@@ -190,3 +190,107 @@ pub async fn proxy_http_request(request: ProxyRequest) -> ProxyResponse {
         content_type,
     }
 }
+
+#[derive(Serialize)]
+pub struct UrlLiveResponse {
+    pub ok: bool,
+    pub status: u16,
+    #[serde(rename = "finalUrl")]
+    pub final_url: String,
+}
+
+fn url_live_err(message: &str) -> UrlLiveResponse {
+    UrlLiveResponse {
+        ok: false,
+        status: 0,
+        final_url: message.to_string(),
+    }
+}
+
+// anti-SSRF: חוסם יעדים פנימיים (loopback / private / link-local / unspecified) כדי שאימות-חיות
+// של כתבה חיצונית לא ישמש לגישה לרשת הפנימית. מכסה IP ליטרלים ו-localhost/.local.
+fn is_blocked_ssrf_host(host: &str) -> bool {
+    if host.is_empty() || host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+                    || v4.octets()[0] == 0
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+            }
+        };
+    }
+    false
+}
+
+// אימות-חיות לכתבות מאתרים חיצוניים (כולל לא-מוכרים) לצורך anti-hallucination:
+// HEAD ואז GET אם השרת לא תומך. HTTPS בלבד, ללא פרטי-הזדהות, חסימת יעדים פנימיים,
+// עד 5 redirects. מחזיר { ok=2xx/3xx, status, finalUrl }.
+#[tauri::command]
+pub async fn check_url_live(url: String, timeout_ms: u64) -> UrlLiveResponse {
+    let parsed = match url::Url::parse(&url) {
+        Ok(u) => u,
+        Err(_) => return url_live_err("כתובת לא תקינה"),
+    };
+    if parsed.scheme() != "https" {
+        return url_live_err("רק HTTPS מורשה");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return url_live_err("כתובת עם פרטי הזדהות אינה מורשית");
+    }
+    let host = normalize_host(parsed.host_str().unwrap_or(""));
+    if is_blocked_ssrf_host(&host) {
+        return url_live_err("Host פנימי חסום");
+    }
+
+    let timeout = if timeout_ms > 0 {
+        timeout_ms.clamp(1000, 15000)
+    } else {
+        5000
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent("Mozilla/5.0 (compatible; WordFlowAI/1.0)")
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return url_live_err(&format!("שגיאת אתחול: {e}")),
+    };
+
+    // HEAD זול קודם; חלק מהשרתים דוחים HEAD (403/405/501) — אז נופלים ל-GET.
+    let head = client.request(reqwest::Method::HEAD, parsed.clone()).send().await;
+    let response = match head {
+        Ok(r) if !matches!(r.status().as_u16(), 403 | 405 | 501) => r,
+        _ => match client.request(reqwest::Method::GET, parsed).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = if e.is_timeout() {
+                    "timeout".to_string()
+                } else {
+                    e.to_string()
+                };
+                return url_live_err(&msg);
+            }
+        },
+    };
+
+    let status = response.status().as_u16();
+    let final_url = response.url().to_string();
+    UrlLiveResponse {
+        ok: (200..400).contains(&status),
+        status,
+        final_url,
+    }
+}

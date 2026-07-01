@@ -276,6 +276,8 @@ const googleOAuth = async () => {
 // ── proxy ───────────────────────────────────────────────────────────────────
 const proxyHttpRequest = async (request = {}) => invoke('proxy_http_request', { request });
 const abortProxyHttpRequest = async (requestId = '') => invoke('abort_proxy_http_request', { requestId });
+// אימות-חיות לכתבות מאתרים לא-מוכרים: HEAD→GET עם anti-SSRF ב-Rust, מחזיר { ok, status, finalUrl }.
+const checkUrlLive = async ({ url = '', timeoutMs = 5000 } = {}) => invoke('check_url_live', { url, timeoutMs });
 
 // ── updater (tauri-plugin-updater דרך פקודות Rust) ──────────────────────────
 const decorateUpdateResult = (result = {}) => ({
@@ -325,6 +327,7 @@ export function installDesktopShim() {
 
     proxyHttpRequest,
     abortProxyHttpRequest,
+    checkUrlLive,
     googleOAuth,
 
     openDocumentDialog,
@@ -347,6 +350,10 @@ export function installDesktopShim() {
     saveProviderConfig: async (config) => writeSecureJson(PROVIDER_CONFIG_FILE, config),
     loadAppSettings: async () => readSecureJson(APP_SETTINGS_FILE),
     saveAppSettings: async (settings) => writeSecureJson(APP_SETTINGS_FILE, settings),
+
+    // ערך מוצפן DPAPI כללי (משמש את "זכור במכשיר הזה" לשמירת ה-DEK).
+    readSecureValue: async (rel) => readSecureJson(rel),
+    saveSecureValue: async (rel, value) => writeSecureJson(rel, value),
 
     saveLocalMaterial,
     listLocalMaterials,
