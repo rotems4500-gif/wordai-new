@@ -15,8 +15,8 @@ const CHEF_MODEL_OPTIONS = [
   { value: 'scholar', label: 'Google Scholar' },
   { value: 'perplexity', label: 'Perplexity' },
   { value: 'groq', label: 'Groq' },
-  { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: 'Custom' },
+  { value: 'ollama', label: 'Ollama (מקומי — עברית חלשה, לא מומלץ)' },
 ];
 
 const normalizeAnswerText = (choices = [], freeText = '') => {

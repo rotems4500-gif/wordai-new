@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useDelimitedListInput } from './useDelimitedListInput';
-import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
+import { normalizeDelimitedList } from './delimitedListInput';
+import { getSyllabusFileAcceptList, getHelperMaterialAcceptList } from './services/workspaceLearningService';
 
 const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'gemini', label: 'Gemini' },
@@ -13,9 +14,9 @@ const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'together', label: 'Together.ai' },
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'xai', label: 'xAI (Grok)' },
-  { id: 'ollama', label: 'Ollama' },
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'custom', label: 'ספק אחר / מותאם' },
+  { id: 'ollama', label: 'Ollama (מקומי — עברית חלשה, לא מומלץ)' },
 ];
 
 const ONBOARDING_AI_PROVIDERS = [
@@ -45,6 +46,214 @@ function SyllabusListTextarea({ value, onCommit, commitLockRef, onUnlock = () =>
   );
 }
 
+// עורך קורסים חוזר: שורת קורס לכל פריט, עם מקום ייעודי לסילבוס + צירוף קבצי עזר.
+// הקבצים מועלים לחומרי הפרויקט ומתויגים בשם הקורס. שמות הקורסים נשמרים חזרה
+// ל-currentCourses לתאימות עם שאר המערכת.
+function CourseRowsEditor({
+  initialNames = [],
+  disabled = false,
+  onNamesChange = () => {},
+  onUploadFile = async () => null,
+  onRemoveFile = () => {},
+}) {
+  const seqRef = useRef(0);
+  const nextId = (prefix) => `${prefix}${seqRef.current++}`;
+  const makeRow = (name = '') => ({ id: nextId('c'), name, syllabus: null, files: [] });
+  const [rows, setRows] = useState(() => {
+    const names = (initialNames || []).map((n) => String(n || '').trim()).filter(Boolean);
+    return names.map((n) => makeRow(n));
+  });
+
+  const commitNames = (nextRows) => {
+    onNamesChange(nextRows.map((r) => r.name.trim()).filter(Boolean));
+  };
+  const applyRows = (nextRows) => {
+    setRows(nextRows);
+    commitNames(nextRows);
+  };
+
+  const addCourse = () => applyRows([...rows, makeRow('')]);
+  const removeCourse = (id) => {
+    const row = rows.find((r) => r.id === id);
+    if (row?.syllabus?.material) onRemoveFile(row.syllabus.material);
+    row?.files.forEach((f) => { if (f.material) onRemoveFile(f.material); });
+    applyRows(rows.filter((r) => r.id !== id));
+  };
+  const setName = (id, value) => applyRows(rows.map((r) => (r.id === id ? { ...r, name: value } : r)));
+
+  const attachSyllabus = async (id, fileList) => {
+    const file = Array.from(fileList || [])[0];
+    if (!file) return;
+    const courseName = (rows.find((r) => r.id === id)?.name || '').trim();
+    const previous = rows.find((r) => r.id === id)?.syllabus;
+    if (previous?.material) onRemoveFile(previous.material);
+    const fid = nextId('s');
+    setRows((prev) => prev.map((r) => (r.id === id
+      ? { ...r, syllabus: { fid, name: file.name, status: 'uploading', material: null } }
+      : r)));
+    try {
+      const res = await onUploadFile(file, courseName, 'syllabus');
+      const material = res?.entry || res || null;
+      setRows((prev) => prev.map((r) => (r.id === id && r.syllabus?.fid === fid
+        ? { ...r, syllabus: { ...r.syllabus, status: 'done', material } }
+        : r)));
+    } catch (_) {
+      setRows((prev) => prev.map((r) => (r.id === id && r.syllabus?.fid === fid
+        ? { ...r, syllabus: { ...r.syllabus, status: 'error' } }
+        : r)));
+    }
+  };
+
+  const removeSyllabus = (id) => {
+    const syl = rows.find((r) => r.id === id)?.syllabus;
+    if (syl?.material) onRemoveFile(syl.material);
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, syllabus: null } : r)));
+  };
+
+  const attachFiles = async (id, fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const courseName = (rows.find((r) => r.id === id)?.name || '').trim();
+    for (const file of files) {
+      const fid = nextId('f');
+      setRows((prev) => prev.map((r) => (r.id === id
+        ? { ...r, files: [...r.files, { fid, name: file.name, status: 'uploading', material: null }] }
+        : r)));
+      try {
+        const res = await onUploadFile(file, courseName, 'material');
+        const material = res?.entry || res || null;
+        setRows((prev) => prev.map((r) => (r.id === id
+          ? { ...r, files: r.files.map((f) => (f.fid === fid ? { ...f, status: 'done', material } : f)) }
+          : r)));
+      } catch (_) {
+        setRows((prev) => prev.map((r) => (r.id === id
+          ? { ...r, files: r.files.map((f) => (f.fid === fid ? { ...f, status: 'error' } : f)) }
+          : r)));
+      }
+    }
+  };
+
+  const removeFile = (id, fid) => {
+    const fileEntry = rows.find((r) => r.id === id)?.files.find((f) => f.fid === fid);
+    if (fileEntry?.material) onRemoveFile(fileEntry.material);
+    setRows((prev) => prev.map((r) => (r.id === id
+      ? { ...r, files: r.files.filter((f) => f.fid !== fid) }
+      : r)));
+  };
+
+  const actionLabelClass = (active) => `flex-none px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap border transition-all duration-300 ${disabled
+    ? 'opacity-60 cursor-not-allowed text-white/50 bg-white/5 border-white/10'
+    : `cursor-pointer ${active ? 'text-cyan-100 bg-cyan-400/10 border-cyan-300/40 hover:bg-cyan-400/20' : 'text-[#cbb89e] bg-white/5 border-white/15 hover:text-white hover:border-amber-400/40'}`}`;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="block text-sm font-medium text-white group-hover:text-amber-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+          קורסים, סילבוס וקבצי עזר 📚
+        </label>
+        <button
+          type="button"
+          onClick={addCourse}
+          disabled={disabled}
+          className="px-3 py-1.5 rounded-xl text-xs font-bold text-amber-200 bg-amber-400/10 border border-amber-400/35 hover:bg-amber-400/20 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          + הוסף קורס
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        {rows.map((row) => (
+          <div key={row.id} className="rounded-2xl border border-white/10 bg-white/5 p-3 flex flex-col gap-2.5">
+            <div className="flex items-center gap-2">
+              <input
+                value={row.name}
+                onChange={(e) => setName(row.id, e.target.value)}
+                disabled={disabled}
+                placeholder="שם הקורס"
+                className="flex-1 min-w-0 px-3 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
+              />
+              <label className={actionLabelClass(Boolean(row.syllabus))} title="צרף את הסילבוס של הקורס">
+                📄 {row.syllabus ? 'החלף סילבוס' : 'סילבוס'}
+                <input
+                  type="file"
+                  accept={getHelperMaterialAcceptList()}
+                  className="hidden"
+                  disabled={disabled}
+                  onChange={(e) => { attachSyllabus(row.id, e.target.files); e.target.value = ''; }}
+                />
+              </label>
+              <label className={actionLabelClass(false)} title="צרף קבצי עזר לקורס זה">
+                📎 קבצי עזר
+                <input
+                  type="file"
+                  multiple
+                  accept={getHelperMaterialAcceptList()}
+                  className="hidden"
+                  disabled={disabled}
+                  onChange={(e) => { attachFiles(row.id, e.target.files); e.target.value = ''; }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => removeCourse(row.id)}
+                disabled={disabled}
+                title="הסר קורס"
+                className="flex-none w-9 h-9 rounded-xl bg-white/5 text-rose-300 text-lg leading-none hover:bg-rose-500/20 transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                ×
+              </button>
+            </div>
+
+            {(row.syllabus || row.files.length > 0) && (
+              <div className="flex flex-wrap gap-1.5">
+                {row.syllabus && (
+                  <span
+                    className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs border ${row.syllabus.status === 'error'
+                      ? 'text-rose-100 bg-rose-500/15 border-rose-400/30'
+                      : 'text-cyan-100 bg-cyan-400/10 border-cyan-300/30'}`}
+                    title={row.syllabus.status === 'error' ? 'ההעלאה נכשלה' : `סילבוס: ${row.syllabus.name}`}
+                  >
+                    {row.syllabus.status === 'uploading' ? '⏳' : row.syllabus.status === 'error' ? '⚠️' : '📄'} סילבוס · {row.syllabus.name}
+                    {row.syllabus.status !== 'uploading' && (
+                      <button type="button" onClick={() => removeSyllabus(row.id)} className="text-rose-300 hover:text-rose-200 leading-none">×</button>
+                    )}
+                  </span>
+                )}
+                {row.files.map((f) => (
+                  <span
+                    key={f.fid}
+                    className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs border ${f.status === 'error'
+                      ? 'text-rose-100 bg-rose-500/15 border-rose-400/30'
+                      : 'text-[#ddcfb9] bg-amber-400/10 border-amber-400/25'}`}
+                    title={f.status === 'error' ? 'ההעלאה נכשלה' : f.name}
+                  >
+                    {f.status === 'uploading' ? '⏳' : f.status === 'error' ? '⚠️' : '📎'} {f.name}
+                    {f.status !== 'uploading' && (
+                      <button
+                        type="button"
+                        onClick={() => removeFile(row.id, f.fid)}
+                        className="text-rose-300 hover:text-rose-200 leading-none"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {rows.length === 0 && (
+          <div className="text-xs text-white/55 px-1 py-1 leading-relaxed">
+            עדיין אין קורסים — הוסף קורס וצרף לכל אחד את הסילבוס וקבצי העזר שלו.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ProfileOnboarding({
   profile,
   updateField,
@@ -62,6 +271,8 @@ export default function ProfileOnboarding({
   onOpenPersonalStyle = () => {},
   syllabusImport = {},
   onImportSyllabusFile = () => {},
+  onUploadCourseMaterial = async () => null,
+  onRemoveCourseMaterial = () => {},
   onComplete = () => {},
   onDismiss = () => {},
   providerConfig = {},
@@ -414,23 +625,6 @@ export default function ProfileOnboarding({
                   </div>
                   
                   <div className="group">
-                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-yellow-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      שם קורס / קורסים פעילים 📚
-                    </label>
-                    <SyllabusListTextarea
-                      key={`currentCourses:${syllabusImportSignature}`}
-                      value={profile.currentCourses}
-                      onCommit={(value) => updateList('currentCourses', value)}
-                      commitLockRef={syllabusListCommitLockRef}
-                      onUnlock={unlockSyllabusListEditing}
-                      disabled={syllabusImportBusy}
-                      placeholder="פרט על הקורסים, הנושאים או הפרויקטים שאתה עובד עליהם..."
-                      rows={2}
-                      className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
-                    />
-                  </div>
-
-                  <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-rose-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                       תז 🪪
                     </label>
@@ -456,144 +650,36 @@ export default function ProfileOnboarding({
                   </p>
                 </div>
                 
-                <div className="rounded-3xl border border-cyan-300/25 bg-gradient-to-br from-cyan-500/18 via-sky-500/10 to-slate-900/70 p-5 shadow-2xl shadow-cyan-950/35">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                    <div className="max-w-2xl">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-cyan-200/25 bg-white/10 text-[11px] font-semibold text-cyan-100 mb-3">
-                        <span>📄</span>
-                        <span>ייבוא סילבוס מהיר</span>
-                      </div>
-                      <h3 className="text-lg font-bold text-white mb-2" style={{ textShadow: '1px 1px 5px rgba(0,0,0,0.7)' }}>
-                        אפשר להתחיל מקובץ סילבוס במקום למלא הכל ידנית
-                      </h3>
-                      <p className="text-sm text-cyan-50/90 leading-relaxed">
-                        {syllabusImportHint}
-                      </p>
-                      <p className="text-xs text-white/70 mt-2 leading-relaxed">
-                        לאחר הייבוא אפשר לעבור על הפרטים ולעדכן ידנית רק מה שחסר.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col sm:items-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => syllabusFileInputRef.current?.click()}
-                        disabled={syllabusImportBusy}
-                        className="px-5 py-3 rounded-2xl bg-cyan-400/85 hover:bg-cyan-300 text-slate-950 text-sm font-bold shadow-lg shadow-cyan-900/30 transition-all duration-300 disabled:opacity-70 disabled:cursor-wait"
-                      >
-                        {syllabusImportBusy ? 'מייבא סילבוס...' : 'העלה סילבוס'}
-                      </button>
-                      <div className="text-[11px] text-white/65">
-                        תומך ב־docx, txt, md, html, pdf, מצגות (pptx), Excel ובתמונות עם OCR
-                      </div>
-                    </div>
-                  </div>
-
-                  <input
-                    ref={syllabusFileInputRef}
-                    type="file"
-                    accept={getSyllabusFileAcceptList()}
-                    className="hidden"
-                    onChange={handleSyllabusFileSelection}
+                <div className="group">
+                  <CourseRowsEditor
+                    key={`currentCourses:${syllabusImportSignature}`}
+                    initialNames={normalizeDelimitedList(profile.currentCourses)}
+                    disabled={syllabusImportBusy}
+                    onNamesChange={(names) => updateList('currentCourses', names)}
+                    onUploadFile={onUploadCourseMaterial}
+                    onRemoveFile={onRemoveCourseMaterial}
                   />
-
-                  {(syllabusImport.fileName || syllabusImport.message) && (
-                    <div className={`mt-4 rounded-2xl border px-4 py-3 ${syllabusImportToneClass}`}>
-                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                        <div className="min-w-0">
-                          {syllabusImport.fileName ? (
-                            <div className="text-sm font-semibold truncate" title={syllabusImport.fileName}>
-                              {syllabusImport.fileName}
-                            </div>
-                          ) : null}
-                          <div className="text-sm leading-relaxed mt-1">
-                            {syllabusImport.message || 'בחר קובץ כדי להתחיל ייבוא.'}
-                          </div>
-                          {syllabusImport.summary ? (
-                            <div className="text-xs mt-2 text-white/80 leading-relaxed">
-                              {syllabusImport.summary}
-                            </div>
-                          ) : null}
-                        </div>
-
-                        <div className="shrink-0">
-                          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold text-white/90">
-                            {syllabusImportBadge}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                  <div className="text-xs font-semibold text-white/85">מילוי ידני משלים</div>
+                  <div className="text-xs font-semibold text-white/85">פרטי הגשה</div>
                   <div className="text-[11px] text-white/65 mt-1 leading-relaxed">
-                    אם חלק מהפרטים לא זוהו מהסילבוס, אפשר להשלים או לתקן אותם ידנית כאן למטה.
+                    הוסף קורסים וצרף לכל אחד את הסילבוס וקבצי העזר למעלה. כאן אפשר להשלים את תאריך ההגשה.
                   </div>
                 </div>
 
                 <div className="space-y-3 opacity-95">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="group">
-                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-amber-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        מרצים / מנחים 👩‍🏫
-                      </label>
-                      <SyllabusListTextarea
-                        key={`lecturerNames:${syllabusImportSignature}`}
-                        value={lecturerNamesValue}
-                        onCommit={(value) => updateList('lecturerNames', value)}
-                        commitLockRef={syllabusListCommitLockRef}
-                        onUnlock={unlockSyllabusListEditing}
-                        disabled={syllabusImportBusy}
-                        rows={3}
-                        placeholder="אפשר להפריד בין שמות בפסיקים או בשורות חדשות"
-                        className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
-                      />
-                    </div>
-                    <div className="group">
-                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-violet-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        נושאי סילבוס / דגשים 📚
-                      </label>
-                      <SyllabusListTextarea
-                        key={`syllabusTopics:${syllabusImportSignature}`}
-                        value={profile.syllabusTopics}
-                        onCommit={(value) => updateList('syllabusTopics', value)}
-                        commitLockRef={syllabusListCommitLockRef}
-                        onUnlock={unlockSyllabusListEditing}
-                        disabled={syllabusImportBusy}
-                        rows={3}
-                        placeholder="נושאים, יחידות לימוד או דגשים שחוזרים לאורך הקורס"
-                        className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="group">
-                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-emerald-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        סוג מטלה / מסמך 📄
-                      </label>
-                      <input
-                        value={profile.assignmentType || ''}
-                        onChange={(e) => updateField('assignmentType', e.target.value)}
-                        disabled={syllabusImportBusy}
-                        placeholder="למשל: עבודה מסכמת"
-                        className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
-                      />
-                    </div>
-                    <div className="group">
-                      <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                        תאריך הגשה 📅
-                      </label>
-                      <input
-                        type="date"
-                        value={profile.submissionDate || ''}
-                        onChange={(e) => updateField('submissionDate', e.target.value)}
-                        disabled={syllabusImportBusy}
-                        className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
-                      />
-                    </div>
+                  <div className="group">
+                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-cyan-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      תאריך הגשה 📅
+                    </label>
+                    <input
+                      type="date"
+                      value={profile.submissionDate || ''}
+                      onChange={(e) => updateField('submissionDate', e.target.value)}
+                      disabled={syllabusImportBusy}
+                      className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all duration-300 hover:bg-white/10"
+                    />
                   </div>
 
                   <div className="group">

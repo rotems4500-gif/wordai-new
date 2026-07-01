@@ -21,7 +21,9 @@ import {
   unlockWithRecoveryCode as unlockCryptoRecovery,
   changePassphrase as changeCryptoPassphrase,
   rotateRecoveryCode as rotateCryptoRecovery,
+  getSessionDek as getCryptoSessionDek,
 } from './services/cloudCryptoSession';
+import { saveDeviceKey as saveCloudDeviceKey, clearDeviceKey as clearCloudDeviceKey, hasDeviceKey as hasCloudDeviceKey } from './services/cloudDeviceKey';
 import { APP_VERSION_LABEL } from './appVersion';
 import { getTheme, setTheme as setAppTheme, onThemeChange } from './theme';
 import { DECK_THEMES } from './presentation/deckThemes';
@@ -89,8 +91,9 @@ import {
   createWorkspaceV2Template,
   deleteWorkspaceV2Template,
   resetWorkspaceV2Templates,
+  syncPersistedAppSettings,
 } from "./services/aiService";
-import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
+import { loadProjectMaterials, saveHelperMaterial, removeHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
 // ─── ספקים נפוצים לדוגמה ───
@@ -1084,7 +1087,7 @@ function AiSettings({ config, setConfig }) {
           onChange={(e) => activate(e.target.value)}
           style={{ width: '100%', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--s-border)', background: 'var(--s-surface-2)', color: 'var(--s-text)', fontSize: 14, fontWeight: 600, outline: 'none', cursor: 'pointer' }}
         >
-          {[['gemini', 'Google Gemini'], ['openai', 'OpenAI (GPT)'], ['claude', 'Claude (Anthropic)'], ['groq', 'Groq'], ['perplexity', 'Perplexity'], ['ollama', 'Ollama (מקומי)'], ['custom', config.custom?.name || 'מותאם']].map(([id, label]) => (
+          {[['gemini', 'Google Gemini'], ['openai', 'OpenAI (GPT)'], ['claude', 'Claude (Anthropic)'], ['groq', 'Groq'], ['perplexity', 'Perplexity'], ['ollama', 'Ollama (מקומי — עברית חלשה)'], ['custom', config.custom?.name || 'מותאם']].map(([id, label]) => (
             <option key={id} value={id}>{label}{config.active === id ? ' · פעיל' : ''}</option>
           ))}
         </select>
@@ -1303,8 +1306,8 @@ function AiSettings({ config, setConfig }) {
       </ProviderSection>
 
       {/* Ollama */}
-      <ProviderSection title="Ollama (מקומי — חינמי לחלוטין)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')} expandedHint={openedGuideProviderId === 'ollama'} guideId="ollama"
-        description="הרץ AI ישירות על המחשב שלך! הורד מ-ollama.com — פרטי, חינמי, ללא אינטרנט">
+      <ProviderSection title="Ollama (מקומי — לא מומלץ לעברית)" icon="🦙" active={config.active === 'ollama'} configured={isProviderConfigured(config, 'ollama')} onActivate={() => activate('ollama')} expandedHint={openedGuideProviderId === 'ollama'} guideId="ollama"
+        description="הרץ AI מקומי, פרטי וחינמי. ⚠️ המודלים המקומיים חלשים בעברית ואין להם גישה לאינטרנט/מקורות — עדיף Gemini או Perplexity לעבודות בעברית.">
         <FieldRow label="כתובת שרת" placeholder="http://localhost:11434/v1" value={config.ollama?.baseUrl}
           onChange={v => update('ollama', 'baseUrl', v)} hint="ברירת מחדל כשאולמה רץ על המחשב" />
         <FieldRow
@@ -1425,7 +1428,7 @@ function AiSettings({ config, setConfig }) {
                   ['claude', 'Claude (Anthropic)'],
                   ['groq', 'Groq'],
                   ['perplexity', 'Perplexity'],
-                  ['ollama', 'Ollama (מקומי)'],
+                  ['ollama', 'Ollama (מקומי — עברית חלשה)'],
                   ['custom', 'מותאם אישית'],
                 ].map(([pid, plabel]) => (<option key={pid} value={pid}>{plabel}</option>))}
               </select>
@@ -1620,7 +1623,7 @@ function AiSettings({ config, setConfig }) {
                         ['claude', 'Claude (Anthropic)'],
                         ['groq', 'Groq'],
                         ['perplexity', 'Perplexity'],
-                        ['ollama', 'Ollama (מקומי)'],
+                        ['ollama', 'Ollama (מקומי — עברית חלשה)'],
                         ['custom', 'מותאם אישית'],
                       ].map(([pid, plabel]) => (
                         <option key={pid} value={pid}>{plabel}</option>
@@ -2746,6 +2749,10 @@ const createWorkspaceStep = (index = 1) => ({
   model: '',
 });
 
+// זוכר את הסביבה שנבחרה בין mount ל-mount (הטאב עושה unmount במעבר) כדי שחזרה לטאב
+// תציג את הסביבה שהמשתמש ערך — ולא תקפוץ תמיד ל-templates[0] כאילו העריכה נמחקה.
+let lastWorkspaceV2SelectedId = '';
+
 const createWorkspaceDraft = () => ({
   label: 'סביבת עבודה חדשה',
   mission: 'פתרון משימה מותאמת אישית בעזרת צוות עבודה ברור וממוקד.',
@@ -2789,8 +2796,14 @@ const createWorkspaceDraft = () => ({
 
 function WorkspaceV2Settings({ config }) {
   const [templates, setTemplates] = useState(() => getWorkspaceV2Templates());
-  const [selectedId, setSelectedId] = useState(() => templates[0]?.id || '');
-  const [draft, setDraft] = useState(() => templates[0] || createWorkspaceDraft());
+  const [selectedId, setSelectedId] = useState(() => {
+    const remembered = templates.find((template) => template.id === lastWorkspaceV2SelectedId);
+    return (remembered || templates[0])?.id || '';
+  });
+  const [draft, setDraft] = useState(() => {
+    const remembered = templates.find((template) => template.id === lastWorkspaceV2SelectedId);
+    return remembered || templates[0] || createWorkspaceDraft();
+  });
   const [status, setStatus] = useState('');
 
   const providerChoices = useMemo(() => {
@@ -2813,13 +2826,20 @@ function WorkspaceV2Settings({ config }) {
     setTemplates(nextTemplates);
     const nextSelected = nextTemplates.find((template) => template.id === nextSelectedId) || nextTemplates[0] || createWorkspaceDraft();
     setSelectedId(nextSelected.id || '');
+    lastWorkspaceV2SelectedId = nextSelected.id || '';
     setDraft(nextSelected);
+    // מירֵּור מיידי לקובץ ההגדרות המוצפן (app-settings.json) — אחרת השינוי חי רק ב-localStorage
+    // של WebView2 ואובד ב-restart/עדכון. כל 5 ה-handlers של המוטציות עוברים דרך כאן.
+    if (typeof syncPersistedAppSettings === 'function') {
+      try { syncPersistedAppSettings(); } catch {}
+    }
   };
 
   const selectTemplate = (templateId) => {
     const nextTemplate = templates.find((template) => template.id === templateId);
     if (!nextTemplate) return;
     setSelectedId(nextTemplate.id);
+    lastWorkspaceV2SelectedId = nextTemplate.id;
     setDraft(nextTemplate);
     setStatus('');
   };
@@ -3117,6 +3137,14 @@ function WorkspaceV2Settings({ config }) {
             ))}
           </div>
         </div>
+
+        {/* כפתור שמירה נוסף בתחתית — הכפתור התחתון של המודל ("שמור והחל שינויים") לא שומר את הסביבה */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', border: '1px solid var(--s-border)', borderRadius: 16, padding: '12px 16px', background: 'var(--s-surface-2)' }}>
+          <div style={{ fontSize: 12, color: status ? '#166534' : 'var(--s-muted)', lineHeight: 1.5 }}>
+            {status || 'שינויים בסביבה נשמרים רק בכפתור הזה — לא בכפתור "שמור והחל שינויים" התחתון של חלון ההגדרות.'}
+          </div>
+          <button type="button" onClick={handleSave} style={{ border: '1px solid #16A34A', background: '#16A34A', color: 'white', borderRadius: 10, padding: '10px 22px', fontSize: 13, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }}>שמור סביבה</button>
+        </div>
       </div>
     </div>
   );
@@ -3341,6 +3369,29 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
     { title: 'הפעלת סקיל', text: '/academic-structure בנה לי שלד לעבודה על מנהיגות דיגיטלית' },
     { title: 'מקורות מחקר', text: '/source-hunter תן לי מילות חיפוש ל-Google Scholar על חרדת מבחנים' },
   ];
+  const commonIssues = [
+    {
+      symptom: 'כל בדיקות החיבור נכשלות פתאום (גם ספקים שעבדו)',
+      cause: 'המפתחות מוצפנים בענן (E2EE) והסשן נעול. כשנעול, האפליקציה לא יכולה לפענח אף מפתח.',
+      fix: 'פתח את מסך הנעילה והקלד את ה-passphrase (או קוד השחזור). אחרי הפתיחה כל הספקים עובדים שוב. אפשר לסמן "זכור במכשיר הזה" כדי לא להיתקל בזה בכל פתיחה.',
+      tab: 'security',
+      tabLabel: 'פתח אבטחה',
+    },
+    {
+      symptom: 'שגיאה 401 · invalid x-api-key',
+      cause: 'השרת של הספק דחה את המפתח — בדרך כלל מפתח שגוי, פג, או מפתח של ספק אחר (למשל מפתח OpenAI בשדה של Claude).',
+      fix: 'ודא שהמפתח מתאים לספק: Gemini מתחיל ב-AIza…, OpenAI ב-sk-…, Claude ב-sk-ant-…, Groq ב-gsk_…. הדבק את המפתח המלא בלי רווחים, וודא שיש קרדיט/חיוב פעיל בחשבון אצל הספק.',
+      tab: 'ai',
+      tabLabel: 'פתח ספקים',
+    },
+    {
+      symptom: 'רוצה ספק חזק יותר ל-SPSS/קוד או למצגות, בלי לשנות את הספק הראשי',
+      cause: 'יש ספק ייעודי לפי פיצ\'ר: אפשר להריץ את הכתיבה על Gemini ואת ה-SPSS על Claude (חזק יותר בקוד), בלי להחליף את הספק הפעיל.',
+      fix: 'בטאב "תמונות וגרפים" → כרטיס "קוד (SPSS Syntax)": בחר את הספק הרצוי. השאר את שדה "מפתח API ייעודי" ריק כדי לרשת אוטומטית את המפתח הגלובלי של אותו ספק — מפתח נפרד צריך רק לבילינג/מכסה נפרדים.',
+      tab: 'media',
+      tabLabel: 'פתח תמונות וגרפים',
+    },
+  ];
   const activeStep = guidedTourSteps[activeStepIndex] || guidedTourSteps[0];
 
   const resetSavedMemory = async () => {
@@ -3553,6 +3604,39 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
               <div style={{ fontSize: 11, color: '#1E293B', lineHeight: 1.7, fontFamily: 'Consolas, monospace', background: 'white', border: '1px dashed var(--s-border)', borderRadius: 10, padding: '9px 10px' }}>
                 {item.text}
               </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 20, padding: '16px', background: 'white' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: '#B45309', marginBottom: 6, letterSpacing: '0.08em' }}>פתרון תקלות</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 4 }}>בעיות נפוצות בחיבור ספקים</div>
+        <div style={{ fontSize: 12, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 12 }}>
+          התקלות שחוזרות הכי הרבה סביב מפתחות וספקים — מה הסיבה ואיך מתקנים מהר.
+        </div>
+        <div style={{ display: 'grid', gap: 10 }}>
+          {commonIssues.map((issue) => (
+            <div key={issue.symptom} style={{ border: '1px solid var(--s-border)', borderRadius: 14, background: 'var(--s-surface-2)', padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#92400E', marginBottom: 6 }}>⚠️ {issue.symptom}</div>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, marginBottom: 6 }}><strong style={{ color: 'var(--s-text)' }}>למה:</strong> {issue.cause}</div>
+              <div style={{ fontSize: 11, color: 'var(--s-text)', lineHeight: 1.7, marginBottom: 10 }}><strong>תיקון:</strong> {issue.fix}</div>
+              <button
+                type="button"
+                onClick={() => onNavigate(issue.tab)}
+                style={{
+                  border: issue.tab === activeTab ? '1px solid #1D4ED8' : '1px solid #BFDBFE',
+                  background: issue.tab === activeTab ? '#DBEAFE' : '#EFF6FF',
+                  color: issue.tab === activeTab ? '#1E3A8A' : '#1D4ED8',
+                  borderRadius: 12,
+                  padding: '8px 11px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {issue.tab === activeTab ? `פתוח עכשיו: ${issue.tabLabel}` : issue.tabLabel}
+              </button>
             </div>
           ))}
         </div>
@@ -3894,11 +3978,28 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
     }
   };
 
+  const handleUploadCourseMaterial = async (file, courseName = '', kind = 'material') => {
+    const cn = String(courseName || '').trim();
+    const title = kind === 'syllabus'
+      ? `סילבוס${cn ? ` — ${cn}` : ''} — ${file.name}`
+      : undefined;
+    const res = await saveHelperMaterial(file, { uploadKind: 'course-material', courseName: cn, title });
+    if (res && res.ok === false) throw new Error(res.error || 'שמירת קובץ הקורס נכשלה');
+    return res;
+  };
+
+  const handleRemoveCourseMaterial = async (material) => {
+    if (!material) return;
+    try { await removeHelperMaterial(material); } catch (_) { /* best-effort */ }
+  };
+
   return (
     <ProfileOnboarding
       profile={profile}
       updateField={updateField}
       updateList={updateList}
+      onUploadCourseMaterial={handleUploadCourseMaterial}
+      onRemoveCourseMaterial={handleRemoveCourseMaterial}
       externalAnalysis={{
         selectedProviderId: selectedExternalProviderId,
         quickSetupProviderId: resolvedQuickSetupProviderId,
@@ -6983,6 +7084,7 @@ function SecuritySettings() {
   const [unlocked, setUnlocked] = useState(isCryptoUnlocked());
   const [busy, setBusy] = useState(false);
   const [revealedRecovery, setRevealedRecovery] = useState(null);
+  const [deviceRemembered, setDeviceRemembered] = useState(false);
 
   // טפסים
   const [setupPass, setSetupPass] = useState('');
@@ -7021,6 +7123,32 @@ function SecuritySettings() {
     return () => window.removeEventListener('wordai-cloud-crypto-locked', onLocked);
   }, []);
 
+  // מצב "זכור במכשיר הזה" עבור החשבון הנוכחי.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.uid) { setDeviceRemembered(false); return undefined; }
+    hasCloudDeviceKey(user.uid).then((has) => { if (!cancelled) setDeviceRemembered(has); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user, unlocked]);
+
+  const rememberThisDevice = async () => {
+    setBusy(true);
+    try {
+      const ok = await saveCloudDeviceKey(user.uid, getCryptoSessionDek());
+      setDeviceRemembered(ok);
+      showToast(ok ? 'המכשיר הזה ייפתח אוטומטית מעכשיו.' : 'שמירת המפתח במכשיר נכשלה.', ok ? 'success' : 'error');
+    } finally { setBusy(false); }
+  };
+
+  const forgetThisDevice = async () => {
+    setBusy(true);
+    try {
+      await clearCloudDeviceKey(user.uid);
+      setDeviceRemembered(false);
+      showToast('המכשיר נשכח — בפתיחה הבאה תידרש הסיסמה.', 'info');
+    } finally { setBusy(false); }
+  };
+
   const validatePair = (a, b) => {
     if (a.length < MIN_PASSPHRASE_LEN) { showToast(`הסיסמה חייבת באורך ${MIN_PASSPHRASE_LEN} תווים לפחות.`, 'error'); return false; }
     if (a !== b) { showToast('הסיסמאות לא תואמות.', 'error'); return false; }
@@ -7034,6 +7162,7 @@ function SecuritySettings() {
       const { bundle: b, recoveryCode } = await initCryptoPassphrase(setupPass);
       await saveCloudCryptoMeta(user, b);
       setCloudCryptoEnabled(true);
+      try { await saveCloudDeviceKey(user.uid, getCryptoSessionDek()); setDeviceRemembered(true); } catch { /* ignore */ }
       setBundle(b); setUnlocked(true); setRevealedRecovery(recoveryCode);
       setSetupPass(''); setSetupPass2('');
       // מיגרציה: סנכרון כפוי שמצפין את המפתחות שכבר בענן.
@@ -7050,6 +7179,7 @@ function SecuritySettings() {
       const ok = await unlockCryptoPassphrase(unlockPass, bundle);
       if (!ok) { showToast('סיסמה שגויה.', 'error'); return; }
       setUnlocked(true); setUnlockPass('');
+      try { await saveCloudDeviceKey(user.uid, getCryptoSessionDek()); setDeviceRemembered(true); } catch { /* ignore */ }
       await pullFromCloud(user, { force: true }); // פענוח והחלת המפתחות מהענן
       showToast('נפתח. המפתחות נטענו מהענן.', 'success');
     } catch (e) {
@@ -7077,6 +7207,7 @@ function SecuritySettings() {
       const b2 = await changeCryptoPassphrase(bundle, changePass);
       await saveCloudCryptoMeta(user, b2);
       setBundle(b2);
+      try { await saveCloudDeviceKey(user.uid, getCryptoSessionDek()); setDeviceRemembered(true); } catch { /* ignore */ }
       setShowForgot(false); setRecoveryVerified(false); setRecoveryInput('');
       setChangePass(''); setChangePass2('');
       showToast('סיסמה חדשה נקבעה.', 'success');
@@ -7122,6 +7253,8 @@ function SecuritySettings() {
       await deleteCloudCryptoMeta(user);
       setCloudCryptoEnabled(false);
       lockCryptoSession();
+      try { await clearCloudDeviceKey(user.uid); } catch { /* ignore */ }
+      setDeviceRemembered(false);
       setBundle(null); setUnlocked(false);
       await triggerCloudSync(user, { immediate: true, force: true }); // העלאת גלוי במקום המוצפן
       showToast('הצפנת ענן הושבתה.', 'info');
@@ -7282,6 +7415,23 @@ function SecuritySettings() {
         <p className="text-[13px] text-slate-500 leading-relaxed mt-2 dark:text-[#8ba3bd]">
           מפתחות ה-API מוצפנים לפני שהם עולים לענן. הסנכרון בין מכשירים פעיל.
         </p>
+      </div>
+
+      <div className={card}>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[14px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">💻 מכשיר זה</span>
+          <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${deviceRemembered ? 'text-emerald-700 bg-emerald-100 dark:bg-emerald-400/15 dark:text-emerald-200' : 'text-slate-500 bg-slate-100 dark:bg-white/10 dark:text-[#8ba3bd]'}`}>
+            {deviceRemembered ? 'נפתח אוטומטית' : 'דורש סיסמה'}
+          </span>
+        </div>
+        <p className="text-[12px] text-slate-500 mb-3 leading-relaxed dark:text-[#8ba3bd]">
+          {deviceRemembered
+            ? 'המפתח שמור מקומית (מוגן ע״י מערכת ההפעלה/הדפדפן) — האפליקציה נפתחת בלי לבקש סיסמה. במכשיר חדש עדיין תידרש הסיסמה.'
+            : 'הפעלת זכירה תשמור את המפתח במכשיר הזה כדי שלא תתבקש סיסמה בכל פתיחה.'}
+        </p>
+        <button type="button" onClick={deviceRemembered ? forgetThisDevice : rememberThisDevice} disabled={busy} className={ghostBtn}>
+          {deviceRemembered ? 'שכח מכשיר זה' : 'זכור במכשיר הזה'}
+        </button>
       </div>
 
       <div className={card}>

@@ -2844,6 +2844,7 @@ function buildWorkspaceV2StepContext({
 function buildWorkspaceV2GuardrailBrief(runContext = {}) {
   const guardrails = runContext?.guardrails || {};
   return [
+    ...(guardrails.roleDiscipline || []),
     ...(guardrails.directIsolation || []),
     ...(guardrails.styleProtection || []),
     ...(guardrails.sourceDiscipline || []),
@@ -2925,6 +2926,7 @@ async function runWorkspaceV2DocumentGeneration({
   const systemPrompt = [
     'אתה מנוע Workspace v2 של WordFlow AI. עבוד כצוות מיומן ומבודד למשימה הנוכחית בלבד.',
     'כל שלב בצוות מקבל קריאת API נפרדת ויכול להשתמש בספק/מודל שונה. אל תניח שכל הצוות רץ על אותו מודל.',
+    'הצוות עובד ברצף: כל סוכן מקבל את תוצרי הסוכנים שלפניו, מבצע אך ורק את תפקידו, ומוסר תוצר נקי לסוכן הבא. אף סוכן לא עושה את עבודתו של סוכן אחר.',
     'בשלבים שאינם אחרונים החזר תוצר עבודה פנימי ברור בלבד. בשלב האחרון החזר HTML סופי בלבד עם תגיות כמו h1, h2, p, ul, li.',
     `שם סביבת העבודה: ${workspaceLabel}`,
     template?.mission ? `משימה מרכזית: ${template.mission}` : '',
@@ -2976,6 +2978,8 @@ async function runWorkspaceV2DocumentGeneration({
       skipSkillSelection: true,
       skipMultiModel: true,
       automationSkipReason: 'workspace-v2-step-runner',
+      // הנושא הקצר משמש כשאילתת-מקור ישירה ונקייה (מנרמל-ל-'' אם הוא בעצם טקסט-מטלה).
+      researchTopic: cleanPrompt,
       ...(providerOverride ? {
         providerOverride,
         strictProviderOverride: true,
@@ -2990,14 +2994,30 @@ async function runWorkspaceV2DocumentGeneration({
       currentStepIndex: stepIndex,
       isFinalStep,
     });
+    const previousStep = stepIndex > 0 ? (pipeline[stepIndex - 1] || {}) : null;
+    const nextStep = !isFinalStep ? (pipeline[stepIndex + 1] || {}) : null;
+    const teamRoster = pipeline
+      .map((teammate, teammateIndex) => {
+        const role = teammate?.role || teammate?.id || `שלב ${teammateIndex + 1}`;
+        return `${teammateIndex + 1}. ${role}${teammateIndex === stepIndex ? '  ← אתה כאן' : ''}`;
+      })
+      .join('\n');
     const stepSystemPrompt = [
       systemPrompt,
-      `אתה עכשיו מבצע רק את שלב ${stepIndex + 1}: ${stepLabel}.`,
+      `מבנה הצוות המלא (לפי הסדר):\n${teamRoster}`,
+      `אתה סוכן ${stepIndex + 1} מתוך ${pipeline.length}. אתה מבצע אך ורק את שלב ${stepIndex + 1}: ${stepLabel}.`,
       step.goal ? `מטרת השלב: ${step.goal}` : '',
       Array.isArray(step.instructions) && step.instructions.length ? `הוראות השלב:\n${step.instructions.join('\n')}` : '',
-      step.output ? `תוצר נדרש מהשלב: ${step.output}` : '',
+      step.output ? `תוצר נדרש מהשלב: ${step.output}. אל תחרוג מעבר לתוצר הזה.` : '',
+      previousStep
+        ? `קיבלת תוצר ביניים מהסוכן הקודם (${previousStep.role || previousStep.id || `שלב ${stepIndex}`}). הסתמך עליו ואל תייצר אותו מחדש.`
+        : '',
+      nextStep
+        ? `אחריך: ${nextStep.role || nextStep.id || `שלב ${stepIndex + 2}`} יטפל ב: ${nextStep.goal || 'השלב הבא'}. אל תעשה את עבודתו עבורו ואל תכתוב את המסמך הסופי.`
+        : '',
+      `גבול תפקיד: בצע אך ורק את "${stepLabel}". אל תחרוג לתפקיד של סוכן אחר בצוות.`,
       isFinalStep
-        ? 'זה השלב האחרון. החזר רק HTML מלא וסופי של המסמך, בלי Markdown, בלי יומן עבודה ובלי הסברים.'
+        ? 'זה השלב האחרון. אחד את כל תוצרי הביניים של הצוות והחזר רק HTML מלא וסופי של המסמך, בלי Markdown, בלי יומן עבודה ובלי הסברים.'
         : 'זה אינו השלב האחרון. החזר תוצר ביניים מקצועי, תמציתי ומועיל לשלב הבא. אל תחזיר HTML סופי.',
     ].filter(Boolean).join('\n\n');
 
@@ -4078,7 +4098,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     const userPrompt = userRequestSections.join('\n\n');
-    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nקריטי — טיפול בסוגריים מרובעים: טקסט בתוך סוגריים מרובעים בהוראות (למשל [לפרט את הממצאים], [יש להוסיף כותרת]) הוא תיאור של מה לכתוב, לא טקסט להעתיק. החלף כל סוגר כזה בתוכן אמיתי, מנוסח ומלא. אסור בהחלט שהפלט הסופי יכיל סוגריים מרובעים, placeholder, או את ההוראה המקורית — אלא רק את התוכן הכתוב במקומם.\nאם חסר מידע עובדתי שאי אפשר לאמת (מקור ביבליוגרפי ספציפי, ציטוט מסיור אישי, נתון אישי של המשתמש) — אל תמציא אותו. כתוב את כל מה שכן ניתן לכתוב, וסמן את החלק הספציפי שדורש השלמה ידנית במשפט קצר וברור (למשל "כאן יש להוסיף ציטוט מהסיור"), אבל אל תשאיר את הסוגריים המקוריים ואל תשאיר חלק שלם ריק כשניתן לכתוב בו תוכן עניין.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt,
@@ -5019,15 +5039,19 @@ export async function saveHelperMaterial(file, options = {}) {
   const meta = getMaterialUploadMeta(options.uploadKind || options.id || 'general');
   const previewMeta = await extractHelperMaterialPreview(file, MATERIAL_PREVIEW_MAX_LENGTH);
   const arrayBuffer = await file.arrayBuffer();
+  const courseName = String(options.courseName || '').trim();
+  const title = String(options.title || '').trim()
+    || (courseName ? `${courseName} — ${file.name}` : file.name);
+  const learningHint = courseName ? `${meta.learningHint} (קורס: ${courseName})` : meta.learningHint;
   const payload = {
     name: file.name,
-    title: file.name,
+    title,
     dataBase64: arrayBufferToBase64(arrayBuffer),
     uploadKind: meta.id,
     label: meta.label,
     category: meta.category,
     templateId: meta.templateId,
-    learningHint: meta.learningHint,
+    learningHint,
     previewText: previewMeta.previewText,
     contentText: previewMeta.contentText,
     previewChars: previewMeta.previewChars,

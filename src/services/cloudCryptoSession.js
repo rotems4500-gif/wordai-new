@@ -32,6 +32,17 @@ export function isUnlocked() {
   return Boolean(sessionDek);
 }
 
+// מחזיר את ה-DEK הפתוח (CryptoKey) או null. משמש את "זכור במכשיר הזה" כדי
+// לשמור אותו מקומית אחרי פתיחה מוצלחת.
+export function getSessionDek() {
+  return sessionDek;
+}
+
+// אימוץ DEK שנטען מאחסון המכשיר (פתיחה אוטומטית בלי passphrase).
+export function adoptSessionDek(dek) {
+  if (dek) sessionDek = dek;
+}
+
 // נעילה ידנית (logout / נעילה מפורשת). מאפס את ה-DEK מהזיכרון.
 export function lockSession() {
   sessionDek = null;

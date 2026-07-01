@@ -7,7 +7,10 @@ import {
   changePassphrase as changeCryptoPassphrase,
   initializePassphrase as initCryptoPassphrase,
   hasPlaintextSecrets,
+  getSessionDek,
+  adoptSessionDek,
 } from './services/cloudCryptoSession';
+import { loadDeviceKey, saveDeviceKey, clearDeviceKey } from './services/cloudDeviceKey';
 import { getProviderConfig } from './services/aiService';
 import { setCloudCryptoEnabled, triggerCloudSync, pullFromCloud } from './services/cloudSyncManager';
 import { showToast } from './services/uiFeedback';
@@ -39,6 +42,7 @@ export default function CloudUnlockGate({ user }) {
   const [forgot, setForgot] = useState(false);
   const [recovery, setRecovery] = useState('');
   const [recVerified, setRecVerified] = useState(false);
+  const [remember, setRemember] = useState(true); // "זכור במכשיר הזה" — מסומן כברירת מחדל
 
   // setup / new-pass
   const [newPass, setNewPass] = useState('');
@@ -51,7 +55,17 @@ export default function CloudUnlockGate({ user }) {
     try {
       const b = await fetchCloudCryptoMeta(user);
       if (isCryptoUnlocked()) return;
-      if (b) { setBundle(b); setMode('unlock'); return; }
+      if (b) {
+        // "זכור במכשיר הזה": אם יש DEK שמור — פתיחה אוטומטית בלי passphrase.
+        const deviceKey = await loadDeviceKey(user.uid);
+        if (deviceKey) {
+          adoptSessionDek(deviceKey);
+          try { await pullFromCloud(user, { force: true }); } catch { /* ignore */ }
+          if (isCryptoUnlocked()) return; // נפתח אוטומטית — בלי חלון
+          await clearDeviceKey(user.uid); // המפתח השמור לא תקף יותר → ניפול לבקשת סיסמה
+        }
+        setBundle(b); setMode('unlock'); return;
+      }
       // אין הצפנה לחשבון → להציע setup אם לא דחו וכבר יש מפתחות גלויים
       if (readDeclined().includes(user.uid)) return;
       if (hasPlaintextSecrets(getProviderConfig())) { setBundle(null); setMode('setup'); }
@@ -87,6 +101,8 @@ export default function CloudUnlockGate({ user }) {
   };
 
   const afterUnlock = async () => {
+    if (remember) { try { await saveDeviceKey(user.uid, getSessionDek()); } catch { /* ignore */ } }
+    else { try { await clearDeviceKey(user.uid); } catch { /* ignore */ } }
     try { await pullFromCloud(user, { force: true }); } catch { /* ignore */ }
     showToast('המפתחות נטענו מהענן.', 'success');
     close();
@@ -100,6 +116,7 @@ export default function CloudUnlockGate({ user }) {
       const { bundle: b, recoveryCode } = await initCryptoPassphrase(newPass);
       await saveCloudCryptoMeta(user, b);
       setCloudCryptoEnabled(true);
+      if (remember) { try { await saveDeviceKey(user.uid, getSessionDek()); } catch { /* ignore */ } }
       await triggerCloudSync(user, { immediate: true, force: true }); // מצפין את המפתחות הקיימים
       setBundle(b);
       setRevealedRecovery(recoveryCode); // מציג קוד שחזור פעם אחת
@@ -205,6 +222,12 @@ export default function CloudUnlockGate({ user }) {
             <input type="password" value={newPass2} onChange={(e) => setNewPass2(e.target.value)} dir="ltr"
               onKeyDown={(e) => { if (e.key === 'Enter' && !busy) handleEnable(); }} className={field} />
           </div>
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[var(--wf-accent)]" />
+            <span className="text-[12px] leading-snug text-slate-600 dark:text-[#8ba3bd]">
+              זכור במכשיר הזה — לא לבקש סיסמה שוב בפתיחות הבאות.
+            </span>
+          </label>
           <div className="flex items-center justify-between gap-2">
             <button type="button" onClick={handleEnable} disabled={busy} className={primary}>{busy ? 'מפעיל…' : '🔒 הפעל הצפנה'}</button>
             <button type="button" onClick={handleDeclineSetup} disabled={busy} className="text-[12px] font-bold text-slate-400 hover:underline dark:text-[#8ba3bd]">לא עכשיו</button>
@@ -236,6 +259,12 @@ export default function CloudUnlockGate({ user }) {
               {showPass ? 'הסתר' : 'הצג'}
             </button>
           </div>
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[var(--wf-accent)]" />
+            <span className="text-[12px] leading-snug text-slate-600 dark:text-[#8ba3bd]">
+              זכור במכשיר הזה — לא לבקש סיסמה שוב בפתיחות הבאות. <span className="text-slate-400 dark:text-[#647688]">(במכשיר חדש עדיין תידרש הסיסמה.)</span>
+            </span>
+          </label>
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <button type="button" onClick={handleUnlock} disabled={busy || !pass} className={primary}>{busy ? 'פותח…' : 'פתח'}</button>
