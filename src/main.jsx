@@ -5,6 +5,7 @@ import { DOMSerializer } from '@tiptap/pm/model';
 import '../tailwind.css';
 import DocumentEditor from './DocumentEditor';
 import Ribbon from './Ribbon';
+import MobileToolbar from './MobileToolbar';
 import AiSidebar from './AiSidebar';
 import TopBar from './TopBar';
 import FindReplace from './FindReplace';
@@ -23,8 +24,10 @@ import SpssSyntaxStudio from './SpssSyntaxStudio';
 import SpssProjectStudio from './SpssProjectStudio';
 import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
+import DocumentDraftStudio from './DocumentDraftStudio';
 import { generateDeck } from './services/presentationService';
 import { importPptxDraft } from './services/pptxDraftService';
+import { importDocumentDraft } from './services/documentDraftService';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
@@ -3236,10 +3239,15 @@ function App() {
   const [presentationDeck, setPresentationDeck] = React.useState(null);
   const [presentationBusy, setPresentationBusy] = React.useState(false);
   const [pptxDraft, setPptxDraft] = React.useState(null);
+  const [docDraft, setDocDraft] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [authenticityOpen, setAuthenticityOpen] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
+  ));
+  // טלפון (≤640px): פריסה מצומצמת — MobileToolbar במקום Ribbon, TopBar מקוצר.
+  const [isPhoneViewport, setIsPhoneViewport] = React.useState(() => (
+    typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ));
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
@@ -3326,6 +3334,19 @@ function App() {
     }
     mediaQuery.addListener(updateViewportMode);
     return () => mediaQuery.removeListener(updateViewportMode);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updatePhoneMode = () => setIsPhoneViewport(mediaQuery.matches);
+    updatePhoneMode();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updatePhoneMode);
+      return () => mediaQuery.removeEventListener('change', updatePhoneMode);
+    }
+    mediaQuery.addListener(updatePhoneMode);
+    return () => mediaQuery.removeListener(updatePhoneMode);
   }, []);
 
   const requestPwaInstall = React.useCallback(async () => {
@@ -5493,6 +5514,8 @@ ${sidebarReviewContext}`
     const directModeReason = String(payload.directModeReason || '').trim();
     const useWorkspaceV2 = payload.useWorkspaceV2 === true;
     const workspaceV2TemplateId = String(payload.workspaceV2TemplateId || '').trim();
+    const includeSources = typeof payload.includeSources === 'boolean' ? payload.includeSources : null;
+    const sourceRoute = String(payload.sourceRoute || '').trim();
     const preserveCurrentDocumentOnError = payload.preserveCurrentDocumentOnError === true;
     const workspaceBypassActive = payload.workspaceBypassActive === true;
 
@@ -5614,7 +5637,7 @@ ${sidebarReviewContext}`
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, includeSources, sourceRoute, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -7677,6 +7700,7 @@ ${sidebarReviewContext}`
   const isSpssProjectMode = appMode === 'spss-project';
   const isWordMode = appMode === 'word';
   const isPresentationMode = appMode === 'presentation';
+  const isDocDraftMode = appMode === 'docdraft';
 
   // Stream a generated SPSS findings chapter into the editor and switch to Word mode.
   const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים' } = {}) => {
@@ -7710,6 +7734,32 @@ ${sidebarReviewContext}`
       setPresentationBusy(false);
     }
   }, []);
+
+  // העלאת מסמך Word קיים (.docx) כטיוטה לשכתוב לסגנון המשתמש — נכנס למצב טיוטת מסמך.
+  const handleUploadDocDraft = React.useCallback(async (file) => {
+    if (!file) return false;
+    setShowStartScreen(false);
+    setAppMode('docdraft');
+    try {
+      const buf = await file.arrayBuffer();
+      const draft = await importDocumentDraft(new Uint8Array(buf), file.name || 'document.docx');
+      setDocDraft(draft);
+      return true;
+    } catch (error) {
+      showToast(error?.message || 'טעינת המסמך נכשלה', { tone: 'error' });
+      setAppMode('word');
+      return false;
+    }
+  }, []);
+
+  // טעינת הטקסט המשוכתב מהסטודיו ישירות לעורך TipTap.
+  const handleLoadDocDraftToEditor = React.useCallback(({ html = '', title = '' } = {}) => {
+    if (!String(html || '').trim()) return;
+    applyImportedDocument({ ok: true, html, title, filePath: '', source: 'docdraft' });
+    setDocDraft(null);
+    setAppMode('word');
+  }, [applyImportedDocument]);
+
   const isNonDocumentMode = !isWordMode;
   const isInputDialogVisible = inputDialog.open && isWordMode;
   const isCopyleaksDetectorVisible = copyleaksDetector.open && !showStartScreen && isWordMode;
@@ -7764,7 +7814,29 @@ ${sidebarReviewContext}`
         onCloudSignOut={handleCloudSignOut}
         documentTitle={getDraftTitleFromFilePath(currentFilePath)}
       />
-      {isWordMode && (
+      {isWordMode && isPhoneViewport && !showStartScreen && (
+        <MobileToolbar
+          onCommand={handleCommand}
+          onUndo={() => editor?.chain().focus().undo().run()}
+          onRedo={() => editor?.chain().focus().redo().run()}
+          onOpenFileMenu={() => {
+            setFileMenuTargetTab(null);
+            setFileMenuOpen(true);
+          }}
+          activeFormats={activeFormats}
+          assistantOpen={sidebarOpen}
+          onToggleTaskpane={() => {
+            setAssistantTrigger('manual');
+            setSidebarOpen((v) => {
+              const next = !v;
+              if (next) setSidebarCompact(false);
+              return next;
+            });
+            setLastEditorActivityAt(Date.now());
+          }}
+        />
+      )}
+      {isWordMode && !isPhoneViewport && (
         <Ribbon
           onCommand={handleCommand}
           documentStyle={documentStyle}
@@ -7808,6 +7880,17 @@ ${sidebarReviewContext}`
             <PptxDraftStudio
               draft={pptxDraft}
               onExit={() => { setPptxDraft(null); setAppMode('word'); }}
+              showToast={showToast}
+            />
+          </div>
+        )}
+
+        {isDocDraftMode && docDraft && (
+          <div className="min-w-0 flex-1 flex">
+            <DocumentDraftStudio
+              draft={docDraft}
+              onExit={() => { setDocDraft(null); setAppMode('word'); }}
+              onLoadToEditor={handleLoadDocDraftToEditor}
               showToast={showToast}
             />
           </div>
@@ -8617,6 +8700,7 @@ ${sidebarReviewContext}`
                 onClose={() => {
                   runStartTransition(() => {}, 'start');
                 }}
+                hasOpenDocument={Boolean(editor && editor.getText && editor.getText().trim())}
                 hasDraft={wordPreferences.keepLastAutosavedVersion !== false && Boolean(getPersistedDraftHtml())}
                 lastSavedAt={getPersistedDraftSavedAt()}
                 onCreateBlank={() => {
@@ -8686,6 +8770,7 @@ ${sidebarReviewContext}`
                   payload,
                 })}
                 onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
+                onUploadDocDraft={handleUploadDocDraft}
                 onOpenSpssProject={() => setAppMode('spss-project')}
               />
             </div>
@@ -8815,14 +8900,14 @@ ${sidebarReviewContext}`
           </aside>
         </div>
       )}
-      <footer id="status-bar" className="min-h-6 bg-[#2B579A] text-white flex flex-col gap-1 px-3 py-1 text-[11px] shrink-0 z-30 sm:h-6 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+      <footer id="status-bar" className="min-h-6 bg-[#2B579A] text-white flex flex-row items-center justify-between gap-1 px-3 py-1 text-[11px] shrink-0 z-30 sm:h-6 sm:px-4">
         {isSpssMode ? (
           <>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>SPSS Syntax Studio פעיל</span>
               <span><i className="ph ph-shield-check text-green-300"></i> רק metadata טוקניזי נשלח ל-AI</span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <div className="hidden sm:flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>Tutor mode נשלט מתוך הסטודיו</span>
             </div>
           </>
@@ -8831,9 +8916,9 @@ ${sidebarReviewContext}`
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>עמוד 1 מתוך {pageCount}</span>
               <span>{wordCount} מילים</span>
-              <span><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
+              <span className="hidden sm:inline"><i className="ph ph-check text-green-400"></i> עברית (ישראל)</span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <div className="hidden sm:flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>{VIEW_MODE_LABELS[viewMode] || 'מצב הדפסה'}</span>
               <span>{zoom}%</span>
               <a href="legal/privacy.html" target="_blank" rel="noopener noreferrer" className="text-white/85 underline-offset-2 hover:text-white hover:underline">פרטיות</a>

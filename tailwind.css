@@ -359,6 +359,99 @@
             .page-surface[data-view-mode="print"] h2 { font-size: 20px; }
             .page-surface[data-view-mode="print"] h3 { font-size: 17px; }
         }
+
+        /* ─── Mobile toolbar (טלפון ≤640px): מחליף את ה-Ribbon ─── */
+        .wf-mobile-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 8px;
+            background: var(--ribbon-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-bottom: 1px solid var(--ribbon-border);
+            box-shadow: 0 4px 30px rgba(0,0,0,0.04);
+            flex-shrink: 0;
+            z-index: 20;
+        }
+        .wf-mtb-scroll {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+        }
+        .wf-mtb-scroll::-webkit-scrollbar { display: none; }
+        .wf-mtb-btn, .wf-mtb-file, .wf-mtb-ai {
+            flex-shrink: 0;
+            width: 42px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-color);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .wf-mtb-btn i, .wf-mtb-file i { font-size: 20px; color: var(--word-blue); }
+        .wf-mtb-btn:active, .wf-mtb-file:active { background: var(--ribbon-hover); }
+        .wf-mtb-btn.is-active {
+            background: rgba(108,92,231,0.12);
+            border-color: rgba(108,92,231,0.25);
+        }
+        .wf-mtb-sep {
+            flex-shrink: 0;
+            width: 1px;
+            height: 24px;
+            background: rgba(0,0,0,0.12);
+            margin: 0 2px;
+        }
+        .wf-mtb-select {
+            flex-shrink: 0;
+            height: 42px;
+            max-width: 108px;
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 10px;
+            background: rgba(255,255,255,0.8);
+            font-family: inherit;
+            font-size: 13px;
+            padding: 0 8px;
+            color: var(--text-color);
+            outline: none;
+        }
+        .wf-mtb-ai {
+            background: var(--word-blue);
+            color: white;
+        }
+        .wf-mtb-ai i { font-size: 20px; color: white; }
+        .wf-mtb-ai.is-active { box-shadow: 0 0 0 3px rgba(108,92,231,0.25); }
+        html.dark .wf-mtb-sep { background: rgba(255,255,255,0.14); }
+        html.dark .wf-mtb-select {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.12);
+            color: var(--color-ink);
+        }
+        html.dark .wf-mtb-ai { color: #06231f; }
+        html.dark .wf-mtb-ai i { color: #06231f; }
+
+        /* Safe area (notch) בטלפון — TopBar מקבל padding עליון, סטטוס-בר תחתון */
+        @media (max-width: 640px) {
+            header.bg-chrome { padding-top: calc(5px + env(safe-area-inset-top, 0px)); }
+            #status-bar { padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px)); }
+        }
+
+        /* מגע: יעדי לחיצה גדולים יותר בתפריטי ההקשר של העורך */
+        @media (pointer: coarse) {
+            .r-btn-small { width: 36px; height: 36px; }
+            .inline-btn { padding: 8px 10px; }
+        }
+
         .page-surface[data-active-template]:not([data-active-template="blank"]) > p:first-child {
             text-align: center;
             font-size: 11pt;

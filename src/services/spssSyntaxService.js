@@ -185,6 +185,18 @@ const POSITIONAL_VARIABLE_COMMAND_SPECS = [
   { pattern: /^CROSSTABS\b/i, extraAllowedIdentifiers: new Set(['TABLES']) },
   { pattern: /^ONEWAY\b/i, extraAllowedIdentifiers: new Set() },
   { pattern: /^NONPAR\s+CORR\b/i, extraAllowedIdentifiers: new Set(['VARIABLES']) },
+  // GLM / mixed-model family: "dv BY factors WITH covariates" — no '=', so NONE of the
+  // VARIABLE_SLOT_PATTERNS (which all require BY=/WITH=) match them, and their operands
+  // were never validated. A derived dv whose creating block was blocked (or any phantom)
+  // slipped straight through to SPSS as "undefined variable name". BY/WITH/TO are already
+  // RESERVED_SLOT_TOKENS, and the positional operand section stops at the first '/', so
+  // only the real dv/factor/covariate identifiers are checked against the allow-list.
+  { pattern: /^UNIANOVA\b/i, extraAllowedIdentifiers: new Set() },
+  { pattern: /^GLM\b/i, extraAllowedIdentifiers: new Set() },
+  { pattern: /^MANOVA\b/i, extraAllowedIdentifiers: new Set() },
+  { pattern: /^VARCOMP\b/i, extraAllowedIdentifiers: new Set() },
+  { pattern: /^MIXED\b/i, extraAllowedIdentifiers: new Set() },
+  { pattern: /^LOGISTIC\s+REGRESSION\b/i, extraAllowedIdentifiers: new Set() },
 ];
 
 const VARIABLE_SLOT_PATTERNS = [
@@ -2145,10 +2157,63 @@ export const restoreColumnTokens = (text = '', analysis = null) => {
     .reduce((currentText, entry) => currentText.replace(new RegExp(`\\b${escapeRegExp(entry[0])}\\b`, 'g'), escapeReplacement(entry[1])), String(text || '').trim());
 };
 
+// SPSS `MISSING VALUES` accepts at most THREE discrete values per variable (or a
+// range `lo THRU hi`, or a range plus one value). Batch G's dictionary reader
+// legitimately surfaces 4+ missing codes (98,99,100,101) which the model then emits
+// as a flat list — SPSS rejects it and the whole run dies at the first block. This
+// collapses a code set to a LEGAL spec, converting to a range ONLY when it is exact
+// (a contiguous run, or a contiguous run plus a single outlier) so we NEVER over-cover
+// real data with a naive min..max.
+export const formatSpssMissingValueSpec = (codes = []) => {
+  const nums = Array.from(new Set(
+    (Array.isArray(codes) ? codes : [])
+      .map((value) => (typeof value === 'number' ? value : parseNumericValue(value)))
+      .filter((value) => value !== null && Number.isFinite(value)),
+  )).sort((left, right) => left - right);
+  if (!nums.length) return '';
+  const list = (arr) => arr.map((value) => formatNumericLiteral(value)).join(', ');
+  const isContiguous = (arr) => arr.every((value, index) => index === 0 || value === arr[index - 1] + 1);
+  if (nums.length <= 3) return list(nums);
+  if (isContiguous(nums)) return `${formatNumericLiteral(nums[0])} THRU ${formatNumericLiteral(nums[nums.length - 1])}`;
+  // One contiguous run + a single outlier — SPSS allows a range plus one value.
+  for (let i = 0; i < nums.length; i += 1) {
+    const rest = nums.filter((_, index) => index !== i);
+    if (rest.length >= 2 && isContiguous(rest)) {
+      return `${formatNumericLiteral(rest[0])} THRU ${formatNumericLiteral(rest[rest.length - 1])}, ${formatNumericLiteral(nums[i])}`;
+    }
+  }
+  // Genuinely scattered >3 (rare for sentinels, which sit far outside the real scale):
+  // widest legal form. Legal, and practically safe because the codes are outliers.
+  return `${formatNumericLiteral(nums[0])} THRU ${formatNumericLiteral(nums[nums.length - 1])}`;
+};
+
+// Deterministic safety net: rewrite any generated `MISSING VALUES var (v1,v2,v3,v4…)`
+// whose parenthetical spec has >3 discrete numeric values into an SPSS-legal spec.
+// Independent of the model — guarantees legal output even if the prompt guidance is
+// ignored. Only touches numeric-list specs; leaves ranges/keywords (THRU/LO/HI…) alone.
+const MISSING_VALUES_SPEC_HAS_RANGE = /\b(THRU|LO|LOWEST|HI|HIGHEST|SYSMIS|MISSING)\b/i;
+export const normalizeMissingValuesStatements = (text = '') => String(text || '').replace(
+  /(MISSING\s+VALUES\b[^\n]*?\))(\s*\.)/gi,
+  (whole, body, tail) => {
+    const rewritten = body.replace(/\(([^)]*)\)/g, (group, inner) => {
+      if (MISSING_VALUES_SPEC_HAS_RANGE.test(inner)) return group;
+      const parts = inner.split(',').map((part) => part.trim()).filter(Boolean);
+      if (parts.length <= 3) return group;
+      const nums = parts.map((part) => parseNumericValue(part));
+      if (nums.some((value) => value === null)) return group;
+      const spec = formatSpssMissingValueSpec(nums);
+      return spec ? `(${spec})` : group;
+    });
+    return `${rewritten}${tail}`;
+  },
+);
+
 export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysis', extraAllowedNames = [] } = {}) => {
-  const cleaned = commentOutNonSpssTextLines(stripMarkdownArtifacts(text))
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const cleaned = normalizeMissingValuesStatements(
+    commentOutNonSpssTextLines(stripMarkdownArtifacts(text))
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
+  );
   if (!cleaned) return buildErrorLine('The model returned an empty SPSS response.');
 
   const allowedTokens = new Set(Array.isArray(analysis?.columns) ? analysis.columns.map((column) => column.token) : []);
@@ -2238,7 +2303,7 @@ const buildTokenizedMetadataLines = (analysis = null) => {
     const valueLabels = formatValueLabelMetadata(column);
     const declaredMissing = formatDeclaredMissingMetadata(column);
     const suspectedMissing = Array.isArray(column.suspectedMissingCodes) && column.suspectedMissingCodes.length
-      ? `; suspectedUndeclaredMissing=[${column.suspectedMissingCodes.map((value) => formatNumericLiteral(value)).join(',')}]`
+      ? `; suspectedUndeclaredMissing=[${column.suspectedMissingCodes.map((value) => formatNumericLiteral(value)).join(',')}]; missingValuesSpec=(${formatSpssMissingValueSpec(column.suspectedMissingCodes)})`
       : '';
     // Real variable name is included for semantic context (this is a study tool, not a
     // privacy sandbox). The model still emits VAR_n tokens, which the guardrails validate.
@@ -2270,7 +2335,7 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
       ];
 
   const carriedNamesLine = carriedNames.length
-    ? `משתנים שכבר נוצרו בבלוקים קודמים וזמינים לשימוש (קריאה תקפה גם במצב analysis): ${carriedNames.join(', ')}.`
+    ? `משתנים שכבר נוצרו בבלוקים קודמים והם קיימים בוודאות ב-dataset (שמות מדויקים — השתמש בהם בדיוק ככתבם, קריאה תקפה גם במצב analysis): ${carriedNames.join(', ')}. חובה: אלה משתנים אמיתיים וקיימים. אל תניח שקיים משתנה מקור דומה במקומם (למשל אל תשנה "age_groups" ל-"age_group"), אל תשנה או "תתקן" את שמם, ולעולם אל תחזיר עבורם * ERROR: או תשמיט אותם — השתמש בהם כמו בכל משתנה קיים אחר.`
     : '';
 
   // Methodology reasoning — make the model build the analysis from each variable's
@@ -2279,13 +2344,15 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
   // (2) referencing a derived/grouping variable that was never created.
   const phantomRule = isPrepMode
     ? 'משתני רפאים — אסור: כל משתנה שאתה מזכיר חייב להיות VAR_n קיים, או שם שכבר נוצר (בבלוק הזה או בבלוק קודם מהרשימה למעלה). אם הניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל, ציון או מדד מחושב, משתני דמה) — צור אותו תחילה מ-VAR_n קיים (RECODE ... INTO / COMPUTE / COUNT) ואז השתמש בו. לעולם אל תניח שמשתנה נגזר כבר קיים.'
-    : 'משתני רפאים — אסור: כל משתנה שאתה מזכיר חייב להיות VAR_n קיים, או שם שכבר נוצר בבלוק קודם (מהרשימה למעלה). אם הניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל, ציון או מדד מחושב, דמיז) — אתה במצב analysis-only ואסור לך ליצור אותו כאן: החזר שורת * ERROR: שמסבירה איזה משתנה צריך להיווצר תחילה. לעולם אל תניח שמשתנה נגזר כבר קיים.';
+    : 'משתני רפאים — אסור: כל משתנה שאתה מזכיר חייב להיות VAR_n קיים, או שם שכבר נוצר בבלוק קודם (מהרשימה "משתנים שכבר נוצרו" למעלה). שם שמופיע ברשימה הזו נחשב קיים בוודאות — השתמש בו ככתבו ואל תחזיר עבורו * ERROR:. רק אם הניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה ולא מופיע ברשימת המשתנים שכבר נוצרו (קבוצות גיל, ציון או מדד מחושב, דמיז) — אתה במצב analysis-only ואסור לך ליצור אותו כאן: החזר שורת * ERROR: שמסבירה איזה משתנה צריך להיווצר תחילה. לעולם אל תניח שמשתנה נגזר כבר קיים אם אינו ברשימה.';
 
   const methodologyRules = [
     '— מתודולוגיה (בנה את הניתוח לפי role של כל משתנה, לא רק לפי type):',
     'role=continuous = משתנה רציף (מתאים כ-DV/IV ברגרסיה, במתאם Pearson, וכמשתנה תלוי ב-t-test/ANOVA). role=categorical או role=categorical-code = משתנה קבוצתי/קטגוריאלי: מספר שמייצג קטגוריה (1=זכר 2=נקבה; אזור 1..5; השכלה 1..4) הוא קטגוריאלי גם אם type=numeric — אל תתייחס אליו כרציף.',
     'role=categorical-code = מספר שמייצג קטגוריה נומינלית (מגדר/אזור/השכלה) — קטגוריאלי לכל דבר: גורם ב-ANOVA/chi-square, ודורש dummy-coding ברגרסיה. role=likert = פריט דירוג בסולם (טווח 1..5/1..7) — מותר להתייחס אליו כרציף (ממוצע/מתאם/רגרסיה/t-test) או לאחד כמה פריטים למדד; פריט בודד אפשר גם Spearman. role=identifier = מזהה (ת"ז/מספר נבדק) — לעולם אל תכליל אותו כמשתנה בניתוח.',
     'התאמת פרוצדורה לרמות המדידה: T-TEST = DV רציף + משתנה קיבוץ עם 2 קטגוריות בדיוק; ONEWAY/ANOVA = DV רציף + גורם עם ≥3 קטגוריות; CORRELATIONS (Pearson) = שני משתנים רציפים; CROSSTABS/chi-square = שני משתנים קטגוריאליים; רגרסיה ליניארית = DV רציף.',
+    'גרפים/תרשימים: אם הבקשה מבקשת גרף/תרשים/היסטוגרמה/"הצגה גרפית"/chart/plot — החזר פקודת תצוגה גרפית אמיתית, לא רק סטטיסטיקה. התאם לרמת המדידה: משתנה רציף → GRAPH /HISTOGRAM=VAR_n. או EXAMINE VARIABLES=VAR_n /PLOT=BOXPLOT /STATISTICS=NONE.; משתנה קטגוריאלי → GRAPH /BAR(SIMPLE)=COUNT BY VAR_n. או GRAPH /PIE=COUNT BY VAR_n.; שני משתנים רציפים לבדיקת קשר → GRAPH /SCATTERPLOT(BIVAR)=VAR_x WITH VAR_y.. פקודות GRAPH ו-EXAMINE /PLOT ו-FREQUENCIES /HISTOGRAM /BARCHART הן תצוגה בלבד ומותרות גם במצב analysis-only (הן אינן transformation).',
+    'בדיקות הנחות: כשהבקשה כוללת מבחן היסק וגם בדיקת הנחות — הוסף את הבדיקה עם הפקודה. נורמליות: EXAMINE VARIABLES=VAR_n /PLOT NPPLOT BOXPLOT /STATISTICS DESCRIPTIVES. (Shapiro-Wilk/K-S בפלט). שוויון שונויות: ב-T-TEST טבלת Levene אוטומטית; ב-ONEWAY הוסף /STATISTICS=HOMOGENEITY. ברגרסיה הוסף /STATISTICS COLLIN TOL ו-/RESIDUALS. פקודות אלה מותרות גם ב-analysis-only.',
     'רגרסיה (REGRESSION /DEPENDENT): כל מנבא חייב להיות רציף או דמה (0/1). מנבא קטגוריאלי עם 2 קטגוריות אפשר להכניס גולמי. מנבא קטגוריאלי עם ≥3 קטגוריות אסור להכניס גולמי כאילו רציף — או (א) צור k-1 משתני דמה (RECODE/COMPUTE) במצב prep ואז הרץ REGRESSION, או (ב) השתמש ב-UNIANOVA/GLM עם המשתנה הקטגוריאלי כ-factor אחרי BY ו-/DESIGN. אל תשתמש במשתנה קטגוריאלי או role=identifier כ-DV רציף של רגרסיה.',
     phantomRule,
   ];
@@ -2298,6 +2365,10 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
     ...modeRules,
     carriedNamesLine,
     ...methodologyRules,
+    'כללי הרצה קשיחים ל-SPSS: כל פקודה חייבת להסתיים בנקודה אחת בלבד; כל subcommand מתחיל ב-/; אל תשתמש ב-; בתוך פקודות; אל תשתמש בפקודות פסאודו או בשמות תפריטים; אל תחזיר טקסט שאינו פקודת SPSS או comment שמתחיל ב-* .',
+    'כשאתה יוצר syntax עבור כמה ניתוחים או מתקן master syntax קיים — החזר קוד מלא להרצה מלמעלה למטה, כולל כל שלבי ההכנה שהניתוחים תלויים בהם. אל תחזיר diff, patch, הוראות ידניות או "הוסף את השורה".',
+    'בדוק תאימות פרוצדורה לפני ההחזרה: T-TEST חייב /GROUPS עם קודים קיימים; ONEWAY צריך /STATISTICS DESCRIPTIVES HOMOGENEITY כאשר בודקים הנחות; CROSSTABS עם /STATISTICS=CHISQ ו-/CELLS=COUNT ROW COLUMN; REGRESSION עם /DEPENDENT ו-/METHOD=ENTER; FREQUENCIES/DESCRIPTIVES עם רשימת משתנים אמיתית בלבד.',
+    'אם חסר מידע כדי לבחור קוד קטגוריה, אל תנחש. השתמש רק ב-observedValues/valueLabels מה-metadata, או כתוב comment קצר שמסביר מה המשתמש צריך להשלים ידנית במקום לייצר קוד שגוי.',
     repairHint
       ? `ניסיון קודם ליצור syntax לבקשה הזו נחסם בגלל: "${String(repairHint).slice(0, 300)}". זוהי בקשה אמיתית ממטלת סטטיסטיקה שכבר אומתה מול הנתונים — ספק את ה-syntax הטוב ביותר שאפשר. אם נדרשת הכנת נתונים (חישוב ציון/מדד, היפוך פריטים, recode) — בצע אותה תחילה ואז את הניתוח. החזר * ERROR: רק אם זה באמת בלתי אפשרי עם המשתנים הקיימים, ואז נמק בקצרה.`
       : 'אם הבקשה לא תקפה מתודולוגית, החזר רק שורות comment שמתחילות ב-* ERROR:.',
@@ -2308,7 +2379,7 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
     'אם צריך literals מפורשים ב-/GROUPS, ב-BY(...), או ב-RECODE, השתמש רק ב-observedValues שסופקו במשתנים המתאימים. אם אין observedValues, אל תנחש literals.',
     'valueLabels=[קוד=תווית] במטא-דאטה = משמעות הקודים (1=זכר, 2=נקבה). השתמש בהם כדי לבחור את הקבוצות הנכונות ב-/GROUPS, לבחור reference category הגיונית כשיוצרים משתני דמה, ולכתוב comment קצר עם שם הקטגוריה כשעוזר. אל תמציא קודים שלא ב-observedValues/valueLabels.',
     isPrepMode
-      ? 'אם משתנה מסומן suspectedUndeclaredMissing=[קודים] — אלה קודי sentinel (98/99/-9) שלא הוגדרו כ-missing ומזהמים את הסטטיסטיקה. במצב prep הוסף MISSING VALUES להגדרתם כ-user-missing לפני הניתוח. declaredMissing=[...] כבר מטופל — אל תיגע בו.'
+      ? 'אם משתנה מסומן suspectedUndeclaredMissing=[קודים] — אלה קודי sentinel (98/99/-9) שלא הוגדרו כ-missing ומזהמים את הסטטיסטיקה. במצב prep הוסף MISSING VALUES להגדרתם כ-user-missing לפני הניתוח. חשוב: SPSS מתיר לכל היותר 3 ערכים בדידים ב-MISSING VALUES — אם יש יותר משלושה קודים, השתמש בטווח. ה-metadata כבר נותן לך את הצורה החוקית המוכנה בשדה missingValuesSpec=(...) — העתק אותה בדיוק (למשל MISSING VALUES VAR_n (98 THRU 101).). declaredMissing=[...] כבר מטופל — אל תיגע בו.'
       : 'אם משתנה מסומן suspectedUndeclaredMissing=[קודים] — אלה קודי sentinel שלא הוגדרו כ-missing. במצב analysis-only אסור לך להריץ MISSING VALUES; ציין זאת ב-comment קצר (* הערה:) שממליץ להגדירם במצב הכנת נתונים. declaredMissing=[...] כבר מטופל.',
     'Metadata:',
     buildTokenizedMetadataLines(analysis),
@@ -2485,10 +2556,11 @@ const buildSuspectedMissingDigest = (analysis = null) => {
     .filter((column) => Array.isArray(column?.suspectedMissingCodes) && column.suspectedMissingCodes.length)
     .map((column) => {
       const codes = column.suspectedMissingCodes.map((value) => formatNumericLiteral(value)).join(', ');
+      const legalSpec = formatSpssMissingValueSpec(column.suspectedMissingCodes);
       const range = column.numericStats && column.numericStats.min !== null && column.numericStats.max !== null
         ? `; observed range ${formatNumericLiteral(column.numericStats.min)}..${formatNumericLiteral(column.numericStats.max)}`
         : '';
-      return `- ${column.token}${column.originalName ? ` (${column.originalName})` : ''}: suspected missing codes [${codes}]${range}`;
+      return `- ${column.token}${column.originalName ? ` (${column.originalName})` : ''}: suspected missing codes [${codes}] → MISSING VALUES spec (${legalSpec})${range}`;
     });
   return flagged.length ? flagged.join('\n') : '';
 };
@@ -2746,7 +2818,7 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
       'בדיקת שפיות חובה לפני שאתה מסביר: ודא שהסטטיסטיקה התיאורית הגיונית ביחס לסוג המשתנה. דגל אדום קלאסי — סטיית תקן (SD) גדולה מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם הצפוי (למשל M≈9 או SD≈20 בסולם 0–10, או SD שגדול מהממוצע במשתנה חסום). זה כמעט תמיד אומר ערכי missing לא-מוגדרים (קודים כמו 98/99) שנכנסים לחישוב ומנפחים את התוצאות. אם יש metadata — הצלב מול ה-range וה-observedValues של המשתנה (קודים כמו 98/99 = חשד מיידי).',
       'ה-metadata כבר עשה חלק מהעבודה: שדה suspectedUndeclaredMissing=[...] במשתנה = WordFlow זיהה קוד sentinel (98/99/-9) שלא הוגדר כ-missing וכנראה מזהם את הסטטיסטיקה — התייחס לזה כדגל אדום ודאי. שדה declaredMissing=[...] = הקודים האלה כבר מוגדרים כ-user-missing ו-SPSS מתעלם מהם, אז הם תקינים.',
       'כשאתה מזהה דגל אדום כזה: פתח את הפירוש באזהרה מפורשת, הסבר שכל התוצאות שמבוססות על הממוצעים האלה (t-test/ANOVA/מתאם/רגרסיה) אינן אמינות עד שמגדירים את הקודים כ-user-missing (MISSING VALUES או Variable View → Missing) ומריצים מחדש, ואל תדווח את הערכים המזוהמים ב-APA כאילו הם תקינים.',
-      'תן ניסוח מוכן לדיווח ב-APA כשרלוונטי.',
+      'הפלט עשוי לכלול כמה ניתוחים/טבלאות. פרש כל ניתוח בנפרד: לכל אחד פתח בכותרת ### עם שם הניתוח, כתוב 2-3 שורות הסבר מהותי, וסיים בשורה מודגשת "**ניסוח APA:**" עם המשפט המוכן לשיבוץ (עם הערכים t/F/χ²/r/p/df וגודל אפקט מנוסחים נכון, קורסיב לסמלים סטטיסטיים ופסיק עשרוני לפי הצורך).',
       'אל תמציא מספרים שלא מופיעים בפלט. אם משהו חסר כדי להסיק, אמור זאת.',
       'מותר markdown.',
       tokenizedDraft ? 'צורפה טיוטה קיימת של העבודה — התאם את הניסוח למינוח ולסגנון שבה כדי שאפשר יהיה לשבץ את הפירוש ישירות.' : '',
@@ -2782,6 +2854,88 @@ export const interpretSpssOutput = async ({ analysis = null, output = '', questi
       model: '',
       error: error instanceof Error ? error.message : 'פירוש הפלט נכשל.',
     };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Literature review + reference list. The assignment (sections א+ד) needs a
+// short lit review with a properly-cited reference list — separate from the
+// statistics. Reuses the verified-sources pipeline (retrieveSources) so every
+// reference is a real, live-checked academic source (never a hallucinated one),
+// then grounds a short Hebrew review strictly on those sources.
+// ---------------------------------------------------------------------------
+
+const formatAcademicReference = (source = {}) => {
+  const title = String(source.title || '').trim() || 'מקור אקדמי';
+  const details = String(source.summary || '').trim()
+    || (Array.isArray(source.authors) && source.authors.length ? source.authors.join(', ') : '');
+  const link = String(source.finalUrl || source.url || '').trim();
+  const doi = String(source.doi || '').trim();
+  const parts = [title];
+  if (details) parts.push(details);
+  if (doi) parts.push(`DOI: ${doi}`);
+  else if (link) parts.push(link);
+  return parts.join('. ');
+};
+
+export const buildLiteratureReview = async ({ topic = '', count = 5, providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanTopic = String(topic || '').trim();
+  if (!cleanTopic) {
+    return { ok: false, review: '', references: [], sources: [], providerId: '', model: '', error: 'ציין את נושא המחקר כדי לאתר מקורות.' };
+  }
+  try {
+    const { retrieveSources } = await import('./sourceRetrieval/index.js');
+    const retrieval = await retrieveSources({ query: cleanTopic, kind: 'academic', count: Math.max(3, Math.min(8, Number(count) || 5)) });
+    const sources = Array.isArray(retrieval?.sources) ? retrieval.sources.filter(Boolean) : [];
+    if (!retrieval?.ok || !sources.length) {
+      return {
+        ok: false,
+        review: '',
+        references: [],
+        sources: [],
+        providerId: '',
+        model: '',
+        error: 'לא נמצאו מקורות אקדמיים מאומתים לנושא. נסח את הנושא באנגלית/מדויק יותר, או ודא ש-SerpAPI (Google Scholar) מוגדר בהגדרות.',
+      };
+    }
+
+    const references = sources.map((source) => formatAcademicReference(source));
+    const sourceDigest = sources
+      .map((source, index) => {
+        const link = String(source.finalUrl || source.url || '').trim();
+        const snippet = String(source.snippet || source.summary || '').trim().slice(0, 400);
+        return `[${index + 1}] ${String(source.title || '').trim()}${link ? ` (${link})` : ''}${snippet ? `\n    ${snippet}` : ''}`;
+      })
+      .join('\n');
+
+    const systemPrompt = [
+      'אתה כותב סקירת ספרות קצרה בעברית אקדמית לעבודת מחקר של סטודנט.',
+      'קיבלת נושא מחקר ורשימת מקורות אקדמיים אמיתיים שכבר אומתו (כותרת + תקציר + קישור).',
+      'כתוב פסקה או שתיים (עד ~200 מילים) שמסכמות את מה שעולה מהמקורות האלה ומובילות לשאלת המחקר.',
+      'הסתמך אך ורק על המקורות שסופקו. אל תמציא ממצאים, שמות חוקרים, שנים או נתונים שלא מופיעים במקורות. אם המקורות דלים — כתוב סקירה כללית וזהירה בהתאם, ואל תשלים בהמצאה.',
+      'כשאתה מתייחס למקור, סמן אותו במספר בסוגריים לפי הרשימה (למשל [1], [3]).',
+      'החזר טקסט בלבד (מותר פסקאות), בלי כותרות markdown ובלי רשימת מקורות (היא תיווסף בנפרד).',
+    ].join('\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: `נושא המחקר: ${cleanTopic}\n\nמקורות מאומתים:\n${sourceDigest}`,
+      systemPrompt,
+      agentName: 'SPSS Literature Review',
+      providerOverride,
+      modelOverride,
+    });
+
+    return {
+      ok: true,
+      review: String(text || '').trim(),
+      references,
+      sources,
+      providerId,
+      model,
+      error: '',
+    };
+  } catch (error) {
+    return { ok: false, review: '', references: [], sources: [], providerId: '', model: '', error: error instanceof Error ? error.message : 'בניית סקירת הספרות נכשלה.' };
   }
 };
 
@@ -2883,19 +3037,36 @@ const buildAliasToColumnMap = (analysis = null) => {
   return map;
 };
 
+// Prep methods that CREATE a new variable the later steps consume (age_groups,
+// attitude_index, voted_binary…). When the plan contains one of these, an
+// unresolved variable name is almost always a legitimately-derived variable the
+// prep step will produce — NOT a typo. Flagging it as "not in the file" is a
+// false positive that scared users into thinking their assignment was broken.
+const DERIVATION_METHOD_PATTERN = /(recode|compute|autorecode|count|dummy|index|scale|קידוד|חישוב|מדד|דמ[יה])/i;
+
 export const validateAssignmentProfile = (profile = null, analysis = null) => {
   const warnings = [];
   if (!profile || !Array.isArray(profile.analyses) || !Array.isArray(analysis?.columns)) return warnings;
   const aliasMap = buildAliasToColumnMap(analysis);
 
+  // Does the plan build derived variables at all? If so, unresolved names are
+  // treated as planned derivations, not missing-variable errors.
+  const planHasDerivation = profile.analyses.some((entry) => DERIVATION_METHOD_PATTERN.test(`${entry?.method || ''} ${entry?.label || ''}`));
+
   profile.analyses.forEach((entry) => {
     const label = entry.label || entry.method || 'ניתוח';
     const method = String(entry.method || '').toLowerCase();
     const resolved = [];
+    let hasDerived = false;
     (Array.isArray(entry.variables) ? entry.variables : []).forEach((name) => {
       const column = aliasMap.get(String(name || '').trim().toLowerCase());
       if (column) resolved.push(column);
-      else if (name) warnings.push(`"${label}": המשתנה "${name}" לא נמצא בקובץ הנתונים.`);
+      else if (name) {
+        // Unresolved + the plan creates derived vars ⇒ this is one of them (created
+        // by an earlier recode/compute step), so don't flag it as missing.
+        if (planHasDerivation) hasDerived = true;
+        else warnings.push(`"${label}": המשתנה "${name}" לא נמצא בקובץ הנתונים.`);
+      }
     });
     if (!resolved.length) return;
 
@@ -2909,17 +3080,22 @@ export const validateAssignmentProfile = (profile = null, analysis = null) => {
     if (unusable.length && /(correlation|regression|t-test|anova|מתאם|רגרסיה)/.test(method)) {
       warnings.push(`"${label}": ${unusable.map((column) => column.originalName).join(', ')} אינו מתאים כמשתנה בניתוח (מזהה/טקסט/תאריך).`);
     }
-    if (/(t-test|ttest|מבחן t)/.test(method) && !binaryGroup) {
-      warnings.push(`"${label}": מבחן t דורש משתנה קבוצה עם 2 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
-    }
-    if (/anova|ניתוח שונות/.test(method) && !multiGroup) {
-      warnings.push(`"${label}": ANOVA דורש גורם קטגוריאלי עם ≥3 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
-    }
-    if (/(correlation|pearson|מתאם)/.test(method) && continuousCount < 2) {
-      warnings.push(`"${label}": מתאם Pearson דורש שני משתנים רציפים — בדוק את רמות המדידה.`);
-    }
-    if (/(chi-square|chisquare|חי בריבוע|קי בריבוע)/.test(method) && categoricalCols.length < 2) {
-      warnings.push(`"${label}": חי-בריבוע דורש שני משתנים קטגוריאליים.`);
+    // Skip the measurement-level count checks when a derived variable is involved:
+    // its role is unknown at plan stage (an index is continuous, age_groups is
+    // categorical) and it usually satisfies the test — flagging it is a false alarm.
+    if (!hasDerived) {
+      if (/(t-test|ttest|מבחן t)/.test(method) && !binaryGroup) {
+        warnings.push(`"${label}": מבחן t דורש משתנה קבוצה עם 2 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
+      }
+      if (/anova|ניתוח שונות/.test(method) && !multiGroup) {
+        warnings.push(`"${label}": ANOVA דורש גורם קטגוריאלי עם ≥3 קטגוריות — לא זוהה כזה במשתנים שנבחרו.`);
+      }
+      if (/(correlation|pearson|מתאם)/.test(method) && continuousCount < 2) {
+        warnings.push(`"${label}": מתאם Pearson דורש שני משתנים רציפים — בדוק את רמות המדידה.`);
+      }
+      if (/(chi-square|chisquare|חי בריבוע|קי בריבוע)/.test(method) && categoricalCols.length < 2) {
+        warnings.push(`"${label}": חי-בריבוע דורש שני משתנים קטגוריאליים.`);
+      }
     }
   });
 
@@ -2947,7 +3123,7 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
       '  "deliverable": "findings-chapter" | "interpretation" | "code",',
       '  "needsExplanation": true|false,',
       '  "analyses": [',
-      '    {"label":"שם קצר","method":"t-test|anova|correlation|regression|chi-square|descriptives|reliability|frequencies|other",',
+      '    {"label":"שם קצר","method":"t-test|anova|correlation|regression|chi-square|descriptives|reliability|frequencies|graph|other",',
       '     "variables":["VAR_1","VAR_2"],',
       '     "request":"בקשה אחת בעברית מוכנה ליצירת syntax, שמזכירה את שמות המשתנים (VAR_n)",',
       '     "rationale":"למה המבחן הזה מתאים"}',
@@ -2957,11 +3133,15 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
       'כללים: השתמש אך ורק במשתנים שמופיעים במטא-דאטה (VAR_n). אל תמציא משתנים או מבחנים שלא נדרשים.',
       'בחר deliverable לפי מה שהמטלה מבקשת: פרק ממצאים שלם, פירוש פלט בלבד, או רק קוד.',
       'אם המטלה מציינת מבחן ספציפי — כבד אותו. אם לא, הצע את המבחן הסטטיסטי הנכון למבנה הנתונים.',
+      'תכנן להרצה טובה בפעם הראשונה: אם נדרש recode/סולם/מדד/היפוך/טיפול ב-missing — הוסף analysis מקדים מסוג מתאים לפני הניתוח שמשתמש בתוצר. אם ניתוח תלוי במשתנה נגזר, ה-request של הניתוח יציין שהוא משתמש במשתנה שנוצר קודם ולא ימציא משתנה חדש.',
+      'לכל analysis כתוב request מפורט מספיק ליצירת syntax: שם הפרוצדורה הרצויה, המשתנים המדויקים, בדיקות הנחות נדרשות, גרפים אם נדרשו, ומה לדווח. request עמום גורם לקוד SPSS פחות יציב — אל תחזיר request עמום.',
       'סווג כל משתנה לפי role במטא-דאטה, לא רק לפי type: role=continuous = רציף; role=categorical / role=categorical-code = קטגוריאלי/קבוצתי (מספר שמייצג קטגוריה הוא קטגוריאלי גם אם type=numeric); role=likert = פריט דירוג בסולם — אפשר לטפל בו כרציף או לאחד פריטים למדד; role=identifier = מזהה, אל תכליל בניתוח. התאם את המבחן לרמות המדידה (t-test/ANOVA = DV רציף + גורם קטגוריאלי; chi-square = שני קטגוריאליים; correlation/regression = רציפים).',
       'אם ניתוח דורש משתנה נגזר/מקובץ שלא קיים כעמודה (קבוצות גיל מתוך גיל רציף, ציון/מדד מחושב, משתני דמה) — הוסף קודם analysis נפרד בשלב הכנה (method "recode" או "compute") שה-request שלו יוצר את המשתנה בשם אנגלי ברור, ואז ב-analysis שאחריו השתמש בשם הזה. סדר ה-analyses חייב להציב את שלב ההכנה לפני השימוש. אל תניח שמשתנה נגזר כבר קיים.',
       'רגרסיה עם מנבא קטגוריאלי בעל ≥3 קטגוריות: או הוסף שלב prep ליצירת k-1 משתני דמה, או ציין ב-rationale שיש להריץ GLM/UNIANOVA עם המשתנה כ-factor. אל תכניס מנבא קטגוריאלי רב-קטגורי גולמי לרגרסיה ליניארית.',
       'השתמש ב-valueLabels=[קוד=תווית] במטא-דאטה כדי למפות תיאורים מילוליים במטלה ("נשים", "תואר ראשון") לקודים הנכונים ולמשתנה הנכון. אל תמציא קטגוריות שלא מופיעות ב-valueLabels/observedValues.',
       'אם משתנה שנדרש לניתוח מסומן suspectedUndeclaredMissing=[קודים] — הוסף analysis ראשון בשלב הכנה (method "missing-values") שה-request שלו מגדיר את הקודים האלה כ-user-missing (MISSING VALUES), לפני כל ניתוח שמשתמש במשתנה. אחרת התוצאות יהיו מוטות.',
+      'הצגה גרפית — אם המטלה מבקשת גרף/תרשים/היסטוגרמה/"הצגה גרפית"/plot/chart/diagram, הוסף analysis ייעודי נפרד (method "graph") לכל משתנה או זוג רלוונטי. בחר את סוג הגרף לפי רמת המדידה: רציף (role=continuous/likert) → היסטוגרמה או boxplot; קטגוריאלי (role=categorical/categorical-code) → תרשים עמודות (bar) או עוגה (pie); שני משתנים רציפים לבדיקת קשר → תרשים פיזור (scatter). ה-request יציין במפורש את סוג הגרף ואת שמות המשתנים (VAR_n). אל תוותר על הגרף גם אם באותו סעיף מבקשים גם מדדי מרכז/פיזור — הגרף הוא analysis נפרד ונוסף.',
+      'בדיקות הנחות — לכל מבחן היסק (t-test/ANOVA/רגרסיה/מתאם Pearson) ודא שה-request מבקש גם את בדיקות ההנחות הרלוונטיות: נורמליות (Shapiro-Wilk/Kolmogorov-Smirnov דרך EXAMINE ... /PLOT NPPLOT), שוויון שונויות (Levene — אוטומטי ב-T-TEST, ו-/STATISTICS=HOMOGENEITY ב-ONEWAY), ולרגרסיה גם בדיקת שאריות/מולטיקולינאריות. אפשר לשלב את בדיקות ההנחה באותו request של המבחן. המטלה דורשת לדווח עליהן — אל תשמיט.',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n');
 
@@ -3008,15 +3188,17 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
       'אתה בודק סטטיסטי שמוודא שהרצת SPSS עונה על המטלה לפני שכותבים ממצאים.',
       'קיבלת: טקסט המטלה, ה-syntax שהורץ, והפלט שהמשתמש הדביק.',
       'בדוק: האם יש שגיאות SPSS בפלט (Error/Warning), האם כל הניתוחים הנדרשים רצו, האם הופרו הנחות (נורמליות, שונויות, גודל מדגם), והאם חסר משהו שהמטלה ביקשה.',
+      'גרפים/תרשימים — כלל מיוחד נגד תיקונים חוזרים: גרף ב-SPSS הוא תמונה, לא טקסט. הוא כמעט אף פעם לא מופיע בפלט שמדביקים (שהוא טקסט/טבלאות בלבד), וזה תקין וצפוי. לפני שתתלונן על גרף חסר — בדוק את ה-syntax שהורץ: אם הוא כבר כולל את פקודת הגרף הנדרשת (GRAPH / HISTOGRAM / BAR / PIE / SCATTERPLOT / EXAMINE ... /PLOT), אז הקוד תקין והדרישה מולאה. במקרה כזה אסור לפתוח issue עם verdict="needs-fixes" ואסור להחזיר fixRequest שמבקש "להוסיף גרף" (זה רק ייצר שוב את אותה פקודה בדיוק — הלולאה שאתה חייב למנוע). לכל היותר ציין ב-summary הערה קצרה שהגרפים רצו אך אינם מופיעים בהדבקה כי הם תמונות, ושיש לייצא אותם מ-SPSS ישירות לתוצר. פתח issue על גרף רק אם ה-syntax באמת חסר לגמרי את פקודת הגרף שהמטלה דורשת.',
       'דגל אדום קריטי לבדוק תמיד — סטטיסטיקה תיאורית בלתי-אפשרית: אם ה-SD גדול מהטווח הסביר של הסולם, או הממוצע/מינימום/מקסימום חורגים מהסולם הצפוי (למשל M≈9 או SD≈20 בסולם 0–10, או SD גדול מהממוצע במשתנה חסום), זה מעיד על ערכי missing לא-מוגדרים (קודים כמו 98/99) שנכללים בחישוב ומנפחים את התוצאות. אם יש metadata — הצלב מול ה-range וה-observedValues (קוד 98/99 = חשד). אם זיהית זאת — סמן issue עם verdict="needs-fixes" ו-fixRequest להגדיר את הקודים כ-user-missing (MISSING VALUES) ולהריץ מחדש; כל ניתוח שמבוסס על הממוצעים האלה אינו אמין עד אז.',
-      'אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...] — זהו דגל אדום ודאי שזוהה אוטומטית: פתח issue עם verdict="needs-fixes" ו-fixRequest להגדיר את אותם קודים כ-user-missing ולהריץ מחדש. אם הוא מסומן declaredMissing=[...] בלבד — הקודים כבר מטופלים ואין בעיה.',
+      'אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...] — זהו דגל אדום שזוהה אוטומטית. אבל לפני שאתה פותח issue: קרא את ה-syntax שהורץ. אם הוא כבר כולל שורת MISSING VALUES שמכריזה על אותם קודים עבור אותו משתנה — הבעיה כבר טופלה, אל תפתח אותה שוב ואל תדרוש להגדיר MISSING VALUES פעם נוספת. פתח issue רק אם ה-syntax עדיין לא מטפל בקודים האלה. אם הוא מסומן declaredMissing=[...] בלבד — הקודים כבר מטופלים ואין בעיה.',
+      'עיקרון חשוב נגד תיקונים חוזרים: ה-metadata מתאר את קובץ הגלם ולא משתנה בין הרצות. שפוט תמיד לפי מה שנראה בפלט וב-syntax שהורץ בפועל — לא לפי ה-metadata לבדו. אם התיקון של סבב קודם כבר נמצא ב-syntax ובפלט אין יותר סימן לבעיה, אל תעלה אותה שוב.',
       'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
       '{',
       '  "verdict": "clean" | "needs-fixes",',
-      '  "issues": [ {"label":"איזה ניתוח","problem":"מה הבעיה","fixRequest":"בקשה בעברית לתיקון/הרצה מחדש, עם שמות VAR_n"} ],',
+      '  "issues": [ {"label":"איזה ניתוח","severity":"error|warning|missing|assumption","problem":"מה הבעיה","explanation":"למה זה משנה לתוצר/למטלה","fixRequest":"בקשה בעברית לתיקון/הרצה מחדש, עם שמות VAR_n","rerunInstruction":"מה המשתמש צריך להריץ/להדביק אחרי התיקון"} ],',
       '  "summary": "סיכום קצר של מצב ההרצה"',
       '}',
-      'אם הכל תקין — verdict="clean" ו-issues ריק. אל תמציא מספרים שלא בפלט.',
+      'אם הכל תקין — verdict="clean" ו-issues ריק. אל תמציא מספרים שלא בפלט. אם יש issue, הסבר אותו כך שסטודנט יבין מה לתקן ולמה, אבל אל תציע תיקון שאינו נדרש מהפלט או מהמטלה.',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n');
 
@@ -3042,14 +3224,122 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
     const issues = Array.isArray(restored.issues)
       ? restored.issues.map((entry) => ({
           label: String(entry?.label || '').trim(),
+          severity: String(entry?.severity || '').trim(),
           problem: String(entry?.problem || '').trim(),
+          explanation: String(entry?.explanation || '').trim(),
           fixRequest: String(entry?.fixRequest || '').trim(),
+          rerunInstruction: String(entry?.rerunInstruction || '').trim(),
         })).filter((entry) => entry.problem || entry.fixRequest)
       : [];
     const verdict = String(restored.verdict || '').trim() === 'needs-fixes' || issues.length ? 'needs-fixes' : 'clean';
     return { ok: true, verdict, issues, summary: String(restored.summary || '').trim(), providerId, model, error: '' };
   } catch (error) {
     return { ok: false, verdict: 'unknown', issues: [], summary: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'בדיקת הפלט נכשלה.' };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Pre-flight reviewer — the "good code on the first try" lever. The per-analysis
+// generator writes each block in ISOLATION (one generateSpssSyntax call per item,
+// seeing only the allowed names, not the whole plan or the sibling blocks). This
+// reviewer takes a SECOND look at the fully-assembled master syntax against the
+// task + plan + metadata BEFORE the user burns an SPSS run, and fixes only what
+// is certainly wrong (phantom vars, prep-after-use order, missing MISSING VALUES
+// on flagged vars, raw multi-category predictor in REGRESSION, a required analysis
+// dropped, a missing terminating '.'). Deliberately conservative: if the code is
+// fine or it is unsure it returns verdict="clean" and changes nothing, so it never
+// mangles working syntax. Same VAR_n privacy model as the rest of the studio.
+// ---------------------------------------------------------------------------
+export const reviewSpssMasterSyntax = async ({ assignmentText = '', analysis = null, profile = null, masterSyntax = '', providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanSyntax = String(masterSyntax || '').trim();
+  if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
+    return { ok: false, verdict: 'skip', changed: false, syntax: '', notes: [], providerId: '', model: '', error: 'טען קובץ נתונים לפני בדיקת הקוד.' };
+  }
+  if (!cleanSyntax) {
+    return { ok: false, verdict: 'skip', changed: false, syntax: '', notes: [], providerId: '', model: '', error: 'אין קוד לבדיקה.' };
+  }
+
+  try {
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    const tokenizedSyntax = tokenizeSpssRequest(cleanSyntax.slice(0, MAX_PROJECT_SYNTAX_CHARS), analysis);
+    // Names created by the code itself (COMPUTE/RECODE INTO targets) are legitimate
+    // even though they are not in the metadata — carry them so the fixed syntax that
+    // reuses a derived var is not rejected by the sanitizer as an invented name.
+    const extraAllowedNames = Array.from(collectDeclaredTargetNames(cleanSyntax));
+    const planLines = Array.isArray(profile?.analyses)
+      ? profile.analyses
+          .map((entry, index) => `${index + 1}. ${entry.label || entry.method || 'ניתוח'} [${entry.method || ''}]${entry.request ? ` — ${tokenizeSpssRequest(String(entry.request), analysis)}` : ''}`)
+          .join('\n')
+      : '';
+    const missingDigest = buildSuspectedMissingDigest(analysis);
+
+    const systemPrompt = [
+      'אתה בודק SPSS מומחה שעובר על master syntax שנוצר אוטומטית, לפני שהמשתמש מריץ אותו ב-SPSS.',
+      'המטרה: לתפוס טעויות שיגרמו לשגיאת ריצה או לתוצאה שגויה/חסרה — כדי שההרצה הראשונה תצליח.',
+      'קיבלת: טקסט המטלה, תוכנית הניתוחים, וה-master syntax המלא. אין לך פלט (הקוד עדיין לא רץ).',
+      'בדוק אך ורק בעיות ודאיות:',
+      '1. משתנה שמופיע ב-syntax אך לא קיים ב-metadata ולא נוצר קודם ב-syntax (COMPUTE/RECODE ... INTO) — phantom variable.',
+      '2. משתנה נגזר שנעשה בו שימוש לפני שנוצר (סדר prep שגוי — יש להעביר את שלב ההכנה למעלה).',
+      '3. משתנה שמסומן suspectedUndeclaredMissing ומשמש בניתוח, אך אין לו שורת MISSING VALUES ב-syntax → יזהם את הסטטיסטיקה.',
+      '4. מנבא קטגוריאלי רב-קטגורי (≥3 קטגוריות) שמוכנס גולמי ל-REGRESSION במקום dummy/GLM.',
+      '5. ניתוח שהמטלה או התוכנית דורשת אך חסר לגמרי מה-syntax.',
+      '6. פקודה בלי נקודה מסיימת (.), subcommand שגוי מובהק, או EXECUTE. חסר אחרי transformation שתוצאתו נצרכת מיד.',
+      '7. syntax שאינו runnable כי הוא מכיל הוראות טבעיות, markdown, "TODO", או patch במקום פקודות SPSS מלאות.',
+      '8. שימוש בקודי קבוצה שלא מופיעים ב-observedValues/valueLabels, או /GROUPS בלי קודים מפורשים כאשר SPSS דורש אותם.',
+      'שמרנות — קריטי: אם הקוד תקין או שאינך בטוח, אל תשנה. אל תשכתב ניתוח תקין, אל תוסיף ניתוחים שלא נדרשו, ואל תשנה סגנון. תקן מינימלית ורק את מה שוודאי שגוי. עדיף להחזיר clean מאשר לשבור קוד עובד.',
+      'גרפים: פקודת GRAPH / HISTOGRAM / BAR / PIE / SCATTERPLOT / EXAMINE ... /PLOT תקינה — אל תסמן אותה כבעיה גם אם היא לא תניב טבלת טקסט.',
+      'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
+      '{',
+      '  "verdict": "clean" | "fixed",',
+      '  "notes": ["מה נמצא ותוקן — משפט קצר בעברית לכל פריט"],',
+      '  "syntax": "אם verdict=fixed — ה-master syntax המלא והמתוקן; אם clean — מחרוזת ריקה"',
+      '}',
+      'ב-syntax המתוקן השתמש אך ורק ב-tokens מסוג VAR_n עבור משתני המקור — לא בשמות אמיתיים. שמור על שורות ה-comment (* ...) שמסמנות את מבנה הבלוקים.',
+      'ה-syntax המתוקן חייב להיות master syntax מלא להרצה ב-Run All: לא diff, לא רשימת תיקונים, לא הסבר מחוץ ל-comment, ולא קטע חלקי שמניח שהמשתמש ישלב ידנית.',
+      missingDigest ? `משתנים עם קודי missing חשודים (הצהר עליהם ב-MISSING VALUES אם הם בשימוש בניתוח):\n${missingDigest}` : '',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const message = [
+      `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
+      planLines ? `תוכנית הניתוחים:\n${planLines}` : '',
+      `ה-master syntax לבדיקה:\n${tokenizedSyntax}`,
+    ].filter(Boolean).join('\n\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: message,
+      systemPrompt,
+      agentName: 'SPSS Preflight Reviewer',
+      providerOverride,
+      modelOverride,
+    });
+
+    const parsed = extractJsonPayload(text);
+    if (!parsed) {
+      return { ok: false, verdict: 'unknown', changed: false, syntax: '', notes: [], providerId, model, error: 'לא הצלחתי לפענח את בדיקת הקוד.' };
+    }
+    const notes = Array.isArray(parsed.notes)
+      ? parsed.notes.map((note) => restoreColumnTokens(String(note || '').trim(), analysis)).filter(Boolean).slice(0, 10)
+      : [];
+    const verdict = String(parsed.verdict || '').trim() === 'fixed' ? 'fixed' : 'clean';
+    if (verdict !== 'fixed') {
+      return { ok: true, verdict: 'clean', changed: false, syntax: '', notes, providerId, model, error: '' };
+    }
+    // Model output is in VAR_n tokens; sanitizeSpssSyntax validates then restores to
+    // real names (prep mode — the master legitimately contains data-prep commands).
+    const rawFixed = String(parsed.syntax || '').trim();
+    if (!rawFixed) {
+      return { ok: true, verdict: 'clean', changed: false, syntax: '', notes, providerId, model, error: '' };
+    }
+    const sanitized = sanitizeSpssSyntax(rawFixed, analysis, { mode: 'prep', extraAllowedNames });
+    if (isGuardrailSyntaxResponse(sanitized)) {
+      // The reviewer produced something the sanitizer rejects — do NOT replace the
+      // working code. Surface its notes as advisory only.
+      return { ok: true, verdict: 'clean', changed: false, syntax: '', notes, providerId, model, error: getGuardrailGuidanceMessage(sanitized) };
+    }
+    return { ok: true, verdict: 'fixed', changed: true, syntax: sanitized, notes, providerId, model, error: '' };
+  } catch (error) {
+    return { ok: false, verdict: 'unknown', changed: false, syntax: '', notes: [], providerId: '', model: '', error: error instanceof Error ? error.message : 'בדיקת הקוד נכשלה.' };
   }
 };
 

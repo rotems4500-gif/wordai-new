@@ -29,7 +29,7 @@ tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 base64 = "0.22"
 url = "2"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "macros"] }
 sha2 = "0.10"
 getrandom = "0.2"
 urlencoding = "2"

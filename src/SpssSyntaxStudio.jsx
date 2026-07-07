@@ -272,6 +272,17 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
     });
   }, []);
 
+  React.useEffect(() => {
+    const defaultAnalysis = spssPrefsRef.current?.defaultDataAnalysis;
+    if (analysis || !defaultAnalysis || typeof defaultAnalysis !== 'object') return;
+    if (!Array.isArray(defaultAnalysis.columns) || !defaultAnalysis.columns.length) return;
+    resetForNewDataset(defaultAnalysis);
+    setNotice({
+      tone: 'success',
+      text: `נטען קובץ ברירת המחדל ${defaultAnalysis.fileName || 'קובץ נתונים'} עם ${Number(defaultAnalysis.rowCount || 0).toLocaleString('he-IL')} שורות ו-${defaultAnalysis.columnCount || 0} עמודות. אפשר להחליף קובץ דרך הכפתור.`,
+    });
+  }, [analysis, resetForNewDataset]);
+
   const handleDataFile = React.useCallback(async (file) => {
     if (!file) return;
     const uploadRequestId = createLocalId();

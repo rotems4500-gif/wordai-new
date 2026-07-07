@@ -1,17 +1,22 @@
 // webProxyService.js — באתר (ללא דסקטופ) חלק מהשירותים חסומים ב-CORS בדפדפן:
-// SerpAPI (חיפוש מקורות) ו-Copyleaks (בדיקת מקוריות). מנתבים אותם דרך Firebase Function
+// SerpAPI (חיפוש מקורות), Copyleaks (בדיקת מקוריות) ו-Perplexity (אחזור מקורות — ה-API שלהם
+// לא מחזיר כותרות CORS לדפדפן, נצפה "Failed to fetch" באתר). מנתבים אותם דרך Firebase Function
 // שמשמשת CORS-relay (מקביל ל-proxy_http_request ב-Rust בדסקטופ).
 // הקריאה היא same-origin אל /api/proxy (rewrite ב-hosting → function), כך שאין hop נוסף של CORS.
 //
-// ספקי ה-AI (Gemini/Claude/OpenAI/Groq/Perplexity) *לא* עוברים כאן — הם מאפשרים קריאה ישירה
+// שאר ספקי ה-AI (Gemini/Claude/OpenAI/Groq) *לא* עוברים כאן — הם מאפשרים קריאה ישירה
 // מהדפדפן, ואין סיבה להעמיס עליהם relay (עלות/השהיה/פרטיות).
 
-const RELAY_ENDPOINT = '/api/proxy';
+// בדפדפן הקריאה same-origin ('/api/proxy'). ב-Node (test harness) אין origin —
+// WORDAI_RELAY_ORIGIN מפנה ל-relay הפרוס (למשל https://wordai-website.web.app).
+const RELAY_ORIGIN = (typeof process !== 'undefined' && process.env?.WORDAI_RELAY_ORIGIN) || '';
+const RELAY_ENDPOINT = `${RELAY_ORIGIN}/api/proxy`;
 
 // חייב להישאר מסונכרן עם ה-allowlist בצד-שרת (functions/index.js).
 const RELAY_HOST_PATTERNS = [
   /(^|\.)serpapi\.com$/i,
   /(^|\.)copyleaks\.com$/i,
+  /(^|\.)perplexity\.ai$/i,
 ];
 
 // האם המארח של ה-URL חסום ב-CORS ולכן צריך לעבור דרך ה-relay של השרת.

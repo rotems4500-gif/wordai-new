@@ -64,7 +64,7 @@ const FOCUS_GENERIC_TOKENS = new Set(['מבצע', 'דוח', 'כתבה', 'כתב�
 const NEWS_SITE_QUERY_HINTS = ['מאתר חדשות', 'מאתרי חדשות', 'אתר חדשות', 'עיתונאית', 'עיתונאי', 'news site', 'news-site', 'journalistic news', 'journalistic article', 'from a news site'];
 const OPERATION_QUERY_HINTS = ['מבצע', 'operation'];
 const KNOWN_OPERATION_TITLES_REQUIRING_PREFIX = new Set(['שאגת הארי']);
-const KNOWN_NEWS_DOMAIN_HINTS = [
+export const KNOWN_NEWS_DOMAIN_HINTS = [
   'ynet.co.il',
   'mako.co.il',
   'n12.co.il',
@@ -81,6 +81,7 @@ const KNOWN_NEWS_DOMAIN_HINTS = [
   'ice.co.il',
   'srugim.co.il',
   'davar1.co.il',
+  'the7eye.org.il',
   'inn.co.il',
   'israelnationalnews.com',
   'i24news.tv',
@@ -394,7 +395,8 @@ const textContainsHint = (text = '', hint = '') => {
 
 const hasTextualHint = (text = '', hints = []) => hints.some((hint) => textContainsHint(text, hint));
 
-const isKnownNewsDomain = (domain = '') => {
+// exported: sourceRetrieval משתמש בזה להחלטת keep-botBlocked (403 מדומיין חדשות מוכר).
+export const isKnownNewsDomain = (domain = '') => {
   const normalizedDomain = String(domain || '').toLowerCase();
   return KNOWN_NEWS_DOMAIN_HINTS.some((hint) => domainMatchesHint(normalizedDomain, hint));
 };
@@ -421,6 +423,39 @@ const isDisallowedDomain = (domain = '') => {
   }
 
   return DISALLOWED_DOMAIN_HINTS.some((hint) => domainMatchesHint(normalizedDomain, hint));
+};
+
+// דומיינים אסורים בכל סוג בקשה (news וגם academic): ויקיפדיה, רשתות חברתיות,
+// בלוגים ופורומים — מה שה-prompt של סוכן sources אוסר תמיד. בשונה מ-
+// DISALLOWED_DOMAIN_HINTS (שכולל gov/idf/PDF שלגיטימיים לאקדמי), זו רשימה צרה
+// שבטוח לחסום גם למקורות אקדמיים. נאכף ב-pipeline מיד אחרי אימות ה-URL.
+const UNIVERSALLY_BLOCKED_DOMAIN_HINTS = [
+  'wikipedia.org', 'wikimedia.org', 'wikiwand.com',
+  'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com', 'youtu.be',
+  'twitter.com', 'x.com', 'linkedin.com', 't.me', 'telegram.me',
+  'reddit.com', 'quora.com', 'medium.com', 'substack.com', 'blogspot.com', 'wordpress.com',
+];
+// רשימת דומיינים אסורים מותאמת-משתמש (מוגדרת מה-UI, נשמרת ב-app-settings). מתמזגת
+// עם הרשימה הקשיחה. מוזרקת ע"י aiService ב-hydrate/save (setCustomBlockedSourceDomains).
+let customBlockedDomainHints = [];
+const normalizeBlockedDomainHint = (value = '') => String(value || '')
+  .trim().toLowerCase()
+  .replace(/^https?:\/\//, '')
+  .replace(/^www\./, '')
+  .replace(/[/?#].*$/, '')
+  .trim();
+export const setCustomBlockedSourceDomains = (list = []) => {
+  customBlockedDomainHints = (Array.isArray(list) ? list : [])
+    .map(normalizeBlockedDomainHint)
+    .filter(Boolean);
+};
+export const getCustomBlockedSourceDomains = () => [...customBlockedDomainHints];
+
+export const isUniversallyBlockedSourceDomain = (domain = '') => {
+  const normalizedDomain = String(domain || '').toLowerCase();
+  if (!normalizedDomain) return false;
+  return UNIVERSALLY_BLOCKED_DOMAIN_HINTS.some((hint) => domainMatchesHint(normalizedDomain, hint))
+    || customBlockedDomainHints.some((hint) => domainMatchesHint(normalizedDomain, hint));
 };
 
 const hasKnownNewsSourceSignal = (text = '') => hasTextualHint(text, KNOWN_NEWS_DOMAIN_HINTS)

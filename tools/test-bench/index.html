@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WordFlow LAB — שולחן בדיקות יכולות</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --panel2:#111828; --line:#2a3550; --txt:#e7ecf5; --muted:#8fa0bf; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:12px; }
+  .status { font-size:12px; padding:6px 10px; border-radius:8px; background:var(--panel2); border:1px solid var(--line); margin-bottom:14px; display:flex; gap:14px; flex-wrap:wrap; }
+  .status b { color:var(--txt); }
+  .tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--panel2); color:var(--muted); cursor:pointer; font-size:13px; }
+  .tab.active { background:var(--accent); color:#06101f; font-weight:700; border-color:var(--accent); }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input[type=text], input[type=password], textarea, select { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:#0d121d; color:var(--txt); font-size:13px; font-family:inherit; }
+  textarea { min-height:70px; resize:vertical; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  button { padding:9px 16px; border:0; border-radius:8px; background:var(--accent); color:#06101f; font-weight:700; cursor:pointer; font-size:13px; }
+  button.sec { background:#25324d; color:var(--txt); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+  code { background:#0d121d; padding:1px 5px; border-radius:4px; }
+  .out { margin-top:14px; }
+  .card { border:1px solid var(--line); border-radius:10px; margin-bottom:12px; overflow:hidden; }
+  .card h3 { margin:0; padding:9px 12px; font-size:13px; background:var(--panel2); display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
+  .card h3 .badge { font-size:11px; padding:2px 8px; border-radius:999px; }
+  .badge.ok { background:rgba(74,222,128,.15); color:var(--ok); }
+  .badge.bad { background:rgba(248,113,113,.15); color:var(--bad); }
+  .badge.warn { background:rgba(251,191,36,.15); color:var(--warn); }
+  .card .body { padding:10px 12px; font-size:12px; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; font-family:'Cascadia Code',Consolas,monospace; font-size:11.5px; color:#d7deec; max-height:420px; overflow:auto; }
+  .kv { color:var(--muted); }
+  .kv b { color:var(--txt); }
+  .wire { border-top:1px dashed var(--line); padding-top:8px; margin-top:8px; }
+  .wire .w { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin-bottom:6px; background:#0d121d; }
+  .wire .w .h { color:var(--accent); font-size:11px; margin-bottom:3px; }
+  a { color:var(--accent); word-break:break-all; }
+  .src { border-top:1px solid var(--line); padding:8px 0; }
+  .src .t { font-weight:600; }
+  .src .u { color:var(--muted); font-size:11px; }
+  .ev { font-size:11px; color:var(--muted); border-bottom:1px solid var(--line); padding:3px 0; }
+  .ev b { color:var(--accent); }
+  .pk-wrap { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:4px; background:var(--panel2); }
+  .pk-row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+  .pk-row:first-child { margin-top:0; }
+  .pk-row select, .pk-row input { padding:7px 8px; }
+  .pk-prov { flex:0 0 160px; }
+  .pk-model { flex:1; min-width:0; }
+  .pk-del { padding:6px 10px; background:#3a2530; color:var(--bad); }
+  button.mini { padding:3px 9px; font-size:11px; font-weight:600; }
+  .rtoolbar { display:flex; gap:6px; margin-bottom:8px; }
+  .upload-row { display:flex; justify-content:flex-end; gap:6px; margin:-2px 0 4px; }
+  .upload-row .mini { opacity:.9; }
+  .keys-box { border:1px solid var(--line); border-radius:10px; background:var(--panel2); margin:-6px 0 14px; padding:8px 10px; }
+  .keys-box summary { cursor:pointer; color:var(--txt); font-size:12px; font-weight:700; }
+  .keys-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+  @media (max-width:760px){ .keys-grid { grid-template-columns:1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧪 WordFlow LAB</h1>
+  <div class="sub">מריץ את קוד האפליקציה האמיתי (aiService / agentConfig / sourceRetrieval / workspaceLearning) server-side, ומראה את הפרומפט המדויק שיוצא ל-AI. מפתחות מגיעים מהקונפיג המוצפן (DPAPI) של האפליקציה — לא נכתבים לדיסק ולא נשלחים לדפדפן.</div>
+  <div class="status" id="status">טוען סטטוס…</div>
+  <details class="keys-box" id="keys_box">
+    <summary>🔑 מפתחות LAB מקומיים</summary>
+    <div class="hint">אם הקונפיג המוצפן של האפליקציה חסום בסביבת הבדיקה, אפשר לשמור כאן מפתחות מקומיים. הם נשמרים רק ב-<code>tools/test-bench/keys.local.json</code> שמוחרג מגיט.</div>
+    <div class="keys-grid">
+      <div><label>Gemini</label><input id="key_gemini" type="password" data-no-upload="true" placeholder="AIza…"></div>
+      <div><label>OpenAI</label><input id="key_openai" type="password" data-no-upload="true" placeholder="sk-…"></div>
+      <div><label>Perplexity</label><input id="key_perplexity" type="password" data-no-upload="true" placeholder="pplx-…"></div>
+      <div><label>Scholar / SerpAPI</label><input id="key_scholar" type="password" data-no-upload="true" placeholder="serpapi key"></div>
+    </div>
+    <div class="row"><button id="keys_save" class="sec">💾 שמור וטען מפתחות</button><span class="kv" id="keys_msg"></span></div>
+  </details>
+
+  <div class="tabs" id="tabs">
+    <!-- agent tabs injected here dynamically -->
+    <div class="tab" data-tab="sources" data-static>📚 אחזור מקורות</div>
+    <div class="tab" data-tab="doc" data-static>📄 יצירת מסמך</div>
+    <div class="tab" data-tab="style" data-static>🎭 סגנון אישי</div>
+    <div class="tab" data-tab="spss-syntax" data-static>📈 SPSS רגיל</div>
+    <div class="tab" data-tab="spss-project" data-static>🎓 עבודת סיום SPSS</div>
+    <div class="tab" data-tab="models" data-static>🔑 מודלים ומפתחות</div>
+    <div class="tab" data-tab="summary" data-static>📝 סיכום <span id="sum_count" class="badge ok" style="display:none">0</span></div>
+  </div>
+
+  <!-- AGENT VIEWS injected here dynamically (one panel per agent) -->
+  <div id="agent-views"></div>
+
+  <!-- SOURCES -->
+  <div class="panel view" id="view-sources" style="display:none">
+    <label>שאילתת חיפוש</label>
+    <input id="s_q" type="text" value="עליית מדד המחירים לצרכן בישראל 2024" />
+    <div class="grid2">
+      <div><label>סוג</label><select id="s_kind"><option value="academic">אקדמי</option><option value="news">חדשות</option></select></div>
+      <div><label>כמות</label><input id="s_count" type="text" value="3" /></div>
+    </div>
+    <label>ספקי אחזור לכלול (ריק = כולם)</label>
+    <div class="pk-wrap" style="display:flex;gap:16px;flex-wrap:wrap">
+      <span class="chk"><input type="checkbox" class="s_prov" value="scholar" checked><label style="margin:0">Scholar (אקדמי בלבד)</label></span>
+      <span class="chk"><input type="checkbox" class="s_prov" value="perplexity" checked><label style="margin:0">Perplexity</label></span>
+      <span class="chk"><input type="checkbox" class="s_prov" value="gemini" checked><label style="margin:0">Gemini</label></span>
+    </div>
+    <label>🚫 אתרים לא רצויים (דומיינים, מופרד בפסיק/שורה) — בנוסף לרשימה הקשיחה (ויקיפדיה/רשתות תמיד חסומים)</label>
+    <textarea id="s_blocked" placeholder="למשל: ynet.co.il, mako.co.il" style="min-height:48px"></textarea>
+    <div class="row">
+      <button id="s_run">▶ הרץ retrieveSources</button>
+      <button id="s_blocked_save" class="sec" title="שמור לקביעות (משפיע גם על האפליקציה)">💾 שמור רשימה</button>
+      <button id="s_sum" class="sec" title="הוסף תוצאה אחרונה לסיכום">➕ לסיכום</button>
+    </div>
+    <div class="hint">רץ דרך <code>srcretr.retrieveSources</code> האמיתי עם אימות URL (HEAD→GET) ו-providerTrail מלא. בחר/י אילו ספקי אחזור לכלול — לבדיקת כל אחד בנפרד או יחד (מסתירים את המפתחות של השאר).</div>
+    <div class="out" id="s_out"></div>
+  </div>
+
+  <!-- DOC -->
+  <div class="panel view" id="view-doc" style="display:none">
+    <label>בקשת מסמך (prompt)</label>
+    <textarea id="d_prompt" placeholder="כתוב עבודה אקדמית על…">כתוב עבודה אקדמית קצרה על השפעת רשתות חברתיות על דימוי גוף בקרב מתבגרים, עם מקורות אקדמיים</textarea>
+    <label>ספק ומודל (אחד או כמה להשוואה)</label>
+    <div class="pk-wrap" id="d_targets"></div>
+    <div class="row"><button id="d_add" class="sec">➕ הוסף מודל</button><button id="d_run">▶ הרץ</button><button id="d_sum" class="sec" title="הוסף תוצאה אחרונה לסיכום">➕ לסיכום</button></div>
+    <div class="hint">רץ את נתיב write-with-sources האמיתי; מודד ציטוטים, URLs, מרקרי [דרוש מקור] ואירועי retrieval.</div>
+    <div class="out" id="d_out"></div>
+  </div>
+
+  <!-- STYLE -->
+  <div class="panel view" id="view-style" style="display:none">
+    <div id="sp_summary" class="status" style="margin-bottom:12px">טוען פרופיל…</div>
+    <label>בקשת מסמך</label>
+    <textarea id="st_prompt" placeholder="כתוב מסמך…">כתוב פסקה קצרה על חשיבות ניהול זמן בלימודים אקדמיים</textarea>
+    <label>ספק ומודל (אחד או כמה להשוואה)</label>
+    <div class="pk-wrap" id="st_targets"></div>
+    <div class="row"><button id="st_add" class="sec">➕ הוסף מודל</button><button id="st_run">▶ השווה: עם/בלי סגנון</button><button id="st_sum" class="sec" title="הוסף תוצאה אחרונה לסיכום">➕ לסיכום</button></div>
+    <div class="hint">מייצר את אותה בקשה פעמיים (עם הפרופיל האישי פעיל / מנוטרל) ונותן לכל פלט <b>ציון אותנטיות</b> מול הפרופיל שלך. ציון נמוך = יותר בקול שלך/אנושי, גבוה = גנרי/מכונה. ה-delta מראה כמה הסגנון השפיע. תוצאות נשמרות מקומית ב-<code>lab-results/</code> (gitignored).</div>
+    <div class="out" id="st_out"></div>
+    <hr style="border-color:var(--line);margin:18px 0">
+    <label>בדיקת טקסט חופשי (הדבק טקסט לציון מיידי מול הפרופיל)</label>
+    <textarea id="sc_text" placeholder="הדבק טקסט לניתוח…"></textarea>
+    <div class="row"><button id="sc_run" class="sec">📊 תן ציון לטקסט</button></div>
+    <div class="out" id="sc_out"></div>
+  </div>
+
+  <!-- SPSS REGULAR -->
+  <div class="panel view" id="view-spss-syntax" style="display:none">
+    <div class="kv"><b>SPSS רגיל</b> · אותו מסלול של <code>SpssSyntaxStudio</code>: CSV → metadata → quick actions / generateSpssSyntax / interpret / repair.</div>
+    <label>CSV נתונים</label>
+    <textarea id="sx_csv" style="min-height:120px">gender,age,attitude_1,attitude_2,attitude_3,education
+1,22,4,5,4,1
+2,25,3,4,3,2
+1,34,5,5,4,3
+2,31,2,3,2,2
+1,41,4,4,5,3
+2,29,99,4,3,1</textarea>
+    <div class="grid2">
+      <div>
+        <label>בקשת syntax חופשית</label>
+        <textarea id="sx_request" placeholder="לדוגמה: צור סטטיסטיקה תיאורית ובדוק הבדל במדד העמדות לפי מגדר">צור סטטיסטיקה תיאורית למשתני העמדה ובדוק הבדל לפי מגדר כולל הנחות</textarea>
+      </div>
+      <div>
+        <label>פלט / שגיאה מ-SPSS (אופציונלי)</label>
+        <textarea id="sx_output" placeholder="הדבק Output לפירוש, או Error # לתיקון יחד עם prior syntax"></textarea>
+      </div>
+    </div>
+    <div class="grid2">
+      <div>
+        <label>Prior syntax לתיקון שגיאה (אופציונלי)</label>
+        <textarea id="sx_prior" placeholder="אם הדבקת Error #, הדבק כאן את ה-syntax שרץ"></textarea>
+      </div>
+      <div>
+        <label>שאלה / פוקוס לפירוש או הדרכה</label>
+        <textarea id="sx_question" placeholder="למשל: תסביר APA, או איך עושים ANOVA בתפריטים"></textarea>
+      </div>
+    </div>
+    <div class="grid2">
+      <div>
+        <label>מצב יצירת syntax</label>
+        <select id="sx_mode"><option value="analysis">analysis-only</option><option value="prep">data-prep</option></select>
+      </div>
+      <div>
+        <label>פעולה מהירה כמו באפליקציה (אופציונלי)</label>
+        <div class="grid2">
+          <select id="sx_action"><option value="">ללא — בקשה חופשית</option><option value="descriptives">סטטיסטיקה תיאורית</option><option value="outliers">מצא חריגים</option><option value="reverse-scale">היפוך סולם</option></select>
+          <input id="sx_column" type="text" placeholder="שם עמודה / VAR_n לפעולה מהירה">
+        </div>
+      </div>
+    </div>
+    <label>ספק ומודל</label>
+    <div class="pk-wrap" id="sx_targets"></div>
+    <label>Syntax לסימולציית SPSS / dry-run</label>
+    <textarea id="sx_preview_syntax" style="min-height:140px" placeholder="אחרי יצירת syntax השדה יתמלא אוטומטית, או הדבק כאן קוד SPSS משלך"></textarea>
+    <div class="row">
+      <button id="sx_run">▶ הרץ SPSS רגיל</button>
+      <button id="sx_preview" class="sec">👁 הדמה תגובת SPSS</button>
+      <button id="sx_sum" class="sec" title="הוסף תוצאה אחרונה לסיכום">➕ לסיכום</button>
+    </div>
+    <div class="hint">הסימולציה היא dry-run של WordFlow LAB: היא אינה IBM SPSS, אבל בודקת שמות משתנים, נקודות מסיימות, פקודות מזוהות, ומציגה פלט מדומה/מחושב בסיסי כדי להבין מה צפוי לפני הרצה אמיתית.</div>
+    <div class="out" id="sx_out"></div>
+  </div>
+
+  <!-- SPSS PROJECT -->
+  <div class="panel view" id="view-spss-project" style="display:none">
+    <div class="kv"><b>עבודת סיום · SPSS</b> · אותו pipeline של <code>SpssProjectStudio</code>: analyze assignment → generate blocks → preflight review → master syntax.</div>
+    <label>CSV נתונים</label>
+    <textarea id="sp_csv" style="min-height:120px">gender,age,attitude_1,attitude_2,attitude_3,education,voted
+1,22,4,5,4,1,1
+2,25,3,4,3,2,0
+1,34,5,5,4,3,1
+2,31,2,3,2,2,0
+1,41,4,4,5,3,1
+2,29,99,4,3,1,0</textarea>
+    <label>טקסט מטלה</label>
+    <textarea id="sp_assignment" style="min-height:110px">עליך להכין עבודת סיום ב-SPSS: לבנות מדד עמדה משלושת פריטי attitude, לבדוק מהימנות, להציג סטטיסטיקה תיאורית וגרפים, לבדוק הבדלים במדד לפי מגדר והשכלה, לבדוק קשר בין גיל למדד, ולכתוב קוד SPSS מלא להרצה.</textarea>
+    <label>ספק ומודל</label>
+    <div class="pk-wrap" id="sp_targets"></div>
+    <div class="row"><button id="sp_run">▶ הרץ עבודת סיום</button><button id="sp_sum" class="sec" title="הוסף תוצאה אחרונה לסיכום">➕ לסיכום</button></div>
+    <div class="out" id="sp_out"></div>
+  </div>
+
+  <!-- SUMMARY -->
+  <div class="panel view" id="view-summary" style="display:none">
+    <div class="row" style="margin-top:0">
+      <button id="sum_copy">📋 העתק הכל</button>
+      <button id="sum_clear" class="sec">🗑 נקה</button>
+      <span class="kv" id="sum_status"></span>
+    </div>
+    <div class="hint">כל תוצאה אפשר להוסיף לכאן עם "➕ לסיכום". בסוף — "העתק הכל" ושלח לי את הטקסט.</div>
+    <textarea id="sum_text" style="min-height:340px;margin-top:10px;font-family:'Cascadia Code',Consolas,monospace;font-size:12px" placeholder="הסיכום ייבנה כאן…"></textarea>
+  </div>
+
+  <!-- MODELS -->
+  <div class="panel view" id="view-models" style="display:none">
+    <div class="hint">בודק אילו מודלים כל מפתח בקונפיג האמיתי תומך (gemini/openai/perplexity).</div>
+    <label>ספק</label>
+    <select id="m_provider" style="max-width:260px">
+      <option value="">כל הספקים</option>
+      <option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="perplexity">Perplexity</option>
+    </select>
+    <div class="row"><button id="m_run">▶ בדוק מפתחות ומודלים</button></div>
+    <div class="out" id="m_out"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+const post = (url, body) => fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then((r) => r.json());
+const card = (title, badge, bodyHtml, open=true) =>
+  `<div class="card"><h3 onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">${esc(title)}${badge||''}</h3><div class="body" style="display:${open?'block':'none'}">${bodyHtml}</div></div>`;
+const b = (t, cls) => `<span class="badge ${cls}">${esc(t)}</span>`;
+const wireBlock = (wire) => !wire||!wire.length ? '' :
+  `<div class="wire"><div class="kv"><b>קריאות רשת יוצאות (${wire.length}):</b></div>` +
+  wire.map((w) => `<div class="w"><div class="h">${esc(w.method)} ${esc(w.host)}</div><pre>${esc(w.url)}${w.body?'\n\nBODY:\n'+esc(w.body):''}</pre></div>`).join('') + '</div>';
+
+// ---- quick copy + summary collector ----
+const CLIP = new Map(); let clipId = 0;
+// toolbar for a result: quick-copy the raw text + add a formatted entry to the summary
+function rtoolbar(copyText, summaryEntry) {
+  const cid = ++clipId; CLIP.set('c' + cid, String(copyText || ''));
+  const sid = ++clipId; CLIP.set('s' + sid, String(summaryEntry || copyText || ''));
+  return `<div class="rtoolbar"><button class="sec mini" data-copy="c${cid}">📋 העתק</button>` +
+    `<button class="sec mini" data-sum="s${sid}">➕ לסיכום</button></div>`;
+}
+function flash(btn, txt) { const o = btn.textContent; btn.textContent = txt; setTimeout(() => { btn.textContent = o; }, 1200); }
+function copyToClipboard(text, btn) {
+  const done = () => btn && flash(btn, 'הועתק ✓');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch {} ta.remove(); done && done();
+}
+// ---- universal file upload into LAB fields ----
+// Client-side only: keeps files local to the browser and pastes readable text into
+// the chosen textarea/input. Binary office/PDF files should be converted/exported
+// to text/CSV before uploading here.
+const TEXT_FILE_ACCEPT = '.txt,.md,.csv,.tsv,.json,.html,.htm,.xml,.js,.jsx,.mjs,.css,.log,.sps,.sav.txt,text/*,application/json,text/csv,text/tab-separated-values';
+function readLabFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('קריאת הקובץ נכשלה'));
+    reader.readAsText(file);
+  });
+}
+function setFieldValue(field, text, mode = 'replace') {
+  const next = mode === 'append' && field.value
+    ? `${field.value.trimEnd()}\n\n${text}`.trim()
+    : text;
+  field.value = next;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.focus();
+}
+async function uploadIntoField(field, btn) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = TEXT_FILE_ACCEPT;
+  input.multiple = true;
+  input.onchange = async () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'טוען…';
+    try {
+      const parts = [];
+      for (const file of files) {
+        const text = await readLabFileAsText(file);
+        parts.push(files.length > 1 ? `--- ${file.name} ---\n${text}` : text);
+      }
+      setFieldValue(field, parts.join('\n\n'), field.value.trim() ? 'append' : 'replace');
+      btn.textContent = 'נטען ✓';
+    } catch (e) {
+      btn.textContent = 'שגיאה';
+      alert(e?.message || 'קריאת הקובץ נכשלה');
+    } finally {
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
+    }
+  };
+  input.click();
+}
+function installUploadButtons(root = document) {
+  root.querySelectorAll('textarea, input[type="text"]').forEach((field) => {
+    if (field.dataset.noUpload === 'true' || field.dataset.uploadInstalled === 'true') return;
+    if (field.classList.contains('pk-custom')) return;
+    field.dataset.uploadInstalled = 'true';
+    const row = document.createElement('div');
+    row.className = 'upload-row';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sec mini';
+    btn.textContent = '📎 העלה קובץ לשדה';
+    btn.onclick = () => uploadIntoField(field, btn);
+    row.appendChild(btn);
+    field.parentNode.insertBefore(row, field);
+  });
+}
+function updateSumCount() {
+  const n = ($('sum_text').value.match(/^### /gm) || []).length;
+  const badge = $('sum_count'); badge.textContent = n; badge.style.display = n ? '' : 'none';
+}
+function addToSummary(entry) {
+  const ta = $('sum_text'); ta.value += (ta.value ? '\n\n' : '') + entry; updateSumCount();
+}
+document.addEventListener('click', (e) => {
+  const c = e.target.closest('[data-copy]'); if (c) { copyToClipboard(CLIP.get(c.dataset.copy) || '', c); return; }
+  const s = e.target.closest('[data-sum]'); if (s) { addToSummary(CLIP.get(s.dataset.sum) || ''); flash(s, 'נוסף ✓'); return; }
+});
+$('sum_copy').onclick = () => { if (!$('sum_text').value.trim()) { $('sum_status').textContent = 'הסיכום ריק'; return; } copyToClipboard($('sum_text').value, $('sum_copy')); };
+$('sum_clear').onclick = () => { $('sum_text').value = ''; updateSumCount(); };
+$('sum_text').addEventListener('input', updateSumCount);
+// per-tab last-result entry + quick "add to summary" buttons
+const LAST = { s: '', d: '', st: '', sx: '', sp: '' };
+function quickSum(btnId, key) {
+  $(btnId).onclick = (e) => { if (LAST[key]) { addToSummary(LAST[key]); flash(e.target, 'נוסף ✓'); } else flash(e.target, 'אין תוצאה'); };
+}
+quickSum('s_sum', 's'); quickSum('d_sum', 'd'); quickSum('st_sum', 'st'); quickSum('sx_sum', 'sx'); quickSum('sp_sum', 'sp');
+$('d_add').onclick = () => buildPickerRow($('d_targets'), { checkbox: true, removable: true, provider: PROVIDERS[0]?.id });
+$('st_add').onclick = () => buildPickerRow($('st_targets'), { checkbox: true, removable: true, provider: PROVIDERS[0]?.id });
+
+// ---- tabs (event delegation — works for dynamically-added agent tabs) ----
+function activateTab(key) {
+  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === key));
+  document.querySelectorAll('.view').forEach((v) => v.style.display = 'none');
+  const view = $('view-' + key); if (view) view.style.display = 'block';
+}
+$('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab'); if (tab) activateTab(tab.dataset.tab);
+});
+
+// ---- status ----
+async function loadStatus() {
+  try {
+    const s = await fetch('/api/status').then((r) => r.json());
+    $('status').innerHTML =
+      `קונפיג: ${s.cfgLoaded ? b('נטען ✓','ok') : b('חסר','bad')} · ` +
+      `מקור: <b>${esc(s.cfgSource || '—')}</b> · ` +
+      `bundle: ${s.bundleReady ? b('מוכן ✓','ok') : b('לא','bad')} · ` +
+      `ספקים בקונפיג: <b>${(s.providers||[]).join(', ')||'—'}</b>` +
+      (s.cfgLoaded ? '' : `<br><span class="muted">אפשר למלא את tools/test-bench/keys.local.json כשהקונפיג המוצפן של האפליקציה לא נגיש.</span>`);
+  } catch (e) { $('status').innerHTML = b('שרת לא זמין','bad'); }
+}
+loadStatus();
+
+async function saveLabKeys() {
+  const keys = {
+    gemini: $('key_gemini').value.trim(),
+    openai: $('key_openai').value.trim(),
+    perplexity: $('key_perplexity').value.trim(),
+    scholar: $('key_scholar').value.trim(),
+  };
+  const filled = Object.fromEntries(Object.entries(keys).filter(([, v]) => v));
+  if (!Object.keys(filled).length) {
+    $('keys_msg').innerHTML = b('לא הוזן אף מפתח', 'bad');
+    return;
+  }
+  $('keys_save').disabled = true;
+  $('keys_msg').innerHTML = 'שומר…';
+  try {
+    const r = await post('/api/local-keys', filled);
+    if (!r.ok) throw new Error(r.error || 'השמירה נכשלה');
+    $('keys_msg').innerHTML = b(`נטען ✓ (${(r.providers || []).join(', ')})`, 'ok');
+    await loadStatus();
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    $('keys_msg').innerHTML = b(e?.message || 'השמירה נכשלה', 'bad');
+  } finally {
+    $('keys_save').disabled = false;
+  }
+}
+$('keys_save').onclick = saveLabKeys;
+
+// ---- render agent prompt (shared by inspect + run) ----
+function renderAgentPrompt(d) {
+  const opt = d.options || {};
+  const meta = `<div class="kv">` +
+    `<b>provider:</b> ${esc(opt.providerOverride||'(route)')} · <b>preferred:</b> ${esc(JSON.stringify(opt.preferredProviders||[]))} · ` +
+    `<b>strict:</b> ${opt.strictProviderOverride} · <b>model:</b> ${esc(opt.modelOverride||'—')}<br>` +
+    `<b>isAcademic:</b> ${opt.isAcademicTask} · <b>skipMultiModel:</b> ${opt.skipMultiModel} · ` +
+    `<b>sourceQueryOverride:</b> ${esc(opt.sourceQueryOverride||'—')}</div>`;
+  return card('system prompt (extraSystemPrompt)', '', `<pre>${esc(d.systemPrompt||'(ריק)')}</pre>`) +
+    card('userPrompt', '', `<pre>${esc(d.userPrompt||'(ריק)')}</pre>`) +
+    (d.documentContext ? card('documentContext', '', `<pre>${esc(d.documentContext)}</pre>`, false) : '') +
+    card('options (מה שנשלח ל-chatWithActiveProvider)', '', meta + `<pre>${esc(JSON.stringify(opt, null, 2))}</pre>`, false);
+}
+
+// ---- reusable provider+model picker (fed by real configured providers) ----
+let PROVIDERS = [];
+function provOptions(sel) {
+  return `<option value="default" ${sel==='default'?'selected':''}>ברירת מחדל (route)</option>` +
+    PROVIDERS.map((p) => `<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.label)}${p.isDefault?' ★':''}</option>`).join('');
+}
+function modelOptions(providerId, sel) {
+  const p = PROVIDERS.find((x) => x.id === providerId);
+  const models = p ? p.models : [];
+  return models.map((m) => `<option value="${esc(m)}" ${m===sel?'selected':''}>${esc(m)}</option>`).join('') +
+    `<option value="__custom__">✎ מותאם…</option>`;
+}
+// build one picker row into container. opts: {checkbox, removable, provider}
+function buildPickerRow(container, { checkbox = false, removable = false, provider } = {}) {
+  const pid = provider || 'default';
+  const row = document.createElement('div');
+  row.className = 'pk-row';
+  row.innerHTML =
+    (checkbox ? `<input type="checkbox" checked title="כלול בריצה">` : '') +
+    `<select class="pk-prov">${provOptions(pid)}</select>` +
+    `<select class="pk-model">${modelOptions(pid, '')}</select>` +
+    `<input class="pk-custom" type="text" placeholder="model id מותאם" style="display:none">` +
+    (removable ? `<button class="sec pk-del" title="הסר">✕</button>` : '');
+  const prov = row.querySelector('.pk-prov'), model = row.querySelector('.pk-model'), custom = row.querySelector('.pk-custom');
+  const syncModelState = () => {
+    const isDefault = prov.value === 'default';
+    model.style.display = isDefault ? 'none' : '';
+    if (!isDefault) model.innerHTML = modelOptions(prov.value, '');
+    custom.style.display = (!isDefault && model.value === '__custom__') ? '' : 'none';
+  };
+  prov.onchange = syncModelState;
+  model.onchange = () => { custom.style.display = model.value === '__custom__' ? '' : 'none'; };
+  if (removable) row.querySelector('.pk-del').onclick = () => row.remove();
+  container.appendChild(row); syncModelState();
+  return row;
+}
+// read [{provider, model}] from a container (only checked rows, or all if no checkbox)
+function readTargets(container) {
+  return [...container.querySelectorAll('.pk-row')].filter((r) => {
+    const c = r.querySelector('input[type=checkbox]'); return !c || c.checked;
+  }).map((r) => {
+    const provider = r.querySelector('.pk-prov').value;
+    let model = provider === 'default' ? '' : r.querySelector('.pk-model').value;
+    if (model === '__custom__') model = r.querySelector('.pk-custom').value.trim();
+    return { provider, model };
+  });
+}
+// ---- one panel per agent, built dynamically from /api/agents ----
+function buildAgentTab(agent) {
+  const key = 'agent-' + agent.id;
+  const tab = document.createElement('div');
+  tab.className = 'tab'; tab.dataset.tab = key; tab.textContent = agent.label;
+  $('tabs').insertBefore(tab, $('tabs').querySelector('[data-static]'));   // before the static tabs
+
+  const view = document.createElement('div');
+  view.className = 'panel view'; view.id = 'view-' + key; view.style.display = 'none';
+  view.innerHTML =
+    `<div class="kv" style="margin-bottom:8px"><b>${esc(agent.label)}</b> · <code>${esc(agent.id)}</code> · route: ${esc(agent.route)}${agent.inline?' · inline':''}</div>` +
+    `<label>קלט משתמש (userPrompt)</label>` +
+    `<textarea class="ag-txt" placeholder="${esc(agent.placeholder||'מה לבקש מהסוכן?')}"></textarea>` +
+    `<label>טקסט נבחר בעורך (selectedText, אופציונלי)</label>` +
+    `<input class="ag-sel" type="text" placeholder="ריק = כל המסמך/צ'אט" />` +
+    `<label>הקשר מסמך (docCtx, אופציונלי)</label>` +
+    `<textarea class="ag-doc" placeholder="תוכן המסמך הפעיל, אם רלוונטי"></textarea>` +
+    `<label>ספק ומודל (אחד או כמה להשוואה)</label>` +
+    `<div class="pk-wrap ag-targets"></div>` +
+    `<div class="row">` +
+      `<button class="sec ag-add">➕ הוסף מודל</button>` +
+      `<button class="sec ag-inspect">👁 בנה בלבד — הצג פרומפט</button>` +
+      `<button class="ag-run">▶ הרץ</button>` +
+      `<button class="sec ag-sum" title="הוסף את התוצאה האחרונה לסיכום">➕ לסיכום</button>` +
+    `</div>` +
+    `<div class="hint">שורה אחת = ריצה רגילה. כמה שורות = השוואה זו-לצד-זו. "בנה בלבד" מראה את הפרומפט המדויק בלי קריאה ל-AI.</div>` +
+    `<div class="out ag-out"></div>`;
+  $('agent-views').appendChild(view);
+
+  const targets = view.querySelector('.ag-targets'), out = view.querySelector('.ag-out');
+  buildPickerRow(targets, { checkbox: true, removable: true, provider: 'default' });
+  const input = () => ({ agentId: agent.id, txt: view.querySelector('.ag-txt').value,
+    selection: { selectedText: view.querySelector('.ag-sel').value.trim(), docCtx: view.querySelector('.ag-doc').value.trim() } });
+
+  let lastSum = '';
+  view.querySelector('.ag-add').onclick = () => buildPickerRow(targets, { checkbox: true, removable: true, provider: PROVIDERS[0]?.id });
+  view.querySelector('.ag-sum').onclick = (ev) => { if (lastSum) { addToSummary(lastSum); flash(ev.target, 'נוסף ✓'); } else flash(ev.target, 'אין תוצאה'); };
+  view.querySelector('.ag-inspect').onclick = async () => {
+    out.innerHTML = '<div class="hint">בונה…</div>';
+    const t = readTargets(targets)[0] || { provider: 'default', model: '' };
+    const inp = input();
+    try { out.innerHTML = renderAgentPrompt(await post('/api/inspect', { agentId: inp.agentId, txt: inp.txt, dropdown: t.provider, selection: inp.selection })); }
+    catch (e) { out.innerHTML = b(e.message, 'bad'); }
+  };
+  view.querySelector('.ag-run').onclick = async (ev) => {
+    const list = readTargets(targets);
+    if (!list.length) { out.innerHTML = b('לא נבחרו מודלים', 'warn'); return; }
+    const btn = ev.target; btn.disabled = true; btn.textContent = `מריץ ${list.length}…`;
+    out.innerHTML = `<div class="hint">מריץ ${list.length} ${list.length>1?'מודלים סדרתית':'דרך הקוד האמיתי'}…</div>`;
+    try {
+      const inp = input();
+      const d = await post('/api/run-multi', { agentId: inp.agentId, txt: inp.txt, selection: inp.selection, targets: list });
+      const entries = [];
+      out.innerHTML = d.results.map((r) => {
+        const badge = r.error ? b('error','bad') : b(`${(r.durationMs/1000).toFixed(1)}s · ${r.rawShape||''}`,'ok');
+        const raw = r.error ? r.error : (r.reply || '(ריק)');
+        const sumEntry = `### ${agent.label} [${agent.id}] · ${r.provider}/${r.resolvedModel} · ${(r.durationMs/1000).toFixed(1)}s\nPROMPT: ${inp.txt}\n${r.error?'ERROR':'REPLY'}:\n${raw}`;
+        entries.push(sumEntry);
+        return card(`${r.provider} · ${esc(r.resolvedModel)}`, badge,
+          rtoolbar(raw, sumEntry) +
+          `<div class="kv">מבוקש: ${esc(r.requestedModel)} · רשת: ${r.wire?r.wire.length:0} קריאות</div><pre>${esc(raw)}</pre>` + wireBlock(r.wire));
+      }).join('');
+      lastSum = entries.join('\n\n');
+    } catch (e) { out.innerHTML = b(e.message, 'bad'); }
+    btn.disabled = false; btn.textContent = '▶ הרץ';
+  };
+  installUploadButtons(view);
+  return key;
+}
+
+async function loadProviders() {
+  try { PROVIDERS = (await fetch('/api/providers').then((r) => r.json())).providers || []; } catch { PROVIDERS = []; }
+  buildPickerRow($('d_targets'), { checkbox: true, removable: true, provider: 'default' });
+  buildPickerRow($('st_targets'), { checkbox: true, removable: true, provider: 'default' });
+  buildPickerRow($('sx_targets'), { checkbox: false, removable: false, provider: 'default' });
+  buildPickerRow($('sp_targets'), { checkbox: false, removable: false, provider: 'default' });
+  try {
+    const { agents } = await fetch('/api/agents').then((r) => r.json());
+    const keys = agents.map(buildAgentTab);
+    if (keys[0]) activateTab(keys[0]);   // open the first agent tab by default
+  } catch (e) { $('agent-views').innerHTML = b('טעינת סוכנים נכשלה: ' + e.message, 'bad'); }
+}
+loadProviders();
+installUploadButtons();
+
+// ---- SPSS helpers ----
+function oneTarget(container) {
+  const t = readTargets(container)[0] || { provider: 'default', model: '' };
+  return { provider: t.provider === 'default' ? '' : t.provider, model: t.model || '' };
+}
+function columnsHtml(cols = []) {
+  if (!cols.length) return '';
+  return `<div class="kv"><b>עמודות:</b> ${cols.map((c) => `${esc(c.token || '')}=${esc(c.name || '')} <span class="kv">(${esc(c.role || '')}${c.suspectedMissing?.length ? ', missing?' : ''})</span>`).join(' · ')}</div>`;
+}
+function spssSyntaxCard(title, d, summaryTitle) {
+  const badge = d.ok ? b(`${(d.durationMs/1000).toFixed(1)}s · ${esc(d.kind || 'ok')}`, 'ok') : b(d.error || 'error', 'bad');
+  const main = d.syntax || d.answer || d.guidanceMessage || d.error || '(ריק)';
+  const sumEntry = `### ${summaryTitle} · ${d.providerId || 'default'}/${d.model || 'default'} · ${(d.durationMs/1000).toFixed(1)}s\n${d.ok ? 'OUTPUT' : 'ERROR'}:\n${main}`;
+  LAST.sx = sumEntry;
+  return card(title, badge,
+    rtoolbar(main, sumEntry) +
+    columnsHtml(d.columns || []) +
+    (d.selectedColumn ? `<div class="kv"><b>עמודה נבחרת:</b> ${esc(d.selectedColumn.token)} · ${esc(d.selectedColumn.name)}</div>` : '') +
+    (d.error ? `<pre>${esc(d.error)}</pre>` : `<pre>${esc(main)}</pre>`) +
+    wireBlock(d.wire));
+}
+function spssPreviewCard(d) {
+  const badge = d.ok ? b(`${(d.durationMs/1000).toFixed(1)}s · dry-run`, 'ok') : b(d.error || 'preview issues', 'warn');
+  const issues = (d.issues || []).map((it) => `${it.severity || 'info'}: ${it.message}`).join('\n') || 'לא זוהו בעיות ודאיות.';
+  const sections = (d.sections || []).map((section) =>
+    card(section.title, '', `<pre>${esc((section.lines || []).join('\n'))}</pre>`, false)
+  ).join('');
+  const commands = (d.detectedCommands || []).join(', ') || 'לא זוהו פקודות';
+  const text = [
+    d.disclaimer || '',
+    `Commands: ${commands}`,
+    `Rows: ${d.rowCount ?? '—'}`,
+    '',
+    'Issues:',
+    issues,
+    '',
+    ...(d.sections || []).flatMap((section) => [section.title, ...(section.lines || []), '']),
+  ].join('\n');
+  LAST.sx = `### SPSS Preview · ${(d.durationMs/1000).toFixed(1)}s\n${text}`;
+  return card('SPSS Preview / Dry-run', badge,
+    rtoolbar(text, LAST.sx) +
+    `<div class="hint">${esc(d.disclaimer || '')}</div>` +
+    `<div class="kv"><b>פקודות:</b> ${esc(commands)} · <b>שורות:</b> ${d.rowCount ?? '—'}</div>` +
+    columnsHtml(d.columns || []) +
+    card('בעיות צפויות', d.ok ? b('תקין','ok') : b('דורש בדיקה','warn'), `<pre>${esc(issues)}</pre>`, false) +
+    sections +
+    (d.error ? card('שגיאה', b('error','bad'), `<pre>${esc(d.error)}</pre>`, false) : '') +
+    wireBlock(d.wire));
+}
+function spssProjectCard(d) {
+  const badge = d.ok ? b(`${(d.durationMs/1000).toFixed(1)}s · ${d.blocks?.length || 0} בלוקים`, 'ok') : b(d.error || d.stage || 'error', 'bad');
+  const analyses = (d.profile?.analyses || []).map((a, i) => `${i+1}. ${a.label} [${a.method}] ${Array.isArray(a.variables) ? a.variables.join(', ') : ''}`).join('\n');
+  const steps = (d.steps || []).map((s) => `${s.step}: ${JSON.stringify(s)}`).join('\n');
+  const notes = (d.reviewNotes || []).map((n) => `• ${n}`).join('\n');
+  const main = d.masterSyntax || d.error || '(ריק)';
+  const sumEntry = `### עבודת סיום SPSS · ${(d.durationMs/1000).toFixed(1)}s · reviewChanged=${!!d.reviewChanged}\nASSIGNMENT:\n${d.assignment || ''}\n\nANALYSES:\n${analyses}\n\nREVIEW NOTES:\n${notes || '—'}\n\nMASTER SYNTAX:\n${main}`;
+  LAST.sp = sumEntry;
+  return card('עבודת סיום SPSS', badge,
+    rtoolbar(main, sumEntry) +
+    columnsHtml(d.columns || []) +
+    (d.error ? `<pre>${esc(d.error)}</pre>` : '') +
+    (analyses ? card('תוכנית ניתוחים', '', `<pre>${esc(analyses)}</pre>`, false) : '') +
+    (notes ? card('בדיקה מקדימה', d.reviewChanged ? b('תיקן','ok') : b('הערות','warn'), `<pre>${esc(notes)}</pre>`, false) : '') +
+    (d.missingValuesLines?.length ? card('MISSING VALUES', '', `<pre>${esc(d.missingValuesLines.join('\n'))}</pre>`, false) : '') +
+    (d.derivedVariables?.length ? `<div class="kv"><b>משתנים נגזרים:</b> ${esc(d.derivedVariables.join(', '))}</div>` : '') +
+    card('Master syntax', '', `<pre>${esc(main)}</pre>`, false) +
+    (steps ? card('Steps', '', `<pre>${esc(steps)}</pre>`, false) : '') +
+    wireBlock(d.wire));
+}
+
+// ---- SOURCES ----
+$('s_run').onclick = async () => {
+  const btn = $('s_run'); btn.disabled = true; btn.textContent = 'מריץ…';
+  $('s_out').innerHTML = '<div class="hint">מאחזר…</div>';
+  try {
+    const providers = [...document.querySelectorAll('.s_prov:checked')].map((c) => c.value);
+    const blockedDomains = $('s_blocked').value.split(/[\s,;\n]+/).map((x) => x.trim()).filter(Boolean);
+    const d = await post('/api/retrieve', { query: $('s_q').value.trim(), kind: $('s_kind').value, count: $('s_count').value, providers, blockedDomains });
+    const badge = d.ok ? b(d.sources.length+' מקורות','ok') : b(d.failureReason||'נכשל','bad');
+    const srcs = d.sources.map((s) =>
+      `<div class="src"><div class="t">${esc(s.title||'(ללא כותרת)')}</div><a class="u" href="${esc(s.url)}" target="_blank">${esc(s.url)}</a> <span class="kv">(status=${s.httpStatus})</span>${s.botBlocked?' '+b('חסום-בוט/paywall','warn'):''}</div>`).join('');
+    const ev = d.events.map((e) => `<div class="ev"><b>[${esc(e.type)}]</b> ${esc(e.message)}</div>`).join('');
+    const srcText = d.sources.map((s, i) => `${i+1}. ${s.title||'(ללא כותרת)'}\n   ${s.url} (status=${s.httpStatus}${s.botBlocked?', חסום-בוט/paywall':''})`).join('\n');
+    const sumEntry = `### מקורות: ${$('s_q').value.trim()} [${d.kind||$('s_kind').value}] · ${(d.durationMs/1000).toFixed(1)}s · providers=${providers.join(',')||'all'}\ntrail: ${JSON.stringify(d.providerTrail)}\n${srcText}`;
+    LAST.s = sumEntry;
+    $('s_out').innerHTML =
+      card(`תוצאה (${(d.durationMs/1000).toFixed(1)}s)`, badge,
+        rtoolbar(srcText, sumEntry) +
+        `<div class="kv"><b>providerTrail:</b> ${esc(JSON.stringify(d.providerTrail))} · <b>fromCache:</b> ${d.fromCache}</div>` + srcs) +
+      (d.error ? card('שגיאה', b('error','bad'), `<pre>${esc(d.error)}</pre>`) : '') +
+      card(`אירועי retrieval (${d.events.length})`, '', ev, false) +
+      wireBlock(d.wire);
+  } catch (e) { $('s_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '▶ הרץ retrieveSources';
+};
+// blocked-domains: prefill from the saved (app) setting + save persistently
+async function loadBlockedDomains() {
+  try { const { domains } = await fetch('/api/blocked-domains').then((r) => r.json()); $('s_blocked').value = (domains || []).join(', '); } catch {}
+}
+$('s_blocked_save').onclick = async () => {
+  const domains = $('s_blocked').value.split(/[\s,;\n]+/).map((x) => x.trim()).filter(Boolean);
+  const btn = $('s_blocked_save'); const o = btn.textContent; btn.textContent = 'שומר…';
+  try { const r = await post('/api/blocked-domains', { domains }); $('s_blocked').value = (r.domains || []).join(', '); btn.textContent = 'נשמר ✓'; }
+  catch { btn.textContent = 'שגיאה'; }
+  setTimeout(() => { btn.textContent = o; }, 1400);
+};
+loadBlockedDomains();
+
+// ---- SPSS REGULAR ----
+$('sx_run').onclick = async () => {
+  const btn = $('sx_run'); btn.disabled = true; btn.textContent = 'מריץ SPSS…';
+  $('sx_out').innerHTML = '<div class="hint">מריץ דרך spssSyntaxService האמיתי…</div>';
+  try {
+    const target = oneTarget($('sx_targets'));
+    const d = await post('/api/spss-syntax', {
+      csv: $('sx_csv').value,
+      request: $('sx_request').value.trim(),
+      mode: $('sx_mode').value,
+      actionId: $('sx_action').value,
+      column: $('sx_column').value.trim(),
+      output: $('sx_output').value.trim(),
+      priorSyntax: $('sx_prior').value.trim(),
+      question: $('sx_question').value.trim(),
+      provider: target.provider,
+      model: target.model,
+    });
+    if (d.syntax) $('sx_preview_syntax').value = d.syntax;
+    $('sx_out').innerHTML = spssSyntaxCard('SPSS רגיל', d, 'SPSS רגיל');
+  } catch (e) { $('sx_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '▶ הרץ SPSS רגיל';
+};
+
+$('sx_preview').onclick = async () => {
+  const btn = $('sx_preview'); btn.disabled = true; btn.textContent = 'מדמה…';
+  $('sx_out').innerHTML = '<div class="hint">מריץ dry-run מקומי מול ה-CSV וה-syntax…</div>';
+  try {
+    const d = await post('/api/spss-preview', {
+      csv: $('sx_csv').value,
+      syntax: $('sx_preview_syntax').value.trim() || $('sx_prior').value.trim(),
+    });
+    $('sx_out').innerHTML = spssPreviewCard(d);
+  } catch (e) { $('sx_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '👁 הדמה תגובת SPSS';
+};
+
+// ---- SPSS PROJECT ----
+$('sp_run').onclick = async () => {
+  const btn = $('sp_run'); btn.disabled = true; btn.textContent = 'מריץ עבודת סיום…';
+  $('sp_out').innerHTML = '<div class="hint">מריץ את pipeline עבודת הסיום האמיתי…</div>';
+  try {
+    const target = oneTarget($('sp_targets'));
+    const d = await post('/api/spss-project', {
+      csv: $('sp_csv').value,
+      assignmentText: $('sp_assignment').value.trim(),
+      provider: target.provider,
+      model: target.model,
+    });
+    $('sp_out').innerHTML = spssProjectCard(d);
+  } catch (e) { $('sp_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '▶ הרץ עבודת סיום';
+};
+
+// ---- DOC (multi-model compare) ----
+function docCard(t, d) {
+  const m = d.metrics || {};
+  const label = `${t.provider} · ${t.model||'default'}`;
+  const metricsHtml = `<div class="kv">` +
+    `<b>אורך:</b> ${d.htmlLength} · <b>URLs:</b> ${m.urlCount} · <b>ציטוט מקס':</b> [${m.maxCiteIndex}] · ` +
+    `<b>[דרוש מקור]:</b> ${m.daroshMakorMarkers} · <b>ציטוטים:</b> ${esc((m.proseCitations||[]).slice(0,6).join(' | '))||'—'}</div>`;
+  const ev = (d.retrievalEvents||[]).map((e) => `<div class="ev"><b>[${esc(e.type)}]</b> ${esc(e.message)}</div>`).join('');
+  const sumEntry = `### מסמך: ${$('d_prompt').value.trim().slice(0,80)} · ${label} · ${(d.durationMs/1000).toFixed(1)}s\nאורך=${d.htmlLength} URLs=${m.urlCount} [דרוש מקור]=${m.daroshMakorMarkers}\n${d.plainPreview}`;
+  const html = card(`${label} — ${(d.durationMs/1000).toFixed(1)}s`, d.error?b('error','bad'):b('OK','ok'),
+    rtoolbar(d.plainPreview||d.error, sumEntry) + metricsHtml +
+    (d.error ? `<pre>${esc(d.error)}</pre>` : `<pre>${esc(d.plainPreview)}</pre>`) +
+    (d.fullHtml ? card('HTML מלא', '', `<pre>${esc(d.fullHtml)}</pre>`, false) : '') +
+    (ev ? card(`אירועי retrieval (${d.retrievalEvents.length})`, '', ev, false) : '') +
+    wireBlock(d.wire));
+  return { html, sumEntry };
+}
+$('d_run').onclick = async () => {
+  const targets = readTargets($('d_targets'));
+  if (!targets.length) { $('d_out').innerHTML = b('לא נבחרו מודלים', 'warn'); return; }
+  const btn = $('d_run'); btn.disabled = true;
+  const entries = []; let acc = '';
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    btn.textContent = `מייצר ${i+1}/${targets.length}…`;
+    $('d_out').innerHTML = acc + `<div class="hint">מייצר ${t.provider}/${t.model||'default'} (${i+1}/${targets.length})…</div>`;
+    try {
+      const d = await post('/api/doc', { prompt: $('d_prompt').value.trim(), dropdown: t.provider, model: t.model });
+      const c = docCard(t, d); acc += c.html; entries.push(c.sumEntry);
+    } catch (e) { acc += card(`${t.provider}/${t.model||'default'}`, b('error','bad'), `<pre>${esc(e.message)}</pre>`); }
+    $('d_out').innerHTML = acc;
+  }
+  LAST.d = entries.join('\n\n');
+  btn.disabled = false; btn.textContent = '▶ הרץ';
+};
+
+// ---- STYLE ----
+const scoreColor = (s) => s<40?'ok':s<60?'warn':'bad';
+function loadStyleProfile() {
+  fetch('/api/style-profile').then((r) => r.json()).then((p) => {
+    $('sp_summary').innerHTML = p.hasProfile
+      ? `פרופיל אישי: ${b('נטען ✓','ok')} ` +
+        `<b>${esc(p.displayName||'ללא שם')}</b> · טון: ${esc(p.tonePreference||'—')} · אורך: ${esc(p.lengthPreference||'—')}<br>` +
+        `אוצר מילים ידני: <b>${p.manualVocabulary}</b> · ביטויים: <b>${p.manualPhrases}</b> · נלמד: <b>${p.learnedVocabulary}</b>/<b>${p.learnedPhrases}</b> · דוגמאות: <b>${p.examples}</b> · כיול: ${p.calibrated?b('כן','ok'):b('לא','warn')}`
+      : `פרופיל אישי: ${b('לא נטען / ריק','bad')} — ההשוואה תרוץ אבל "עם סגנון" יהיה זהה ל"בלי".`;
+  }).catch(() => { $('sp_summary').innerHTML = b('שגיאה בטעינת פרופיל','bad'); });
+}
+loadStyleProfile();
+
+function scoreCard(title, d) {
+  if (!d || !d.ok) return card(title, b(d&&d.reason||'אין ציון','bad'), `<div class="kv">${esc(d&&d.message||'')}</div>`);
+  const markers = (d.markers||[]).map((m) => `<div class="ev"><b>${esc(m.label)}</b> (${m.severity}) ${esc(m.detail||'')}</div>`).join('');
+  return card(`${title} — ציון ${d.score}/100`, b(d.label, scoreColor(d.score)),
+    `<div class="kv"><b>סף:</b> ${d.threshold} · <b>מילים:</b> ${d.wordCount} · <b>מכויל:</b> ${d.calibrated?'כן':'לא'}</div>` +
+    (markers?`<div style="margin-top:6px">${markers}</div>`:'') +
+    (d.preview?`<pre style="margin-top:8px">${esc(d.preview)}</pre>`:''));
+}
+function styleCompareCard(t, d) {
+  const label = `${t.provider} · ${t.model||'default'}`;
+  let head = '', sumEntry = '';
+  if (d.delta !== null) {
+    const cls = d.delta>0?'ok':d.delta<0?'bad':'warn';
+    const msg = d.delta>0 ? `הסגנון הוריד את הציון הגנרי ב-${d.delta} נק' → יותר בקול שלך`
+      : d.delta<0 ? `הסגנון העלה את הציון הגנרי ב-${Math.abs(d.delta)} נק' (לא עזר)`
+      : 'אין הבדל בציון';
+    sumEntry = `### סגנון: ${$('st_prompt').value.trim().slice(0,70)} · ${label}\ndelta=${d.delta} (עם סגנון ${d.withStyle.score} / בלי ${d.withoutStyle.score}) · ${msg}`;
+    head = card(`${label} — delta ${d.delta>0?'+':''}${d.delta} · ${(d.durationMs/1000).toFixed(0)}s`, b(msg,cls),
+      rtoolbar(sumEntry, sumEntry) +
+      `<div class="kv">עם סגנון: <b>${d.withStyle.score??'—'}</b> · בלי סגנון: <b>${d.withoutStyle.score??'—'}</b>${d.hasProfile?'':' · ⚠ אין פרופיל טעון'}</div>`);
+  }
+  const html = head +
+    (d.error?card(`${label} — שגיאה`,b('error','bad'),`<pre>${esc(d.error)}</pre>`):'') +
+    scoreCard(`${label} · עם סגנון`, d.withStyle) +
+    scoreCard(`${label} · בלי סגנון`, d.withoutStyle) +
+    wireBlock(d.wire);
+  return { html, sumEntry };
+}
+$('st_run').onclick = async () => {
+  const targets = readTargets($('st_targets'));
+  if (!targets.length) { $('st_out').innerHTML = b('לא נבחרו מודלים', 'warn'); return; }
+  const btn = $('st_run'); btn.disabled = true;
+  const entries = []; let acc = '';
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    btn.textContent = `מייצר ${i+1}/${targets.length}…`;
+    $('st_out').innerHTML = acc + `<div class="hint">מייצר עם/בלי סגנון ל-${t.provider}/${t.model||'default'} (${i+1}/${targets.length}, 2 הרצות)…</div>`;
+    try {
+      const d = await post('/api/style-compare', { prompt: $('st_prompt').value.trim(), dropdown: t.provider, model: t.model });
+      const c = styleCompareCard(t, d); acc += c.html; if (c.sumEntry) entries.push(c.sumEntry);
+    } catch (e) { acc += card(`${t.provider}/${t.model||'default'}`, b('error','bad'), `<pre>${esc(e.message)}</pre>`); }
+    $('st_out').innerHTML = acc;
+  }
+  LAST.st = entries.join('\n\n');
+  btn.disabled = false; btn.textContent = '▶ השווה: עם/בלי סגנון';
+};
+$('sc_run').onclick = async () => {
+  const btn = $('sc_run'); btn.disabled = true; btn.textContent = 'מנתח…';
+  try {
+    const d = await post('/api/score', { text: $('sc_text').value });
+    $('sc_out').innerHTML = scoreCard('ציון הטקסט', d) + (d.hasProfile?'':`<div class="hint">${b('אין פרופיל טעון','warn')} — הציון מבוסס על אותות כלליים בלבד.</div>`);
+  } catch (e) { $('sc_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '📊 תן ציון לטקסט';
+};
+
+// ---- MODELS ----
+$('m_run').onclick = async () => {
+  const btn = $('m_run'); btn.disabled = true; btn.textContent = 'בודק…';
+  $('m_out').innerHTML = '<div class="hint">בודק…</div>';
+  try {
+    const prov = $('m_provider').value;
+    const { results } = await fetch('/api/models' + (prov?`?provider=${prov}`:'')).then((r) => r.json());
+    $('m_out').innerHTML = results.map((r) => {
+      const badge = r.ok ? b(r.models.length+' מודלים','ok') : b(r.error||'שגיאה','bad');
+      const list = (r.models||[]).map((mm) => `<div class="ev"><b>${esc(mm.id)}</b> ${esc(mm.display||'')} <span class="kv">${esc((mm.methods||[]).join(','))}</span></div>`).join('');
+      return card(r.provider, badge, list || `<div class="kv">${esc(r.error||'')}</div>`, false);
+    }).join('');
+  } catch (e) { $('m_out').innerHTML = b(e.message, 'bad'); }
+  btn.disabled = false; btn.textContent = '▶ בדוק מפתחות ומודלים';
+};
+</script>
+</body>
+</html>

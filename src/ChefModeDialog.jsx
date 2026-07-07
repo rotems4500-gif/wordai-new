@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { chefModeDecideNextStep, chefModeGenerateQuestion } from './services/aiService';
+import { chefModeGenerateQuestion, chefModeInterview } from './services/aiService';
 import { showConfirm } from './services/uiFeedback';
 import { buildSelectedMaterialsContext } from './services/workspaceLearningService';
 
 const MAX_QUESTIONS = 13;
-const MIN_AUTO_STOP_RESPONSES = 5;
+const MIN_AUTO_STOP_RESPONSES = 4;
+// כשהפרומפט + הנחיות/חומרים כבר עונים על רוב השאלות — מותר לשף לעצור מוקדם יותר.
+const MIN_AUTO_STOP_RESPONSES_RICH_CONTEXT = 2;
 const CHEF_MATERIALS_CONTEXT_MAX_CHARS = 8000;
 const CHEF_FINAL_ADDITIONS_QUESTION_ID = 'final-additions';
 
@@ -84,6 +86,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const [finalAdditionsText, setFinalAdditionsText] = useState('');
   const [finalAdditionsBaseResponses, setFinalAdditionsBaseResponses] = useState([]);
   const [isFinalAdditionsStep, setIsFinalAdditionsStep] = useState(false);
+  // בחירת מסלול מקורות בסוף הבישול: auto (המערכת מחליטה) | pipeline | single-call | none
+  const [sourceRoute, setSourceRoute] = useState('auto');
   const [askFinalAdditions, setAskFinalAdditions] = useState(() => {
     try {
       return localStorage.getItem('wordflow_chef_ask_final_additions') !== 'false';
@@ -95,6 +99,11 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  // מסך "הנה מה שהבנתי": בריף מזוקק לעריכה/אישור לפני יצירת המסמך.
+  const [briefText, setBriefText] = useState('');
+  const [isBriefStep, setIsBriefStep] = useState(false);
+  const [isPreparingBrief, setIsPreparingBrief] = useState(false);
+  const [briefBaseResponses, setBriefBaseResponses] = useState([]);
   const materialsContextCacheRef = useRef({ key: '', promise: null });
   const chefContextKey = buildChefContextKey(chefContext);
 
@@ -158,7 +167,10 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     return payload;
   };
 
-  const canAutoStop = (responsesCount) => Number(responsesCount || 0) >= MIN_AUTO_STOP_RESPONSES;
+  const hasRichContext = Boolean(String(chefContext?.prompt || '').trim()
+    && (String(chefContext?.instructions || '').trim() || (Array.isArray(chefContext?.selectedMaterials) && chefContext.selectedMaterials.length)));
+  const minAutoStopResponses = hasRichContext ? MIN_AUTO_STOP_RESPONSES_RICH_CONTEXT : MIN_AUTO_STOP_RESPONSES;
+  const canAutoStop = (responsesCount) => Number(responsesCount || 0) >= minAutoStopResponses;
 
   useEffect(() => {
     let isMounted = true;
@@ -196,8 +208,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
               setFinalAdditionsText('');
               setFinalAdditionsBaseResponses(loadedResponses);
               setIsFinalAdditionsStep(true);
-            } else if (typeof onStart === 'function') {
-              await onStart(loadedResponses, loadedModel);
+            } else {
+              await startBriefPreview(loadedResponses, loadedModel);
             }
             return;
           }
@@ -269,7 +281,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     return nextResponses;
   };
 
-  const handleFinish = async (finalResponses) => {
+  const handleFinish = async (finalResponses, extraOptions = {}) => {
     setIsSubmitting(true);
     try {
       localStorage.setItem('wordflow_chef_responses', JSON.stringify({
@@ -279,7 +291,7 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       }));
 
       if (typeof onStart === 'function') {
-        await onStart(finalResponses, localModel);
+        await onStart(finalResponses, localModel, { sourceRoute, ...extraOptions });
       }
 
       localStorage.removeItem('wordflow_chef_session');
@@ -288,6 +300,45 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // זיקוק הבריף והצגתו לאישור/עריכה לפני הכתיבה. אם הזיקוק נכשל —
+  // ממשיכים במסלול הישן (StartScreen יזקק בעצמו) במקום לתקוע את המשתמש.
+  const startBriefPreview = async (finalResponses, model = localModel) => {
+    if (isPreparingBrief || isSubmitting) return;
+    setIsPreparingBrief(true);
+    try {
+      const materialsContext = await prepareChefMaterialsContext();
+      const result = await chefModeInterview(finalResponses, model, null, {
+        documentPrompt: chefContext?.prompt,
+        templateId: chefContext?.templateId,
+        instructions: chefContext?.instructions,
+        materialsContext,
+      });
+      const nextBrief = String(result?.brief || '').trim();
+      if (!nextBrief) throw new Error('בריף ריק');
+      setBriefText(nextBrief);
+      setBriefBaseResponses(finalResponses);
+      setIsFinalAdditionsStep(false);
+      setIsBriefStep(true);
+    } catch (error) {
+      console.warn('Chef brief preview failed, falling back to direct compose', error);
+      await handleFinish(finalResponses);
+    } finally {
+      setIsPreparingBrief(false);
+    }
+  };
+
+  const handleConfirmBrief = async () => {
+    if (isSubmitting) return;
+    const cleanBrief = String(briefText || '').trim();
+    await handleFinish(briefBaseResponses, cleanBrief ? { finalBrief: cleanBrief } : {});
+  };
+
+  const handleBackFromBrief = () => {
+    if (isSubmitting) return;
+    setIsBriefStep(false);
+    if (askFinalAdditions) setIsFinalAdditionsStep(true);
   };
 
   const buildResponsesWithFinalAdditions = (baseResponses = responses) => {
@@ -319,12 +370,12 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       saveSession(preparedResponses, currentQuestion, questionFlow, localModel);
       return;
     }
-    await handleFinish(preparedResponses);
+    await startBriefPreview(preparedResponses);
   };
 
   const handleConfirmFinalAdditions = async () => {
-    if (isSubmitting) return;
-    await handleFinish(buildResponsesWithFinalAdditions(finalAdditionsBaseResponses));
+    if (isSubmitting || isPreparingBrief) return;
+    await startBriefPreview(buildResponsesWithFinalAdditions(finalAdditionsBaseResponses));
   };
 
   const handleBackFromFinalAdditions = () => {
@@ -370,23 +421,10 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
       return;
     }
 
+    // קריאה אחת בלבד: מחולל השאלה כבר מחזיר shouldStop בעצמו,
+    // כך שקריאת ההחלטה הנפרדת (chefModeDecideNextStep) הייתה כפילות יקרה ואיטית.
     setIsEvaluating(true);
     try {
-      const materialsContext = await prepareChefMaterialsContext();
-      const decision = await chefModeDecideNextStep(newResponses, localModel, {
-        currentQuestionId: current.id,
-        maxQuestions: MAX_QUESTIONS,
-        documentPrompt: chefContext?.prompt,
-        templateId: chefContext?.templateId,
-        instructions: chefContext?.instructions,
-        selectedMaterials: chefContext?.selectedMaterials || [],
-        materialsContext,
-      });
-      if (decision?.shouldStop && canAutoStop(newResponses.length)) {
-        await requestFinishWithFinalReview(newResponses);
-        return;
-      }
-
       setIsLoadingQuestion(true);
       const nextStep = questionFlow.length + 1;
       const dynamicQuestion = await requestDynamicQuestion(nextStep, newResponses, localModel);
@@ -482,6 +520,9 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
     setFinalAdditionsText('');
     setFinalAdditionsBaseResponses([]);
     setIsFinalAdditionsStep(false);
+    setBriefText('');
+    setBriefBaseResponses([]);
+    setIsBriefStep(false);
     onClose?.();
   };
 
@@ -568,7 +609,30 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
         </div>
 
         <div className="p-8">
-          {isFinalAdditionsStep ? (
+          {isPreparingBrief ? (
+            <div className="text-center py-12">
+              <div className="animate-spin w-8 h-8 border-2 border-white/30 border-t-cyan-200 rounded-full mx-auto mb-4"></div>
+              <div className="text-white/80 text-sm">השף מזקק את התשובות לבריף יצירה...</div>
+            </div>
+          ) : isBriefStep ? (
+            <>
+              <h3 className="text-xl md:text-2xl font-bold text-white mb-3 text-right">
+                הנה מה שהבנתי — אפשר לערוך לפני הכתיבה
+              </h3>
+              <p className="text-white/65 text-sm mb-6 text-right">
+                זה הבריף שיישלח לכותב יחד עם התשובות המלאות שלך. תקן כאן כל דבר שלא מדויק.
+              </p>
+
+              <div className="mb-6">
+                <textarea
+                  value={briefText}
+                  onChange={(e) => setBriefText(e.target.value)}
+                  dir="rtl"
+                  className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent resize-y min-h-[220px] leading-relaxed"
+                />
+              </div>
+            </>
+          ) : isFinalAdditionsStep ? (
             <>
               <h3 className="text-xl md:text-2xl font-bold text-white mb-3 text-right">
                 יש משהו אחרון שחשוב להוסיף לפני שאני מתחיל לכתוב?
@@ -584,6 +648,33 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
                   placeholder="למשל: להדגיש את הטון, להימנע מנושא מסוים, לשמור על מבנה מסוים, או להוסיף פרט אחרון..."
                   className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-2 focus:ring-cyan-200 focus:border-transparent resize-y min-h-[120px]"
                 />
+              </div>
+
+              <div className="mb-6 text-right">
+                <div className="text-white font-bold text-sm mb-1">איך לטפל במקורות?</div>
+                <p className="text-white/60 text-xs mb-3">בחירה מפורשת גוברת על ההחלטה האוטומטית של המערכת.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {[
+                    { id: 'auto', label: 'אוטומטי (מומלץ)', desc: 'המערכת בוחרת מסלול לפי דרישות המטלה' },
+                    { id: 'pipeline', label: 'מחקר מלא', desc: 'אחזור מקורות מאומתים (כולל אקדמיים) לפני הכתיבה — יסודי, איטי יותר' },
+                    { id: 'single-call', label: 'קריאה אחת', desc: 'Gemini מחפש וכותב יחד — מהיר וחסכוני, מקורות web בלבד' },
+                    { id: 'none', label: 'בלי מקורות', desc: 'כתיבה בלבד, ללא חיפוש וללא ביבליוגרפיה' },
+                  ].map((route) => (
+                    <button
+                      key={route.id}
+                      type="button"
+                      onClick={() => setSourceRoute(route.id)}
+                      className={`p-3 rounded-xl border-2 transition-all text-right ${
+                        sourceRoute === route.id
+                          ? 'border-cyan-300 bg-cyan-400/20 text-cyan-50 shadow-lg shadow-cyan-500/20'
+                          : 'border-white/20 bg-white/5 hover:bg-white/10 text-white/80 hover:text-white'
+                      }`}
+                    >
+                      <div className="font-bold text-sm">{route.label}</div>
+                      <div className="text-xs opacity-75 mt-1">{route.desc}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           ) : !question || isLoadingQuestion ? (
@@ -627,18 +718,40 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
           )}
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            {isFinalAdditionsStep ? (
+            {isPreparingBrief ? null : isBriefStep ? (
+              <>
+                <button
+                  onClick={handleConfirmBrief}
+                  disabled={isSubmitting || !String(briefText || '').trim()}
+                  className={`px-8 py-3 rounded-xl font-bold transition-all transform ${
+                    isSubmitting || !String(briefText || '').trim()
+                      ? 'bg-gray-500/30 text-gray-300 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:shadow-lg hover:shadow-cyan-500/30 hover:scale-105'
+                  }`}
+                >
+                  {isSubmitting ? '⏳ מכין מסמך...' : '✓ אשר וכתוב את המסמך'}
+                </button>
+
+                <button
+                  onClick={handleBackFromBrief}
+                  disabled={isSubmitting}
+                  className="px-8 py-3 rounded-xl font-bold border border-white/20 text-white hover:bg-white/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  חזרה
+                </button>
+              </>
+            ) : isFinalAdditionsStep ? (
               <>
                 <button
                   onClick={handleConfirmFinalAdditions}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isPreparingBrief}
                   className={`px-8 py-3 rounded-xl font-bold transition-all transform ${
                     isSubmitting
                       ? 'bg-gray-500/30 text-gray-300 cursor-not-allowed'
                       : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:shadow-lg hover:shadow-cyan-500/30 hover:scale-105'
                   }`}
                 >
-                  {isSubmitting ? '⏳ מכין מסמך...' : finalAdditionsText.trim() ? 'הוסף והתחל לכתוב' : 'התחל לכתוב בלי תוספות'}
+                  {isSubmitting ? '⏳ מכין מסמך...' : finalAdditionsText.trim() ? 'הוסף והמשך לאישור הבריף' : 'המשך לאישור הבריף'}
                 </button>
 
                 <button

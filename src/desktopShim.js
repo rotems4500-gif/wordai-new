@@ -276,6 +276,10 @@ const googleOAuth = async () => {
 // ── proxy ───────────────────────────────────────────────────────────────────
 const proxyHttpRequest = async (request = {}) => invoke('proxy_http_request', { request });
 const abortProxyHttpRequest = async (requestId = '') => invoke('abort_proxy_http_request', { requestId });
+// בדיקת חיות URL של מקור (דומיין שרירותי, https בלבד) — ראה proxy.rs::verify_url.
+const verifyUrl = async (request = {}) => invoke('verify_url', { request });
+// קריאת תוכן טקסטואלי של עמוד מקור (התאמת טענה-מקור) — ראה proxy.rs::fetch_page_text.
+const fetchPageText = async (request = {}) => invoke('fetch_page_text', { request });
 
 // ── updater (tauri-plugin-updater דרך פקודות Rust) ──────────────────────────
 const decorateUpdateResult = (result = {}) => ({
@@ -325,6 +329,8 @@ export function installDesktopShim() {
 
     proxyHttpRequest,
     abortProxyHttpRequest,
+    verifyUrl,
+    fetchPageText,
     googleOAuth,
 
     openDocumentDialog,

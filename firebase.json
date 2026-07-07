@@ -36,6 +36,20 @@
         }
       },
       {
+        "source": "/api/verify-url",
+        "function": {
+          "functionId": "verifyUrl",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/fetch-page-text",
+        "function": {
+          "functionId": "fetchPageText",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

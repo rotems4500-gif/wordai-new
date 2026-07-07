@@ -1,6 +1,9 @@
 export const WORKSPACE_V2_VERSION = 'workspace-v2.0-draft';
 const WORKSPACE_V2_CUSTOM_TEMPLATES_KEY = 'wordai_workspace_v2_templates';
 
+import { isV3FlagEnabled } from '../v3/flags';
+import { readV3Templates, writeV3Templates } from '../v3/workspaces/store';
+
 export const WORKSPACE_V2_TEMPLATE_IDS = {
   MARKETING: 'marketing',
   ACADEMIC_HEAVY: 'academic-heavy',
@@ -48,6 +51,11 @@ const buildWorkspaceV2Step = ({
 
 const readWorkspaceV2TemplateOverrides = () => {
   if (typeof localStorage === 'undefined') return {};
+  // V3 שלב 4b: תחת workspacesTruth התבניות המותאמות חיות ב-blob המאוחד.
+  if (isV3FlagEnabled('workspacesTruth')) {
+    const fromV3 = readV3Templates();
+    if (fromV3) return Array.isArray(fromV3) ? {} : fromV3;
+  }
   try {
     const parsed = JSON.parse(localStorage.getItem(WORKSPACE_V2_CUSTOM_TEMPLATES_KEY) || '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
@@ -59,7 +67,10 @@ const readWorkspaceV2TemplateOverrides = () => {
 const writeWorkspaceV2TemplateOverrides = (value = {}) => {
   if (typeof localStorage === 'undefined') return value;
   const safeValue = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  localStorage.setItem(WORKSPACE_V2_CUSTOM_TEMPLATES_KEY, JSON.stringify(safeValue));
+  // V3: כתיבה דרך ה-store מקרינה גם את מפתח ה-legacy; אחרת — legacy ישיר.
+  if (!(isV3FlagEnabled('workspacesTruth') && writeV3Templates(safeValue))) {
+    localStorage.setItem(WORKSPACE_V2_CUSTOM_TEMPLATES_KEY, JSON.stringify(safeValue));
+  }
   try {
     window.dispatchEvent(new CustomEvent('wordai-workspace-v2-templates-changed', { detail: { templates: safeValue } }));
   } catch {}

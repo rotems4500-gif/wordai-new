@@ -26,7 +26,7 @@ import {
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
-import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 
 const MODERN_TEMPLATES = [
@@ -463,7 +463,7 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
   const [outputType, setOutputType] = useState('document');
   const [pptSlideCount, setPptSlideCount] = useState(10);
@@ -515,6 +515,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
   const fileInputRef = useRef(null);
   const baseDraftInputRef = useRef(null);
+  const docDraftInputRef = useRef(null);
   const instructionFileInputRef = useRef(null);
   const [instructions, setInstructions] = useState(() => {
     if (instructionsResetToken > 0) return '';
@@ -1392,11 +1393,38 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
   };
 
-  const handleChefStart = async (responses, model) => {
+  const handleChefStart = async (responses, model, chefOptions = {}) => {
+    // sourceRoute מהבורר בסוף הבישול: 'auto' | 'pipeline' | 'single-call' | 'none'
+    const chefSourceRoute = String(chefOptions?.sourceRoute || '').trim().toLowerCase();
     try {
       setIsGenerating(true);
-      const result = await chefModeInterview(responses, model);
-      const generatedPrompt = String(result?.brief ?? result?.html ?? responses?.[0]?.answer ?? 'בישול אוטומטי').trim();
+      // בריף שאושר/נערך במסך "הנה מה שהבנתי" בדיאלוג — מקור אמת. זיקוק כאן הוא fallback
+      // בלבד למקרה שהדיאלוג לא הצליח להכין בריף.
+      let briefText = String(chefOptions?.finalBrief || '').trim();
+      if (!briefText) {
+        const result = await chefModeInterview(responses, model, null, {
+          documentPrompt: prompt,
+          templateId: selectedTemplate,
+          instructions,
+        });
+        briefText = String(result?.brief ?? result?.html ?? '').trim();
+      }
+      // הדרישות המקוריות מצורפות לבריף כלשונן: זיהוי מכסות מקורות (מאמרים אקדמיים, כתבות)
+      // רץ על טקסט הבקשה, ובריף מזוקק שהשמיט ניסוח דרישה גרם לניתוב שגוי (web במקום Scholar).
+      const originalRequest = String(prompt || '').trim()
+        || String(responses?.[0]?.answer || '').trim();
+      // הכותב מקבל גם את תשובות הבישול המלאות — הזיקוק ל-6 שורות היה צוואר בקבוק
+      // שאיבד ניואנסים. סדר עדיפות מוצהר: תשובות (מאוחרות) גוברות על הבקשה המקורית.
+      const fullResponsesText = formatChefResponsesForCompose(responses);
+      const generatedPrompt = [
+        briefText || originalRequest || 'בישול אוטומטי',
+        fullResponsesText
+          ? `תשובות הבישול המלאות של המשתמש — מחייבות; בכל סתירה מול הבקשה המקורית, התשובות גוברות (הן מאוחרות יותר):\n${fullResponsesText}`
+          : '',
+        briefText && originalRequest && originalRequest !== briefText
+          ? `הדרישות המקוריות של המשתמש — מחייבות כלשונן אלא אם שונו בתשובות הבישול, כולל כל דרישה מספרית (מקורות, מאמרים אקדמיים, כתבות, מבנה):\n${originalRequest}`
+          : '',
+      ].filter(Boolean).join('\n\n');
       const selectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
       const selectedProviderId = String(model || resolvedDirectProviderId || '').trim();
       const selectedProviderModel = selectedProviderId === resolvedDirectProviderId
@@ -1419,6 +1447,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         forceDirectMode: true,
         skipWorkflowAutomation: true,
         directModeReason: 'chef-final-compose',
+        ...(chefSourceRoute && chefSourceRoute !== 'auto' ? {
+          sourceRoute: chefSourceRoute,
+          includeSources: chefSourceRoute !== 'none',
+        } : {}),
       });
       setSelectedModel(undefined);
       setShowChefDialog(false);
@@ -1580,6 +1612,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 >
                   📊 מצגת
                 </button>
+                {onUploadDocDraft && (
+                  <button
+                    type="button"
+                    onClick={() => docDraftInputRef.current?.click()}
+                    className="rounded-xl px-5 py-2 text-sm font-bold text-white/80 transition hover:bg-white/15"
+                    title="העלה טיוטת מסמך Word — הסוכן ישכתב אותה לסגנון הכתיבה שלך, בלי לשנות עיצוב"
+                  >
+                    📥 שכתוב טיוטה
+                  </button>
+                )}
                 {onOpenSpssProject && (
                   <button
                     type="button"
@@ -1591,6 +1633,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   </button>
                 )}
               </div>
+              <input
+                ref={docDraftInputRef}
+                type="file"
+                accept=".docx"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) onUploadDocDraft?.(f); e.target.value = ''; }}
+              />
             </div>
 
             <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center mb-6">
@@ -2061,6 +2110,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         {/* Quick Access Bar */}
         <div className={buildStartScreenRevealClassName(mounted, 'bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 sm:p-6')} style={buildStartScreenRevealStyle(START_SCREEN_REVEAL_DELAYS.quickAccess)}>
           <div className="flex flex-wrap justify-center gap-3 sm:gap-4">
+            {hasOpenDocument && (
+              <button
+                onClick={onClose}
+                className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-cyan-500/80 to-blue-600/80 hover:from-cyan-600/80 hover:to-blue-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
+                title="חזרה למסמך הפתוח (Esc)"
+              >
+                ↩ חזרה למסמך
+              </button>
+            )}
+
             <button
               onClick={onOpenDocument}
               className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
@@ -2209,20 +2268,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 );
               })}
             </div>
-            <div className="mt-3 flex items-center justify-between">
-              <span className="text-[12.5px] font-semibold text-[#bcd2e6]">טייס אוטומטי</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autopilotEnabled}
-                onClick={() => { const next = !autopilotEnabled; setAutopilotEnabled(next); try { if (typeof saveWorkspaceAutomation === 'function') saveWorkspaceAutomation({ autopilotEnabled: next }); } catch (e) { /* ignore */ } }}
-                className="relative inline-block h-[23px] w-10 rounded-full transition"
-                style={{ background: autopilotEnabled ? '#2dd4bf' : 'rgba(255,255,255,0.15)' }}
-                aria-label="טייס אוטומטי"
-              >
-                <span className="absolute top-[3px] h-[17px] w-[17px] rounded-full transition-all" style={{ background: autopilotEnabled ? '#06231f' : '#cfe0ef', left: autopilotEnabled ? '3px' : '20px' }} />
-              </button>
-            </div>
+            {/* טייס אוטומטי הוסתר: מפעיל את ה-orchestrator הישן שנמצא ב-quarantine (aiService WORKSPACE_AUTOMATION_QUARANTINED). */}
           </div>
 
           {/* מסמכים אחרונים */}

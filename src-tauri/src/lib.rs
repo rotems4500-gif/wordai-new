@@ -110,6 +110,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             proxy::proxy_http_request,
             proxy::abort_proxy_http_request,
+            proxy::verify_url,
+            proxy::fetch_page_text,
             fs_ops::read_app_file,
             fs_ops::write_app_file,
             fs_ops::read_app_file_base64,

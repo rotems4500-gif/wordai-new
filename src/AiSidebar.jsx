@@ -5,6 +5,12 @@ import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLoopService";
 import { showToast } from "./services/uiFeedback";
 import { AGENTS_CONFIG } from "./agentConfig";
+import { buildSourcesQueryOverride as buildSourcesQueryOverridePure, isSourcesNewsRequest as isSourcesNewsRequestPure, buildHoleFillSourceQueryOverride as buildHoleFillSourceQueryOverridePure } from "./services/sourceQueryBuilder";
+import { startRunScope, getActiveRunScope, endRunScope, setScopeTopic } from "./v3/orchestration/runScope";
+import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext } from "./services/chatSourceCheck";
+import { classifyChatScope } from "./services/chatScope";
+import { resolveStrongGeneralModelForProvider } from "./services/aiService";
+import { isV3FlagEnabled } from "./v3/flags";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
 
@@ -678,6 +684,107 @@ const deleteChatSessionForDocumentIds = (workspaceId = '', documentIds = [], ses
   return getSavedChatSessionsForDocumentIds(workspaceId, documentIds);
 };
 
+// ── Review ledger ("חבר ביקורתי") — זיכרון ממצאי בדיקת מרצה, per-document + per-session ──
+// מונע לופ אינסופי: ממצא שנדחה/טופל נשלח חזרה למודל כ-digest ואסור לו לחזור.
+// היסטוריית הצ'אט חתוכה ל-12 הודעות ולכן ה-ledger הוא מקור האמת, לא ההיסטוריה.
+const REVIEW_LEDGER_SESSION_LIMIT = 20;
+const REVIEW_FINDING_LINE_PATTERN = /^(🔴|🟡|⚪)\s*(?:קריטי|חשוב|קוסמטי)?\s*(?:\[(F-[\w-]{1,24})\])?\s*[:：]?\s*(.+)$/u;
+const REVIEW_VERDICT_READY_PATTERN = /פסק\s*דין\s*[:：].{0,24}מוכן\s+להגשה/u;
+const REVIEW_VERDICT_NOT_READY_PATTERN = /פסק\s*דין\s*[:：].{0,24}(?:עדיין\s+לא|לא\s+מוכן)/u;
+const REVIEW_SEVERITY_BY_EMOJI = { '🔴': 'critical', '🟡': 'important', '⚪': 'cosmetic' };
+const REVIEW_SEVERITY_LABELS = { critical: 'קריטי', important: 'חשוב', cosmetic: 'קוסמטי' };
+const REVIEW_STATUS_LABELS = { open: 'פתוח', dismissed: 'נדחה על ידי המשתמש', fixed: 'טופל' };
+
+const getReviewLedgerStorageKey = (workspaceId = '', documentId = '') => `${getChatMemoryStorageKey(workspaceId, documentId)}:reviewLedger`;
+
+const createReviewFindingId = (title = '') => {
+  const input = String(title || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  return `F-${Math.abs(hash).toString(36).slice(0, 6) || '0'}`;
+};
+
+// פירסור פלט המרצה: שורות ממצא בפורמט "🔴 קריטי [F-xxx]: כותרת — הסבר" + שורת "פסק דין".
+// דעיכה בחן: תוכן שלא תואם ⇒ אפס ממצאים, הבועה מוצגת כרגיל.
+const parseReviewFindings = (content = '') => {
+  const findings = [];
+  let verdict = '';
+  String(content || '').split('\n').forEach((rawLine) => {
+    const line = rawLine.replace(/^[\s>*#-]+/, '').replace(/\*\*/g, '').trim();
+    if (!line) return;
+    if (REVIEW_VERDICT_READY_PATTERN.test(line)) { verdict = 'ready'; return; }
+    if (REVIEW_VERDICT_NOT_READY_PATTERN.test(line)) { verdict = 'not-ready'; return; }
+    const match = line.match(REVIEW_FINDING_LINE_PATTERN);
+    if (!match) return;
+    const body = String(match[3] || '').trim();
+    if (!body) return;
+    const title = (body.split(/\s+[—–-]\s+/)[0] || body).slice(0, 120).trim();
+    findings.push({
+      severity: REVIEW_SEVERITY_BY_EMOJI[match[1]] || 'important',
+      findingId: String(match[2] || '').trim() || createReviewFindingId(title),
+      title,
+      text: body,
+    });
+  });
+  return { findings, verdict };
+};
+
+const readReviewLedgerForDocumentIds = (workspaceId = '', documentIds = []) => {
+  const resolvedDocumentIds = buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds]));
+  for (const documentId of resolvedDocumentIds) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(getReviewLedgerStorageKey(workspaceId, documentId)) || 'null');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length) return parsed;
+    } catch {}
+  }
+  return {};
+};
+
+const saveReviewLedgerForDocumentIds = (workspaceId = '', documentIds = [], ledger = {}) => {
+  const entries = Object.entries(ledger && typeof ledger === 'object' ? ledger : {})
+    .sort((a, b) => (Number(b[1]?.updatedAt) || 0) - (Number(a[1]?.updatedAt) || 0))
+    .slice(0, REVIEW_LEDGER_SESSION_LIMIT);
+  const payload = JSON.stringify(Object.fromEntries(entries));
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    try { localStorage.setItem(getReviewLedgerStorageKey(workspaceId, documentId), payload); } catch {}
+  });
+};
+
+const removeReviewLedgerForDocumentIds = (workspaceId = '', documentIds = []) => {
+  buildDocumentPersistenceIds(...(Array.isArray(documentIds) ? documentIds : [documentIds])).forEach((documentId) => {
+    try { localStorage.removeItem(getReviewLedgerStorageKey(workspaceId, documentId)); } catch {}
+  });
+};
+
+// מיזוג ממצאים מסבב חדש לתוך רשומת ה-session: דחייה של המשתמש גוברת ונשמרת,
+// ממצא חדש נפתח כ-open, פסק הדין המפורש של המודל גובר על היסק מקומי.
+const mergeParsedFindingsIntoSessionLedger = (sessionLedger = null, parsed = { findings: [], verdict: '' }) => {
+  const prev = sessionLedger && typeof sessionLedger === 'object' ? sessionLedger : { findings: [], verdict: '', round: 0 };
+  const prevFindings = Array.isArray(prev.findings) ? prev.findings : [];
+  const round = (Number(prev.round) || 0) + 1;
+  const byId = new Map(prevFindings.map((finding) => [finding.findingId, { ...finding }]));
+  (parsed.findings || []).forEach((finding) => {
+    const existing = byId.get(finding.findingId);
+    if (existing) {
+      byId.set(finding.findingId, { ...existing, title: finding.title, text: finding.text, severity: finding.severity, round });
+    } else {
+      byId.set(finding.findingId, { ...finding, status: 'open', round, raisedAt: Date.now() });
+    }
+  });
+  const findings = [...byId.values()];
+  const hasOpenBlocking = findings.some((finding) => finding.status === 'open' && (finding.severity === 'critical' || finding.severity === 'important'));
+  const verdict = parsed.verdict || (hasOpenBlocking ? 'not-ready' : prev.verdict || '');
+  return { ...prev, findings, verdict, round, updatedAt: Date.now() };
+};
+
+const buildReviewLedgerDigest = (sessionLedger = null) => {
+  const findings = Array.isArray(sessionLedger?.findings) ? sessionLedger.findings : [];
+  if (!findings.length) return '';
+  const lines = findings.map((finding) => `[${finding.findingId}] ${REVIEW_SEVERITY_LABELS[finding.severity] || 'חשוב'} · ${REVIEW_STATUS_LABELS[finding.status] || 'פתוח'} — ${finding.title}`);
+  const digest = `ממצאים קודמים (זיכרון סבבים — חובה לכבד סטטוסים; "נדחה על ידי המשתמש" אסור להעלות שוב):\n${lines.join('\n')}`;
+  return digest.length > 2000 ? `${digest.slice(0, 2000)}…` : digest;
+};
+
 const persistPromptHistoryForDocumentIds = (workspaceId = '', documentIds = [], promptHistory = []) => {
   const normalizedHistory = (Array.isArray(promptHistory) ? promptHistory : [])
     .map((entry) => String(entry || '').trim())
@@ -878,6 +985,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [messages, setMessages] = useState(() => getSavedMessagesForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [activeChatSessionId, setActiveChatSessionId] = useState(() => getSavedActiveChatSessionIdForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds) || createChatSessionId());
   const [chatSessions, setChatSessions] = useState(() => getSavedChatSessionsForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
+  const [reviewLedger, setReviewLedger] = useState(() => readReviewLedgerForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistoryForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
@@ -924,6 +1032,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const effectiveDocIdRef = useRef(effectiveDocId);
   const chatPersistenceKeyRef = useRef(getChatMemoryStorageKey(workspaceAutomation.activeWorkspaceId, effectiveDocId));
   const pendingChatPersistenceLoadRef = useRef(null);
+  // מגן כתיבה ל-review ledger: בהחלפת מסמך/סביבה אסור לכתוב את ה-ledger הישן על המפתח החדש
+  // לפני שאפקט הטעינה רץ (אותו דפוס כמו pendingChatPersistenceLoadRef להודעות).
+  const reviewLedgerLoadedScopeRef = useRef(`${getWorkspaceAutomation().activeWorkspaceId}::${documentPersistenceScopeKey}`);
   const isEditComposerMode = composerMode === 'edit';
   const activeEditTarget = editTarget?.active || null;
 
@@ -964,6 +1075,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const globalSidebarProviderChoice = configuredProviderChoices.find((choice) => choice.isDefault) || configuredProviderChoices[0] || null;
   const effectiveSidebarProviderId = forceGlobalSidebarProvider ? (globalSidebarProviderChoice?.id || 'default') : selectedProviderId;
   const activeProviderChoice = configuredProviderChoices.find((choice) => choice.id === effectiveSidebarProviderId) || null;
+  // בחירה מפורשת של ספק בדרופדאון (לא 'default', לא נעילה גלובלית) מנצחת תמיד:
+  // מפעילה pin קשיח לאותה ריצה כדי שהאוטו-ראוטינג/מולטי-מודל לא ידרוס את הבחירה.
+  const userExplicitSidebarProvider = !forceGlobalSidebarProvider
+    && Boolean(selectedProviderId)
+    && selectedProviderId !== 'default'
+    && Boolean(activeProviderChoice);
   const providerModelChoices = activeProviderChoice
     ? getProviderModelChoices(activeProviderChoice.id, providerConfig)
     : [];
@@ -1498,6 +1615,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setActiveChatSessionId(nextActiveSessionId);
     setChatSessions(getSavedChatSessionsForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds));
     setPromptHistory(nextPromptHistory);
+    setReviewLedger(readReviewLedgerForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds));
+    reviewLedgerLoadedScopeRef.current = `${workspaceAutomation.activeWorkspaceId}::${documentPersistenceScopeKey}`;
   }, [chatMemoryStorageKey, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
@@ -1505,6 +1624,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       persistPromptHistoryForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, promptHistory);
     } catch {}
   }, [documentPersistenceScopeKey, promptHistory, workspaceAutomation.activeWorkspaceId]);
+
+  useEffect(() => {
+    if (reviewLedgerLoadedScopeRef.current !== `${workspaceAutomation.activeWorkspaceId}::${documentPersistenceScopeKey}`) return;
+    try {
+      saveReviewLedgerForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, reviewLedger);
+    } catch {}
+  }, [documentPersistenceScopeKey, reviewLedger, workspaceAutomation.activeWorkspaceId]);
 
   useEffect(() => {
     setAgentProgressMap((prev) => {
@@ -1676,6 +1802,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const clearConversation = useCallback((options = {}) => {
     const clearArchive = options?.clearArchive === true;
     beginRequestCycle();
+    // V3: ניקוי שיחה = גבול נושא — ה-scope הישן נסגר, אין ירושת מקורות/שאילתות.
+    endRunScope('sidebar');
     const nextSessionId = createChatSessionId();
     try {
       documentPersistenceIds.forEach((documentId) => {
@@ -1683,6 +1811,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         if (clearArchive) {
           localStorage.removeItem(getChatSessionArchiveStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
           localStorage.removeItem(getActiveChatSessionIdStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
+          localStorage.removeItem(getReviewLedgerStorageKey(workspaceAutomation.activeWorkspaceId, documentId));
         }
       });
       saveActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, nextSessionId);
@@ -1701,6 +1830,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setActiveAgentStatus({ ...IDLE_AGENT_STATUS });
     setAgentProgressMap({});
     if (clearArchive) setChatSessions([]);
+    if (clearArchive) setReviewLedger({});
     setMentionMenu({ ...EMPTY_MENTION_MENU });
   }, [beginRequestCycle, clearPendingMentionSelection, documentPersistenceScopeKey, workspaceAutomation.activeWorkspaceId]);
 
@@ -1709,6 +1839,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const sessionMessages = normalizeMessagesForPersistence(session?.messages || []);
     if (!sessionId || !sessionMessages.length || loading) return;
     beginRequestCycle();
+    // V3: מעבר לשיחה אחרת = גבול נושא.
+    endRunScope('sidebar');
     try {
       saveActiveChatSessionIdForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, sessionId);
       persistMessagesForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, sessionMessages);
@@ -1733,11 +1865,143 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     if (!safeSessionId || loading) return;
     const nextSessions = deleteChatSessionForDocumentIds(workspaceAutomation.activeWorkspaceId, documentPersistenceIds, safeSessionId);
     setChatSessions(nextSessions);
+    setReviewLedger((prev) => {
+      if (!prev[safeSessionId]) return prev;
+      const next = { ...prev };
+      delete next[safeSessionId];
+      return next;
+    });
     if (safeSessionId === activeChatSessionId) {
       clearConversation();
       setChatSessions(nextSessions);
     }
   }, [activeChatSessionId, clearConversation, documentPersistenceScopeKey, loading, workspaceAutomation.activeWorkspaceId]);
+
+  const dismissReviewFinding = useCallback((findingId = '') => {
+    const safeFindingId = String(findingId || '').trim();
+    if (!safeFindingId) return;
+    setReviewLedger((prev) => {
+      const session = prev[activeChatSessionId];
+      if (!session) return prev;
+      const findings = (Array.isArray(session.findings) ? session.findings : []).map((finding) => (
+        finding.findingId === safeFindingId ? { ...finding, status: 'dismissed' } : finding
+      ));
+      const hasOpenBlocking = findings.some((finding) => finding.status === 'open' && (finding.severity === 'critical' || finding.severity === 'important'));
+      // דחיית הממצא החוסם האחרון לא מכריזה "מוכן" בשם המודל — רק מנקה את "לא מוכן".
+      const verdict = !hasOpenBlocking && session.verdict === 'not-ready' ? '' : session.verdict;
+      return { ...prev, [activeChatSessionId]: { ...session, findings, verdict, updatedAt: Date.now() } };
+    });
+  }, [activeChatSessionId]);
+
+  const activeReviewSession = reviewLedger[activeChatSessionId] || null;
+
+  // שורות ממצאים מתחת לבועת תשובה של סוכן המרצה: נקודת חומרה + כותרת + "לא רלוונטי".
+  const renderReviewFindingRows = (msg, variant = 'dark') => {
+    if (msg?.role !== 'assistant' || msg?.reviewAgentId !== 'lecturer' || msg?.error) return null;
+    const parsed = parseReviewFindings(msg.content);
+    if (!parsed.findings.length) return null;
+    const dark = variant === 'dark';
+    const sessionFindings = Array.isArray(activeReviewSession?.findings) ? activeReviewSession.findings : [];
+    const textColor = dark ? '#CBD5E1' : '#334155';
+    const mutedColor = dark ? '#94A3B8' : '#64748B';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6, width: '100%' }}>
+        {parsed.findings.map((finding) => {
+          const ledgerEntry = sessionFindings.find((entry) => entry.findingId === finding.findingId) || null;
+          const status = ledgerEntry?.status || 'open';
+          const dotColor = finding.severity === 'critical' ? '#F87171' : finding.severity === 'important' ? '#FBBF24' : (dark ? '#94A3B8' : '#CBD5E1');
+          return (
+            <div key={finding.findingId} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: textColor, opacity: status === 'dismissed' ? 0.55 : 1 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: status === 'dismissed' ? 'line-through' : 'none' }}>{finding.title}</span>
+              {status === 'open' && (
+                <button
+                  type="button"
+                  onClick={() => dismissReviewFinding(finding.findingId)}
+                  title="הממצא לא רלוונטי — אל תעלה אותו שוב"
+                  style={{ fontSize: 10, color: mutedColor, background: dark ? 'rgba(148, 163, 184, 0.1)' : '#F1F5F9', border: dark ? '1px solid rgba(148, 163, 184, 0.22)' : '1px solid #E2E8F0', borderRadius: 10, padding: '2px 8px', cursor: 'pointer', fontWeight: 500, flexShrink: 0 }}
+                >
+                  לא רלוונטי
+                </button>
+              )}
+              {status === 'dismissed' && <span style={{ fontSize: 10, color: mutedColor, flexShrink: 0 }}>נדחה</span>}
+              {status === 'fixed' && <span style={{ fontSize: 10, color: '#34D399', flexShrink: 0 }}>טופל</span>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // chip "מוכן להגשה" מעל אזור הכתיבה — רק כשפסק הדין האחרון של המרצה הוא ready.
+  const renderReviewVerdictChip = (variant = 'dark') => {
+    if (activeReviewSession?.verdict !== 'ready') return null;
+    const dark = variant === 'dark';
+    return (
+      <div style={{
+        margin: '0 0 8px',
+        padding: '6px 12px',
+        borderRadius: 12,
+        fontSize: 12,
+        fontWeight: 700,
+        textAlign: 'center',
+        color: dark ? '#BBF7D0' : '#047857',
+        background: dark ? 'rgba(6, 78, 59, 0.24)' : '#ECFDF5',
+        border: dark ? '1px solid rgba(52, 211, 153, 0.22)' : '1px solid #A7F3D0',
+      }}>
+        ✅ מוכן להגשה — אין ממצאים קריטיים או חשובים פתוחים
+      </div>
+    );
+  };
+
+  // בורר מודל קומפקטי בשורת הכתיבה — גישה מהירה לספק/מודל בלי להיכנס להגדרות.
+  // ברירת מחדל 'default' = לפי ההגדרות + שדרוג אוטומטי למודל חזק בצ'אט כללי.
+  const renderComposerModelQuickPick = (variant = 'dark') => {
+    if (forceGlobalSidebarProvider || !configuredProviderChoices.length) return null;
+    const dark = variant === 'dark';
+    const selectStyle = {
+      fontSize: 11,
+      fontWeight: 600,
+      color: dark ? '#E2E8F0' : '#334155',
+      background: dark ? 'rgba(148,163,184,0.12)' : '#F1F5F9',
+      border: dark ? '1px solid rgba(148,163,184,0.24)' : '1px solid #E2E8F0',
+      borderRadius: 9,
+      padding: '3px 8px',
+      cursor: 'pointer',
+      outline: 'none',
+      maxWidth: 150,
+    };
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: dark ? 'rgba(226,232,240,0.6)' : '#64748B', fontWeight: 600 }}>🧠 מודל:</span>
+        <select
+          value={selectedProviderId || 'default'}
+          onChange={(e) => { clearPendingMentionSelection(); setSelectedProviderId(e.target.value); setSelectedAgentId(''); }}
+          disabled={isSettingsLocked}
+          style={selectStyle}
+          title="ספק לשיחה במסך הזה"
+        >
+          <option value="default" style={{ color: '#1F2937' }}>אוטומטי (חזק לצ'אט כללי)</option>
+          {configuredProviderChoices.map((provider) => (
+            <option key={provider.id} value={provider.id} style={{ color: '#1F2937' }}>{provider.label}</option>
+          ))}
+        </select>
+        {activeProviderChoice && providerModelChoices.length > 1 && (
+          <select
+            value={resolvedSelectedProviderModel}
+            onChange={(e) => { clearPendingMentionSelection(); setSelectedProviderModel(e.target.value); }}
+            disabled={isSettingsLocked}
+            style={selectStyle}
+            title="מודל למסך הזה"
+          >
+            {providerModelChoices.map((modelId) => (
+              <option key={modelId} value={modelId} style={{ color: '#1F2937' }}>{modelId}</option>
+            ))}
+          </select>
+        )}
+      </div>
+    );
+  };
 
   const renderChatHistoryPanel = (variant = 'light') => {
     const dark = variant === 'dark';
@@ -2118,6 +2382,24 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       skillLabel: 'מיפוי מיקומים',
       fallbackInsertText: outputText,
     });
+
+    // חבר ביקורתי: החלת תשובת מרצה במסמך מסמנת את הממצאים שבה כ"טופלו" (best-effort) —
+    // כך הם לא יעלו שוב בסבב הבא אלא אם הבעיה חזרה בטקסט.
+    if (message?.reviewAgentId === 'lecturer') {
+      const appliedFindingIds = new Set(parseReviewFindings(outputText).findings.map((finding) => finding.findingId));
+      if (appliedFindingIds.size) {
+        setReviewLedger((prev) => {
+          const session = prev[activeChatSessionId];
+          if (!session) return prev;
+          const findings = (Array.isArray(session.findings) ? session.findings : []).map((finding) => (
+            appliedFindingIds.has(finding.findingId) && finding.status === 'open'
+              ? { ...finding, status: 'fixed' }
+              : finding
+          ));
+          return { ...prev, [activeChatSessionId]: { ...session, findings, updatedAt: Date.now() } };
+        });
+      }
+    }
   };
 
   const stripComposerModeDirectiveFromSystemPrompt = useCallback((systemPrompt = '') => {
@@ -3192,70 +3474,30 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const contextualAssignmentBrief = shouldUseAssignmentBriefForPrompt(requestPrompt) ? assignmentBriefContext : '';
     const followUpSourceGroundingContext = buildFollowUpSourceGroundingContext(messages, requestPrompt);
     const baseContext = selectedText
-      ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
+      ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
       : currentBlockText
-        ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
+        ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
         : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
     const finalContext = [contextualAssignmentBrief, followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n');
     return finalContext;
   };
 
-  const buildHoleFillSourceQueryOverride = (promptText = '') => {
-    const sourceNeedPattern = /(?:חור|חורים|חסר|להשלים|מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|עיתונות|דיין|לשון\s+הרע|ציטוט|אזכור)/i;
-    const genericContextPattern = /^(?:מסמך\s+פעיל|מפת\s+מסמך|טקסט\s+נבחר|פסקה\s+נוכחית)\b/i;
-    const priorSourceListPattern = /(?:^(?:מקורות\s+אקדמיים\s+בלבד|מקורות\s+מאומתים|תוצאות\s+Web\s+מקורקעות|הוחזרו\s+רק\s+פריטים|לא\s+הוספתי\s+מקורות)\b)|(?:^|\n)\s*(?:\d+\.\s+[^\n]{0,160})?(?:פרטי\s+פרסום|קישור|תקציר|מקור):/i;
-    const cleanCandidate = (value = '') => String(value || '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/עבור\s+על\s+(?:המסמך\s+הנוכחי|הטקסט\s+הבא|הפסקה\s+או\s+המסמך\s+הנוכחי)[^\n.:]*[.:]?/gi, ' ')
-      .replace(/(?:זהה\s+מה\s+חסר\s+בו|השלם\s+רק\s+את\s+החורים\s+שדורשים\s+מידע\s+מאומת\s+מהרשת|והחזר\s+נוסח\s+מעודכן\s+שמשלב\s+את\s+ההשלמות\s+בתוך\s+(?:הטקסט|המסמך))/gi, ' ')
-      .replace(/(?:קריאת\s+השלמה\s+לתיקוני\s+בדיקה\s*\+\s*תיקון|בקשת\s+המשתמש|התמקד\s+רק\s+בתיקונים\s+הבאים\s+שנשארו\s+להשלמה|בדוק\s+את\s+המסמך\s+הנוכחי[^\n]*)/gi, ' ')
-      .replace(/^[\s\d.):-]+/gm, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const candidates = [
-      promptText,
-      ...messages.slice(-8).reverse().map((message) => message?.content || ''),
+  // עטיפות דקות מעל המודול המשותף src/services/sourceQueryBuilder.js. הלוגיקה עצמה חיה
+  // שם כמקור-אמת יחיד, כדי שקובץ הבדיקה יריץ בדיוק את אותו קוד. כאן רק מזריקים מצב רכיב.
+  // V3 (runScope): בלי סריקת הודעות צ'אט — זה בדיוק ערוץ הזיהום שנושא ישן דולף דרכו.
+  // הנושא מגיע מה-prompt הנוכחי/הבחירה בלבד; המשכים עוברים דרך scope.topic.
+  const buildHoleFillSourceQueryOverride = (promptText = '') =>
+    buildHoleFillSourceQueryOverridePure(promptText, {
+      messages: isV3FlagEnabled('runScope') ? [] : messages,
       selectedText,
       currentBlockText,
-    ]
-      .filter((candidate) => !priorSourceListPattern.test(String(candidate || '')))
-      .map(cleanCandidate)
-      .filter((candidate) => candidate && sourceNeedPattern.test(candidate) && !genericContextPattern.test(candidate) && !priorSourceListPattern.test(candidate));
-    const preferred = candidates.find((candidate) => /(?:מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|ציטוט|אזכור)/i.test(candidate)) || candidates[0] || '';
-    return preferred.slice(0, 320).trim();
-  };
+    });
 
-  const buildSourcesQueryOverride = (promptText = '') => {
-    const genericInstructionPattern = /(?:מצא|חפש|אתר|תן|תביא|הבא)\s+(?:לי\s+)?(?:מקורות|כתבות|מאמרים|קישורים|לינקים|sources?|articles?|references?|links?)[^:\n.]*[:.]?/gi;
-    const quotedTextMatch = String(promptText || '').match(/"([^"]{12,1600})"/);
-    const cleanCandidate = (value = '') => String(value || '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(genericInstructionPattern, ' ')
-      .replace(/אם\s+(?:הבקשה|נדרש)[^.]*?(?:חדשות|חדשותי)[^.]*[.]?/gi, ' ')
-      .replace(/אחרת\s+העדף[^.]*[.]?/gi, ' ')
-      .replace(/(?:אל\s+תמציא|בלי\s+להמציא|לא\s+להמציא)[^.:\n]*(?:URLs?|כותרות|מקורות|מאמרים|כתבות)?/gi, ' ')
-      .replace(/^(?:טקסט\s+נבחר|פסקה\s+נוכחית|מסמך\s+פעיל)\s*[:：]?/gim, ' ')
-      .replace(/^[\s"'“”״׳:;,.!?()-]+|[\s"'“”״׳:;,.!?()-]+$/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const candidates = [
-      cleanCandidate(quotedTextMatch?.[1] || ''),
-      cleanCandidate(promptText),
-      cleanCandidate(selectedText),
-      cleanCandidate(currentBlockText),
-    ].filter(Boolean);
-    const preferred = candidates.find((candidate) => candidate.length >= 18 && !/^(?:מקורות|כתבות|מאמרים|sources?|articles?)\b/i.test(candidate)) || candidates[0] || '';
-    if (/^(?:עבור\s+)?(?:הטענה|הנושא|המסמך|הטקסט)\b/i.test(preferred)) return '';
-    return preferred.slice(0, 260).trim();
-  };
+  const buildSourcesQueryOverride = (promptText = '') =>
+    buildSourcesQueryOverridePure(promptText, { selectedText, currentBlockText });
 
-  const isSourcesNewsRequest = (promptText = '', queryOverride = '') => {
-    const cleanPrompt = String(promptText || '')
-      .replace(/אם\s+הבקשה\s+או\s+הטקסט\s+עוסקים\s+בכתבות\/חדשות[^.]*\./gi, ' ')
-      .replace(/אם\s+נדרש\s+מקור\s+חדשותי[^.;]*[.;]?/gi, ' ');
-    const combined = [cleanPrompt, queryOverride, selectedText, currentBlockText].filter(Boolean).join('\n');
-    return /(?:כתבה|כתבות|ידיעה|ידיעות|כתבת\s+חדשות|אתר(?:י)?\s+חדשות|חדשות|news\s+articles?|articles?\s+from\s+news|news\s+site)/i.test(combined);
-  };
+  const isSourcesNewsRequest = (promptText = '', queryOverride = '') =>
+    isSourcesNewsRequestPure(promptText, queryOverride, { selectedText, currentBlockText });
   const normalizeAssistantMessageText = (value) => String(value ?? '')
     .replace(/\r\n/g, '\n')
     .replace(/\s+/g, ' ')
@@ -3656,6 +3898,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       if (classicTaskpaneSystemCtx) {
         finalExtraSystemPrompt = [finalExtraSystemPrompt, classicTaskpaneSystemCtx].filter(Boolean).join('\n\n');
       }
+      // זיכרון סבבים: תקציר ממצאים קודמים של ה-session נוסע ב-system prompt (לא בהיסטוריה,
+      // שנחתכת ל-12 הודעות) — כך ממצא שנדחה לא חוזר גם בשיחה ארוכה.
+      if (lecturerDirectAgentRequest) {
+        const reviewLedgerDigest = buildReviewLedgerDigest(reviewLedger[activeChatSessionId]);
+        if (reviewLedgerDigest) {
+          finalExtraSystemPrompt = [finalExtraSystemPrompt, reviewLedgerDigest].filter(Boolean).join('\n\n');
+        }
+      }
       if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
         const fallbackSelection = buildClassicTaskpaneSelection(activeClassicAgentId);
         if (fallbackSelection && fallbackSelection.selection) {
@@ -3689,10 +3939,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
     const runtimeProviderOverride = String(runtimeOptions.providerOverride || '').trim();
     const runtimeModelOverride = String(runtimeOptions.modelOverride || '').trim();
-    const globalLockProviderOverride = forceGlobalSidebarProvider ? finalPinnedProviderId : '';
-    const globalLockModelOverride = forceGlobalSidebarProvider ? resolvedFinalProviderModel : '';
+    const pinExplicitProvider = forceGlobalSidebarProvider || userExplicitSidebarProvider;
+    const globalLockProviderOverride = pinExplicitProvider ? finalPinnedProviderId : '';
+    const globalLockModelOverride = pinExplicitProvider ? resolvedFinalProviderModel : '';
     const strictProviderId = runtimeProviderOverride || globalLockProviderOverride;
-    const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true || forceGlobalSidebarProvider;
+    const runtimeStrictProviderOverride = runtimeOptions.strictProviderOverride === true || pinExplicitProvider;
     const hasStrictRuntimeProviderOverride = runtimeStrictProviderOverride && Boolean(strictProviderId);
     const preferredProviderId = hasStrictRuntimeProviderOverride
       ? ''
@@ -3774,7 +4025,21 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
 
-    const ctx = buildContext(requestEditTargets, requestEditBatchTargets, txt);
+    let ctx = buildContext(requestEditTargets, requestEditBatchTargets, txt);
+    // ── סיווג מסלול צ'אט: מסמך / ידע כללי / כתיבה כללית (תחליף ג'ימיני) ──
+    // רק לצ'אט ישיר בלי סוכן מפורש; סוכן קלאסי/עריכה נשארים 'document'.
+    const chatScopeResult = classifyChatScope(txt, {
+      hasSelection: Boolean(selectedText),
+      hasCurrentBlock: Boolean(currentBlockText),
+      hasDocument: Boolean(documentSnapshot.fullText || documentSnapshot.excerptText),
+      activeAgentId: activeClassicAgentId || '',
+      isEditComposerMode,
+    });
+    const isGeneralChatScope = chatScopeResult.scope === 'general-knowledge' || chatScopeResult.scope === 'general-writing';
+    // מודל חזק כברירת מחדל לצ'אט כללי כשהמשתמש לא נעל מודל (שדרוג בתוך אותו ספק בלבד).
+    const generalScopeModelOverride = (isGeneralChatScope && !explicitProviderModel && !hasPinnedProviderPreference)
+      ? resolveStrongGeneralModelForProvider(activeProviderChoice?.id || providerConfig?.active || 'gemini', providerConfig)
+      : '';
     const holeFillSourceQueryOverride = effectiveDirectAgentMeta.id === 'holeFill'
       ? buildHoleFillSourceQueryOverride(txt)
       : '';
@@ -3785,6 +4050,24 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       ? isSourcesNewsRequest(txt, sourcesQueryOverride)
       : false;
     const directAgentName = hasPinnedProviderPreference ? `${effectiveDirectAgentMeta.name} · ${requestProviderLabel}` : effectiveDirectAgentMeta.name;
+    // ── V3 (שלב 3): RunScope לצ'אט הסיידבר ──
+    // scope חדש כשאין scope פעיל, כשזו שיחה חדשה (אין היסטוריה) או כשה-workspace התחלף.
+    // נושא מפורש מהבקשה הנוכחית מעדכן את ה-scope (ומאפס נעילת מקורות ישנה) — כך
+    // "מקורות על לבנון" אחרי שיחה על מוגבלויות מקבל שאילתה נקייה, לא ירושה.
+    const requestExplicitTopic = sourcesQueryOverride || holeFillSourceQueryOverride || '';
+    const scopeWorkspaceId = String(workspaceAutomation?.activeWorkspaceId || '').trim();
+    let sidebarRunScope = getActiveRunScope('sidebar');
+    if (!sidebarRunScope || !conversationHistory.length || sidebarRunScope.workspaceId !== scopeWorkspaceId) {
+      sidebarRunScope = startRunScope('sidebar', {
+        origin: effectiveDirectAgentMeta.id === 'sources' ? 'sources-agent'
+          : effectiveDirectAgentMeta.id === 'holeFill' ? 'hole-fill'
+            : 'sidebar-chat',
+        workspaceId: scopeWorkspaceId,
+        topic: requestExplicitTopic,
+      });
+    } else if (requestExplicitTopic) {
+      setScopeTopic(sidebarRunScope, requestExplicitTopic);
+    }
     setMessages((prev) => [...prev, { role: 'user', content: originalText, composerMode }]);
     setRequestSnapshot({
       providerLabel: hasPinnedProviderPreference ? requestProviderSummary : activeProviderSummary,
@@ -3800,6 +4083,33 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setMessages((prev) => [...prev, { role: 'assistant', content: '', composerMode }]);
 
     try {
+      // אימות מקורות חי ("חבר ביקורתי"): כשנשאל על מקור/קישור קיים — בודקים את ה-URLs
+      // בבדיקה חיה ומצרפים תוצאות להקשר של אותה קריאה. מדולג לסוכני sources/holeFill
+      // (יש להם pipeline אחזור משלהם) ולמצב עריכה.
+      if (!isEditComposerMode && !['sources', 'holeFill'].includes(effectiveDirectAgentMeta.id || '')) {
+        const sourceCheckRequest = detectSourceCheckRequest(txt, {
+          selectedText,
+          currentBlockText,
+          documentSnapshotText: documentSnapshot.fullText || documentSnapshot.excerptText || '',
+          hasSourceLock: Boolean(sidebarRunScope?.sourceLock),
+        });
+        if (sourceCheckRequest.shouldCheck) {
+          updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', progress: 20, message: 'מאמת מקורות…' });
+          try {
+            const sourceCheckOutcome = await runChatSourceCheck({
+              urls: sourceCheckRequest.urls,
+              signal: sidebarRunScope?.abortController?.signal,
+              allowAll: sourceCheckRequest.scanAllDocument === true,
+              claimText: sourceCheckRequest.claimText,
+            });
+            const sourceCheckContext = formatSourceCheckContext({ ...sourceCheckOutcome, claimText: sourceCheckRequest.claimText });
+            if (sourceCheckContext) ctx = [ctx, sourceCheckContext].filter(Boolean).join('\n\n');
+          } catch {
+            // כשל באימות עצמו לא מפיל את הצ'אט — המודל פשוט לא יקבל בלוק אימות.
+          }
+          if (!isCurrentRequestCycle(requestCycle)) return;
+        }
+      }
       const invokeDirectCall = async (nextPrompt, nextContext, nextSystemPrompt, phaseMeta = {}) => await chatWithActiveProvider(nextPrompt, nextContext, nextSystemPrompt, {
         agentId: effectiveDirectAgentMeta.id || '',
         agentLabel: directAgentName,
@@ -3813,8 +4123,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         includeAppMemory: !isEditComposerMode,
         providerOverride: directProviderId,
         preferredProviders,
-        modelOverride: explicitProviderModel,
+        modelOverride: explicitProviderModel || generalScopeModelOverride,
         strictProviderOverride: hasStrictRuntimeProviderOverride,
+        chatScope: chatScopeResult.scope,
+        forceInternetInfo: isGeneralChatScope && chatScopeResult.isTimeSensitive,
+        runScope: sidebarRunScope,
         sourceQueryOverride: sourcesQueryOverride || holeFillSourceQueryOverride,
         sourceQuerySource: sourcesQueryOverride ? 'taskpaneSourcesContext' : (holeFillSourceQueryOverride ? 'holeFillContext' : ''),
         isAcademicTask: effectiveDirectAgentMeta.id === 'sources' && !sourcesNewsRequest,
@@ -3851,7 +4164,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         : finalExtraSystemPrompt;
       const directAnalysisSystemPrompt = stripComposerModeDirectiveFromSystemPrompt(directSystemPrompt);
       const effectiveRequestedSplitCallCount = lecturerDirectAgentRequest && !isEditComposerMode ? 0 : requestedSplitCallCount;
-      const reply = effectiveRequestedSplitCallCount >= 2
+      let reply = effectiveRequestedSplitCallCount >= 2
         ? await (isEditComposerMode
           ? runEditMultiCallWorkflow({
             splitCallCount: effectiveRequestedSplitCallCount,
@@ -3881,22 +4194,56 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           }))
         : await invokeDirectCall(txt, ctx, directSystemPrompt, { phase: 'single', stepIndex: 1, stepCount: 1 });
       if (!isCurrentRequestCycle(requestCycle)) return;
+      // לולאת סגנון אישי בבקשה מפורשת ("תכתוב שיישמע כמוני"): מזקקים את תוצר הכתיבה
+      // מול הגלאי המקומי עד שנשמע כמו המשתמש. רק בכתיבה כללית, לא בשאלת ידע.
+      if (chatScopeResult.explicitStyleLoop && chatScopeResult.scope === 'general-writing' && String(reply || '').trim()) {
+        try {
+          const styleProfile = getPersonalStyleProfile();
+          updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', progress: 80, message: 'מזקק לקול האישי שלך…' });
+          const styleLoop = await runHumanizerLoop({
+            text: reply,
+            context: ctx,
+            target: 32,
+            maxPasses: 3,
+            profile: styleProfile,
+            onProgress: ({ pass, maxPasses, score, target }) => {
+              if (!isCurrentRequestCycle(requestCycle)) return;
+              updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', progress: Math.min(94, 80 + pass * 4), message: `מכוונן לקול שלך — סבב ${pass}/${maxPasses} (ציון ${score}, יעד <${target})` });
+            },
+            invokeModel: (prompt, loopCtx) => invokeDirectCall(prompt, loopCtx, [directSystemPrompt, STEALTH_HUMANIZE_GUIDE].filter(Boolean).join('\n\n'), { phase: 'style-repair', stepIndex: 1, stepCount: 1 }),
+          });
+          if (styleLoop?.text && isCurrentRequestCycle(requestCycle)) reply = styleLoop.text;
+        } catch {
+          // כשל בלולאה לא מפיל את התשובה — נשארים עם הנוסח המקורי.
+        }
+      }
       const applyResult = shouldSkipTaskpaneApply
         ? { ok: true, skipped: true, reason: 'taskpane-analysis-only' }
         : requestEditBatchTargets.length > 1
           ? await applyEditBatchReply(reply, requestEditBatchTargets.map((target) => ({ ...target, batchPrompt: txt })), effectiveDirectAgentMeta.id || 'assistant-main')
           : await applyEditReply(reply, requestEditTarget, effectiveDirectAgentMeta.id || 'assistant-main');
       const documentActionMeta = buildDocumentActionMeta(applyResult, reply);
+      const isLecturerReviewReply = lecturerDirectAgentRequest && !isEditComposerMode;
       setMessages((prev) => {
         const newMsg = [...prev];
         newMsg[newMsg.length - 1] = {
           ...newMsg[newMsg.length - 1],
           content: String(reply || ''),
           composerMode,
+          ...(isLecturerReviewReply ? { reviewAgentId: 'lecturer' } : {}),
           ...documentActionMeta,
         };
         return newMsg;
       });
+      if (isLecturerReviewReply) {
+        const parsedReview = parseReviewFindings(String(reply || ''));
+        if (parsedReview.findings.length || parsedReview.verdict) {
+          setReviewLedger((prev) => ({
+            ...prev,
+            [activeChatSessionId]: mergeParsedFindingsIntoSessionLedger(prev[activeChatSessionId], parsedReview),
+          }));
+        }
+      }
       updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, applyResult && !applyResult.skipped && !applyResult.ok
         ? { state: 'error', progress: 100, message: documentActionMeta.documentActionMessage || 'העריכה לא הוחלה במסמך' }
         : { state: 'success', progress: 100, message: 'הושלם' });
@@ -3945,15 +4292,16 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const preferredProviderId = activeProviderChoice?.id || '';
     const preferredProviders = !forceGlobalSidebarProvider && preferredProviderId ? [preferredProviderId] : [];
     const explicitProviderModel = preferredProviderId ? resolvedSelectedProviderModel : '';
+    const pinExplicitProvider = forceGlobalSidebarProvider || userExplicitSidebarProvider;
     await executeRoleAgentTask(agent, task, {
       skillId: isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId),
       autoUseDefaultSkill: isEditComposerMode ? false : selectedSkillId === 'none',
       persistSelection: !isEditComposerMode,
       providerLabel: activeProviderSummary,
-      providerOverride: forceGlobalSidebarProvider ? preferredProviderId : '',
+      providerOverride: pinExplicitProvider ? preferredProviderId : '',
       preferredProviders,
       modelOverride: explicitProviderModel,
-      strictProviderOverride: forceGlobalSidebarProvider,
+      strictProviderOverride: pinExplicitProvider,
       scopeLabel: contextScopeLabel,
       contextPreview,
       editModeExplicitRouting: false,
@@ -4008,8 +4356,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           : 'מצא מקורות מאומתים עבור הטענה או הנושא המרכזי במסמך. אם נדרש מקור חדשותי - החזר כתבות חדשות מאומתות; אחרת העדף מקורות אקדמיים, מאמרים אקדמיים או מחקרים רלוונטיים. אל תמציא URLs או כותרות.';
       case 'lecturer':
         return targetText
-          ? `בדוק את הטקסט הבא כמו מרצה אקדמי. אם אני במצב עריכה, החזר נוסח מתוקן שמיישם את ההערות; אם אי אפשר לתקן בלי מידע חסר, כתוב במפורש אילו חורים נשארו:\n\n"${targetText}"`
-          : 'בדוק את המסמך או הטיוטה הפעילה כמו מרצה אקדמי. אם אני במצב עריכה, החזר נוסח מתוקן שמיישם את ההערות; אם אי אפשר לתקן בלי מידע חסר, כתוב במפורש אילו חורים נשארו.';
+          ? `בדוק את הקטע הממוקד הבא כמו מרצה אקדמי לפני הגשה. דרג כל ממצא לפי חומרה (🔴 קריטי / 🟡 חשוב / ⚪ קוסמטי) וסיים בשורת "פסק דין". אם הקטע תקין — אמור זאת בפשטות:\n\n"${targetText}"`
+          : 'בדוק את המסמך או הטיוטה הפעילה כמו מרצה אקדמי לפני הגשה. דרג כל ממצא לפי חומרה (🔴 קריטי / 🟡 חשוב / ⚪ קוסמטי) וסיים בשורת "פסק דין". אם העבודה תקינה — אמור זאת בפשטות.';
       case 'continue':
         return targetText
           ? `המשך לכתוב מהנקודה שבה הטקסט הבא נעצר:\n\n"${targetText}"`
@@ -4030,7 +4378,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const buildClassicTaskpaneSelection = (agentId) => {
     const agentConfig = buildEffectiveClassicAgentConfig(agentId);
     if (forceGlobalSidebarProvider) return null;
-    const preferredProviderId = String(agentConfig?.sidebarSelection?.providerId || agentConfig?.route || '').trim();
+    // בחירה מפורשת של המשתמש בדרופדאון מנצחת את הראוט הקשיח של הסוכן.
+    // 'default' פירושו "השתמש בראוט המומלץ של הסוכן".
+    const explicitProviderId = selectedProviderId && selectedProviderId !== 'default'
+      ? String(selectedProviderId).trim()
+      : '';
+    const preferredProviderId = explicitProviderId
+      || String(agentConfig?.sidebarSelection?.providerId || agentConfig?.route || '').trim();
     if (!preferredProviderId) return null;
     const configuredChoice = configuredProviderChoices.find((choice) => choice.id === preferredProviderId) || null;
     if (!configuredChoice) {
@@ -4042,7 +4396,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         reason: `הפעולה הזו דורשת את ${preferredProviderId}, אבל הספק הזה לא מוגדר כרגע.`,
       };
     }
-    const preferredModel = String(agentConfig?.sidebarSelection?.model || '').trim();
+    const preferredModel = explicitProviderId
+      ? String(resolvedSelectedProviderModel || '').trim()
+      : String(agentConfig?.sidebarSelection?.model || '').trim();
     const nextModelChoices = getProviderModelChoices(preferredProviderId, providerConfig, preferredModel ? [preferredModel] : []);
     const resolvedModel = preferredModel
       ? normalizeProviderModelName(preferredProviderId, preferredModel)
@@ -4453,6 +4809,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                       <div style={{ ...bbl(msg.role === 'user', compactMode), ...(msg.error ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' } : {}) }}>
                         {renderChatMessageContent(msg.content)}
                       </div>
+                      {renderReviewFindingRows(msg, 'light')}
                       {msg.documentActionMessage && (
                         <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, fontSize: 11, lineHeight: 1.5, ...documentActionTone }}>
                           {msg.documentActionMessage}
@@ -4508,6 +4865,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             )}
 
           <div style={{ padding: '8px 12px 10px', background: 'var(--chat-surface)', borderTop: '1px solid var(--chat-border)', flexShrink: 0 }}>
+            {renderReviewVerdictChip('light')}
+            {renderComposerModelQuickPick('light')}
             {activeClassicAgent && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: '#F0FDFA', border: '1px solid #0D9488', borderRadius: 8, margin: '8px 0', color: '#0F766E', fontSize: 13, fontWeight: 600 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -5302,6 +5661,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   )}
                 </div>
                 
+                {renderReviewFindingRows(msg, 'dark')}
                 {msg.documentActionMessage && (
                   <div
                     style={{
@@ -5399,7 +5759,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             position: 'relative',
             zIndex: 10,
           }}>
-            
+            {renderReviewVerdictChip('dark')}
+            {renderComposerModelQuickPick('dark')}
+
             {/* חיווי הקשר */}
             {localContext && (
               <div style={{

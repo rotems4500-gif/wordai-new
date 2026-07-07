@@ -45,12 +45,12 @@ export default function TopBar({
     .map((part) => part[0])
     .join('')
     .toUpperCase() || 'CL';
-  const quickBtn = (icon, title, action, disabled = false) => (
+  const quickBtn = (icon, title, action, disabled = false, extraClass = '') => (
     <button
       onClick={action}
       title={title}
       disabled={disabled}
-      className={`h-8 min-w-8 rounded-full flex items-center justify-center transition ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/20'}`}
+      className={`h-8 min-w-8 rounded-full items-center justify-center transition ${extraClass || 'flex'} ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/20'}`}
     >
       <i className={`${icon} text-[18px] text-amber-100`}></i>
     </button>
@@ -71,19 +71,19 @@ export default function TopBar({
         {quickBtn('ph ph-house', 'בית', onHome)}
         {isWordMode && (
           <>
-            {quickBtn('ph ph-folder-open', 'פתח מהמחשב', onOpen)}
-            {quickBtn('ph ph-file-plus', 'חדש', onNew)}
-            {quickBtn('ph ph-plus-square', 'חלון חדש', onNewWindow, newWindowDisabled)}
+            {quickBtn('ph ph-folder-open', 'פתח מהמחשב', onOpen, false, 'hidden sm:flex')}
+            {quickBtn('ph ph-file-plus', 'חדש', onNew, false, 'hidden sm:flex')}
+            {quickBtn('ph ph-plus-square', 'חלון חדש', onNewWindow, newWindowDisabled, 'hidden sm:flex')}
             {quickBtn('ph ph-floppy-disk', 'שמור', onSave)}
-            {quickBtn('ph ph-floppy-disk-back', 'שמור בשם', onSaveAs)}
-            {quickBtn('ph ph-arrow-counter-clockwise', 'בטל', onUndo)}
-            {quickBtn('ph ph-arrow-clockwise', 'בצע שוב', onRedo)}
-            {quickBtn('ph ph-list-checks', 'המלצות לטיוטה', onOpenDraftRecommendations, draftRecommendationsDisabled)}
-            {quickBtn('ph ph-magnifying-glass', 'בדיקת סגנון (נשמע כמו AI?)', onCheckStyle)}
-            <div className="mx-1 h-6 w-px bg-white/30"></div>
+            {quickBtn('ph ph-floppy-disk-back', 'שמור בשם', onSaveAs, false, 'hidden sm:flex')}
+            {quickBtn('ph ph-arrow-counter-clockwise', 'בטל', onUndo, false, 'hidden sm:flex')}
+            {quickBtn('ph ph-arrow-clockwise', 'בצע שוב', onRedo, false, 'hidden sm:flex')}
+            {quickBtn('ph ph-list-checks', 'המלצות לטיוטה', onOpenDraftRecommendations, draftRecommendationsDisabled, 'hidden sm:flex')}
+            {quickBtn('ph ph-magnifying-glass', 'בדיקת סגנון (נשמע כמו AI?)', onCheckStyle, false, 'hidden sm:flex')}
+            <div className="mx-1 hidden h-6 w-px bg-white/30 sm:block"></div>
           </>
         )}
-        <button onClick={onFocus} title="מצב מיקוד" className="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center transition">
+        <button onClick={onFocus} title="מצב מיקוד" className="hidden h-8 w-8 rounded-full hover:bg-white/20 sm:flex items-center justify-center transition">
           <i className="ph ph-arrows-out-simple text-lg text-amber-100"></i>
         </button>
         <div className="hidden lg:flex items-center gap-1 rounded-full bg-white/10 p-1 mr-1">
@@ -93,7 +93,7 @@ export default function TopBar({
           {modeBtn('presentation', 'מצגות')}
         </div>
         <i className={`${isSpssMode ? 'ph-fill ph-chart-scatter' : isPresentationsMode ? 'ph-fill ph-presentation-chart' : 'ph-fill ph-file-word'} text-2xl ml-1`}></i>
-        <span className="truncate max-w-[12rem] xl:max-w-[16rem]">{isSpssMode ? 'SPSS Syntax Studio' : isPresentationsMode ? 'Presentation Studio' : `${documentTitle || 'מסמך חדש'} - Word`}</span>
+        <span className="truncate max-w-[7rem] sm:max-w-[12rem] xl:max-w-[16rem]">{isSpssMode ? 'SPSS Syntax Studio' : isPresentationsMode ? 'Presentation Studio' : `${documentTitle || 'מסמך חדש'} - Word`}</span>
       </div>
       {isSpssMode ? (
         <div className="hidden min-w-0 items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90 md:flex">
@@ -106,7 +106,7 @@ export default function TopBar({
           <span className="truncate">מצב מצגות פעיל · בריף, ויזואליה, תמונות וסיפור הצגה</span>
         </div>
       ) : (
-        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:min-w-[260px] lg:max-w-[560px] lg:flex-1 lg:flex-nowrap">
+        <div className="flex w-auto min-w-0 flex-wrap items-center gap-2 sm:w-full lg:w-auto lg:min-w-[260px] lg:max-w-[560px] lg:flex-1 lg:flex-nowrap">
           {isWordMode && (
             <button
               type="button"
@@ -121,7 +121,7 @@ export default function TopBar({
               }`}
             >
               <i className={`ph ${assignmentBriefOpen ? 'ph-eye' : 'ph-notepad'} text-base`}></i>
-              <span>{assignmentBriefOpen ? 'הסתר הוראות' : (assignmentBriefAvailable ? 'הוראות המטלה' : 'הוסף הוראות')}</span>
+              <span className="hidden sm:inline">{assignmentBriefOpen ? 'הסתר הוראות' : (assignmentBriefAvailable ? 'הוראות המטלה' : 'הוסף הוראות')}</span>
             </button>
           )}
           <div className="hidden md:flex bg-white/20 rounded px-3 py-1 w-full md:w-[320px] lg:w-full flex items-center gap-2">
@@ -147,7 +147,7 @@ export default function TopBar({
         >
           <i className={`ph ${theme === 'dark' ? 'ph-sun' : 'ph-moon'} text-lg text-amber-100`}></i>
         </button>
-        <div className="flex lg:hidden items-center gap-1 rounded-full bg-white/10 p-1">
+        <div className="hidden sm:flex lg:hidden items-center gap-1 rounded-full bg-white/10 p-1">
           {modeBtn('word', 'Word')}
           {modeBtn('spss', 'SPSS')}
           {modeBtn('spss-project', 'עבודה')}
@@ -169,14 +169,14 @@ export default function TopBar({
                   }`}
                 >
                   <i className={`ph ${cloudBusy ? 'ph-arrows-clockwise' : 'ph-cloud-arrow-up'} text-base`}></i>
-                  <span>{cloudBusy ? 'מסנכרן...' : 'העלה לענן'}</span>
+                  <span className="hidden sm:inline">{cloudBusy ? 'מסנכרן...' : 'העלה לענן'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={onCloudPull}
                   disabled={cloudBusy}
                   title="משוך הגדרות ומפתחות API מהענן (למכשיר הזה)"
-                  className={`flex items-center gap-2 rounded-full border px-3 py-1.5 transition text-xs font-semibold ${
+                  className={`hidden sm:flex items-center gap-2 rounded-full border px-3 py-1.5 transition text-xs font-semibold ${
                     cloudBusy
                       ? 'border-emerald-200/40 bg-emerald-100/10 text-white/70 cursor-wait'
                       : 'border-emerald-200/60 bg-emerald-300/15 text-white hover:bg-emerald-300/25'
@@ -209,7 +209,7 @@ export default function TopBar({
                 }`}
               >
                 <i className="ph ph-google-logo text-base"></i>
-                <span>התחבר עם Google</span>
+                <span className="hidden sm:inline">התחבר עם Google</span>
               </button>
             )}
             <div className="hidden xl:flex max-w-[18rem] items-center gap-2 rounded-full border border-white/15 bg-white/8 px-3 py-1.5 text-[11px] font-semibold text-white/80">
@@ -223,7 +223,7 @@ export default function TopBar({
             <button
               onClick={onOpenUpdates}
               title="בדוק אם יש עדכון"
-              className="flex items-center gap-2 rounded-full border border-white/30 px-3 py-1.5 hover:bg-white/20 transition text-xs font-semibold"
+              className="hidden sm:flex items-center gap-2 rounded-full border border-white/30 px-3 py-1.5 hover:bg-white/20 transition text-xs font-semibold"
             >
               <i className="ph ph-arrow-circle-up text-base"></i>
               <span className="hidden sm:inline">עדכונים</span>

@@ -5,6 +5,7 @@ import { useDelimitedListInput } from './useDelimitedListInput';
 import { AGENTS_CONFIG } from './agentConfig';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import { saveBlobInBrowser } from './services/browserDocxExport';
+import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { onCloudAuthChange, saveCloudCryptoMeta, fetchCloudCryptoMeta, deleteCloudCryptoMeta } from './firebase/services';
 import {
@@ -48,6 +49,8 @@ import {
   saveRoleAgents,
   getAssistantBehavior,
   saveAssistantBehavior,
+  getBlockedSourceDomains,
+  saveBlockedSourceDomains,
   getWordPreferences,
   saveWordPreferences,
   getPresentationPreferences,
@@ -2004,7 +2007,8 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
     const nextPrompt = buildPortablePrompt({
       sharedInstructions: deferredSharedInstructions,
       profile: deferredPersonalStyle,
-      includePortablePackage: true,
+      // יעד: AI חיצוני בלבד — בלוק voice רזה, בלי dump JSON כבד שרלוונטי רק לייבוא חזרה לוורדפלו.
+      emphasizeVoice: true,
     });
     setPortablePrompt(nextPrompt);
     setPortablePromptDirty(false);
@@ -2366,6 +2370,12 @@ function PresentationDefaultsSettings({ prefs, setPrefs }) {
 
 function SpssDefaultsSettings({ prefs, setPrefs }) {
   const set = (field, value) => setPrefs((prev) => ({ ...prev, [field]: value }));
+  const defaultDataInputRef = React.useRef(null);
+  const [defaultDataBusy, setDefaultDataBusy] = React.useState(false);
+  const [defaultDataError, setDefaultDataError] = React.useState('');
+  const defaultDataAnalysis = prefs.defaultDataAnalysis && typeof prefs.defaultDataAnalysis === 'object'
+    ? prefs.defaultDataAnalysis
+    : null;
   const genModeOptions = [
     ['analysis', 'ניתוח', 'יצירת syntax לניתוחים סטטיסטיים'],
     ['prep', 'הכנת נתונים', 'recode / compute / מהימנות — כותב משתנים חדשים'],
@@ -2374,12 +2384,78 @@ function SpssDefaultsSettings({ prefs, setPrefs }) {
     ['master', 'Master מאוחד'],
     ['block', 'בלוק אחרון'],
   ];
+  const onDefaultDataInputChange = async (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    setDefaultDataBusy(true);
+    setDefaultDataError('');
+    try {
+      const analysis = await readDataFileToAnalysis(file);
+      setPrefs((prev) => ({
+        ...prev,
+        defaultDataFileName: analysis.fileName || file.name || '',
+        defaultDataSavedAt: new Date().toISOString(),
+        defaultDataAnalysis: analysis,
+      }));
+    } catch (error) {
+      setDefaultDataError(error instanceof Error ? error.message : 'קריאת קובץ הנתונים נכשלה.');
+    } finally {
+      setDefaultDataBusy(false);
+    }
+  };
+  const clearDefaultData = () => {
+    setDefaultDataError('');
+    setPrefs((prev) => ({
+      ...prev,
+      defaultDataFileName: '',
+      defaultDataSavedAt: '',
+      defaultDataAnalysis: null,
+    }));
+  };
 
   return (
     <div>
+      <input
+        ref={defaultDataInputRef}
+        type="file"
+        accept={SUPPORTED_DATA_FILE_ACCEPT}
+        style={{ display: 'none' }}
+        onChange={onDefaultDataInputChange}
+      />
       <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
         ברירות המחדל של סטודיו ה-SPSS. הערכים חלים בכל פעם שנכנסים לסטודיו.
       </p>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>קובץ נתונים ברירת מחדל</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
+              נטען אוטומטית בכניסה לטאבי SPSS. נשמר snapshot של metadata וסטטיסטיקות סיכום, לא שורות הדאטה הגולמיות.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => defaultDataInputRef.current?.click()}
+            disabled={defaultDataBusy}
+            style={{ border: '1px solid #2563EB', background: defaultDataBusy ? '#DBEAFE' : '#EFF6FF', color: '#1D4ED8', borderRadius: 8, padding: '7px 10px', fontSize: 12, fontWeight: 700, cursor: defaultDataBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+          >
+            {defaultDataBusy ? 'טוען...' : (defaultDataAnalysis ? 'החלף קובץ' : 'בחר קובץ')}
+          </button>
+        </div>
+        {defaultDataAnalysis ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <span style={{ borderRadius: 999, background: '#F1F5F9', padding: '5px 9px', fontSize: 11, fontWeight: 700, color: '#334155' }}>{defaultDataAnalysis.fileName || prefs.defaultDataFileName || 'קובץ נתונים'}</span>
+            <span style={{ borderRadius: 999, background: '#F1F5F9', padding: '5px 9px', fontSize: 11, fontWeight: 700, color: '#334155' }}>{Number(defaultDataAnalysis.rowCount || 0).toLocaleString('he-IL')} שורות</span>
+            <span style={{ borderRadius: 999, background: '#F1F5F9', padding: '5px 9px', fontSize: 11, fontWeight: 700, color: '#334155' }}>{defaultDataAnalysis.columnCount || 0} עמודות</span>
+            <button type="button" onClick={clearDefaultData} style={{ border: '1px solid #CBD5E1', background: 'white', color: '#475569', borderRadius: 8, padding: '5px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>נקה</button>
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, fontSize: 11, color: 'var(--s-muted)' }}>לא הוגדר קובץ ברירת מחדל.</div>
+        )}
+        {defaultDataError && <div style={{ marginTop: 8, fontSize: 11, color: '#B91C1C', lineHeight: 1.6 }}>{defaultDataError}</div>}
+      </div>
 
       <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>מצב יצירה ברירת מחדל</div>
@@ -6271,6 +6347,14 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
   const activeProviderModel = String(config?.[activeProviderId]?.model || '').trim();
   const activeModelChoices = getProviderModelChoices(activeProviderId, config, [activeProviderModel]);
   const [logsCount, setLogsCount] = useState(() => getAgentDebugLogs({ workspaceId: activeWorkspaceId, includeUnscoped: false }).length);
+  const [blockedDomainsText, setBlockedDomainsText] = useState(() => getBlockedSourceDomains().join(', '));
+  const [blockedDomainsSaved, setBlockedDomainsSaved] = useState(false);
+  const saveBlockedDomains = () => {
+    const normalized = saveBlockedSourceDomains(blockedDomainsText);
+    setBlockedDomainsText(normalized.join(', '));
+    setBlockedDomainsSaved(true);
+    setTimeout(() => setBlockedDomainsSaved(false), 1600);
+  };
   const [summary, setSummary] = useState(() => getLatestAgentRunSummary(automation));
   const defaultProviderId = DEFAULT_PROVIDER_CONFIG.active;
   const defaultProviderModel = DEFAULT_PROVIDER_CONFIG?.[defaultProviderId]?.model || '';
@@ -6513,6 +6597,29 @@ function DeveloperSettings({ config, setConfig, automation, setAutomation, setAg
                 Verified Sources Only: תמיד פעיל. בקשות למקורות, ציטוטים ולינקים יחזירו רק תוצאות אחזור מאומתות או חסימה מפורשת עם NO_VERIFIED_SOURCES_FOUND.
               </span>
             </label>
+
+            <div style={{ marginTop: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: '#1F2937', display: 'block', marginBottom: 4 }}>
+                🚫 אתרים לא רצויים למקורות
+              </label>
+              <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginBottom: 6 }}>
+                דומיינים שלא יופיעו כמקורות, מופרדים בפסיק או שורה (למשל: <code>example.com, some-blog.co.il</code>). מתווספים לרשימה הקשיחה — ויקיפדיה, רשתות חברתיות ובלוגים חסומים תמיד.
+              </div>
+              <textarea
+                value={blockedDomainsText}
+                onChange={(e) => setBlockedDomainsText(e.target.value)}
+                rows={3}
+                placeholder="example.com, some-blog.co.il"
+                style={{ width: '100%', border: '1px solid var(--s-border)', borderRadius: 10, padding: '9px 10px', fontSize: 13, resize: 'vertical', direction: 'ltr', textAlign: 'left' }}
+              />
+              <button
+                type="button"
+                onClick={saveBlockedDomains}
+                style={{ marginTop: 8, border: '1px solid #2563EB', background: blockedDomainsSaved ? '#DCFCE7' : '#EFF6FF', color: blockedDomainsSaved ? '#166534' : '#1D4ED8', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+              >
+                {blockedDomainsSaved ? 'נשמר ✓' : 'שמור רשימת חסימה'}
+              </button>
+            </div>
           </div>
 
           <div style={{ fontSize: 11, color: verifiedRetrievalConfigured ? 'var(--s-muted)' : '#B45309', lineHeight: 1.6, marginTop: 10 }}>

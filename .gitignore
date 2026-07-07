@@ -64,3 +64,8 @@ src-tauri/gen/schemas/
 # Local Claude Code settings (machine-specific)
 .claude/settings.local.json
 .claude/launch.json
+
+# test-bench local API keys (never commit)
+tools/test-bench/keys.local.json
+# test-bench LAB results — personal style comparisons etc. (never commit)
+tools/test-bench/lab-results/

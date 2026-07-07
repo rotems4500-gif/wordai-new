@@ -12,6 +12,7 @@ import {
 } from './aiService';
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService';
+import { createRunScope, setScopeTopic } from '../v3/orchestration/runScope';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const BROWSER_MATERIALS_KEY = 'wordai_browser_uploaded_materials';
@@ -1764,6 +1765,33 @@ function resolveGenerationRequestContext({ prompt = '', instructions = '', templ
   return { cleanPrompt, cleanInstructions, title };
 }
 
+// גוזר נושא-מחקר נקי מפרומפט/הנחיות של יצירת-מסמך, לשימוש כ-sourceQueryOverride באחזור מקורות.
+// פרומפטים של מסמך נראים כמו "מטלה" (בהיקף N עמודים, APA, מבוא/דיון/סיכום) ולכן חילוץ-השאילתה
+// הרגיל חוסם אותם כ-blocked-assignment. כאן מפשיטים את פועל-הכתיבה, שם-התוצר ודרישות-המבנה
+// ומשאירים רק את הנושא. מוחזר עם קידומת "הנושא:" כך ש-extractExplicitResearchSubjectQuery יזהה
+// אותו ישירות ויעקוף את חסימת-המטלה.
+function deriveDocumentResearchTopic(promptText = '', instructionsText = '') {
+  let text = [String(promptText || ''), String(instructionsText || '')].filter((s) => s.trim()).join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  // הערה: אין להשתמש ב-\b סביב עברית — ב-JS regex \b הוא ASCII בלבד ולא תופס גבול-מילה עברי.
+  // עדיפות: "הנושא: X" מפורש
+  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?)\s*[:：\-–]\s*([^\n.;]+)/i);
+  if (explicit) {
+    text = explicit[1];
+  } else {
+    // "כתוב/צור/הכן ... על X" — לוקחים מהמופע הראשון של מילת-קישור אחרי פועל-הכתיבה
+    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
+    if (afterVerb) text = afterVerb[1];
+  }
+  // הסרת סעיפי-דרישות/מבנה נגררים (הכולל.., בהיקף.., לפי APA, עם N מקורות..). בלי \b.
+  text = text
+    .replace(/[\s,،]+(?:ה?כולל(?:ת|ים)?|שתכלול|שיכלול|בהיקף|באורך|לפי|על[- ]?פי|בפורמט|בסגנון|בעימוד|עם|כולל|בצירוף|בליווי|including|with)(?:\s.*)?$/i, '')
+    .replace(/[\s.,;:"'״׳()\-–]+$/g, '')
+    .replace(/^[\s.,;:"'״׳()\-–]+/g, '')
+    .trim();
+  return text.slice(0, 200).trim();
+}
+
 function buildLocalDraft(prompt, templateId, instructions, selectedMaterials) {
   const structurePolicy = detectDocumentStructurePolicy({ prompt, instructions });
   const { title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
@@ -1851,6 +1879,16 @@ function normalizeGeneratedHtmlFragmentWrappers(response = '') {
     if (hasMeaningfulVisibleText(stripHtmlTags(bodyInnerHtml))) {
       source = bodyInnerHtml;
     }
+  }
+
+  // מעטפות מסמך שנותרו בכל מקום בטקסט (בלוק head, תגיות html/body פתוחות או
+  // ייתומות אחרי merge של המשכים) — דפדפן מתעלם מהן, אז מסירים במקום להיכשל.
+  const withoutDocumentWrappers = source
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<\/?(?:html|body)\b[^>]*>/gi, '')
+    .trim();
+  if (withoutDocumentWrappers !== source && hasMeaningfulVisibleText(stripHtmlTags(withoutDocumentWrappers))) {
+    source = withoutDocumentWrappers;
   }
 
   return stripBoundaryDocumentClosingTags(source);
@@ -2051,6 +2089,9 @@ function findGeneratedHtmlIntegrityIssue(html = '') {
     const raw = match[0] || '';
     const tagName = String(match[1] || '').toLowerCase();
     if (!tagName || raw.startsWith('<!--')) continue;
+    // תגיות מבנה מסמך (html/head/body) — דפדפן סלחני אליהן גם כשהן ייתומות
+    // או לא מאוזנות (למשל </body> באמצע אחרי merge), אז לא עוקבים אחריהן בסטק.
+    if (tagName === 'html' || tagName === 'head' || tagName === 'body') continue;
 
     const isClosingTag = raw.startsWith('</');
     const isSelfClosing = raw.endsWith('/>') || HTML_VOID_TAGS.has(tagName);
@@ -2554,12 +2595,17 @@ function getGeneratedHtmlProviderCompletion(response = '') {
   const stopReason = String(response.completion.stopReason || '').trim();
   const provider = String(response.completion.provider || '').trim();
   const model = String(response.completion.model || '').trim();
+  const sourceLock = response.completion.sourceLock && typeof response.completion.sourceLock === 'object'
+    ? response.completion.sourceLock
+    : null;
   const normalized = {
     ...(reason ? { reason } : {}),
     ...(finishReason ? { finishReason } : {}),
     ...(stopReason ? { stopReason } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    // נעילת המקורות של ה-pass — עוברת ל-continuation passes (אנטי-הזיות באמצע מסמך).
+    ...(sourceLock ? { sourceLock } : {}),
   };
   return Object.keys(normalized).length ? normalized : null;
 }
@@ -2629,8 +2675,12 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
 }) {
   const maxContinuationPassesRaw = Number(requestOptions?.maxContinuationPasses);
   const maxContinuationPasses = Number.isFinite(maxContinuationPassesRaw)
-    ? Math.max(1, Math.min(4, Math.floor(maxContinuationPassesRaw)))
+    ? Math.max(1, Math.min(6, Math.floor(maxContinuationPassesRaw)))
     : 2;
+  // הגנות אנטי-לולאה: מעבר לתקרת ה-passes הקשיחה, עוצרים גם אם pass לא הוסיף תוכן ממשי.
+  const MIN_CONTINUATION_PROGRESS_CHARS = 16;
+  const MAX_STALLED_CONTINUATION_PASSES = 2;
+  let stalledContinuationPasses = 0;
   const response = await chatWithActiveProvider(userPrompt, context, systemPrompt, {
     ...requestOptions,
     includeCompletionMetadata: true,
@@ -2650,7 +2700,10 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
 
   for (let continuationAttempt = 0; continuationAttempt < maxContinuationPasses; continuationAttempt += 1) {
     const shouldContinueFromIntegrity = Boolean(validationError) && isRecoverableGeneratedHtmlContinuationIssue(integrityIssue);
-    const shouldContinueFromCompletion = Boolean(validationError) && didGeneratedHtmlResponseHitLengthCap(completion);
+    // עצירת-limit של הספק (finish_reason=length/MAX_TOKENS) פירושה שהתוכן נחתך באמצע — גם אם
+    // ה-HTML שהתקבל *תקין מבנית*. לכן ההמשך מנותק מ-validationError: ממשיכים עד שהספק מסיים
+    // באופן טבעי (או עד תקרת ה-passes / עצירת-stall). זה מה שתיקן מסמך "כבד" שנחתך לפני הסעיף האחרון.
+    const shouldContinueFromCompletion = didGeneratedHtmlResponseHitLengthCap(completion);
     const continuationIssue = shouldContinueFromCompletion
       ? buildGeneratedHtmlCompletionContinuationIssue(completion)
       : integrityIssue;
@@ -2679,7 +2732,10 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
       const continuationModel = String(completion?.model || requestOptions.modelOverride || '').trim();
       const continuationRequestOptions = {
         ...requestOptions,
+        // בלי retrieval חוזר ב-continuation — אבל נעילת המקורות של ה-pass הראשון עוברת הלאה.
+        // (הבאג ההיסטורי: forceVerifiedSourceFollowOn:false בלי נעילה ⇒ המצאת מקורות באמצע מסמך.)
         forceVerifiedSourceFollowOn: false,
+        ...(completion?.sourceLock ? { sourceLock: completion.sourceLock } : {}),
       };
       const continuationResponse = await chatWithActiveProvider(
         continuationPrompt,
@@ -2708,35 +2764,56 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
 
       const continuationCompletion = getGeneratedHtmlProviderCompletion(continuationResponse);
       const continuationHtml = stripGeneratedHtmlResponseCodeFences(getGeneratedHtmlProviderResponseText(continuationResponse));
+      const lengthBeforeMerge = partialHtml.length;
       const mergedResponse = mergeGeneratedHtmlContinuation(partialHtml, continuationHtml);
+      const continuationProgressChars = mergedResponse.length - lengthBeforeMerge;
 
       partialHtml = mergedResponse;
       completion = continuationCompletion;
       normalizedResponse = mergedResponse.trim();
       integrityIssue = findGeneratedHtmlIntegrityIssue(normalizedResponse);
 
+      // הגנת-stall: pass שלא הוסיף תוכן ממשי נספר; שני stalls רצופים ⇒ עצירה, גם אם הספק
+      // עדיין מדווח על עצירת-limit (מונע לולאה כשההמשך חוזר ריק/כפול).
+      if (continuationProgressChars < MIN_CONTINUATION_PROGRESS_CHARS) {
+        stalledContinuationPasses += 1;
+      } else {
+        stalledContinuationPasses = 0;
+      }
+      const stalled = stalledContinuationPasses >= MAX_STALLED_CONTINUATION_PASSES;
+
       try {
         const mergedValidatedResponse = ensureCompleteGeneratedHtmlResponse(mergedResponse, operationLabel);
+        validationError = null;
+        validatedResponse = mergedValidatedResponse; // המיזוג התקין האחרון — מוחזר גם אם נמצה מכסת ה-passes
+        // ההמשך עצמו נחתך שוב ב-limit ⇒ עוד תוכן חסר, ממשיכים ללולאה (אלא אם נעצרנו ב-stall).
+        const continuationHitLengthCap = didGeneratedHtmlResponseHitLengthCap(continuationCompletion);
+        const documentComplete = !continuationHitLengthCap || stalled;
 
         logAgentDebugEvent({
           type: 'doc-html-continuation-success',
-          state: 'success',
+          state: documentComplete ? 'success' : 'running',
           runId,
           agentLabel,
-          message: `continuation ${continuationAttempt + 1} השלים בהצלחה את ${operationLabel}`,
+          message: documentComplete
+            ? `continuation ${continuationAttempt + 1} השלים את ${operationLabel}`
+            : `continuation ${continuationAttempt + 1} התקדם אך המסמך עדיין נחתך — ממשיך`,
           integrityIssue: continuationIssue,
           completionReason: completion?.reason || '',
           continuationCompletionReason: continuationCompletion?.reason || '',
           partialChars: partialHtml.length,
           continuationChars: continuationHtml.length,
+          progressChars: continuationProgressChars,
+          stalledPasses: stalledContinuationPasses,
           outputChars: mergedValidatedResponse.length,
           ...requestLogContext,
         });
 
-        return mergedValidatedResponse;
+        if (documentComplete) return mergedValidatedResponse;
+        // אחרת: תקין-אך-נחתך-שוב → הלולאה תמשיך (completion=continuationCompletion שנחתך ב-limit).
       } catch (retryValidationError) {
         validationError = retryValidationError;
-        if (continuationAttempt >= maxContinuationPasses - 1) {
+        if (stalled || continuationAttempt >= maxContinuationPasses - 1) {
           throw retryValidationError;
         }
       }
@@ -2781,18 +2858,23 @@ function resolveWorkspaceV2StepRoute({ step = {}, template = {}, requestedProvid
   const stepProviderId = String(step?.providerId || '').trim();
   const templateProviderId = String(template?.providerId || '').trim();
   const requestProviderId = String(requestedProviderSelection?.providerId || '').trim();
-  const providerOverride = stepProviderId || templateProviderId || requestProviderId;
+  // בחירה מפורשת של המשתמש מנצחת את ניתוב השלב/התבנית. כשאין בחירה — נשמר הניתוב המקורי.
+  const providerOverride = requestProviderId || stepProviderId || templateProviderId;
 
   const stepModel = String(step?.model || '').trim();
   const templateModel = String(template?.model || '').trim();
   const requestModel = String(requestedProviderSelection?.providerModel || '').trim();
-  let modelOverride = stepModel;
+  let modelOverride = '';
 
+  // המודל נגזר מאותו מקור שקבע את הספק.
+  if (providerOverride && requestProviderId && providerOverride === requestProviderId) {
+    modelOverride = requestModel;
+  }
+  if (!modelOverride && providerOverride && stepProviderId && providerOverride === stepProviderId) {
+    modelOverride = stepModel;
+  }
   if (!modelOverride && providerOverride && templateProviderId && providerOverride === templateProviderId) {
     modelOverride = templateModel;
-  }
-  if (!modelOverride && providerOverride && requestProviderId && providerOverride === requestProviderId) {
-    modelOverride = requestModel;
   }
   if (!modelOverride && !providerOverride) {
     modelOverride = templateModel || requestModel;
@@ -2871,6 +2953,8 @@ async function runWorkspaceV2DocumentGeneration({
   returnMeta = false,
   humanizeLoop = null,
   onHumanizeProgress = null,
+  runScope = null,
+  includeSources = null,
 }) {
   const personalStyleProfile = getPersonalStyleProfile();
   const runContext = buildWorkspaceV2RunContext({
@@ -2942,8 +3026,12 @@ async function runWorkspaceV2DocumentGeneration({
     cleanInstructions ? `הנחיות מחייבות של המשתמש:\n${cleanInstructions}` : '',
     structureLockInstructions ? `נעילת מבנה מפורשת:\n${structureLockInstructions}` : '',
     notes ? `למידת סגנון מעבודות קודמות:\n${notes}` : '',
+    notes ? 'גדר למידת-סגנון: העבודות הקודמות והתובנות שנלמדו מהן הן מקור לסגנון וניסוח בלבד — לעולם לא נושא, טענות או תוכן. אסור לכתוב על נושא של עבודה קודמת אלא אם הוא הנושא המפורש של הבקשה הנוכחית.' : '',
     'כלל הכרעה: הוראת המשתמש וחומרי המקור גוברים על תבנית workspace. התבנית עוזרת לבצע, לא מחליפה את המטלה.',
-    'אם חסר מידע עובדתי או מקור דרוש, נסח בזהירות וסמן חוסר רק אם אי אפשר לייצר תוצר אמין.',
+    // כלל אנטי-הזיה מחייב — גובר על הלחץ להשלים עבודה מלאה:
+    'כלל ברזל נגד המצאה: מותר לכתוב רק מה שמבוסס על חומרי המשתמש, על ההקשר שסופק, או על מקורות שנשלפו בפועל. אסור בתכלית האיסור להמציא — לא מקורות, לא כותרות, לא כתבות, לא ציטוטים, לא שמות, לא תאריכים, לא URLs, ולא חוויות או תצפיות אישיות של המשתמש (כמו מה שמישהו אמר בסיור או מה שפורסם ברשת).',
+    'בכל מקום שדרוש מקור/נתון/ציטוט ואין לך אותו מתוך החומרים או האחזור — כתוב בדיוק "[דרוש מקור]" והמשך. עדיף מסמך עם חורים מסומנים בכנות על פני מסמך שנשמע שלם אבל מכיל פרטים מומצאים. לעולם אל תבחר להמציא כדי "להשלים".',
+    materialsText ? '' : 'שים לב: לא סופקו חומרי משתמש. אין לך גישה לחוויה האישית, לסיור, לראיונות או למקורות של המשתמש — אל תמציא אותם. כתוב רק את מה שאפשר לבסס, וסמן [דרוש מקור] / [דרוש קלט מהמשתמש] בכל מקום שחסר.',
   ].filter(Boolean).join('\n\n');
 
   const baseContext = [
@@ -2958,6 +3046,9 @@ async function runWorkspaceV2DocumentGeneration({
     const step = pipeline[stepIndex] || {};
     const isFinalStep = stepIndex === pipeline.length - 1;
     const stepLabel = step.role || step.id || `שלב ${stepIndex + 1}`;
+    // מזהה/שם יציבים לשלב, כדי ש-getLatestAgentRunSummary יציג את שמות שלבי התבנית שרצו בפועל
+    // ולא ייפול לסוכני-התפקיד של סביבת העבודה הנוכחית.
+    const stepAgentId = String(step.id || `v2-step-${stepIndex + 1}`).trim();
     const { providerOverride, modelOverride } = resolveWorkspaceV2StepRoute({
       step,
       template,
@@ -2965,6 +3056,8 @@ async function runWorkspaceV2DocumentGeneration({
     });
     const stepRequestOptions = {
       runId,
+      // V3: כל שלבי ה-pipeline חולקים scope אחד — session אחזור, נעילת מקורות ותקציב.
+      ...(runScope ? { runScope } : {}),
       agentLabel: `${workspaceLabel} · ${stepLabel}`,
       activeWorkspaceId: runContext.workspaceId,
       workspaceName: workspaceLabel,
@@ -2976,6 +3069,9 @@ async function runWorkspaceV2DocumentGeneration({
       skipSkillSelection: true,
       skipMultiModel: true,
       automationSkipReason: 'workspace-v2-step-runner',
+      // includeSources===false מפורש (מה-UI/הקורא) מנצח את מדיניות-המקורות של התבנית: מדכא
+      // אחזור-מקורות אוטומטי בכל שלב. null ⇒ נשמרת התנהגות התבנית (זיהוי-אוטומטי) ללא שינוי.
+      ...(includeSources === false ? { forceSuppressResearchRouting: true } : {}),
       ...(providerOverride ? {
         providerOverride,
         strictProviderOverride: true,
@@ -3005,6 +3101,8 @@ async function runWorkspaceV2DocumentGeneration({
       type: 'workspace-v2-step-start',
       state: 'running',
       runId,
+      agentId: stepAgentId,
+      agentName: stepLabel,
       agentLabel: `${workspaceLabel} · ${stepLabel}`,
       message: `Workspace v2 מריץ שלב ${stepIndex + 1}: ${stepLabel}`,
       workspaceV2TemplateId: template.id,
@@ -3019,7 +3117,7 @@ async function runWorkspaceV2DocumentGeneration({
       finalStepRequestOptions = {
         ...stepRequestOptions,
         expectDocumentOutput: true,
-        maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
+        maxContinuationPasses: Math.max(4, Math.min(6, 3 + normalizedAdditionalReviewRounds)),
       };
       cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
         userPrompt: userRequestSections.join('\n\n'),
@@ -3055,6 +3153,8 @@ async function runWorkspaceV2DocumentGeneration({
         type: 'workspace-v2-step-success',
         state: 'success',
         runId,
+        agentId: stepAgentId,
+        agentName: stepLabel,
         agentLabel: `${workspaceLabel} · ${stepLabel}`,
         message: `Workspace v2 סיים שלב ${stepIndex + 1}: ${stepLabel}`,
         workspaceV2TemplateId: template.id,
@@ -3896,9 +3996,22 @@ async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '
 
 // forceDirectMode=false כברירת מחדל: יצירה חדשה רשאית לרוץ ב-workflow automation (ריבוי סוכנים)
 // כשסביבת העבודה מאפשרת. בכוונה שונה מ-reviseDocumentWithFeedback (true) — עריכה ממוקדת לא מצדיקה ריבוי סוכנים.
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false, humanizeLoop = null, onHumanizeProgress = null }) {
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false, humanizeLoop = null, onHumanizeProgress = null, includeSources = null, sourceRoute = '' }) {
+  // sourceRoute — בחירה מפורשת של המשתמש (בורר בסוף הבישול): 'pipeline' | 'single-call' | 'none' | '' (auto).
+  // 'none' מתורגם ל-includeSources=false; השאר מוזרם ל-chatWithActiveProvider כ-options.sourceRoute.
+  const normalizedSourceRoute = String(sourceRoute || '').trim().toLowerCase();
+  if (normalizedSourceRoute === 'none') includeSources = false;
+  else if ((normalizedSourceRoute === 'pipeline' || normalizedSourceRoute === 'single-call') && includeSources !== false) includeSources = true;
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
+  // גדר קלט משובש: קידוד פגום הופך עברית לרצף '?'. בלי הגדר המודל נשאר בלי נושא
+  // וכותב עבודה שלמה מנושאי פרופיל-הסגנון (נצפה בפועל) — עדיף כישלון מיידי וברור.
+  const combinedRequestText = `${cleanPrompt} ${cleanInstructions}`;
+  const questionMarkCount = (combinedRequestText.match(/\?/g) || []).length;
+  const requestLetterCount = (combinedRequestText.match(/[A-Za-z֐-׿]/g) || []).length;
+  if (questionMarkCount >= 8 && requestLetterCount < questionMarkCount) {
+    throw new Error('הבקשה התקבלה משובשת — רוב הטקסט הוא סימני שאלה (כנראה תקלת קידוד). נסח מחדש את נושא המסמך.');
+  }
   const runId = String(providedRunId || `doc-${Date.now()}`).trim();
   const normalizedAdditionalReviewRounds = Math.max(0, Math.min(MAX_ADDITIONAL_REVIEW_ROUNDS, Number(additionalReviewRounds) || 0));
   const isAcademicTask = isLikelyAcademicDocumentRequest({ prompt: cleanPrompt, instructions: cleanInstructions, templateId });
@@ -3980,6 +4093,15 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       ...requestLogContext,
     });
 
+    // V3 (שלב 3): RunScope אחד לכל יצירת-המסמך — כל הסוכנים והמעברים (writer, checker,
+    // continuations) חולקים session אחזור, נעילת מקורות ותקציב אחד; שאילתות נגזרות
+    // מהנושא של ה-run בלבד, בלי זליגה משיחות/מסמכים קודמים.
+    const documentRunScope = createRunScope({
+      origin: shouldUseWorkflowAutomation ? 'workflow' : 'draft',
+      workspaceId: requestWorkspaceId,
+      runId,
+    });
+
     const shouldUseWorkspaceV2 = useWorkspaceV2 === true
       && !shouldForceDirectCompose
       && !exactArticleUrl
@@ -4006,6 +4128,8 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         returnMeta,
         humanizeLoop,
         onHumanizeProgress,
+        runScope: documentRunScope,
+        includeSources,
       });
     }
 
@@ -4037,6 +4161,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     const suppressVisibleAgentNotes = structurePolicy.noSummary || structurePolicy.directStructureLock;
     const requestOptions = {
       runId,
+      runScope: documentRunScope,
       agentLabel: documentRunLabel,
       activeWorkspaceId: requestWorkspaceId,
       workspaceName: requestWorkspaceName,
@@ -4045,12 +4170,41 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       templateId,
       isAcademicTask,
       additionalReviewRounds: normalizedAdditionalReviewRounds,
-      maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
+      // מסמכי שף נוטים להיות ארוכים (הבריף דורש היקפים מדויקים) — תקרת המשכות מלאה.
+      maxContinuationPasses: directModeReason === 'chef-final-compose'
+        ? 6
+        : Math.max(4, Math.min(6, 3 + normalizedAdditionalReviewRounds)),
       appendAgentNotesToOutput: suppressVisibleAgentNotes ? false : automation?.appendAgentNotesToOutput === true,
       agentNotesInstruction: !suppressVisibleAgentNotes && automation?.appendAgentNotesToOutput === true
         ? String(automation?.agentNotesInstruction || '').trim()
         : '',
     };
+    // כשהמשתמש מבקש מסמך *עם מקורות* — מדליקים אחזור-אמת לפני הכתיבה (retrieve-then-write):
+    // chatWithActiveProvider ישלוף מקורות מאומתים, ינעל את ה-allowedUrls, ויכתוב מקורקע עליהם בלבד,
+    // במקום לתת למודל להמציא ציטוטים. בלי זה יצירת-מסמך לא עשתה שום grounding (הבקשה נחשבה
+    // "deliverable" ולכן isExplicitSourceRequest החזיר false). לא מפעילים כשיש נעילת-URL מדויקת.
+    // includeSources מפורש (מה-UI) מנצח; ה-regex נשאר כ-fallback לזיהוי אוטומטי.
+    const documentSourceRequirement = typeof includeSources === 'boolean'
+      ? includeSources
+      : /(מקור(?:ות)?|מראי\s+מקום|ביבליוגרפ|רשימת\s+מקורות|אסמכתא|ציטוט|הפניות|references?|bibliography|citations?|\bAPA\b|\bMLA\b|סקירת\s+ספרות|literature\s+review)/i
+        .test([cleanPrompt, cleanInstructions].filter(Boolean).join('\n'));
+    if (documentSourceRequirement && !exactArticleUrl) {
+      requestOptions.forceVerifiedSourceFollowOn = true;
+      const derivedTopic = deriveDocumentResearchTopic(cleanPrompt, cleanInstructions);
+      if (derivedTopic) {
+        requestOptions.sourceQueryOverride = `הנושא: ${derivedTopic}`;
+        requestOptions.sourceQuerySource = 'documentTopic';
+        // הנושא נקבע גם על ה-scope — שאילתות-המשך בתוך ה-run נגזרות ממנו בלבד.
+        setScopeTopic(documentRunScope, derivedTopic);
+      }
+    }
+    if (normalizedSourceRoute === 'pipeline' || normalizedSourceRoute === 'single-call') {
+      requestOptions.sourceRoute = normalizedSourceRoute;
+    } else if (normalizedSourceRoute === 'none') {
+      // "בלי מקורות" מהבורר: מדכא גם את היוריסטיקות הרשת (single-call/grounded-web),
+      // לא רק את retrieve-then-write — אחרת אזכור "מקורות" בבריף עדיין מדליק חיפוש.
+      requestOptions.forceSuppressResearchRouting = true;
+    }
     if (shouldForceDirectCompose) {
       requestOptions.strictFormatting = true;
       applyDirectModeSkips(requestOptions);
@@ -4065,7 +4219,10 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     } else if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (shouldUseWorkflowAutomation === false || exactArticleUrl) {
+    // בחירה מפורשת של ספק/מודל מנצחת תמיד — גם כשה-workflow האוטומטי פעיל.
+    // בלי התנאי הזה, יצירת מסמך עם סביבת עבודה פעילה התעלמה מהמודל שהמשתמש בחר
+    // וניתבה per-agent לפי הגדרות הסביבה.
+    if (shouldUseWorkflowAutomation === false || exactArticleUrl || requestedProviderSelection.providerId) {
       applyRequestedProviderOverride(requestOptions, requestedProviderSelection);
     }
 
@@ -4381,8 +4538,15 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
         truncateHtml: true,
       });
 
+    // V3 (שלב 3): scope לרוויזיה — נושא נגזר מהבקשה המקורית + המשוב, לא משיחות אחרות.
+    const revisionRunScope = createRunScope({
+      origin: shouldUseWorkflowAutomation ? 'workflow' : 'draft',
+      workspaceId: requestWorkspaceId,
+      runId,
+    });
     const requestOptions = {
       runId,
+      runScope: revisionRunScope,
       agentLabel: documentUpdateLabel,
       activeWorkspaceId: requestWorkspaceId,
       workspaceName: requestWorkspaceName,
@@ -4393,8 +4557,21 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       templateId,
       isAcademicTask,
       additionalReviewRounds: normalizedAdditionalReviewRounds,
-      maxContinuationPasses: Math.max(2, Math.min(4, 2 + normalizedAdditionalReviewRounds)),
+      maxContinuationPasses: Math.max(4, Math.min(6, 3 + normalizedAdditionalReviewRounds)),
     };
+    // כמו ביצירת מסמך: אם המשוב/הבקשה דורשים מקורות — retrieve-then-write (grounding אמיתי),
+    // כדי שלא יומצאו ציטוטים בעריכה. לא מפעילים כשיש נעילת-URL מדויקת.
+    const revisionSourceRequirement = /(מקור(?:ות)?|מראי\s+מקום|ביבליוגרפ|רשימת\s+מקורות|אסמכתא|ציטוט|הפניות|references?|bibliography|citations?|\bAPA\b|\bMLA\b|סקירת\s+ספרות|literature\s+review)/i
+      .test([originalPrompt, cleanFeedback].filter(Boolean).join('\n'));
+    if (revisionSourceRequirement && !exactArticleUrl) {
+      requestOptions.forceVerifiedSourceFollowOn = true;
+      const derivedTopic = deriveDocumentResearchTopic(originalPrompt, cleanFeedback);
+      if (derivedTopic) {
+        requestOptions.sourceQueryOverride = `הנושא: ${derivedTopic}`;
+        requestOptions.sourceQuerySource = 'documentTopic';
+        setScopeTopic(revisionRunScope, derivedTopic);
+      }
+    }
     if (!shouldUseWorkflowAutomation) {
       applyDirectModeSkips(requestOptions);
       requestOptions.automationSkipReason = workspaceRouteReason || (noActiveWorkflowAutomation ? 'noActiveAgents' : 'direct');
@@ -4402,7 +4579,8 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     if (noActiveWorkflowAutomation && !requestOptions.automationSkipReason) {
       requestOptions.automationSkipReason = 'noActiveAgents';
     }
-    if (!shouldUseWorkflowAutomation || exactArticleUrl) {
+    // בחירה מפורשת מנצחת גם ב-workflow אוטומטי (ראה generateDocumentFromPrompt).
+    if (!shouldUseWorkflowAutomation || exactArticleUrl || requestedProviderSelection.providerId) {
       applyRequestedProviderOverride(requestOptions, requestedProviderSelection);
     }
     applyExactSourceUrlLock(requestOptions, exactArticleUrl);

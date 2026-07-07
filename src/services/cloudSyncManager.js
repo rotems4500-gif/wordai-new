@@ -10,8 +10,12 @@ import {
   decryptSecrets,
   hasEncryptedSecrets,
 } from "./cloudCryptoSession";
+import { syncV3FromLegacy as syncWorkspacesV3FromLegacy } from "../v3/workspaces/store";
 
-const CLOUD_PROFILE_SCHEMA_VERSION = 2;
+// schema 3 (2026-07-03): נוסף wordai_workspaces_v3 (ה-blob המאוחד של סביבות העבודה)
+// + תבניות workspace-v2. לקוחות schema-2 בוחרים מפתחות לפי הרשימה המקומית שלהם ולכן
+// מתעלמים מהמפתחות החדשים בבטחה; מפתחות ה-legacy ממשיכים להישלח (dual-write) עבורם.
+const CLOUD_PROFILE_SCHEMA_VERSION = 3;
 
 // ---- E2EE flag ----
 // כבוי כברירת מחדל. מודלק רק אחרי שהמשתמש מגדיר passphrase (setCloudCryptoEnabled(true)).
@@ -44,6 +48,8 @@ const CLOUD_PROFILE_APP_SETTING_KEYS = [
   "wordai_personal_style",
   "wordai_workspace_automation",
   "wordai_workspaces_library",
+  "wordai_workspaces_v3",
+  "wordai_workspace_v2_templates",
   "wordai_shared_agent_instructions",
   "wordai_role_agents",
   "wordai_home_instructions",
@@ -213,6 +219,9 @@ function applyCloudProfile(cloudProfile = null) {
     }
 
     if (appliedSettings || appliedProviderConfig) {
+      // V3: אחרי החלת profile מהענן — ה-blob המאוחד של סביבות העבודה מתעדכן מיד
+      // מה-legacy keys שהוחלו, כך שהוא לא נשאר מאחור עד המוטציה הבאה.
+      try { syncWorkspacesV3FromLegacy(); } catch {}
       writeCloudSyncMeta({
         lastAppliedCloudUpdatedAt: Number(cloudProfile.profileUpdatedAt || Date.now()) || Date.now(),
         lastSuccessfulCloudSyncAt: Date.now(),
