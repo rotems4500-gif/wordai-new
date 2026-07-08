@@ -158,7 +158,7 @@ export const DEFAULT_SHORTCUTS = {
 };
 
 export const DEFAULT_ASSISTANT_BEHAVIOR = {
-  autoPopup: true,
+  autoPopup: false,
   idleSeconds: 5,
   sidebarPreset: 'word-taskpane',
   autoRouteSourceRequests: true,

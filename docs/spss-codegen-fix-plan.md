@@ -137,6 +137,43 @@
 - **בדיקה:** parser דטרמיניסטי 17/17 · `node --check` נקי · `npm run build` ירוק (13.6s).
 - **תלוי-אישור:** deploy עם bump `public/sw.js`.
 
+## אצווה I — בדיקה מקדימה + חיווט תיקון-משגיאה לסטודיו המודרך (חדש, מומש) · נפרס sw v28
+
+שני מנופים למטרת "קוד טוב במכה הראשונה + סיום בשני סבבים":
+
+- **I1 · בדיקה מקדימה (first-try).** `reviewSpssMasterSyntax` ב-`spssSyntaxService.js` — הגנרטור כותב כל בלוק **בבידוד** (קריאה נפרדת לכל ניתוח, רואה רק extraAllowedNames). הבודק לוקח מבט הוליסטי שני על ה-master syntax המורכב מול המטלה+תוכנית+metadata **לפני** שהמשתמש מריץ, ומתקן רק ודאויות: phantom var, סדר prep-אחרי-שימוש, MISSING VALUES חסר על משתנה מסומן, מנבא רב-קטגורי גולמי ב-REGRESSION, ניתוח נדרש שנשמט, נקודה מסיימת חסרה. שמרני: verdict `clean`|`fixed`, מחזיר syntax רק כשבאמת שינה + עובר `sanitizeSpssSyntax(mode:'prep')`, אחרת לא נוגע בקוד העובד. אותו מודל פרטיות VAR_n. חיווט ב-`onGenerateAllCode` (רץ אוטומטית אחרי הרכבת הבלוקים; blocked stubs נשמרים), פאנל תכלת בשלב הקוד מציג מה תוקן.
+- **I2 · תיקון משגיאת-SPSS אמיתית בסטודיו המודרך.** `parseSpssOutputErrors`+`repairSpssSyntaxFromError` (אצווה H) היו מחווטים רק בסטודיו החופשי. חיווטתי `onRepairFromError` + memo דטרמיניסטי `outputErrors` ל-ProjectStudio: כשהפלט המודבק מכיל Error # פטאלי — באנר אדום בולט בשלבי output+refine עם כפתור "🛠 תקן את הקוד לפי שגיאת ה-SPSS" → פרסור דטרמיניסטי → תיקון ממוקד במכה אחת → מחליף blocks, מנקה פלט ישן. עוקף את לולאת ה-critique הגנרית כשההרצה ממש נכשלה.
+- **בדיקה:** `node --check` נקי · `npm run build` ירוק (35s). ה-AI-half דורש מפתחות המשתמש (לא harness-testable); parseSpssOutputErrors כבר 17/17.
+- **תלוי-אישור:** deploy עם bump `public/sw.js`.
+
+## אצווה J — רגרסיה: MISSING VALUES עם >3 ערכים בדידים (חדש, מומש) · נפרס sw v28
+
+**רגרסיה שאצווה G הכניסה.** SPSS מתיר לכל היותר **3 ערכי missing בדידים** למשתנה (או טווח, או טווח+ערך אחד). לפני G, רק ההיוריסטיקה הנומרית (D5) הזינה `suspectedMissingCodes` — בד"כ 1-2 קודים → רשימה חוקית. G הוסיף את קורא-התוויות (`labelDerivedMissing`, איחוד על כל המילון) → 4 קודים (98,99,100,101) על קבצי סקר אמיתיים → המחולל פלט `MISSING VALUES v20 (98, 99, 100, 101).` = 4 בדידים = **Error, וכל ההרצה נופלת בבלוק הראשון**. הזיהוי השתפר, הפליטה נשברה.
+
+- **J1** `formatSpssMissingValueSpec(codes)` — ממיר קבוצת קודים ל-spec חוקי: ≤3 → רשימה; רצף → `min THRU max`; רצף+חריג יחיד → `range, value`; מפוזר >3 (נדיר לסנטינלים) → `min THRU max` הרחב. **ממיר לטווח רק כשהוא מדויק — לעולם לא over-cover נאיבי.**
+- **J2** `normalizeMissingValuesStatements(text)` — רשת ביטחון דטרמיניסטית ב-`sanitizeSpssSyntax` (רץ על כל בלוק, כל סטודיו): משכתב כל `MISSING VALUES var (v1..v4+)` עם >3 ערכים בדידים ל-spec חוקי. מדלג על טווחים/keywords קיימים ועל non-numeric. מטפל בכמה קבוצות בפקודה אחת + lowercase + decimals.
+- **J3** הדרכה משלימה: `missingValuesSpec=(98 THRU 101)` מוכן ב-metadata line + digest, וכלל בפרומפט ("SPSS מתיר עד 3 בדידים; העתק את missingValuesSpec").
+- **בדיקה:** 17/17 יוניט (format + normalize) · build ירוק 16.5s.
+- **תלוי-אישור:** deploy עם bump `public/sw.js`.
+
+## אצווה K — undefined-variable ממשפחת GLM חומק מה-guardrail (חדש, מומש) · נפרס sw v29
+
+**התלונה של המשתמש:** `>Warning Text: Attitude_Index Command: UNIANOVA — An undefined variable name... Execution of this command stops.` המשתנה הנגזר לא קיים ב-runtime, וה-sanitizer נתן לזה לעבור. שוחזר דטרמיניסטית: `sanitizeSpssSyntax` מאמת משתנים רק ב-**slots מנויים** (`POSITIONAL_VARIABLE_COMMAND_SPECS` + `VARIABLE_SLOT_PATTERNS`). כל דפוסי ה-slot דורשים `BY=`/`WITH=` עם סימן שווה — אבל משפחת GLM כותבת `dv BY factors WITH covariates` **בלי `=`**, אז אף דפוס לא תפס אותן והמשתנים שלהן מעולם לא נבדקו. dv נגזר שהבלוק שיוצר אותו נחסם (או כל phantom) חמק ישר ל-SPSS.
+
+- **K1** הוספתי ל-`POSITIONAL_VARIABLE_COMMAND_SPECS`: `UNIANOVA`, `GLM`, `MANOVA`, `VARCOMP`, `MIXED`, `LOGISTIC REGRESSION`. `extractPositionalOperandSection` חותך בסימן `/` הראשון, ו-`BY`/`WITH`/`TO` כבר ב-`RESERVED_SLOT_TOKENS` — אז רק ה-dv/factor/covariate האמיתיים נבדקים מול ה-allow-list. אפס false-positive על קוד תקין (dv נגזר קיים ב-allow-list דרך collectDeclaredTargetNames/extraAllowedNames).
+- דילגתי בכוונה על GENLIN/NOMREG/PLUM — יש להן אופציות positional בסוגריים (REFERENCE=/BASE=) שהיו מסומנות כ-phantom. פערים משניים שנשארו: subcommands כמו `/DESIGN=`, `/M-W=` ב-NPAR.
+- **בדיקה:** 11/11 יוניט (repro על ה-sanitizer האמיתי דרך parseCsvText+tokenizeSpssRequest): UNIANOVA/GLM/MIXED/LOGISTIC phantom→נחסם; קוד תקין→עובר; ONEWAY/FREQUENCIES ללא רגרסיה. `node --check` נקי.
+- **נפרס** sw v29.
+
+## אצווה L — נתיב יצירת-קוד אחד (holistic) לשני הטאבים (חדש, מומש) · sw pending
+
+**ההחלטה:** הטאב הרגיל (`SpssSyntaxStudio`) מפיק קוד עשיר ושמיש יותר מהטאב המונחה (`SpssProjectStudio`). הסיבה הדטרמיניסטית: הטאב הרגיל שולח **בקשה הוליסטית אחת** ל-`generateSpssSyntax` → master syntax רציף ועשיר; הטאב המונחה פירק את המטלה ל-N ניתוחים ויצר **בלוק מבודד לכל אחד** (כל קריאה רואה רק ניתוח יחיד + extraAllowedNames) → בלוקים דלילים, יותר חסימות guardrail, ולכן נדרשו שכבות review/critique לפצות. שני הטאבים כבר חלקו את אותו מנוע (`generateSpssSyntax`) — ההבדל היה בעיצוב הבקשה בלבד.
+
+- **L1** `SpssProjectStudio.jsx` · `onGenerateAllCode`: הוחלף הלולאה המבודדת בקריאה **הוליסטית אחת**. בונה `combinedRequest` = טקסט המטלה + checklist מסודר (prep-first) של תוכנית הניתוחים, ושולח ל-`generateSpssSyntax` במצב `prep` פעם אחת → master block יחיד ועשיר, בדיוק כמו הטאב הרגיל. נשמרו: ה-planner (`analyzeSpssAssignment`) לתצוגת התוכנית + deliverable + הקשר לפרק הממצאים; retry על חסימת-guard (מצב 2: skip guard + בקשה מועשרת); `reviewSpssMasterSyntax` כבדיקה מקדימה. הוסרו: `generateBlockWithRetry` per-block, איסוף `createdNames` בין בלוקים, blocked-stubs מרובים.
+- **החלטה ארכיטקטונית:** נתיב אחד — שני טאבים (UI). איחוד לטאב אחד ייבחן בהמשך.
+- **בדיקה:** `npm run build` ירוק (1m). ה-AI-half דורש מפתחות המשתמש + הרצת SPSS אמיתית (לא harness-testable) — המשתמש מריץ מטלה אמיתית לאימות.
+- **תלוי-אישור:** deploy עם bump `public/sw.js`.
+
 ## עקרונות עבודה
 
 - אפס קריאות AI לבדיקה — הכל דטרמיניסטי (כמו role-tests).
