@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SlideFrame } from './presentation/SlideRenderer';
 import PresentMode from './presentation/PresentMode';
-import { DECK_THEMES } from './presentation/deckThemes';
+import { DECK_THEMES, getThemeById, THEME_ACCENTS } from './presentation/deckThemes';
+import { FAMILY_ORDER, FAMILY_LABELS } from './presentation/themes';
 import {
   SLIDE_LAYOUTS, getLayout, layoutHasImage, getSlideExportMode, BG_VARIANTS,
   createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide,
@@ -28,6 +29,69 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   reader.onerror = reject;
   reader.readAsDataURL(file);
 });
+
+// ── תמונת דוגמה חיה לבורר ה-themes: אובייקט אחד משותף (לא נוצר מחדש בכל רנדר) ──
+const THEME_PREVIEW_SAMPLE_SLIDE = createSlide({
+  layout: 'cover', title: 'כותרת המצגת', subtitle: 'שורת משנה קצרה', kicker: 'סדרה',
+});
+
+// תא preview בודד — ממתין ל-IntersectionObserver לפני שמרנדר SlideFrame חי (18 שקפים
+// חיים במקביל כבד); עד אז מציג placeholder צבעוני לפי theme.colors.bg.
+const ThemePreviewCell = React.memo(function ThemePreviewCell({ theme, selected, onSelect, small }) {
+  const wrapRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (visible) return undefined;
+    const el = wrapRef.current;
+    if (!el) return undefined;
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return undefined; }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
+    }, { rootMargin: '200px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+
+  return (
+    <button
+      type="button"
+      ref={wrapRef}
+      onClick={() => onSelect(theme.id)}
+      title={theme.blurb || theme.label}
+      className={`flex flex-col gap-1.5 rounded-2xl border-2 p-1.5 text-right transition ${selected ? 'border-cyan-400 bg-cyan-500/10' : 'border-slate-700 bg-slate-800/30 hover:border-slate-500'}`}
+    >
+      <div className="w-full overflow-hidden rounded-xl" style={{ aspectRatio: '16 / 9' }}>
+        {visible
+          ? <SlideFrame slide={THEME_PREVIEW_SAMPLE_SLIDE} themeId={theme.id} rounded={false} shadow={false} />
+          : <div className="h-full w-full" style={{ background: theme.coverGradient || theme.colors?.bg || '#0f172a' }} />}
+      </div>
+      <span className={`truncate font-semibold text-slate-200 ${small ? 'text-[10px]' : 'text-xs'}`}>{theme.label}</span>
+    </button>
+  );
+});
+
+// בורר themes מקובץ לפי family, עם כותרות עבריות ותאי preview חיים.
+function ThemeFamilyPicker({ value, onSelect, small = false }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {FAMILY_ORDER.map((famId) => {
+        const items = DECK_THEMES.filter((t) => t.family === famId);
+        if (!items.length) return null;
+        return (
+          <div key={famId} className="flex flex-col gap-2">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{FAMILY_LABELS[famId] || famId}</div>
+            <div className={`grid gap-2 ${small ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-3'}`}>
+              {items.map((t) => (
+                <ThemePreviewCell key={t.id} theme={t} selected={t.id === value} onSelect={onSelect} small={small} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ── טופס יצירה (מצב ללא deck) ────────────────────────────────────
 function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle }) {
@@ -123,20 +187,25 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
           </select></label>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">סגנון</span>
-          <div className="grid grid-cols-2 gap-2">
-            {DECK_THEMES.map((t) => (
-              <button key={t.id} type="button" onClick={() => setThemeId(t.id)} title={t.blurb} className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${themeId === t.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{t.label}</button>
-            ))}
-          </div>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-slate-200">סגנון</span>
+          <button
+            type="button"
+            onClick={() => setThemeId(DECK_THEMES[Math.floor(Math.random() * DECK_THEMES.length)].id)}
+            className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-cyan-400 hover:text-cyan-300"
+          >🎲 הפתע אותי</button>
         </div>
-        <div className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">רמת עומס</span>
-          <div className="grid grid-cols-3 gap-2">
-            {DENSITY.map((d) => (
-              <button key={d.id} type="button" onClick={() => setDensity(d.id)} className={`rounded-xl border px-2 py-2 text-sm font-bold transition ${density === d.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{d.label}</button>
-            ))}
-          </div>
+        <div className="max-h-[380px] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+          <ThemeFamilyPicker value={themeId} onSelect={setThemeId} />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2"><span className="text-sm font-bold text-slate-200">רמת עומס</span>
+        <div className="grid grid-cols-3 gap-2">
+          {DENSITY.map((d) => (
+            <button key={d.id} type="button" onClick={() => setDensity(d.id)} className={`rounded-xl border px-2 py-2 text-sm font-bold transition ${density === d.id ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{d.label}</button>
+          ))}
         </div>
       </div>
 
@@ -294,8 +363,12 @@ function ImagePicker({ slide, onPick, onClose }) {
 }
 
 // ── עורך (inspector) של שקופית נבחרת ─────────────────────────────
-function Inspector({ slide, onChange, onOpenImagePicker }) {
+function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
   const layoutDef = getLayout(slide.layout);
+  const theme = getThemeById(themeId);
+  const accentChoices = (Array.isArray(theme.accents) && theme.accents.length ? theme.accents : null)
+    || THEME_ACCENTS[theme.id]
+    || [theme.colors?.accent, theme.colors?.accent2].filter(Boolean);
   const setField = (field, value) => onChange({ [field]: value });
   const setBullet = (i, value) => {
     const bullets = [...slide.bullets]; bullets[i] = value; setField('bullets', bullets);
@@ -337,9 +410,39 @@ function Inspector({ slide, onChange, onOpenImagePicker }) {
         </div>
       </div>
 
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold text-slate-400">צבע הדגשה</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {accentChoices.map((color) => (
+            <button
+              key={color}
+              type="button"
+              onClick={() => setField('accent', color)}
+              title={color}
+              style={{ background: color }}
+              className={`h-7 w-7 flex-none rounded-full border-2 transition ${String(slide.accent || '').toLowerCase() === String(color).toLowerCase() ? 'scale-110 border-white' : 'border-slate-700 hover:border-slate-400'}`}
+            />
+          ))}
+          <input
+            type="color"
+            value={slide.accent || theme.colors?.accent || '#38bdf8'}
+            onChange={(e) => setField('accent', e.target.value)}
+            title="בחירת צבע חופשית"
+            className="h-7 w-9 flex-none cursor-pointer rounded-lg border border-slate-700 bg-transparent p-0.5"
+          />
+          {slide.accent && (
+            <button type="button" onClick={() => setField('accent', '')} className="rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300">אוטו</button>
+          )}
+        </div>
+      </div>
+
       {(fields.includes('title')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת</span>
           <input value={slide.title} onChange={(e) => setField('title', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+      )}
+      {(fields.includes('title')) && (
+        <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">תווית עליונה (אופציונלי)</span>
+          <input value={slide.kicker || ''} onChange={(e) => setField('kicker', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
       )}
       {(fields.includes('subtitle')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת משנה</span>
@@ -455,6 +558,8 @@ export default function PresentationStudio({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [themePanelOpen, setThemePanelOpen] = useState(false);
+  const themePanelRef = useRef(null);
 
   const slides = deck?.slides || [];
   const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
@@ -465,7 +570,7 @@ export default function PresentationStudio({
   useEffect(() => {
     if (!deck) return undefined;
     const onKey = (e) => {
-      if (presenting || pickerOpen || exportOpen) return;
+      if (presenting || pickerOpen || exportOpen || themePanelOpen) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       const t = e.target;
       const tag = t?.tagName;
@@ -481,7 +586,22 @@ export default function PresentationStudio({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deck, presenting, pickerOpen, exportOpen, selectedId]);
+  }, [deck, presenting, pickerOpen, exportOpen, themePanelOpen, selectedId]);
+
+  // סגירת פאנל ה-theme בלחיצה מחוץ לו או ב-Escape
+  useEffect(() => {
+    if (!themePanelOpen) return undefined;
+    const onDown = (e) => {
+      if (themePanelRef.current && !themePanelRef.current.contains(e.target)) setThemePanelOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setThemePanelOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [themePanelOpen]);
 
   // החזקת השקופית הנבחרת בתוך התצוגה בעת ניווט
   useEffect(() => {
@@ -528,11 +648,13 @@ export default function PresentationStudio({
     setExportOpen(false);
     setExporting(true);
     try {
-      const base64 = await buildPptxBase64(deck, { profile });
+      const { base64, warnings } = await buildPptxBase64(deck, { profile });
       if (window.desktopApp?.saveDocumentDialog) {
         const res = await window.desktopApp.saveDocumentDialog({ title: deck.title || 'presentation', preferredExtension: 'pptx', base64 });
-        if (res?.ok) showToast('המצגת נשמרה כ-PPTX ✓', { tone: 'success' });
-        else if (!res?.canceled) showToast(res?.error || 'שמירה נכשלה', { tone: 'error' });
+        if (res?.ok) {
+          showToast('המצגת נשמרה כ-PPTX ✓', { tone: 'success' });
+          if (warnings?.length) showToast(warnings.join(' · '), { tone: 'warning' });
+        } else if (!res?.canceled) showToast(res?.error || 'שמירה נכשלה', { tone: 'error' });
       } else {
         // דפדפן: הורדה ישירה. מפענחים base64→Blob ישירות (fetch על data-URL
         // ענק נכשל ב"Failed to fetch" כשהמצגת כבדה עם תמונות מוטמעות).
@@ -549,6 +671,7 @@ export default function PresentationStudio({
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         showToast('המצגת ירדה ✓', { tone: 'success' });
+        if (warnings?.length) showToast(warnings.join(' · '), { tone: 'warning' });
       }
     } catch (e) {
       showToast(e?.message || 'ייצוא נכשל', { tone: 'error' });
@@ -560,9 +683,22 @@ export default function PresentationStudio({
       {/* סרגל עליון */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
         <input value={deck.title} onChange={(e) => onDeckChange({ ...deck, title: e.target.value })} className="rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-white outline-none focus:bg-slate-800" />
-        <select value={deck.themeId} onChange={(e) => onDeckChange({ ...deck, themeId: e.target.value })} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 outline-none">
-          {DECK_THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-        </select>
+        <div className="relative" ref={themePanelRef}>
+          <button
+            type="button"
+            onClick={() => setThemePanelOpen((v) => !v)}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400"
+          >🎨 {getThemeById(deck.themeId).label} ▾</button>
+          {themePanelOpen && (
+            <div className="absolute right-0 z-50 mt-1 max-h-[70vh] w-[380px] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl">
+              <ThemeFamilyPicker
+                value={deck.themeId}
+                onSelect={(id) => { onDeckChange({ ...deck, themeId: id }); setThemePanelOpen(false); }}
+                small
+              />
+            </div>
+          )}
+        </div>
         <div className="flex-1" />
         <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
@@ -597,7 +733,7 @@ export default function PresentationStudio({
           {slides.map((s, i) => (
             <button key={s.id} ref={s.id === selected.id ? selectedThumbRef : null} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
               <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-              <SlideFrame slide={s} themeId={deck.themeId} index={i} shadow={false} />
+              <SlideFrame slide={s} themeId={deck.themeId} index={i} shadow={false} deckTitle={deck.title} />
             </button>
           ))}
           <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
@@ -606,7 +742,7 @@ export default function PresentationStudio({
         {/* תצוגה מרכזית */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
           <div className="w-full max-w-3xl">
-            {selected && <SlideFrame slide={selected} themeId={deck.themeId} index={selectedIndex} />}
+            {selected && <SlideFrame slide={selected} themeId={deck.themeId} index={selectedIndex} deckTitle={deck.title} />}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
@@ -617,7 +753,7 @@ export default function PresentationStudio({
 
         {/* inspector */}
         <div className="w-72 overflow-auto border-r border-slate-800 bg-slate-900/50">
-          {selected && <Inspector slide={selected} onChange={patchSlide} onOpenImagePicker={() => setPickerOpen(true)} />}
+          {selected && <Inspector slide={selected} themeId={deck.themeId} onChange={patchSlide} onOpenImagePicker={() => setPickerOpen(true)} />}
         </div>
       </div>
 

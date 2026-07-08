@@ -17,6 +17,8 @@ export const SLIDE_LAYOUTS = [
   { id: 'comparison',    label: 'השוואה',         hasImage: false, fields: ['title', 'columns'] },
   { id: 'stat',          label: 'מספרים / נתונים', hasImage: false, fields: ['title', 'stats'] },
   { id: 'steps',         label: 'שלבים / תהליך',  hasImage: false, fields: ['title', 'steps'] },
+  { id: 'agenda',        label: 'סדר יום',        hasImage: false, fields: ['title', 'bullets'] },
+  { id: 'timeline',      label: 'ציר זמן',        hasImage: false, fields: ['title', 'steps'] },
   { id: 'big-statement', label: 'משפט מפתח',      hasImage: false, fields: ['body', 'subtitle'] },
   { id: 'quote',         label: 'ציטוט',          hasImage: false, fields: ['body', 'subtitle'] },
   { id: 'closing',       label: 'סיכום / סיום',   hasImage: true,  fields: ['title', 'bullets'] },
@@ -45,6 +47,7 @@ export const createSlide = (overrides = {}) => ({
   layout: 'title-bullets',
   title: '',
   subtitle: '',
+  kicker: '',             // תווית עליונה קטנה מעל הכותרת (אופציונלי)
   bullets: [],            // string[]
   body: '',               // טקסט חופשי (ציטוט / פסקה)
   columns: [              // לפריסת two-column/comparison: [{ heading, bullets[] }, ...]
@@ -130,6 +133,7 @@ export const normalizeSlide = (raw = {}) => {
     layout,
     title: String(raw.title || '').trim(),
     subtitle: String(raw.subtitle || '').trim(),
+    kicker: String(raw.kicker || '').trim(),
     bullets: toStringArray(raw.bullets),
     body: String(raw.body || '').trim(),
     columns,
@@ -161,6 +165,20 @@ export const BG_VARIANTS = [
   { id: 'ring', label: 'טבעת' },
   { id: 'stripes', label: 'פסים' },
   { id: 'dotsCorner', label: 'אשכול נקודות' },
+  // ── variants חדשים (WP0.3) ──
+  { id: 'waves', label: 'גלים' },
+  { id: 'blobOutline', label: 'קווי מתאר' },
+  { id: 'plusGrid', label: 'רשת פלוס' },
+  { id: 'concentric', label: 'טבעות' },
+  { id: 'halftoneCorner', label: 'הדפס רשת' },
+  { id: 'topo', label: 'קווי גובה' },
+  { id: 'confetti', label: 'קונפטי' },
+  { id: 'circuit', label: 'מעגל מודפס' },
+  { id: 'sunburst', label: 'קרני שמש' },
+  { id: 'scanlines', label: 'קווי סריקה' },
+  { id: 'crosshatch', label: 'שתי וערב' },
+  { id: 'cornerBracket', label: 'סוגריים' },
+  { id: 'gridLines', label: 'רשת אדריכלית' },
 ];
 export const BG_VARIANT_IDS = BG_VARIANTS.map((v) => v.id);
 
@@ -169,12 +187,41 @@ const AUTO_BG_SEQUENCE = ['mesh', 'arcTR', 'shapes', 'band', 'glowBL', 'grid', '
 // פריסות עם טיפול רקע חזק משלהן — לא מוסיפים variant.
 const OWN_BG_LAYOUTS = new Set(['cover', 'section', 'image-full']);
 
-export const resolveBgVariant = (slide, index = 0) => {
+// ── decor packs — רצפי רוטציה בעלי אופי, אחד לכל משפחת theme ─────────
+// theme.decorPack (מ-resolveTheme) בוחר את הרצף. null = התנהגות legacy (AUTO).
+// כל רצף מערבב variants ישנים+חדשים בהתאם ל-vibe; אין שניים רצופים זהים.
+export const DECOR_PACKS = {
+  darklux:  ['gridLines', 'cornerBracket', 'glowTR', 'ring', 'sunburst', 'band', 'concentric', 'glowBL'],
+  swiss:    ['plusGrid', 'gridLines', 'cornerBracket', 'diagonal', 'band', 'crosshatch', 'stripes'],
+  cyber:    ['circuit', 'scanlines', 'glowTR', 'grid', 'concentric', 'gridLines', 'glowBL'],
+  organic:  ['waves', 'topo', 'blobOutline', 'mesh', 'arcBL', 'concentric', 'arcTR'],
+  memphis:  ['confetti', 'shapes', 'blobOutline', 'dotsCorner', 'ring', 'waves', 'stripes'],
+  deco:     ['sunburst', 'concentric', 'cornerBracket', 'stripes', 'ring', 'band', 'gridLines'],
+  mono:     ['crosshatch', 'gridLines', 'plusGrid', 'diagonal', 'scanlines', 'cornerBracket', 'stripes'],
+  glass:    ['concentric', 'mesh', 'glowBL', 'ring', 'blobOutline', 'glowTR', 'arcTR'],
+  pastel:   ['blobOutline', 'waves', 'dotsCorner', 'mesh', 'confetti', 'arcBL', 'concentric'],
+  terminal: ['scanlines', 'gridLines', 'circuit', 'plusGrid', 'crosshatch', 'grid', 'band'],
+  midnight: ['gridLines', 'band', 'glowBL', 'cornerBracket', 'sunburst', 'concentric', 'glowTR'],
+  brutal:   ['cornerBracket', 'stripes', 'plusGrid', 'diagonal', 'shapes', 'gridLines', 'band'],
+};
+
+// מחזיר את רצף הרוטציה עבור theme — pack מוגדר אם קיים, אחרת AUTO (legacy).
+export const getDecorSequence = (theme) => {
+  const pack = theme?.decorPack;
+  return (pack && DECOR_PACKS[pack]) ? DECOR_PACKS[pack] : AUTO_BG_SEQUENCE;
+};
+
+// resolveBgVariant(slide, index[, theme])
+// הפרמטר השלישי theme אופציונלי ותאימות-לאחור מלאה: קריאה עם 2 ארגומנטים
+// מתנהגת בדיוק כמו קודם (AUTO_BG_SEQUENCE). אם הועבר theme עם decorPack תקף,
+// הרוטציה עוברת דרך אותו pack במקום ה-AUTO.
+export const resolveBgVariant = (slide, index = 0, theme = null) => {
   const v = slide?.bgVariant;
   if (v && v !== 'auto' && BG_VARIANT_IDS.includes(v)) return v;
   if (OWN_BG_LAYOUTS.has(slide?.layout)) return 'none';
+  const seq = getDecorSequence(theme);
   const i = Number.isFinite(index) ? index : 0;
-  return AUTO_BG_SEQUENCE[((i % AUTO_BG_SEQUENCE.length) + AUTO_BG_SEQUENCE.length) % AUTO_BG_SEQUENCE.length];
+  return seq[((i % seq.length) + seq.length) % seq.length];
 };
 
 // ── מסלול ייצוא (hybrid) ─────────────────────────────────────────
@@ -182,7 +229,7 @@ export const resolveBgVariant = (slide, index = 0) => {
 // השאר נשאר native-editable כדי שהטקסט/בולטים יישארו עריכים ב-PowerPoint.
 export const IMAGE_EXPORT_LAYOUTS = new Set([
   'cover', 'section', 'quote', 'image-full', 'closing',
-  'big-statement', 'stat', 'steps', 'comparison',
+  'big-statement', 'stat', 'steps', 'comparison', 'agenda', 'timeline',
 ]);
 
 export const getSlideExportMode = (slide) =>
