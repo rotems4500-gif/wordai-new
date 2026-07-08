@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useLayoutEffect, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { Extension } from "@tiptap/core";
@@ -18,15 +19,44 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
-import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot } from "lucide-react";
+import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus } from "lucide-react";
 import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
+import { getSynonymSuggestions, isHebrewWord } from "./services/synonymsService.js";
+import EditorContextMenu from "./components/EditorContextMenu.jsx";
+import Ruler from "./components/Ruler.jsx";
 import { showToast } from "./services/uiFeedback";
 import { tagStyleSample } from "./services/styleAuthenticityService";
 import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
 import { FindHighlight } from "./extensions/FindHighlight";
 import { CommentMark } from "./extensions/CommentMark";
-import { TrackChange } from "./extensions/TrackChange";
+import { TrackChange, DeletionMark } from "./extensions/TrackChange";
+import { PageNumberField } from "./extensions/PageNumberField";
+import { MathNode } from "./extensions/MathNode";
+import { CrossReferenceNode, HeadingRefId } from "./extensions/CrossReferenceNode";
+import { TocNode } from "./extensions/TocNode";
+import { Pagination } from "./extensions/Pagination";
+import { getLayoutPageSizeCm } from "./services/documentLayout";
+
+const selectWordUnderCursor = (editor) => {
+  if (!editor) return false;
+  const { state } = editor;
+  if (!state.selection.empty) return true;
+  const $from = state.selection.$from;
+  const parent = $from.parent;
+  if (!parent || !parent.isTextblock) return false;
+  const text = parent.textContent || '';
+  const offset = $from.parentOffset;
+  const isBoundary = (ch) => /[\s.,;:!?()\[\]{}"'״"”«»<>\/\\|–—-]/.test(ch);
+  let start = offset;
+  let end = offset;
+  while (start > 0 && !isBoundary(text[start - 1])) start -= 1;
+  while (end < text.length && !isBoundary(text[end])) end += 1;
+  if (start === end) return false;
+  const blockStart = $from.start();
+  editor.chain().focus().setTextSelection({ from: blockStart + start, to: blockStart + end }).run();
+  return true;
+};
 
 const DOC_STYLE_PRESETS = {
   academic: { fontFamily: "'Frank Ruhl Libre', 'Times New Roman', serif", fontSize: '12.5pt', lineHeight: '1.72', padding: '2.54cm', width: '21cm', minHeight: '29.7cm', background: '#ffffff', border: '1px solid #d6d9de' },
@@ -37,30 +67,6 @@ const DOC_STYLE_PRESETS = {
 
 const MINI_TOOLBAR_FONTS = ['Alef', 'David', 'Assistant', 'Heebo', 'Arial', 'Times New Roman'];
 const MINI_TOOLBAR_SIZES = ['8', '9', '10', '11', '12', '14', '16', '18', '20', '24', '28', '36'];
-
-const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-
-const getBestContextPanelPosition = ({ anchorX, anchorY, containerWidth, containerHeight, menuWidth, menuHeight, gap = 12, padding = 16 }) => {
-  const availableRight = containerWidth - anchorX - padding;
-  const availableLeft = anchorX - padding;
-  const availableBottom = containerHeight - anchorY - padding;
-  const availableTop = anchorY - padding;
-
-  const placeRight = availableRight >= availableLeft;
-  const placeDown = availableBottom >= availableTop;
-
-  const x = placeRight
-    ? anchorX + gap
-    : anchorX - menuWidth - gap;
-  const y = placeDown
-    ? anchorY + gap
-    : anchorY - menuHeight - gap;
-
-  return {
-    x: clamp(x, padding, Math.max(padding, containerWidth - menuWidth - padding)),
-    y: clamp(y, padding, Math.max(padding, containerHeight - menuHeight - padding)),
-  };
-};
 
 const getSelectionClientRect = (view) => {
   if (!view?.state?.selection || !view?.coordsAtPos) return null;
@@ -148,16 +154,20 @@ const getSavedTypographyDefaults = (prefs = {}) => {
   }
 };
 
-export default function DocumentEditor({ onReady, onWordCountChange, onCommand = () => {}, onOpenAssistant = () => {}, onContextMenuOpen = () => {}, wordPreferences = {}, documentStyle = 'academic', viewMode = 'print', activeTemplateId = 'blank' }) {
+export default function DocumentEditor({ onReady, onWordCountChange, onCommand = () => {}, onOpenAssistant = () => {}, onContextMenuOpen = () => {}, wordPreferences = {}, documentStyle = 'academic', documentLayout = null, viewMode = 'print', activeTemplateId = 'blank' }) {
   const [loadingAction, setLoadingAction] = useState(null);
   const [formatPainterActive, setFormatPainterActive] = useState(false);
   const [copiedFormat, setCopiedFormat] = useState(null);
   const [contextPanel, setContextPanel] = useState({ open: false, x: 24, y: 80 });
+  // מילים נרדפות: תוצאות מנוע מקומי (null = בטעינה, [] = לא נמצא, מערך = תוצאות).
+  const [synonymSuggestions, setSynonymSuggestions] = useState(null);
+  const synonymTargetRef = React.useRef(null);
   // D2: קווי גבול-עמוד (overlay בטוח, ללא reflow) — מציין היכן כל עמוד A4 נגמר.
   const [pageBox, setPageBox] = useState(null);
   const [pageGuides, setPageGuides] = useState([]);
   const wrapperRef = React.useRef(null);
   const wordCountFrameRef = React.useRef(null);
+  const contextMenuRef = React.useRef(null);
   const bubbleActions = React.useMemo(() => ([
     { id: "sourcesAcademic", type: "assistant", row: 1, icon: <GraduationCap size={14} className="text-indigo-600" />, label: "מקור אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות אקדמיים מאומתים בלבד לטקסט או למסמך הפעיל. אם חסר הקשר, התבסס על המסמך והשיחה הקודמת.' } },
     { id: "summary", type: "inline", row: 1, icon: <Wand2 size={14} className="text-blue-600" />, label: "סיכום" },
@@ -278,6 +288,13 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       FindHighlight,
       CommentMark,
       TrackChange,
+      DeletionMark,
+      PageNumberField,
+      MathNode,
+      CrossReferenceNode,
+      HeadingRefId,
+      TocNode,
+      Pagination,
     ],
     content: "<p></p>",
     editorProps: {
@@ -312,29 +329,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
           if (!hasSelection && typeof pos === 'number') {
             editor?.chain().focus().setTextSelection(pos).run();
           }
-          const menuWidth = 356;
-          const menuHeight = 290;
-          const viewport = window.visualViewport || window;
-          const viewportWidth = viewport.width || window.innerWidth || menuWidth + 48;
-          const viewportHeight = viewport.height || window.innerHeight || menuHeight + 48;
-          const selectionRect = hasSelection ? getSelectionClientRect(view) : null;
-          const viewportOffsetLeft = Number(viewport.offsetLeft) || 0;
-          const viewportOffsetTop = Number(viewport.offsetTop) || 0;
-          const anchorX = (selectionRect ? selectionRect.right : event?.clientX) - viewportOffsetLeft || 24;
-          const anchorY = (selectionRect ? selectionRect.bottom : event?.clientY) - viewportOffsetTop || 80;
-          const position = getBestContextPanelPosition({
-            anchorX,
-            anchorY,
-            containerWidth: viewportWidth,
-            containerHeight: viewportHeight,
-            menuWidth,
-            menuHeight,
-          });
-          setContextPanel({
-            open: true,
-            x: position.x,
-            y: position.y,
-          });
+          setContextPanel({ open: true, x: event.clientX, y: event.clientY });
           return true;
         },
       },
@@ -552,6 +547,42 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     setContextPanel((prev) => ({ ...prev, open: false }));
   }, []);
 
+  const applySynonym = useCallback((text) => {
+    const target = synonymTargetRef.current;
+    if (!editor || !target || typeof text !== 'string' || !text.trim()) {
+      closeContextPanel();
+      return;
+    }
+    editor.chain().focus().setTextSelection({ from: target.from, to: target.to }).insertContent(text).run();
+    closeContextPanel();
+  }, [editor, closeContextPanel]);
+
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const handleReadAloud = useCallback(() => {
+    if (!('speechSynthesis' in window)) { closeContextPanel(); return; }
+    if (isSpeaking) { window.speechSynthesis.cancel(); setIsSpeaking(false); return; }
+    const { state } = editor;
+    const text = !state.selection.empty
+      ? state.doc.textBetween(state.selection.from, state.selection.to, ' ')
+      : editor.getText();
+    if (!text || !text.trim()) { closeContextPanel(); return; }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'he-IL';
+    const voices = window.speechSynthesis.getVoices() || [];
+    const hebrewVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('he'));
+    if (hebrewVoice) utterance.voice = hebrewVoice;
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  }, [editor, isSpeaking, closeContextPanel]);
+
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }, []);
+
   const applyContextCommand = useCallback((command, value) => {
     if (!editor) return;
     const chain = editor.chain().focus();
@@ -627,6 +658,31 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     closeContextPanel();
   }, [closeContextPanel, editor]);
 
+  const handlePasteWithFormatting = useCallback(async () => {
+    if (!editor) {
+      closeContextPanel();
+      return;
+    }
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      let html = null;
+      for (const item of clipboardItems) {
+        if (item.types.includes('text/html')) {
+          const blob = await item.getType('text/html');
+          html = await blob.text();
+          break;
+        }
+      }
+      if (html) {
+        editor.chain().focus().insertContent(html, { parseOptions: { preserveWhitespace: false } }).run();
+      } else {
+        const text = await navigator.clipboard.readText();
+        if (text) editor.chain().focus().insertContent(text.replace(/\r\n/g, '\n')).run();
+      }
+    } catch {}
+    closeContextPanel();
+  }, [closeContextPanel, editor]);
+
   const copyFormat = useCallback(() => {
     if (!editor) return;
     const attrs = editor.getAttributes("textStyle");
@@ -682,11 +738,83 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     };
   }, [closeContextPanel, contextPanel.open]);
 
-  // D2: מדידת גבולות עמוד A4 וציור קווי-עמוד ב-overlay (ללא נגיעה במסמך).
+  // מילים נרדפות: מחשבים את המילה תחת הסמן (בלי לשנות את הבחירה בעורך)
+  // בכל פעם שתפריט ההקשר נפתח, ומאחזרים הצעות מהמנוע המקומי.
+  React.useEffect(() => {
+    if (!contextPanel.open) {
+      setSynonymSuggestions(null);
+      synonymTargetRef.current = null;
+      return;
+    }
+    if (!editor) return;
+
+    const { state } = editor;
+    const { $from, from, to, empty } = state.selection;
+    const isBoundary = (ch) => /[\s.,;:!?()\[\]{}"'״"”«»<>\/\\|–—-]/.test(ch);
+
+    let wordFrom = null;
+    let wordTo = null;
+    let word = '';
+
+    const selectedText = !empty ? state.doc.textBetween(from, to, ' ') : '';
+    if (!empty && selectedText.trim() && selectedText.trim().split(/\s+/).length <= 3 && selectedText.length <= 40) {
+      word = selectedText.trim();
+      wordFrom = from;
+      wordTo = to;
+    } else {
+      const parent = $from.parent;
+      if (parent && parent.isTextblock) {
+        const text = parent.textContent || '';
+        const offset = $from.parentOffset;
+        let start = offset;
+        let end = offset;
+        while (start > 0 && !isBoundary(text[start - 1])) start -= 1;
+        while (end < text.length && !isBoundary(text[end])) end += 1;
+        if (start !== end) {
+          const blockStart = $from.start();
+          word = text.slice(start, end);
+          wordFrom = blockStart + start;
+          wordTo = blockStart + end;
+        }
+      }
+    }
+
+    const sentence = $from.parent?.textContent || '';
+
+    if (!word || !isHebrewWord(word)) {
+      synonymTargetRef.current = null;
+      setSynonymSuggestions([]);
+      return;
+    }
+
+    synonymTargetRef.current = { from: wordFrom, to: wordTo, word };
+    setSynonymSuggestions(null);
+    let cancelled = false;
+    getSynonymSuggestions({ word, sentence, limit: 6 })
+      .then((results) => { if (!cancelled) setSynonymSuggestions(Array.isArray(results) ? results : []); })
+      .catch(() => { if (!cancelled) setSynonymSuggestions([]); });
+    return () => { cancelled = true; };
+  }, [contextPanel.open, editor]);
+
+  useLayoutEffect(() => {
+    if (!contextPanel.open) return;
+    const el = contextMenuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    let left = contextPanel.x;
+    let top = contextPanel.y;
+    if (left + rect.width > window.innerWidth - 8) left = Math.max(8, contextPanel.x - rect.width);
+    if (top + rect.height > window.innerHeight - 8) top = Math.max(8, contextPanel.y - rect.height);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [contextPanel]);
+
+  // D2: מדידת גבולות עמוד וציור קווי-עמוד ב-overlay (ללא נגיעה במסמך).
+  // גובה העמוד נגזר מ-documentLayout (גודל + כיוון) — לא A4 קבוע.
   React.useEffect(() => {
     if (!editor) return undefined;
     const PX_PER_CM = 96 / 2.54;
-    const PAGE_OUTER_PX = 29.7 * PX_PER_CM;
+    const PAGE_OUTER_PX = getLayoutPageSizeCm(documentLayout || undefined).height * PX_PER_CM;
 
     const measure = () => {
       const wrap = wrapperRef.current;
@@ -723,86 +851,208 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       editor.off('update', schedule);
       if (ro) ro.disconnect();
     };
-  }, [editor, viewMode, documentStyle]);
+  }, [editor, viewMode, documentStyle, documentLayout]);
+
+  const contextMenuItems = useMemo(() => {
+    if (!editor) return [];
+    const hasSelection = contextPanel.open ? !editor.state.selection.empty : false;
+    const fontSizeOptions = ['10', '11', '12', '14', '16', '18', '24'];
+
+    return [
+      {
+        id: 'miniToolbar',
+        custom: (
+          <div dir="rtl" className="flex items-center gap-1.5">
+            <select
+              className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
+              value={editor.getAttributes('textStyle').fontFamily || 'Alef'}
+              onChange={(e) => applyContextCommand('fontFamily', e.target.value)}
+              title="גופן"
+            >
+              {!MINI_TOOLBAR_FONTS.includes(editor.getAttributes('textStyle').fontFamily || '') && editor.getAttributes('textStyle').fontFamily ? (
+                <option value={editor.getAttributes('textStyle').fontFamily}>{editor.getAttributes('textStyle').fontFamily}</option>
+              ) : null}
+              {MINI_TOOLBAR_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}
+            </select>
+            <select
+              className="h-9 w-[68px] rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
+              value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
+              onChange={(e) => applyContextCommand('fontSize', `${e.target.value}pt`)}
+              title="גודל"
+            >
+              {!MINI_TOOLBAR_SIZES.includes(String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')) ? (
+                <option value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}>
+                  {String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
+                </option>
+              ) : null}
+              {MINI_TOOLBAR_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+            <button className={`rounded-lg p-2 transition ${editor.isActive('bold') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('bold')} title="מודגש">
+              <Bold size={16} />
+            </button>
+            <button className={`rounded-lg p-2 transition ${editor.isActive('italic') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('italic')} title="נטוי">
+              <Italic size={16} />
+            </button>
+            <button className={`rounded-lg p-2 transition ${editor.isActive('underline') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('underline')} title="קו תחתי">
+              <UnderlineIcon size={16} />
+            </button>
+          </div>
+        ),
+      },
+      {
+        id: 'cut',
+        label: 'גזור',
+        icon: Scissors,
+        shortcut: 'Ctrl+X',
+        disabled: !hasSelection,
+        onSelect: () => { onCommand('cutSelection'); closeContextPanel(); },
+      },
+      {
+        id: 'copy',
+        label: 'העתק',
+        icon: Copy,
+        shortcut: 'Ctrl+C',
+        disabled: !hasSelection,
+        onSelect: () => { onCommand('copySelection'); closeContextPanel(); },
+      },
+      {
+        id: 'pasteHeader',
+        headerLabel: true,
+        label: 'אפשרויות הדבקה:',
+      },
+      {
+        id: 'pasteOptions',
+        custom: (
+          <div dir="rtl" className="flex items-center gap-1.5">
+            <button className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-100" onClick={handlePasteWithFormatting} title="שמור עיצוב מקור">
+              <Clipboard size={16} />
+            </button>
+            <button className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-100" onClick={() => { onCommand('pasteClipboard'); closeContextPanel(); }} title="שמור טקסט בלבד">
+              <ClipboardType size={16} />
+            </button>
+          </div>
+        ),
+      },
+      {
+        id: 'font',
+        separatorBefore: true,
+        label: 'גופן...',
+        icon: Type,
+        submenu: [
+          ...MINI_TOOLBAR_FONTS.map((f) => ({
+            id: `font-${f}`,
+            label: f,
+            onSelect: () => applyContextCommand('fontFamily', f),
+          })),
+          ...fontSizeOptions.map((s, idx) => ({
+            id: `size-${s}`,
+            label: `גודל ${s}`,
+            separatorBefore: idx === 0,
+            onSelect: () => applyContextCommand('fontSize', `${s}pt`),
+          })),
+          { id: 'font-bold', separatorBefore: true, label: 'מודגש', onSelect: () => applyContextCommand('bold') },
+          { id: 'font-italic', label: 'נטוי', onSelect: () => applyContextCommand('italic') },
+          { id: 'font-underline', label: 'קו תחתי', onSelect: () => applyContextCommand('underline') },
+        ],
+      },
+      {
+        id: 'paragraph',
+        label: 'פיסקה...',
+        icon: Pilcrow,
+        submenu: [
+          { id: 'align-right', label: 'יישור לימין', icon: AlignRight, onSelect: () => applyContextCommand('alignRight') },
+          { id: 'align-center', label: 'מרכוז', icon: AlignCenter, onSelect: () => applyContextCommand('alignCenter') },
+          { id: 'align-left', label: 'יישור לשמאל', icon: AlignLeft, onSelect: () => applyContextCommand('alignLeft') },
+          { id: 'line-height-1', separatorBefore: true, label: 'רווח שורות 1', onSelect: () => editor.chain().focus().setLineHeight('1').run() },
+          { id: 'line-height-1-15', label: 'רווח שורות 1.15', onSelect: () => editor.chain().focus().setLineHeight('1.15').run() },
+          { id: 'line-height-1-5', label: 'רווח שורות 1.5', onSelect: () => editor.chain().focus().setLineHeight('1.5').run() },
+          { id: 'line-height-2', label: 'רווח שורות 2', onSelect: () => editor.chain().focus().setLineHeight('2').run() },
+        ],
+      },
+      {
+        id: 'synonyms',
+        separatorBefore: true,
+        label: 'מילים נרדפות',
+        icon: BookOpen,
+        submenu: [
+          ...(synonymSuggestions === null
+            ? [{ id: 'syn-loading', headerLabel: true, label: 'טוען...' }]
+            : []),
+          ...(Array.isArray(synonymSuggestions) && synonymSuggestions.length === 0
+            ? [{ id: 'syn-none', headerLabel: true, label: 'לא נמצאו מילים נרדפות' }]
+            : []),
+          ...(Array.isArray(synonymSuggestions)
+            ? synonymSuggestions.map((s, i) => ({
+                id: `syn-${i}`,
+                label: s.text,
+                onSelect: () => applySynonym(s.text),
+              }))
+            : []),
+          {
+            id: 'syn-ai',
+            separatorBefore: true,
+            label: 'הצעות נוספות (AI)',
+            icon: Sparkles,
+            onSelect: () => {
+              if (selectWordUnderCursor(editor)) {
+                handleAiAction('synonyms');
+              } else {
+                closeContextPanel();
+              }
+            },
+          },
+        ],
+      },
+      {
+        id: 'translate',
+        label: 'תרגם',
+        icon: Languages,
+        onSelect: () => {
+          if (editor.state.selection.empty) {
+            const $from = editor.state.selection.$from;
+            editor.chain().focus().setTextSelection({ from: $from.start(), to: $from.end() }).run();
+          }
+          handleAiAction('translate');
+        },
+      },
+      {
+        id: 'readAloud',
+        label: isSpeaking ? 'עצור הקראה' : 'קרא בקול רם',
+        icon: Volume2,
+        onSelect: handleReadAloud,
+      },
+      {
+        id: 'link',
+        separatorBefore: true,
+        label: 'קישור',
+        icon: LinkIcon,
+        shortcut: 'Ctrl+K',
+        onSelect: () => { onCommand('insertLinkDialog'); closeContextPanel(); },
+      },
+      {
+        id: 'comment',
+        label: 'הערה חדשה',
+        icon: MessageSquarePlus,
+        disabled: !hasSelection,
+        onSelect: () => { onCommand('addComment'); closeContextPanel(); },
+      },
+    ];
+  }, [editor, contextPanel, applyContextCommand, closeContextPanel, onCommand, handlePasteWithFormatting, handleAiAction, isSpeaking, handleReadAloud, synonymSuggestions, applySynonym]);
 
   if (!editor) return null;
 
   return (
     <div ref={wrapperRef} className="flex flex-col items-center w-full min-h-full relative">
-      {contextPanel.open && (
+      {contextPanel.open && createPortal(
         <div
+          ref={contextMenuRef}
           data-context-panel="true"
-          className="fixed z-40 max-h-[calc(100vh-32px)] w-[356px] overflow-hidden rounded-2xl border border-slate-200 bg-white/98 shadow-[0_24px_72px_rgba(15,23,42,0.22)] backdrop-blur-sm"
+          className="fixed z-[90]"
           style={{ left: `${contextPanel.x}px`, top: `${contextPanel.y}px` }}
         >
-          <div className="border-b border-slate-200 bg-slate-50/95 px-3 py-2.5">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handlePasteClipboard} title="הדבק">
-                <Clipboard size={16} />
-              </button>
-              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handleCutSelection} title="גזור">
-                <Scissors size={16} />
-              </button>
-              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={handleCopySelection} title="העתק">
-                <Copy size={16} />
-              </button>
-              <div className="mx-1 h-5 w-px bg-slate-200" />
-              <select
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
-                value={editor.getAttributes('textStyle').fontFamily || 'Alef'}
-                onChange={(e) => applyContextCommand('fontFamily', e.target.value)}
-                title="גופן"
-              >
-                {!MINI_TOOLBAR_FONTS.includes(editor.getAttributes('textStyle').fontFamily || '') && editor.getAttributes('textStyle').fontFamily ? (
-                  <option value={editor.getAttributes('textStyle').fontFamily}>{editor.getAttributes('textStyle').fontFamily}</option>
-                ) : null}
-                {MINI_TOOLBAR_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}
-              </select>
-              <select
-                className="h-9 w-[68px] rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none"
-                value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
-                onChange={(e) => applyContextCommand('fontSize', `${e.target.value}pt`)}
-                title="גודל"
-              >
-                {!MINI_TOOLBAR_SIZES.includes(String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')) ? (
-                  <option value={String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}>
-                    {String(editor.getAttributes('textStyle').fontSize || '12').replace(/pt$/i, '')}
-                  </option>
-                ) : null}
-                {MINI_TOOLBAR_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
-              </select>
-              <button className={`rounded-lg p-2 transition ${editor.isActive('bold') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('bold')} title="מודגש">
-                <Bold size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive('italic') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('italic')} title="נטוי">
-                <Italic size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive('underline') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('underline')} title="קו תחתי">
-                <UnderlineIcon size={16} />
-              </button>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <button className={`rounded-lg p-2 transition ${editor.isActive('bulletList') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('bulletList')} title="רשימת נקודות">
-                <List size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive('orderedList') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('orderedList')} title="רשימה ממוספרת">
-                <ListOrdered size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'right' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignRight')} title="יישור לימין">
-                <AlignRight size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'center' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignCenter')} title="מרכוז">
-                <AlignCenter size={16} />
-              </button>
-              <button className={`rounded-lg p-2 transition ${editor.isActive({ textAlign: 'left' }) ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`} onClick={() => applyContextCommand('alignLeft')} title="יישור לשמאל">
-                <AlignLeft size={16} />
-              </button>
-              <button className="rounded-lg p-2 text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={() => applyContextCommand('clearFormatting')} title="נקה עיצוב">
-                <Eraser size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
+          <EditorContextMenu editor={editor} items={contextMenuItems} onClose={closeContextPanel} />
+        </div>,
+        document.body
       )}
 
       {/* תפריט צף חכם שמופיע רק כשיש בחירת טקסט */}
@@ -919,6 +1169,8 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
         )}
       </BubbleMenu>
 
+      {viewMode === 'print' && <Ruler />}
+
       <EditorContent editor={editor} className="w-full shrink-0" />
 
       {pageBox && pageGuides.length > 0 && (
@@ -958,6 +1210,71 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
           ))}
         </div>
       )}
+
+      {/* chrome של כותרות עליונות/תחתונות ומספרי עמוד — מוצג פר-עמוד מתוך documentLayout */}
+      {pageBox && viewMode === 'print' && (documentLayout?.header || documentLayout?.footer || documentLayout?.pageNumbers) && (() => {
+        const PAGE_OUTER_PX = getLayoutPageSizeCm(documentLayout || undefined).height * (96 / 2.54);
+        const pagesInView = pageGuides.length + 1;
+        const chromeItems = [];
+        const headerText = documentLayout?.header
+          ? [documentLayout.header.text, documentLayout.header.pageNumber ? 'עמוד {n}' : '']
+              .filter(Boolean).join(' · ')
+          : '';
+        const footerBase = documentLayout?.footer?.text || '';
+        const footerHasPageNum = Boolean(documentLayout?.footer?.pageNumber || documentLayout?.pageNumbers);
+        for (let page = 0; page < pagesInView; page += 1) {
+          const pageTop = page * PAGE_OUTER_PX;
+          const pageBottom = Math.min((page + 1) * PAGE_OUTER_PX, pageBox.height);
+          const pageLabel = String(page + 1);
+          if (documentLayout?.header) {
+            chromeItems.push(
+              <div
+                key={`hdr-${page}`}
+                style={{
+                  position: 'absolute', top: pageTop + 10, left: 0, right: 0,
+                  textAlign: 'center', color: '#94a3b8', fontSize: 11,
+                  padding: '0 32px', direction: 'rtl',
+                }}
+              >
+                {headerText.replace('{n}', pageLabel) || ' '}
+              </div>
+            );
+          }
+          if (documentLayout?.footer || footerHasPageNum) {
+            const footerText = [footerBase, footerHasPageNum ? `עמוד ${pageLabel}` : '']
+              .filter(Boolean).join(' · ');
+            chromeItems.push(
+              <div
+                key={`ftr-${page}`}
+                style={{
+                  position: 'absolute', top: pageBottom - 26, left: 0, right: 0,
+                  textAlign: 'center', color: '#94a3b8', fontSize: 11,
+                  padding: '0 32px', direction: 'rtl',
+                }}
+              >
+                {footerText || ' '}
+              </div>
+            );
+          }
+        }
+        return (
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              top: pageBox.top,
+              left: pageBox.left,
+              width: pageBox.width,
+              height: pageBox.height,
+              pointerEvents: 'none',
+              zIndex: 4,
+              overflow: 'hidden',
+            }}
+          >
+            {chromeItems}
+          </div>
+        );
+      })()}
     </div>
   );
 }

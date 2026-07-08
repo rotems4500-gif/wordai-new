@@ -12,7 +12,8 @@ import FindReplace from './FindReplace';
 import SourceManager from './SourceManager';
 import CommentsPanel from './CommentsPanel';
 import { removeCommentById } from './extensions/CommentMark';
-import { acceptInsertions, rejectInsertions } from './extensions/TrackChange';
+import { acceptInsertions, rejectInsertions, collectTrackedChanges, acceptTrackedChange, rejectTrackedChange } from './extensions/TrackChange';
+import TrackChangesPanel from './TrackChangesPanel';
 import FileMenu from './FileMenu';
 import CloudUnlockGate from './CloudUnlockGate';
 import WelcomeGate from './WelcomeGate';
@@ -33,6 +34,8 @@ import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './Wor
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
+import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/documentLayout';
+import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEditor } from './services/stylesRegistry';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { Modal, Button, Input, TextArea } from './components/ui';
@@ -3270,10 +3273,38 @@ function App() {
   const [currentBlockText, setCurrentBlockText] = React.useState('');
   const [editTarget, setEditTarget] = React.useState(() => ({ ...EMPTY_EDIT_TARGET }));
   const [trackChanges, setTrackChanges] = React.useState(false);
+  const [trackPanelOpen, setTrackPanelOpen] = React.useState(false);
+  const [trackedChanges, setTrackedChanges] = React.useState([]);
   const [shortcuts, setShortcuts] = React.useState(getShortcutsConfig());
   const [assistantBehavior, setAssistantBehavior] = React.useState(getAssistantBehavior());
   const [wordPreferences, setWordPreferences] = React.useState(getWordPreferences());
   const [documentStyle, setDocumentStyle] = React.useState(() => localStorage.getItem('wordai_document_style') || 'academic');
+  // layout ברמת מסמך (שוליים/כיוון/גודל/כותרות/סימן מים/גבולות) — מקור אמת לייצוא DOCX
+  const [documentLayout, setDocumentLayout] = React.useState(() => loadPersistedDocumentLayout());
+  React.useEffect(() => { persistDocumentLayout(documentLayout); }, [documentLayout]);
+  // pageCount חי ממנוע העימוד (extensions/Pagination.js)
+  const paginationDrivenRef = React.useRef(false);
+  React.useEffect(() => {
+    const onPagination = (event) => {
+      const count = Number(event?.detail?.pageCount);
+      if (!Number.isFinite(count) || count < 1) return;
+      paginationDrivenRef.current = true;
+      setPageCount(count);
+    };
+    window.addEventListener('wordflow:pagination', onPagination);
+    return () => window.removeEventListener('wordflow:pagination', onPagination);
+  }, []);
+
+  // שחזור ערכת צבעים שנשמרה
+  React.useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('wordai_theme_colors') || 'null');
+      if (saved?.primary) {
+        document.documentElement.style.setProperty('--word-blue', saved.primary);
+        document.documentElement.style.setProperty('--word-accent', saved.accent || saved.primary);
+      }
+    } catch {}
+  }, []);
   const [activeTemplateId, setActiveTemplateId] = React.useState(() => getPersistedActiveTemplateId());
   const [pendingStartupDocument, setPendingStartupDocument] = React.useState(HAS_PENDING_STARTUP_DOCUMENT);
   const [isAiStreaming, setIsAiStreaming] = React.useState(false);
@@ -4025,6 +4056,35 @@ function App() {
     });
   }), []);
 
+  // רענון רשימת השינויים המסומנים כשהחלונית פתוחה
+  React.useEffect(() => {
+    if (!editor || !trackPanelOpen) return undefined;
+    const refresh = () => setTrackedChanges(collectTrackedChanges(editor));
+    refresh();
+    editor.on('update', refresh);
+    return () => editor.off('update', refresh);
+  }, [editor, trackPanelOpen]);
+
+  // עריכת משוואה קיימת (dblclick על MathNode שולח אירוע עם pos + latex)
+  React.useEffect(() => {
+    const onEditMath = async (event) => {
+      if (!editor) return;
+      const { pos, latex } = event.detail || {};
+      if (typeof pos !== 'number') return;
+      const result = await requestInputDialog({
+        title: 'עריכת משוואה',
+        description: 'תחביר LaTeX',
+        fields: [{ id: 'latex', label: 'נוסחה (LaTeX)', type: 'textarea', value: latex || '' }],
+        confirmLabel: 'עדכן',
+      });
+      const nextLatex = String(result?.latex || '').trim();
+      if (!nextLatex) return;
+      editor.chain().focus().updateMathNodeAt(pos, nextLatex).run();
+    };
+    window.addEventListener('wordflow:edit-math', onEditMath);
+    return () => window.removeEventListener('wordflow:edit-math', onEditMath);
+  }, [editor, requestInputDialog]);
+
   const closeInputDialog = React.useCallback((result = null) => {
     setInputDialog((prev) => {
       try {
@@ -4738,7 +4798,8 @@ function App() {
           setLastEditorActivityAt(Date.now());
           setLastEditorContentActivityAt(Date.now());
         }
-        if (includePages) {
+        if (includePages && !paginationDrivenRef.current) {
+          // fallback בלבד — כשמנוע העימוד פעיל, pageCount מגיע מאירוע wordflow:pagination
           let markers = 0;
           editor.state.doc.descendants((node) => {
             if (node.type?.name === 'pageBreak') markers += 1;
@@ -5424,8 +5485,11 @@ ${sidebarReviewContext}`
     };
   }, [editor, wordPreferences]);
 
+  // הפתיחה האוטומטית של הסיידבר אחרי הפסקת הקלדה (trigger 'idle') הוסרה לפי
+  // בקשת המשתמש. הסיידבר נפתח רק ידנית או ע"י זרימות autopilot/manual.
   React.useEffect(() => {
-    if (!editor || sidebarOpen || assistantBehavior.autoPopup === false) return;
+    if (!editor || sidebarOpen) return;
+    if (assistantBehavior.autoPopup !== 'legacy-idle') return; // כבוי; ערך נסתר להחזרה עתידית
     if (Date.now() < assistantAutoPopupBlockedUntil) return;
     if (!lastEditorContentActivityAt) return;
     if (Date.now() - lastEditorContentActivityAt > 1000) return;
@@ -6684,9 +6748,10 @@ ${sidebarReviewContext}`
         fontSize,
         language: 'he-IL',
         disableProofing: false,
+        layout: documentLayout,
       },
     };
-  }, [documentStyle, editor, inferCurrentDocumentTitle, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
+  }, [documentLayout, documentStyle, editor, inferCurrentDocumentTitle, wordPreferences.defaultFontFamily, wordPreferences.defaultFontSize, wordPreferences.defaultFontStack]);
 
   const downloadBrowserDocxOrAlert = React.useCallback(async (preferredExtension = 'docx') => {
     try {
@@ -6787,6 +6852,27 @@ ${sidebarReviewContext}`
         }
         break;
       }
+      case 'applyThemeColors': {
+        // ערכת צבעים אמיתית: משתני CSS + התמדה — כותרות/הדגשות במסמך צבועות דרך var(--word-blue)
+        const themePrimary = String(value?.primary || '#2B579A');
+        const themeAccent = String(value?.accent || '#106EBE');
+        document.documentElement.style.setProperty('--word-blue', themePrimary);
+        document.documentElement.style.setProperty('--word-accent', themeAccent);
+        try { localStorage.setItem('wordai_theme_colors', JSON.stringify({ primary: themePrimary, accent: themeAccent, name: value?.name || '' })); } catch {}
+        showToast(`ערכת הצבעים "${value?.name || ''}" הוחלה על המסמך`, { tone: 'success' });
+        break;
+      }
+      case 'applyThemeFonts': {
+        // ערכת גופנים ברמת מסמך: ברירת המחדל של העורך + התמדה (לא רק על הבחירה)
+        const themeFont = String(value?.body || 'Alef');
+        localStorage.setItem('default-font', themeFont);
+        localStorage.setItem('default-font-stack', themeFont);
+        saveWordPreferences({ ...wordPreferences, defaultFontFamily: themeFont, defaultFontStack: themeFont });
+        setWordPreferences((prev) => ({ ...prev, defaultFontFamily: themeFont, defaultFontStack: themeFont }));
+        applyDocumentStyleToEditor(documentStyle);
+        showToast(`ערכת הגופנים "${value?.name || themeFont}" הוחלה על המסמך`, { tone: 'success' });
+        break;
+      }
       case 'saveDefaultTypography': {
         const currentFontStack = String(editor.getAttributes('textStyle')?.fontFamily || window.getComputedStyle(editor.view.dom).fontFamily || 'Alef').trim();
         const currentFont = normalizeStoredDefaultFont(currentFontStack);
@@ -6813,6 +6899,47 @@ ${sidebarReviewContext}`
       case 'applyDocumentStyle':
         changeDocumentStyle(value || 'academic');
         break;
+
+      // --- סגנונות מהירים מוגדרים ע"י המשתמש (Quick Styles) ---
+      case 'applyNamedStyle': {
+        const styleId = String(value || '');
+        const style = getCustomStyles().find((s) => s.id === styleId);
+        if (!style) break;
+        applyStyleToEditor(editor, style);
+        showToast(`הסגנון "${style.name}" הוחל`, { tone: 'success' });
+        break;
+      }
+      case 'createNamedStyle': {
+        const result = await requestInputDialog({
+          title: 'צור סגנון מהבחירה',
+          fields: [
+            { id: 'name', label: 'שם הסגנון', placeholder: 'למשל: כותרת משנה' },
+          ],
+          confirmLabel: 'צור סגנון',
+        });
+        const styleName = String(result?.name || '').trim();
+        if (!styleName) break;
+        const built = buildStyleFromEditor(editor);
+        const existingList = getCustomStyles();
+        const existing = existingList.find((s) => s.name === styleName);
+        const newStyle = { id: existing?.id || `style_${Date.now()}`, name: styleName, ...built };
+        const nextList = existing
+          ? existingList.map((s) => (s.id === existing.id ? newStyle : s))
+          : [...existingList, newStyle];
+        saveCustomStyles(nextList);
+        window.dispatchEvent(new Event('wordflow:styles-changed'));
+        showToast(`הסגנון "${styleName}" נשמר`, { tone: 'success' });
+        break;
+      }
+      case 'deleteNamedStyle': {
+        const delId = String(value || '');
+        const list = getCustomStyles();
+        const target = list.find((s) => s.id === delId);
+        saveCustomStyles(list.filter((s) => s.id !== delId));
+        window.dispatchEvent(new Event('wordflow:styles-changed'));
+        if (target) showToast(`הסגנון "${target.name}" נמחק`, { tone: 'info' });
+        break;
+      }
 
       // --- כיווניות RTL / LTR ברמת הבלוק ---
       case 'setDirRTL': {
@@ -6967,7 +7094,18 @@ ${sidebarReviewContext}`
         const d = new Date().toLocaleDateString('he-IL', { year: 'numeric', month: 'long', day: 'numeric' });
         editor.chain().focus().insertContent(d).run(); break;
       }
-      case 'insertMath': editor.chain().focus().insertContent(' ∑ ').run(); break;
+      case 'insertMath': {
+        const mathResult = await requestInputDialog({
+          title: 'הוספת משוואה',
+          description: 'הקלד נוסחה בתחביר LaTeX, למשל: x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}',
+          fields: [{ id: 'latex', label: 'נוסחה (LaTeX)', type: 'textarea', placeholder: 'a^2 + b^2 = c^2' }],
+          confirmLabel: 'הוסף משוואה',
+        });
+        const latexInput = String(mathResult?.latex || '').trim();
+        if (!latexInput) break;
+        editor.chain().focus().insertMathNode(latexInput).run();
+        break;
+      }
       case 'insertSymbol': editor.chain().focus().insertContent(value).run(); break;
       case 'addComment': {
         const { from, to, empty } = editor.state.selection;
@@ -7044,31 +7182,54 @@ ${sidebarReviewContext}`
         }
         break;
       }
-      case 'wordCount': {
-        const txt = editor.getText();
-        const wc = txt.trim() ? txt.trim().split(/\s+/).length : 0;
-        showToast(`ספירת מילים: ${wc}`, { tone: 'info' }); break;
-      }
+      case 'wordCount':
       case 'charCount': {
-        const cc = editor.getText().length;
-        showToast(`ספירת תווים: ${cc}`, { tone: 'info' }); break;
+        // דיאלוג סטטיסטיקות מלא (כמו "ספירת מילים" של Word)
+        const txt = editor.getText();
+        const trimmed = txt.trim();
+        const words = trimmed ? trimmed.split(/\s+/).length : 0;
+        const charsWithSpaces = txt.replace(/\n/g, '').length;
+        const charsNoSpaces = txt.replace(/\s/g, '').length;
+        let paragraphs = 0;
+        let lines = 0;
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+            if (node.textContent.trim()) paragraphs += 1;
+            lines += Math.max(1, node.textContent.split('\n').length);
+            return false;
+          }
+          return true;
+        });
+        await showConfirm(
+          [
+            `מילים: ${words.toLocaleString('he-IL')}`,
+            `תווים (ללא רווחים): ${charsNoSpaces.toLocaleString('he-IL')}`,
+            `תווים (כולל רווחים): ${charsWithSpaces.toLocaleString('he-IL')}`,
+            `פסקאות: ${paragraphs.toLocaleString('he-IL')}`,
+            `שורות (הערכה): ${lines.toLocaleString('he-IL')}`,
+            `עמודים: ${pageCount.toLocaleString('he-IL')}`,
+          ].join('\n'),
+          { title: 'סטטיסטיקת מסמך', confirmLabel: 'סגור', cancelLabel: '' },
+        );
+        break;
       }
 
-      // --- תוכן עניינים אמיתי (מוזרק לתוך העורך) ---
+      // --- תוכן עניינים חי (node שמתעדכן אוטומטית לפי הכותרות) ---
       case 'generateTOC': {
-        const headings = [];
-        editor.state.doc.descendants((node, pos) => {
-          if (node.type.name === 'heading') {
-            const id = `heading-${pos}`;
-            headings.push({ level: node.attrs.level, text: node.textContent, id });
-          }
+        let hasHeading = false;
+        let hasToc = false;
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === 'heading' && node.textContent.trim()) hasHeading = true;
+          if (node.type.name === 'tocNode') hasToc = true;
+          return true;
         });
-        if (!headings.length) { showToast('לא נמצאו כותרות במסמך', { tone: 'warning' }); break; }
-        const tocItems = headings
-          .map((h) => `<li style="padding-right:${(h.level - 1) * 16}px"><a href="#${h.id}">${h.text}</a></li>`)
-          .join('');
-        const tocHtml = `<p><strong>תוכן עניינים</strong></p><ul style="list-style:none;padding:0">${tocItems}</ul><hr/>`;
-        editor.chain().focus().insertContentAt(1, tocHtml).run();
+        if (hasToc) {
+          showToast('תוכן העניינים כבר קיים ומתעדכן אוטומטית לפי הכותרות.', { tone: 'info' });
+          break;
+        }
+        if (!hasHeading) { showToast('לא נמצאו כותרות במסמך', { tone: 'warning' }); break; }
+        editor.chain().focus().insertTocNode().run();
+        showToast('תוכן עניינים חי נוסף — מתעדכן אוטומטית וקליק על שורה קופץ לכותרת.', { tone: 'success' });
         break;
       }
 
@@ -7097,7 +7258,77 @@ ${sidebarReviewContext}`
         break;
       }
 
-      case 'aiSpellCheck': showToast('בדיקת איות AI: סמן טקסט ולחץ "תיקון" ב-BubbleMenu.', { tone: 'info' }); break;
+      case 'aiSpellCheck': {
+        // סריקת איות/דקדוק אמיתית: מריצים את סוכן ה'תיקון' על הבחירה (או על כל המסמך),
+        // והתוצאה מוצגת כהצעת AI עם קבל/דחה (התשתית הקיימת של AiSuggestionMark).
+        const { empty: selEmpty } = editor.state.selection;
+        const docTextLength = editor.getText().length;
+        if (selEmpty && docTextLength > 12000) {
+          showToast('המסמך ארוך — סמן קטע (עד ~12,000 תווים) והרץ שוב את בדיקת האיות.', { tone: 'warning' });
+          break;
+        }
+        if (selEmpty && !docTextLength) {
+          showToast('המסמך ריק — אין מה לבדוק.', { tone: 'info' });
+          break;
+        }
+        if (selEmpty) {
+          const confirmed = await showConfirm('להריץ בדיקת איות ודקדוק על כל המסמך? התיקונים יוצגו כהצעה עם אישור/דחייה.', {
+            title: 'בדיקת איות AI',
+            confirmLabel: 'בדוק את כל המסמך',
+          });
+          if (!confirmed) break;
+          editor.chain().focus().selectAll().run();
+        }
+        showToast('בודק איות ודקדוק...', { tone: 'info' });
+        try {
+          const { applyInlineAi } = await import('./services/aiService');
+          await applyInlineAi(editor, 'fix');
+          showToast('הבדיקה הושלמה — אשר או דחה את התיקון בתפריט הצף.', { tone: 'success' });
+        } catch (error) {
+          showToast(`בדיקת האיות נכשלה: ${error?.message || 'שגיאה'}`, { tone: 'error' });
+        }
+        break;
+      }
+      case 'insertCrossReference': {
+        // דיאלוג הפניה מקושרת אמיתי: בחירת כותרת יעד → node חי שמתעדכן עם הכותרת
+        const availableHeadings = [];
+        editor.state.doc.descendants((node, pos) => {
+          if (node.type.name === 'heading' && node.textContent.trim()) {
+            availableHeadings.push({ pos, text: node.textContent.trim(), refId: node.attrs.refId || null });
+          }
+        });
+        if (!availableHeadings.length) {
+          showToast('אין כותרות במסמך — הוסף כותרת (כותרת 1/2/3) ואז צור הפניה.', { tone: 'warning' });
+          break;
+        }
+        const crossRefResult = await requestInputDialog({
+          title: 'הפניה מקושרת',
+          description: 'בחר כותרת יעד — ההפניה תציג את שם הכותרת ותתעדכן אם הכותרת תשתנה.',
+          fields: [{
+            id: 'target',
+            label: 'כותרת יעד',
+            type: 'select',
+            value: '0',
+            options: availableHeadings.map((h, idx) => ({ value: String(idx), label: h.text.slice(0, 80) })),
+          }],
+          confirmLabel: 'הוסף הפניה',
+        });
+        if (!crossRefResult) break;
+        const chosen = availableHeadings[Number(crossRefResult.target || 0)];
+        if (!chosen) break;
+        let refId = chosen.refId;
+        if (!refId) {
+          refId = `ref_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          const headingNode = editor.state.doc.nodeAt(chosen.pos);
+          if (headingNode) {
+            editor.view.dispatch(
+              editor.state.tr.setNodeMarkup(chosen.pos, undefined, { ...headingNode.attrs, refId }),
+            );
+          }
+        }
+        editor.chain().focus().insertCrossReference({ targetId: refId, fallbackLabel: chosen.text }).run();
+        break;
+      }
 
       // --- פקודות File Menu ---
       case 'newDoc': {
@@ -7269,8 +7500,38 @@ ${sidebarReviewContext}`
       case 'focusMode': setSidebarOpen(false); break;
       case 'toggleWatermark': {
         const el = document.querySelector('.ProseMirror');
-        if (el) el.style.backgroundImage = el.style.backgroundImage
-          ? '' : 'repeating-linear-gradient(-45deg, transparent, transparent 100px, rgba(200,200,200,0.1) 100px, rgba(200,200,200,0.1) 200px)';
+        if (documentLayout.watermark) {
+          // סימן מים קיים — הסרה
+          if (el) el.style.backgroundImage = '';
+          setDocumentLayout((prev) => ({ ...prev, watermark: null }));
+          showToast('סימן המים הוסר', { tone: 'info' });
+          break;
+        }
+        const wmResult = await requestInputDialog({
+          title: 'סימן מים',
+          description: 'הטקסט יופיע באלכסון על כל עמוד, וגם בקובץ ה-Word המיוצא.',
+          fields: [
+            { id: 'text', label: 'טקסט סימן המים', value: 'טיוטה', placeholder: 'טיוטה / סודי / עותק' },
+            {
+              id: 'color', label: 'צבע', type: 'select', value: '#C8C8C8',
+              options: [
+                { value: '#C8C8C8', label: 'אפור בהיר' },
+                { value: '#FCA5A5', label: 'אדום בהיר' },
+                { value: '#93C5FD', label: 'כחול בהיר' },
+              ],
+            },
+          ],
+          confirmLabel: 'החל סימן מים',
+        });
+        const wmText = String(wmResult?.text || '').trim();
+        if (!wmText) break;
+        const wmColor = wmResult.color || '#C8C8C8';
+        if (el) {
+          const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='400'><text x='200' y='200' font-size='48' fill='${wmColor}' fill-opacity='0.35' text-anchor='middle' transform='rotate(-45 200 200)' font-family='Arial'>${wmText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,'')}</text></svg>`;
+          el.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+          el.style.backgroundRepeat = 'repeat';
+        }
+        setDocumentLayout((prev) => ({ ...prev, watermark: { text: wmText, color: wmColor } }));
         break;
       }
       case 'setPageColor': {
@@ -7279,15 +7540,51 @@ ${sidebarReviewContext}`
           el.dataset.customBackground = value;
           el.style.background = value;
         }
+        setDocumentLayout((prev) => ({ ...prev, pageColor: value || '' }));
         break;
       }
       case 'togglePageBorders': {
         const el = document.querySelector('.ProseMirror');
-        if (el) {
-          const nextBorder = el.dataset.customBorder ? '' : '2px solid var(--word-blue)';
-          el.dataset.customBorder = nextBorder;
-          el.style.border = nextBorder || '';
+        if (documentLayout.pageBorder) {
+          if (el) { el.dataset.customBorder = ''; el.style.border = ''; }
+          setDocumentLayout((prev) => ({ ...prev, pageBorder: null }));
+          showToast('גבולות העמוד הוסרו', { tone: 'info' });
+          break;
         }
+        const pbResult = await requestInputDialog({
+          title: 'גבולות עמוד',
+          description: 'הגבול יופיע סביב העמוד וגם בקובץ ה-Word המיוצא.',
+          fields: [
+            {
+              id: 'color', label: 'צבע', type: 'select', value: '#2B579A',
+              options: [
+                { value: '#2B579A', label: 'כחול Word' },
+                { value: '#000000', label: 'שחור' },
+                { value: '#6B7280', label: 'אפור' },
+                { value: '#B91C1C', label: 'אדום' },
+              ],
+            },
+            {
+              id: 'width', label: 'עובי', type: 'select', value: '1',
+              options: [
+                { value: '0.5', label: 'דק (½ נק׳)' },
+                { value: '1', label: 'רגיל (1 נק׳)' },
+                { value: '2', label: 'עבה (2 נק׳)' },
+                { value: '3', label: 'עבה מאוד (3 נק׳)' },
+              ],
+            },
+          ],
+          confirmLabel: 'החל גבול',
+        });
+        if (!pbResult) break;
+        const pbColor = pbResult.color || '#2B579A';
+        const pbWidth = Number(pbResult.width) || 1;
+        if (el) {
+          const cssBorder = `${Math.max(1, Math.round(pbWidth * 1.33))}px solid ${pbColor}`;
+          el.dataset.customBorder = cssBorder;
+          el.style.border = cssBorder;
+        }
+        setDocumentLayout((prev) => ({ ...prev, pageBorder: { style: 'single', color: pbColor, sizePt: pbWidth } }));
         break;
       }
       case 'exportHTML': {
@@ -7308,9 +7605,11 @@ ${sidebarReviewContext}`
           page.dataset.customPadding = m;
           page.style.padding = m;
         }
+        setDocumentLayout((prev) => ({ ...prev, margins: marginMap[value] ? value : 'normal' }));
         break;
       }
       case 'setOrientation': {
+        setDocumentLayout((prev) => ({ ...prev, orientation: value === 'landscape' ? 'landscape' : 'portrait' }));
         const page2 = document.querySelector('.ProseMirror');
         if (!page2) break;
         if (value === 'landscape') {
@@ -7328,6 +7627,7 @@ ${sidebarReviewContext}`
       case 'setPageSize': {
         const sizes = { a4: ['21cm','29.7cm'], a3: ['29.7cm','42cm'], letter: ['21.59cm','27.94cm'], legal: ['21.59cm','35.56cm'] };
         const [pw, ph] = sizes[value] || sizes.a4;
+        setDocumentLayout((prev) => ({ ...prev, pageSize: sizes[value] ? value : 'a4' }));
         const pg = document.querySelector('.ProseMirror');
         if (pg) {
           pg.dataset.customWidth = pw;
@@ -7377,28 +7677,49 @@ ${sidebarReviewContext}`
         ).run();
         break;
       case 'insertHeader': {
-        const headerMap = {
-          'ריק': '<div style="border-bottom:1px solid #ccc;padding-bottom:6px;margin-bottom:12px;color:#555;font-size:12px">&nbsp;</div>',
-          'שם מסמך': '<div style="border-bottom:1px solid #ccc;padding-bottom:6px;margin-bottom:12px;color:#555;font-size:12px;text-align:center"><strong>כותרת מסמך</strong></div>',
-          'תאריך + שם': `<div style="border-bottom:1px solid #ccc;padding-bottom:6px;margin-bottom:12px;color:#555;font-size:12px;display:flex;justify-content:space-between"><span><strong>שם המסמך</strong></span><span>${new Date().toLocaleDateString('he-IL')}</span></div>`,
-          'מספר עמוד': '<div style="border-bottom:1px solid #ccc;padding-bottom:6px;margin-bottom:12px;color:#555;font-size:12px;text-align:left">עמוד 1</div>',
+        // כותרת עליונה = state ברמת מסמך (מוצג כ-chrome על העמוד + מיוצא כ-Header אמיתי ב-DOCX)
+        const headerTextMap = {
+          'ריק': '',
+          'שם מסמך': inferCurrentDocumentTitle(editor?.getText?.() || '') || 'כותרת מסמך',
+          'תאריך + שם': `${inferCurrentDocumentTitle(editor?.getText?.() || '') || 'שם המסמך'} · ${new Date().toLocaleDateString('he-IL')}`,
+          'מספר עמוד': '',
         };
-        editor.chain().focus().insertContentAt(1, headerMap[value] || headerMap['ריק']).run();
+        if (value === 'הסר') {
+          setDocumentLayout((prev) => ({ ...prev, header: null }));
+          showToast('הכותרת העליונה הוסרה', { tone: 'info' });
+          break;
+        }
+        setDocumentLayout((prev) => ({
+          ...prev,
+          header: { preset: value || 'ריק', text: headerTextMap[value] ?? '', pageNumber: value === 'מספר עמוד' },
+        }));
+        showToast('כותרת עליונה הוגדרה — תופיע בכל עמוד ובקובץ ה-Word המיוצא', { tone: 'success' });
         break;
       }
       case 'insertFooter': {
-        const footerMap = {
-          'ריק': '<div style="border-top:1px solid #ccc;padding-top:6px;margin-top:20px;color:#555;font-size:12px">&nbsp;</div>',
-          'שם מסמך': '<div style="border-top:1px solid #ccc;padding-top:6px;margin-top:20px;color:#555;font-size:12px;text-align:center"><strong>שם המסמך</strong></div>',
-          'מספר עמוד': '<div style="border-top:1px solid #ccc;padding-top:6px;margin-top:20px;color:#555;font-size:12px;text-align:left">עמוד 1</div>',
-          'תאריך': `<div style="border-top:1px solid #ccc;padding-top:6px;margin-top:20px;color:#555;font-size:12px">${new Date().toLocaleDateString('he-IL')}</div>`,
+        const footerTextMap = {
+          'ריק': '',
+          'שם מסמך': inferCurrentDocumentTitle(editor?.getText?.() || '') || 'שם המסמך',
+          'מספר עמוד': '',
+          'תאריך': new Date().toLocaleDateString('he-IL'),
         };
-        const pos = editor.state.doc.content.size;
-        editor.chain().focus().insertContentAt(pos, footerMap[value] || footerMap['ריק']).run();
+        if (value === 'הסר') {
+          setDocumentLayout((prev) => ({ ...prev, footer: null, pageNumbers: false }));
+          showToast('הכותרת התחתונה הוסרה', { tone: 'info' });
+          break;
+        }
+        setDocumentLayout((prev) => ({
+          ...prev,
+          footer: { preset: value || 'ריק', text: footerTextMap[value] ?? '', pageNumber: value === 'מספר עמוד' },
+          pageNumbers: prev.pageNumbers || value === 'מספר עמוד',
+        }));
+        showToast('כותרת תחתונה הוגדרה — תופיע בכל עמוד ובקובץ ה-Word המיוצא', { tone: 'success' });
         break;
       }
       case 'insertPageNum':
-        editor.chain().focus().insertContent(`<span style="border:1px solid #ccc;padding:1px 6px;border-radius:3px;font-size:11px;color:#555">[עמוד]</span>`).run();
+        // שדה חי בעורך + מספרי עמוד אמיתיים ב-Footer של קובץ ה-Word המיוצא
+        editor.chain().focus().insertPageNumberField().run();
+        setDocumentLayout((prev) => ({ ...prev, pageNumbers: true }));
         break;
       case 'insertTextBox': {
         const tbMap = {
@@ -7448,9 +7769,39 @@ ${sidebarReviewContext}`
         const chartData = String(result?.chartData || '');
         const rows = chartData.split(',').map(r => r.trim().split(':').map(s => s.trim())).filter(r => r.length === 2);
         if (!rows.length) break;
-        const max = Math.max(...rows.map(r => parseFloat(r[1]) || 0)) || 1;
-        const barChart = `<div style="padding:12px;background:#f9f9f9;border:1px solid #ddd;border-radius:4px;margin:8px 0"><div style="font-weight:bold;margin-bottom:8px;text-align:center">תרשים</div>${rows.map(([lbl, val]) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="width:70px;font-size:12px;text-align:right">${lbl}</span><div style="flex:1;background:#e5e7eb;border-radius:2px;height:18px;position:relative"><div style="width:${Math.round((parseFloat(val) / max) * 100)}%;background:#2B579A;height:100%;border-radius:2px;display:flex;align-items:center;padding-right:4px"><span style="font-size:11px;color:white">${val}</span></div></div></div>`).join('')}</div>`;
-        editor.chain().focus().insertContent(barChart).run();
+        const chartType = ['bar', 'line', 'pie', 'table'].includes(value) ? value : 'bar';
+        const values = rows.map(([, v]) => parseFloat(v) || 0);
+        const max = Math.max(...values) || 1;
+        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        let chartHtml = '';
+        if (chartType === 'table') {
+          chartHtml = `<table><tr><th>שם</th><th>ערך</th></tr>${rows.map(([lbl, val]) => `<tr><td>${esc(lbl)}</td><td>${esc(val)}</td></tr>`).join('')}</table>`;
+        } else if (chartType === 'pie') {
+          // עוגה: SVG conic דרך stroke-dasharray על עיגולים
+          const total = values.reduce((a, b) => a + b, 0) || 1;
+          const colors = ['#2B579A', '#E97132', '#196B24', '#0F9ED5', '#A02B93', '#DE9ED8', '#4EA72E', '#C00000'];
+          let acc = 0;
+          const segments = rows.map(([lbl, val], i) => {
+            const frac = (parseFloat(val) || 0) / total;
+            const seg = `<circle r="15.9155" cx="21" cy="21" fill="transparent" stroke="${colors[i % colors.length]}" stroke-width="10" stroke-dasharray="${(frac * 100).toFixed(2)} ${(100 - frac * 100).toFixed(2)}" stroke-dashoffset="${(25 - acc * 100).toFixed(2)}"></circle>`;
+            acc += frac;
+            return seg;
+          }).join('');
+          const legendText = rows.map(([lbl, val]) => `${lbl}: ${val}`).join(' · ');
+          const pieSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 42 42"><g transform="rotate(-90 21 21)">${segments}</g></svg>`;
+          // SVG גולמי לא שורד את הסכימה של TipTap — עוטפים כתמונת data-URI
+          chartHtml = `<img src="data:image/svg+xml;utf8,${encodeURIComponent(pieSvg)}" alt="תרשים עוגה" /><p style="text-align:center;font-size:12px;color:#475569">${esc(legendText)}</p>`;
+        } else if (chartType === 'line') {
+          const w = 320; const h = 140; const pad = 20;
+          const step = rows.length > 1 ? (w - pad * 2) / (rows.length - 1) : 0;
+          const points = values.map((v, i) => `${pad + i * step},${h - pad - ((v / max) * (h - pad * 2))}`).join(' ');
+          const labels = rows.map(([lbl], i) => `<text x="${pad + i * step}" y="${h - 4}" font-size="9" text-anchor="middle" fill="#475569">${esc(lbl).slice(0, 8)}</text>`).join('');
+          const lineSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><polyline points="${points}" fill="none" stroke="#2B579A" stroke-width="2"/>${values.map((v, i) => `<circle cx="${pad + i * step}" cy="${h - pad - ((v / max) * (h - pad * 2))}" r="3" fill="#2B579A"/>`).join('')}${labels}</svg>`;
+          chartHtml = `<img src="data:image/svg+xml;utf8,${encodeURIComponent(lineSvg)}" alt="תרשים קווים" />`;
+        } else {
+          chartHtml = `<div style="padding:12px;background:#f9f9f9;border:1px solid #ddd;border-radius:4px;margin:8px 0"><div style="font-weight:bold;margin-bottom:8px;text-align:center">תרשים</div>${rows.map(([lbl, val]) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="width:70px;font-size:12px;text-align:right">${esc(lbl)}</span><div style="flex:1;background:#e5e7eb;border-radius:2px;height:18px;position:relative"><div style="width:${Math.round(((parseFloat(val) || 0) / max) * 100)}%;background:#2B579A;height:100%;border-radius:2px;display:flex;align-items:center;padding-right:4px"><span style="font-size:11px;color:white">${esc(val)}</span></div></div></div>`).join('')}</div>`;
+        }
+        editor.chain().focus().insertContent(chartHtml).run();
         break;
       }
 
@@ -7483,6 +7834,12 @@ ${sidebarReviewContext}`
           modern: `<div data-cover-page="true"><p>WordFlow AI</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p></div>`,
           academic: `<div data-cover-page="true"><p>עבודה אקדמית</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>מגיש/ה: ${safeAuthor}</p><p>${safeDate}</p></div>`,
           bold: `<div data-cover-page="true"><p>דוח / מצגת / מסמך</p><h1>${safeTitle}</h1><h2>${safeSub}</h2><hr /><p>${safeAuthor}</p><p>${safeDate}</p></div>`,
+          minimal: `<div data-cover-page="true"><p></p><p></p><p></p><h1 style="text-align:center">${safeTitle}</h1><p style="text-align:center"><span style="color:#64748b">${safeSub}</span></p><p></p><p></p><p style="text-align:center">${safeAuthor} · ${safeDate}</p></div>`,
+          elegant: `<div data-cover-page="true"><p style="text-align:center"><span style="color:#94a3b8">✦ ✦ ✦</span></p><h1 style="text-align:center">${safeTitle}</h1><hr /><h3 style="text-align:center">${safeSub}</h3><p></p><p style="text-align:center">${safeAuthor}</p><p style="text-align:center"><span style="color:#64748b">${safeDate}</span></p><p style="text-align:center"><span style="color:#94a3b8">✦ ✦ ✦</span></p></div>`,
+          corporate: `<div data-cover-page="true"><p style="text-align:left"><span style="color:#2B579A"><strong>■■■</strong></span></p><p></p><h1>${safeTitle}</h1><h2><span style="color:#2B579A">${safeSub}</span></h2><p></p><hr /><p><strong>הוכן על ידי:</strong> ${safeAuthor}</p><p><strong>תאריך:</strong> ${safeDate}</p><p><strong>סטטוס:</strong> טיוטה לאישור</p></div>`,
+          thesis: `<div data-cover-page="true"><p style="text-align:center">מוסד אקדמי</p><p style="text-align:center"><span style="color:#64748b">הפקולטה / החוג</span></p><p></p><p></p><h1 style="text-align:center">${safeTitle}</h1><h3 style="text-align:center">${safeSub}</h3><p></p><p style="text-align:center">עבודה זו מוגשת כחלק מהדרישות לקבלת התואר</p><p></p><p style="text-align:center"><strong>מגיש/ה:</strong> ${safeAuthor}</p><p style="text-align:center"><strong>מנחה:</strong> ________________</p><p></p><p style="text-align:center">${safeDate}</p></div>`,
+          legal: `<div data-cover-page="true"><p style="text-align:center"><strong>ב״ה</strong></p><p></p><h1 style="text-align:center">${safeTitle}</h1><h3 style="text-align:center">${safeSub}</h3><p></p><hr /><p><strong>נערך על ידי:</strong> ${safeAuthor}</p><p><strong>תאריך עריכה:</strong> ${safeDate}</p><p><span style="color:#64748b">מסמך זה הינו טיוטה משפטית ואינו מהווה ייעוץ משפטי.</span></p></div>`,
+          creative: `<div data-cover-page="true"><h1 style="text-align:center"><span style="color:#7c3aed">${safeTitle}</span></h1><p style="text-align:center"><span style="color:#a78bfa">〰〰〰〰〰</span></p><h3 style="text-align:center">${safeSub}</h3><p></p><p></p><p style="text-align:center">${safeAuthor}</p><p style="text-align:center"><span style="color:#64748b">${safeDate}</span></p></div>`,
         };
 
   persistActiveTemplateId('cover');
@@ -7508,10 +7865,17 @@ ${sidebarReviewContext}`
         const newVal = !trackChanges;
         setTrackChanges(newVal);
         editor.commands.setTrackChangesEnabled?.(newVal);
-        showToast(newVal ? 'מעקב שינויים: פעיל' : 'מעקב שינויים: כבוי', { tone: 'info' });
+        if (newVal) setTrackPanelOpen(true);
+        showToast(newVal ? 'מעקב שינויים: פעיל (הוספות ומחיקות מסומנות)' : 'מעקב שינויים: כבוי', { tone: 'info' });
+        break;
+      }
+      case 'toggleTrackPanel': {
+        setTrackPanelOpen((prev) => !prev);
         break;
       }
       case 'acceptAllChanges': {
+        // משביתים זמנית את המעקב כדי ש-setContent לא יסומן בעצמו כשינוי
+        editor.commands.setTrackChangesEnabled?.(false);
         const html = editor.getHTML();
         const div = document.createElement('div');
         div.innerHTML = html;
@@ -7520,6 +7884,7 @@ ${sidebarReviewContext}`
         });
         editor.commands.setContent(div.innerHTML);
         acceptInsertions(editor);
+        editor.commands.setTrackChangesEnabled?.(trackChanges);
         break;
       }
       case 'rejectAllChanges': {
@@ -7539,8 +7904,10 @@ ${sidebarReviewContext}`
           span.textContent = orig;
           el.replaceWith(span);
         });
+        editor.commands.setTrackChangesEnabled?.(false);
         editor.commands.setContent(div2.innerHTML);
         rejectInsertions(editor);
+        editor.commands.setTrackChangesEnabled?.(trackChanges);
         break;
       }
 
@@ -7661,7 +8028,12 @@ ${sidebarReviewContext}`
         break;
       }
       case 'splitWindow':
-        showToast('הפצל אינו נתמך בדפדפן. פתח חלון נוסף עם Ctrl+T.', { tone: 'warning' });
+        // אין ארכיטקטורת split-pane; החלופה הכנה — חלון נוסף של האפליקציה
+        if (window.desktopApp?.createAppWindow) {
+          Promise.resolve(window.desktopApp.createAppWindow()).catch(() => {});
+        } else {
+          window.open(window.location.href, '_blank', 'noopener');
+        }
         break;
 
       default: break;
@@ -8164,6 +8536,25 @@ ${sidebarReviewContext}`
                       values: { ...prev.values, [field.id]: e.target.value },
                     })),
                   };
+                  if (field.type === 'select') {
+                    return (
+                      <label key={field.id} className="flex flex-col gap-1.5 text-sm text-slate-600">
+                        <span>{field.label}</span>
+                        <select
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none"
+                          value={inputDialog.values?.[field.id] || ''}
+                          onChange={(e) => setInputDialog((prev) => ({
+                            ...prev,
+                            values: { ...prev.values, [field.id]: e.target.value },
+                          }))}
+                        >
+                          {(field.options || []).map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    );
+                  }
                   if (field.type === 'textarea') {
                     return (
                       <TextArea
@@ -8642,6 +9033,7 @@ ${sidebarReviewContext}`
           <div className={`wordai-document-stage relative w-full flex justify-center ${documentArrival.active ? `wordai-document-arrival wordai-document-arrival--${documentArrival.tone}` : ''}`} style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
             <DocumentEditor
               documentStyle={documentStyle}
+              documentLayout={documentLayout}
               viewMode={viewMode}
               activeTemplateId={activeTemplateId}
               onReady={handleEditorReady}
@@ -9022,6 +9414,26 @@ ${sidebarReviewContext}`
               el.classList.add('comment-active');
               window.setTimeout(() => el.classList.remove('comment-active'), 1200);
             }
+          }}
+        />
+      )}
+
+      {appMode === 'word' && trackPanelOpen && (
+        <TrackChangesPanel
+          open={trackPanelOpen}
+          changes={trackedChanges}
+          trackingEnabled={trackChanges}
+          onClose={() => setTrackPanelOpen(false)}
+          onAccept={(change) => { acceptTrackedChange(editor, change); setTrackedChanges(collectTrackedChanges(editor)); }}
+          onReject={(change) => { rejectTrackedChange(editor, change); setTrackedChanges(collectTrackedChanges(editor)); }}
+          onAcceptAll={() => { acceptInsertions(editor); setTrackedChanges([]); }}
+          onRejectAll={() => { rejectInsertions(editor); setTrackedChanges([]); }}
+          onScrollTo={(change) => {
+            const from = change?.ranges?.[0]?.from;
+            if (typeof from !== 'number' || !editor) return;
+            editor.chain().focus().setTextSelection(Math.min(from, editor.state.doc.content.size)).run();
+            const dom = editor.view.domAtPos(Math.min(from + 1, editor.state.doc.content.size))?.node;
+            (dom?.nodeType === 1 ? dom : dom?.parentElement)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
           }}
         />
       )}

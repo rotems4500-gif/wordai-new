@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getToolLinksConfig } from './services/aiService';
 import { showToast } from './services/uiFeedback';
+import { getCustomStyles } from './services/stylesRegistry';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 
 const FONTS = [
@@ -38,6 +39,13 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
   const [tableHover, setTableHover] = useState({ row: 0, col: 0 });
   const [fixedDrop, setFixedDrop] = useState(null); // { type, x, y }
   const [symbolCat, setSymbolCat] = useState('כללי');
+  const [customStylesTick, setCustomStylesTick] = useState(0);
+
+  useEffect(() => {
+    const onStylesChanged = () => setCustomStylesTick((t) => t + 1);
+    window.addEventListener('wordflow:styles-changed', onStylesChanged);
+    return () => window.removeEventListener('wordflow:styles-changed', onStylesChanged);
+  }, []);
   const toolLinks = getToolLinksConfig();
   const dropRef = useRef(null);
   const imgRef = useRef(null);
@@ -121,6 +129,12 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             { id: 'modern', label: 'מודרני', preview: 'כותרת גדולה עם תגית עליונה' },
             { id: 'academic', label: 'אקדמי', preview: 'מסגרת נקייה ומראה פורמלי' },
             { id: 'bold', label: 'נועז', preview: 'מראה צבעוני ומודגש' },
+            { id: 'minimal', label: 'מינימלי', preview: 'כותרת ממורכזת, נקי לגמרי' },
+            { id: 'elegant', label: 'אלגנטי', preview: 'עיטורים עדינים וסימטריה' },
+            { id: 'corporate', label: 'עסקי', preview: 'כותרת + פרטי מסמך מובנים' },
+            { id: 'thesis', label: 'תזה / סמינריון', preview: 'מוסד, מנחה ודרישות תואר' },
+            { id: 'legal', label: 'משפטי', preview: 'פורמלי עם הסתייגות משפטית' },
+            { id: 'creative', label: 'יצירתי', preview: 'צבע סגול ונגיעה אישית' },
           ].map((cover) => (
             <button
               key={cover.id}
@@ -381,9 +395,12 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
         <div ref={dropRef} style={{ ...ms, padding: '10px 12px', minWidth: '240px' }}>
           <div style={{ fontSize: '12px', fontWeight: '600', color: '#323130', marginBottom: '8px' }}>בחר מרווח בין פסקאות</div>
           {[
-            { label: 'צפוף', lineHeight: '1.15', before: 0, after: 4 },
-            { label: 'רגיל', lineHeight: '1.5', before: 0, after: 8 },
-            { label: 'מרווח', lineHeight: '2', before: 0, after: 14 },
+            { label: 'ללא רווח בפסקה', lineHeight: '1.0', before: 0, after: 0 },
+            { label: 'דחוס', lineHeight: '1.0', before: 0, after: 4 },
+            { label: 'צמוד', lineHeight: '1.15', before: 0, after: 6 },
+            { label: 'פתוח', lineHeight: '1.15', before: 0, after: 10 },
+            { label: 'רופף', lineHeight: '1.5', before: 0, after: 6 },
+            { label: 'כפול', lineHeight: '2', before: 0, after: 8 },
           ].map((item) => (
             <button
               key={item.label}
@@ -435,11 +452,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             { name: 'סגול קלאסי', primary: '#6B2E8F', accent: '#9B4DB7' },
           ].map(theme => (
             <button key={theme.name} className="r-btn" style={{ width: '100%', padding: '6px 10px', gap: '8px', marginBottom: '2px' }}
-              onClick={() => {
-                document.documentElement.style.setProperty('--word-blue', theme.primary);
-                document.documentElement.style.setProperty('--word-accent', theme.accent);
-                closeDrop();
-              }}>
+              onClick={() => { onCommand('applyThemeColors', theme); closeDrop(); }}>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <div style={{ width: 16, height: 16, borderRadius: '50%', background: theme.primary }} />
                 <div style={{ width: 16, height: 16, borderRadius: '50%', background: theme.accent }} />
@@ -461,7 +474,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             { name: 'מודרני (Assistant)', heading: 'Assistant', body: 'Assistant' },
           ].map(f => (
             <button key={f.name} className="r-btn" style={{ width: '100%', padding: '6px 10px', marginBottom: '2px', flexDirection: 'column', alignItems: 'flex-start' }}
-              onClick={() => { onCommand('fontFamily', f.body); closeDrop(); }}>
+              onClick={() => { onCommand('applyThemeFonts', f); closeDrop(); }}>
               <span style={{ fontFamily: f.heading, fontWeight: 'bold', fontSize: '14px' }}>{f.name}</span>
               <span style={{ fontFamily: f.body, fontSize: '11px', color: '#605E5C' }}>Aa Bb עברית</span>
             </button>
@@ -645,6 +658,35 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                             </>
                           );
                         })()}
+                        {(() => { void customStylesTick; return getCustomStyles(); })().map((style) => (
+                          <div
+                            key={style.id}
+                            className="style-item"
+                            style={{ position: 'relative' }}
+                            title={`החל את הסגנון "${style.name}" (קליק ימני / החזק להסרה)`}
+                            onClick={() => onCommand('applyNamedStyle', style.id)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              if (window.confirm(`למחוק את הסגנון "${style.name}"?`)) {
+                                onCommand('deleteNamedStyle', style.id);
+                              }
+                            }}
+                          >
+                            <span style={{
+                              fontSize: '13px',
+                              fontWeight: style.bold ? '700' : '400',
+                              fontStyle: style.italic ? 'italic' : 'normal',
+                              textDecoration: style.underline ? 'underline' : 'none',
+                              color: style.color || 'inherit',
+                              fontFamily: style.fontFamily || 'inherit',
+                            }}>AaBb</span>
+                            <span>{style.name}</span>
+                          </div>
+                        ))}
+                        <div className="style-item" onClick={() => onCommand('createNamedStyle')} title="שמור את העיצוב הנוכחי כסגנון חדש">
+                          <span style={{ fontSize: '15px', fontWeight: '700', color: '#2B579A' }}>+</span>
+                          <span>צור סגנון</span>
+                        </div>
                     </div>
                 </div>
                 <div className="toolbar-group-label">סגנונות</div>
@@ -689,7 +731,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                     <div className="btn-column">
                         <button className="r-btn r-btn-medium" onClick={(e) => openDrop('smartart', e)}><i className="ph-fill ph-tree-structure text-green-600"></i> SmartArt</button>
                         <button className="r-btn r-btn-medium" onClick={(e) => openDrop('chart', e)}><i className="ph-fill ph-chart-bar"></i> תרשים</button>
-                        <button className="r-btn r-btn-medium" onClick={() => imgRef.current?.click()}><i className="ph-fill ph-cube"></i> מודלים / תמונה</button>
+                        <button className="r-btn r-btn-medium" onClick={() => imgRef.current?.click()}><i className="ph-fill ph-image"></i> תמונה מקובץ</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">איורים</div>
@@ -719,7 +761,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                     </button>
                     <div className="btn-column">
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('insertBookmarkDialog')}><i className="ph-fill ph-bookmark-simple"></i> סימניה</button>
-                        <button className="r-btn r-btn-medium" onClick={handleInsertLink}><i className="ph-fill ph-arrows-merge"></i> הפניה מקושרת</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('insertCrossReference')}><i className="ph-fill ph-arrows-merge"></i> הפניה מקושרת</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">קישורים</div>
@@ -901,6 +943,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                     <div className="btn-column">
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('acceptAllChanges')}><i className="ph-fill ph-check text-green-500"></i> קבל</button>
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('rejectAllChanges')}><i className="ph-fill ph-x text-red-500"></i> דחה</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('toggleTrackPanel')}><i className="ph-fill ph-list-checks"></i> חלונית סקירה</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">מעקב ושינויים</div>

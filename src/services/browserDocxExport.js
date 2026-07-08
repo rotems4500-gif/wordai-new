@@ -1,9 +1,14 @@
 import {
   AlignmentType,
+  BorderStyle,
   Document,
+  Footer,
+  Header,
   HeadingLevel,
   ImageRun,
   Packer,
+  PageNumber,
+  PageOrientation,
   Paragraph,
   Table,
   TableCell,
@@ -12,6 +17,12 @@ import {
   WidthType,
 } from 'docx';
 import JSZip from 'jszip';
+import {
+  cssColorToDocxHex,
+  getLayoutMarginCm,
+  normalizeDocumentLayout,
+  PAGE_SIZES_CM,
+} from './documentLayout';
 
 const DOCX_DEFAULT_FONT = 'Arial';
 const DOCX_DEFAULT_LANGUAGE = { value: 'he-IL', eastAsia: 'he-IL', bidirectional: 'he-IL' };
@@ -518,8 +529,126 @@ const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = r
   return children.length ? children : [new Paragraph({ text: '' })];
 };
 
+// בונה header/footer/properties של section מתוך documentLayout (ראה services/documentLayout.js)
+const buildHeaderFooterParagraph = (content = {}, typography = {}, { isFooter = false } = {}) => {
+  const children = [];
+  const text = String(content?.text || '').trim();
+  if (text) {
+    children.push(createDocxTextRun(text, { size: 20, color: '555555' }, typography));
+  }
+  if (content?.pageNumber) {
+    if (children.length) children.push(createDocxTextRun(' · ', { size: 20, color: '555555' }, typography));
+    children.push(new TextRun({
+      ...buildDocxRunStyle(typography, { size: 20, color: '555555' }),
+      children: ['עמוד ', PageNumber.CURRENT, ' מתוך ', PageNumber.TOTAL_PAGES],
+    }));
+  }
+  if (!children.length) {
+    children.push(createDocxTextRun(' ', {}, typography));
+  }
+  return new Paragraph({
+    alignment: content?.pageNumber && !text ? AlignmentType.CENTER : AlignmentType.RIGHT,
+    bidirectional: true,
+    spacing: isFooter ? { before: 120 } : { after: 120 },
+    children,
+  });
+};
+
+const buildDocxSectionFromLayout = (rawLayout, typography = {}) => {
+  const layout = normalizeDocumentLayout(rawLayout);
+  const marginCm = getLayoutMarginCm(layout);
+  // מעבירים מידות portrait גולמיות — חבילת docx מחליפה רוחב/גובה בעצמה כש-orientation=landscape
+  const [width, height] = PAGE_SIZES_CM[layout.pageSize] || PAGE_SIZES_CM.a4;
+  const margin = `${marginCm}cm`;
+
+  const properties = {
+    page: {
+      size: {
+        width: `${width}cm`,
+        height: `${height}cm`,
+        orientation: layout.orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
+      },
+      margin: { top: margin, right: margin, bottom: margin, left: margin },
+      ...(layout.pageBorder ? {
+        borders: {
+          pageBorderTop: {
+            style: BorderStyle.SINGLE,
+            size: Math.max(2, Math.round((layout.pageBorder.sizePt || 1) * 8)),
+            color: cssColorToDocxHex(layout.pageBorder.color) || '2B579A',
+          },
+          pageBorderBottom: {
+            style: BorderStyle.SINGLE,
+            size: Math.max(2, Math.round((layout.pageBorder.sizePt || 1) * 8)),
+            color: cssColorToDocxHex(layout.pageBorder.color) || '2B579A',
+          },
+          pageBorderLeft: {
+            style: BorderStyle.SINGLE,
+            size: Math.max(2, Math.round((layout.pageBorder.sizePt || 1) * 8)),
+            color: cssColorToDocxHex(layout.pageBorder.color) || '2B579A',
+          },
+          pageBorderRight: {
+            style: BorderStyle.SINGLE,
+            size: Math.max(2, Math.round((layout.pageBorder.sizePt || 1) * 8)),
+            color: cssColorToDocxHex(layout.pageBorder.color) || '2B579A',
+          },
+        },
+      } : {}),
+    },
+  };
+
+  const headerParagraphs = [];
+  if (layout.watermark?.text) {
+    headerParagraphs.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      bidirectional: true,
+      children: [createDocxTextRun(layout.watermark.text, { size: 72, color: cssColorToDocxHex(layout.watermark.color) || 'C8C8C8' }, typography)],
+    }));
+  }
+  if (layout.header) {
+    headerParagraphs.push(buildHeaderFooterParagraph(layout.header, typography));
+  }
+
+  const footerContent = layout.footer || (layout.pageNumbers ? { pageNumber: true } : null);
+  const normalizedFooter = footerContent
+    ? { ...footerContent, pageNumber: footerContent.pageNumber || layout.pageNumbers }
+    : null;
+
+  return {
+    properties,
+    ...(headerParagraphs.length ? { headers: { default: new Header({ children: headerParagraphs }) } } : {}),
+    ...(normalizedFooter ? { footers: { default: new Footer({ children: [buildHeaderFooterParagraph(normalizedFooter, typography, { isFooter: true })] }) } } : {}),
+    background: layout.pageColor ? { color: cssColorToDocxHex(layout.pageColor) || undefined } : undefined,
+  };
+};
+
+// מסיר בלוקים ויזואליים של כותרת עליונה/תחתונה שהוזרקו לגוף (data-doc-header/footer) —
+// בייצוא הם מוחלפים ב-Header/Footer אמיתיים של DOCX.
+const stripInBodyHeaderFooterBlocks = (html = '') => String(html || '')
+  .replace(/<div[^>]*data-doc-(?:header|footer)=["']true["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+// node תוכן-עניינים חי מרונדר כטקסט בלבד ב-getHTML — בייצוא מרחיבים אותו לרשימת הכותרות בפועל
+const expandLiveTocForExport = (html = '') => {
+  const source = String(html || '');
+  if (!/data-type=["']toc-live["']/i.test(source)) return source;
+  const headings = [];
+  const headingRegex = /<h([123])[^>]*>([\s\S]*?)<\/h\1>/gi;
+  let match;
+  while ((match = headingRegex.exec(source)) !== null) {
+    const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, '')).trim();
+    if (text) headings.push({ level: Number(match[1]), text });
+  }
+  const items = headings.map((h) => `<li style="padding-right:${(h.level - 1) * 16}px">${h.text}</li>`).join('');
+  const tocHtml = `<p><strong>תוכן עניינים</strong></p><ul>${items}</ul><hr/>`;
+  return source.replace(/<div[^>]*data-type=["']toc-live["'][^>]*>[\s\S]*?<\/div>/gi, tocHtml);
+};
+
 export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} } = {}) => {
   const typography = resolveDocxExportOptions({ html, exportOptions });
+  const layoutSection = buildDocxSectionFromLayout(exportOptions?.layout, typography);
+  if (exportOptions?.layout) {
+    html = stripInBodyHeaderFooterBlocks(html);
+  }
+  html = expandLiveTocForExport(html);
   const headingOneSize = Math.max(typography.fontSize + 10, 34);
   const headingTwoSize = Math.max(typography.fontSize + 4, 28);
   const headingThreeSize = Math.max(typography.fontSize + 2, 24);
@@ -617,8 +746,12 @@ export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} }
         },
       ],
     },
+    ...(layoutSection.background?.color ? { background: { color: layoutSection.background.color } } : {}),
     sections: [
       {
+        properties: layoutSection.properties,
+        ...(layoutSection.headers ? { headers: layoutSection.headers } : {}),
+        ...(layoutSection.footers ? { footers: layoutSection.footers } : {}),
         children,
       },
     ],
