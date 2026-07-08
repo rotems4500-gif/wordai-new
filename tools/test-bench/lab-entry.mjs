@@ -989,5 +989,7 @@ export const lab = {
   saveBlockedDomains: (list) => ai.saveBlockedSourceDomains(list),
   // diagnostic passthrough — topic extraction for the bleed investigation
   extractVerifiedSourceQuery: (args) => ai.extractVerifiedSourceQuery(args),
+  // offline SPSS helpers (no LLM) — unit-testable from node
+  detectStaleSessionRun: (args) => spss.detectStaleSessionRun(args),
 };
 export default lab;

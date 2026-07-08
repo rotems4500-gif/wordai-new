@@ -2211,6 +2211,9 @@ export const normalizeMissingValuesStatements = (text = '') => String(text || ''
 export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysis', extraAllowedNames = [] } = {}) => {
   const cleaned = normalizeMissingValuesStatements(
     commentOutNonSpssTextLines(stripMarkdownArtifacts(text))
+      // מילות מפתח שהמודל ממציא ו-SPSS דוחה — נורמליזציה דטרמיניסטית (COEFFS אינו
+      // keyword חוקי בשום פקודה, אז החלפה גלובלית בטוחה).
+      .replace(/\bCOEFFS\b/gi, 'COEFF')
       .replace(/\n{3,}/g, '\n\n')
       .trim(),
   );
@@ -2529,6 +2532,43 @@ export const parseSpssOutputErrors = (output = '') => {
   return { diagnostics, fatal, warnings, hasFatal: fatal.length > 0, hasWarnings: warnings.length > 0 };
 };
 
+// זיהוי "הרצה חלקית": SPSS מדווח undefined variable על משתנה שה-syntax עצמו יוצר
+// (COMPUTE/RECODE INTO). זה לא באג בקוד — המשתמש הריץ רק חלק מהקוד או פתח מחדש את
+// הנתונים, והמשתנים המחושבים (שחיים בזיכרון הסשן בלבד) נעלמו. במקרה כזה "תיקון"
+// ע"י LLM רק מקלקל קוד תקין; הפתרון הוא הרצה מלאה מלמעלה למטה.
+export const detectStaleSessionRun = ({ syntax = '', output = '' } = {}) => {
+  const none = { stale: false, variables: [], advice: '' };
+  const cleanSyntax = String(syntax || '').trim();
+  if (!cleanSyntax) return none;
+  const parsed = parseSpssOutputErrors(output);
+  if (!parsed.diagnostics.length) return none;
+
+  const declared = new Set(
+    Array.from(collectDeclaredTargetNames(getSpssCommands(stripSpssCommentLines(cleanSyntax))))
+      .map((name) => name.toLowerCase()),
+  );
+  if (!declared.size) return none;
+
+  // offendingText מגיע לעיתים כ-"VarName Command: REGRESSION" בשורה אחת — לכן
+  // התאמה לפי טוקנים ולא לפי השורה כולה.
+  const staleVariables = Array.from(new Set(
+    parsed.diagnostics
+      .filter((entry) => /undefined variable name|scratch or system variable/i.test(entry.message))
+      .flatMap((entry) => String(entry.offendingText || '').split(/[^A-Za-z0-9_@#$.]+/))
+      .map((token) => token.trim())
+      .filter((token) => token && declared.has(token.toLowerCase())),
+  ));
+  if (!staleVariables.length) return none;
+
+  return {
+    stale: true,
+    variables: staleVariables,
+    advice: `SPSS מדווח שהמשתנים ${staleVariables.join(', ')} לא קיימים — אבל הקוד עצמו יוצר אותם בשלב ההכנה. `
+      + 'זה קורה כשמריצים רק חלק מהקוד או כשקובץ הנתונים נפתח מחדש: משתנים מחושבים חיים רק בזיכרון של הסשן. '
+      + 'הקוד תקין ואין מה לתקן בו — פתח את קובץ הנתונים המקורי, בחר את כל הקוד (Ctrl+A) והרץ הכול יחד מלמעלה למטה (Run → Selection).',
+  };
+};
+
 const buildSpssErrorDigest = (parsed = null, analysis = null) => {
   const formatEntry = (entry) => {
     const parts = [`${entry.severity === 'warning' ? 'אזהרה' : 'שגיאה'} #${entry.number}`];
@@ -2615,6 +2655,12 @@ export const repairSpssSyntaxFromError = async ({ analysis = null, priorSyntax =
   const parsed = parseSpssOutputErrors(output);
   if (!parsed.diagnostics.length) {
     return { ok: false, syntax: '', rawSyntax: '', parsed, guidanceMessage: '', error: 'לא זוהו שגיאות או אזהרות SPSS בטקסט שהודבק. ודא שהדבקת את הודעת השגיאה (Error # / Warning #) מחלון ה-Output.', providerId: '', model: '' };
+  }
+
+  // הרצה חלקית ≠ באג בקוד: אל תשלח ל-LLM "לתקן" קוד תקין — החזר הנחיית הרצה מלאה.
+  const staleRun = detectStaleSessionRun({ syntax: cleanSyntax, output });
+  if (staleRun.stale) {
+    return { ok: false, syntax: '', rawSyntax: '', parsed, guidanceMessage: staleRun.advice, error: '', providerId: '', model: '' };
   }
 
   const tokenizedSyntax = tokenizeSpssRequest(cleanSyntax, analysis);
@@ -3365,6 +3411,28 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
     return { ok: false, verdict: 'needs-output', issues: [], summary: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי שאבדוק אותו מול המטלה.' };
+  }
+
+  // הרצה חלקית ≠ באג בקוד: undefined variable על משתנה שהקוד יוצר בעצמו. עצירה
+  // דטרמיניסטית לפני ה-LLM — fixRequest ריק בכוונה, כדי שלולאת "תקן הכל" לא תיגע בקוד.
+  const staleRun = detectStaleSessionRun({ syntax: masterSyntax, output: cleanOutput });
+  if (staleRun.stale) {
+    return {
+      ok: true,
+      verdict: 'needs-fixes',
+      issues: [{
+        label: 'הרצה חלקית של הקוד',
+        severity: 'error',
+        problem: `SPSS לא מצא את ${staleRun.variables.join(', ')} — משתנים שהקוד יוצר בשלב ההכנה.`,
+        explanation: 'הורץ רק חלק מהקוד, או שקובץ הנתונים נפתח מחדש אחרי שלב ההכנה. משתנים מחושבים קיימים רק בזיכרון הסשן.',
+        fixRequest: '',
+        rerunInstruction: 'פתח את קובץ הנתונים המקורי, בחר את כל הקוד (Ctrl+A) והרץ הכול יחד (Run → Selection). ואז הדבק את הפלט המלא מחדש.',
+      }],
+      summary: staleRun.advice,
+      providerId: '',
+      model: '',
+      error: '',
+    };
   }
 
   try {
