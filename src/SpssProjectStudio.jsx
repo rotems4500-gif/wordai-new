@@ -985,6 +985,69 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     }
   }, [masterSyntax, spsFileName]);
 
+  // פאנל המלצת מרצה — מרונדר גם במקצה השיפורים (שם עוד עובדים על הקוד ו"הוסף
+  // לקוד" הכי שימושי) וגם בשלב ההסבר. badgeNumber מוצג רק בשלב ההסבר הממוספר.
+  const renderLecturerPanel = (badgeNumber = null) => (
+    <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-lg font-bold text-slate-900">{badgeNumber !== null && <StageBadge n={badgeNumber} />} 🎓 המלצת מרצה</div>
+          <p className="mt-1 text-sm text-slate-600">אופציונלי — ייעוץ על סמך התוצאות: כיווני חיזוק, מנבאים חלופיים והסתייגויות.</p>
+        </div>
+        <button
+          type="button"
+          className={`rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition ${busy === 'lecturer-advice' ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
+          onClick={onAdviseLecturer}
+          disabled={!output.trim() || Boolean(busy)}
+        >
+          {busy === 'lecturer-advice' ? 'מכין המלצה...' : (lecturerAdvice ? 'בקש המלצת מרצה מחדש' : 'בקש המלצת מרצה')}
+        </button>
+      </div>
+      {lecturerAdvice ? (
+        <div className="mt-4 space-y-3">
+          {lecturerAdvice.summary && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 text-slate-800 whitespace-pre-wrap">{lecturerAdvice.summary}</div>
+          )}
+          {(lecturerAdvice.recommendations || []).map((rec, index) => {
+            const hasVariables = Array.isArray(rec.suggestedVariables) && rec.suggestedVariables.length > 0;
+            const busyKey = `lecturer-rec-${rec.finding || rec.suggestedAnalysis}`;
+            return (
+              <div key={`${rec.finding || 'rec'}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-800">
+                <div className="font-semibold text-slate-900">{rec.finding}</div>
+                {rec.recommendation && <div className="mt-1 text-slate-700">{rec.recommendation}</div>}
+                {rec.suggestedAnalysis && <div className="mt-1 text-xs text-slate-500">ניתוח מוצע: {rec.suggestedAnalysis}</div>}
+                {hasVariables && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {rec.suggestedVariables.map((varName) => (
+                      <span key={varName} className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{varName}</span>
+                    ))}
+                  </div>
+                )}
+                {rec.integrityNote && (
+                  <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-800">⚖️ הערת יושרה אקדמית: {rec.integrityNote}</div>
+                )}
+                {hasVariables && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${busy === busyKey ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
+                      onClick={() => onAddLecturerRecommendation(rec)}
+                      disabled={Boolean(busy)}
+                    >
+                      {busy === busyKey ? 'מוסיף...' : 'הוסף לקוד'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">הדבק פלט מ-SPSS ולחץ "בקש המלצת מרצה" לקבלת כיווני המשך.</div>
+      )}
+    </section>
+  );
+
   const appendixText = React.useMemo(() => buildAiAppendixText(aiLog), [aiLog]);
   const litReviewText = React.useMemo(() => buildLitReviewText(litReview), [litReview]);
   // Honest Scholar hint (שלב A2) — only claim it's configured when the user actually
@@ -1543,6 +1606,9 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
               </div>
             </section>
           )}
+          {/* המלצת מרצה זמינה כבר במקצה השיפורים — כאן "הוסף לקוד" הכי שימושי,
+              כשעדיין עובדים על ה-syntax מול הפלט. */}
+          {stage === 'refine' && renderLecturerPanel()}
 
           {/* STAGE 5 — explain + deliverable */}
           {stage === 'explain' && (
@@ -1640,65 +1706,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                 )}
               </section>
 
-              {/* Optional lecturer-advice panel (שלב D) */}
-              <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={4} /> 🎓 המלצת מרצה</div>
-                    <p className="mt-1 text-sm text-slate-600">אופציונלי — ייעוץ על סמך התוצאות: כיווני חיזוק, מנבאים חלופיים והסתייגויות.</p>
-                  </div>
-                  <button
-                    type="button"
-                    className={`rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition ${busy === 'lecturer-advice' ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
-                    onClick={onAdviseLecturer}
-                    disabled={!output.trim() || Boolean(busy)}
-                  >
-                    {busy === 'lecturer-advice' ? 'מכין המלצה...' : (lecturerAdvice ? 'בקש המלצת מרצה מחדש' : 'בקש המלצת מרצה')}
-                  </button>
-                </div>
-                {lecturerAdvice ? (
-                  <div className="mt-4 space-y-3">
-                    {lecturerAdvice.summary && (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 text-slate-800 whitespace-pre-wrap">{lecturerAdvice.summary}</div>
-                    )}
-                    {(lecturerAdvice.recommendations || []).map((rec, index) => {
-                      const hasVariables = Array.isArray(rec.suggestedVariables) && rec.suggestedVariables.length > 0;
-                      const busyKey = `lecturer-rec-${rec.finding || rec.suggestedAnalysis}`;
-                      return (
-                        <div key={`${rec.finding || 'rec'}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-800">
-                          <div className="font-semibold text-slate-900">{rec.finding}</div>
-                          {rec.recommendation && <div className="mt-1 text-slate-700">{rec.recommendation}</div>}
-                          {rec.suggestedAnalysis && <div className="mt-1 text-xs text-slate-500">ניתוח מוצע: {rec.suggestedAnalysis}</div>}
-                          {hasVariables && (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {rec.suggestedVariables.map((varName) => (
-                                <span key={varName} className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{varName}</span>
-                              ))}
-                            </div>
-                          )}
-                          {rec.integrityNote && (
-                            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-800">⚖️ הערת יושרה אקדמית: {rec.integrityNote}</div>
-                          )}
-                          {hasVariables && (
-                            <div className="mt-3">
-                              <button
-                                type="button"
-                                className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${busy === busyKey ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
-                                onClick={() => onAddLecturerRecommendation(rec)}
-                                disabled={Boolean(busy)}
-                              >
-                                {busy === busyKey ? 'מוסיף...' : 'הוסף לקוד'}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">הדבק פלט מ-SPSS ולחץ "בקש המלצת מרצה" לקבלת כיווני המשך.</div>
-                )}
-              </section>
+              {/* Optional lecturer-advice panel (שלב D) — מוצג גם במקצה השיפורים */}
+              {renderLecturerPanel(4)}
 
               {/* AI-usage appendix (section ה) */}
               <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
