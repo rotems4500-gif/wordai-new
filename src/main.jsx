@@ -1,4 +1,17 @@
 import './desktopShim'; // מתקין window.desktopApp מעל Tauri (חייב לרוץ ראשון)
+
+// גרסה חדשה עלתה לאוויר → chunks ישנים נמחקו → lazy import נכשל בטאבים פתוחים.
+// טעינה מחדש אוטומטית (פעם אחת) מביאה את ה-index העדכני עם ה-hashes הנכונים.
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', (event) => {
+    const lastReload = Number(sessionStorage.getItem('wordflow:chunk-reload') || 0);
+    if (Date.now() - lastReload < 30000) return; // מניעת לולאת reload אם הבעיה אחרת
+    sessionStorage.setItem('wordflow:chunk-reload', String(Date.now()));
+    event.preventDefault();
+    window.location.reload();
+  });
+}
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { DOMSerializer } from '@tiptap/pm/model';
