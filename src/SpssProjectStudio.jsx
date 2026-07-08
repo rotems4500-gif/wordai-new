@@ -16,11 +16,13 @@ import {
   buildSpssFindingsChapter,
   collectDeclaredTargetNames,
   critiqueSpssRun,
+  ensureGraphCoverage,
   generateSpssSyntax,
   interpretSpssOutput,
   parseSpssOutputErrors,
   repairSpssSyntaxFromError,
   reviewSpssMasterSyntax,
+  validatePlanCoverage,
 } from './services/spssSyntaxService';
 
 const createLocalId = () => {
@@ -162,6 +164,11 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
   const [output, setOutput] = React.useState('');
   const [critique, setCritique] = React.useState(null);
   const [reviewNotes, setReviewNotes] = React.useState([]);
+  // Deterministic backstops (no AI cost): graphNotes = plan "graph" entries whose chart
+  // command was auto-synthesized; coverageGaps = plan analyses not found in the final
+  // syntax at all (advisory — never blocks the user from running/copying the code).
+  const [graphNotes, setGraphNotes] = React.useState([]);
+  const [coverageGaps, setCoverageGaps] = React.useState([]);
   const [interpretations, setInterpretations] = React.useState([]);
   const [litReview, setLitReview] = React.useState(null);
   // AI-usage log — every model call the studio makes, for the required AI appendix (section ה).
@@ -467,7 +474,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     setBusy('analyze');
     setNotice({ tone: 'info', text: 'מנתח את המטלה מול הנתונים...' });
     try {
-      const result = await analyzeSpssAssignment({ assignmentText, analysis, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      const result = await analyzeSpssAssignment({ assignmentText, analysis, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       if (!result.ok) {
         setNotice({ tone: 'error', text: result.error || 'ניתוח המטלה נכשל.' });
         return;
@@ -477,6 +484,9 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       setOutput('');
       setCritique(null);
       setInterpretations([]);
+      setReviewNotes([]);
+      setGraphNotes([]);
+      setCoverageGaps([]);
       logAi({ stage: 'הבנת המשימה', description: 'ניתוח טקסט המטלה מול קובץ הנתונים וזיהוי הניתוחים הסטטיסטיים הנדרשים', prompt: assignmentText, providerId: result.providerId, model: result.model });
       setStage('code');
       setNotice({ tone: 'success', text: `זוהו ${result.profile.analyses.length} ניתוחים · תוצר נדרש: ${DELIVERABLE_LABELS[result.profile.deliverable]}.` });
@@ -485,7 +495,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     } finally {
       setBusy('');
     }
-  }, [analysis, assignmentText, logAi]);
+  }, [analysis, assignmentText, draft, logAi]);
 
   // Stage 2 — generate the full master syntax in ONE holistic pass.
   // נתיב אחד: אותו מנוע כמו הטאב הרגיל. במקום בלוק מבודד לכל ניתוח (שהפיק קוד
@@ -549,11 +559,13 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       // values) BEFORE the user runs SPSS. Non-destructive: replaces only when it changed.
       const repairedNote = repaired ? ' (שוקם בניסיון חוזר)' : '';
       let reviewNote = '';
+      let trackedSyntax = buildMasterSyntax(nextBlocks);
       if (succeeded) {
         setNotice({ tone: 'info', text: 'בודק את הקוד לפני הרצה...' });
         try {
-          const review = await reviewSpssMasterSyntax({ assignmentText, analysis, profile, masterSyntax: buildMasterSyntax(nextBlocks), ...route });
+          const review = await reviewSpssMasterSyntax({ assignmentText, analysis, profile, masterSyntax: trackedSyntax, ...route });
           if (review.ok && review.changed && review.syntax) {
+            trackedSyntax = review.syntax;
             setBlocks([{ id: createLocalId(), title: 'Master syntax (נבדק אוטומטית)', syntax: review.syntax, blocked: false }]);
             setReviewNotes(review.notes);
             logAi({ stage: 'בדיקת קוד', description: `בדיקה מקדימה של הקוד לפני הרצה — תוקנו ${review.notes.length} נקודות`, prompt: 'בדוק את ה-master syntax מול המטלה ותקן בעיות ודאיות לפני הרצה', providerId: review.providerId, model: review.model });
@@ -565,8 +577,29 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         } catch {
           setReviewNotes([]);
         }
+
+        // Deterministic backstops — no LLM call. Graph guarantee first (it can add
+        // commands the coverage check would otherwise flag), then the advisory
+        // plan↔code coverage scan over whatever syntax survived so far.
+        try {
+          const graphResult = ensureGraphCoverage({ profile, analysis, masterSyntax: trackedSyntax });
+          if (graphResult.changed && graphResult.syntax) {
+            trackedSyntax = graphResult.syntax;
+            setBlocks([{ id: createLocalId(), title: 'Master syntax (גרפים הושלמו אוטומטית)', syntax: graphResult.syntax, blocked: false }]);
+          }
+          setGraphNotes(graphResult.missing || []);
+        } catch {
+          setGraphNotes([]);
+        }
+        try {
+          setCoverageGaps(validatePlanCoverage({ profile, analysis, masterSyntax: trackedSyntax }));
+        } catch {
+          setCoverageGaps([]);
+        }
       } else {
         setReviewNotes([]);
+        setGraphNotes([]);
+        setCoverageGaps([]);
       }
 
       setNotice(succeeded
@@ -701,6 +734,22 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         } catch {
           postFixReviewNotes = [];
         }
+
+        // Deterministic backstops — same as onGenerateAllCode: graph guarantee first,
+        // then advisory plan↔code coverage over the syntax that will actually ship.
+        try {
+          const graphResult = ensureGraphCoverage({ profile, analysis, masterSyntax: finalSyntax });
+          if (graphResult.changed && graphResult.syntax) finalSyntax = graphResult.syntax;
+          setGraphNotes(graphResult.missing || []);
+        } catch {
+          setGraphNotes([]);
+        }
+        try {
+          setCoverageGaps(validatePlanCoverage({ profile, analysis, masterSyntax: finalSyntax }));
+        } catch {
+          setCoverageGaps([]);
+        }
+
         setBlocks([{ id: createLocalId(), title: 'Master syntax מעודכן (מקצה שיפורים)', syntax: finalSyntax, blocked: false }]);
         setReviewNotes(postFixReviewNotes);
         logAi({ stage: 'מקצה שיפורים', description: `איחוד הקוד הקיים עם כל התיקונים (${critique.issues.length}) לקוד מעודכן אחד`, prompt: `תקן הכל: ${critique.issues.map((it) => it.label || it.problem).filter(Boolean).join('; ')}`, providerId: result.providerId, model: result.model });
@@ -1204,6 +1253,22 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                       <ul className="mt-2 list-disc space-y-1 pr-5 text-xs leading-6 text-sky-700">
                         {reviewNotes.map((note, index) => (<li key={index}>{note}</li>))}
                       </ul>
+                    </div>
+                  )}
+                  {graphNotes.length > 0 && (
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-sm font-semibold text-slate-700">ℹ️ הושלמו אוטומטית פקודות גרף עבור: {graphNotes.join(', ')}.</div>
+                    </div>
+                  )}
+                  {coverageGaps.length > 0 && (
+                    <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3">
+                      <div className="text-sm font-semibold text-rose-800">⚠️ ניתוחים מהתוכנית שלא נמצאו בקוד:</div>
+                      <ul className="mt-2 list-disc space-y-1 pr-5 text-xs leading-6 text-rose-700">
+                        {coverageGaps.map((gap, index) => (
+                          <li key={index}>{gap.label}{gap.variables?.length ? ` (${gap.variables.join(', ')})` : ''}</li>
+                        ))}
+                      </ul>
+                      <div className="mt-2 text-xs leading-6 text-rose-700">שקול לייצר מחדש את הקוד או להשלים ידנית לפני ההרצה ב-SPSS.</div>
                     </div>
                   )}
                   <textarea

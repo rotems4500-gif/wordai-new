@@ -556,6 +556,71 @@ function spssColumnDigest(analysis) {
   }));
 }
 
+// ---- .sav parsing in Node (real fs.stream.Readable — no browser shim needed) ----
+// Mirrors src/services/spssDataIngest.js's readSpssSavFileInBrowser normalization
+// (normalizeDeclaredMissing / normalizeSpssSavCellValue) so the shape fed into
+// spss.parseSpssSavDataset({fileName, variables, rows}) is identical to the app's.
+// 'sav-reader-core' resolves via the vite.verify.config.mjs alias to
+// node_modules/sav-reader/dist/SavReader.js (same package.json dep as the app;
+// no new dependency). Node's real stream.Readable.from() works fine here — the
+// browser-only createBufferReadable() workaround in spssDataIngest.js is not needed.
+function spssNormalizeDeclaredMissing(missing) {
+  if (missing === null || missing === undefined) return null;
+  const discrete = [];
+  let range = null;
+  if (typeof missing === 'number') {
+    if (Number.isFinite(missing)) discrete.push(missing);
+  } else if (Array.isArray(missing)) {
+    missing.forEach((value) => { if (typeof value === 'number' && Number.isFinite(value)) discrete.push(value); });
+  } else if (typeof missing === 'object') {
+    const min = Number(missing.min);
+    const max = Number(missing.max);
+    if (Number.isFinite(min) && Number.isFinite(max)) range = { min, max };
+    if (typeof missing.value === 'number' && Number.isFinite(missing.value)) discrete.push(missing.value);
+  }
+  if (!discrete.length && !range) return null;
+  return { discrete, range };
+}
+function spssNormalizeSavCellValue(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? value : '';
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.toISOString();
+  return String(value);
+}
+async function parseSavBufferToDataset(buffer, fileName = 'dataset.sav') {
+  const { Readable } = await import('node:stream');
+  const { SavReader } = await import('sav-reader-core');
+  const readable = Readable.from(buffer);
+  const sav = new SavReader(readable);
+  await sav.open();
+
+  const variables = Array.isArray(sav.meta?.sysvars)
+    ? sav.meta.sysvars.map((variable) => ({
+        name: String(variable?.name || '').trim(),
+        label: String(variable?.label || '').trim(),
+        type: variable?.type === 0 ? 'numeric' : 'string',
+        valueLabels: typeof sav.meta?.getValueLabels === 'function'
+          ? (sav.meta.getValueLabels(variable?.name) || []).map((entry) => ({
+              value: spssNormalizeSavCellValue(entry?.val),
+              label: String(entry?.label || '').trim(),
+            }))
+          : [],
+        declaredMissing: spssNormalizeDeclaredMissing(variable?.missing),
+      })).filter((variable) => variable.name)
+    : [];
+  if (!variables.length) throw new Error('לא זוהו משתנים בקובץ ה-SAV.');
+
+  const rawRows = await sav.readAllRows(true);
+  const rows = (Array.isArray(rawRows) ? rawRows : []).map((row) => {
+    const normalizedRow = {};
+    variables.forEach((variable) => { normalizedRow[variable.name] = spssNormalizeSavCellValue(row?.[variable.name]); });
+    return normalizedRow;
+  });
+  if (!rows.length) throw new Error('קובץ ה-SAV נקרא, אבל לא נמצאו בו שורות נתונים.');
+
+  return { fileName, rowCount: rows.length, columnCount: variables.length, variables, rows };
+}
+
 function parseLabCsvRows(csv = '') {
   const rows = [];
   let row = [];
@@ -771,66 +836,121 @@ async function runSpssSyntax({ csv, request = '', mode = 'analysis', actionId = 
   }
 }
 
-async function runSpssProject({ csv, assignmentText, provider = '', model = '' }) {
+// Faithful replica of SpssProjectStudio.onGenerateAllCode (lines ~494-580): ONE
+// holistic combinedRequest (prep-first planChecklist + assignmentText), a 2-step
+// retry ladder (skipMethodologyGuard on the 2nd attempt), then reviewSpssMasterSyntax.
+// Accepts either csv OR a .sav file (base64) — same parseSpssSavDataset the app uses.
+async function runSpssProject({ csv = '', savBase64 = '', savFileName = 'dataset.sav', assignmentText = '', draftText = '', provider = '', model = '' } = {}) {
   const from = beginCapture();
   const t0 = Number(process.hrtime.bigint() / 1000000n);
   const route = provider ? { providerOverride: provider, modelOverride: model } : {};
   const steps = [];
   try {
-    const analysis = spss.parseCsvText(String(csv || ''), { fileName: 'lab.csv' });
+    let analysis;
+    let savInfo = null;
+    if (String(savBase64 || '').trim()) {
+      const buffer = Buffer.from(savBase64, 'base64');
+      const dataset = await parseSavBufferToDataset(buffer, savFileName || 'dataset.sav');
+      savInfo = { fileName: dataset.fileName, rowCount: dataset.rowCount, columnCount: dataset.columnCount };
+      analysis = spss.parseSpssSavDataset(dataset);
+    } else {
+      analysis = spss.parseCsvText(String(csv || ''), { fileName: 'lab.csv' });
+    }
     // Compact metadata the model actually reasons over (role + missing signal).
     const columns = spssColumnDigest(analysis);
 
-    // 1) plan
-    const planned = await spss.analyzeSpssAssignment({ assignmentText, analysis, ...route });
+    // 1) plan — draftText forwarded so this stays forward-compatible with
+    // analyzeSpssAssignment's upcoming draftText param (harmless extra key until it lands).
+    const planned = await spss.analyzeSpssAssignment({ assignmentText, analysis, draftText, ...route });
     steps.push({ step: 'plan', ok: planned.ok, model: planned.model, error: planned.error || '' });
     if (!planned.ok) {
-      return { ok: false, stage: 'plan', error: planned.error, columns, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+      return { ok: false, stage: 'plan', error: planned.error, columns, sav: savInfo, steps, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
     }
     const profile = planned.profile;
 
-    // 2) per-analysis generation with the 3-step retry ladder + prep-first order
-    const ordered = [...profile.analyses.filter(spssIsPrep), ...profile.analyses.filter((a) => !spssIsPrep(a))];
-    const blocks = [];
-    const createdNames = [];
-    for (const item of ordered) {
-      const baseMode = spssIsPrep(item) ? 'prep' : 'analysis';
-      const req = item.request || item.label;
-      let r = await spss.generateSpssSyntax({ analysis, request: req, tutorMode: true, mode: baseMode, extraAllowedNames: createdNames, ...route });
-      let repaired = false;
-      if (!(r.ok && r.syntax)) {
-        const r2 = await spss.generateSpssSyntax({ analysis, request: req, tutorMode: true, mode: 'prep', extraAllowedNames: createdNames, skipMethodologyGuard: true, repairHint: r.guidanceMessage, ...route });
-        if (r2.ok && r2.syntax) { r = r2; repaired = true; }
-        else {
-          const enriched = `${req}\n(אם נדרשת הכנת נתונים — בצע אותה תחילה ואז את הניתוח. ספק syntax מלא ושמיש; אל תחזיר ERROR אלא אם זה באמת בלתי אפשרי.)`;
-          const r3 = await spss.generateSpssSyntax({ analysis, request: enriched, tutorMode: true, mode: 'prep', extraAllowedNames: createdNames, skipMethodologyGuard: true, repairHint: r2.guidanceMessage || r.guidanceMessage, ...route });
-          if (r3.ok && r3.syntax) { r = r3; repaired = true; }
-          else r = r3 || r2 || r;
-        }
-      }
-      if (r.ok && r.syntax) {
-        blocks.push({ title: item.label, method: item.method, syntax: r.syntax, blocked: false, repaired });
-        createdNames.push(...Array.from(spss.collectDeclaredTargetNames(r.syntax)));
-      } else {
-        blocks.push({ title: item.label, method: item.method, syntax: `* ${item.label}: ${r.guidanceMessage || 'נעצר לפני יצירת syntax.'}`, blocked: true, repaired: false });
-      }
-    }
-    steps.push({ step: 'generate', blocks: blocks.length, blocked: blocks.filter((b) => b.blocked).length, repaired: blocks.filter((b) => b.repaired).length });
+    // 2) ONE holistic combinedRequest — mirrors onGenerateAllCode exactly (prep-first
+    // ordering, numbered planChecklist, assignmentText appended, 2-step retry ladder).
+    const isPrepItem = (item) => spssIsPrep(item);
+    const orderedAnalyses = [
+      ...profile.analyses.filter((item) => isPrepItem(item)),
+      ...profile.analyses.filter((item) => !isPrepItem(item)),
+    ];
+    const planChecklist = orderedAnalyses
+      .map((item, index) => `${index + 1}. ${item.label}${item.method ? ` (${item.method})` : ''} — ${item.request || item.label}`)
+      .join('\n');
+    const combinedRequest = [
+      'בצע עבודת SPSS מלאה שעונה על כל דרישות המטלה, בסינטקס אחד רציף ומלא.',
+      '',
+      'טקסט המטלה:',
+      String(assignmentText || '').trim(),
+      '',
+      'תוכנית הניתוחים הנדרשים (בצע את כולם, בסדר הזה — הכנת נתונים תחילה):',
+      planChecklist,
+      '',
+      'הנחיות פלט: הפק syntax אחד שכולל את כל הניתוחים לפי הסדר. לכל מבחן היסק הוסף בדיקות הנחות רלוונטיות (נורמליות, שוויון שונויות). הפרד בין הבלוקים בהערות תיאוריות (* --- כותרת ---.). ספק קוד עשיר ומלא לעבודת סיום — לא מינימלי. השתמש אך ורק במשתנים שבמטא-דאטה; אל תמציא משתנים.',
+    ].join('\n');
 
-    // 3) pre-flight review over the assembled master
-    const reviewable = blocks.filter((b) => !b.blocked);
-    let masterSyntax = spssAssembleMaster(reviewable);
+    let result = await spss.generateSpssSyntax({ analysis, request: combinedRequest, tutorMode: true, mode: 'prep', extraAllowedNames: [], ...route });
+    let repaired = false;
+    if (!result.ok || !result.syntax) {
+      const enrichedRequest = `${combinedRequest}\n(ספק syntax מלא ושמיש; אל תחזיר ERROR אלא אם זה באמת בלתי אפשרי.)`;
+      const retry = await spss.generateSpssSyntax({
+        analysis, request: enrichedRequest, tutorMode: true, mode: 'prep', extraAllowedNames: [],
+        skipMethodologyGuard: true, repairHint: result.guidanceMessage, ...route,
+      });
+      if (retry.ok && retry.syntax) { result = retry; repaired = true; }
+      else { result = retry || result; }
+    }
+    const genRoute = result?.providerId ? { providerId: result.providerId, model: result.model } : null;
+    const succeeded = Boolean(result.ok && result.syntax);
+    steps.push({ step: 'generate', ok: succeeded, repaired, model: genRoute?.model, error: succeeded ? '' : (result.guidanceMessage || result.error || '') });
+
+    const profileDigest = {
+      summary: profile.summary, deliverable: profile.deliverable, notes: profile.notes,
+      analyses: (profile.analyses || []).map((a) => ({ label: a.label, method: a.method, variables: a.variables })),
+    };
+
+    if (!succeeded) {
+      return {
+        ok: false, stage: 'generate', error: result.guidanceMessage || result.error || 'יצירת ה-syntax נעצרה.',
+        columns, sav: savInfo, profile: profileDigest, steps,
+        blocks: [{ title: 'ניתוח מלא', syntax: `* ${result.guidanceMessage || 'הבקשה נעצרה לפני יצירת syntax.'}`, blocked: true }],
+        wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0,
+      };
+    }
+
+    let masterSyntax = result.syntax;
+
+    // 3) pre-flight review over the master — same call onGenerateAllCode makes.
     let reviewNotes = [];
     let reviewChanged = false;
-    if (reviewable.length) {
-      const review = await spss.reviewSpssMasterSyntax({ assignmentText, analysis, profile, masterSyntax, ...route });
-      reviewNotes = review.notes || [];
-      reviewChanged = !!(review.ok && review.changed && review.syntax);
-      if (reviewChanged) masterSyntax = spssAssembleMaster([{ title: 'Master syntax (נבדק אוטומטית)', syntax: review.syntax }, ...blocks.filter((b) => b.blocked)]);
-      steps.push({ step: 'preflight-review', changed: reviewChanged, notes: reviewNotes.length, model: review.model, error: review.error || '' });
+    const review = await spss.reviewSpssMasterSyntax({ assignmentText, analysis, profile, masterSyntax, ...route });
+    reviewNotes = review.notes || [];
+    reviewChanged = !!(review.ok && review.changed && review.syntax);
+    if (reviewChanged) masterSyntax = review.syntax;
+    steps.push({ step: 'preflight-review', changed: reviewChanged, notes: reviewNotes.length, model: review.model, error: review.error || '' });
+
+    // 4) deterministic validators from stages 1-2 of the plan — guarded with typeof
+    // checks so the LAB keeps working before those exports land in spssSyntaxService.js.
+    let graphSynthesis = null;
+    if (typeof spss.ensureGraphCoverage === 'function') {
+      try {
+        const graph = await spss.ensureGraphCoverage({ profile, analysis, masterSyntax });
+        if (graph?.changed && graph.syntax) masterSyntax = graph.syntax;
+        graphSynthesis = { changed: !!graph?.changed, missing: graph?.missing || [] };
+        steps.push({ step: 'graph-coverage', changed: !!graph?.changed, missing: (graph?.missing || []).length });
+      } catch (e) { graphSynthesis = { error: e?.message || String(e) }; }
+    }
+    let coverageReport = null;
+    if (typeof spss.validatePlanCoverage === 'function') {
+      try {
+        coverageReport = await spss.validatePlanCoverage({ profile, analysis, masterSyntax });
+        const gapCount = Array.isArray(coverageReport?.gaps) ? coverageReport.gaps.length : (Array.isArray(coverageReport?.missing) ? coverageReport.missing.length : 0);
+        steps.push({ step: 'plan-coverage', gaps: gapCount });
+      } catch (e) { coverageReport = { error: e?.message || String(e) }; }
     }
 
-    // 4) deterministic surfaces the user can eyeball: the MISSING VALUES lines (range fix)
+    // Deterministic surfaces the user can eyeball: the MISSING VALUES lines (range fix)
     // and every derived variable name (undefined-var / naming-consistency check).
     const missingValuesLines = (masterSyntax.match(/^MISSING\s+VALUES\b.*$/gim) || []);
     const uniqueDerived = Array.from(new Set(Array.from(spss.collectDeclaredTargetNames(masterSyntax))));
@@ -839,16 +959,19 @@ async function runSpssProject({ csv, assignmentText, provider = '', model = '' }
       ok: true,
       assignment: assignmentText,
       columns,
-      profile: {
-        summary: profile.summary, deliverable: profile.deliverable, notes: profile.notes,
-        analyses: (profile.analyses || []).map((a) => ({ label: a.label, method: a.method, variables: a.variables })),
-      },
-      blocks: blocks.map((b) => ({ title: b.title, method: b.method, blocked: b.blocked, repaired: b.repaired })),
+      sav: savInfo,
+      profile: profileDigest,
+      repaired,
+      blocks: [{ title: 'Master syntax', syntax: masterSyntax, blocked: false, repaired }],
       derivedVariables: uniqueDerived,
       missingValuesLines,
       reviewChanged,
       reviewNotes,
+      graphSynthesis,
+      coverageReport,
       masterSyntax,
+      providerId: genRoute?.providerId || '',
+      model: genRoute?.model || '',
       steps,
       wire: endCapture(from),
       durationMs: Number(process.hrtime.bigint() / 1000000n) - t0,

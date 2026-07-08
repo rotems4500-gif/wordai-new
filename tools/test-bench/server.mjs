@@ -63,27 +63,33 @@ async function saveResult(kind, data) {
 // The app writes [magic "DPAPI1\n"] + DPAPI blob (see src-tauri/src/secure.rs).
 async function decryptDpapiFile(fileName) {
   const filePath = path.join(process.env.APPDATA || '', 'com.wordai.assistant', fileName);
-  let blobBase64 = '';
   try {
     const raw = await readFile(filePath);
     const magic = Buffer.from('DPAPI1\n', 'ascii');
     if (!raw.subarray(0, magic.length).equals(magic)) throw new Error('unexpected secure-file header');
-    blobBase64 = raw.subarray(magic.length).toString('base64');
   } catch (e) {
     console.warn(`DPAPI read failed (${fileName}):`, e.message);
     return '';
   }
+  // ה-blob לא מוטמע בשורת הפקודה (config גדול → "command line is too long" / ENAMETOOLONG):
+  // PowerShell קורא את הקובץ המוצפן בעצמו וכותב את הפענוח לקובץ זמני שנקרא ונמחק כאן.
   // PS script passed as base64 UTF-16LE via -EncodedCommand so no shell quoting can
-  // mangle the inner quotes / backtick-n magic bytes.
+  // mangle the inner quotes.
+  const outPath = path.join(SCRATCH, `dpapi-${fileName}.tmp`);
   const ps = [
     'Add-Type -AssemblyName System.Security',
-    `$blob=[Convert]::FromBase64String(${JSON.stringify(blobBase64)})`,
+    `$raw=[IO.File]::ReadAllBytes(${JSON.stringify(filePath)})`,
+    '$blob=[byte[]]($raw[7..($raw.Length-1)])',
     '$dec=[Security.Cryptography.ProtectedData]::Unprotect($blob,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
-    '[Console]::Out.Write([Text.Encoding]::UTF8.GetString($dec))',
+    `[IO.File]::WriteAllBytes(${JSON.stringify(outPath)},$dec)`,
   ].join('\n');
   const encoded = Buffer.from(ps, 'utf16le').toString('base64');
   try {
-    const out = await run('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]);
+    await mkdir(SCRATCH, { recursive: true });
+    await run('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]);
+    const out = await readFile(outPath, 'utf8');
+    const { rm } = await import('node:fs/promises');
+    await rm(outPath, { force: true });
     return out.trim();
   } catch (e) {
     console.warn(`DPAPI decrypt failed (${fileName}):`, e.message);
@@ -352,7 +358,32 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && (url === '/api/spss-project' || url === '/api/spss')) {
       const b = await readBody(req);
-      const out = await LAB.runSpssProject({ csv: b.csv || '', assignmentText: b.assignmentText || '', provider: b.provider || '', model: b.model || '' });
+      let csv = b.csv || '';
+      let savBase64 = b.savBase64 || '';
+      let savFileName = b.savFileName || 'dataset.sav';
+      let assignmentText = b.assignmentText || '';
+      let draftText = b.draftText || '';
+      // Path variants take precedence over inline fields — absolute paths read
+      // server-side (e.g. a real .sav on disk, or pre-extracted assignment/draft .txt).
+      if (b.savPath) {
+        try {
+          const buf = await readFile(String(b.savPath));
+          savBase64 = buf.toString('base64');
+          savFileName = path.basename(String(b.savPath));
+        } catch (e) { return json(res, { ok: false, error: `לא ניתן לקרוא savPath: ${e?.message || e}` }, 400); }
+      }
+      if (b.assignmentPath) {
+        try { assignmentText = await readFile(String(b.assignmentPath), 'utf8'); }
+        catch (e) { return json(res, { ok: false, error: `לא ניתן לקרוא assignmentPath: ${e?.message || e}` }, 400); }
+      }
+      if (b.draftPath) {
+        try { draftText = await readFile(String(b.draftPath), 'utf8'); }
+        catch (e) { return json(res, { ok: false, error: `לא ניתן לקרוא draftPath: ${e?.message || e}` }, 400); }
+      }
+      const out = await LAB.runSpssProject({
+        csv, savBase64, savFileName, assignmentText, draftText,
+        provider: b.provider || '', model: b.model || '',
+      });
       await saveResult('spss', out);
       return json(res, out);
     }

@@ -3103,7 +3103,185 @@ export const validateAssignmentProfile = (profile = null, analysis = null) => {
   return Array.from(new Set(warnings)).slice(0, 8);
 };
 
-export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null, providerOverride = '', modelOverride = '' } = {}) => {
+// Deterministic plan→code coverage check (zero AI cost, advisory only — never blocks a
+// run). Every analyses[] entry the planner produced should show up as a matching SPSS
+// command in the final master syntax; this is the safety net for the case that broke
+// the real run (planned analysis silently dropped from generation). Unknown methods
+// are skipped rather than flagged, so a false positive never scares the user.
+const METHOD_COMMAND_HEADS = {
+  't-test': [/^T-TEST\b/i],
+  anova: [/^ONEWAY\b/i, /^UNIANOVA\b/i, /^GLM\b/i],
+  correlation: [/^CORRELATIONS\b/i, /^NONPAR CORR\b/i],
+  regression: [/^REGRESSION\b/i],
+  'chi-square': [/^CROSSTABS\b/i],
+  descriptives: [/^DESCRIPTIVES\b/i, /^EXAMINE\b/i, /^MEANS\b/i, /^FREQUENCIES\b/i],
+  frequencies: [/^FREQUENCIES\b/i],
+  reliability: [/^RELIABILITY\b/i],
+  graph: [/^GRAPH\b/i, /^EXAMINE\b/i, /^FREQUENCIES\b/i],
+  recode: [/^RECODE\b/i, /^COMPUTE\b/i, /^DO IF\b/i],
+  compute: [/^COMPUTE\b/i, /^RECODE\b/i],
+  'missing-values': [/^MISSING VALUES\b/i],
+};
+
+// Resolve a plan variable name (may be a real dataset alias, or a name the plan invented
+// for a compute/recode step) to the outputName that will actually appear in the syntax.
+// Falls back to the raw name (trimmed) when it is not a known dataset alias — it may
+// still be a derived variable declared by COMPUTE/RECODE ... INTO in the syntax itself.
+const resolvePlanVariableName = (rawName = '', aliasMap = new Map()) => {
+  const trimmed = String(rawName || '').trim();
+  if (!trimmed) return '';
+  const column = aliasMap.get(trimmed.toLowerCase());
+  return column ? column.outputName : trimmed;
+};
+
+export const validatePlanCoverage = ({ profile = null, analysis = null, masterSyntax = '' } = {}) => {
+  const gaps = [];
+  if (!profile || !Array.isArray(profile.analyses) || !profile.analyses.length) return gaps;
+
+  const aliasMap = buildAliasToColumnMap(analysis);
+  const declaredTargets = collectDeclaredTargetNames(masterSyntax);
+  const declaredTargetsLower = new Set(Array.from(declaredTargets).map((name) => name.toLowerCase()));
+  const commands = getSpssCommands(masterSyntax);
+  const commandHeads = commands.map((command) => extractCommandHead(command));
+
+  profile.analyses.forEach((entry) => {
+    const method = String(entry?.method || '').trim().toLowerCase();
+    const heads = METHOD_COMMAND_HEADS[method];
+    if (!heads) return; // unrecognized method — no basis to judge, skip (never a false flag)
+
+    const matchingCommands = commands.filter((command, index) => heads.some((pattern) => pattern.test(commandHeads[index])));
+    const label = entry.label || entry.method || 'ניתוח';
+    const variables = Array.isArray(entry.variables) ? entry.variables.filter(Boolean) : [];
+
+    if (!matchingCommands.length) {
+      gaps.push({ label, method, variables });
+      return;
+    }
+    if (!variables.length) return; // command head present, nothing else to verify
+
+    const covered = variables.some((rawName) => {
+      const outputName = resolvePlanVariableName(rawName, aliasMap);
+      if (!outputName) return false;
+      let pattern;
+      try {
+        pattern = new RegExp(`\\b${escapeRegExp(outputName)}\\b`, 'i');
+      } catch {
+        return false;
+      }
+      if (matchingCommands.some((command) => pattern.test(command))) return true;
+      return declaredTargetsLower.has(String(rawName || '').trim().toLowerCase()) || declaredTargetsLower.has(outputName.toLowerCase());
+    });
+
+    if (!covered) gaps.push({ label, method, variables });
+  });
+
+  return gaps;
+};
+
+// ---------------------------------------------------------------------------
+// Graph guarantee — deterministic backstop for the second real failure from the actual
+// run (an assignment that asked for "הצגה גרפית" for every variable produced zero
+// charts). The planner is instructed to add a "graph" analysis per variable, but code
+// generation is per-block and can silently drop it. ensureGraphCoverage re-checks the
+// assembled master syntax and synthesizes any missing chart command deterministically
+// (no LLM call, no chance of inventing a wrong variable name).
+// ---------------------------------------------------------------------------
+export const isChartCommand = (command = '') => {
+  const head = extractCommandHead(command);
+  if (/^GRAPH\b/i.test(head)) return true;
+  if (/^EXAMINE\b/i.test(head)) {
+    return /\/PLOT\s*=?[^\n/]*\b(?:BOXPLOT|HISTOGRAM|NPPLOT)\b/i.test(command);
+  }
+  if (/^FREQUENCIES\b/i.test(head)) {
+    return /\/HISTOGRAM\b/i.test(command) || /\/BARCHART\b/i.test(command);
+  }
+  return false;
+};
+
+export const chooseChartCommand = (columns = [], { pairForScatter = false } = {}) => {
+  const cols = (Array.isArray(columns) ? columns : []).filter(Boolean);
+  if (!cols.length) return '';
+
+  if (pairForScatter && cols.length === 2 && cols.every((column) => MODELING_CONTINUOUS_ROLES.has(column.analysisRole))) {
+    return `GRAPH /SCATTERPLOT(BIVAR)=${cols[0].outputName} WITH ${cols[1].outputName}.`;
+  }
+
+  const [first] = cols;
+  if (MODELING_CONTINUOUS_ROLES.has(first.analysisRole)) {
+    return `GRAPH /HISTOGRAM=${first.outputName}.`;
+  }
+  if (CATEGORICAL_ROLES.has(first.analysisRole)) {
+    return `GRAPH /BAR(SIMPLE)=COUNT BY ${first.outputName}.`;
+  }
+  return ''; // identifier / date / text — not chartable, skip silently
+};
+
+export const ensureGraphCoverage = ({ profile = null, analysis = null, masterSyntax = '' } = {}) => {
+  const baseSyntax = String(masterSyntax || '');
+  const noop = { changed: false, syntax: baseSyntax, missing: [] };
+  if (!profile || !Array.isArray(profile.analyses) || !profile.analyses.length) return noop;
+
+  const aliasMap = buildAliasToColumnMap(analysis);
+  const declaredTargets = collectDeclaredTargetNames(baseSyntax);
+  const declaredTargetsLower = new Set(Array.from(declaredTargets).map((name) => name.toLowerCase()));
+  const chartCommands = getSpssCommands(baseSyntax).filter(isChartCommand);
+
+  // A plan variable that is not a known dataset column but IS a name the syntax itself
+  // declares (COMPUTE/RECODE ... INTO) is a computed index — treat it as continuous
+  // (a mean/sum index has no natural categorical reading) rather than skipping it.
+  const resolveChartColumn = (rawName = '') => {
+    const trimmed = String(rawName || '').trim();
+    if (!trimmed) return null;
+    const column = aliasMap.get(trimmed.toLowerCase());
+    if (column) return column;
+    if (declaredTargetsLower.has(trimmed.toLowerCase())) {
+      return { outputName: trimmed, analysisRole: 'continuous' };
+    }
+    return null;
+  };
+
+  const missing = [];
+  const appended = [];
+
+  profile.analyses
+    .filter((entry) => String(entry?.method || '').trim().toLowerCase() === 'graph')
+    .forEach((entry) => {
+      const label = entry.label || entry.method || 'גרף';
+      const rawVariables = Array.isArray(entry.variables) ? entry.variables : [];
+      const columns = rawVariables.map(resolveChartColumn).filter(Boolean);
+      if (!columns.length) return; // nothing resolvable — validatePlanCoverage will flag it
+
+      const isCovered = (column) => {
+        let pattern;
+        try {
+          pattern = new RegExp(`\\b${escapeRegExp(column.outputName)}\\b`, 'i');
+        } catch {
+          return false;
+        }
+        return chartCommands.some((command) => pattern.test(command));
+      };
+      const uncovered = columns.filter((column) => !isCovered(column));
+      if (!uncovered.length) return;
+
+      missing.push(label);
+      // זוג רציפים = scatter אחד; אחרת גרף נפרד לכל משתנה לא-מכוסה (entry מרובה
+      // משתנים כמו "גרפים לכל המשתנים" חייב לכסות את כולם, לא רק את הראשון).
+      const commands = columns.length === 2 && uncovered.length === 2 && columns.every((column) => MODELING_CONTINUOUS_ROLES.has(column.analysisRole))
+        ? [chooseChartCommand(columns, { pairForScatter: true })]
+        : uncovered.map((column) => chooseChartCommand([column]));
+      const block = commands.filter(Boolean).join('\n');
+      if (block) {
+        appended.push(`* --- גרף (הושלם אוטומטית): ${label} ---.\n${block}`);
+      }
+    });
+
+  if (!appended.length) return { changed: false, syntax: baseSyntax, missing };
+
+  const syntax = [baseSyntax.trimEnd(), ...appended].join('\n\n');
+  return { changed: true, syntax, missing };
+};
+
+export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null, draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanAssignment = String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS);
   if (!cleanAssignment) {
     return { ok: false, profile: null, providerId: '', model: '', error: 'הדבק את טקסט המטלה כדי שאבין מה צריך לעשות.' };
@@ -3114,6 +3292,7 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
 
   try {
     const tokenizedAssignment = tokenizeSpssRequest(cleanAssignment, analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
     const systemPrompt = [
       'אתה יועץ סטטיסטי מומחה שמכין סטודנט ישראלי לעבודת סיום ב-SPSS.',
       'קיבלת טקסט מטלה ומטא-דאטה של dataset (שמות משתנים מתוקנים VAR_n + סטטיסטיקות סיכום, בלי שורות גולמיות).',
@@ -3141,12 +3320,21 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
       'השתמש ב-valueLabels=[קוד=תווית] במטא-דאטה כדי למפות תיאורים מילוליים במטלה ("נשים", "תואר ראשון") לקודים הנכונים ולמשתנה הנכון. אל תמציא קטגוריות שלא מופיעות ב-valueLabels/observedValues.',
       'אם משתנה שנדרש לניתוח מסומן suspectedUndeclaredMissing=[קודים] — הוסף analysis ראשון בשלב הכנה (method "missing-values") שה-request שלו מגדיר את הקודים האלה כ-user-missing (MISSING VALUES), לפני כל ניתוח שמשתמש במשתנה. אחרת התוצאות יהיו מוטות.',
       'הצגה גרפית — אם המטלה מבקשת גרף/תרשים/היסטוגרמה/"הצגה גרפית"/plot/chart/diagram, הוסף analysis ייעודי נפרד (method "graph") לכל משתנה או זוג רלוונטי. בחר את סוג הגרף לפי רמת המדידה: רציף (role=continuous/likert) → היסטוגרמה או boxplot; קטגוריאלי (role=categorical/categorical-code) → תרשים עמודות (bar) או עוגה (pie); שני משתנים רציפים לבדיקת קשר → תרשים פיזור (scatter). ה-request יציין במפורש את סוג הגרף ואת שמות המשתנים (VAR_n). אל תוותר על הגרף גם אם באותו סעיף מבקשים גם מדדי מרכז/פיזור — הגרף הוא analysis נפרד ונוסף.',
+      'מתאמים — אם המטלה מבקשת במפורש מקדם מתאם / "מידת הקשר" בין המשתנים, הוסף analysis ייעודי (method "correlation", CORRELATIONS או NONPAR CORR לפי רמת המדידה) בין המשתנה התלוי לכל משתנה בלתי-תלוי — גם אם בנוסף מתוכננת רגרסיה לבחינת ההשערות. רגרסיה אינה תחליף לדרישת מתאם מפורשת; אלה שני סעיפים נפרדים בעבודה.',
       'בדיקות הנחות — לכל מבחן היסק (t-test/ANOVA/רגרסיה/מתאם Pearson) ודא שה-request מבקש גם את בדיקות ההנחות הרלוונטיות: נורמליות (Shapiro-Wilk/Kolmogorov-Smirnov דרך EXAMINE ... /PLOT NPPLOT), שוויון שונויות (Levene — אוטומטי ב-T-TEST, ו-/STATISTICS=HOMOGENEITY ב-ONEWAY), ולרגרסיה גם בדיקת שאריות/מולטיקולינאריות. אפשר לשלב את בדיקות ההנחה באותו request של המבחן. המטלה דורשת לדווח עליהן — אל תשמיט.',
+      tokenizedDraft
+        ? 'צורפה טיוטה קיימת של העבודה — היא מקור האמת להגדרת משתנים, לא טקסט המטלה. אם הטיוטה מגדירה משתנה (למשל "מדד עמדות = שאלה 21 + שאלה 36"), מפה את ההגדרה למשתנים המתאימים במטא-דאטה (VAR_n) ובנה לפיה. אם הטיוטה מגדירה משתנה תלוי מחושב מכמה פריטים — הוסף תמיד analysis מקדים בשלב הכנה (method "compute") שבונה אותו (כולל RECODE להיפוך פריטים אם הטיוטה מציינת זאת) לפני כל analysis שמשתמש בו, והשתמש בשם המשתנה הנגזר ב-variables של הניתוחים התלויים בו. אם יש סתירה בין הטיוטה לטקסט המטלה — ציין זאת ב-notes ואל תמציא הכרעה.'
+        : '',
       buildGuidanceMetadataBlock(analysis),
     ].filter(Boolean).join('\n');
 
+    const userMessage = [
+      tokenizedDraft ? `הטיוטה הקיימת של העבודה (מקור אמת להגדרות משתנים):\n${tokenizedDraft}` : '',
+      `טקסט המטלה:\n${tokenizedAssignment}`,
+    ].filter(Boolean).join('\n\n');
+
     const { text, providerId, model } = await callGuidanceProvider({
-      tokenizedMessage: `טקסט המטלה:\n${tokenizedAssignment}`,
+      tokenizedMessage: userMessage,
       systemPrompt,
       agentName: 'SPSS Assignment Planner',
       providerOverride,

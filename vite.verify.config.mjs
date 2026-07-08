@@ -29,6 +29,10 @@ export default defineConfig({
     srcretr: path.join(PROJECT, 'src/services/sourceRetrieval/index.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     spss: path.join(PROJECT, 'src/services/spssSyntaxService.js'),
+    // .sav parsing in the LAB (tools/test-bench/lab-entry.mjs) — same alias as
+    // vite.config.js: SavReader core without SavBufferReader's browser-only
+    // stream.Readable.from. Node's real Readable.from() feeds it directly.
+    'sav-reader-core': path.join(PROJECT, 'node_modules', 'sav-reader', 'dist', 'SavReader.js'),
   } },
   ssr: { noExternal: true },
   build: {
