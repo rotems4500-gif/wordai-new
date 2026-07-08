@@ -981,6 +981,16 @@ async function runSpssProject({ csv = '', savBase64 = '', savFileName = 'dataset
   }
 }
 
+async function buildAnalysisFromInput({ csv = '', savBase64 = '', savFileName = 'dataset.sav' } = {}) {
+  if (String(savBase64 || '').trim()) {
+    const buffer = Buffer.from(savBase64, 'base64');
+    const dataset = await parseSavBufferToDataset(buffer, savFileName || 'dataset.sav');
+    return spss.parseSpssSavDataset(dataset);
+  } else {
+    return spss.parseCsvText(String(csv || ''), { fileName: 'lab.csv' });
+  }
+}
+
 export const lab = {
   seedConfig, seedAppSettings, getAgents, getProviders, inspectAgent, runAgent, runAgentMulti,
   retrieveSourcesLab, generateDoc, getStyleProfile, runStyleComparison, scoreText, runSpssSyntax, simulateSpssPreview, runSpssProject,
@@ -991,5 +1001,9 @@ export const lab = {
   extractVerifiedSourceQuery: (args) => ai.extractVerifiedSourceQuery(args),
   // offline SPSS helpers (no LLM) — unit-testable from node
   detectStaleSessionRun: (args) => spss.detectStaleSessionRun(args),
+  adviseLecturerNextSteps: (args) => spss.adviseLecturerNextSteps(args),
+  buildLiteratureReview: (args) => spss.buildLiteratureReview(args),
+  buildAnalysisFromInput,
 };
 export default lab;
+

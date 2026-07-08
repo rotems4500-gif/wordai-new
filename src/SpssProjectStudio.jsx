@@ -11,6 +11,7 @@ import {
   normalizeProviderModelName,
 } from './services/aiService';
 import {
+  adviseLecturerNextSteps,
   analyzeSpssAssignment,
   buildLiteratureReview,
   buildSpssFindingsChapter,
@@ -150,6 +151,12 @@ const downloadTextFile = (content = '', fileName = 'wordflow-spss-syntax.sps') =
   return saveBlobInBrowser(blob, fileName);
 };
 
+// Small round numbered badge for the explain-stage section titles — pure ordering hint,
+// no logic attached.
+const StageBadge = ({ n }) => (
+  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">{n}</span>
+);
+
 export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = null }) {
   const fileInputRef = React.useRef(null);
   const draftInputRef = React.useRef(null);
@@ -171,6 +178,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
   const [coverageGaps, setCoverageGaps] = React.useState([]);
   const [interpretations, setInterpretations] = React.useState([]);
   const [litReview, setLitReview] = React.useState(null);
+  const [lecturerAdvice, setLecturerAdvice] = React.useState(null);
+  const [chapterTruncated, setChapterTruncated] = React.useState(false);
   // AI-usage log — every model call the studio makes, for the required AI appendix (section ה).
   const [aiLog, setAiLog] = React.useState([]);
   const [busy, setBusy] = React.useState('');
@@ -288,6 +297,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     setReviewNotes([]);
     setInterpretations([]);
     setLitReview(null);
+    setLecturerAdvice(null);
+    setChapterTruncated(false);
     setAiLog([]);
     setStage('understand');
     setNotice({
@@ -828,6 +839,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       return;
     }
     setBusy('chapter');
+    setChapterTruncated(false);
     setNotice({ tone: 'info', text: 'מרכיב פרק ממצאים...' });
     try {
       const result = await buildSpssFindingsChapter({ assignmentText, analysis, masterSyntax, output, interpretations, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
@@ -835,6 +847,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         setNotice({ tone: 'error', text: result.error || 'הרכבת פרק הממצאים נכשלה.' });
         return;
       }
+      setChapterTruncated(Boolean(result.truncated));
       logAi({ stage: 'פרק ממצאים', description: 'הרכבת פרק ממצאים בעברית מהפלט, הפירושים והמטלה', prompt: 'הרכב פרק ממצאים מהפלט והפירושים', providerId: result.providerId, model: result.model });
       if (typeof onEmitDocument === 'function') {
         // יש טיוטה? ממזגים: הטיוטה כבסיס + פרק הממצאים בסופה → מסמך אחד שלם.
@@ -845,6 +858,9 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
           html: mergedHtml,
           title: draft?.title || result.title || 'פרק ממצאים',
         });
+        if (result.truncated) {
+          setNotice({ tone: 'error', text: 'הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.' });
+        }
       } else {
         setNotice({ tone: 'error', text: 'אין יעד להזרמת המסמך. נסה שוב מתוך האפליקציה.' });
       }
@@ -880,6 +896,77 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     }
   }, [assignmentText, profile, logAi]);
 
+  // Optional lecturer-advice panel (שלב D) — guidance-only call, no chapter/syntax
+  // changes on its own; suggestions are validated against real metadata in the service
+  // (buildAliasToColumnMap) before they ever reach the UI, so every suggestedVariables
+  // entry here is guaranteed to exist in the dataset.
+  const onAdviseLecturer = React.useCallback(async () => {
+    if (!output.trim()) {
+      setNotice({ tone: 'error', text: 'הדבק פלט מ-SPSS לפני בקשת המלצת מרצה.' });
+      return;
+    }
+    setBusy('lecturer-advice');
+    setNotice({ tone: 'info', text: 'מכין המלצת מרצה על סמך התוצאות...' });
+    try {
+      const result = await adviseLecturerNextSteps({
+        assignmentText,
+        analysis,
+        profile,
+        masterSyntax,
+        output,
+        interpretations,
+        providerOverride: spssRouteRef.current.providerId,
+        modelOverride: spssRouteRef.current.model,
+      });
+      if (!result.ok) {
+        setNotice({ tone: 'error', text: result.error || 'הפקת המלצת המרצה נכשלה.' });
+        return;
+      }
+      setLecturerAdvice(result);
+      logAi({ stage: 'המלצת מרצה', description: 'ייעוץ מרצה על סמך התוצאות — כיווני המשך והמלצות', prompt: 'המלץ על כיווני המשך על סמך התוצאות', providerId: result.providerId, model: result.model });
+      setNotice({ tone: 'success', text: 'המלצת המרצה מוכנה.' });
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'הפקת המלצת המרצה נכשלה.' });
+    } finally {
+      setBusy('');
+    }
+  }, [output, assignmentText, analysis, profile, masterSyntax, interpretations, logAi]);
+
+  // Turn one lecturer recommendation into a runnable syntax block — same idiom as
+  // onApplyFix: build a Hebrew request from the suggested analysis+variables, generate
+  // in 'prep' mode (works for both prep-style and analysis-style suggestions well
+  // enough — the model reads the request itself), append as a new block.
+  const onAddLecturerRecommendation = React.useCallback(async (rec) => {
+    if (!rec?.suggestedAnalysis || !Array.isArray(rec.suggestedVariables) || !rec.suggestedVariables.length) return;
+    const busyKey = `lecturer-rec-${rec.finding || rec.suggestedAnalysis}`;
+    setBusy(busyKey);
+    try {
+      const request = `${rec.suggestedAnalysis} עבור המשתנים: ${rec.suggestedVariables.join(', ')}`;
+      const createdNames = blocks.flatMap((block) => Array.from(collectDeclaredTargetNames(block.syntax)));
+      const result = await generateSpssSyntax({
+        analysis,
+        request,
+        tutorMode: true,
+        mode: 'prep',
+        extraAllowedNames: createdNames,
+        providerOverride: spssRouteRef.current.providerId,
+        modelOverride: spssRouteRef.current.model,
+      });
+      if (result.ok && result.syntax) {
+        const findingShort = String(rec.finding || rec.suggestedAnalysis || '').slice(0, 60);
+        setBlocks((prev) => [...prev, { id: createLocalId(), title: `המלצת מרצה: ${findingShort}`, syntax: result.syntax, blocked: false }]);
+        logAi({ stage: 'המלצת מרצה', description: `יצירת בלוק לפי המלצת מרצה: ${findingShort}`, prompt: request, providerId: result.providerId, model: result.model });
+        setNotice({ tone: 'success', text: 'נוסף בלוק קוד להמלצת המרצה. הרץ אותו ב-SPSS ועדכן את הפלט כדי לראות את התוצאה.' });
+      } else {
+        setNotice({ tone: 'error', text: result.guidanceMessage || 'יצירת בלוק ההמלצה נעצרה.' });
+      }
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'יצירת בלוק ההמלצה נכשלה.' });
+    } finally {
+      setBusy('');
+    }
+  }, [analysis, blocks, logAi]);
+
   const onCopySyntax = React.useCallback(async () => {
     try {
       await navigator.clipboard.writeText(masterSyntax);
@@ -900,6 +987,9 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
 
   const appendixText = React.useMemo(() => buildAiAppendixText(aiLog), [aiLog]);
   const litReviewText = React.useMemo(() => buildLitReviewText(litReview), [litReview]);
+  // Honest Scholar hint (שלב A2) — only claim it's configured when the user actually
+  // set SerpAPI + a key, mirroring the real gate in sourceRetrieval/pipeline.js.
+  const scholarConfigured = Boolean(providerConfigState?.scholar?.provider === 'serpapi' && providerConfigState?.scholar?.key);
 
   const copyToClipboard = React.useCallback(async (text, okMsg) => {
     try {
@@ -1459,7 +1549,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
             <div className="space-y-5">
               <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-lg font-bold text-slate-900">פירוש הפלט</div>
+                  <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={1} /> פירוש הפלט</div>
                   <button
                     type="button"
                     className={`rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition ${busy === 'interpret' ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
@@ -1481,8 +1571,22 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
               </section>
 
               <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
-                <div className="text-lg font-bold text-slate-900">התוצר הסופי</div>
+                <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={2} /> התוצר הסופי</div>
                 <p className="mt-1 text-sm text-slate-600">תוצר מומלץ לפי המטלה: <span className="font-semibold text-blue-700">{DELIVERABLE_LABELS[profile?.deliverable || 'findings-chapter']}</span></p>
+                {interpretations.length === 0 && (
+                  <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs leading-6 text-blue-700">מומלץ קודם "פרש את הפלט" — הפרק ישתמש בפירושים לניסוח מדויק יותר.</div>
+                )}
+                {draft ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
+                    <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700" title={draft.name}>נבנה על בסיס הטיוטה: {draft.name}</span>
+                    <button type="button" className="text-xs font-semibold text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline" onClick={clearDraft}>הסר</button>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
+                    <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600">אין טיוטה מצורפת — הפרק ייווצר עצמאית.</span>
+                    <button type="button" className="text-xs font-semibold text-blue-700 underline-offset-2 hover:underline" onClick={onSelectDraft} disabled={busy === 'draft'}>{busy === 'draft' ? 'טוען...' : 'צרף טיוטה'}</button>
+                  </div>
+                )}
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                   <button
                     type="button"
@@ -1496,13 +1600,16 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                   <button type="button" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700" onClick={onCopySyntax}>העתק syntax</button>
                 </div>
                 <div className="mt-3 text-xs leading-6 text-slate-500">"צור מסמך" פותח את העורך עם פרק הממצאים מוכן להמשך עריכה.</div>
+                {chapterTruncated && (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-6 text-amber-800">⚠️ הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.</div>
+                )}
               </section>
 
               {/* Literature review + reference list (sections א+ד) */}
               <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-lg font-bold text-slate-900">סקירת ספרות ומקורות</div>
+                    <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={3} /> סקירת ספרות ומקורות</div>
                     <p className="mt-1 text-sm text-slate-600">מאתר מקורות אקדמיים אמיתיים ומאומתים לנושא המחקר וכותב סקירה קצרה מבוססת עליהם — בלי מקורות מומצאים.</p>
                   </div>
                   <button
@@ -1525,13 +1632,77 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">דורש SerpAPI (Google Scholar) מוגדר בהגדרות כדי לשלוף מאמרים אקדמיים אמיתיים.</div>
+                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                    {scholarConfigured
+                      ? 'Scholar מוגדר ✓ — לחץ "אתר מקורות וכתוב סקירה" לאיתור מקורות אקדמיים.'
+                      : 'דורש SerpAPI (Google Scholar) מוגדר בהגדרות כדי לשלוף מאמרים אקדמיים אמיתיים.'}
+                  </div>
+                )}
+              </section>
+
+              {/* Optional lecturer-advice panel (שלב D) */}
+              <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={4} /> 🎓 המלצת מרצה</div>
+                    <p className="mt-1 text-sm text-slate-600">אופציונלי — ייעוץ על סמך התוצאות: כיווני חיזוק, מנבאים חלופיים והסתייגויות.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`rounded-2xl px-5 py-2.5 text-sm font-semibold text-white transition ${busy === 'lecturer-advice' ? 'cursor-wait bg-slate-300' : 'bg-[#0066cc] hover:bg-blue-700'}`}
+                    onClick={onAdviseLecturer}
+                    disabled={!output.trim() || Boolean(busy)}
+                  >
+                    {busy === 'lecturer-advice' ? 'מכין המלצה...' : (lecturerAdvice ? 'בקש המלצת מרצה מחדש' : 'בקש המלצת מרצה')}
+                  </button>
+                </div>
+                {lecturerAdvice ? (
+                  <div className="mt-4 space-y-3">
+                    {lecturerAdvice.summary && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 text-slate-800 whitespace-pre-wrap">{lecturerAdvice.summary}</div>
+                    )}
+                    {(lecturerAdvice.recommendations || []).map((rec, index) => {
+                      const hasVariables = Array.isArray(rec.suggestedVariables) && rec.suggestedVariables.length > 0;
+                      const busyKey = `lecturer-rec-${rec.finding || rec.suggestedAnalysis}`;
+                      return (
+                        <div key={`${rec.finding || 'rec'}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-800">
+                          <div className="font-semibold text-slate-900">{rec.finding}</div>
+                          {rec.recommendation && <div className="mt-1 text-slate-700">{rec.recommendation}</div>}
+                          {rec.suggestedAnalysis && <div className="mt-1 text-xs text-slate-500">ניתוח מוצע: {rec.suggestedAnalysis}</div>}
+                          {hasVariables && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {rec.suggestedVariables.map((varName) => (
+                                <span key={varName} className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{varName}</span>
+                              ))}
+                            </div>
+                          )}
+                          {rec.integrityNote && (
+                            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-800">⚖️ הערת יושרה אקדמית: {rec.integrityNote}</div>
+                          )}
+                          {hasVariables && (
+                            <div className="mt-3">
+                              <button
+                                type="button"
+                                className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${busy === busyKey ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
+                                onClick={() => onAddLecturerRecommendation(rec)}
+                                disabled={Boolean(busy)}
+                              >
+                                {busy === busyKey ? 'מוסיף...' : 'הוסף לקוד'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">הדבק פלט מ-SPSS ולחץ "בקש המלצת מרצה" לקבלת כיווני המשך.</div>
                 )}
               </section>
 
               {/* AI-usage appendix (section ה) */}
               <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm">
-                <div className="text-lg font-bold text-slate-900">נספח שימוש בבינה מלאכותית</div>
+                <div className="flex items-center gap-2 text-lg font-bold text-slate-900"><StageBadge n={5} /> נספח שימוש בבינה מלאכותית</div>
                 <p className="mt-1 text-sm text-slate-600">נדרש במטלה (סעיף ה'). נבנה אוטומטית מכל קריאת AI שבוצעה כאן: איזה מודל, לאיזו מטרה, ועם איזה קלט.</p>
                 {appendixText ? (
                   <div className="mt-4 space-y-3">

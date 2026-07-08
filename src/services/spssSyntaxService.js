@@ -2931,7 +2931,9 @@ export const buildLiteratureReview = async ({ topic = '', count = 5, providerOve
   }
   try {
     const { retrieveSources } = await import('./sourceRetrieval/index.js');
-    const retrieval = await retrieveSources({ query: cleanTopic, kind: 'academic', count: Math.max(3, Math.min(8, Number(count) || 5)) });
+    const { getProviderConfig } = await import('./aiService.js');
+    const cfg = getProviderConfig();
+    const retrieval = await retrieveSources({ query: cleanTopic, kind: 'academic', count: Math.max(3, Math.min(8, Number(count) || 5)), cfg });
     const sources = Array.isArray(retrieval?.sources) ? retrieval.sources.filter(Boolean) : [];
     if (!retrieval?.ok || !sources.length) {
       return {
@@ -2995,13 +2997,22 @@ export const buildLiteratureReview = async ({ topic = '', count = 5, providerOve
 
 const MAX_ASSIGNMENT_CHARS = 12000;
 const MAX_PROJECT_SYNTAX_CHARS = 12000;
-const MAX_DRAFT_CHARS = 16000;
+const MAX_DRAFT_CHARS = 60000;
+const DRAFT_MIDDLE_OMITTED_MARKER = '\n\n... [קטע אמצעי הושמט] ...\n\n';
 
 // טיוטה קיימת שהמשתמש העלה (עבודה בכתיבה) — מוזרמת כהקשר ל-AI, מטוקנת כמו כל
 // טקסט אחר כדי לשמור על מודל הפרטיות (שמות עמודות → VAR_n).
+// טיוטות ארוכות (עד MAX_DRAFT_CHARS) נדגמות ראש+זנב (70/30) במקום slice מהראש
+// בלבד — כותב הפרק צריך לראות גם איך העבודה מסתיימת, לא רק איך היא נפתחת.
 const buildDraftContextBlock = (draftText = '', analysis = null) => {
-  const clean = String(draftText || '').trim().slice(0, MAX_DRAFT_CHARS);
-  if (!clean) return '';
+  const raw = String(draftText || '').trim();
+  if (!raw) return '';
+  let clean = raw;
+  if (raw.length > MAX_DRAFT_CHARS) {
+    const headChars = Math.round(MAX_DRAFT_CHARS * 0.7);
+    const tailChars = MAX_DRAFT_CHARS - headChars;
+    clean = `${raw.slice(0, headChars)}${DRAFT_MIDDLE_OMITTED_MARKER}${raw.slice(-tailChars)}`;
+  }
   return tokenizeSpssRequest(clean, analysis);
 };
 
@@ -3495,6 +3506,117 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
 };
 
 // ---------------------------------------------------------------------------
+// Lecturer advisory (optional, שלב D) — an advisory voice, never a directive: reads the
+// already-produced results and suggests directions the student can consider (e.g. a
+// non-significant hypothesis test → concrete alternative predictors that actually exist
+// in the file). Every suggestedVariables entry is validated deterministically against
+// buildAliasToColumnMap AFTER restoreTokensDeep — a suggestion the model hallucinated for
+// a variable outside the metadata is stripped (never trusted from the model alone).
+// Recommendations that imply a post-hoc hypothesis change must carry integrityNote (HARKing).
+// ---------------------------------------------------------------------------
+export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = null, profile = null, masterSyntax = '', output = '', interpretations = [], providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
+  if (!cleanOutput) {
+    return { ok: false, recommendations: [], summary: '', providerId: '', model: '', error: 'הדבק פלט מ-SPSS כדי לקבל המלצת מרצה על סמך התוצאות.' };
+  }
+
+  try {
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    const tokenizedSyntax = tokenizeSpssRequest(String(masterSyntax || '').trim().slice(0, MAX_PROJECT_SYNTAX_CHARS), analysis);
+    const tokenizedOutput = tokenizeSpssRequest(cleanOutput, analysis);
+
+    const planDigest = Array.isArray(profile?.analyses)
+      ? profile.analyses.map((entry, index) => `${index + 1}. ${entry.label || entry.method || 'ניתוח'} [${entry.method || ''}]`).join('\n')
+      : '';
+
+    const interpretationDigest = (Array.isArray(interpretations) ? interpretations : [])
+      .map((entry) => {
+        const label = String(entry?.label || '').trim();
+        const answer = String(entry?.answer || '').trim();
+        return answer ? `### ${label || 'ניתוח'}\n${answer}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    const tokenizedInterpretationDigest = tokenizeSpssRequest(interpretationDigest, analysis);
+
+    const systemPrompt = [
+      'אתה מרצה סטטיסטיקה בכיר שמייעץ לסטודנט — קול מייעץ (advisory), לא מכתיב. אתה עוזר לו לראות כיווני המשך אפשריים על סמך התוצאות שכבר התקבלו, ולא קובע במקומו מה לעשות.',
+      'קיבלת: טקסט המטלה, תוכנית הניתוחים, ה-syntax שהורץ, פירושים שכבר הופקו לפלט (אם יש), והפלט הגולמי מ-SPSS.',
+      'כלל מחייב וקשיח: כל ערך ב-suggestedVariables חייב להיות token מסוג VAR_n שקיים בפועל במטא-דאטה שצורפה בהמשך. הצעת משתנה שאינו קיים במטא-דאטה אסורה לחלוטין — זו הזיה.',
+      'כשמבחן השערה בפלט אינו מובהק (p לא מובהק) — הצע 1-2 מנבאים חלופיים קונקרטיים שקיימים בפועל במטא-דאטה (למשל השכלה או הכנסה כמדד SES), עם הפרוצדורה הסטטיסטית המתאימה לרמת המדידה שלהם (role=continuous/categorical/likert וכו׳). אל תמציא משתנה שלא ברשימה.',
+      'אזהרת HARKing (Hypothesizing After the Results are Known): כל המלצה שמשתמעת ממנה שינוי או הוספת השערה אחרי שכבר נראו התוצאות חייבת לשאת integrityNote שמסביר שיש לנסח זאת כניתוח חקרני (exploratory) ולגלות זאת במפורש בעבודה — לא להציג כאילו הייתה השערה שנקבעה מראש.',
+      'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
+      '{',
+      '  "recommendations": [',
+      '    {"finding":"מה נמצא בתוצאות","recommendation":"כיוון מוצע לשיקול הסטודנט, בניסוח מייעץ ולא מכתיב","suggestedVariables":["VAR_n"],"suggestedAnalysis":"הפרוצדורה הסטטיסטית המתאימה","integrityNote":"אזהרת HARKing אם רלוונטי, אחרת מחרוזת ריקה"}',
+      '  ],',
+      '  "summary": "סיכום קצר של כיווני ההמשך המוצעים"',
+      '}',
+      'עצה כללית/מתודולוגית שאינה תלויה במשתנה ספציפי מותרת — suggestedVariables יכול להיות מערך ריק במקרה כזה.',
+      'אל תמציא ערכים או תוצאות שלא מופיעים בפלט. אם משהו חסר כדי להסיק, ציין זאת.',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const message = [
+      `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
+      planDigest ? `תוכנית הניתוחים:\n${planDigest}` : '',
+      `ה-syntax שהורץ:\n${tokenizedSyntax || '(לא סופק)'}`,
+      tokenizedInterpretationDigest ? `פירושים שכבר הופקו:\n${tokenizedInterpretationDigest}` : '',
+      `הפלט הגולמי מ-SPSS:\n${tokenizedOutput}`,
+    ].filter(Boolean).join('\n\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: message,
+      systemPrompt,
+      agentName: 'SPSS Lecturer Advisor',
+      providerOverride,
+      modelOverride,
+    });
+
+    const parsed = extractJsonPayload(text);
+    if (!parsed) {
+      return { ok: false, recommendations: [], summary: '', providerId, model, error: 'לא הצלחתי לפענח את המלצת המרצה. נסה שוב.' };
+    }
+
+    const restored = restoreTokensDeep(parsed, analysis) || {};
+    const aliasMap = buildAliasToColumnMap(analysis);
+    let droppedCount = 0;
+    const recommendations = (Array.isArray(restored.recommendations) ? restored.recommendations : [])
+      .map((entry) => {
+        const rawVariables = Array.isArray(entry?.suggestedVariables) ? entry.suggestedVariables : [];
+        const resolvedColumns = rawVariables
+          .map((name) => aliasMap.get(String(name || '').trim().toLowerCase()))
+          .filter(Boolean);
+        const resolvedNames = resolvedColumns.map((column) => column.originalName || column.outputName || column.token);
+        // כלל אנטי-הזיה: אם ה-entry ביקש משתנים במפורש (לא עצה כללית) וכולם לא
+        // נפתרו מול הקובץ האמיתי — כל ה-entry לא אמין, זורקים אותו כולו.
+        if (rawVariables.length && !resolvedNames.length) {
+          droppedCount += 1;
+          return null;
+        }
+        return {
+          finding: String(entry?.finding || '').trim(),
+          recommendation: String(entry?.recommendation || '').trim(),
+          suggestedVariables: resolvedNames,
+          suggestedAnalysis: String(entry?.suggestedAnalysis || '').trim(),
+          integrityNote: String(entry?.integrityNote || '').trim(),
+        };
+      })
+      .filter((entry) => entry && (entry.finding || entry.recommendation || entry.suggestedAnalysis));
+
+    let summary = String(restored.summary || '').trim();
+    if (droppedCount > 0) {
+      const dropNote = `הוסרו ${droppedCount} המלצות שהפנו למשתנים שאינם בקובץ.`;
+      summary = summary ? `${summary}\n\n${dropNote}` : dropNote;
+    }
+
+    return { ok: true, recommendations, summary, providerId, model, error: '' };
+  } catch (error) {
+    return { ok: false, recommendations: [], summary: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הפקת המלצת המרצה נכשלה.' };
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Pre-flight reviewer — the "good code on the first try" lever. The per-analysis
 // generator writes each block in ISOLATION (one generateSpssSyntax call per item,
 // seeing only the allowed names, not the whole plan or the sibling blocks). This
@@ -3599,10 +3721,54 @@ export const reviewSpssMasterSyntax = async ({ assignmentText = '', analysis = n
   }
 };
 
+// --- אנטי-חיתוך: פרק הממצאים כולל טבלאות ויכול להיות ארוך מברירת המחדל של
+// הספק. אין אופציית maxOutputTokens גנרית ב-chatWithActiveProvider (נבדק —
+// requestBodyExtras קיים אך משמש רק למסלול perplexity הפנימי), אז מסתמכים על
+// זיהוי חיתוך דטרמיניסטי + לולאת continuation במקום.
+const CLOSING_BLOCK_TAG_PATTERN = /<\/(p|table|h2|h3|ul|ol|li)>\s*$/i;
+const BALANCED_TAG_NAMES = ['table', 'ul', 'ol', 'p'];
+
+const countTagOccurrences = (html = '', tagName = '') => {
+  const openPattern = new RegExp(`<${tagName}(?:\\s[^>]*)?>`, 'gi');
+  const closePattern = new RegExp(`</${tagName}\\s*>`, 'gi');
+  const open = (html.match(openPattern) || []).length;
+  const close = (html.match(closePattern) || []).length;
+  return { open, close };
+};
+
+const isTruncatedHtml = (html = '') => {
+  const trimmed = String(html || '').trim();
+  if (!trimmed) return true;
+  if (!CLOSING_BLOCK_TAG_PATTERN.test(trimmed)) return true;
+  return BALANCED_TAG_NAMES.some((tag) => {
+    const { open, close } = countTagOccurrences(trimmed, tag);
+    return open > close;
+  });
+};
+
+// מדביקה המשך לטקסט קיים, ומורידה חפיפה אם ה-continuation חוזר על זנב הטקסט
+// שכבר נכתב (המודל לפעמים חוזר על כמה תווים אחרונים לפני שהוא ממשיך הלאה).
+const appendContinuationHtml = (accumulated = '', continuation = '') => {
+  const acc = String(accumulated || '');
+  const cont = String(continuation || '').trim();
+  if (!cont) return acc;
+  const maxOverlap = Math.min(acc.length, cont.length, 400);
+  for (let len = maxOverlap; len >= 40; len -= 1) {
+    if (acc.slice(-len) === cont.slice(0, len)) {
+      return acc + cont.slice(len);
+    }
+  }
+  return `${acc}${/\s$/.test(acc) ? '' : '\n'}${cont}`;
+};
+
+const MAX_FINDINGS_CONTINUATION_ROUNDS = 3;
+const FINDINGS_CONTINUATION_TAIL_CHARS = 1500;
+const FINDINGS_CONTINUATION_INSTRUCTION = 'זה סוף הפרק שנכתב עד כה ונקטע. המשך בדיוק מהנקודה שנעצרת. אל תחזור על טקסט קיים, אל תפתח כותרת חדשה של הפרק, החזר אך ורק את ההמשך כ-HTML.';
+
 export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [], draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
   if (!cleanOutput) {
-    return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פלט להרכבת פרק ממצאים. הדבק קודם את הפלט מ-SPSS.' };
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פלט להרכבת פרק ממצאים. הדבק קודם את הפלט מ-SPSS.', truncated: false };
   }
 
   try {
@@ -3653,10 +3819,45 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       .replace(/```/g, '')
       .trim();
     if (!restoredHtml) {
-      return { ok: false, html: '', title: '', providerId, model, error: 'המודל לא החזיר פרק ממצאים. נסה שוב.' };
+      return { ok: false, html: '', title: '', providerId, model, error: 'המודל לא החזיר פרק ממצאים. נסה שוב.', truncated: false };
     }
-    return { ok: true, html: restoredHtml, title: 'פרק ממצאים', providerId, model, error: '' };
+
+    // חיתוך: הטבלאות/הכותרות הארוכות בפרק הממצאים עלולות להיחתך על ברירת המחדל
+    // של הספק. משלימים עד 3 סבבי continuation לפני שמוותרים ומדווחים truncated.
+    let accumulatedHtml = restoredHtml;
+    let truncated = isTruncatedHtml(accumulatedHtml);
+    let round = 0;
+    while (truncated && round < MAX_FINDINGS_CONTINUATION_ROUNDS) {
+      round += 1;
+      const tail = accumulatedHtml.slice(-FINDINGS_CONTINUATION_TAIL_CHARS);
+      const tokenizedTail = tokenizeSpssRequest(tail, analysis);
+      const continuationMessage = [
+        'הפרק שנכתב עד כה (זנב הקטע, לצורך המשך בלבד):',
+        tokenizedTail,
+        '',
+        FINDINGS_CONTINUATION_INSTRUCTION,
+      ].join('\n');
+
+      // eslint-disable-next-line no-await-in-loop
+      const continuationResult = await callGuidanceProvider({
+        tokenizedMessage: continuationMessage,
+        systemPrompt,
+        agentName: 'SPSS Findings Writer',
+        providerOverride,
+        modelOverride,
+      });
+
+      const continuationHtml = (restoreColumnTokens(continuationResult.text, analysis) || continuationResult.text)
+        .replace(/```html/gi, '')
+        .replace(/```/g, '')
+        .trim();
+      if (!continuationHtml) break;
+      accumulatedHtml = appendContinuationHtml(accumulatedHtml, continuationHtml);
+      truncated = isTruncatedHtml(accumulatedHtml);
+    }
+
+    return { ok: true, html: accumulatedHtml, title: 'פרק ממצאים', providerId, model, error: '', truncated };
   } catch (error) {
-    return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת פרק הממצאים נכשלה.' };
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת פרק הממצאים נכשלה.', truncated: false };
   }
 };

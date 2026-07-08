@@ -387,7 +387,45 @@ const server = createServer(async (req, res) => {
       await saveResult('spss', out);
       return json(res, out);
     }
-    res.writeHead(404); res.end('not found');
+    if (req.method === 'POST' && url === '/api/spss-advise') {
+      const b = await readBody(req);
+      let csv = b.csv || '';
+      let savBase64 = b.savBase64 || '';
+      let savFileName = b.savFileName || 'dataset.sav';
+      let assignmentText = b.assignmentText || '';
+      let profile = b.profile || null;
+      let masterSyntax = b.masterSyntax || '';
+      let output = b.output || '';
+      let interpretations = b.interpretations || [];
+      if (b.savPath) {
+        try {
+          const buf = await readFile(String(b.savPath));
+          savBase64 = buf.toString('base64');
+          savFileName = path.basename(String(b.savPath));
+        } catch (e) { return json(res, { ok: false, error: `לא ניתן לקרוא savPath: ${e?.message || e}` }, 400); }
+      }
+      let analysis;
+      try {
+        analysis = await LAB.buildAnalysisFromInput({ csv, savBase64, savFileName });
+      } catch (e) {
+        return json(res, { ok: false, error: `לא ניתן לנתח את הנתונים: ${e?.message || e}` }, 400);
+      }
+      const out = await LAB.adviseLecturerNextSteps({
+        assignmentText, analysis, profile, masterSyntax, output, interpretations,
+        providerOverride: b.provider || '', modelOverride: b.model || '',
+      });
+      await saveResult('spss-advise', out);
+      return json(res, out);
+    }
+    if (req.method === 'POST' && url === '/api/spss-litreview') {
+      const b = await readBody(req);
+      const out = await LAB.buildLiteratureReview({
+        topic: b.topic || '', count: b.count || 5,
+        providerOverride: b.provider || '', modelOverride: b.model || '',
+      });
+      await saveResult('spss-litreview', out);
+      return json(res, out);
+    }
   } catch (e) {
     json(res, { error: e?.message || String(e), stack: String(e?.stack || '').split('\n').slice(0, 4) }, 500);
   }
@@ -396,3 +434,6 @@ const server = createServer(async (req, res) => {
 boot().then(() => {
   server.listen(PORT, '127.0.0.1', () => console.log(`WordFlow LAB → http://localhost:${PORT}`));
 }).catch((e) => { console.error('boot failed:', e); process.exit(1); });
+
+
+
