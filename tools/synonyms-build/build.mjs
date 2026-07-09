@@ -9,7 +9,7 @@
 //
 // This script does NOT run automatically and is NOT wired into the app build.
 // Run it by hand:
-//   node tools/synonyms-build/build.mjs [--fresh] [--seed-only|--domains-only] [--limit N]
+//   node tools/synonyms-build/build.mjs [--fresh] [--seed-only|--domains-only] [--core] [--wordlist <file>] [--limit N]
 //
 // See tools/synonyms-build/README.md for details and resume behavior.
 // ============================================================================
@@ -17,6 +17,22 @@ import { readFile, writeFile, access } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import {
+  LOCAL_KEYS_PATH,
+  MODEL,
+  GENAI_ENDPOINT,
+  NIKUD_RE,
+  HEBREW_WORD_RE,
+  STOP_WORDS,
+  exists,
+  sleep,
+  run,
+  stripNikud,
+  normalizeLemmaKey,
+  stripJsonFences,
+  resolveGeminiApiKey,
+  callGemini,
+} from './lib.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(DIR, '..', '..');
@@ -24,11 +40,6 @@ const PROJECT = path.resolve(DIR, '..', '..');
 const CHECKPOINT_PATH = path.join(DIR, 'checkpoint.json');
 const LEXICON_JSON_PATH = path.join(DIR, 'lexicon.json');
 const OUTPUT_MODULE_PATH = path.join(PROJECT, 'src', 'services', 'synonymsLexicon.data.js');
-const LOCAL_KEYS_PATH = path.join(DIR, '..', 'test-bench', 'keys.local.json');
-
-const MODEL = 'gemini-2.5-flash';
-const GENAI_ENDPOINT = (key) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(key)}`;
 
 // ── CLI args ──────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -37,6 +48,10 @@ const FLAGS = {
   seedOnly: argv.includes('--seed-only'),
   domainsOnly: argv.includes('--domains-only'),
   core: argv.includes('--core'),
+  wordlist: (() => {
+    const idx = argv.indexOf('--wordlist');
+    return idx !== -1 ? argv[idx + 1] : null;
+  })(),
   limit: (() => {
     const idx = argv.indexOf('--limit');
     if (idx === -1) return Infinity;
@@ -45,116 +60,13 @@ const FLAGS = {
   })(),
 };
 
-const exists = async (p) => { try { await access(p); return true; } catch { return false; } };
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const run = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
-  const p = spawn(cmd, args, { ...opts, shell: true });
-  let out = '', err = '';
-  p.stdout?.on('data', (d) => { out += d; });
-  p.stderr?.on('data', (d) => { err += d; });
-  p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(err || out || `exit ${code}`))));
-  p.on('error', reject);
-});
-
-// ── 1. API key resolution ────────────────────────────────────────────────
-// Precedence (same pattern as tools/test-bench/server.mjs):
-//   1. env GEMINI_API_KEY / GOOGLE_API_KEY
-//   2. env WORDAI_CFG (JSON string, provider-config shape)
-//   3. DPAPI-decrypt %APPDATA%/com.wordai.assistant/ai-provider-config.json
-//   4. tools/test-bench/keys.local.json
-
-async function decryptDpapiFile(fileName) {
-  const filePath = path.join(process.env.APPDATA || '', 'com.wordai.assistant', fileName);
-  try {
-    const raw = await readFile(filePath);
-    const magic = Buffer.from('DPAPI1\n', 'ascii');
-    if (!raw.subarray(0, magic.length).equals(magic)) throw new Error('unexpected secure-file header');
-  } catch (e) {
-    console.warn(`DPAPI read failed (${fileName}):`, e.message);
-    return '';
-  }
-  // ה-blob המוצפן גדול ממגבלת שורת הפקודה של cmd — לכן PowerShell קורא את הקובץ
-  // בעצמו במקום לקבל את ה-base64 כארגומנט.
-  const ps = [
-    'Add-Type -AssemblyName System.Security',
-    `$raw=[IO.File]::ReadAllBytes(${JSON.stringify(filePath)})`,
-    '$blob=$raw[7..($raw.Length-1)]',
-    '$dec=[Security.Cryptography.ProtectedData]::Unprotect($blob,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
-    '[Console]::Out.Write([Text.Encoding]::UTF8.GetString($dec))',
-  ].join('\n');
-  const encoded = Buffer.from(ps, 'utf16le').toString('base64');
-  try {
-    const out = await run('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]);
-    return out.trim();
-  } catch (e) {
-    console.warn(`DPAPI decrypt failed (${fileName}):`, e.message);
-    return '';
-  }
-}
-
-function extractGeminiKeyFromConfigJson(raw) {
-  if (!raw) return '';
-  let parsed;
-  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return ''; }
-  const source = parsed?.providerConfig || parsed?.aiProviderConfig || parsed?.ai_provider_config || parsed;
-  const direct = source?.gemini;
-  if (typeof direct === 'string') return direct.trim();
-  if (direct && typeof direct === 'object') {
-    const key = String(direct.key || direct.apiKey || '').trim();
-    if (key) return key;
-  }
-  const envKey = source?.GEMINI_API_KEY || source?.GOOGLE_API_KEY;
-  if (envKey) return String(envKey).trim();
-  return '';
-}
-
-async function readLocalKeysGeminiKey() {
-  if (!(await exists(LOCAL_KEYS_PATH))) return '';
-  try {
-    const raw = await readFile(LOCAL_KEYS_PATH, 'utf8');
-    return extractGeminiKeyFromConfigJson(raw);
-  } catch (e) {
-    console.warn('keys.local.json load failed:', e.message);
-    return '';
-  }
-}
-
-async function resolveGeminiApiKey() {
-  if (process.env.GEMINI_API_KEY) return { key: process.env.GEMINI_API_KEY.trim(), source: 'env GEMINI_API_KEY' };
-  if (process.env.GOOGLE_API_KEY) return { key: process.env.GOOGLE_API_KEY.trim(), source: 'env GOOGLE_API_KEY' };
-  if (process.env.WORDAI_CFG) {
-    const key = extractGeminiKeyFromConfigJson(process.env.WORDAI_CFG);
-    if (key) return { key, source: 'env WORDAI_CFG' };
-  }
-  const dpapiJson = await decryptDpapiFile('ai-provider-config.json');
-  if (dpapiJson) {
-    const key = extractGeminiKeyFromConfigJson(dpapiJson);
-    if (key) return { key, source: 'app encrypted config (DPAPI)' };
-  }
-  const localKey = await readLocalKeysGeminiKey();
-  if (localKey) return { key: localKey, source: 'keys.local.json' };
-  return { key: '', source: 'missing' };
-}
+// ── 1. API key resolution (imported from lib.mjs) ───────────────────────
 
 // ── 2. Seed word collection from local corpora ───────────────────────────
-// Copied from src/services/styleAuthenticityService.js:37
-const STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה', 'אשר', 'כאשר', 'בין', 'לפי', 'תוך', 'אצל', 'מתוך', 'בו', 'בה', 'בהם']);
-
 const SAMPLE_FILES = [
   path.join(PROJECT, 'tools', 'detector-train', 'samples', 'human.txt'),
   path.join(PROJECT, 'tools', 'detector-train', 'samples', 'ai.txt'),
 ];
-
-const NIKUD_RE = /[֑-ׇ]/g;
-const HEBREW_WORD_RE = /^[א-ת]+$/;
-
-function stripNikud(s) {
-  return String(s || '').replace(NIKUD_RE, '');
-}
-
-function normalizeLemmaKey(s) {
-  return stripNikud(String(s || '')).trim();
-}
 
 async function collectSeedWordsFromSamples(topN = 800) {
   const freq = new Map();
@@ -191,6 +103,7 @@ async function collectSeedWordsFromSamples(topN = 800) {
 
 // ── 3. Domain prompts (fixed, generate synonyms directly without seed words) ─
 const DOMAIN_TOPICS = [
+  // Original 25 entries — keep exactly as-is
   'כתיבה אקדמית — מילות מעבר ומחברים (לפיכך, יתרה מכך, וכו׳)',
   'כתיבה משפטית — מונחים ופעלים נפוצים בכתבי טענות',
   'רגשות — שמות תואר ופעלים המתארים רגש',
@@ -216,6 +129,61 @@ const DOMAIN_TOPICS = [
   'ביטויי הסכמה/אי-הסכמה (מסכים, חולק, תומך, מתנגד וכו׳)',
   'מילים לתיאור ודאות/ספק (ודאי, סביר, ייתכן, מוטל בספק וכו׳)',
   'שם עצם: קשר/מערכת יחסים (קשר, יחס, זיקה, מתאם וכו׳)',
+  // ~55 new entries (various fields)
+  'רפואה ובריאות (טיפול, מחלה, בדיקה, רפא, חוסן)',
+  'טכנולוגיה ומחשבים (קוד, אלגוריתם, תוכנה, חומרה, תקשורת)',
+  'כלכלה ופיננסים (השקעה, מכירה, תקציב, הוצאה, רווח)',
+  'חינוך והוראה (בחינה, כיתה, מורה, תלמיד, לימוד)',
+  'פסיכולוגיה (רגש, התנהגות, מוטיבציה, סטרס, שחרור)',
+  'סוציולוגיה (חברה, תרבות, קבוצה, חברתי, שיוך)',
+  'מדעי הטבע (בטבע, ביולוגיה, כימיה, פיזיקה, אורגניזם)',
+  'סטטיסטיקה ומחקר כמותי (נתונים, ניתוח, סטטיסטי, כמות, מדגם)',
+  'מתודולוגיה של מחקר איכותני (ראיון, תצפית, ניתוח, גישה איכותית)',
+  'פוליטיקה וממשל (ממשלה, דמוקרטיה, חוק, בחירות, פוליטי)',
+  'תקשורת ועיתונות (עיתון, כתבה, ראיון, מדיה, פרסום)',
+  'אמנות ותרבות (אמן, ציור, מוזיקה, תיאטרון, ספרות)',
+  'ספורט (משחק, ספורטאי, תחרות, ניצחון, הפסד)',
+  'מזון ובישול (אוכל, מרק, מנה, מתכון, טעם)',
+  'משפחה ויחסים (הורה, ילד, בן-זוג, משפחה, אהבה)',
+  'עבודה וקריירה (עבודה, עובד, מעסיק, משרה, קריירה)',
+  'נדל״ן ודיור (בית, דירה, קרקע, בעל-בניין, שכירות)',
+  'תחבורה (מכונית, רכבת, דרך, תחבורה, נסיעה)',
+  'סביבה ואקלים (טבע, הגנה, זיהום, אקלים, ירוק)',
+  'דת ומסורת (אמונה, כנסיה, מסורה, חג, קדוש)',
+  'צבא וביטחון (חייל, צבא, הגנה, ביטחון, מלחמה)',
+  'פעלי ראייה (ראה, הבחין, צפה, הסתכל, תצפית)',
+  'פעלי שמיעה (שמע, הקשיב, צליל, רעש, כנגון)',
+  'פעלי נתינה/לקיחה (נתן, לקח, מסר, קיבל, העביר)',
+  'פעלי התחלה/סיום (התחיל, סיים, פתח, סגר, חדל)',
+  'פעלי המשכיות (המשיך, נמשך, אחרי, הלאה, ללא הפסקה)',
+  'פעלי השוואה (השווה, דומה, שונה, הבדל, מלבד)',
+  'פעלי הערכה ושיפוט (העריך, שפט, הסיק, הערה, ביקורת)',
+  'פעלי בקשה/דרישה (ביקש, דרש, בקשה, התחנן, התחייבות)',
+  'פעלי הבטחה/התחייבות (הבטיח, התחייב, מבטיח, הבטחה, מחויבות)',
+  'שמות תואר למהירות/איטיות (מהיר, איטי, מדהים, סחי, קצב)',
+  'שמות תואר ליופי/כיעור (יפה, קברציל, נאה, מכוער, מגעיל)',
+  'שמות תואר לקושי/קלות (קשה, קל, מסובך, פשוט, תלול)',
+  'שמות תואר לחדש/ישן (חדש, ישן, עתיק, מודרני, קדום)',
+  'שמות תואר לנפוץ/נדיר (נפוץ, נדיר, רגיל, חריג, יוצא-דופן)',
+  'תיאורי מזג אוויר (שמש, גשם, קור, חום, רוח)',
+  'ביטויי כמות ומידה (הרבה, מעט, כל, חלק, יחס)',
+  'ביטויי מיקום ומרחק (כאן, שם, קרוב, רחוק, סביב)',
+  'ביטויי תדירות (תמיד, לעולם, פעמים, לעתים, בדרך-כלל)',
+  'מילות הדגשה וחיזוק (ממש, אבל, בהחלט, כמעט, דווקא)',
+  'מילות מיתון והסתייגות (אולי, כנראה, יתכן, כביכול, נראה)',
+  'ניסוח מסקנות ודיון אקדמי (כתוצאה, בסיכום, כלומר, הוכח, מוכח)',
+  'ניסוח סקירת ספרות (מסביר, טוען, יתר על כן, על-פי, בהתאם)',
+  'ניסוח ממצאים (התוצאה, העלה, גילה, ממצא, סיכום)',
+  'ביטויים בכתיבה עסקית ומכתבים רשמיים (בכבודו, לפנינו, הנדון, בעניין)',
+  'ניסוח בקשות ופניות רשמיות (בבקשה, אם הדברים יתברו, להלן, טוב)',
+  'מונחי היי-טק וסטארטאפ יומיומיים (סטארטאפ, אפליקציה, פלטפורמה, דיגיטלי)',
+  'שפה ספרותית גבוהה (מליצית) (הנאה, כחלום, נדודים, זזו, אור)',
+  'לשון דיבור יומיומית (בסדר, טוב, לא משנה, כבר, עכשיו)',
+  'פעלי רגש כלפי אחרים (אהב, העריך, תיעב, שנא, חשק)',
+  'שמות עצם מופשטים נפוצים (רעיון, מושג, עיקרון, מחשבה, דעה)',
+  'מונחי זמן אקדמיים (תקופה, עידן, שלב, שנה, תאריך)',
+  'פעלי שינוי והפיכה (הפך, השתנה, התפתח, הרהר, טרנספורמציה)',
+  'מבני טיעון (טענה, נימוק, ראיה, הפרכה, טיעון)',
 ];
 
 function buildDomainPrompt(topic) {
@@ -241,45 +209,7 @@ function buildSeedPrompt(words) {
 
 const SEED_BATCH_SIZE = 25;
 
-// ── 4. Gemini call with retry ─────────────────────────────────────────────
-function stripJsonFences(text) {
-  return String(text || '')
-    .trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/, '')
-    .replace(/```\s*$/, '')
-    .trim();
-}
-
-async function callGemini(apiKey, prompt, { retried = false } = {}) {
-  const body = {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 32768, responseMimeType: 'application/json' },
-  };
-  let res;
-  try {
-    res = await fetch(GENAI_ENDPOINT(apiKey), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    if (!retried) { await sleep(20000); return callGemini(apiKey, prompt, { retried: true }); }
-    throw e;
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    if ((res.status === 429 || res.status >= 500) && !retried) {
-      console.warn(`  HTTP ${res.status} — retrying once after 20s backoff`);
-      await sleep(20000);
-      return callGemini(apiKey, prompt, { retried: true });
-    }
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
-  return text;
-}
+// ── 4. Gemini call with retry (imported from lib.mjs) ────────────────────
 
 function parseBatchResponse(text) {
   const cleaned = stripJsonFences(text);
@@ -443,6 +373,34 @@ async function main() {
       const chunk = missing.slice(i, i + SEED_BATCH_SIZE);
       batches.push({ id: `core_${i / SEED_BATCH_SIZE}`, kind: 'seed', prompt: buildSeedPrompt(chunk) });
     }
+  }
+  if (FLAGS.wordlist) {
+    // Load wordlist from file and generate batches
+    const existing = new Set(Object.keys((await loadCheckpoint()).lexicon || {}));
+    let fileWords = [];
+    let lines = [];
+    try {
+      const raw = await readFile(FLAGS.wordlist, 'utf8');
+      lines = raw.split('\n');
+      fileWords = lines
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith('#'))
+        .map((word) => normalizeLemmaKey(word))
+        .filter((word) => HEBREW_WORD_RE.test(word) && word.length >= 2 && !STOP_WORDS.has(word));
+    } catch (e) {
+      console.error(`wordlist read failed (${FLAGS.wordlist}):`, e.message);
+      process.exit(1);
+    }
+    const totalInFile = lines
+      .filter((line) => line.trim().length > 0 && !line.trim().startsWith('#')).length;
+    const missingFromLexicon = [...new Set(fileWords)].filter((w) => !existing.has(w));
+    const dedupedWords = [...new Set(missingFromLexicon)];
+    console.log(`wordlist: ${totalInFile} in file, ${fileWords.length} after filter, ${dedupedWords.length} missing from lexicon`);
+    for (let i = 0; i < dedupedWords.length; i += SEED_BATCH_SIZE) {
+      const chunk = dedupedWords.slice(i, i + SEED_BATCH_SIZE);
+      batches.push({ id: `wl_${i / SEED_BATCH_SIZE}`, kind: 'seed', prompt: buildSeedPrompt(chunk) });
+    }
+    console.log(`  generated ${Math.ceil(dedupedWords.length / SEED_BATCH_SIZE)} batches for wordlist`);
   }
 
   const limited = batches.slice(0, Math.min(batches.length, FLAGS.limit));

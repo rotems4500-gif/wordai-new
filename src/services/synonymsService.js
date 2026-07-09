@@ -28,6 +28,17 @@ async function loadLexicon() {
   return _lexiconPromise;
 }
 
+// שכבת הקהילה (מילים נרדפות שתרמו משתמשים, Firestore) — import עצלן וסובלני:
+// אם המודול חסר/נכשל, המנוע ממשיך לעבוד על הלקסיקון המקומי בלבד.
+let _communityPromise = null;
+
+async function loadCommunityModule() {
+  if (!_communityPromise) {
+    _communityPromise = import('./communitySynonymsService.js').catch(() => null);
+  }
+  return _communityPromise;
+}
+
 // ---------------------------------------------------------------------------
 // stopwords — הועתקו מ-styleAuthenticityService.js (לא מייבאים, כדי לא לגרור תלות)
 // ---------------------------------------------------------------------------
@@ -339,11 +350,44 @@ export async function getSynonymSuggestions({ word, sentence = '', limit = 6 } =
     if (senses) break; // עוצרים ב-tier הראשון שהניב פגיעה
   }
 
-  if (!senses) return [];
+  // --- שכבת קהילה: lookup סינכרוני מה-cache (בלי IO) ---
+  // אם הלקסיקון פגע — מחפשים תרומות על אותו lemma; אחרת סורקים את המועמדים
+  // באותו סדר tiers, כך שתרומות קהילה עונות גם על מילים שאין להן ערך מקומי.
+  const community = await loadCommunityModule();
+  let communityEntries = [];
+  let communityCandidate = null;
+  if (community && typeof community.getCommunitySynonymsSync === 'function') {
+    try {
+      if (hitCandidate) {
+        communityEntries = community.getCommunitySynonymsSync(hitCandidate.lemma) || [];
+        communityCandidate = hitCandidate;
+      } else {
+        outer: for (const tier of tiers) {
+          for (const cand of tier) {
+            const found = community.getCommunitySynonymsSync(cand.lemma);
+            if (Array.isArray(found) && found.length) {
+              communityEntries = found;
+              communityCandidate = cand;
+              break outer;
+            }
+          }
+        }
+      }
+    } catch {
+      communityEntries = [];
+      communityCandidate = null;
+    }
+  }
+  // רק תרומות בהמתנה/מאושרות (שכבת ההגנה השנייה — ה-cache כבר מסנן rejected)
+  communityEntries = communityEntries.filter(
+    (e) => e && e.synonym && e.status !== 'rejected',
+  );
+
+  if (!senses && !communityEntries.length) return [];
 
   // --- ניקוד sense-ים לפי הקשר ---
   const sentenceTokens = tokenizeSentence(sentence);
-  const scoredSenses = senses.map((sense, idx) => {
+  const scoredSenses = (senses || []).map((sense, idx) => {
     const synList = Array.isArray(sense?.[0]) ? sense[0] : [];
     const ctxList = Array.isArray(sense?.[1]) ? sense[1] : [];
     const ctxScore = scoreSenseContext(ctxList, sentenceTokens);
@@ -358,7 +402,9 @@ export async function getSynonymSuggestions({ word, sentence = '', limit = 6 } =
   const results = [];
   const usedTexts = new Set();
   // dedupe מול המילה המקורית והבסיס שנפגע
-  const blockList = new Set([core, hitCandidate.lemma]);
+  const blockList = new Set([core]);
+  if (hitCandidate) blockList.add(hitCandidate.lemma);
+  if (communityCandidate) blockList.add(communityCandidate.lemma);
 
   for (const { synList, senseScore } of scoredSenses) {
     for (let i = 0; i < synList.length; i++) {
@@ -375,6 +421,23 @@ export async function getSynonymSuggestions({ word, sentence = '', limit = 6 } =
 
       results.push({ text: finalText, score: senseScore + positionBonus });
     }
+  }
+
+  // --- מיזוג תרומות קהילה כ-pseudo-sense ---
+  // ניקוד: התאמת הקשר (כמו sense רגיל) + קבוע קטן, כך שתוצאה מקומית עם
+  // התאמת הקשר אמיתית (score>=1) תמיד גוברת על תרומה "קרה".
+  for (const entry of communityEntries) {
+    const rawSyn = normalizeWord(entry.synonym);
+    if (!rawSyn || blockList.has(rawSyn)) continue;
+    const ctxScore = scoreSenseContext(entry.contextWords || [], sentenceTokens);
+    const finalText = reapplyMorphology(
+      rawSyn,
+      communityCandidate.prefix,
+      communityCandidate.suffix,
+    );
+    if (finalText === core || usedTexts.has(finalText)) continue;
+    usedTexts.add(finalText);
+    results.push({ text: finalText, score: ctxScore + 0.002, community: true });
   }
 
   results.sort((a, b) => b.score - a.score);

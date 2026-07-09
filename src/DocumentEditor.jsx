@@ -19,9 +19,10 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
-import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus } from "lucide-react";
+import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus, Plus } from "lucide-react";
 import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
 import { getSynonymSuggestions, isHebrewWord } from "./services/synonymsService.js";
+import AddSynonymDialog from "./components/AddSynonymDialog.jsx";
 import EditorContextMenu from "./components/EditorContextMenu.jsx";
 import Ruler from "./components/Ruler.jsx";
 import { showToast } from "./services/uiFeedback";
@@ -162,6 +163,8 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
   // מילים נרדפות: תוצאות מנוע מקומי (null = בטעינה, [] = לא נמצא, מערך = תוצאות).
   const [synonymSuggestions, setSynonymSuggestions] = useState(null);
   const synonymTargetRef = React.useRef(null);
+  // יעד לדיאלוג "הוסף מילה נרדפת" — נלכד לפני סגירת התפריט (הסגירה מאפסת את ה-ref)
+  const [addSynonymTarget, setAddSynonymTarget] = useState(null);
   // D2: קווי גבול-עמוד (overlay בטוח, ללא reflow) — מציין היכן כל עמוד A4 נגמר.
   const [pageBox, setPageBox] = useState(null);
   const [pageGuides, setPageGuides] = useState([]);
@@ -557,6 +560,31 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     closeContextPanel();
   }, [editor, closeContextPanel]);
 
+  // שמירת תרומת מילה נרדפת קהילתית (משותפת לכל המשתמשים) + טריגר אימות AI בסף 100
+  const handleAddSynonymSave = useCallback(async (synonym) => {
+    const target = addSynonymTarget;
+    if (!target?.word) return { ok: false, error: 'invalid' };
+    try {
+      const community = await import('./services/communitySynonymsService.js');
+      const res = await community.addCommunitySynonym({
+        word: target.word,
+        synonym,
+        sentence: target.sentence || '',
+      });
+      if (res?.ok) {
+        showToast('המילה הנרדפת נוספה ותשותף עם כל המשתמשים', { tone: 'success' });
+        if ((res.pendingCount || 0) >= 100) {
+          import('./services/synonymsValidationService.js')
+            .then((m) => m.maybeRunValidation())
+            .catch(() => {});
+        }
+      }
+      return res || { ok: false, error: 'unknown' };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }, [addSynonymTarget]);
+
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   const handleReadAloud = useCallback(() => {
@@ -787,9 +815,13 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       return;
     }
 
-    synonymTargetRef.current = { from: wordFrom, to: wordTo, word };
+    synonymTargetRef.current = { from: wordFrom, to: wordTo, word, sentence };
     setSynonymSuggestions(null);
     let cancelled = false;
+    // רענון cache הקהילה ברקע (TTL פנימי מונע קריאות מיותרות) — לא חוסם את ה-lookup
+    import('./services/communitySynonymsService.js')
+      .then((m) => m.ensureCommunityCache())
+      .catch(() => {});
     getSynonymSuggestions({ word, sentence, limit: 6 })
       .then((results) => { if (!cancelled) setSynonymSuggestions(Array.isArray(results) ? results : []); })
       .catch(() => { if (!cancelled) setSynonymSuggestions([]); });
@@ -1001,6 +1033,16 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
               }
             },
           },
+          {
+            id: 'syn-add',
+            label: 'הוסף מילה נרדפת…',
+            icon: Plus,
+            onSelect: () => {
+              const target = synonymTargetRef.current;
+              closeContextPanel();
+              if (target?.word) setAddSynonymTarget({ word: target.word, sentence: target.sentence || '' });
+            },
+          },
         ],
       },
       {
@@ -1043,6 +1085,13 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
 
   return (
     <div ref={wrapperRef} className="flex flex-col items-center w-full min-h-full relative">
+      {addSynonymTarget && (
+        <AddSynonymDialog
+          word={addSynonymTarget.word}
+          onSave={handleAddSynonymSave}
+          onClose={() => setAddSynonymTarget(null)}
+        />
+      )}
       {contextPanel.open && createPortal(
         <div
           ref={contextMenuRef}

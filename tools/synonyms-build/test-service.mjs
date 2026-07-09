@@ -144,6 +144,71 @@ await test('empty lexicon → []', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// שכבת קהילה (communitySynonymsService)
+// ---------------------------------------------------------------------------
+const { __setCommunityForTests } = await import('../../src/services/communitySynonymsService.js');
+
+await test('community-only hit: word missing from lexicon still returns contribution', async () => {
+  __setCommunityForTests(new Map([
+    ['מגדלור', [{ id: 'c1', synonym: 'מאור', contextWords: [], status: 'pending' }]],
+  ]));
+  const out = await getSynonymSuggestions({ word: 'מגדלור', sentence: '' });
+  assert.ok(texts(out).includes('מאור'), `expected מאור in ${JSON.stringify(texts(out))}`);
+  __setCommunityForTests(null);
+});
+
+await test('community merge: contribution appears alongside lexicon synonyms', async () => {
+  __setCommunityForTests(new Map([
+    ['הסכם', [{ id: 'c2', synonym: 'מזכר', contextWords: [], status: 'approved' }]],
+  ]));
+  const out = await getSynonymSuggestions({ word: 'הסכם', sentence: '' });
+  const t = texts(out);
+  assert.ok(t.includes('חוזה'), `expected lexicon חוזה in ${JSON.stringify(t)}`);
+  assert.ok(t.includes('מזכר'), `expected community מזכר in ${JSON.stringify(t)}`);
+  __setCommunityForTests(null);
+});
+
+await test('community with prefix: והסכם → contribution gets ו prefix', async () => {
+  __setCommunityForTests(new Map([
+    ['הסכם', [{ id: 'c3', synonym: 'מזכר', contextWords: [], status: 'pending' }]],
+  ]));
+  const out = await getSynonymSuggestions({ word: 'והסכם', sentence: '' });
+  assert.ok(texts(out).includes('ומזכר'), `expected ומזכר in ${JSON.stringify(texts(out))}`);
+  __setCommunityForTests(null);
+});
+
+await test('lexicon sense with real context match outranks cold community entry', async () => {
+  __setCommunityForTests(new Map([
+    ['עמוד', [{ id: 'c4', synonym: 'כרכוב', contextWords: [], status: 'pending' }]],
+  ]));
+  const out = await getSynonymSuggestions({ word: 'עמוד', sentence: 'העמוד תומך בגשר של הבניין' });
+  assert.ok(
+    ['תורן', 'מוט', 'עמוד תווך'].includes(out[0].text),
+    `expected context-matched lexicon synonym first, got ${out[0].text}`,
+  );
+  assert.ok(texts(out).includes('כרכוב'), 'community entry should still be present');
+  __setCommunityForTests(null);
+});
+
+await test('rejected community entries are excluded', async () => {
+  __setCommunityForTests(new Map([
+    ['מגדלור', [
+      { id: 'c5', synonym: 'מאור', contextWords: [], status: 'rejected' },
+    ]],
+  ]));
+  const out = await getSynonymSuggestions({ word: 'מגדלור', sentence: '' });
+  assert.deepStrictEqual(out, []);
+  __setCommunityForTests(null);
+});
+
+await test('empty community map → behavior identical to before (no match → [])', async () => {
+  __setCommunityForTests(new Map());
+  const out = await getSynonymSuggestions({ word: 'מילהשאיננה', sentence: '' });
+  assert.deepStrictEqual(out, []);
+  __setCommunityForTests(null);
+});
+
+// ---------------------------------------------------------------------------
 // סיכום
 // ---------------------------------------------------------------------------
 console.log('\nSynonyms service tests:\n');

@@ -36,6 +36,28 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /synonymContributions/{contributionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.lemma is string
+        && request.resource.data.lemma.size() > 0
+        && request.resource.data.lemma.size() <= 30
+        && request.resource.data.synonym is string
+        && request.resource.data.synonym.size() > 0
+        && request.resource.data.synonym.size() <= 30;
+      // עדכון סטטוס ע"י סוכן האימות (רץ בצד לקוח — אין שרת; מודל אמון: כל משתמש מחובר)
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'validatedAt', 'validationNote']);
+      allow delete: if false;
+    }
+
+    match /synonymsMeta/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
