@@ -1937,6 +1937,66 @@ const commentOutNonSpssTextLines = (text = '') => {
   return outputLines.join('\n');
 };
 
+// --- Merged-line repair -----------------------------------------------------
+// LLM round-trips that return syntax inside a JSON string (preflight review,
+// error repair) sometimes flatten real newlines into spaces. SPSS interactive
+// mode honors a period as a command terminator only at end-of-line, so a
+// flattened `RELIABILITY ... /SUMMARY=TOTAL. * comment.` line turns the comment
+// into garbage INSIDE the command (hard stop), and `* comment. RECODE ...`
+// makes the comment swallow the whole command (silent skip → the recurring
+// "undefined variable name" on later analyses). Deterministically re-split.
+const HEBREW_CHAR_PATTERN = /[֐-׿]/;
+
+// A remainder only counts as a new line if it is a `*` comment or looks like a
+// real command: keyword + ASCII head (a Hebrew "sentence" that merely mentions
+// a keyword, e.g. `* ...מדד. COMPUTE יוצר אותו.`, must NOT be split).
+const remainderStartsNewSpssLine = (remainder = '') => {
+  const trimmed = String(remainder || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('*')) return true;
+  if (!isLikelySpssCommandStartLine(trimmed)) return false;
+  const preQuote = (trimmed.split(/['"]/)[0] || trimmed).slice(0, 60);
+  return !HEBREW_CHAR_PATTERN.test(preQuote);
+};
+
+const splitMergedSpssStatementLine = (line = '') => {
+  const source = String(line || '');
+  const trimmed = source.trim();
+  if (!trimmed) return [source];
+
+  const isComment = trimmed.startsWith('*');
+  let quoteCharacter = '';
+  for (let index = isComment ? 1 : 0; index < trimmed.length; index += 1) {
+    const character = trimmed[index];
+    if (quoteCharacter) {
+      if (character === quoteCharacter) {
+        if (trimmed[index + 1] === quoteCharacter) { index += 1; continue; }
+        quoteCharacter = '';
+      }
+      continue;
+    }
+    if (character === '\'' || character === '"') {
+      quoteCharacter = character;
+      continue;
+    }
+    if (character !== '.' || isNumericLiteralDot(trimmed, index)) continue;
+    const remainder = trimmed.slice(index + 1);
+    if (remainderStartsNewSpssLine(remainder)) {
+      return [trimmed.slice(0, index + 1), ...splitMergedSpssStatementLine(remainder.trim())];
+    }
+    // Inside a comment, a period that does not start a new statement is prose —
+    // keep scanning. Inside a command it is a terminator with trailing prose we
+    // leave for the guardrails to flag.
+  }
+  return [source];
+};
+
+export const splitMergedSpssLines = (text = '') => String(text || '')
+  .split(/\r?\n/)
+  .flatMap((line) => splitMergedSpssStatementLine(line))
+  .join('\n');
+// -----------------------------------------------------------------------------
+
 const findBlockedAnalysisOnlyCommandIssue = (input = '', mode = 'analysis') => {
   const isPrepMode = mode === 'prep';
   const modeLabel = isPrepMode ? 'Data-prep mode' : 'Analysis-only mode';
@@ -2210,10 +2270,15 @@ export const normalizeMissingValuesStatements = (text = '') => String(text || ''
 
 export const sanitizeSpssSyntax = (text = '', analysis = null, { mode = 'analysis', extraAllowedNames = [] } = {}) => {
   const cleaned = normalizeMissingValuesStatements(
-    commentOutNonSpssTextLines(stripMarkdownArtifacts(text))
+    commentOutNonSpssTextLines(splitMergedSpssLines(stripMarkdownArtifacts(text)))
       // מילות מפתח שהמודל ממציא ו-SPSS דוחה — נורמליזציה דטרמיניסטית (COEFFS אינו
       // keyword חוקי בשום פקודה, אז החלפה גלובלית בטוחה).
       .replace(/\bCOEFFS\b/gi, 'COEFF')
+      // N אינו keyword חוקי ב-/STATISTICS של DESCRIPTIVES/FREQUENCIES (הפלט ממילא
+      // כולל N) — המודל נוטה להוסיף אותו וזה עוצר את הפקודה. מסירים רק N צמוד
+      // ל-keyword סטטיסטי מוכר, לא כל N בטקסט.
+      .replace(/\b(MEAN|STDDEV|SEMEAN|VARIANCE|MIN|MAX|RANGE|SUM|KURTOSIS|SKEWNESS)\s+N\b(?=[\s./]|$)/g, '$1')
+      .replace(/(\/STATISTICS\s*=\s*)N\s+(?=[A-Z])/g, '$1')
       .replace(/\n{3,}/g, '\n\n')
       .trim(),
   );
@@ -2725,7 +2790,19 @@ export const repairSpssSyntaxFromError = async ({ analysis = null, priorSyntax =
 // ---------------------------------------------------------------------------
 
 const MAX_GUIDANCE_HISTORY_TURNS = 8;
-const MAX_GUIDANCE_OUTPUT_CHARS = 8000;
+// 40k ולא 8k: פלט של פרויקט מלא הוא 10-30k תווים, והניתוחים החשובים (רגרסיה)
+// יושבים בסוף. חיתוך ראש בלבד ב-8k גרם לפרק ממצאים בלי רגרסיה בכלל.
+const MAX_GUIDANCE_OUTPUT_CHARS = 40000;
+
+// חיתוך פלט שחורג מהתקרה: שומרים ראש+זנב (60/40) במקום ראש בלבד — הזנב מכיל
+// את הניתוחים ההיסקיים שבסוף הריצה, שהם לב הפרק/הפירוש.
+const clampSpssOutputText = (output = '', maxChars = MAX_GUIDANCE_OUTPUT_CHARS) => {
+  const clean = String(output || '').trim();
+  if (clean.length <= maxChars) return clean;
+  const headChars = Math.floor(maxChars * 0.6);
+  const tailChars = maxChars - headChars;
+  return `${clean.slice(0, headChars)}\n\n[... קטע אמצעי קוצר ...]\n\n${clean.slice(-tailChars)}`;
+};
 
 const resolveActiveProviderMeta = (providerConfig = null) => {
   const providerId = String(providerConfig?.active || '').trim();
@@ -2845,7 +2922,7 @@ export const runSpssGuidance = async ({ analysis = null, question = '', history 
 };
 
 export const interpretSpssOutput = async ({ analysis = null, output = '', question = '', draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
-  const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
+  const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, answer: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי לקבל פירוש.' };
   }
@@ -3419,7 +3496,7 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
 };
 
 export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', providerOverride = '', modelOverride = '' } = {}) => {
-  const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
+  const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, verdict: 'needs-output', issues: [], summary: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי שאבדוק אותו מול המטלה.' };
   }
@@ -3515,7 +3592,7 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
 // Recommendations that imply a post-hoc hypothesis change must carry integrityNote (HARKing).
 // ---------------------------------------------------------------------------
 export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = null, profile = null, masterSyntax = '', output = '', interpretations = [], providerOverride = '', modelOverride = '' } = {}) => {
-  const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
+  const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, recommendations: [], summary: '', providerId: '', model: '', error: 'הדבק פלט מ-SPSS כדי לקבל המלצת מרצה על סמך התוצאות.' };
   }
@@ -3766,7 +3843,7 @@ const FINDINGS_CONTINUATION_TAIL_CHARS = 1500;
 const FINDINGS_CONTINUATION_INSTRUCTION = 'זה סוף הפרק שנכתב עד כה ונקטע. המשך בדיוק מהנקודה שנעצרת. אל תחזור על טקסט קיים, אל תפתח כותרת חדשה של הפרק, החזר אך ורק את ההמשך כ-HTML.';
 
 export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [], draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
-  const cleanOutput = String(output || '').trim().slice(0, MAX_GUIDANCE_OUTPUT_CHARS);
+  const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פלט להרכבת פרק ממצאים. הדבק קודם את הפלט מ-SPSS.', truncated: false };
   }
@@ -3790,6 +3867,7 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       'החזר אך ורק HTML נקי (בלי ```), עם <h2>/<h3>/<p>/<table> בלבד. בלי <html> או <body>.',
       'מבנה מומלץ: כותרת פרק (<h2>פרק ממצאים</h2>), ואז תת-פרק לכל ניתוח עם דיווח התוצאה, מובהקות וגודל אפקט בסגנון APA, וטבלה כשמתאים.',
       'הסתמך אך ורק על המספרים שבפלט ובפירושים שסופקו. אל תמציא ערכים. אם משהו חסר — ציין זאת בעדינות.',
+      'אם ניתוח מופיע בפלט — דווח את תוצאותיו במספרים בפועל. אסור ניסוח עתידי ("חלק זה יורחב לאחר ההרצה", "יש לדווח כאן על...") עבור ניתוח שתוצאותיו כבר בפלט; ניסוח כזה מותר רק לניתוח שבאמת חסר.',
       'דגל אדום לפני דיווח: אם הסטטיסטיקה התיאורית בלתי-אפשרית (SD גדול מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם — סימן לערכי missing לא-מוגדרים כמו 98/99 שנכללו בחישוב), או אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...], אל תדווח את הערכים כאילו הם תקינים. ציין במפורש בפרק שהתוצאות מוטות עקב missing לא-מוגדר, ושיש להגדירו (MISSING VALUES) ולהריץ מחדש לפני הסקת מסקנות.',
       'כתוב עברית אקדמית רהוטה, לא תרגום מילולי.',
       tokenizedDraft

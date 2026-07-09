@@ -42,6 +42,7 @@ import DocumentDraftStudio from './DocumentDraftStudio';
 import { generateDeck } from './services/presentationService';
 import { importPptxDraft } from './services/pptxDraftService';
 import { importDocumentDraft } from './services/documentDraftService';
+import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
 import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
@@ -8088,11 +8089,28 @@ ${sidebarReviewContext}`
   const isDocDraftMode = appMode === 'docdraft';
 
   // Stream a generated SPSS findings chapter into the editor and switch to Word mode.
+  // אם הטיוטה שבעורך מכילה הערות placeholder ("חלק זה יורחב לאחר הרצת הניתוח
+  // בפועל") — משלבים את תתי-הפרק במקומן ושומרים על שאר העבודה, במקום להחליף
+  // את כל המסמך בפרק בלבד.
   const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים' } = {}) => {
     if (!String(html || '').trim()) return;
+    if (editor) {
+      try {
+        const merge = mergeSpssFindingsIntoDraftHtml(editor.getHTML(), html);
+        if (merge && merge.replacedCount > 0) {
+          editor.commands.setContent(merge.mergedHtml);
+          setAppMode('word');
+          showToast(
+            `פרק הממצאים שולב בעבודה: ${merge.replacedCount} הערות "יורחב לאחר ההרצה" הוחלפו בתוצאות בפועל${merge.appendedCount ? `, ועוד ${merge.appendedCount} תתי-פרקים נוספו בסוף המסמך` : ''}.`,
+            { tone: 'success', duration: 7000 },
+          );
+          return;
+        }
+      } catch { /* נפילה שקטה להתנהגות הישנה — החלפת מסמך מלאה */ }
+    }
     applyImportedDocument({ ok: true, html, title, filePath: '', source: 'spss-project' });
     setAppMode('word');
-  }, [applyImportedDocument]);
+  }, [editor, applyImportedDocument]);
 
   // יצירה/איפוס מתוך הסטודיו: payload=null → טופס יצירה חדש; אחרת מייצר deck
   const handleStudioGenerate = React.useCallback((payload) => {

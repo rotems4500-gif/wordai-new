@@ -12,6 +12,7 @@ import {
   isGuardrailSyntaxResponse,
   repairSpssSyntaxFromError,
   runSpssGuidance,
+  splitMergedSpssLines,
 } from './services/spssSyntaxService';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { BROWSER_DOC_ACCEPT, pickDesktopDocument, readBrowserDocumentFile } from './services/documentUpload';
@@ -74,7 +75,9 @@ const buildSyntaxFileName = ({ analysis = null, mode = 'master', blockCount = 0,
 const buildMasterSyntax = (blocks = []) => blocks
   .map((block, index) => [
     `* --- Block ${index + 1}: ${normalizeBlockTitle(block.title) || 'SPSS block'} | ${formatTime(block.createdAt)} ---.`,
-    String(block.syntax || '').trim(),
+    // מפצל שורות שהתמזגו ב-round-trip של המודל (פקודה. * הערה) — ב-SPSS מיזוג
+    // כזה מבליע פקודות בתוך הערות וגורם ל-"undefined variable" בהמשך.
+    splitMergedSpssLines(String(block.syntax || '').trim()),
   ].filter(Boolean).join('\n'))
   .join('\n\n')
   .trim();

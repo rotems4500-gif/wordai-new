@@ -1,4 +1,5 @@
 import React from 'react';
+import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { BROWSER_DOC_ACCEPT, BROWSER_OUTPUT_ACCEPT, pickDesktopDocument, readBrowserDocumentFile } from './services/documentUpload';
@@ -23,6 +24,7 @@ import {
   parseSpssOutputErrors,
   repairSpssSyntaxFromError,
   reviewSpssMasterSyntax,
+  splitMergedSpssLines,
   validatePlanCoverage,
 } from './services/spssSyntaxService';
 
@@ -69,11 +71,30 @@ const MASTER_SYNTAX_PREAMBLE = [
   '* ═══════════════════════════════════════════════════════════════════════.',
 ].join('\n');
 
+// Lines the assembly itself adds — strip stale copies that survived an LLM
+// round-trip (review/repair return the WHOLE master, preamble included, so
+// naive re-wrapping duplicated the banner and block markers).
+const PREAMBLE_LINE_SET = new Set(MASTER_SYNTAX_PREAMBLE.split('\n').map((line) => line.trim()));
+const BLOCK_MARKER_PATTERN = /^\* --- \d+\. .* ---\.$/;
+
+const stripAssemblyArtifacts = (syntax = '') => String(syntax || '')
+  .split('\n')
+  .filter((line) => {
+    const trimmed = line.trim();
+    return !PREAMBLE_LINE_SET.has(trimmed) && !BLOCK_MARKER_PATTERN.test(trimmed);
+  })
+  .join('\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
 const buildMasterSyntax = (blocks = []) => {
   const body = blocks
     .map((block, index) => [
       `* --- ${index + 1}. ${String(block.title || 'SPSS block').replace(/\s+/g, ' ').trim()} ---.`,
-      String(block.syntax || '').trim(),
+      // splitMergedSpssLines: LLM round-trips sometimes flatten newlines, which
+      // merges `command. * comment` onto one line — in SPSS that silently
+      // comments-out commands ("undefined variable") or hard-stops them.
+      stripAssemblyArtifacts(splitMergedSpssLines(String(block.syntax || '').trim())),
     ].filter(Boolean).join('\n'))
     .join('\n\n')
     .trim();
@@ -179,6 +200,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
   const [interpretations, setInterpretations] = React.useState([]);
   const [litReview, setLitReview] = React.useState(null);
   const [lecturerAdvice, setLecturerAdvice] = React.useState(null);
+  // מפתחות המלצות מרצה שכבר נוספו לקוד — חיווי ✓ קבוע על הכרטיס ומניעת הוספה כפולה.
+  const [addedLecturerRecKeys, setAddedLecturerRecKeys] = React.useState(() => new Set());
   const [chapterTruncated, setChapterTruncated] = React.useState(false);
   // AI-usage log — every model call the studio makes, for the required AI appendix (section ה).
   const [aiLog, setAiLog] = React.useState([]);
@@ -833,6 +856,9 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     }
   }, [analysis, output, logAi]);
 
+  // "צור מסמך פרק ממצאים" = one-click: מריץ אוטומטית גם פירוש פלט וגם סקירת
+  // ספרות אם עוד לא הופקו, ואז מרכיב את הפרק — במקום שלוש לחיצות נפרדות.
+  // כשל בשלב עזר (פירוש/סקירה) לא עוצר את הפרק — רק מדווח בסוף.
   const onBuildChapter = React.useCallback(async () => {
     if (!output.trim()) {
       setNotice({ tone: 'error', text: 'אין פלט להרכבת פרק ממצאים.' });
@@ -840,9 +866,52 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     }
     setBusy('chapter');
     setChapterTruncated(false);
-    setNotice({ tone: 'info', text: 'מרכיב פרק ממצאים...' });
+    const skippedSteps = [];
     try {
-      const result = await buildSpssFindingsChapter({ assignmentText, analysis, masterSyntax, output, interpretations, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      // שלב 1/3 — פירוש הפלט (קלט ישיר לפרק הממצאים).
+      let chapterInterpretations = interpretations;
+      if (!chapterInterpretations.length) {
+        setNotice({ tone: 'info', text: 'שלב 1/3: מפרש את הפלט...' });
+        try {
+          const interpretResult = await interpretSpssOutput({ analysis, output, question: '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+          if (interpretResult.ok) {
+            chapterInterpretations = [{ id: createLocalId(), label: 'פירוש הפלט', answer: interpretResult.answer }];
+            setInterpretations(chapterInterpretations);
+            logAi({ stage: 'פירוש הפלט', description: 'פירוש הפלט מ-SPSS בעברית וניסוח בסגנון APA לכל ניתוח', prompt: 'פרש את הפלט מ-SPSS', providerId: interpretResult.providerId, model: interpretResult.model });
+          } else {
+            skippedSteps.push('פירוש הפלט');
+          }
+        } catch {
+          skippedSteps.push('פירוש הפלט');
+        }
+      }
+
+      // שלב 2/3 — סקירת ספרות ומקורות (מוכנה בפאנל; מצורפת לתוצר רק כשאין טיוטה,
+      // כדי לא לשכפל סקירה שכבר קיימת בעבודה).
+      let chapterLitReview = litReview;
+      if (!chapterLitReview) {
+        const topic = (assignmentText.trim() || profile?.summary || '').slice(0, 400);
+        if (topic) {
+          setNotice({ tone: 'info', text: 'שלב 2/3: מאתר מקורות אקדמיים וכותב סקירת ספרות...' });
+          try {
+            const litResult = await buildLiteratureReview({ topic, count: 5, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+            if (litResult.ok) {
+              chapterLitReview = { review: litResult.review, references: litResult.references };
+              setLitReview(chapterLitReview);
+              logAi({ stage: 'סקירת ספרות ומקורות', description: `איתור ${litResult.references.length} מקורות אקדמיים מאומתים וסקירת ספרות קצרה מבוססת עליהם`, prompt: `אתר מקורות אקדמיים בנושא: ${topic}`, providerId: litResult.providerId, model: litResult.model });
+            } else {
+              skippedSteps.push('סקירת ספרות');
+            }
+          } catch {
+            skippedSteps.push('סקירת ספרות');
+          }
+        } else {
+          skippedSteps.push('סקירת ספרות (אין נושא מחקר)');
+        }
+      }
+
+      setNotice({ tone: 'info', text: 'שלב 3/3: מרכיב פרק ממצאים...' });
+      const result = await buildSpssFindingsChapter({ assignmentText, analysis, masterSyntax, output, interpretations: chapterInterpretations, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       if (!result.ok) {
         setNotice({ tone: 'error', text: result.error || 'הרכבת פרק הממצאים נכשלה.' });
         return;
@@ -850,16 +919,45 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       setChapterTruncated(Boolean(result.truncated));
       logAi({ stage: 'פרק ממצאים', description: 'הרכבת פרק ממצאים בעברית מהפלט, הפירושים והמטלה', prompt: 'הרכב פרק ממצאים מהפלט והפירושים', providerId: result.providerId, model: result.model });
       if (typeof onEmitDocument === 'function') {
-        // יש טיוטה? ממזגים: הטיוטה כבסיס + פרק הממצאים בסופה → מסמך אחד שלם.
-        const mergedHtml = draft?.html
-          ? `${draft.html}\n<hr>\n${result.html}`
-          : result.html;
+        // יש טיוטה? קודם מנסים שילוב חכם: הערות "(הערה: חלק זה יורחב לאחר
+        // הרצת הניתוח בפועל)" בטיוטה מוחלפות בתת-הפרק המתאים מהממצאים, כך
+        // שהתוצאות נכנסות במקום הנכון בגוף העבודה. אין הערות כאלה? נופלים
+        // לצירוף הישן — טיוטה + פרק בסופה.
+        let mergedHtml = result.html;
+        let mergeSummary = '';
+        if (draft?.html) {
+          const smartMerge = mergeSpssFindingsIntoDraftHtml(draft.html, result.html);
+          if (smartMerge && smartMerge.replacedCount > 0) {
+            mergedHtml = smartMerge.mergedHtml;
+            mergeSummary = `שולב בגוף העבודה (${smartMerge.replacedCount} הערות "יורחב לאחר ההרצה" הוחלפו בתוצאות${smartMerge.appendedCount ? `, ${smartMerge.appendedCount} תתי-פרקים נוספו בסוף` : ''})`;
+          } else {
+            mergedHtml = `${draft.html}\n<hr>\n${result.html}`;
+            mergeSummary = 'צורף בסוף הטיוטה';
+          }
+        } else if (chapterLitReview?.review) {
+          // אין טיוטה (= אין סקירה קיימת בעבודה) → מסמך עצמאי שלם: פרק +
+          // סקירת ספרות + רשימת מקורות.
+          mergedHtml = [
+            result.html,
+            '<h2>סקירת ספרות</h2>',
+            textToHtmlParagraphs(chapterLitReview.review),
+            '<h2>רשימת מקורות</h2>',
+            `<ol>${(chapterLitReview.references || []).map((ref) => `<li>${escapeHtml(ref)}</li>`).join('')}</ol>`,
+          ].join('\n');
+          mergeSummary = 'כולל סקירת ספרות ורשימת מקורות';
+        }
         onEmitDocument({
           html: mergedHtml,
           title: draft?.title || result.title || 'פרק ממצאים',
         });
         if (result.truncated) {
           setNotice({ tone: 'error', text: 'הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.' });
+        } else {
+          const doneParts = ['פרק הממצאים מוכן'];
+          if (mergeSummary) doneParts.push(mergeSummary);
+          if (draft?.html && chapterLitReview?.review) doneParts.push('סקירת הספרות מוכנה בפאנל למטה — "הוסף לתוצר" כשתרצה');
+          const skippedText = skippedSteps.length ? ` (דולג: ${skippedSteps.join(', ')})` : '';
+          setNotice({ tone: skippedSteps.length ? 'info' : 'success', text: `${doneParts.join(' · ')}.${skippedText}` });
         }
       } else {
         setNotice({ tone: 'error', text: 'אין יעד להזרמת המסמך. נסה שוב מתוך האפליקציה.' });
@@ -869,7 +967,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     } finally {
       setBusy('');
     }
-  }, [assignmentText, analysis, masterSyntax, output, interpretations, draft, onEmitDocument, logAi]);
+  }, [assignmentText, analysis, masterSyntax, output, interpretations, litReview, profile, draft, onEmitDocument, logAi]);
 
   // Lit review + reference list (sections א+ד) — verified academic sources only.
   const onBuildLitReview = React.useCallback(async () => {
@@ -955,6 +1053,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       if (result.ok && result.syntax) {
         const findingShort = String(rec.finding || rec.suggestedAnalysis || '').slice(0, 60);
         setBlocks((prev) => [...prev, { id: createLocalId(), title: `המלצת מרצה: ${findingShort}`, syntax: result.syntax, blocked: false }]);
+        // חיווי מקומי על הכרטיס עצמו — ה-notice העליון נגלל מחוץ למסך כשהפאנל בתחתית.
+        setAddedLecturerRecKeys((prev) => { const next = new Set(prev); next.add(busyKey); return next; });
         logAi({ stage: 'המלצת מרצה', description: `יצירת בלוק לפי המלצת מרצה: ${findingShort}`, prompt: request, providerId: result.providerId, model: result.model });
         setNotice({ tone: 'success', text: 'נוסף בלוק קוד להמלצת המרצה. הרץ אותו ב-SPSS ועדכן את הפלט כדי לראות את התוצאה.' });
       } else {
@@ -1028,14 +1128,30 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                 )}
                 {hasVariables && (
                   <div className="mt-3">
-                    <button
-                      type="button"
-                      className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${busy === busyKey ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
-                      onClick={() => onAddLecturerRecommendation(rec)}
-                      disabled={Boolean(busy)}
-                    >
-                      {busy === busyKey ? 'מוסיף...' : 'הוסף לקוד'}
-                    </button>
+                    {addedLecturerRecKeys.has(busyKey) ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.2 7.3a1 1 0 0 1-1.42.004L3.29 9.21a1 1 0 1 1 1.42-1.408l3.09 3.116 6.49-6.582a1 1 0 0 1 1.414-.006Z" clipRule="evenodd" /></svg>
+                          נוסף לקוד
+                        </span>
+                        <span className="text-xs text-slate-500">בלוק חדש נוסף ל-Master syntax — הרץ ב-SPSS ועדכן את הפלט.</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition ${busy === busyKey ? 'cursor-wait border-blue-200 bg-blue-50 text-blue-500' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
+                        onClick={() => onAddLecturerRecommendation(rec)}
+                        disabled={Boolean(busy)}
+                      >
+                        {busy === busyKey && (
+                          <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z" />
+                          </svg>
+                        )}
+                        {busy === busyKey ? 'מייצר בלוק קוד...' : 'הוסף לקוד'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1665,7 +1781,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                   <button type="button" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700" onClick={onDownloadSyntax}>הורד קובץ .sps</button>
                   <button type="button" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700" onClick={onCopySyntax}>העתק syntax</button>
                 </div>
-                <div className="mt-3 text-xs leading-6 text-slate-500">"צור מסמך" פותח את העורך עם פרק הממצאים מוכן להמשך עריכה.</div>
+                <div className="mt-3 text-xs leading-6 text-slate-500">לחיצה אחת מריצה הכל: פירוש הפלט וסקירת ספרות (אם עוד לא הופקו) ואז הרכבת הפרק — והעורך נפתח עם התוצר המוכן.</div>
                 {chapterTruncated && (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-6 text-amber-800">⚠️ הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.</div>
                 )}
