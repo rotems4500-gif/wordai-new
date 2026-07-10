@@ -201,13 +201,34 @@ const applyLiveVerification = async ({ candidates, session, signal, log, require
   return survivors;
 };
 
-// דירוג: מאומת-חי לפני bot-blocked; אקדמי — לפי citedBy; חדשות — דומיין מוכר קודם.
+// בונוס עדכניות למקור אקדמי לפי שנת פרסום: מקור טרי (≤2 שנים) מקבל את הבונוס הגדול
+// ביותר, ודועך ככל שהמקור ישן יותר. שנה חסרה/לא תקינה => 0 (לא עונש, רק אין בונוס).
+const academicRecencyBonus = (year) => {
+  const parsed = Number(year);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  const age = new Date().getFullYear() - parsed;
+  if (age <= 2) return 1.0;
+  if (age <= 5) return 0.6;
+  if (age <= 10) return 0.3;
+  return 0;
+};
+
+// ציון אקדמי משולב: log10(citedBy+1) כדי שציטוטים לא ידרסו הכל בקנה-מידה לינארי,
+// ועליו בונוס עדכניות. כך מאמר טרי עם מעט ציטוטים יכול לעקוף מאמר ישן עם מעט יותר
+// ציטוטים, אבל מאמר קלאסי עם המון ציטוטים (סדרי גודל) עדיין ינצח.
+const academicRankScore = (source) => {
+  const citedBy = Number(source?.citedBy) || 0;
+  return Math.log10(citedBy + 1) + academicRecencyBonus(source?.year);
+};
+
+// דירוג: מאומת-חי לפני bot-blocked (שולט תמיד, ללא קשר לציון); אקדמי — לפי ציון
+// citedBy+עדכניות; חדשות — דומיין מוכר קודם.
 const rankSources = (sources = [], kind = 'web') => [...sources].sort((left, right) => {
   const leftBlocked = left?.verification?.botBlocked ? 1 : 0;
   const rightBlocked = right?.verification?.botBlocked ? 1 : 0;
   if (leftBlocked !== rightBlocked) return leftBlocked - rightBlocked;
   if (kind === 'academic') {
-    return (Number(right?.citedBy) || 0) - (Number(left?.citedBy) || 0);
+    return academicRankScore(right) - academicRankScore(left);
   }
   if (kind === 'news') {
     const leftKnown = isKnownNewsDomain(left?.domain) ? 0 : 1;

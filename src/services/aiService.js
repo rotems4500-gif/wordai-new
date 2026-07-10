@@ -3655,22 +3655,6 @@ const normalizePerplexityVerifiedSource = (raw = {}) => {
   };
 };
 
-const normalizePerplexityCitationSource = (url = '') => {
-  const safeUrl = normalizeSourceSearchText(url);
-  if (!safeUrl) return null;
-  return {
-    title: '',
-    url: safeUrl,
-    snippet: '',
-    summary: '',
-    authors: [],
-    year: '',
-    citedBy: null,
-    doi: extractDoiFromSource(safeUrl),
-    providerId: 'perplexity-search',
-  };
-};
-
 // requestJsonOverHttp / proxyDesktopHttpRequest חולצו ל-httpTransport.js (משותף עם sourceRetrieval).
 
 // RetrievalSession אחד לכל run: כל הסוכנים/ההמשכים של אותה פעולה חולקים cache + תקציב
@@ -3873,10 +3857,9 @@ const extractPerplexityVerifiedArticleSources = (payload = {}, limit = VERIFIED_
   if (searchResults.length) {
     return dedupeVerifiedSourceResults(searchResults).slice(0, Math.max(1, Math.min(VERIFIED_SOURCE_RESULT_HARD_LIMIT, Number(limit) || VERIFIED_SOURCE_RESULT_LIMIT)));
   }
-  const citations = Array.isArray(payload?.citations)
-    ? payload.citations.map(normalizePerplexityCitationSource).filter(Boolean)
-    : [];
-  return dedupeVerifiedSourceResults(citations).slice(0, Math.max(1, Math.min(VERIFIED_SOURCE_RESULT_HARD_LIMIT, Number(limit) || VERIFIED_SOURCE_RESULT_LIMIT)));
+  // no citations fallback — model-generated citations were the main source-hallucination
+  // vector (see sourceRetrieval/providers/perplexitySearch.js); search_results only.
+  return [];
 };
 
 const normalizeGroundedWebResult = (item = {}, providerId = '') => {
