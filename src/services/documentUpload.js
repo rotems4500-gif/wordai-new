@@ -3,7 +3,14 @@
 // בדפדפן: txt/md/html נקראים ישירות, ו-Word (docx) + PDF מחולצים דרך materialExtractBrowser.
 
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
-import { extractSpvTablesText } from './spvOutputParser';
+import { extractSpvTablesText, extractSpvChartImages } from './spvOutputParser';
+import {
+  CHART_IMAGE_EXTENSIONS,
+  readImageFileAsBase64,
+  describeChartImages,
+  extractDocxChartImages,
+  extractPdfChartPageImages,
+} from './chartVisionService';
 
 // קבצים שנקראים כטקסט/HTML גולמי (file.text()).
 const BROWSER_TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'html', 'htm', 'csv', 'tsv', 'rtf', 'xml', 'log'];
@@ -15,8 +22,9 @@ const MAX_EXTRACT_CHARS = 100000;
 
 // טיוטה/משימה: מסמכי טקסט רגילים.
 export const BROWSER_DOC_ACCEPT = '.txt,.md,.markdown,.html,.htm,.docx,.pdf';
-// פלט SPSS: כולל גם פורמטים שמייצאים אליהם Output — Excel, csv, html, ו-.spv נייטיב.
-export const BROWSER_OUTPUT_ACCEPT = '.txt,.md,.html,.htm,.csv,.tsv,.rtf,.docx,.pdf,.xlsx,.xls,.spv';
+// פלט SPSS: כולל גם פורמטים שמייצאים אליהם Output — Excel, csv, html, .spv נייטיב,
+// ותמונות גרפים (נקראות דרך מודל vision — ראה chartVisionService).
+export const BROWSER_OUTPUT_ACCEPT = '.txt,.md,.html,.htm,.csv,.tsv,.rtf,.docx,.pdf,.xlsx,.xls,.spv,.png,.jpg,.jpeg,.webp,.gif,.bmp';
 
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -77,7 +85,9 @@ export const pickDesktopDocument = async () => {
 
 // קורא מסמך מ-<input type="file"> בדפדפן (txt/md/html ישירות, docx/PDF דרך מחלץ).
 // זורק אם הסיומת לא נתמכת או אם החילוץ נכשל.
-export const readBrowserDocumentFile = async (file) => {
+// opts.readCharts — קריאת גרפים מוטמעים (docx/pdf/spv/תמונות) דרך מודל vision;
+// מיועד להעלאות פלט SPSS, לא לטיוטות/מטלות.
+export const readBrowserDocumentFile = async (file, { readCharts = false } = {}) => {
   if (!file) return null;
   const ext = String(file.name || '').toLowerCase().split('.').pop();
 
@@ -98,7 +108,27 @@ export const readBrowserDocumentFile = async (file) => {
     if (!result.ok) {
       throw new Error(result.error || 'חילוץ הטקסט מהקובץ נכשל.');
     }
-    const text = String(result.text || '').trim();
+    let text = String(result.text || '').trim();
+    // גרפים מוטמעים: ב-Word הם תמונות (או EMF), ב-PDF הם תוכן עמוד — קוראים אותם
+    // דרך מודל vision. כשל כאן לא מפיל את הטקסט שכבר חולץ.
+    if (readCharts && (ext === 'pdf' || ext === 'docx')) {
+      let chartsText = '';
+      try {
+        const extracted = ext === 'docx'
+          ? await extractDocxChartImages(bytes)
+          : await extractPdfChartPageImages(bytes);
+        if (extracted.images.length) {
+          const described = await describeChartImages(extracted.images);
+          if (described.text && described.failures < described.total) chartsText = described.text;
+        }
+        if (ext === 'docx' && extracted.vectorCount && !extracted.images.length) {
+          chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-Word — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה כתמונה.]`;
+        }
+      } catch {
+        /* גרפים הם תוספת — הטקסט הוא העיקר */
+      }
+      if (chartsText) text = text ? `${text}\n\n${chartsText}` : chartsText;
+    }
     if (!text) {
       throw new Error('לא נמצא טקסט בקובץ. ייתכן שזה PDF סרוק (תמונה) ללא שכבת טקסט.');
     }
@@ -113,6 +143,19 @@ export const readBrowserDocumentFile = async (file) => {
     } catch {
       throw new Error('קריאת קובץ ה-SPV נכשלה. ייתכן שהוא דחוס בפורמט שאינו נתמך. ב-SPSS: File → Export → Word‏/HTML‏/Excel והעלה את הקובץ שנוצר.');
     }
+    // גרפים בתוך ה-SPV הם תמונות — הטבלאות לא מכסות אותם. מנסים לקרוא אותם דרך
+    // מודל vision; כשל (אין מפתח/רשת) לא מפיל את הטבלאות שכבר חולצו.
+    let chartsText = '';
+    try {
+      const chartImages = await extractSpvChartImages(bytes);
+      if (chartImages.length) {
+        const described = await describeChartImages(chartImages);
+        if (described.text && described.failures < described.total) chartsText = described.text;
+      }
+    } catch {
+      /* גרפים הם תוספת — הטבלאות הן העיקר */
+    }
+    if (chartsText) text = text ? `${text}\n\n${chartsText}` : chartsText;
     // הפענוח מחלץ כותרות, תוויות וערכים מספריים מטבלאות ה-light. אם בכל זאת לא יצא
     // פלט מספרי משמעותי (גרסת .spv לא נתמכת), מפנים לייצוא טקסט קריא במקום פלט חלקי.
     const numericTokenCount = (text.match(/\d+(?:[.,]\d+)?/g) || []).length;
@@ -122,5 +165,15 @@ export const readBrowserDocumentFile = async (file) => {
     return normalizeDocumentPayload({ name: file.name, text, source: 'browser' });
   }
 
-  throw new Error('בדפדפן אפשר להעלות קובצי טקסט (txt, csv, html), Word‏ (docx), PDF, Excel‏ (xlsx) או SPSS Output‏ (.spv). לתוצאה הטובה ביותר עם פלט SPSS — ייצא ל-Excel‏/Word‏/HTML.');
+  // תמונת גרף (png/jpg וכו') — נקראת דרך מודל vision ומוחזרת כתיאור טקסטואלי מובנה.
+  if (CHART_IMAGE_EXTENSIONS.includes(ext)) {
+    const image = await readImageFileAsBase64(file);
+    const described = await describeChartImages([image]);
+    if (!described.text || described.failures >= described.total) {
+      throw new Error('קריאת הגרף מהתמונה נכשלה. ודא שמוגדר מפתח לספק עם ראייה (Gemini / OpenAI / Claude) ונסה שוב.');
+    }
+    return normalizeDocumentPayload({ name: file.name, text: described.text, source: 'browser' });
+  }
+
+  throw new Error('בדפדפן אפשר להעלות קובצי טקסט (txt, csv, html), Word‏ (docx), PDF, Excel‏ (xlsx), SPSS Output‏ (.spv) או תמונת גרף (png/jpg). לתוצאה הטובה ביותר עם פלט SPSS — ייצא ל-Excel‏/Word‏/HTML.');
 };

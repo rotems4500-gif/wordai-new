@@ -1,8 +1,10 @@
 import React from 'react';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
+import { buildChapterFigures } from './services/spssChartRenderer';
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { BROWSER_DOC_ACCEPT, BROWSER_OUTPUT_ACCEPT, pickDesktopDocument, readBrowserDocumentFile } from './services/documentUpload';
+import { CHART_IMAGE_ACCEPT, readImageFileAsBase64, describeChartImages } from './services/chartVisionService';
 import {
   getSpssPreferences,
   saveSpssPreferences,
@@ -16,6 +18,7 @@ import {
   analyzeSpssAssignment,
   buildLiteratureReview,
   buildSpssFindingsChapter,
+  buildSpssSummaryChapter,
   collectDeclaredTargetNames,
   critiqueSpssRun,
   ensureGraphCoverage,
@@ -178,11 +181,12 @@ const StageBadge = ({ n }) => (
   <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">{n}</span>
 );
 
-export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = null }) {
+export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = null, onOpenHelp = null }) {
   const fileInputRef = React.useRef(null);
   const draftInputRef = React.useRef(null);
   const assignmentInputRef = React.useRef(null);
   const outputInputRef = React.useRef(null);
+  const chartImageInputRef = React.useRef(null);
   const [stage, setStage] = React.useState('understand');
   const [analysis, setAnalysis] = React.useState(null);
   const [assignmentText, setAssignmentText] = React.useState('');
@@ -215,6 +219,8 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
   const [providerConfigState, setProviderConfigState] = React.useState(() => getProviderConfig());
   const [spssProviderId, setSpssProviderId] = React.useState(() => String(spssPrefsRef.current.providerId || '').trim());
   const [spssModel, setSpssModel] = React.useState(() => String(spssPrefsRef.current.model || '').trim());
+  // צירוף נספח AI (תיעוד שימוש + הדרכה) לתוצר כשהוא נפתח בעורך — קריאת API נוספת.
+  const [attachAiAppendix, setAttachAiAppendix] = React.useState(false);
 
   const providerChoices = React.useMemo(() => {
     const configured = getConfiguredProviderChoices(providerConfigState);
@@ -444,27 +450,12 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
   }, []);
 
   // קובץ פלט (אופציונלי) — חלופה להדבקת ה-Output מ-SPSS; ממלא את שדה הפלט.
-  const onSelectOutputFile = React.useCallback(async () => {
-    setBusy('output-file');
-    try {
-      const desktop = await pickDesktopDocument();
-      if (desktop.canceled) return;
-      if (desktop.unsupported) {
-        outputInputRef.current?.click();
-        return;
-      }
-      const text = String(desktop.doc.text || '').trim();
-      if (!text) {
-        setNotice({ tone: 'error', text: 'לא נמצא טקסט בקובץ הפלט.' });
-        return;
-      }
-      setOutput((prev) => (prev.trim() ? `${prev.trim()}\n\n${text}` : text));
-      setNotice({ tone: 'success', text: `נטען פלט מתוך ${desktop.doc.name}. אפשר לערוך לפני הבדיקה.` });
-    } catch (error) {
-      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'טעינת קובץ הפלט נכשלה.' });
-    } finally {
-      setBusy('');
-    }
+  // תמיד דרך <input type="file"> (גם בדסקטופ): הדיאלוג הנייטיבי מוגבל ל-docx/txt
+  // ומחזיר טקסט בלבד, ואילו כאן נתמכים גם pdf/xlsx/spv/תמונות + קריאת גרפים.
+  const onSelectOutputFile = React.useCallback(() => {
+    if (!outputInputRef.current) return;
+    outputInputRef.current.value = '';
+    outputInputRef.current.click();
   }, []);
 
   const onOutputFileInputChange = React.useCallback(async (event) => {
@@ -473,7 +464,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     if (!file) return;
     setBusy('output-file');
     try {
-      const next = await readBrowserDocumentFile(file);
+      const next = await readBrowserDocumentFile(file, { readCharts: true });
       const text = String(next?.text || '').trim();
       if (!text) {
         setNotice({ tone: 'error', text: 'לא נמצא טקסט בקובץ הפלט.' });
@@ -487,6 +478,36 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       setBusy('');
     }
   }, []);
+
+  // תמונות גרפים — גרף ב-SPSS הוא תמונה, אז קוראים אותו דרך מודל vision והתיאור
+  // הטקסטואלי מצטרף לשדה הפלט כמו כל Output אחר.
+  const onChartImageInputChange = React.useCallback(async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    setBusy('chart-image');
+    try {
+      const images = [];
+      for (const file of files) images.push(await readImageFileAsBase64(file));
+      const described = await describeChartImages(images);
+      if (!described.text || described.failures >= described.total) {
+        throw new Error('קריאת הגרפים נכשלה. ודא שמוגדר מפתח לספק עם ראייה (Gemini / OpenAI / Claude).');
+      }
+      setOutput((prev) => (prev.trim() ? `${prev.trim()}\n\n${described.text}` : described.text));
+      logAi({ stage: 'קריאת גרפים', description: `קריאת ${described.total} תמונות גרף מפלט SPSS דרך מודל ראייה והמרתן לתיאור טקסטואלי`, prompt: files.map((f) => f.name).join(', '), providerId: described.providerId, model: described.model });
+      const okCount = described.total - described.failures;
+      setNotice({
+        tone: described.failures ? 'info' : 'success',
+        text: described.failures
+          ? `נקראו ${okCount} מתוך ${described.total} גרפים. עבור השאר — ייצא מחדש כ-PNG ונסה שוב.`
+          : `נקרא${described.total > 1 ? 'ו' : ''} ${described.total} גרפ${described.total > 1 ? 'ים' : ''} והתיאור נוסף לפלט. אפשר לערוך לפני הבדיקה.`,
+      });
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'קריאת תמונות הגרפים נכשלה.' });
+    } finally {
+      setBusy('');
+    }
+  }, [logAi]);
 
   const onDrop = React.useCallback((event) => {
     event.preventDefault();
@@ -871,7 +892,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       // שלב 1/3 — פירוש הפלט (קלט ישיר לפרק הממצאים).
       let chapterInterpretations = interpretations;
       if (!chapterInterpretations.length) {
-        setNotice({ tone: 'info', text: 'שלב 1/3: מפרש את הפלט...' });
+        setNotice({ tone: 'info', text: 'שלב 1/4: מפרש את הפלט...' });
         try {
           const interpretResult = await interpretSpssOutput({ analysis, output, question: '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
           if (interpretResult.ok) {
@@ -892,7 +913,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       if (!chapterLitReview) {
         const topic = (assignmentText.trim() || profile?.summary || '').slice(0, 400);
         if (topic) {
-          setNotice({ tone: 'info', text: 'שלב 2/3: מאתר מקורות אקדמיים וכותב סקירת ספרות...' });
+          setNotice({ tone: 'info', text: 'שלב 2/4: מאתר מקורות אקדמיים וכותב סקירת ספרות...' });
           try {
             const litResult = await buildLiteratureReview({ topic, count: 5, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
             if (litResult.ok) {
@@ -910,14 +931,42 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         }
       }
 
-      setNotice({ tone: 'info', text: 'שלב 3/3: מרכיב פרק ממצאים...' });
-      const result = await buildSpssFindingsChapter({ assignmentText, analysis, masterSyntax, output, interpretations: chapterInterpretations, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+      // תרשימי התפלגות דטרמיניסטיים מהנתונים עצמם (לא מהמודל) — משובצים בפרק
+      // דרך מרקרים. כשל ברינדור (canvas) לא עוצר את הפרק.
+      let chapterFigures = [];
+      try {
+        const figuresResult = buildChapterFigures(analysis, { priorityText: assignmentText });
+        chapterFigures = figuresResult?.figures || [];
+        if (figuresResult?.skipped?.length) {
+          console.warn('SPSS chapter figures skipped beyond cap:', figuresResult.skipped.join(', '));
+        }
+      } catch {
+        skippedSteps.push('תרשימי התפלגות');
+      }
+
+      setNotice({ tone: 'info', text: 'שלב 3/4: מרכיב פרק ממצאים...' });
+      const result = await buildSpssFindingsChapter({ assignmentText, analysis, masterSyntax, output, interpretations: chapterInterpretations, draftText: draft?.text || '', figures: chapterFigures, providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
       if (!result.ok) {
         setNotice({ tone: 'error', text: result.error || 'הרכבת פרק הממצאים נכשלה.' });
         return;
       }
-      setChapterTruncated(Boolean(result.truncated));
-      logAi({ stage: 'פרק ממצאים', description: 'הרכבת פרק ממצאים בעברית מהפלט, הפירושים והמטלה', prompt: 'הרכב פרק ממצאים מהפלט והפירושים', providerId: result.providerId, model: result.model });
+      logAi({ stage: 'פרק ממצאים', description: `הרכבת פרק ממצאים בעברית מהפלט, הפירושים והמטלה${chapterFigures.length ? `, כולל ${chapterFigures.length} תרשימי התפלגות שנוצרו מהנתונים` : ''}`, prompt: 'הרכב פרק ממצאים מהפלט והפירושים', providerId: result.providerId, model: result.model });
+
+      // שלב 4/4 — פרק סיכום ודיון. כשל כאן לא חוסם את פליטת המסמך.
+      setNotice({ tone: 'info', text: 'שלב 4/4: כותב פרק סיכום ודיון...' });
+      let summaryResult = null;
+      try {
+        summaryResult = await buildSpssSummaryChapter({ assignmentText, analysis, interpretations: chapterInterpretations, findingsHtml: result.html, litReview: chapterLitReview, draftText: draft?.text || '', providerOverride: spssRouteRef.current.providerId, modelOverride: spssRouteRef.current.model });
+        if (summaryResult.ok) {
+          logAi({ stage: 'פרק סיכום ודיון', description: 'כתיבת פרק סיכום ודיון: מהלך המחקר, ממצאים מול ההשערות, דיון מול הספרות, מגבלות והמלצות', prompt: 'כתוב פרק סיכום ודיון על בסיס פרק הממצאים והספרות', providerId: summaryResult.providerId, model: summaryResult.model });
+        } else {
+          skippedSteps.push('פרק סיכום ודיון');
+        }
+      } catch {
+        skippedSteps.push('פרק סיכום ודיון');
+      }
+      const summaryHtml = summaryResult?.ok ? summaryResult.html : '';
+      setChapterTruncated(Boolean(result.truncated || (summaryResult?.ok && summaryResult.truncated)));
       if (typeof onEmitDocument === 'function') {
         // יש טיוטה? קודם מנסים שילוב חכם: הערות "(הערה: חלק זה יורחב לאחר
         // הרצת הניתוח בפועל)" בטיוטה מוחלפות בתת-הפרק המתאים מהממצאים, כך
@@ -934,26 +983,33 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
             mergedHtml = `${draft.html}\n<hr>\n${result.html}`;
             mergeSummary = 'צורף בסוף הטיוטה';
           }
+          // פרק הסיכום תמיד מצטרף בסוף העבודה.
+          if (summaryHtml) mergedHtml = `${mergedHtml}\n<hr>\n${summaryHtml}`;
         } else if (chapterLitReview?.review) {
-          // אין טיוטה (= אין סקירה קיימת בעבודה) → מסמך עצמאי שלם: פרק +
-          // סקירת ספרות + רשימת מקורות.
+          // אין טיוטה (= אין סקירה קיימת בעבודה) → מסמך עצמאי שלם: פרק ממצאים +
+          // סקירת ספרות + סיכום ודיון + רשימת מקורות.
           mergedHtml = [
             result.html,
             '<h2>סקירת ספרות</h2>',
             textToHtmlParagraphs(chapterLitReview.review),
+            summaryHtml,
             '<h2>רשימת מקורות</h2>',
             `<ol>${(chapterLitReview.references || []).map((ref) => `<li>${escapeHtml(ref)}</li>`).join('')}</ol>`,
-          ].join('\n');
-          mergeSummary = 'כולל סקירת ספרות ורשימת מקורות';
+          ].filter(Boolean).join('\n');
+          mergeSummary = 'כולל סקירת ספרות, פרק סיכום ודיון ורשימת מקורות';
+        } else if (summaryHtml) {
+          mergedHtml = `${result.html}\n${summaryHtml}`;
         }
         onEmitDocument({
           html: mergedHtml,
           title: draft?.title || result.title || 'פרק ממצאים',
+          withAiAppendix: attachAiAppendix,
         });
-        if (result.truncated) {
+        if (result.truncated || (summaryResult?.ok && summaryResult.truncated)) {
           setNotice({ tone: 'error', text: 'הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.' });
         } else {
-          const doneParts = ['פרק הממצאים מוכן'];
+          const doneParts = [summaryHtml ? 'פרק הממצאים ופרק הסיכום מוכנים' : 'פרק הממצאים מוכן'];
+          if (chapterFigures.length) doneParts.push(`${chapterFigures.length} תרשימי התפלגות שובצו`);
           if (mergeSummary) doneParts.push(mergeSummary);
           if (draft?.html && chapterLitReview?.review) doneParts.push('סקירת הספרות מוכנה בפאנל למטה — "הוסף לתוצר" כשתרצה');
           const skippedText = skippedSteps.length ? ` (דולג: ${skippedSteps.join(', ')})` : '';
@@ -967,7 +1023,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
     } finally {
       setBusy('');
     }
-  }, [assignmentText, analysis, masterSyntax, output, interpretations, litReview, profile, draft, onEmitDocument, logAi]);
+  }, [assignmentText, analysis, masterSyntax, output, interpretations, litReview, profile, draft, onEmitDocument, logAi, attachAiAppendix]);
 
   // Lit review + reference list (sections א+ד) — verified academic sources only.
   const onBuildLitReview = React.useCallback(async () => {
@@ -1219,6 +1275,14 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         className="hidden"
         onChange={onOutputFileInputChange}
       />
+      <input
+        ref={chartImageInputRef}
+        type="file"
+        accept={CHART_IMAGE_ACCEPT}
+        multiple
+        className="hidden"
+        onChange={onChartImageInputChange}
+      />
 
       {/* Header + stepper */}
       <div className="border-b border-slate-200 bg-white px-5 py-4 md:px-8">
@@ -1227,13 +1291,25 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
             <div className="inline-flex items-center rounded-full bg-[#1F6FEB]/10 px-3 py-1 text-[11px] font-bold text-[#1F6FEB]">עבודת סיום · SPSS</div>
             <h1 className="text-xl font-bold text-slate-900">מצב עבודה מונחה</h1>
           </div>
-          <button
-            type="button"
-            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
-            onClick={onExit}
-          >
-            יציאה
-          </button>
+          <div className="flex items-center gap-2">
+            {onOpenHelp && (
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
+                onClick={() => onOpenHelp('studios')}
+                title="מדריך הסטודיו"
+              >
+                ❓ מדריך
+              </button>
+            )}
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
+              onClick={onExit}
+            >
+              יציאה
+            </button>
+          </div>
         </div>
         {stage !== 'quick-interpret' && (
         <div className="mx-auto mt-4 flex w-full max-w-6xl items-center gap-2 overflow-x-auto">
@@ -1409,7 +1485,7 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-lg font-bold text-slate-900">פירוש פלט SPSS — מהיר</div>
-                    <p className="mt-1 text-sm leading-7 text-slate-600">הדבק או העלה פלט מ-SPSS וקבל הסבר בעברית בסגנון APA — בלי מטלה או נתונים. נתמכים: Excel, Word, PDF, HTML, csv, txt וקובץ SPSS Output‏ (.spv). אפשר גם להעלות קובץ נתונים להקשר טוב יותר — לא חובה.</p>
+                    <p className="mt-1 text-sm leading-7 text-slate-600">הדבק או העלה פלט מ-SPSS וקבל הסבר בעברית בסגנון APA — בלי מטלה או נתונים. נתמכים: Excel, Word, PDF, HTML, csv, txt, קובץ SPSS Output‏ (.spv) ותמונות גרפים (png/jpg — נקראות עם מודל ראייה). אפשר גם להעלות קובץ נתונים להקשר טוב יותר — לא חובה.</p>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <button
@@ -1427,6 +1503,14 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                       disabled={busy === 'output-file'}
                     >
                       {busy === 'output-file' ? 'טוען...' : '📎 העלה קובץ פלט'}
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-2xl border px-4 py-2 text-xs font-semibold transition ${busy === 'chart-image' ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-[#1F6FEB]/30 bg-[#1F6FEB]/5 text-[#1F6FEB] hover:bg-[#1F6FEB]/10'}`}
+                      onClick={() => { if (chartImageInputRef.current) { chartImageInputRef.current.value = ''; chartImageInputRef.current.click(); } }}
+                      disabled={busy === 'chart-image'}
+                    >
+                      {busy === 'chart-image' ? 'קורא גרפים...' : '📊 העלה גרף (תמונה)'}
                     </button>
                   </div>
                 </div>
@@ -1580,10 +1664,18 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                   >
                     {busy === 'output-file' ? 'טוען...' : '📎 העלה קובץ פלט'}
                   </button>
+                  <button
+                    type="button"
+                    className={`rounded-2xl border px-4 py-2 text-xs font-semibold transition ${busy === 'chart-image' ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400' : 'border-[#1F6FEB]/30 bg-[#1F6FEB]/5 text-[#1F6FEB] hover:bg-[#1F6FEB]/10'}`}
+                    onClick={() => { if (chartImageInputRef.current) { chartImageInputRef.current.value = ''; chartImageInputRef.current.click(); } }}
+                    disabled={busy === 'chart-image'}
+                  >
+                    {busy === 'chart-image' ? 'קורא גרפים...' : '📊 העלה גרף (תמונה)'}
+                  </button>
                 </div>
               </div>
-              <p className="mt-2 text-sm leading-7 text-slate-600">הרץ את ה-master syntax ב-SPSS, סמן את טבלאות ה-Output הרלוונטיות והדבק כאן — או העלה קובץ פלט וה-Output ייטען לכאן. נתמכים: Excel‏ (xlsx), Word‏ (docx), PDF, HTML, csv, txt וקובץ SPSS Output‏ (.spv). 💡 לתוצאה הנקייה ביותר, ב-SPSS: File → Export → Excel‏/HTML. אפשר להדביק/לטעון כמה טבלאות יחד.</p>
-              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">📊 יש בתוכנית גרפים? גרף ב-SPSS הוא תמונה — הוא לא נכנס לטקסט שמדביקים כאן, והבדיקה לא "רואה" אותו. ייצא כל גרף מ-SPSS (קליק ימני על הגרף → Copy / Export) והדבק אותו ישירות לתוצר בעורך.</div>
+              <p className="mt-2 text-sm leading-7 text-slate-600">הרץ את ה-master syntax ב-SPSS, סמן את טבלאות ה-Output הרלוונטיות והדבק כאן — או העלה קובץ פלט וה-Output ייטען לכאן. נתמכים: Excel‏ (xlsx), Word‏ (docx), PDF, HTML, csv, txt, קובץ SPSS Output‏ (.spv) ותמונות גרפים (png/jpg). 💡 לתוצאה הנקייה ביותר, ב-SPSS: File → Export → Excel‏/HTML. אפשר להדביק/לטעון כמה טבלאות יחד.</p>
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">📊 יש בתוכנית גרפים? גרף ב-SPSS הוא תמונה, ולכן הוא לא נכנס לטקסט שמדביקים כאן. ייצא כל גרף מ-SPSS כתמונה (קליק ימני על הגרף → Export → PNG) ולחץ "📊 העלה גרף (תמונה)" — הגרף ייקרא על ידי מודל ראייה והתיאור שלו יצטרף לפלט. בהעלאת קובץ ‎.spv הגרפים שבפנים נקראים אוטומטית. את התמונה עצמה הדבק גם לתוצר בעורך.</div>
               <textarea
                 className="mt-4 min-h-[320px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[12px] leading-6 text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/70"
                 placeholder="הדבק כאן את הפלט (Independent Samples Test, Correlations, ANOVA וכו')."
@@ -1781,6 +1873,10 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
                   <button type="button" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700" onClick={onDownloadSyntax}>הורד קובץ .sps</button>
                   <button type="button" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700" onClick={onCopySyntax}>העתק syntax</button>
                 </div>
+                <label className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 cursor-pointer">
+                  <input type="checkbox" checked={attachAiAppendix} onChange={(e) => setAttachAiAppendix(e.target.checked)} className="h-4 w-4 accent-amber-500" />
+                  📎 צרף נספח AI (תיעוד שימוש + הדרכה) לסוף התוצר — כרוך בקריאת API נוספת
+                </label>
                 <div className="mt-3 text-xs leading-6 text-slate-500">לחיצה אחת מריצה הכל: פירוש הפלט וסקירת ספרות (אם עוד לא הופקו) ואז הרכבת הפרק — והעורך נפתח עם התוצר המוכן.</div>
                 {chapterTruncated && (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-6 text-amber-800">⚠️ הפרק ארוך ונקטע למרות ניסיונות השלמה — נסה שוב או פצל את הבקשה.</div>

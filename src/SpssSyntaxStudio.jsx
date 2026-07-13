@@ -93,7 +93,7 @@ const noticeToneClassMap = {
   info: 'border-slate-200 bg-slate-50 text-slate-700',
 };
 
-export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
+export default function SpssSyntaxStudio({ onOpenProjectMode = null, onOpenHelp = null }) {
   const fileInputRef = React.useRef(null);
   const draftInputRef = React.useRef(null);
   const activeUploadRequestIdRef = React.useRef('');
@@ -733,6 +733,16 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
                   אפשר גם לגרור קובץ ישירות לאזור הזה.
                 </div>
+                {onOpenHelp && (
+                  <button
+                    type="button"
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-800"
+                    onClick={() => onOpenHelp('studios')}
+                    title="מדריך הסטודיו"
+                  >
+                    ❓ מדריך
+                  </button>
+                )}
               </div>
 
               {onOpenProjectMode && (
@@ -820,15 +830,27 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null }) {
                   העלית dataset פעיל. מכאן הפוקוס הוא על בקשה בעברית, על syntax נקי, ועל recovery קטן אם צריך לחזור צעד אחד אחורה.
                 </p>
               </div>
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-                <input
-                  type="checkbox"
-                  className="checkbox checkbox-sm"
-                  checked={tutorMode}
-                  onChange={(event) => setTutorMode(event.target.checked)}
-                />
-                Tutor mode
-              </label>
+              <div className="flex items-center gap-2">
+                {onOpenHelp && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
+                    onClick={() => onOpenHelp('studios')}
+                    title="מדריך הסטודיו"
+                  >
+                    ❓ מדריך
+                  </button>
+                )}
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-sm"
+                    checked={tutorMode}
+                    onChange={(event) => setTutorMode(event.target.checked)}
+                  />
+                  Tutor mode
+                </label>
+              </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]">
               <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">{analysis.fileName || 'קובץ נתונים נטען'}</span>

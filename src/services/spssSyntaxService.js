@@ -1,4 +1,5 @@
 import Papa from 'papaparse';
+import { applyFigureMarkersToHtml } from './spssChartRenderer.js';
 
 const MAX_INFERENCE_ROWS = 5;
 const MAX_DISTINCT_PREVIEW = 8;
@@ -7,6 +8,10 @@ const DATE_INFERENCE_RATIO = 0.8;
 const LOW_CARDINALITY_RATIO = 0.25;
 const SMALL_SET_CATEGORICAL_RATIO = 0.75;
 const MAX_SMALL_SET_DISTINCT = 12;
+// Chart-data caps for the deterministic distribution field on each column profile
+// (buildColumnProfile) — used by spssChartRenderer to draw histograms/bar charts.
+const MAX_DISTRIBUTION_CATEGORIES = 20;
+const MIN_DISTRIBUTION_N = 3;
 // Classic SPSS sentinel/user-missing codes. Used only to FLAG suspected undeclared
 // missing (a sentinel sitting far outside the natural scale), never to drop data.
 const SENTINEL_MISSING_CODES = new Set([-9, -99, -999, 97, 98, 99, 997, 998, 999, 9998, 9999]);
@@ -679,6 +684,157 @@ const buildValueLabelMap = (valueLabels = []) => {
   return map;
 };
 
+// Round a raw bin width UP to a "nice" step (1, 2, 2.5, 5 × 10^k) so histogram edges
+// land on readable numbers instead of e.g. 3.7.
+const roundBinWidthToNiceNumber = (rawWidth) => {
+  if (!Number.isFinite(rawWidth) || rawWidth <= 0) return 1;
+  const exponent = Math.floor(Math.log10(rawWidth));
+  const magnitude = 10 ** exponent;
+  const fraction = rawWidth / magnitude;
+  let niceFraction;
+  if (fraction <= 1) niceFraction = 1;
+  else if (fraction <= 2) niceFraction = 2;
+  else if (fraction <= 2.5) niceFraction = 2.5;
+  else if (fraction <= 5) niceFraction = 5;
+  else niceFraction = 10;
+  return niceFraction * magnitude;
+};
+
+const roundBinEdge = (value) => Math.round(value * 1000) / 1000;
+
+// Sturges-style histogram over numeric chart values (already missing-filtered). One bin
+// per integer when the range is small and integer-like; otherwise "nice"-width bins.
+const buildDistributionHistogram = (numericChartValues = [], n = 0, excludedSuspectedMissing = []) => {
+  const hMin = Math.min(...numericChartValues);
+  const hMax = Math.max(...numericChartValues);
+  const integerLike = numericChartValues.every((value) => Number.isInteger(value));
+  const bins = [];
+
+  if (integerLike && (hMax - hMin) <= MAX_DISTRIBUTION_CATEGORIES) {
+    const counts = new Map();
+    numericChartValues.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+    for (let point = hMin; point <= hMax; point += 1) {
+      bins.push({ start: point, end: point, count: counts.get(point) || 0 });
+    }
+  } else {
+    const targetBinCount = Math.min(15, Math.max(5, Math.ceil(Math.log2(Math.max(n, 2))) + 1));
+    const rawWidth = (hMax - hMin) / targetBinCount || 1;
+    let width = roundBinWidthToNiceNumber(rawWidth);
+    // עיגול כלפי מעלה עלול להוריד את מספר ה-bins מתחת ל-5 (למשל 5.7→10). במקרה כזה
+    // יורדים למספר ה"יפה" הבא כלפי מטה, כל עוד לא חורגים מהתקרה.
+    if ((hMax - hMin) / width < 5) {
+      const smallerWidth = roundBinWidthToNiceNumber(width / 2.2);
+      if (smallerWidth > 0 && (hMax - hMin) / smallerWidth <= MAX_DISTRIBUTION_CATEGORIES) {
+        width = smallerWidth;
+      }
+    }
+    const alignedStart = Math.floor(hMin / width) * width;
+    const edges = [alignedStart];
+    while (edges[edges.length - 1] < hMax && edges.length <= MAX_DISTRIBUTION_CATEGORIES) {
+      edges.push(edges[edges.length - 1] + width);
+    }
+    for (let index = 0; index < edges.length - 1 && bins.length < MAX_DISTRIBUTION_CATEGORIES; index += 1) {
+      const binStart = edges[index];
+      const binEnd = edges[index + 1];
+      const isLastBin = index === edges.length - 2;
+      const count = numericChartValues.filter((value) => (
+        isLastBin ? value >= binStart && value <= binEnd : value >= binStart && value < binEnd
+      )).length;
+      bins.push({ start: roundBinEdge(binStart), end: roundBinEdge(binEnd), count });
+    }
+  }
+
+  return {
+    kind: 'histogram',
+    valueCounts: [],
+    otherCount: 0,
+    bins,
+    excludedSuspectedMissing,
+    n,
+  };
+};
+
+// Deterministic chart-ready distribution for a column: exact category counts (bar chart)
+// or histogram bins, after excluding declared-missing (already done upstream) AND
+// suspected-undeclared-missing sentinel codes. Returns null when the role isn't
+// analyzable (identifier/date/text) or there isn't enough usable data to chart.
+const buildColumnDistribution = ({ analysisRole, nonEmptyValues, valueLabelMap, suspectedMissingCodes }) => {
+  if (analysisRole === 'identifier' || analysisRole === 'date' || analysisRole === 'text') return null;
+
+  const suspectedSet = new Set(suspectedMissingCodes);
+  const excludedCounts = new Map();
+  const chartValues = [];
+  nonEmptyValues.forEach((rawValue) => {
+    const numericValue = parseNumericValue(rawValue);
+    if (numericValue !== null && Number.isInteger(numericValue) && suspectedSet.has(numericValue)) {
+      excludedCounts.set(numericValue, (excludedCounts.get(numericValue) || 0) + 1);
+      return;
+    }
+    chartValues.push(rawValue);
+  });
+
+  const n = chartValues.length;
+  if (n < MIN_DISTRIBUTION_N) return null;
+
+  const excludedSuspectedMissing = Array.from(excludedCounts.entries())
+    .map(([code, count]) => ({ code, count }))
+    .sort((left, right) => left.code - right.code);
+
+  const numericChartValues = chartValues.map(parseNumericValue);
+  const allNumeric = numericChartValues.every((value) => value !== null);
+
+  const isCategoricalRole = analysisRole === 'categorical' || analysisRole === 'categorical-code' || analysisRole === 'likert';
+
+  if (isCategoricalRole) {
+    const counts = new Map();
+    chartValues.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+
+    // A numeric "categorical" with too many distinct codes reads better as a histogram.
+    if (allNumeric && counts.size > MAX_DISTRIBUTION_CATEGORIES) {
+      return buildDistributionHistogram(numericChartValues, n, excludedSuspectedMissing);
+    }
+
+    let entries = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      label: valueLabelMap.get(value) || null,
+      count,
+    }));
+
+    if (allNumeric) {
+      entries.sort((left, right) => parseNumericValue(left.value) - parseNumericValue(right.value));
+    } else {
+      entries.sort((left, right) => right.count - left.count);
+    }
+
+    let otherCount = 0;
+    if (entries.length > MAX_DISTRIBUTION_CATEGORIES) {
+      // Non-numeric only (numeric already diverted to histogram above): keep top 20 by
+      // count, lump the long tail.
+      const byCountDesc = [...entries].sort((left, right) => right.count - left.count);
+      const kept = byCountDesc.slice(0, MAX_DISTRIBUTION_CATEGORIES);
+      otherCount = byCountDesc.slice(MAX_DISTRIBUTION_CATEGORIES).reduce((sum, entry) => sum + entry.count, 0);
+      const keptValues = new Set(kept.map((entry) => entry.value));
+      entries = entries.filter((entry) => keptValues.has(entry.value));
+    }
+
+    return {
+      kind: 'categorical',
+      valueCounts: entries,
+      otherCount,
+      bins: [],
+      excludedSuspectedMissing,
+      n,
+    };
+  }
+
+  // continuous (or any other numeric role that reaches here) → histogram.
+  if (allNumeric) {
+    return buildDistributionHistogram(numericChartValues, n, excludedSuspectedMissing);
+  }
+
+  return null;
+};
+
 const buildColumnProfile = ({ originalName = '', outputName = '', token = '', allValues = [], sampleValues = [], aliases = [], valueLabels = [], declaredMissing = null } = {}) => {
   const declared = declaredMissing && (declaredMissing.discrete?.length || declaredMissing.range) ? declaredMissing : null;
   const normalizedValues = allValues.map(normalizeCell);
@@ -760,6 +916,13 @@ const buildColumnProfile = ({ originalName = '', outputName = '', token = '', al
     valueLabelCoverage,
   });
 
+  const distribution = buildColumnDistribution({
+    analysisRole,
+    nonEmptyValues,
+    valueLabelMap,
+    suspectedMissingCodes,
+  });
+
   return {
     token,
     originalName,
@@ -790,6 +953,7 @@ const buildColumnProfile = ({ originalName = '', outputName = '', token = '', al
     analysisRole,
     isNumeric: inferredType === 'numeric',
     isCategorical: inferredType === 'categorical' || measurementLevel === 'nominal',
+    distribution,
   };
 };
 
@@ -3842,7 +4006,44 @@ const MAX_FINDINGS_CONTINUATION_ROUNDS = 3;
 const FINDINGS_CONTINUATION_TAIL_CHARS = 1500;
 const FINDINGS_CONTINUATION_INSTRUCTION = 'זה סוף הפרק שנכתב עד כה ונקטע. המשך בדיוק מהנקודה שנעצרת. אל תחזור על טקסט קיים, אל תפתח כותרת חדשה של הפרק, החזר אך ורק את ההמשך כ-HTML.';
 
-export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [], draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
+// לולאת continuation משותפת לבוני פרקי ה-HTML הארוכים (ממצאים / סיכום ודיון):
+// כל עוד ה-HTML נראה קטוע, מבקשים מהמודל להמשיך מהזנב, עד MAX_FINDINGS_CONTINUATION_ROUNDS.
+const runHtmlContinuationLoop = async ({ initialHtml, systemPrompt, analysis, providerOverride, modelOverride, agentName }) => {
+  let accumulatedHtml = initialHtml;
+  let truncated = isTruncatedHtml(accumulatedHtml);
+  let round = 0;
+  while (truncated && round < MAX_FINDINGS_CONTINUATION_ROUNDS) {
+    round += 1;
+    const tail = accumulatedHtml.slice(-FINDINGS_CONTINUATION_TAIL_CHARS);
+    const tokenizedTail = tokenizeSpssRequest(tail, analysis);
+    const continuationMessage = [
+      'הפרק שנכתב עד כה (זנב הקטע, לצורך המשך בלבד):',
+      tokenizedTail,
+      '',
+      FINDINGS_CONTINUATION_INSTRUCTION,
+    ].join('\n');
+
+    // eslint-disable-next-line no-await-in-loop
+    const continuationResult = await callGuidanceProvider({
+      tokenizedMessage: continuationMessage,
+      systemPrompt,
+      agentName,
+      providerOverride,
+      modelOverride,
+    });
+
+    const continuationHtml = (restoreColumnTokens(continuationResult.text, analysis) || continuationResult.text)
+      .replace(/```html/gi, '')
+      .replace(/```/g, '')
+      .trim();
+    if (!continuationHtml) break;
+    accumulatedHtml = appendContinuationHtml(accumulatedHtml, continuationHtml);
+    truncated = isTruncatedHtml(accumulatedHtml);
+  }
+  return { html: accumulatedHtml, truncated };
+};
+
+export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', interpretations = [], draftText = '', figures = [], providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פלט להרכבת פרק ממצאים. הדבק קודם את הפלט מ-SPSS.', truncated: false };
@@ -3862,6 +4063,17 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       .filter(Boolean)
       .join('\n\n');
 
+    // מניפסט תרשימים: רק מרקרים + מספרים אמיתיים. לעולם לא data-URIs לתוך ה-prompt.
+    const safeFigures = (Array.isArray(figures) ? figures : []).filter((figure) => figure && figure.token && figure.html);
+    const figureManifest = safeFigures.length
+      ? tokenizeSpssRequest(
+        safeFigures
+          .map((figure) => `[[FIG:${figure.token}]] — תרשים ${figure.figureNumber}: ${figure.kindHebrew} של ${figure.label}. נתונים אמיתיים: ${figure.statsLine}`)
+          .join('\n'),
+        analysis,
+      )
+      : '';
+
     const systemPrompt = [
       'אתה כותב אקדמי שמרכיב "פרק ממצאים" בעברית לעבודת סטטיסטיקה, על בסיס פלט SPSS.',
       'החזר אך ורק HTML נקי (בלי ```), עם <h2>/<h3>/<p>/<table> בלבד. בלי <html> או <body>.',
@@ -3870,6 +4082,9 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       'אם ניתוח מופיע בפלט — דווח את תוצאותיו במספרים בפועל. אסור ניסוח עתידי ("חלק זה יורחב לאחר ההרצה", "יש לדווח כאן על...") עבור ניתוח שתוצאותיו כבר בפלט; ניסוח כזה מותר רק לניתוח שבאמת חסר.',
       'דגל אדום לפני דיווח: אם הסטטיסטיקה התיאורית בלתי-אפשרית (SD גדול מהטווח הסביר של הסולם, או ממוצע/מינימום/מקסימום מחוץ לסולם — סימן לערכי missing לא-מוגדרים כמו 98/99 שנכללו בחישוב), או אם משתנה ב-metadata מסומן suspectedUndeclaredMissing=[...], אל תדווח את הערכים כאילו הם תקינים. ציין במפורש בפרק שהתוצאות מוטות עקב missing לא-מוגדר, ושיש להגדירו (MISSING VALUES) ולהריץ מחדש לפני הסקת מסקנות.',
       'כתוב עברית אקדמית רהוטה, לא תרגום מילולי.',
+      figureManifest
+        ? 'צורפה רשימת תרשימי התפלגות שנוצרו אוטומטית מהנתונים בפועל. בחלק הסטטיסטיקה התיאורית, מיד אחרי הדיווח על כל משתנה, כתוב שורה נפרדת ובה אך ורק המרקר המדויק של התרשים שלו (למשל: [[FIG:VAR_1]]). בטקסט עצמו הפנה לתרשים לפי מספרו ("כמוצג בתרשים 1") והוסף משפט פרשנות אחד המבוסס רק על הנתונים שצוינו במניפסט (קטגוריה שכיחה, צורת התפלגות). אל תכתוב תגי img או figure בעצמך, אל תשנה את המרקרים ואל תמציא תרשימים שאינם ברשימה.'
+        : '',
       tokenizedDraft
         ? 'צורפה טיוטה קיימת של העבודה. כתוב את פרק הממצאים כך שישתלב בה: התאם למינוח, למבנה ולסגנון הכתיבה, אל תחזור על דברים שכבר נכתבו בטיוטה, והפנה לחלקים קיימים כשרלוונטי. החזר רק את פרק הממצאים (לא לשכתב את הטיוטה).'
         : '',
@@ -3880,6 +4095,7 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
       tokenizedDraft ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}` : '',
       `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
       interpretationBlock ? `פירושים שכבר הופקו:\n${interpretationBlock}` : '',
+      figureManifest ? `תרשימי התפלגות זמינים לשיבוץ (מרקרים):\n${figureManifest}` : '',
       `ה-syntax שהורץ:\n${tokenizedSyntax || '(לא סופק)'}`,
       `הפלט הגולמי מ-SPSS:\n${tokenizedOutput}`,
     ].filter(Boolean).join('\n\n');
@@ -3902,40 +4118,121 @@ export const buildSpssFindingsChapter = async ({ assignmentText = '', analysis =
 
     // חיתוך: הטבלאות/הכותרות הארוכות בפרק הממצאים עלולות להיחתך על ברירת המחדל
     // של הספק. משלימים עד 3 סבבי continuation לפני שמוותרים ומדווחים truncated.
-    let accumulatedHtml = restoredHtml;
-    let truncated = isTruncatedHtml(accumulatedHtml);
-    let round = 0;
-    while (truncated && round < MAX_FINDINGS_CONTINUATION_ROUNDS) {
-      round += 1;
-      const tail = accumulatedHtml.slice(-FINDINGS_CONTINUATION_TAIL_CHARS);
-      const tokenizedTail = tokenizeSpssRequest(tail, analysis);
-      const continuationMessage = [
-        'הפרק שנכתב עד כה (זנב הקטע, לצורך המשך בלבד):',
-        tokenizedTail,
-        '',
-        FINDINGS_CONTINUATION_INSTRUCTION,
-      ].join('\n');
+    const continuation = await runHtmlContinuationLoop({
+      initialHtml: restoredHtml,
+      systemPrompt,
+      analysis,
+      providerOverride,
+      modelOverride,
+      agentName: 'SPSS Findings Writer',
+    });
+    let accumulatedHtml = continuation.html;
+    const truncated = continuation.truncated;
 
-      // eslint-disable-next-line no-await-in-loop
-      const continuationResult = await callGuidanceProvider({
-        tokenizedMessage: continuationMessage,
-        systemPrompt,
-        agentName: 'SPSS Findings Writer',
-        providerOverride,
-        modelOverride,
-      });
-
-      const continuationHtml = (restoreColumnTokens(continuationResult.text, analysis) || continuationResult.text)
-        .replace(/```html/gi, '')
-        .replace(/```/g, '')
-        .trim();
-      if (!continuationHtml) break;
-      accumulatedHtml = appendContinuationHtml(accumulatedHtml, continuationHtml);
-      truncated = isTruncatedHtml(accumulatedHtml);
+    // שיבוץ התרשימים: מחליפים כל מרקר [[FIG:...]] ב-HTML האמיתי של התרשים.
+    // מרקרים שהמודל השמיט מצורפים כמקבץ — התרשימים לעולם לא נעדרים מהפרק.
+    let figuresReplaced = 0;
+    let figuresAppended = 0;
+    if (safeFigures.length) {
+      const applied = applyFigureMarkersToHtml(accumulatedHtml, safeFigures);
+      accumulatedHtml = applied.html;
+      figuresReplaced = applied.replacedCount;
+      figuresAppended = applied.appendedCount;
     }
 
-    return { ok: true, html: accumulatedHtml, title: 'פרק ממצאים', providerId, model, error: '', truncated };
+    return { ok: true, html: accumulatedHtml, title: 'פרק ממצאים', providerId, model, error: '', truncated, figuresReplaced, figuresAppended };
   } catch (error) {
     return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת פרק הממצאים נכשלה.', truncated: false };
+  }
+};
+
+// פרק הממצאים מכיל תרשימים כ-data-URIs ענקיים — אסור שיגיעו ל-prompt.
+// מחליפים כל <figure> בטקסט הכיתוב שלו ומוחקים כל תמונת data שנותרה.
+const stripFigureHtmlForContext = (html = '') => String(html || '')
+  .replace(/<figure[^>]*>[\s\S]*?<figcaption[^>]*>([\s\S]*?)<\/figcaption>[\s\S]*?<\/figure>/gi, (fullMatch, caption) => `<p>${String(caption).replace(/<[^>]*>/g, '').trim()}</p>`)
+  .replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, '')
+  .replace(/<img[^>]*src="data:[^"]*"[^>]*>/gi, '');
+
+const MAX_SUMMARY_FINDINGS_CONTEXT_CHARS = 24000;
+
+export const buildSpssSummaryChapter = async ({ assignmentText = '', analysis = null, interpretations = [], findingsHtml = '', litReview = null, draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanFindings = stripFigureHtmlForContext(findingsHtml).trim().slice(0, MAX_SUMMARY_FINDINGS_CONTEXT_CHARS);
+  if (!cleanFindings) {
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פרק ממצאים לבניית פרק סיכום ודיון.', truncated: false };
+  }
+
+  try {
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    const tokenizedFindings = tokenizeSpssRequest(cleanFindings, analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
+    const interpretationBlock = (Array.isArray(interpretations) ? interpretations : [])
+      .map((entry) => {
+        const label = String(entry?.label || '').trim();
+        const answer = String(entry?.answer || '').trim();
+        return answer ? `### ${label || 'ניתוח'}\n${answer}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    const reviewText = String(litReview?.review || '').trim();
+    const referencesList = (Array.isArray(litReview?.references) ? litReview.references : [])
+      .map((ref) => String(typeof ref === 'string' ? ref : ref?.citation || ref?.text || '').trim())
+      .filter(Boolean);
+    const literatureBlock = [
+      reviewText ? `סקירת הספרות של העבודה:\n${reviewText}` : '',
+      referencesList.length ? `רשימת המקורות המאושרת (אין להוסיף מקורות מעבר לרשימה זו):\n${referencesList.map((ref, index) => `${index + 1}. ${ref}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    const systemPrompt = [
+      'אתה כותב אקדמי שמרכיב "פרק סיכום ודיון" בעברית לעבודת סטטיסטיקה, על בסיס פרק הממצאים והחומרים שסופקו.',
+      'החזר אך ורק HTML נקי (בלי ```), עם <h2>/<h3>/<p> בלבד. בלי <html> או <body>.',
+      'מבנה מחייב: <h2>פרק סיכום ודיון</h2> ואז חמישה תתי-פרקים בסדר הזה:',
+      '<h3>מהלך המחקר</h3> — תיאור תמציתי של שאלת המחקר, המדגם (השתמש ב-N האמיתי מהממצאים), כלי המדידה והניתוחים שבוצעו.',
+      '<h3>ממצאים מרכזיים אל מול ההשערות</h3> — לכל השערה: האם אוששה או הופרכה, עם הסטטיסטיקות שכבר דווחו בפרק הממצאים (r, p, ממוצעים). אסור להמציא מספרים חדשים או לשנות ערכים שדווחו.',
+      '<h3>דיון ופרשנות לאור הספרות</h3> — פרש את הממצאים אך ורק מול סקירת הספרות ורשימת המקורות שסופקו. אסור בהחלט להמציא מקורות, שמות חוקרים או שנים שאינם ברשימה. אם ממצא סותר את הספרות — ציין זאת והצע הסבר אפשרי זהיר.',
+      '<h3>מגבלות המחקר</h3> — מגבלות המבוססות על עובדות אמיתיות מהעבודה בלבד (גודל מדגם, מערך מתאמי שאינו מאפשר סיבתיות, דיווח עצמי, ערכי חוסר אם צוינו). אל תמציא מגבלות שאינן נתמכות בנתונים.',
+      '<h3>המלצות למחקר המשך וליישום</h3> — המלצות קונקרטיות הנובעות מהממצאים והמגבלות.',
+      'כתוב עברית אקדמית רהוטה וזורמת, לא רשימות נקודות — פסקאות מלאות.',
+      tokenizedDraft
+        ? 'צורפה טיוטה קיימת של העבודה. התאם את פרק הסיכום למינוח ולסגנון שלה ואל תחזור מילה במילה על ניסוחים קיימים. החזר רק את פרק הסיכום.'
+        : '',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const message = [
+      tokenizedDraft ? `הטיוטה הקיימת של העבודה (להקשר וסגנון בלבד):\n${tokenizedDraft}` : '',
+      `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
+      `פרק הממצאים שנכתב (המקור היחיד למספרים):\n${tokenizedFindings}`,
+      interpretationBlock ? `פירושים שהופקו במהלך העבודה:\n${interpretationBlock}` : '',
+      literatureBlock,
+    ].filter(Boolean).join('\n\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: message,
+      systemPrompt,
+      agentName: 'SPSS Summary Writer',
+      providerOverride,
+      modelOverride,
+    });
+
+    const restoredHtml = (restoreColumnTokens(text, analysis) || text)
+      .replace(/```html/gi, '')
+      .replace(/```/g, '')
+      .trim();
+    if (!restoredHtml) {
+      return { ok: false, html: '', title: '', providerId, model, error: 'המודל לא החזיר פרק סיכום ודיון. נסה שוב.', truncated: false };
+    }
+
+    const continuation = await runHtmlContinuationLoop({
+      initialHtml: restoredHtml,
+      systemPrompt,
+      analysis,
+      providerOverride,
+      modelOverride,
+      agentName: 'SPSS Summary Writer',
+    });
+
+    return { ok: true, html: continuation.html, title: 'פרק סיכום ודיון', providerId, model, error: '', truncated: continuation.truncated };
+  } catch (error) {
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת פרק הסיכום נכשלה.', truncated: false };
   }
 };

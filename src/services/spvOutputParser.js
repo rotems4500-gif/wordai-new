@@ -146,3 +146,34 @@ export const extractSpvTablesText = async (bytes) => {
 
   return blocks.join('\n\n').slice(0, MAX_SPV_TEXT_CHARS);
 };
+
+// גרפים בתוך .spv נשמרים כתמונות (png/jpg) בארכיון — הפרסר הטבלאי מדלג עליהם.
+// כאן מחלצים אותם כדי שמודל vision יוכל "לקרוא" אותם (ראה chartVisionService).
+const SPV_IMAGE_PATTERN = /\.(png|jpe?g)$/i;
+const MAX_SPV_CHART_IMAGES = 12;
+
+export const extractSpvChartImages = async (bytes) => {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(bytes);
+  const imagePaths = Object.keys(zip.files)
+    .filter((path) => !zip.files[path].dir && SPV_IMAGE_PATTERN.test(path))
+    .sort()
+    .slice(0, MAX_SPV_CHART_IMAGES);
+
+  const images = [];
+  for (const path of imagePaths) {
+    try {
+      const base64 = await zip.files[path].async('base64');
+      // תמונות זעירות (אייקונים/לוגו) אינן גרפים — מסננים לפי גודל מקודד (~3KB).
+      if (base64.length < 4000) continue;
+      images.push({
+        base64,
+        mimeType: /\.png$/i.test(path) ? 'image/png' : 'image/jpeg',
+        fileName: path.split('/').pop(),
+      });
+    } catch {
+      /* דלג על תמונה לא קריאה */
+    }
+  }
+  return images;
+};
