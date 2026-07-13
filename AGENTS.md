@@ -98,10 +98,11 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 ---
 
 ## תיעוד קיים ב-`docs/`
-- [docs/project-index.md](docs/project-index.md) — אינדקס בעברית (חלקי/חלקו ישן). המסמך הזה (AGENTS.md) מעודכן יותר.
+- [docs/CODE-MAP.md](docs/CODE-MAP.md) — **תוכן עניינים מלא של הקוד** (קבצים, שורות, מפות סקשנים למונוליטים, מפת מערכת העזרה).
 - [docs/user-guide.md](docs/user-guide.md) — מדריך משתמש.
 - [docs/api-keys-guide.md](docs/api-keys-guide.md) — חיבור מפתחות LLM.
-- planning: `project-plan.md`, `plan.md`, `next-version-plan.md`, `autopilot-full-update.md`, `cross-device-sync-plan.md`, `live-streaming-plan.md`, `ux-audit-roadmap.md`.
+- planning עדכני: `open-items.md`, `ux-audit-roadmap.md`, `tauri-migration-plan.md`, `autopilot-full-update.md`, `live-streaming-plan.md`, מסמכי SPSS.
+- `docs/archive/` — **מסמכים היסטוריים מלפני המעבר ל-Tauri** (project-index, plan, project-plan, next-version-plan ועוד) — לא לסמוך עליהם.
 
 ---
 

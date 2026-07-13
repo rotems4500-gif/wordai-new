@@ -359,7 +359,7 @@ function DaniAside({ text }) {
 /* ── sections meta ────────────────────────────────────────────────────────── */
 const SECTIONS = [
   { id: 'daily', tab: 'מדריך כיס', kicker: 'מדריך כיס', icon: 'ph-rocket-launch', title: 'ליום יום, בקצרה', lead: 'אם אתה כבר מכיר את WordFlow — זה כל מה שצריך כדי לעבוד מהר.', dani: 'ארבעה כרטיסים, ואתה בעניינים.', Body: DailyBody },
-  { id: 'tour', tab: 'הסיור', kicker: 'הסיור המודרך', icon: 'ph-map-trifold', title: 'שבע תחנות, מההתחלה ועד הסוף', lead: 'אותו סיור מחכה גם בתוכנה, תחת הגדרות ← מדריך.', dani: 'נלך יחד תחנה-תחנה, בלי למהר.', Body: TourBody },
+  { id: 'tour', tab: 'הסיור', kicker: 'הסיור המודרך', icon: 'ph-map-trifold', title: 'תחנה אחר תחנה, מההתחלה ועד הסוף', lead: 'גרסה מקוצרת של הסיור מחכה גם בתוכנה, תחת הגדרות ← מדריך.', dani: 'נלך יחד תחנה-תחנה, בלי למהר.', Body: TourBody },
   { id: 'choose', tab: 'ישיר/סביבה', kicker: 'ההחלטה החשובה', icon: 'ph-signpost', title: 'ישיר מול סביבת עבודה', lead: 'ככל שהמשימה מורכבת יותר — כך כדאי לתת ל-workspace לעבוד בשבילך.', dani: 'מתלבט? תתחיל ישיר, תמיד אפשר לשדרג.', Body: ChooseBody },
   { id: 'workspaces', tab: 'סביבות', kicker: 'הספרייה המלאה', icon: 'ph-squares-four', title: 'כל סביבות העבודה', lead: 'עשר סביבות, לכל סוג משימה — למה כל אחת מתאימה ומה היא עושה.', dani: 'לא לפי שם הספק — לפי סוג המשימה.', Body: WorkspacesBody },
   { id: 'providers', tab: 'ספקים', kicker: 'מנועי ה-AI', icon: 'ph-plugs-connected', title: 'ספקים ומודלים', lead: 'במסלול הישיר אתה בוחר; ב-workspace זה נקבע לפי צוות הסוכנים.', dani: 'לעברית אקדמית — קל להתחיל מ-Gemini.', Body: ProvidersBody },

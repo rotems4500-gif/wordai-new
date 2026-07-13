@@ -25,7 +25,7 @@ description: "Use when implementing onboarding, first-run setup, welcome flow, A
 3. מסמכים ועבודות עבר מועלים רק באישור מפורש, עם הסבר ברור למה כל סוג קובץ ישמש.
 4. completion screen צריך להוביל לעורך או להגדרות, לא לעוד שאלות.
 5. ההסבר על learning ו-trust חייב להיות תכליתי ושקוף, בלי שפה כבדה.
-6. אם מוסיפים preview חדש, משתמשים ב-[docs/new-user-onboarding-plan.md](../../docs/new-user-onboarding-plan.md) וב-[preview-onboarding.html](../../preview-onboarding.html) כ-reference חזותי וזרימתי בלבד.
+6. אם מוסיפים preview חדש, משתמשים ב-[docs/archive/new-user-onboarding-plan.md](../../docs/archive/new-user-onboarding-plan.md) וב-[preview-onboarding.html](../../preview-onboarding.html) כ-reference חזותי וזרימתי בלבד.
 7. מקור האמת לסכמה, לשמות שדות ולשמירה בפועל הוא הקוד הקיים ב-`src/services/aiService.js`, `src/FileMenu.jsx` ו-`src/ProfileOnboarding.jsx`.
 
 ## עקרונות מימוש

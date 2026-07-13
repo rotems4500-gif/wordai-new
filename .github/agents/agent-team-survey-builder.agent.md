@@ -14,7 +14,7 @@ description: "ממפה survey קצר ל-preset קיים של צוות סוכני
 ## מקור אמת מחייב
 
 1. קרא קודם את `src/services/aiService.js` כדי להבין את `WORKSPACE_AGENT_PRESETS`, `buildWorkspaceAgentPreset`, `getRoleAgents` ו-`saveRoleAgents`.
-2. אם ההמלצה מגיעה מתוך onboarding, קרא גם את `docs/new-user-onboarding-plan.md`, `preview-onboarding.html` ו-`.github/instructions/onboarding-flow.instructions.md`.
+2. אם ההמלצה מגיעה מתוך onboarding, קרא גם את `docs/archive/new-user-onboarding-plan.md`, `preview-onboarding.html` ו-`.github/instructions/onboarding-flow.instructions.md`.
 3. `preview-onboarding.html` הוא reference זרימתי בלבד; מקור האמת לשמות presets, workflow modes ותפקידי הסוכנים הוא הקוד.
 
 ## כללי מיפוי

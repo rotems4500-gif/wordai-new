@@ -3,9 +3,9 @@
 מסמך ניווט לפרויקט. נכתב כדי שסוכן AI (וגם אתה, רותם) יתמצא מהר. עברית-first.
 מעדכנים אותו כשהארכיטקטורה משתנה — לא כל קומיט.
 
-> ⚠️ ה-`README.md` הישן מתאר Word Add-in מבוסס Office.js + vanilla JS. **זה לא נכון יותר.**
-> היום זה אפליקציית **Tauri 2 desktop + React 19 + TipTap** (עברה מ-Electron ביוני 2026). סמוך על המסמך הזה, לא על README.
+> האפליקציה: **Tauri 2 desktop + React 19 + TipTap** (עברה מ-Electron ביוני 2026; לפני כן Word Add-in). ה-README מעודכן לזה גם הוא.
 > אותו קוד frontend מגיש גם את **האתר/PWA** (Firebase hosting) — לא נוגעים בו בעבודת הדסקטופ.
+> 🗺️ **תוכן עניינים מפורט של הקוד: [docs/CODE-MAP.md](docs/CODE-MAP.md)** — כולל מפות סקשנים עם מספרי שורות לשני המונוליטים (main.jsx, aiService.js). המסמך הזה נשאר המפה התמציתית.
 
 ---
 
@@ -67,7 +67,7 @@ npm run desktop:build # tauri build — installer NSIS + exe -> src-tauri/target
 
 ### `src/services/` — שירותים נוספים
 - [articleSourceValidation.js](src/services/articleSourceValidation.js) — אימות מקורות אמיתיים (anti-hallucination), נורמליזציה של URL/טקסט, ניתוח query.
-- [browserRetrievalService.js](src/services/browserRetrievalService.js) — אחזור snapshot של עמוד דרך ה-Electron (desktop only).
+- [browserRetrievalService.js](src/services/browserRetrievalService.js) — אחזור snapshot של עמוד דרך אפליקציית הדסקטופ (desktop only).
 - [copyleaksService.js](src/services/copyleaksService.js) — בדיקת מקוריות / AI-content.
 - [cloudSyncManager.js](src/services/cloudSyncManager.js) — סנכרון ענן בין מכשירים.
 - [workspaceV2Service.js](src/services/workspaceV2Service.js) — templates של workspaces (re-exported דרך aiService).
@@ -100,10 +100,11 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 ---
 
 ## תיעוד קיים ב-`docs/`
-- [docs/project-index.md](docs/project-index.md) — אינדקס בעברית (חלקי/חלקו ישן). המסמך הזה (CLAUDE.md) מעודכן יותר.
+- [docs/CODE-MAP.md](docs/CODE-MAP.md) — **תוכן עניינים מלא של הקוד** (קבצים, שורות, מפות סקשנים למונוליטים, מפת מערכת העזרה).
 - [docs/user-guide.md](docs/user-guide.md) — מדריך משתמש.
 - [docs/api-keys-guide.md](docs/api-keys-guide.md) — חיבור מפתחות LLM.
-- planning: `project-plan.md`, `plan.md`, `next-version-plan.md`, `autopilot-full-update.md`, `cross-device-sync-plan.md`, `live-streaming-plan.md`, `ux-audit-roadmap.md`.
+- planning עדכני: `open-items.md`, `ux-audit-roadmap.md`, `tauri-migration-plan.md`, `autopilot-full-update.md`, `live-streaming-plan.md`, מסמכי SPSS.
+- `docs/archive/` — **מסמכים היסטוריים מלפני המעבר ל-Tauri** (project-index, plan, project-plan, next-version-plan ועוד) — לא לסמוך עליהם.
 
 ---
 
@@ -118,6 +119,6 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 ---
 
 ## Git
-- branch ראשי: `main`. branch נוכחי: `fix/revert-regression`.
+- branch ראשי: `main`.
 - repo: `github.com/rotems4500-gif/wordai-new`.
 - קומיטים אחרונים בנושא release bumps + lecturer review apply flow.

@@ -1,3 +1,4 @@
+> ⚠ מסמך היסטורי (לפני המעבר ל-Tauri, יוני 2026) — לא משקף את הארכיטקטורה הנוכחית. ראה CLAUDE.md ו-docs/CODE-MAP.md.
 # Dashboard Prototype Archive
 
 תאריך ארכיון: `2026-06-09`

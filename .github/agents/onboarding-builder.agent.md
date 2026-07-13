@@ -13,7 +13,7 @@ description: "בונה flow של onboarding, welcome wizard, first-run setup, pr
 
 ## חומרי בסיס מחייבים
 
-1. קרא קודם את `docs/new-user-onboarding-plan.md`.
+1. קרא קודם את `docs/archive/new-user-onboarding-plan.md`.
 2. אם צריך כיוון ויזואלי, השתמש ב-`preview-onboarding.html` כ-reference חזותי וזרימתי בלבד.
 3. מקור האמת ל-data model, לשמות שדות ול-persistence הוא `src/main.jsx`, `src/StartScreen.jsx`, `src/FileMenu.jsx`, `src/ProfileOnboarding.jsx`, `src/services/aiService.js`, `src/services/workspaceLearningService.js`.
 
