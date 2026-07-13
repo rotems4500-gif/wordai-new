@@ -471,7 +471,15 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
         return;
       }
       setOutput((prev) => (prev.trim() ? `${prev.trim()}\n\n${text}` : text));
-      setNotice({ tone: 'success', text: `נטען פלט מתוך ${next.name}. אפשר לערוך לפני הבדיקה.` });
+      // הודעת מצב לגבי גרפים: קריאה מוצלחת, כשל חלקי, או EMF וקטורי שדפדפן לא קורא.
+      const cs = next?.chartStatus;
+      if (cs && cs.vectorOnly > 0) {
+        setNotice({ tone: 'info', text: `נטען פלט מתוך ${next.name}. ⚠ נמצאו ${cs.vectorOnly} גרפים בפורמט EMF (וקטורי של Windows) שלא ניתן לקרוא בדפדפן — ייצא את הפלט ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG ולחץ "📊 העלה גרף (תמונה)".` });
+      } else if (cs && cs.described > 0) {
+        setNotice({ tone: 'success', text: `נטען פלט מתוך ${next.name} · נקראו ${cs.described} גרפים מהקובץ. אפשר לערוך לפני הבדיקה.` });
+      } else {
+        setNotice({ tone: 'success', text: `נטען פלט מתוך ${next.name}. אפשר לערוך לפני הבדיקה.` });
+      }
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'טעינת קובץ הפלט נכשלה.' });
     } finally {
@@ -490,16 +498,16 @@ export default function SpssProjectStudio({ onExit = () => {}, onEmitDocument = 
       const images = [];
       for (const file of files) images.push(await readImageFileAsBase64(file));
       const described = await describeChartImages(images);
-      if (!described.text || described.failures >= described.total) {
+      if (described.described < 1) {
         throw new Error('קריאת הגרפים נכשלה. ודא שמוגדר מפתח לספק עם ראייה (Gemini / OpenAI / Claude).');
       }
       setOutput((prev) => (prev.trim() ? `${prev.trim()}\n\n${described.text}` : described.text));
       logAi({ stage: 'קריאת גרפים', description: `קריאת ${described.total} תמונות גרף מפלט SPSS דרך מודל ראייה והמרתן לתיאור טקסטואלי`, prompt: files.map((f) => f.name).join(', '), providerId: described.providerId, model: described.model });
-      const okCount = described.total - described.failures;
+      const missed = described.total - described.described;
       setNotice({
-        tone: described.failures ? 'info' : 'success',
-        text: described.failures
-          ? `נקראו ${okCount} מתוך ${described.total} גרפים. עבור השאר — ייצא מחדש כ-PNG ונסה שוב.`
+        tone: missed ? 'info' : 'success',
+        text: missed
+          ? `נקראו ${described.described} מתוך ${described.total} גרפים. עבור השאר — ייצא מחדש כ-PNG ונסה שוב.`
           : `נקרא${described.total > 1 ? 'ו' : ''} ${described.total} גרפ${described.total > 1 ? 'ים' : ''} והתיאור נוסף לפלט. אפשר לערוך לפני הבדיקה.`,
       });
     } catch (error) {

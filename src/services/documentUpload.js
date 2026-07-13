@@ -109,20 +109,30 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
       throw new Error(result.error || 'חילוץ הטקסט מהקובץ נכשל.');
     }
     let text = String(result.text || '').trim();
-    // גרפים מוטמעים: ב-Word הם תמונות (או EMF), ב-PDF הם תוכן עמוד — קוראים אותם
-    // דרך מודל vision. כשל כאן לא מפיל את הטקסט שכבר חולץ.
+    // גרפים מוטמעים: ב-Word הם תמונות (או EMF), ב-PDF הם ציור וקטורי בעמוד — קוראים
+    // אותם דרך מודל vision. כשל כאן לא מפיל את הטקסט שכבר חולץ.
+    let chartStatus = null;
     if (readCharts && (ext === 'pdf' || ext === 'docx')) {
       let chartsText = '';
       try {
-        const extracted = ext === 'docx'
-          ? await extractDocxChartImages(bytes)
-          : await extractPdfChartPageImages(bytes);
-        if (extracted.images.length) {
-          const described = await describeChartImages(extracted.images);
-          if (described.text && described.failures < described.total) chartsText = described.text;
-        }
-        if (ext === 'docx' && extracted.vectorCount && !extracted.images.length) {
-          chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-Word — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה כתמונה.]`;
+        if (ext === 'docx') {
+          const extracted = await extractDocxChartImages(bytes);
+          if (extracted.images.length) {
+            const described = await describeChartImages(extracted.images);
+            if (described.described > 0) chartsText = described.text;
+            chartStatus = { kind: 'docx', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 };
+          } else if (extracted.vectorCount) {
+            // גרפי SPSS ב-Word הם EMF/WMF וקטורי — דפדפן לא מרנדר אותו.
+            chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-Word — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה עם "העלה גרף (תמונה)".]`;
+            chartStatus = { kind: 'docx', described: 0, failures: 0, total: extracted.vectorCount, vectorOnly: extracted.vectorCount };
+          }
+        } else {
+          const extracted = await extractPdfChartPageImages(bytes);
+          if (extracted.images.length) {
+            const described = await describeChartImages(extracted.images, { pageMode: true });
+            if (described.described > 0) chartsText = described.text;
+            chartStatus = { kind: 'pdf', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 };
+          }
         }
       } catch {
         /* גרפים הם תוספת — הטקסט הוא העיקר */
@@ -132,7 +142,7 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
     if (!text) {
       throw new Error('לא נמצא טקסט בקובץ. ייתכן שזה PDF סרוק (תמונה) ללא שכבת טקסט.');
     }
-    return normalizeDocumentPayload({ name: file.name, text, source: 'browser' });
+    return { ...normalizeDocumentPayload({ name: file.name, text, source: 'browser' }), chartStatus };
   }
 
   if (ext === SPV_EXTENSION) {
@@ -146,11 +156,13 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
     // גרפים בתוך ה-SPV הם תמונות — הטבלאות לא מכסות אותם. מנסים לקרוא אותם דרך
     // מודל vision; כשל (אין מפתח/רשת) לא מפיל את הטבלאות שכבר חולצו.
     let chartsText = '';
+    let chartStatus = null;
     try {
       const chartImages = await extractSpvChartImages(bytes);
       if (chartImages.length) {
         const described = await describeChartImages(chartImages);
-        if (described.text && described.failures < described.total) chartsText = described.text;
+        if (described.described > 0) chartsText = described.text;
+        chartStatus = { kind: 'spv', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 };
       }
     } catch {
       /* גרפים הם תוספת — הטבלאות הן העיקר */
@@ -162,17 +174,17 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
     if (text.length < 120 || numericTokenCount < 8) {
       throw new Error('לא הצלחתי לחלץ את הטבלאות מקובץ ה-SPV הזה (ייתכן גרסה/דחיסה שאינה נתמכת). ב-SPSS: File → Export → Word‏/HTML‏/Excel והעלה את הקובץ שנוצר, או סמן הכל בחלון ה-Output (Ctrl+A) → Copy → הדבק כטקסט.');
     }
-    return normalizeDocumentPayload({ name: file.name, text, source: 'browser' });
+    return { ...normalizeDocumentPayload({ name: file.name, text, source: 'browser' }), chartStatus };
   }
 
   // תמונת גרף (png/jpg וכו') — נקראת דרך מודל vision ומוחזרת כתיאור טקסטואלי מובנה.
   if (CHART_IMAGE_EXTENSIONS.includes(ext)) {
     const image = await readImageFileAsBase64(file);
     const described = await describeChartImages([image]);
-    if (!described.text || described.failures >= described.total) {
+    if (described.described < 1) {
       throw new Error('קריאת הגרף מהתמונה נכשלה. ודא שמוגדר מפתח לספק עם ראייה (Gemini / OpenAI / Claude) ונסה שוב.');
     }
-    return normalizeDocumentPayload({ name: file.name, text: described.text, source: 'browser' });
+    return { ...normalizeDocumentPayload({ name: file.name, text: described.text, source: 'browser' }), chartStatus: { kind: 'image', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 } };
   }
 
   throw new Error('בדפדפן אפשר להעלות קובצי טקסט (txt, csv, html), Word‏ (docx), PDF, Excel‏ (xlsx), SPSS Output‏ (.spv) או תמונת גרף (png/jpg). לתוצאה הטובה ביותר עם פלט SPSS — ייצא ל-Excel‏/Word‏/HTML.');
