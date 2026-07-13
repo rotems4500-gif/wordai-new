@@ -317,11 +317,16 @@ function buildAgentRequest(agentId, { txt, dropdown = 'default', selection = {},
   const finalExtraSystemPrompt = String(cAgent?.taskpaneSystemCtx || cAgent?.systemCtx || '').trim();
 
   // document context (AiSidebar buildContext ~3196)
-  const baseContext = selectedText
+  const baseDocContext = selectedText
     ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
     : currentBlockText
       ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx}`
       : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
+  // נספח AI: מזריקים את הקול האישי של המשתמש כמו במסלול האמיתי (AiSidebar buildContext).
+  const aiAppendixVoice = agentId === 'aiAppendix'
+    ? (() => { const v = ai.buildPersonalStyleVoiceBlock?.() || ''; return v ? `קול אישי של המשתמש (נסח את הפרומפטים והרפלקציה בקול הזה, מותאם למשלב צ'אט):\n${v}` : ''; })()
+    : '';
+  const baseContext = [aiAppendixVoice, baseDocContext].filter(Boolean).join('\n\n');
 
   const requestedSplitCallCount = Number(cAgent?.defaultSplitCallCount || 0);
   const directAgentName = hasPinnedProviderPreference ? `${cAgent.label} · ${finalProviderId}` : cAgent.label;

@@ -552,6 +552,7 @@ export default function PresentationStudio({
   hasDocument = false,
   documentTitle = '',
   showToast = () => {},
+  onOpenHelp = null,
 }) {
   const [selectedId, setSelectedId] = useState(deck?.slides?.[0]?.id || '');
   const [presenting, setPresenting] = useState(false);
@@ -615,7 +616,10 @@ export default function PresentationStudio({
         <div className="flex w-full flex-col">
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
             <span className="text-sm font-bold text-slate-300">📊 סטודיו מצגות</span>
-            <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+            <div className="flex items-center gap-2">
+              {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓ מדריך</button>}
+              <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+            </div>
           </div>
           {busy
             ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-slate-300">
@@ -724,6 +728,7 @@ export default function PresentationStudio({
             </>
           )}
         </div>
+        {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓</button>}
         <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
       </div>
 

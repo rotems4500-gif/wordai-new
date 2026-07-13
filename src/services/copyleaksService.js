@@ -386,7 +386,7 @@ const requestCopyleaks = async ({ url, method = 'POST', headers = {}, body, time
     }
 
     if (typeof window !== 'undefined') {
-      const error = new Error('Copyleaks דורש את אפליקציית הדסקטופ או proxy מקומי, כי הדפדפן חוסם את ה-API שלו במגבלות CORS. פתחו את האפליקציה דרך Electron ונסו שוב.');
+      const error = new Error('Copyleaks דורש את אפליקציית הדסקטופ או proxy מקומי, כי הדפדפן חוסם את ה-API שלו במגבלות CORS. פתחו את אפליקציית הדסקטופ WordFlow AI ונסו שוב.');
       error.name = 'CopyleaksTransportError';
       error.technicalCode = 'BROWSER_CORS';
       error.technicalMessage = 'Copyleaks API does not expose browser CORS headers; desktop proxy is unavailable.';

@@ -213,6 +213,8 @@ const saveLocalMaterial = async (payload = {}) => {
     extractionStatus: String(payload.extractionStatus || '').trim(),
     extractionMessage: String(payload.extractionMessage || '').trim(),
     extractionTruncated: payload.extractionTruncated === true,
+    // שיוך לתיקיית פרויקט (אופציונלי) — חומר בלי projectId נשאר גלובלי.
+    projectId: String(payload.projectId || '').trim(),
     uploadedAt: new Date().toISOString(),
   };
 

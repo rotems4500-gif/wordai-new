@@ -98,7 +98,7 @@ export const DEFAULT_PROVIDER_CONFIG = {
   },
 };
 
-export const DEFAULT_SIDEBAR_MODE_IDS = ['reviewFix', 'fix', 'holeFill', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic'];
+export const DEFAULT_SIDEBAR_MODE_IDS = ['reviewFix', 'fix', 'holeFill', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic', 'aiAppendix', 'brainstorm'];
 
 export const buildDefaultSidebarModeSettings = () => ({
   forceGlobalProvider: false,
@@ -141,6 +141,11 @@ export const normalizeSidebarModeSettings = (settings = {}) => {
       };
     })
     .filter(Boolean);
+
+  // מצבי ברירת מחדל חדשים (סוכנים שנוספו לאפליקציה) מצטרפים אוטומטית גם להגדרות שמורות ישנות.
+  for (const defaultMode of defaults.modes) {
+    if (!seen.has(defaultMode.id)) modes.push({ ...defaultMode });
+  }
 
   return {
     ...defaults,
@@ -903,6 +908,7 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_role_agents',
   'wordai_home_instructions',
   'wordai_hidden_project_materials',
+  'wordai_projects_v1',
   'wordai_saved_docs_history',
   'wordai_app_memory',
   'wordflow_home_customizations',
@@ -1025,6 +1031,25 @@ const mergeWorkspaceAutomationPreservingLocalPointer = (currentRaw, incomingRaw)
   return JSON.stringify(incoming);
 };
 
+// מיזוג ברמת-רשומה של תיקיות הפרויקטים (wordai_projects_v1): לכל פרויקט הרשומה
+// החדשה יותר מנצחת (updatedAt/deletedAt), כמו mergeWorkspaceMaps — עריכות מקבילות
+// בשני מכשירים על פרויקטים שונים לא דורסות זו את זו, ומחיקה רכה לא קמה לתחייה.
+const mergeProjectsV1Blobs = (currentRaw, incomingRaw) => {
+  let incoming;
+  try { incoming = JSON.parse(incomingRaw); } catch { return incomingRaw; }
+  if (!incoming || typeof incoming !== 'object') return incomingRaw;
+  let current = null;
+  try { current = currentRaw ? JSON.parse(currentRaw) : null; } catch { current = null; }
+  if (current && typeof current === 'object') {
+    incoming.projects = mergeWorkspaceMaps(
+      current.projects && typeof current.projects === 'object' ? current.projects : {},
+      incoming.projects && typeof incoming.projects === 'object' ? incoming.projects : {},
+      Date.now(),
+    );
+  }
+  return JSON.stringify(incoming);
+};
+
 // אותו עיקרון עבור ה-blob המאוחד של V3: activeWorkspaceId (ו-bypass) הם מצב per-device.
 const mergeWorkspacesV3PreservingLocalPointer = (currentRaw, incomingRaw) => {
   let incoming;
@@ -1064,7 +1089,9 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
         // אותה הגנה כמו ב-pointer: הסביבה הפעילה היא בחירה per-device — snapshot מהענן
         // לא מחליף אותה (הרגרסיה ההיסטורית: מכשיר "קופץ" לסביבה של מכשיר אחר).
         ? mergeWorkspacesV3PreservingLocalPointer(current, incoming)
-        : incoming;
+        : key === 'wordai_projects_v1'
+          ? mergeProjectsV1Blobs(current, incoming)
+          : incoming;
     if (current === nextValue) return;
 
     localStorage.setItem(key, nextValue);
@@ -5966,6 +5993,16 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   ].join('\n');
 };
 
+// בלוק קול אישי רזה (emphasizeVoice) לשימוש חיצוני — למשל בהזרקת סגנון המשתמש
+// לתוך הפרומטים של נספח ה-AI, כך שהם יישמעו כמו שהמשתמש עצמו כותב.
+export const buildPersonalStyleVoiceBlock = (profile = null) => {
+  try {
+    return buildPersonalStyleInstructions(profile || getPersonalStyleProfile(), { emphasizeVoice: true });
+  } catch {
+    return '';
+  }
+};
+
 const PORTABLE_PROFILE_PACKAGE_VERSION = 1;
 
 const sanitizePortableAgent = (agent = {}) => ({
@@ -7350,6 +7387,18 @@ const appendNotesToOutput = ({ output = '', appendix = '' }) => {
   if (!suffix) return base;
   if (!base) return suffix;
   return `${base}\n\n${suffix}`;
+};
+
+export const parseAiAppendixResponse = (raw = '') => {
+  const text = String(raw || '');
+  const appendixMatch = text.match(/<<<APPENDIX_HTML>>>([\s\S]*?)<<<END_APPENDIX_HTML>>>/);
+  const guidanceMatch = text.match(/<<<CHAT_GUIDANCE>>>([\s\S]*?)<<<END_CHAT_GUIDANCE>>>/);
+  const appendixHtml = String(appendixMatch?.[1] || '').trim();
+  const guidanceText = String(guidanceMatch?.[1] || '').trim();
+  if (!appendixHtml) {
+    return { ok: false, appendixHtml: '', guidanceText: text.trim() };
+  }
+  return { ok: true, appendixHtml, guidanceText: guidanceText || 'נספח ה-AI מוכן. לחץ על "הוסף נספח לסוף המסמך" כדי לשלב אותו בעבודה.' };
 };
 
 export const getAppMemory = () => {

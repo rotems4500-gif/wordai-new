@@ -837,6 +837,7 @@ export async function loadProjectMaterials() {
         extractionMessage: String(item.extractionMessage || '').trim() || extractedState.extractionMessage,
         extractionTruncated: item?.extractionTruncated === true,
         canPreviewText: canPreviewMaterialText(type) || Boolean(previewText),
+        projectId: String(item.projectId || '').trim(),
       };
     });
 }
@@ -915,13 +916,42 @@ export function removeDocumentHistoryByFilePath(filePath = '') {
   return next;
 }
 
-export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual', filePath = '' }) {
+// עדכון נקודתי של רשומת היסטוריה (למשל שיוך לפרויקט) בלי לגעת בשאר השדות.
+export function updateDocumentHistoryEntry(docHistoryId, patch = {}) {
+  const cleanId = String(docHistoryId || '').trim();
+  if (!cleanId || !patch || typeof patch !== 'object') return getSavedDocsHistory();
+
+  const current = getSavedDocsHistory();
+  let changed = false;
+  const next = current.map((item) => {
+    if (String(item?.id || '') !== cleanId) return item;
+    changed = true;
+    return { ...item, ...patch };
+  });
+  if (!changed) return current;
+
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+    syncPersistedAppSettings();
+  } catch {
+    return current;
+  }
+  return next;
+}
+
+export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual', filePath = '', projectId = '' }) {
   const plainText = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!plainText) return [];
 
   const current = getSavedDocsHistory();
   const entryTitle = String(title || plainText.slice(0, 60) || 'מסמך חדש').trim();
   const cleanPath = String(filePath || '').trim();
+  // שיוך לפרויקט: אם לא סופק במפורש — יורש מהרשומה הקודמת של אותו קובץ,
+  // כדי ששמירה חוזרת של מסמך לא תנתק אותו מהפרויקט שלו.
+  const previousEntry = cleanPath
+    ? current.find((item) => String(item?.filePath || '').trim() === cleanPath)
+    : null;
+  const cleanProjectId = String(projectId || '').trim() || String(previousEntry?.projectId || '').trim();
   const entry = {
     id: `${Date.now()}`,
     title: entryTitle,
@@ -933,6 +963,7 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     savedAt: new Date().toISOString(),
     // נתיב הקובץ נשמר רק אם הוא קיים, כדי שמסך הפתיחה יוכל לפתוח מחדש
     ...(cleanPath ? { filePath: cleanPath } : {}),
+    ...(cleanProjectId ? { projectId: cleanProjectId } : {}),
   };
 
   // אם יש כבר רשומה עם אותו filePath - מחליפים אותה (מסמך זהה שנפתח/נשמר שוב)
@@ -5185,6 +5216,7 @@ function buildUploadedMaterialEntry(payload = {}) {
     previewSource: String(payload?.previewSource || '').trim(),
     previewError: String(payload?.previewError || '').trim(),
     extractedChars: Math.max(0, Number(payload?.extractedChars) || 0),
+    projectId: String(payload?.projectId || '').trim(),
     extractionStatus: String(payload?.extractionStatus || '').trim(),
     extractionMessage: String(payload?.extractionMessage || '').trim(),
     extractionTruncated: payload?.extractionTruncated === true,
@@ -5216,6 +5248,8 @@ export async function saveHelperMaterial(file, options = {}) {
     extractionStatus: previewMeta.extractionStatus,
     extractionMessage: previewMeta.extractionMessage,
     extractionTruncated: previewMeta.extractionTruncated,
+    // שיוך לפרויקט (אופציונלי): חומר בלי projectId נשאר גלובלי כמו היום.
+    ...(options.projectId ? { projectId: String(options.projectId).trim() } : {}),
   };
 
   if (window.desktopApp?.saveLocalMaterial) {

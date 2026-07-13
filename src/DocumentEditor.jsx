@@ -19,7 +19,7 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
-import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus, Plus } from "lucide-react";
+import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus, Plus, Paperclip } from "lucide-react";
 import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
 import { getSynonymSuggestions, isHebrewWord } from "./services/synonymsService.js";
 import AddSynonymDialog from "./components/AddSynonymDialog.jsx";
@@ -182,6 +182,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     { id: "organize", type: "inline", row: 2, icon: <PaintBucket size={14} className="text-orange-500" />, label: "ארגון" },
     { id: "holeFill", type: "inline", row: 2, icon: <Wand2 size={14} className="text-lime-600" />, label: "מילוי חורים" },
     { id: "sourcesGeneral", type: "assistant", row: 2, icon: <Newspaper size={14} className="text-sky-600" />, label: "מקור לא אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות לא אקדמיים אבל אמינים ומאומתים, כמו כתבות, אתרי ממשלה או גופים רשמיים, לטקסט או למסמך הפעיל.' } },
+    { id: "aiAppendix", type: "assistant", row: 3, icon: <Paperclip size={14} className="text-amber-600" />, label: "נספח AI", payload: { classicAgentId: 'aiAppendix', composerMode: 'chat', prompt: 'צור נספח תיעוד שימוש ב-AI למסמך הפעיל: רשימת פרומפטים לפי שלבי העבודה, פסקת רפלקציה, והדרכה איך להריץ ולצלם. התבסס על היסטוריית הפרומפטים האמיתית אם קיימת.' } },
     { id: "tagDesired", type: "tag", tagKind: "desired", row: 3, icon: <UserCheck size={14} className="text-emerald-600" />, label: "הסגנון שלי (רצוי)" },
     { id: "tagAi", type: "tag", tagKind: "ai", row: 3, icon: <Bot size={14} className="text-rose-500" />, label: "נראה כמו AI" },
   ].filter(({ id }) => wordPreferences?.aiQuickActions?.[id] !== false)), [wordPreferences]);
@@ -280,7 +281,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       TableRow,
       TableCell,
       TableHeader,
-      Image,
+      Image.configure({ allowBase64: true }),
       Link.configure({ openOnClick: false }),
       Color,
       Highlight.configure({ multicolor: true }),

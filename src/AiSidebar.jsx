@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse, getHumanizerPreferences, saveHumanizerPreferences, getPersonalStyleProfile } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
+import { getProjectForDocument, buildProjectContextBlock, summarizeConversationForMemory, appendProjectMemory, isSupportedExternalChatShareUrl, PROJECTS_UPDATED_EVENT } from "./services/projectService";
 import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/styleAuthenticityService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLoopService";
 import { showToast } from "./services/uiFeedback";
@@ -9,7 +10,7 @@ import { buildSourcesQueryOverride as buildSourcesQueryOverridePure, isSourcesNe
 import { startRunScope, getActiveRunScope, endRunScope, setScopeTopic } from "./v3/orchestration/runScope";
 import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext } from "./services/chatSourceCheck";
 import { classifyChatScope } from "./services/chatScope";
-import { resolveStrongGeneralModelForProvider } from "./services/aiService";
+import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from "./services/aiService";
 import { isV3FlagEnabled } from "./v3/flags";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
@@ -972,7 +973,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, launchPreset = null }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
@@ -988,6 +989,65 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [reviewLedger, setReviewLedger] = useState(() => readReviewLedgerForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
+  // הפרויקט שהמסמך הפתוח שייך אליו — הקונטקסט שלו מוזרק לכל בקשה בסיידבר.
+  const [activeProject, setActiveProject] = useState(() => getProjectForDocument({ filePath: currentFilePath }));
+  const [savingProjectMemory, setSavingProjectMemory] = useState(false);
+  const [externalChatDialogOpen, setExternalChatDialogOpen] = useState(false);
+  const [externalChatUrl, setExternalChatUrl] = useState('');
+  const [externalChatText, setExternalChatText] = useState('');
+  useEffect(() => {
+    const refreshActiveProject = () => setActiveProject(getProjectForDocument({ filePath: currentFilePath }));
+    refreshActiveProject();
+    window.addEventListener(PROJECTS_UPDATED_EVENT, refreshActiveProject);
+    return () => window.removeEventListener(PROJECTS_UPDATED_EVENT, refreshActiveProject);
+  }, [currentFilePath]);
+
+  // שמירת מסקנות שיחת התכנון הנוכחית לזיכרון הפרויקט (סיכום במודל + הוספה לרשומות).
+  const saveBrainstormConclusionsToProject = async () => {
+    if (!activeProject || savingProjectMemory) return;
+    setSavingProjectMemory(true);
+    try {
+      const transcript = messages
+        .filter((m) => m?.role === 'user' || m?.role === 'assistant')
+        .slice(-24)
+        .map((m) => ({ role: m.role, content: String(m.content || '') }));
+      const entry = await summarizeConversationForMemory({ transcript, source: 'brainstorm-sidebar' });
+      appendProjectMemory(activeProject.id, entry);
+      showToast(`המסקנות נשמרו לזיכרון הפרויקט "${activeProject.name}" ✅`, { tone: 'success' });
+    } catch (err) {
+      showToast(err?.message || 'שמירת המסקנות נכשלה', { tone: 'error' });
+    } finally {
+      setSavingProjectMemory(false);
+    }
+  };
+
+  // צירוף שיחה חיצונית (ChatGPT/Gemini/Claude): הדבקת תוכן ידנית — דפי share נטענים
+  // ב-JavaScript ולא ניתנים לאחזור אוטומטי. הקישור נשמר כתווית מקור בלבד.
+  const attachExternalChat = async ({ alsoSaveToProject = false } = {}) => {
+    const cleanUrl = externalChatUrl.trim();
+    const cleanText = externalChatText.trim();
+    if (cleanText.length < 40) {
+      showToast('הדבק את תוכן השיחה (לפחות כמה שורות) כדי לצרף אותה.', { tone: 'warning' });
+      return;
+    }
+    const label = cleanUrl ? `שיחת AI חיצונית (${cleanUrl})` : 'שיחת AI חיצונית';
+    setAttachedFiles((prev) => [...prev, { name: label, text: cleanUrl ? `מקור: ${cleanUrl}\n\n${cleanText}` : cleanText }]);
+    setExternalChatDialogOpen(false);
+    setExternalChatUrl('');
+    setExternalChatText('');
+    if (alsoSaveToProject && activeProject) {
+      setSavingProjectMemory(true);
+      try {
+        const entry = await summarizeConversationForMemory({ transcript: cleanText, source: 'external-link', sourceUrl: cleanUrl });
+        appendProjectMemory(activeProject.id, entry);
+        showToast(`השיחה סוכמה ונשמרה לזיכרון הפרויקט "${activeProject.name}" ✅`, { tone: 'success' });
+      } catch (err) {
+        showToast(err?.message || 'שמירת השיחה לפרויקט נכשלה', { tone: 'error' });
+      } finally {
+        setSavingProjectMemory(false);
+      }
+    }
+  };
   const [promptHistory, setPromptHistory] = useState(() => getSavedPromptHistoryForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
   const [preNavigationDraft, setPreNavigationDraft] = useState('');
@@ -1204,6 +1264,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const effectiveAgentSummary = loading && requestSnapshot?.agentLabel ? requestSnapshot.agentLabel : (activeAgent ? activeAgent.name : 'צ׳אט ישיר');
   const effectiveSkillSummary = loading && requestSnapshot?.skillLabel ? requestSnapshot.skillLabel : (activeSkill ? activeSkill.label : inactiveSkillSummaryLabel);
   const chatHeaderButtons = [
+    ...(onOpenHelp ? [{ key: 'help', icon: '❓', title: 'מדריך למשתמש', onClick: () => onOpenHelp('guideUser') }] : []),
     { key: 'theme', icon: isDarkTheme ? '☀️' : '🌙', title: 'מצב תצוגה (בהיר/כהה)', onClick: () => toggleTheme() },
     { key: 'style', icon: '🎨', title: 'סגנון אישי', onClick: () => onOpenSettingsTab('personal') },
     { key: 'settings', icon: '⚙️', title: 'הגדרות', onClick: () => setTab((prev) => prev === 'settings' ? 'chat' : 'settings') },
@@ -3471,14 +3532,30 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
   const buildContext = (targetState = null, batchTargets = [], requestPrompt = '') => {
     if (isEditComposerMode) return buildEditModeContext(targetState, batchTargets, requestPrompt);
-    const contextualAssignmentBrief = shouldUseAssignmentBriefForPrompt(requestPrompt) ? assignmentBriefContext : '';
+    const isAiAppendixRequest = activeClassicAgentId === 'aiAppendix';
+    // נספח AI תמיד מקבל את הוראות המטלה (אם קיימות) + היסטוריית פרומפטים אמיתית של המסמך.
+    const contextualAssignmentBrief = (isAiAppendixRequest && assignmentBriefContext)
+      ? assignmentBriefContext
+      : (shouldUseAssignmentBriefForPrompt(requestPrompt) ? assignmentBriefContext : '');
+    const aiAppendixHistoryContext = isAiAppendixRequest
+      ? (promptHistory.length
+        ? `היסטוריית פרומפטים אמיתית (פרומפטים שנשלחו בפועל במהלך העבודה על מסמך זה, מהישן לחדש):\n${promptHistory.slice(-40).map((p, i) => `${i + 1}. ${String(p).slice(0, 500)}`).join('\n')}`
+        : 'היסטוריית פרומפטים אמיתית: לא קיימת היסטוריה שמורה למסמך זה — שחזר פרומפטים סבירים מתוכן המסמך בלבד, ואל תציג אותם כהיסטוריה אמיתית.')
+      : '';
+    // הזרקת הקול האישי של המשתמש כך שהפרומטים בנספח יישמעו כמו שהוא כותב.
+    const aiAppendixVoiceContext = isAiAppendixRequest
+      ? (() => {
+        const voiceBlock = buildPersonalStyleVoiceBlock();
+        return voiceBlock ? `קול אישי של המשתמש (נסח את הפרומפטים והרפלקציה בקול הזה, מותאם למשלב צ'אט):\n${voiceBlock}` : '';
+      })()
+      : '';
     const followUpSourceGroundingContext = buildFollowUpSourceGroundingContext(messages, requestPrompt);
     const baseContext = selectedText
       ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
       : currentBlockText
         ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
         : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
-    const finalContext = [contextualAssignmentBrief, followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n');
+    const finalContext = [contextualAssignmentBrief, aiAppendixVoiceContext, aiAppendixHistoryContext, followUpSourceGroundingContext, baseContext].filter(Boolean).join('\n\n');
     return finalContext;
   };
 
@@ -3745,7 +3822,12 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return;
     }
     let manualSkillId = isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId);
-    let finalExtraSystemPrompt = [composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
+    // קונטקסט הפרויקט (הוראות + חומרים + זיכרון שיחות) מוזרק ראשון לכל בקשה בסיידבר.
+    let projectContextBlock = '';
+    if (activeProject) {
+      try { projectContextBlock = await buildProjectContextBlock(activeProject.id); } catch {}
+    }
+    let finalExtraSystemPrompt = [projectContextBlock, composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
       .filter(Boolean)
       .join('\n\n');
     let finalProviderId = effectiveSidebarProviderId;
@@ -4224,13 +4306,18 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           : await applyEditReply(reply, requestEditTarget, effectiveDirectAgentMeta.id || 'assistant-main');
       const documentActionMeta = buildDocumentActionMeta(applyResult, reply);
       const isLecturerReviewReply = lecturerDirectAgentRequest && !isEditComposerMode;
+      // נספח AI: מפרקים את התשובה — בצ'אט מציגים רק את ההדרכה, ה-HTML של הנספח נשמר במטא
+      // של ההודעה ומוכנס למסמך רק בלחיצת כפתור מפורשת.
+      const isAiAppendixReply = activeClassicAgentId === 'aiAppendix' && !isEditComposerMode;
+      const aiAppendixParsed = isAiAppendixReply ? parseAiAppendixResponse(String(reply || '')) : null;
       setMessages((prev) => {
         const newMsg = [...prev];
         newMsg[newMsg.length - 1] = {
           ...newMsg[newMsg.length - 1],
-          content: String(reply || ''),
+          content: aiAppendixParsed ? aiAppendixParsed.guidanceText : String(reply || ''),
           composerMode,
           ...(isLecturerReviewReply ? { reviewAgentId: 'lecturer' } : {}),
+          ...(aiAppendixParsed?.ok ? { aiAppendixHtml: aiAppendixParsed.appendixHtml } : {}),
           ...documentActionMeta,
         };
         return newMsg;
@@ -4456,6 +4543,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
 
   const toggleClassicTaskpaneAgent = (agentId) => {
     setActiveClassicAgentId((currentAgentId) => (currentAgentId === agentId ? null : agentId));
+  };
+
+  // מפעיל את סוכן "נספח AI" ישירות מהסיידבר, בלי צורך בבחירת טקסט בתפריט הבועה.
+  const launchAiAppendixAgent = () => {
+    setActiveClassicAgentId('aiAppendix');
+    setTab('chat');
+    setInput('צור נספח תיעוד שימוש ב-AI למסמך הפעיל: רשימת פרומפטים לפי שלבי העבודה, פסקת רפלקציה, והדרכה איך להריץ ולצלם. התבסס על היסטוריית הפרומפטים האמיתית אם קיימת.');
   };
 
   const classicTaskpaneAgents = sidebarModeSettings.modes
@@ -4837,6 +4931,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                               ＋ הוסף למסמך
                             </button>
                           )}
+                          {msg.role === 'assistant' && !msg.error && msg.aiAppendixHtml && onAppendAiAppendix && (
+                            <button
+                              type="button"
+                              onClick={() => onAppendAiAppendix(msg.aiAppendixHtml)}
+                              style={{ padding: '7px 13px', borderRadius: 9, border: 0, background: '#F59E0B', color: '#78350F', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              📎 הוסף נספח לסוף המסמך
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => copyMessageToClipboard(msg.content)}
@@ -4899,6 +5002,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   </div>
                 )}
                 <div className="nicebar" style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 0 9px' }}>
+                  <button
+                    type="button"
+                    onClick={launchAiAppendixAgent}
+                    disabled={loading}
+                    title="צור נספח תיעוד שימוש ב-AI עם הדרכה"
+                    style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, border: '1px solid rgba(245, 158, 11, 0.4)', background: 'rgba(245, 158, 11, 0.12)', color: '#B45309', fontSize: 12, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                  >
+                    📎 נספח AI
+                  </button>
                   {visibleActions.slice(0, 4).map((action) => (
                     <button
                       key={action.id}
@@ -4923,6 +5035,48 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
               </>
             )}
 
+            {activeClassicAgentId === 'brainstorm' && activeProject && messages.length >= 2 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 6 }}>
+                <button
+                  type="button"
+                  onClick={saveBrainstormConclusionsToProject}
+                  disabled={savingProjectMemory}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 999, border: '1px solid color-mix(in srgb, var(--chat-accent) 35%, transparent)', background: 'color-mix(in srgb, var(--chat-accent) 12%, transparent)', color: 'var(--chat-accent)', fontSize: 12, fontWeight: 800, cursor: savingProjectMemory ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  {savingProjectMemory ? '⏳ מסכם ושומר…' : `🧭 שמור מסקנות לפרויקט "${activeProject.name}"`}
+                </button>
+              </div>
+            )}
+            {externalChatDialogOpen && (
+              <div style={{ marginBottom: 8, padding: 12, borderRadius: 13, border: '1px solid var(--chat-border)', background: 'var(--chat-bubble-ai)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--chat-ink)' }}>🔗 צירוף שיחת AI חיצונית</div>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={externalChatUrl}
+                  onChange={(e) => setExternalChatUrl(e.target.value)}
+                  placeholder="https://chatgpt.com/share/… (לא חובה — לתיעוד המקור)"
+                  style={{ width: '100%', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--chat-border)', background: 'var(--chat-bg, transparent)', color: 'var(--chat-ink)', fontSize: 12, boxSizing: 'border-box' }}
+                />
+                {externalChatUrl.trim() && !isSupportedExternalChatShareUrl(externalChatUrl) && (
+                  <div style={{ fontSize: 11, color: 'var(--chat-ink-soft)' }}>הקישור לא נראה כמו קישור שיתוף מוכר (ChatGPT/Gemini/Claude) — יצורף כתווית מקור בלבד.</div>
+                )}
+                <textarea
+                  value={externalChatText}
+                  onChange={(e) => setExternalChatText(e.target.value)}
+                  placeholder="הדבק כאן את תוכן השיחה (העתק מהדף המשותף). דפי שיתוף נטענים ב-JavaScript ולכן אי אפשר למשוך אותם אוטומטית."
+                  rows={5}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 9, border: '1px solid var(--chat-border)', background: 'var(--chat-bg, transparent)', color: 'var(--chat-ink)', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }}
+                />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => attachExternalChat()} style={{ padding: '6px 13px', borderRadius: 999, border: 'none', background: 'var(--chat-accent)', color: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>צרף לשיחה</button>
+                  {activeProject && (
+                    <button type="button" onClick={() => attachExternalChat({ alsoSaveToProject: true })} disabled={savingProjectMemory} style={{ padding: '6px 13px', borderRadius: 999, border: '1px solid var(--chat-accent)', background: 'transparent', color: 'var(--chat-accent)', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>צרף + שמור לזיכרון הפרויקט</button>
+                  )}
+                  <button type="button" onClick={() => setExternalChatDialogOpen(false)} style={{ padding: '6px 13px', borderRadius: 999, border: '1px solid var(--chat-border)', background: 'transparent', color: 'var(--chat-ink-soft)', fontSize: 12, cursor: 'pointer' }}>ביטול</button>
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <button
@@ -4934,6 +5088,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   📎
                 </button>
                 <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".docx,.txt,.md,.pdf,.json" onChange={handleFileUpload} />
+                <button
+                  type="button"
+                  onClick={() => setExternalChatDialogOpen((v) => !v)}
+                  title="צירוף קישור לשיחת AI חיצונית (ChatGPT/Gemini/Claude)"
+                  style={{ width: 40, height: 44, background: externalChatDialogOpen ? 'color-mix(in srgb, var(--chat-accent) 15%, transparent)' : 'var(--chat-bubble-ai)', border: '1px solid var(--chat-border)', borderRadius: 13, fontSize: 16, color: 'var(--chat-ink-soft)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  🔗
+                </button>
               </div>
 
               <div style={{ flex: 1, position: 'relative' }}>
@@ -5719,6 +5881,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         style={{ fontSize: 11, color: '#A78BFA', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: 12, padding: '4px 12px', cursor: 'pointer', transition: 'all 0.3s ease', fontWeight: 500 }}
                       >
                         הוסף למסמך
+                      </button>
+                    )}
+                    {msg.role === 'assistant' && !msg.error && msg.aiAppendixHtml && onAppendAiAppendix && (
+                      <button
+                        type="button"
+                        onClick={() => onAppendAiAppendix(msg.aiAppendixHtml)}
+                        style={{ fontSize: 11, color: '#FCD34D', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 12, padding: '4px 12px', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        📎 הוסף נספח לסוף המסמך
                       </button>
                     )}
                   </div>

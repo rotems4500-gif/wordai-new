@@ -42,6 +42,7 @@ export default function PptxDraftStudio({
   draft,
   onExit = () => {},
   showToast = () => {},
+  onOpenHelp = null,
 }) {
   const [, forceRender] = useReducer((n) => n + 1, 0);
   const [instructions, setInstructions] = useState('');
@@ -112,6 +113,7 @@ export default function PptxDraftStudio({
         <button onClick={() => setCompare((v) => !v)} className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${compare ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>⇆ השוואה</button>
         {compare && <button onClick={() => setOnlyChanged((v) => !v)} disabled={!changedCount} className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${onlyChanged ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'} disabled:opacity-40`}>רק ששונו</button>}
         <button onClick={handleExport} disabled={exporting || busy} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX'}</button>
+        {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓</button>}
         <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
       </div>
 

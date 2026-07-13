@@ -1,7 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GeneratingOverlay } from './WordFlowAnimations';
 import ChefModeDialog from './ChefModeDialog';
+import ProjectsPanel from './components/ProjectsPanel';
+import ProjectSettingsModal from './components/ProjectSettingsModal';
+import ProjectBrainstormPanel from './components/ProjectBrainstormPanel';
 import { showToast, showConfirm } from './services/uiFeedback';
+import {
+  listProjects,
+  getUngroupedDocuments,
+  assignDocumentToProject,
+  unassignDocumentFromProject,
+  PROJECTS_UPDATED_EVENT,
+} from './services/projectService';
 import { scoreTextAuthenticity } from './services/styleAuthenticityService';
 import {
   getHomeInstructions,
@@ -463,7 +473,7 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
   const [outputType, setOutputType] = useState('document');
   const [pptSlideCount, setPptSlideCount] = useState(10);
@@ -473,11 +483,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [pptImageIntensity, setPptImageIntensity] = useState('high');
   const [pptSpeakerNotes, setPptSpeakerNotes] = useState(false);
   const [pptIncludeCover, setPptIncludeCover] = useState(true);
+  const [pptAiAppendix, setPptAiAppendix] = useState(false);
   const [uiTheme, setUiTheme] = useState(getTheme);
   useEffect(() => onThemeChange(setUiTheme), []);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
   const [isGenerating, setIsGenerating] = useState(false);
   const [humanizeLoopEnabled, setHumanizeLoopEnabled] = useState(() => Boolean(getAppMemory().humanizeLoopOnGenerate));
+  const [aiAppendixEnabled, setAiAppendixEnabled] = useState(() => Boolean(getAppMemory().aiAppendixOnGenerate));
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -544,6 +556,15 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [circularMaxRounds, setCircularMaxRounds] = useState(2);
   const [recentDocs, setRecentDocs] = useState(() => (typeof getRecentDocuments === 'function' ? getRecentDocuments(8) : []));
   const canOpenRecentDocs = typeof window !== 'undefined' && typeof window.desktopApp?.openDocumentByPath === 'function';
+  const [projectsList, setProjectsList] = useState(() => (typeof listProjects === 'function' ? listProjects() : []));
+  const [selectedProjectForSettings, setSelectedProjectForSettings] = useState(null);
+  const [selectedProjectForBrainstorm, setSelectedProjectForBrainstorm] = useState(null);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof listProjects !== 'function') return undefined;
+    const refreshProjectsList = () => setProjectsList(listProjects());
+    window.addEventListener(PROJECTS_UPDATED_EVENT, refreshProjectsList);
+    return () => window.removeEventListener(PROJECTS_UPDATED_EVENT, refreshProjectsList);
+  }, []);
   const [workspaceV2Templates, setWorkspaceV2Templates] = useState(() => (
     typeof getWorkspaceV2Templates === 'function' ? getWorkspaceV2Templates() : []
   ));
@@ -1297,6 +1318,40 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setRecentDocs(nextHistory.slice(0, 8));
   };
 
+  const handleMoveRecentDoc = (doc, targetProjectId) => {
+    if (targetProjectId) assignDocumentToProject(doc.id, targetProjectId);
+    else unassignDocumentFromProject(doc.id);
+    setRecentDocs(typeof getRecentDocuments === 'function' ? getRecentDocuments(8) : []);
+  };
+
+  // "מסמך חדש" מתוך כרטיס פרויקט: מילוי מוקדם של שדה הנושא בהקשר הפרויקט. שיוך המסמך
+  // עצמו לפרויקט קורה אחרי היצירה, כשהמשתמש בוחר "העבר לפרויקט…" ברשימת המסמכים
+  // (המסך הזה לא מקבל callback על סיום היצירה, כך שזו הדרך הכי לא-פולשנית לחבר את הזרימה).
+  const handleNewDocumentInProject = (project) => {
+    setPrompt((prev) => (String(prev || '').trim() ? prev : `הפרויקט: ${project.name}\n`));
+    setOutputType('document');
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.querySelector('input[placeholder*="נושא"]')?.focus();
+      });
+    }
+  };
+
+  // תוצאה של "הפוך לכיוון עבודה" מתוך שיחת התכנון של הפרויקט: מזין את הבריף כטקסט המקור
+  // ליצירת המסמך (זהה למסלול שה-Chef Mode כבר מזין אליו).
+  const handleTurnProjectBrainstormIntoWorkDirection = ({ brief, projectId } = {}) => {
+    const project = projectsList.find((p) => p.id === projectId);
+    const briefText = String(brief || '').trim();
+    setPrompt(project ? `הפרויקט: ${project.name}\n${briefText}` : briefText);
+    setOutputType('document');
+    setSelectedProjectForBrainstorm(null);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.querySelector('input[placeholder*="נושא"]')?.focus();
+      });
+    }
+  };
+
   const handleDeleteMaterial = async (event, item) => {
     event?.preventDefault?.();
     event?.stopPropagation?.();
@@ -1347,6 +1402,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           imageIntensity: pptImageIntensity,
           speakerNotes: pptSpeakerNotes,
           includeCover: pptIncludeCover,
+          aiAppendix: pptAiAppendix,
           selectedMaterials: presentationSelectedMaterials,
         });
       } finally {
@@ -1378,6 +1434,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         baseDraft,
         additionalReviewRounds: 0,
         humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
+        aiAppendix: aiAppendixEnabled,
       });
     } finally {
       setIsGenerating(false);
@@ -1444,6 +1501,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         baseDraft,
         additionalReviewRounds: 0,
         humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
+        aiAppendix: aiAppendixEnabled,
         forceDirectMode: true,
         skipWorkflowAutomation: true,
         directModeReason: 'chef-final-compose',
@@ -1714,6 +1772,25 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               </label>
             )}
 
+            {!isPresentationOutput && (
+              <label className="flex items-center gap-3 mb-6 px-4 py-3 bg-white/10 backdrop-blur-md border border-white/25 rounded-2xl cursor-pointer text-right">
+                <input
+                  type="checkbox"
+                  checked={aiAppendixEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setAiAppendixEnabled(next);
+                    saveAppMemory({ ...getAppMemory(), aiAppendixOnGenerate: next });
+                  }}
+                  className="w-4 h-4 accent-amber-400 shrink-0"
+                />
+                <span className="flex flex-col">
+                  <span className="text-white font-semibold text-sm">📎 צירוף נספח AI (תיעוד שימוש + הדרכה)</span>
+                  <span className="text-white/65 text-xs">אחרי היצירה, נוסף לסוף המסמך פרק נספח עם הפרומפטים לפי שלבים, פסקת רפלקציה והדרכה איך להריץ ולצלם מסך. כרוך בקריאת API נוספת.</span>
+                </span>
+              </label>
+            )}
+
             {isPresentationOutput && (
               <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
                 <div className="text-white font-semibold text-sm mb-4">⚙️ הגדרות מצגת</div>
@@ -1790,6 +1867,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   <label className="inline-flex items-center gap-2 text-white/85 text-xs">
                     <input type="checkbox" checked={pptSpeakerNotes} onChange={(e) => setPptSpeakerNotes(e.target.checked)} />
                     הערות מרצה קצרות
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-amber-200/90 text-xs" title="שקופיות נספח בסוף הדק עם הפרומפטים לפי שלבים והדרכה. כרוך בקריאת API נוספת.">
+                    <input type="checkbox" checked={pptAiAppendix} onChange={(e) => setPptAiAppendix(e.target.checked)} />
+                    📎 נספח AI (קריאת API נוספת)
                   </label>
                 </div>
                 <div className="mt-3 text-white/55 text-[11px]">
@@ -2149,6 +2230,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             >
               ⚙️ הגדרות וסקילים
             </button>
+
+            {onOpenHelp && (
+              <button
+                onClick={() => onOpenHelp('guideUser')}
+                className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
+                title="מדריך למשתמש"
+              >
+                📖 מדריך למשתמש
+              </button>
+            )}
           </div>
         </div>
         </main>
@@ -2271,12 +2362,23 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             {/* טייס אוטומטי הוסתר: מפעיל את ה-orchestrator הישן שנמצא ב-quarantine (aiService WORKSPACE_AUTOMATION_QUARANTINED). */}
           </div>
 
-          {/* מסמכים אחרונים */}
+          {/* פרויקטים */}
+          <ProjectsPanel
+            onOpenProjectBrainstorm={(project) => setSelectedProjectForBrainstorm(project)}
+            onOpenProjectSettings={(project) => setSelectedProjectForSettings(project)}
+            onOpenDocument={(doc) => handleOpenRecentDoc(doc)}
+            onNewDocumentInProject={handleNewDocumentInProject}
+          />
+
+          {/* מסמכים אחרונים (ללא פרויקט, אם קיימים פרויקטים — אחרת כל המסמכים) */}
           {canOpenRecentDocs && recentDocs.some((doc) => Boolean(String(doc?.filePath || '').trim())) && (
             <div className="mt-auto pt-2">
-              <div className="mb-2 text-[13px] font-extrabold text-[#cfe0ef]">מסמכים אחרונים</div>
+              <div className="mb-2 text-[13px] font-extrabold text-[#cfe0ef]">{projectsList.length ? 'מסמכים אחרונים · ללא פרויקט' : 'מסמכים אחרונים'}</div>
               <div className="flex flex-col gap-0.5">
-                {recentDocs.filter((doc) => Boolean(String(doc?.filePath || '').trim())).slice(0, 5).map((doc) => {
+                {(projectsList.length
+                  ? (typeof getUngroupedDocuments === 'function' ? getUngroupedDocuments() : recentDocs)
+                  : recentDocs
+                ).filter((doc) => Boolean(String(doc?.filePath || '').trim())).slice(0, 5).map((doc) => {
                   const savedAt = doc?.savedAt ? new Date(doc.savedAt) : null;
                   const dateLabel = savedAt && !Number.isNaN(savedAt.getTime())
                     ? savedAt.toLocaleDateString('he-IL', { day: 'numeric', month: 'short' })
@@ -2288,6 +2390,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                         <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#bcd2e6]">{doc.title || 'מסמך ללא שם'}</span>
                         {dateLabel && <span className="whitespace-nowrap text-[10.5px] text-[#6f87a1]">{dateLabel}</span>}
                       </button>
+                      {Boolean(projectsList.length) && (
+                        <select
+                          value=""
+                          onChange={(e) => e.target.value && handleMoveRecentDoc(doc, e.target.value)}
+                          title="העבר לפרויקט…"
+                          className="shrink-0 rounded-md border border-white/15 bg-slate-900 px-1 py-0.5 text-[9.5px] text-white/60 opacity-0 outline-none transition group-hover:opacity-100"
+                        >
+                          <option value="">העבר לפרויקט…</option>
+                          {projectsList.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      )}
                       <button type="button" onClick={(event) => handleDeleteRecentDoc(event, doc)} title="הסר" className="text-sm text-[#7e96b0] opacity-0 transition hover:text-rose-300 group-hover:opacity-100">×</button>
                     </div>
                   );
@@ -2440,6 +2555,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               baseDraftText: String(baseDraft?.text || '').trim()
                 || String(baseDraft?.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
             }}
+          />
+        )}
+
+        {selectedProjectForSettings && (
+          <ProjectSettingsModal
+            project={selectedProjectForSettings}
+            onClose={() => setSelectedProjectForSettings(null)}
+          />
+        )}
+
+        {selectedProjectForBrainstorm && (
+          <ProjectBrainstormPanel
+            project={selectedProjectForBrainstorm}
+            onClose={() => setSelectedProjectForBrainstorm(null)}
+            onTurnIntoWorkDirection={handleTurnProjectBrainstormIntoWorkDirection}
           />
         )}
       </div>

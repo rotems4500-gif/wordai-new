@@ -40,12 +40,14 @@ import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
 import DocumentDraftStudio from './DocumentDraftStudio';
 import { generateDeck } from './services/presentationService';
+import { createSlide } from './presentation/deckModel';
 import { importPptxDraft } from './services/pptxDraftService';
 import { importDocumentDraft } from './services/documentDraftService';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange, chatWithActiveProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from './services/aiService';
+import { AGENTS_CONFIG } from './agentConfig';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
 import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/documentLayout';
@@ -516,6 +518,48 @@ const buildSidebarDocumentSnapshot = (editorInstance, {
     headings,
     charCount: fullText.length,
   };
+};
+
+// ממיר את ה-HTML של נספח ה-AI (hr/h3/ol/p) לרצף שקופיות בסוף דק המצגת.
+const buildAiAppendixSlidesFromHtml = (appendixHtml = '') => {
+  const html = String(appendixHtml || '').trim();
+  if (!html || typeof DOMParser === 'undefined') return [];
+  let root;
+  try {
+    root = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html').body.firstChild;
+  } catch {
+    return [];
+  }
+  if (!root) return [];
+  const nodes = [...root.children];
+  const slides = [createSlide({ layout: 'section', title: 'נספח: תיעוד השימוש ב-AI', subtitle: '⚠️ שקופיות זמניות — למחוק לפני הגשה' })];
+  let i = 0;
+  while (i < nodes.length) {
+    const el = nodes[i];
+    if (el.tagName.toLowerCase() !== 'h3') { i += 1; continue; }
+    const heading = el.textContent.trim();
+    const bullets = [];
+    let bodyText = '';
+    let j = i + 1;
+    while (j < nodes.length && !['h3', 'h2'].includes(nodes[j].tagName.toLowerCase())) {
+      const n = nodes[j];
+      const nt = n.tagName.toLowerCase();
+      if (nt === 'ol' || nt === 'ul') {
+        bullets.push(...[...n.querySelectorAll('li')].map((li) => li.textContent.trim()).filter(Boolean));
+      } else if (nt === 'p') {
+        bodyText += (bodyText ? '\n' : '') + n.textContent.trim();
+      }
+      j += 1;
+    }
+    if (/רפלקציה/.test(heading)) {
+      slides.push(createSlide({ layout: 'quote', subtitle: 'רפלקציה', body: bodyText || bullets.join(' ') }));
+    } else {
+      const slideBullets = bullets.length ? bullets : (bodyText ? bodyText.split('\n').filter(Boolean) : []);
+      slides.push(createSlide({ layout: 'title-bullets', title: heading, bullets: slideBullets }));
+    }
+    i = j;
+  }
+  return slides;
 };
 
 const hasMeaningfulPromptBlockLocator = (value = '') => normalizeStructuralEditText(value).length >= MIN_PROMPT_BLOCK_LOCATOR_LENGTH;
@@ -3268,6 +3312,10 @@ function App() {
   ));
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
+  const openHelpTopic = React.useCallback((topic = 'guideUser') => {
+    setHelpModalTopic(topic);
+    setHelpModalOpen(true);
+  }, []);
   const [findReplace, setFindReplace] = React.useState({ open: false, mode: 'find' });
   const [sourceManagerOpen, setSourceManagerOpen] = React.useState(false);
   const [comments, setComments] = React.useState([]);
@@ -5072,6 +5120,45 @@ function App() {
     };
   }, [editor, getCurrentEditTarget, triggerDocumentArrival]);
 
+  // Helper משותף לכל הזרימות: מריץ את סוכן נספח ה-AI על טקסט נתון ומחזיר {ok, appendixHtml, guidanceText}.
+  const generateAiAppendixHtml = React.useCallback(async ({ contextText = '', providerId = '', providerModel = '' } = {}) => {
+    const appendixConfig = AGENTS_CONFIG.aiAppendix || {};
+    const appendixPrompt = 'צור נספח תיעוד שימוש ב-AI לעבודה: רשימת פרומפטים לפי שלבי העבודה, פסקת רפלקציה, והדרכה איך להריץ ולצלם. אין היסטוריית פרומפטים שמורה — שחזר פרומפטים סבירים מתוכן העבודה.';
+    const voiceBlock = buildPersonalStyleVoiceBlock();
+    const appendixContext = [
+      voiceBlock ? `קול אישי של המשתמש (נסח את הפרומפטים והרפלקציה בקול הזה, מותאם למשלב צ'אט):\n${voiceBlock}` : '',
+      `מסמך פעיל:\n${String(contextText || '').slice(0, 16000)}`,
+    ].filter(Boolean).join('\n\n');
+    const raw = await chatWithActiveProvider(appendixPrompt, appendixContext, String(appendixConfig.systemCtx || ''), {
+      agentId: 'aiAppendix',
+      agentLabel: appendixConfig.label || 'נספח AI',
+      directChat: true,
+      includeAppMemory: false,
+      providerOverride: providerId && providerId !== 'default' ? providerId : '',
+      modelOverride: providerModel || '',
+      skipAutomation: true,
+      skipAutomationPrompt: true,
+      skipMultiModel: true,
+    });
+    return parseAiAppendixResponse(String(raw || ''));
+  }, []);
+
+  const handleAppendAiAppendix = React.useCallback((html = '') => {
+    if (!editor) {
+      showToast('העורך לא זמין כרגע להוספת הנספח.', { tone: 'warning' });
+      return;
+    }
+    const appendixHtml = String(html || '').trim();
+    if (!appendixHtml) {
+      showToast('לא התקבל תוכן נספח להוספה.', { tone: 'warning' });
+      return;
+    }
+    // תמיד בסוף המסמך האמיתי — מתעלמים מסמן/יעד עריכה.
+    editor.chain().focus().insertContentAt(editor.state.doc.content.size, appendixHtml).run();
+    triggerDocumentArrival('warning');
+    showToast('נספח ה-AI נוסף לסוף המסמך. זכור למחוק את קופסת ההוראות הצהובה לפני הגשה.');
+  }, [editor, triggerDocumentArrival]);
+
   const applyFeedbackReviewSuggestions = React.useCallback(async () => {
     if (!editor) {
       showToast('העורך לא זמין כרגע לעריכה.', { tone: 'warning' });
@@ -5586,6 +5673,7 @@ ${sidebarReviewContext}`
     const baseDraft = payload.baseDraft && typeof payload.baseDraft === 'object' ? { ...payload.baseDraft } : null;
     const additionalReviewRounds = Math.max(0, Math.min(2, Number(payload.additionalReviewRounds) || 0));
     const humanizeLoop = payload.humanizeLoop && typeof payload.humanizeLoop === 'object' ? payload.humanizeLoop : null;
+    const wantsAiAppendix = payload.aiAppendix === true;
     const suppressDeferredReviewOffer = payload.suppressDeferredReviewOffer === true;
     const forceDirectMode = payload.forceDirectMode === true;
     const skipWorkflowAutomation = payload.skipWorkflowAutomation === true;
@@ -5736,6 +5824,27 @@ ${sidebarReviewContext}`
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
       persistLocalCache(generated);
+      // נספח AI אופציונלי מהמסך הבית: קריאת API נוספת שמייצרת פרק תיעוד שימוש ומוסיפה לסוף המסמך.
+      if (wantsAiAppendix && !usedFallback) {
+        try {
+          showToast('מייצר נספח AI (תיעוד שימוש) — קריאת API נוספת…');
+          const snapshot = buildSidebarDocumentSnapshot(editor);
+          const appendixParsed = await generateAiAppendixHtml({
+            contextText: String(snapshot?.text || ''),
+            providerId: selectedProviderId,
+            providerModel: selectedProviderModel,
+          });
+          if (appendixParsed.ok && appendixParsed.appendixHtml) {
+            editor.chain().focus().insertContentAt(editor.state.doc.content.size, appendixParsed.appendixHtml).run();
+            persistLocalCache(editor.getHTML());
+            showToast('נספח ה-AI נוסף לסוף המסמך. זכור למחוק את בלוק ההוראות "למחוק לפני הגשה" לפני ההגשה.');
+          } else {
+            showToast('נספח ה-AI לא הוחזר בפורמט צפוי — דלגתי עליו. אפשר לנסות שוב מסרגל ה-AI.', { tone: 'warning' });
+          }
+        } catch (appendixError) {
+          showToast('יצירת נספח ה-AI נכשלה: ' + (appendixError?.message || 'שגיאה'), { tone: 'warning' });
+        }
+      }
       setLiveGeneration((prev) => ({ ...prev, active: true, state: usedFallback ? 'warning' : 'success', prompt: usedFallback ? 'נוצרה טיוטה בטוחה לבדיקה ושיפור' : resolvedTitle, summary: latestSummary, logs: latestLogs, runId: generationRequest.runId, workspaceId: generationLogsWorkspaceId }));
       setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
         ...prev,
@@ -5870,6 +5979,7 @@ ${sidebarReviewContext}`
     imageIntensity = 'high',
     density = 'balanced',
     documentText: providedDocumentText = '',
+    aiAppendix = false,
   } = {}) => {
     const cleanTopic = String(topic || '').trim();
     const fromDocument = source === 'document';
@@ -5900,7 +6010,31 @@ ${sidebarReviewContext}`
         density,
         imageIntensity,
       });
-      setPresentationDeck(deck);
+      let finalDeck = deck;
+      // נספח AI כשקופיות בסוף הדק (קריאת API נוספת) — לפי בקשה ממסך הפתיחה.
+      if (aiAppendix && deck && Array.isArray(deck.slides)) {
+        try {
+          showToast('מייצר נספח AI למצגת — קריאת API נוספת…');
+          const deckText = deck.slides
+            .map((s) => [s.title, s.subtitle, s.body, ...(Array.isArray(s.bullets) ? s.bullets : [])].filter(Boolean).join(' '))
+            .filter(Boolean)
+            .join('\n');
+          const contextText = deckText || documentText || cleanTopic;
+          const appendixParsed = await generateAiAppendixHtml({ contextText, providerId: '', providerModel: '' });
+          if (appendixParsed.ok && appendixParsed.appendixHtml) {
+            const appendixSlides = buildAiAppendixSlidesFromHtml(appendixParsed.appendixHtml);
+            if (appendixSlides.length) {
+              finalDeck = { ...deck, slides: [...deck.slides, ...appendixSlides] };
+              showToast('נספח ה-AI נוסף כשקופיות בסוף הדק. זכור למחוק אותן לפני הגשה.');
+            }
+          } else {
+            showToast('נספח ה-AI לא נוצר בפורמט צפוי — דלגתי עליו.', { tone: 'warning' });
+          }
+        } catch (appendixError) {
+          showToast('יצירת נספח ה-AI למצגת נכשלה: ' + (appendixError?.message || 'שגיאה'), { tone: 'warning' });
+        }
+      }
+      setPresentationDeck(finalDeck);
       return true;
     } catch (error) {
       showToast(error?.message || 'יצירת המצגת נכשלה', { tone: 'error' });
@@ -5908,7 +6042,7 @@ ${sidebarReviewContext}`
     } finally {
       setPresentationBusy(false);
     }
-  }, [editor]);
+  }, [editor, generateAiAppendixHtml]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -8092,8 +8226,28 @@ ${sidebarReviewContext}`
   // אם הטיוטה שבעורך מכילה הערות placeholder ("חלק זה יורחב לאחר הרצת הניתוח
   // בפועל") — משלבים את תתי-הפרק במקומן ושומרים על שאר העבודה, במקום להחליף
   // את כל המסמך בפרק בלבד.
-  const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים' } = {}) => {
+  // נספח AI על תוצר ה-SPSS שכבר יושב בעורך — קריאת API נוספת שמוסיפה פרק תיעוד לסוף המסמך.
+  const appendAiAppendixToCurrentEditor = React.useCallback(async () => {
+    if (!editor) return;
+    try {
+      showToast('מייצר נספח AI (תיעוד שימוש) — קריאת API נוספת…');
+      const snapshot = buildSidebarDocumentSnapshot(editor);
+      const parsed = await generateAiAppendixHtml({ contextText: String(snapshot?.text || '') });
+      if (parsed.ok && parsed.appendixHtml) {
+        editor.chain().focus().insertContentAt(editor.state.doc.content.size, parsed.appendixHtml).run();
+        triggerDocumentArrival('warning');
+        showToast('נספח ה-AI נוסף לסוף המסמך. זכור למחוק את בלוק ההוראות "למחוק לפני הגשה" לפני ההגשה.');
+      } else {
+        showToast('נספח ה-AI לא הוחזר בפורמט צפוי — דלגתי עליו. אפשר לנסות שוב מסרגל ה-AI.', { tone: 'warning' });
+      }
+    } catch (appendixError) {
+      showToast('יצירת נספח ה-AI נכשלה: ' + (appendixError?.message || 'שגיאה'), { tone: 'warning' });
+    }
+  }, [editor, generateAiAppendixHtml, triggerDocumentArrival]);
+
+  const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים', withAiAppendix = false } = {}) => {
     if (!String(html || '').trim()) return;
+    let placed = false;
     if (editor) {
       try {
         const merge = mergeSpssFindingsIntoDraftHtml(editor.getHTML(), html);
@@ -8104,13 +8258,19 @@ ${sidebarReviewContext}`
             `פרק הממצאים שולב בעבודה: ${merge.replacedCount} הערות "יורחב לאחר ההרצה" הוחלפו בתוצאות בפועל${merge.appendedCount ? `, ועוד ${merge.appendedCount} תתי-פרקים נוספו בסוף המסמך` : ''}.`,
             { tone: 'success', duration: 7000 },
           );
-          return;
+          placed = true;
         }
       } catch { /* נפילה שקטה להתנהגות הישנה — החלפת מסמך מלאה */ }
     }
-    applyImportedDocument({ ok: true, html, title, filePath: '', source: 'spss-project' });
-    setAppMode('word');
-  }, [editor, applyImportedDocument]);
+    if (!placed) {
+      applyImportedDocument({ ok: true, html, title, filePath: '', source: 'spss-project' });
+      setAppMode('word');
+    }
+    if (withAiAppendix) {
+      // ממתינים ריצה קצרה כדי שהתוכן יתייצב בעורך לפני קריאת הנספח.
+      setTimeout(() => { appendAiAppendixToCurrentEditor(); }, 400);
+    }
+  }, [editor, applyImportedDocument, appendAiAppendixToCurrentEditor]);
 
   // יצירה/איפוס מתוך הסטודיו: payload=null → טופס יצירה חדש; אחרת מייצר deck
   const handleStudioGenerate = React.useCallback((payload) => {
@@ -8266,7 +8426,7 @@ ${sidebarReviewContext}`
       
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         <div className="min-w-0 flex-1" style={{ display: isSpssMode ? 'flex' : 'none' }}>
-          <SpssSyntaxStudio onOpenProjectMode={() => setAppMode('spss-project')} />
+          <SpssSyntaxStudio onOpenProjectMode={() => setAppMode('spss-project')} onOpenHelp={openHelpTopic} />
         </div>
 
         {isSpssProjectMode && (
@@ -8274,6 +8434,7 @@ ${sidebarReviewContext}`
             <SpssProjectStudio
               onExit={() => setAppMode('word')}
               onEmitDocument={handleEmitSpssDocument}
+              onOpenHelp={openHelpTopic}
             />
           </div>
         )}
@@ -8284,6 +8445,7 @@ ${sidebarReviewContext}`
               draft={pptxDraft}
               onExit={() => { setPptxDraft(null); setAppMode('word'); }}
               showToast={showToast}
+              onOpenHelp={openHelpTopic}
             />
           </div>
         )}
@@ -8311,6 +8473,7 @@ ${sidebarReviewContext}`
               hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}
               documentTitle={getDraftTitleFromFilePath(currentFilePath)}
               showToast={showToast}
+              onOpenHelp={openHelpTopic}
             />
           </div>
         )}
@@ -8482,6 +8645,7 @@ ${sidebarReviewContext}`
             {!shouldShowProgressOnlyPanel && (
             <AiSidebar
               mode="sidebar"
+              onOpenHelp={openHelpTopic}
               compactMode={sidebarCompact}
               launchPreset={assistantLaunchPreset}
               activeDocumentSessionId={activeDocumentSessionId}
@@ -8508,6 +8672,7 @@ ${sidebarReviewContext}`
                 onInsert={(text) => {
                   if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
                 }}
+                onAppendAiAppendix={handleAppendAiAppendix}
                 onStreamStart={handleStreamStart}
                 onStreamChunk={handleStreamChunk}
                 onStreamEnd={handleStreamEnd}
@@ -9115,6 +9280,7 @@ ${sidebarReviewContext}`
               }}
             >
               <StartScreen
+                onOpenHelp={openHelpTopic}
                 instructionsResetToken={startScreenInstructionsResetToken}
                 onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}
                 documentStyle={documentStyle}
