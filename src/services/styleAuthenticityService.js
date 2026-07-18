@@ -6,6 +6,7 @@
 // רק שכבת הכיול (add/train/get) נוגעת באחסון הפרופיל האישי.
 
 import { getPersonalStyleProfile, savePersonalStyleProfile } from './aiService';
+import { addGoldChunk } from './styleSampleStore';
 
 // מילות קישור פורמליות שמודלים נוטים להעדיף בצפיפות גבוהה.
 const FORMAL_CONNECTORS = [
@@ -347,6 +348,21 @@ export function tagStyleSample(text = '', kind = 'desired') {
     next.dislikedStylePatterns = Array.from(new Set([...prev, ...markerNotes])).slice(-MAX_AVOID_NOTES);
   }
   savePersonalStyleProfile?.(next);
+
+  // 3. אם מנוע הסגנון (Style Engine) פעיל — נתב גם לשם, בנוסף לשדות ה-legacy מעל.
+  //    ה-legacy מוזרק רק כשהמנוע כבוי (ראה buildPersonalStyleInstructions), אז בלעדי זה
+  //    תיוג "הסגנון שלי" הופך למת-קצה עבור משתמשי המנוע.
+  try {
+    const engineOn = next?.styleEngine?.enabled === true;
+    const wordCount = (clean.match(/[֐-׿A-Za-z0-9'"׳״-]+/g) || []).length;
+    if (engineOn && isDesired && wordCount >= 25) {
+      addGoldChunk({ text: clean, title: 'סומן כסגנון שלי' });
+      const updatedProfile = { ...next, styleEngine: { ...next.styleEngine, qualitativePatternsStale: true } };
+      savePersonalStyleProfile?.(updatedProfile);
+    }
+  } catch (err) {
+    console.warn('[styleAuthenticityService] tagStyleSample: style-engine routing failed (non-fatal):', err);
+  }
 
   return {
     ok: true,

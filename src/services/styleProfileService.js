@@ -427,6 +427,9 @@ const normalizePattern = (raw) => {
     // truth שחייב לשרוד את ה-cap (ראו mergeQualitativePatterns). דגל מפורש כי לא כל
     // הדפוסים הממוינים ניתנים לזיהוי לפי frequencyPer100Words (מבניים לא נושאים אותו).
     ...(raw.mined === true ? { mined: true } : {}),
+    // קיורציה — המשתמש יכול לנעוץ (pin) דפוס: תמיד שורד את ה-cap ומקבל boost בבחירה.
+    pinned: !!raw.pinned,
+    userAdjustedAt: Number.isFinite(Number(raw.userAdjustedAt)) ? toNum(raw.userAdjustedAt) : 0,
   };
 };
 
@@ -549,6 +552,9 @@ export function normalizeStyleEngine(raw) {
     genreProfiles,
     qualitativePatterns,
     negativeSpace: cleanStringArray(src.negativeSpace, CAP_NEGATIVE),
+    // קיורציה — מפתחות קנוניים של דפוסים שהמשתמש דחה ("לא אני"): מסוננים מרכזית
+    // ב-runQualitativeAnalysis כדי לשרוד ניתוח מחדש. cap 60.
+    rejectedPatternKeys: cleanStringArray(src.rejectedPatternKeys, 60),
     blacklist,
     editCounters,
     goldChunkRefs: cleanStringArray(src.goldChunkRefs, 100),
@@ -713,18 +719,32 @@ const mulberry32 = (seed) => {
  * @returns {Array<object>}
  */
 export function selectRotatedPatterns(patterns, { count = 5, seed = 0 } = {}) {
+  // קיורציה — דפוס נעוץ (pinned) מקבל משקל אפקטיבי מוגבר min(0.95, weight*1.2) לצורך
+  // מיון/רולטה, ותמיד נכנס ראשון (לפני ה-signature_phrase הכפוי והרולטה).
   const pool = (Array.isArray(patterns) ? patterns : [])
     .filter(isPlainObject)
-    .map((p) => ({ ...p, weight: clamp(toNum(p.weight, 0.5), 0, 1) }));
+    .map((p) => {
+      const w = clamp(toNum(p.weight, 0.5), 0, 1);
+      return { ...p, weight: p.pinned ? Math.min(0.95, w * 1.2) : w };
+    });
   if (!pool.length || count <= 0) return [];
 
   const sorted = [...pool].sort((a, b) => b.weight - a.weight);
   const selected = [];
   const used = new Set();
 
+  // תמיד ראשונים: דפוסים נעוצים (לפי משקל אפקטיבי יורד), עם dedupe וחיתוך ל-count.
+  for (const p of sorted) {
+    if (selected.length >= count) break;
+    if (p.pinned && !used.has(p)) {
+      selected.push(p);
+      used.add(p);
+    }
+  }
+
   // תמיד: signature_phrase החזק ביותר.
-  const topSig = sorted.find((p) => p.type === 'signature_phrase');
-  if (topSig) {
+  const topSig = sorted.find((p) => p.type === 'signature_phrase' && !used.has(p));
+  if (topSig && selected.length < count) {
     selected.push(topSig);
     used.add(topSig);
   }
@@ -1159,6 +1179,24 @@ export function canonicalPatternKey(pattern) {
   return toks.length ? toks.join(' ') : normalizePhrase(label);
 }
 
+/**
+ * קיורציה — מסנן דפוסים שהמשתמש דחה. מחזיר רק דפוסים שה-canonicalPatternKey שלהם
+ * *אינו* בקבוצת המפתחות הדחויים. פונקציה טהורה (בונה Set פעם אחת).
+ * @param {Array<object>} patterns
+ * @param {string[]} rejectedKeys
+ * @returns {Array<object>}
+ */
+export function filterRejectedPatterns(patterns, rejectedKeys) {
+  const list = Array.isArray(patterns) ? patterns : [];
+  const rejected = new Set(
+    (Array.isArray(rejectedKeys) ? rejectedKeys : [])
+      .map((k) => String(k || '').trim())
+      .filter(Boolean),
+  );
+  if (!rejected.size) return list.slice();
+  return list.filter((p) => !rejected.has(canonicalPatternKey(p)));
+}
+
 // אם ל-label יש ביטוי במרכאות — משכתב אותו לתבנית יציבה `ביטוי חוזר: "<ביטוי>"`
 // ומסמן signature_phrase. אחרת מחזיר את הדפוס כמות שהוא. דטרמיניסטי → labels זהים בין הרצות.
 const canonicalizePatternLabel = (pattern) => {
@@ -1239,6 +1277,8 @@ export function mergeQualitativePatterns(existing, incoming) {
         // דטרמיניסטי ששריד בערבות מהמכסה (ראו reserved-capacity slicing למטה). על קונפליקט,
         // ה-flag "דבק" (once mined, always mined) — גם אם הגרסה המנצחת היא ה-LLM.
         ...(raw.mined === true ? { mined: true } : {}),
+        // קיורציה — pinned "דבק" כמו mined: דפוס נעוץ חייב לשרוד את המיזוג/ה-cap.
+        ...(raw.pinned === true ? { pinned: true } : {}),
       };
       const pattern = { id, label, type, weight, ...extraFields };
       const key = canonicalPatternKey(pattern);
@@ -1254,10 +1294,12 @@ export function mergeQualitativePatterns(existing, incoming) {
       // reserved-capacity ב-cap למטה לא יזהה שהתופעה הזו נכרתה בפועל.
       const cur = list[mi].pattern;
       const stickyMined = cur.mined === true || raw.mined === true;
+      const stickyPinned = cur.pinned === true || raw.pinned === true;
+      const stickyFlags = { ...(stickyMined ? { mined: true } : {}), ...(stickyPinned ? { pinned: true } : {}) };
       if (weight > cur.weight) {
-        list[mi].pattern = { ...cur, label, type, weight, ...extraFields, ...(stickyMined ? { mined: true } : {}) };
-      } else if (stickyMined && cur.mined !== true) {
-        list[mi].pattern = { ...cur, mined: true };
+        list[mi].pattern = { ...cur, label, type, weight, ...extraFields, ...stickyFlags };
+      } else if ((stickyMined && cur.mined !== true) || (stickyPinned && cur.pinned !== true)) {
+        list[mi].pattern = { ...cur, ...stickyFlags };
       }
     });
   };
@@ -1276,8 +1318,9 @@ export function mergeQualitativePatterns(existing, incoming) {
   // לראות כי" נעלם מפרופיל אחד בין 2 הרצות, אך לא מהשני, אך ורק בגלל סדר ה-cap). לכן:
   // קודם שומרים את כל הממוינים (עד MINED_RESERVED, לפי weight), ואז ממלאים את היתרה
   // (30-len(mined)) מהיתר לפי אותו מיון weight-יורד הקיים.
+  // קיורציה — pinned נחשב כמו mined לצורך שריון: דפוס נעוץ לעולם לא נופל מה-cap.
   const MINED_RESERVED = 18;
-  const minedSorted = sortedAll.filter((p) => p.mined === true).slice(0, MINED_RESERVED);
+  const minedSorted = sortedAll.filter((p) => p.mined === true || p.pinned === true).slice(0, MINED_RESERVED);
   const minedIds = new Set(minedSorted.map((p) => p.id));
   const remainingSlots = Math.max(0, CAP_PATTERNS - minedSorted.length);
   const others = sortedAll.filter((p) => !minedIds.has(p.id)).slice(0, remainingSlots);

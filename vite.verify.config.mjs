@@ -16,7 +16,9 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/source-retrieval-live.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
-      : 'tools/test-bench/source-pipeline-harness.mjs';
+      : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
+        ? 'tools/test-bench/style-tag-route-unit.mjs'
+        : 'tools/test-bench/source-pipeline-harness.mjs';
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab' : 'out-sf';
 export default defineConfig({

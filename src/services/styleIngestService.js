@@ -25,6 +25,7 @@ import {
   mineStructuralFormulas,
   consensusMergePatterns,
   canonicalPatternKey,
+  filterRejectedPatterns,
   deriveAutoBlacklist,
   seedStyleEngineFromLegacyProfile,
   GENRES,
@@ -479,6 +480,12 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
       return true;
     });
   }
+  // קיורציה — נקודת סינון מרכזית אחת: מסיר דפוסים שהמשתמש דחה ("לא אני"), כך שהם
+  // לא חוזרים גם אחרי ניתוח מחדש. (מכני המיזוג/קונצנזוס נשארים ללא שינוי.)
+  engine.qualitativePatterns = filterRejectedPatterns(
+    engine.qualitativePatterns,
+    engine.rejectedPatternKeys,
+  );
   // negativeSpace: מיזוג + dedupe/cap מטופל ב-normalizeStyleEngine.
   engine.negativeSpace = [
     ...(Array.isArray(engine.negativeSpace) ? engine.negativeSpace : []),
@@ -557,6 +564,7 @@ export function getStyleOverview() {
       user: Array.isArray(blacklist.user) ? blacklist.user : [],
       removed: Array.isArray(blacklist.removed) ? blacklist.removed : [],
     },
+    rejectedPatternKeys: Array.isArray(engine.rejectedPatternKeys) ? engine.rejectedPatternKeys : [],
     confidence: engine.confidence,
     metricsEligibleDocCount: engine.metricsEligibleDocCount || 0,
     extractionMeta: isPlainObject(engine.extractionMeta) ? engine.extractionMeta : null,
@@ -691,6 +699,72 @@ export function markPatternsStale() {
   const { profile, engine } = loadEngine();
   engine.qualitativePatternsStale = true;
   return saveEngine(profile, engine);
+}
+
+// ---------- קיורציה: reject / unreject / pin ----------
+
+const CAP_REJECTED_KEYS = 60;
+
+/**
+ * דוחה דפוס ("לא אני"): מחשב את המפתח הקנוני שלו, מוסיף אותו ל-rejectedPatternKeys
+ * (dedupe, cap 60), ומסיר את הדפוס מ-qualitativePatterns. המפתח הדחוי שורד ניתוח מחדש
+ * (סינון מרכזי ב-runQualitativeAnalysis).
+ * @param {string} patternId
+ * @returns {{ok:boolean, key?:string}}
+ */
+export function rejectPattern(patternId) {
+  const id = String(patternId || '').trim();
+  if (!id) return { ok: false };
+  const { profile, engine } = loadEngine();
+  const patterns = Array.isArray(engine.qualitativePatterns) ? engine.qualitativePatterns : [];
+  const target = patterns.find((p) => isPlainObject(p) && String(p.id || '').trim() === id);
+  if (!target) return { ok: false };
+  const key = canonicalPatternKey(target);
+  const rejected = Array.isArray(engine.rejectedPatternKeys) ? [...engine.rejectedPatternKeys] : [];
+  if (key && !rejected.includes(key)) {
+    rejected.push(key);
+  }
+  engine.rejectedPatternKeys = rejected.slice(0, CAP_REJECTED_KEYS);
+  engine.qualitativePatterns = patterns.filter((p) => String(p?.id || '').trim() !== id);
+  saveEngine(profile, engine);
+  return { ok: true, key };
+}
+
+/**
+ * מבטל דחייה של מפתח: מסיר אותו מ-rejectedPatternKeys ומסמן qualitativePatternsStale
+ * כדי שהניתוח הבא יוכל למצוא את הדפוס שוב.
+ * @param {string} key
+ * @returns {{ok:boolean}}
+ */
+export function unrejectPattern(key) {
+  const target = String(key || '').trim();
+  if (!target) return { ok: false };
+  const { profile, engine } = loadEngine();
+  const rejected = Array.isArray(engine.rejectedPatternKeys) ? engine.rejectedPatternKeys : [];
+  engine.rejectedPatternKeys = rejected.filter((k) => String(k || '').trim() !== target);
+  engine.qualitativePatternsStale = true;
+  saveEngine(profile, engine);
+  return { ok: true };
+}
+
+/**
+ * נועץ/משחרר דפוס: מסמן pattern.pinned + userAdjustedAt=now. דפוס נעוץ תמיד שורד
+ * את ה-cap ומקבל boost בבחירה (selectRotatedPatterns).
+ * @param {string} patternId
+ * @param {boolean} pinned
+ * @returns {{ok:boolean}}
+ */
+export function pinPattern(patternId, pinned = true) {
+  const id = String(patternId || '').trim();
+  if (!id) return { ok: false };
+  const { profile, engine } = loadEngine();
+  const patterns = Array.isArray(engine.qualitativePatterns) ? engine.qualitativePatterns : [];
+  const target = patterns.find((p) => isPlainObject(p) && String(p.id || '').trim() === id);
+  if (!target) return { ok: false };
+  target.pinned = pinned !== false;
+  target.userAdjustedAt = Date.now();
+  saveEngine(profile, engine);
+  return { ok: true };
 }
 
 // re-export לנוחות ה-UI (איפוס מלא של ה-store).

@@ -12,6 +12,9 @@ import {
   setBlacklistUser,
   removeAutoBlacklistItem,
   restoreAutoBlacklistItem,
+  rejectPattern,
+  unrejectPattern,
+  pinPattern,
 } from '../services/styleIngestService';
 import { getSampleDocuments } from '../services/styleSampleStore';
 
@@ -189,6 +192,36 @@ export default function StyleProfilePanel({ onClose }) {
     }
   };
 
+  const handleRejectPattern = (patternId) => {
+    try {
+      rejectPattern(patternId);
+    } catch (err) {
+      console.error('rejectPattern failed:', err);
+    } finally {
+      refresh();
+    }
+  };
+
+  const handleUnrejectPattern = (key) => {
+    try {
+      unrejectPattern(key);
+    } catch (err) {
+      console.error('unrejectPattern failed:', err);
+    } finally {
+      refresh();
+    }
+  };
+
+  const handlePinPattern = (patternId, pinned) => {
+    try {
+      pinPattern(patternId, pinned);
+    } catch (err) {
+      console.error('pinPattern failed:', err);
+    } finally {
+      refresh();
+    }
+  };
+
   const handleUserBlacklistBlur = () => {
     const lines = userBlacklistDraft
       .split('\n')
@@ -215,6 +248,22 @@ export default function StyleProfilePanel({ onClose }) {
   const connectorEntries = metrics?.connectorFrequency
     ? Object.keys(metrics.connectorFrequency).slice(0, 3)
     : [];
+
+  // Change 3 — נאדג' ז'אנר פעיל: כמה מסמכים יש לכל ז'אנר מתוך המסמכים שהועלו בפועל.
+  const docGenreCounts = {};
+  documents.forEach((doc) => {
+    const g = doc?.genre;
+    if (!g || g === 'אחר') return;
+    docGenreCounts[g] = (docGenreCounts[g] || 0) + 1;
+  });
+  const nearGenres = Object.entries(docGenreCounts)
+    .filter(([, count]) => count >= 1 && count <= 2)
+    .slice(0, 2);
+  const hasGenreAtThreshold = Object.values(docGenreCounts).some((count) => count >= 3);
+  const genreNudgeLines = nearGenres.map(([genre, count]) => (
+    `📈 יש רק ${count} מסמכי "${genre}" — העלה עוד ${3 - count} כדי שאבנה פרופיל מותאם לז'אנר הזה.`
+  ));
+  const showGenericGenreNudge = genreNudgeLines.length === 0 && !hasGenreAtThreshold && documents.length >= 3;
 
   const metricCards = [];
   if (metrics) {
@@ -331,6 +380,20 @@ export default function StyleProfilePanel({ onClose }) {
 
       {/* 3. Documents list */}
       <div>
+        {(genreNudgeLines.length > 0 || showGenericGenreNudge) && (
+          <div className="flex flex-col gap-1 mb-2">
+            {genreNudgeLines.map((line) => (
+              <div key={line} className="text-[12px] font-semibold text-cyan-700 bg-cyan-50 border border-cyan-100 rounded-lg px-3 py-1.5">
+                {line}
+              </div>
+            ))}
+            {showGenericGenreNudge && (
+              <div className="text-[12px] font-semibold text-cyan-700 bg-cyan-50 border border-cyan-100 rounded-lg px-3 py-1.5">
+                💡 העלה 3 מסמכים או יותר מאותו סוג (למשל סקירות ספרות) ואבנה פרופיל מותאם-ז'אנר.
+              </div>
+            )}
+          </div>
+        )}
         <div className="text-[14px] font-extrabold text-slate-800 mb-2">מסמכים שהועלו</div>
         {documents.length === 0 ? (
           <div className="text-[13px] text-slate-400 bg-slate-50 border border-slate-200 rounded-xl px-4 py-6 text-center">
@@ -396,7 +459,10 @@ export default function StyleProfilePanel({ onClose }) {
 
       {/* 5. Qualitative patterns */}
       <div>
-        <div className="text-[14px] font-extrabold text-slate-800 mb-2">דפוסים איכותניים</div>
+        <div className="text-[14px] font-extrabold text-slate-800 mb-1">דפוסים איכותניים</div>
+        <p className="text-[12px] text-slate-400 mb-2">
+          סמן ✗ על דפוס שהוא נושא מקרי ולא הסגנון שלך — הוא לא יחזור גם בניתוח מחדש. 📌 נועל דפוס חשוב.
+        </p>
         {(!overview?.qualitativePatterns || overview.qualitativePatterns.length === 0) ? (
           <div className="text-[13px] text-slate-400 bg-slate-50 border border-slate-200 rounded-xl px-4 py-6 text-center">
             לחץ "נתח מחדש" אחרי העלאת מסמכים כדי לחלץ דפוסים
@@ -410,6 +476,28 @@ export default function StyleProfilePanel({ onClose }) {
                     {PATTERN_TYPE_LABELS[pattern.type] || pattern.type}
                   </span>
                   <span className="text-[13px] font-semibold text-slate-700 flex-1">{pattern.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => handlePinPattern(pattern.id, !pattern.pinned)}
+                    className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                      pattern.pinned
+                        ? 'text-indigo-600 bg-indigo-50'
+                        : 'text-slate-300 hover:text-indigo-500 hover:bg-indigo-50'
+                    }`}
+                    title={pattern.pinned ? 'בטל נעילה' : 'נעל דפוס'}
+                    aria-label={pattern.pinned ? 'בטל נעילה' : 'נעל דפוס'}
+                  >
+                    📌
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRejectPattern(pattern.id)}
+                    className="shrink-0 w-7 h-7 rounded-lg text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors"
+                    title="לא אני"
+                    aria-label="לא אני"
+                  >
+                    ✗
+                  </button>
                 </div>
                 <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                   <div
@@ -417,9 +505,38 @@ export default function StyleProfilePanel({ onClose }) {
                     style={{ width: `${Math.max(0, Math.min(100, Math.round((pattern.weight || 0) * 100)))}%` }}
                   />
                 </div>
+                {pattern.evidence && (
+                  <div className="text-[11.5px] text-slate-400 mt-1.5 truncate" title={pattern.evidence}>
+                    "{String(pattern.evidence).slice(0, 90)}{String(pattern.evidence).length > 90 ? '…' : ''}"
+                  </div>
+                )}
               </div>
             ))}
           </div>
+        )}
+        {overview?.rejectedPatternKeys?.length > 0 && (
+          <details className="mt-2.5 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5">
+            <summary className="text-[12.5px] font-semibold text-slate-500 cursor-pointer select-none">
+              דפוסים שדחיתי ({overview.rejectedPatternKeys.length})
+            </summary>
+            <p className="text-[11.5px] text-slate-400 mt-1.5 mb-1.5">שחזור יחזיר את הדפוס בניתוח הבא.</p>
+            <div className="flex flex-col gap-1.5">
+              {overview.rejectedPatternKeys.map((key) => (
+                <div key={key} className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5">
+                  <span className="text-[12.5px] text-slate-500 truncate">{key}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleUnrejectPattern(key)}
+                    className="shrink-0 text-slate-400 hover:text-indigo-600 text-[13px]"
+                    title="שחזר"
+                    aria-label="שחזר"
+                  >
+                    ↺
+                  </button>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
       </div>
 
