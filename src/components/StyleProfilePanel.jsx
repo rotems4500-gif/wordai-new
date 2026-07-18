@@ -95,9 +95,13 @@ export default function StyleProfilePanel({ onClose }) {
     const handler = () => refresh();
     window.addEventListener('wordai-personal-style-updated', handler);
     window.addEventListener('wordai-style-samples-updated', handler);
+    // Seam 1 — כשמפתח AI נשמר (חיבור ספק חדש), רענן: אם הפרופיל היה חלקי (LLM נכשל/חסר)
+    // ויש כבר מסמכים, ה-banner למטה יציע "נתח מחדש" באופן טבעי (overview מתעדכן).
+    window.addEventListener('wordai-provider-config-changed', handler);
     return () => {
       window.removeEventListener('wordai-personal-style-updated', handler);
       window.removeEventListener('wordai-style-samples-updated', handler);
+      window.removeEventListener('wordai-provider-config-changed', handler);
     };
   }, [refresh]);
 
@@ -264,6 +268,21 @@ export default function StyleProfilePanel({ onClose }) {
     `📈 יש רק ${count} מסמכי "${genre}" — העלה עוד ${3 - count} כדי שאבנה פרופיל מותאם לז'אנר הזה.`
   ));
   const showGenericGenreNudge = genreNudgeLines.length === 0 && !hasGenreAtThreshold && documents.length >= 3;
+
+  // Seam 3 — סטטוס דו-שכבתי: פרופיל מקומי (מדדים/דפוסים) מול שכבת ה-LLM (ז'אנרים/דפוסים איכותניים).
+  const docCount = overview?.stats?.docCount || 0;
+  const extractionMeta = overview?.extractionMeta || null;
+  const hasLocalProfile = Boolean(metrics) || (overview?.qualitativePatterns?.length > 0);
+  const llmIncomplete = docCount > 0 && (
+    !extractionMeta
+    || !(extractionMeta.batches > 0)
+    || extractionMeta.llmBatchesFailed > 0
+    || extractionMeta.genreClassificationFailed
+  );
+  const llmComplete = docCount > 0 && extractionMeta
+    && extractionMeta.batches > 0
+    && !extractionMeta.llmBatchesFailed
+    && !extractionMeta.genreClassificationFailed;
 
   const metricCards = [];
   if (metrics) {
@@ -451,9 +470,24 @@ export default function StyleProfilePanel({ onClose }) {
         </div>
       )}
 
-      {(overview?.extractionMeta?.llmBatchesFailed > 0 || overview?.extractionMeta?.genreClassificationFailed) && (
-        <div className="text-[12.5px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
-          ⚠️ חלק מניתוח ה-AI נכשל (בדוק חיבור ספק). הפרופיל נבנה חלקית — לחץ "נתח מחדש".
+      {hasLocalProfile && llmIncomplete && (
+        <div className="flex items-center justify-between gap-3 flex-wrap text-[12.5px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+          <span>
+            ✓ פרופיל בסיסי מוכן (מדדים + ביטויי חתימה). 🔌 חבר מפתח AI בהגדרות כדי להשלים דפוסים איכותניים וזיהוי ז'אנרים — ואז לחץ "נתח מחדש".
+          </span>
+          <button
+            type="button"
+            onClick={handleReanalyze}
+            disabled={analyzing}
+            className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[12px] font-bold transition-colors disabled:opacity-60"
+          >
+            נתח מחדש עכשיו
+          </button>
+        </div>
+      )}
+      {llmComplete && (
+        <div className="inline-flex items-center gap-1.5 self-start text-[11.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
+          ✓ ניתוח AI מלא
         </div>
       )}
 

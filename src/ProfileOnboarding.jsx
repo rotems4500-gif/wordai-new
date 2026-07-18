@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
+import { ingestAndAnalyze, setStyleEngineEnabled } from './services/styleIngestService';
+import { getSampleStoreStats } from './services/styleSampleStore';
+
+const PAST_WORKS_ACCEPT = '.docx,.pdf,.txt,.md,.rtf,.html';
 
 const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'gemini', label: 'Gemini' },
@@ -72,6 +76,10 @@ export default function ProfileOnboarding({
   const [mounted, setMounted] = useState(false);
   const [copyPromptState, setCopyPromptState] = useState('');
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
+  const [pastWorksUploading, setPastWorksUploading] = useState(false);
+  const [pastWorksProgress, setPastWorksProgress] = useState('');
+  const [pastWorksStats, setPastWorksStats] = useState(null);
+  const pastWorksFileInputRef = useRef(null);
   const [selectedAiProviders, setSelectedAiProviders] = useState(() =>
     ONBOARDING_AI_PROVIDERS.filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).map(([id]) => id),
   );
@@ -99,7 +107,7 @@ export default function ProfileOnboarding({
   };
 
   const goToStep = (targetStep) => {
-    const safeStep = Math.max(1, Math.min(10, Number(targetStep) || 1));
+    const safeStep = Math.max(1, Math.min(11, Number(targetStep) || 1));
     if (safeStep === step || animating) return;
     setAnimating(true);
     setTimeout(() => {
@@ -193,6 +201,34 @@ export default function ProfileOnboarding({
     event.target.value = '';
   };
 
+  const handlePastWorksFileSelection = async (event) => {
+    const files = Array.from(event.target.files || []).filter(Boolean);
+    event.target.value = '';
+    if (!files.length) return;
+    setPastWorksUploading(true);
+    setPastWorksProgress(`מנתח מסמך 1/${files.length}...`);
+    try {
+      await ingestAndAnalyze(files, {
+        onProgress: (info) => {
+          const current = Number(info?.current ?? info?.index ?? 0) + 1;
+          const total = Number(info?.total ?? files.length);
+          setPastWorksProgress(`מנתח מסמך ${Math.min(current, total)}/${total}...`);
+        },
+        runPatterns: true,
+      });
+      const stats = getSampleStoreStats();
+      setPastWorksStats(stats);
+      if (stats?.docCount > 0) {
+        try { setStyleEngineEnabled(true); } catch {}
+      }
+    } catch (err) {
+      console.error('ingestAndAnalyze (onboarding) failed:', err);
+      setPastWorksProgress('');
+    } finally {
+      setPastWorksUploading(false);
+    }
+  };
+
   const handleCopyExternalPrompt = async () => {
     const promptText = String(externalAnalysis.promptText || '').trim();
     if (!promptText) {
@@ -226,8 +262,9 @@ export default function ProfileOnboarding({
     6: '⚖️',
     7: '🎨',
     8: '📝',
-    9: '🔌',
-    10: '✨',
+    9: '🗂️',
+    10: '🔌',
+    11: '✨',
   };
 
   const stepTitles = {
@@ -239,8 +276,9 @@ export default function ProfileOnboarding({
     6: 'חוקים',
     7: 'סגנון',
     8: 'ניסוח',
-    9: 'חיבור AI',
-    10: 'סיום',
+    9: 'עבודות עבר',
+    10: 'חיבור AI',
+    11: 'סיום',
   };
 
   // פאנל "הפרופיל מתגבש" החי (עיצוב המוקאפ) — נגזר מהשדות שכבר מולאו
@@ -283,7 +321,7 @@ export default function ProfileOnboarding({
                 <div 
                   className="h-full bg-gradient-to-r from-[#efab4d] via-[#e0a04a] to-[#cba24f] rounded-full shadow-lg transition-all duration-1000 ease-out"
                   style={{
-                    width: `${(step / 10) * 100}%`,
+                    width: `${(step / 11) * 100}%`,
                     boxShadow: '0 0 20px rgba(239, 171, 77, 0.4)'
                   }}
                 ></div>
@@ -292,7 +330,7 @@ export default function ProfileOnboarding({
             
             {/* Step Indicators */}
             <div className="relative flex justify-between">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((s) => (
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((s) => (
                 <div key={s} className="flex flex-col items-center">
                   <button
                     type="button"
@@ -324,7 +362,7 @@ export default function ProfileOnboarding({
         </div>
 
         {/* Content Area — דו-פאנל: טופס + פאנל פרופיל חי (עיצוב המוקאפ) */}
-        <div className={`px-4 pb-4 ${[1, 9, 10].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
+        <div className={`px-4 pb-4 ${[1, 10, 11].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
           <div 
             className={`bg-[#1a1512]/55 backdrop-blur-md rounded-2xl p-4 border border-[#efab4d]/12 shadow-xl transition-all duration-700 ${
               animating 
@@ -1019,6 +1057,62 @@ export default function ProfileOnboarding({
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    📚 העבודות שכתבת = הסגנון שלך
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    העלה עבודות ומסמכים שכתבת בעצמך (Word/PDF). המערכת תלמד מהם את טביעת האצבע הסגנונית שלך — אורכי משפטים, ביטויים חוזרים, מבנה. עובד גם בלי חיבור AI; ככל שתעלה יותר, החיקוי יהיה מדויק יותר. הקבצים נשארים במכשיר שלך.
+                  </p>
+                </div>
+
+                <div
+                  className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-[#efab4d]/30 bg-white/5 rounded-2xl px-4 py-8 text-center transition-colors hover:bg-white/10"
+                >
+                  <span className="text-[28px]">📄</span>
+                  <p className="text-sm font-semibold text-white">
+                    <button
+                      type="button"
+                      onClick={() => pastWorksFileInputRef.current?.click()}
+                      disabled={pastWorksUploading}
+                      className="text-[#efab4d] hover:text-[#f0b65f] underline disabled:opacity-50"
+                    >
+                      בחר קבצים להעלאה
+                    </button>
+                  </p>
+                  <p className="text-xs text-[#8f7e69] max-w-[46ch]">
+                    תומך ב-Word, PDF, טקסט, Markdown, RTF ו-HTML. אפשר לבחור כמה קבצים יחד.
+                  </p>
+                  <input
+                    ref={pastWorksFileInputRef}
+                    type="file"
+                    multiple
+                    accept={PAST_WORKS_ACCEPT}
+                    onChange={handlePastWorksFileSelection}
+                    disabled={pastWorksUploading}
+                    className="hidden"
+                  />
+                  {pastWorksUploading && (
+                    <div className="flex items-center gap-2 mt-2 text-[12.5px] font-semibold text-[#efab4d]">
+                      <span className="w-3.5 h-3.5 border-2 border-[#efab4d]/40 border-t-[#efab4d] rounded-full animate-spin" />
+                      {pastWorksProgress || 'מעלה ומנתח...'}
+                    </div>
+                  )}
+                  {!pastWorksUploading && pastWorksStats && (
+                    <div className="mt-2 text-[12.5px] font-semibold text-emerald-300">
+                      נקלטו {pastWorksStats.docCount} מסמכים ({pastWorksStats.totalWords.toLocaleString('he-IL')} מילים) ✓
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-[#efab4d]/16 bg-white/5 p-4 text-[12.5px] text-[#8f7e69] leading-relaxed">
+                  זה שלב אופציונלי — אפשר לדלג ולחזור אליו מאוחר יותר דרך הגדרות מנוע הסגנון.
+                </div>
+              </div>
+            )}
+
+            {step === 10 && (
+              <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
                     🔌 חיבור מנוע AI
                   </h2>
                   <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
@@ -1080,7 +1174,7 @@ export default function ProfileOnboarding({
                 </div>
               </div>
             )}
-            {step === 10 && (
+            {step === 11 && (
               <div className="space-y-4 animate-in slide-in-from-top-5 duration-700">
                 <div className="text-center mb-4">
                   <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 text-white rounded-full flex items-center justify-center text-5xl mb-4 mx-auto animate-bounce shadow-2xl shadow-green-400/50">
@@ -1160,7 +1254,7 @@ export default function ProfileOnboarding({
           </div>
 
           {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/חיבור/סיום (full-width) */}
-          {![1, 9, 10].includes(step) && (
+          {![1, 10, 11].includes(step) && (
             <aside className="hidden lg:block lg:sticky lg:top-2 rounded-2xl border border-[#efab4d]/16 p-5 shadow-xl" style={{ background: 'rgba(26,21,18,0.55)', boxShadow: '0 20px 44px rgba(10,7,5,0.4)' }}>
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2.5">
@@ -1214,12 +1308,12 @@ export default function ProfileOnboarding({
           </button>
           
           <button
-            onClick={step === 10 ? onComplete : nextStep}
+            onClick={step === 11 ? onComplete : nextStep}
             className="group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 bg-gradient-to-r from-[#efab4d] to-[#e0a04a] text-[#251f1c] hover:from-[#f0b65f] hover:to-[#e6a851] shadow-lg hover:shadow-2xl transform hover:scale-105 border border-[#f4ecde]/25"
             style={{ boxShadow: '0 10px 30px rgba(239, 171, 77, 0.32)' }}
           >
             <span className="flex items-center gap-2">
-              {step === 10 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
+              {step === 11 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
             </span>
           </button>
         </div>
