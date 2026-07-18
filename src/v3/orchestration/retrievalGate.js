@@ -5,6 +5,7 @@
 // לפי היוריסטיקת אורך. כשאין נושא — מחזירים needsTopic במקום לנחש.
 
 import { retrieveSources } from '../../services/sourceRetrieval';
+import { deriveResearchTopicQuery } from '../../services/sourceQueryBuilder';
 
 // ניקוי מינימלי של prompt לנושא: הסרת הוראות אחזור גנריות. בכוונה שמרני —
 // אם אחרי הניקוי לא נשאר נושא ממשי, עדיף לשאול את המשתמש מאשר לנחש.
@@ -33,6 +34,10 @@ export const deriveGateQuery = ({ scope, prompt = '' } = {}) => {
 
   // נושא מפורש ב-scope (המשתמש אישר/ערך אותו) גובר תמיד.
   if (scopeTopic) return { query: scopeTopic, source: 'scope-topic' };
+
+  // חילוץ נושא אמיתי מהפרומפט (פועל-כתיבה + "על X", "הנושא: X") לפני fallback הגולמי.
+  const topicFromPrompt = deriveResearchTopicQuery(promptText);
+  if (topicFromPrompt) return { query: topicFromPrompt, source: 'prompt-topic' };
 
   const cleaned = stripRetrievalInstructions(promptText);
   if (cleaned.length >= 6) return { query: cleaned.slice(0, 260), source: 'prompt' };

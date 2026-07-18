@@ -9,6 +9,8 @@ import {
   syncPersistedAppSettings,
   buildWorkspaceV2RunContext,
   validateWorkspaceV2RunContext,
+  scoreStyleForDocument,
+  rewriteDocumentStyle,
 } from './aiService';
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService';
@@ -961,6 +963,8 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     source,
     category: classifyDocName(entryTitle).category,
     savedAt: new Date().toISOString(),
+    // ספירת מילים — משמשת את ה-Project Hub למעקב התקדמות מול יעד מילים.
+    wordCount: plainText ? plainText.split(/\s+/).filter(Boolean).length : 0,
     // נתיב הקובץ נשמר רק אם הוא קיים, כדי שמסך הפתיחה יוכל לפתוח מחדש
     ...(cleanPath ? { filePath: cleanPath } : {}),
     ...(cleanProjectId ? { projectId: cleanProjectId } : {}),
@@ -2164,8 +2168,18 @@ function findGeneratedHtmlIntegrityIssue(html = '') {
   return '';
 }
 
+// מנקה דליפת סימוני ציטוט ממוספרים ([1], [2][5]) שמקורם ב-snippets של חיפוש (מסלול single-call).
+// שומר בכוונה על סוגריים לא-מספריים: "[דרוש מקור]", "[נוסח חדש]" וכד'.
+function stripCitationMarkerLeakage(html = '') {
+  let out = String(html || '');
+  out = out.replace(/\[\d{1,3}\](\s*\[\d{1,3}\])*/g, '');
+  out = out.replace(/ {2,}/g, ' ');           // רווחים כפולים שנוצרו
+  out = out.replace(/ ([,.;:!?])/g, '$1');    // רווח יתום לפני פיסוק
+  return out;
+}
+
 function ensureCompleteGeneratedHtmlResponse(response = '', operationLabel = 'המסמך') {
-  const normalized = normalizeGeneratedHtmlResponse(response);
+  const normalized = stripCitationMarkerLeakage(normalizeGeneratedHtmlResponse(response));
   const visibleText = stripHtmlTags(normalized);
   if (!hasMeaningfulVisibleText(visibleText)) {
     throw new Error(`התקבלה תשובת ${operationLabel} ריקה או לא שמישה`);
@@ -2768,6 +2782,16 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
         forceVerifiedSourceFollowOn: false,
         ...(completion?.sourceLock ? { sourceLock: completion.sourceLock } : {}),
       };
+      // Phase 6 — deep tier: jitter פר-קריאה על ההמשכים (call index = continuationAttempt+1).
+      // טמפרטורה = base+0.1 clamped 0.3-1.0; styleEngineSeed טרי ושונה לכל pass → רוטציית דפוסים
+      // בין הפתיחה לגוף (שבירת self-conditioning, §10 נק' 4). מוחל רק כשה-flag דלוק — נשאר ללא-שינוי לשאר.
+      if (requestOptions.styleDeepJitter) {
+        const callIndex = continuationAttempt + 1;
+        if (Number.isFinite(requestOptions.styleDeepBaseTemp)) {
+          continuationRequestOptions.temperature = Math.min(1.0, Math.max(0.3, requestOptions.styleDeepBaseTemp + 0.1));
+        }
+        continuationRequestOptions.styleEngineSeed = callIndex * 1000 + (Date.now() % 1000);
+      }
       const continuationResponse = await chatWithActiveProvider(
         continuationPrompt,
         buildGeneratedHtmlContinuationContext({ context, partialHtml, integrityIssue: continuationIssue }),
@@ -2986,6 +3010,7 @@ async function runWorkspaceV2DocumentGeneration({
   onHumanizeProgress = null,
   runScope = null,
   includeSources = null,
+  temperature = null,
 }) {
   const personalStyleProfile = getPersonalStyleProfile();
   const runContext = buildWorkspaceV2RunContext({
@@ -3073,6 +3098,12 @@ async function runWorkspaceV2DocumentGeneration({
   let cleanedResponse = '';
   let finalStepRequestOptions = null;
 
+  // V3: מציבים את נושא-התוכן האמיתי על ה-scope כדי שכל שלב יחפש לפי הנושא ולא לפי טקסט המטלה/תבנית.
+  if (runScope) {
+    const v2Topic = deriveDocumentResearchTopic(cleanPrompt, cleanInstructions);
+    if (v2Topic) setScopeTopic(runScope, v2Topic);
+  }
+
   for (let stepIndex = 0; stepIndex < pipeline.length; stepIndex += 1) {
     const step = pipeline[stepIndex] || {};
     const isFinalStep = stepIndex === pipeline.length - 1;
@@ -3149,6 +3180,8 @@ async function runWorkspaceV2DocumentGeneration({
         ...stepRequestOptions,
         expectDocumentOutput: true,
         maxContinuationPasses: Math.max(4, Math.min(6, 3 + normalizedAdditionalReviewRounds)),
+        // טמפרטורת יצירתיות — רק לשלב הכתיבה הסופי (המסמך), לא לשלבי הביניים.
+        ...(Number.isFinite(temperature) ? { temperature } : {}),
       };
       cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
         userPrompt: userRequestSections.join('\n\n'),
@@ -4027,12 +4060,13 @@ async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '
 
 // forceDirectMode=false כברירת מחדל: יצירה חדשה רשאית לרוץ ב-workflow automation (ריבוי סוכנים)
 // כשסביבת העבודה מאפשרת. בכוונה שונה מ-reviseDocumentWithFeedback (true) — עריכה ממוקדת לא מצדיקה ריבוי סוכנים.
-export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false, humanizeLoop = null, onHumanizeProgress = null, includeSources = null, sourceRoute = '' }) {
-  // sourceRoute — בחירה מפורשת של המשתמש (בורר בסוף הבישול): 'pipeline' | 'single-call' | 'none' | '' (auto).
-  // 'none' מתורגם ל-includeSources=false; השאר מוזרם ל-chatWithActiveProvider כ-options.sourceRoute.
+export async function generateDocumentFromPrompt({ prompt, templateId = 'blank', instructions = '', selectedMaterials = [], selectedModel, selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = false, skipWorkflowAutomation = false, directModeReason = '', workspaceV2TemplateId = '', useWorkspaceV2 = false, humanizeLoop = null, onHumanizeProgress = null, includeSources = null, sourceRoute = '', temperature = null, styleDepth = 'normal' }) {
+  // sourceRoute — בחירת מסלול מקורות ('pipeline' | 'single-call' | 'none' | '' auto): מהבורר בסוף
+  // הבישול או ממצב Direct. 'none' מתורגם ל-includeSources=false; 'pipeline'/'single-call' קובעים רק
+  // *איך* מאחזרים כשנדרשים מקורות (includeSources מפורש או ה-regex מחליטים *אם* — כך Direct עם
+  // מסמך בלי מקורות נשאר קריאה נקייה בלי grounding).
   const normalizedSourceRoute = String(sourceRoute || '').trim().toLowerCase();
   if (normalizedSourceRoute === 'none') includeSources = false;
-  else if ((normalizedSourceRoute === 'pipeline' || normalizedSourceRoute === 'single-call') && includeSources !== false) includeSources = true;
   const { cleanPrompt, cleanInstructions, title } = resolveGenerationRequestContext({ prompt, instructions, templateId });
   if (!cleanPrompt && !cleanInstructions) throw new Error('צריך לכתוב נושא קצר או הנחיות למסמך');
   // גדר קלט משובש: קידוד פגום הופך עברית לרצף '?'. בלי הגדר המודל נשאר בלי נושא
@@ -4161,6 +4195,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         onHumanizeProgress,
         runScope: documentRunScope,
         includeSources,
+        ...(Number.isFinite(temperature) ? { temperature } : {}),
       });
     }
 
@@ -4209,7 +4244,21 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentNotesInstruction: !suppressVisibleAgentNotes && automation?.appendAgentNotesToOutput === true
         ? String(automation?.agentNotesInstruction || '').trim()
         : '',
+      // טמפרטורת יצירתיות מבורר הסגנון האישי — נשלחת רק לכתיבת המסמך הראשית (לא לקריאות meta).
+      ...(Number.isFinite(temperature) ? { temperature } : {}),
     };
+    // Phase 6 — deep tier בלבד: וריאציה מבוקרת בין קריאות כדי לשבור self-conditioning (§10 נק' 4).
+    // גרסה שמרנית ובטוחה: *לא* יצירה מקטעית מלאה (outline→section-by-section, נדחתה כמסוכנת לפאס הזה),
+    // אלא jitter של טמפרטורה + styleEngineSeed טרי לכל קריאה. הקריאה הראשונה (הפתיחה) על ה-base,
+    // וההמשכים (הגוף) מקבלים base+0.1 clamped 0.3-1.0 + seed שונה → רוטציית דפוסים בין פתיחה לגוף.
+    // ה-jitter של ההמשכים מיושם בתוך requestGeneratedHtmlResponseWithSingleContinuation.
+    if (styleDepth === 'deep') {
+      // call index 0 (פתיחה): seed טרי; טמפרטורה נשארת base (לא נוגעים).
+      requestOptions.styleEngineSeed = Date.now() % 1000;
+      // מרקרים שמורידים את ה-jitter של ההמשכים אל עוזר ההמשך.
+      requestOptions.styleDeepJitter = true;
+      requestOptions.styleDeepBaseTemp = Number.isFinite(temperature) ? temperature : null;
+    }
     // כשהמשתמש מבקש מסמך *עם מקורות* — מדליקים אחזור-אמת לפני הכתיבה (retrieve-then-write):
     // chatWithActiveProvider ישלוף מקורות מאומתים, ינעל את ה-allowedUrls, ויכתוב מקורקע עליהם בלבד,
     // במקום לתת למודל להמציא ציטוטים. בלי זה יצירת-מסמך לא עשתה שום grounding (הבקשה נחשבה
@@ -4329,8 +4378,46 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       operationLabel: 'האנשת המסמך',
     });
 
+    // שופט הסגנון (Phase 4, אי-הרסני): מנקד את הטקסט הנקי של המסמך מול הפרופיל
+    // ומצרף styleScore ל-meta. לא משכתב את ה-HTML (סיכון אובדן מבנה) — רק חשיפת ציון
+    // ל-LAB/קוראים + דגל styleRewriteSuggested. לעולם לא שובר יצירה (כל כשל → בלי ציון).
+    let styleScore = null;
+    let styleRewriteSuggested = false;
+    let styleRewriteApplied = false;
+    let styleFinalHtml = humanizedResponse; // humanizedResponse הוא const — משתנה מקומי לשכתוב.
+    if (returnMeta) {
+      try {
+        const plainDocText = stripHtmlTags(styleFinalHtml);
+        if (plainDocText && plainDocText.length >= 40) {
+          // deep tier מריץ את שופט ה-LLM המלא; אחרת 'auto' (מקומי + LLM רק בטווח אפור).
+          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto', requestText: prompt });
+          if (styleResult && Number.isFinite(styleResult.score)) {
+            styleScore = styleResult;
+            styleRewriteSuggested = styleResult.score <= 70;
+          }
+        }
+      } catch {
+        // ניקוד סגנון הוא best-effort — לא נוגע בפלט המסמך.
+      }
+
+      // Stage A: אם הציון נמוך והמנוע פעיל — שכתוב פסקאות לכיוון הסגנון (אי-הרסני-מבנית).
+      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && styleDepth !== 'fast') {
+        try {
+          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth, target: 75, requestText: prompt });
+          if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
+            styleFinalHtml = rewriteResult.html;
+            styleRewriteApplied = true;
+            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto' });
+            if (rescored && Number.isFinite(rescored.score)) styleScore = rescored;
+          }
+        } catch {
+          // כשל שכתוב לעולם לא שובר יצירה ולא מאפס את הציון הקיים.
+        }
+      }
+    }
+
     return returnMeta
-      ? { html: humanizedResponse, usedFallback: false, runId, errorMessage: '', title }
+      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', title, styleScore, styleRewriteSuggested, styleRewriteApplied }
       : humanizedResponse;
   } catch (error) {
     logAgentDebugEvent({
@@ -4451,7 +4538,12 @@ async function prepareFeedbackDrivenDocumentContext({
 
 // forceDirectMode=true כברירת מחדל: שכתוב לפי feedback הוא עריכה ממוקדת — רץ ישירות במודל יחיד
 // בלי workflow automation. בכוונה שונה מ-generateDocumentFromPrompt (false) שמאפשר ריבוי סוכנים ביצירה חדשה.
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null, sourceRoute = '', includeSources = null }) {
+  // sourceRoute — בחירת מסלול מקורות (בורר בסוף הבישול / מצב Direct): 'pipeline' | 'single-call' | 'none' | '' (auto).
+  // מקביל ל-generateDocumentFromPrompt: 'none' → includeSources=false; המסלול קובע רק *איך*,
+  // includeSources מפורש או ה-regex קובעים *אם*.
+  const normalizedSourceRoute = String(sourceRoute || '').trim().toLowerCase();
+  if (normalizedSourceRoute === 'none') includeSources = false;
   const cleanHtml = String(existingHtml || '').trim();
   const cleanFeedback = String(feedback || '').trim();
   const requestedProviderSelection = resolveRequestedProviderSelection({ selectedModel, selectedProviderId, selectedProviderModel });
@@ -4592,8 +4684,11 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     };
     // כמו ביצירת מסמך: אם המשוב/הבקשה דורשים מקורות — retrieve-then-write (grounding אמיתי),
     // כדי שלא יומצאו ציטוטים בעריכה. לא מפעילים כשיש נעילת-URL מדויקת.
-    const revisionSourceRequirement = /(מקור(?:ות)?|מראי\s+מקום|ביבליוגרפ|רשימת\s+מקורות|אסמכתא|ציטוט|הפניות|references?|bibliography|citations?|\bAPA\b|\bMLA\b|סקירת\s+ספרות|literature\s+review)/i
-      .test([originalPrompt, cleanFeedback].filter(Boolean).join('\n'));
+    // includeSources מפורש (מהבורר) מנצח; ה-regex נשאר כ-fallback לזיהוי אוטומטי.
+    const revisionSourceRequirement = typeof includeSources === 'boolean'
+      ? includeSources
+      : /(מקור(?:ות)?|מראי\s+מקום|ביבליוגרפ|רשימת\s+מקורות|אסמכתא|ציטוט|הפניות|references?|bibliography|citations?|\bAPA\b|\bMLA\b|סקירת\s+ספרות|literature\s+review)/i
+        .test([originalPrompt, cleanFeedback].filter(Boolean).join('\n'));
     if (revisionSourceRequirement && !exactArticleUrl) {
       requestOptions.forceVerifiedSourceFollowOn = true;
       const derivedTopic = deriveDocumentResearchTopic(originalPrompt, cleanFeedback);
@@ -4602,6 +4697,12 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
         requestOptions.sourceQuerySource = 'documentTopic';
         setScopeTopic(revisionRunScope, derivedTopic);
       }
+    }
+    if (normalizedSourceRoute === 'pipeline' || normalizedSourceRoute === 'single-call') {
+      requestOptions.sourceRoute = normalizedSourceRoute;
+    } else if (normalizedSourceRoute === 'none') {
+      // "בלי מקורות" מהבורר: מדכא גם את היוריסטיקות הרשת, לא רק retrieve-then-write.
+      requestOptions.forceSuppressResearchRouting = true;
     }
     if (!shouldUseWorkflowAutomation) {
       applyDirectModeSkips(requestOptions);

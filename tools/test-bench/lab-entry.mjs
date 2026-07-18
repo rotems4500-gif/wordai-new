@@ -82,6 +82,12 @@ const srcretr = await import('srcretr');
 const wls = await import('wls');
 const styleauth = await import('styleauth');
 const spss = await import('spss');
+// ---- Personal Style Engine services ----
+const styleProfile = await import('styleprofile');
+const styleSamples = await import('stylesamples');
+const styleIngest = await import('styleingest');
+const styleRetrieval = await import('styleretrieval');
+const styleJudge = await import('stylejudge');
 
 // Node URL verifier (parallels Rust verify_url): HEAD→GET, follow redirects, 5s.
 // Extra vs Rust: on a live page we GET and parse <title>, returning it so the
@@ -155,7 +161,18 @@ function getStyleProfile() {
   };
 }
 
-const htmlToPlain = (html) => String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const htmlToPlain = (html) => String(html)
+  // Preserve block structure: insert paragraph breaks at block-element boundaries
+  // BEFORE stripping tags, so paragraphCount/avgParagraphWords survive into computeLocalMetrics.
+  .replace(/<\/(p|div|h[1-6]|li|tr|blockquote|section|article)\s*>/gi, '\n\n')
+  .replace(/<br\s*\/?>/gi, '\n\n')
+  .replace(/<[^>]+>/g, ' ')
+  // Collapse horizontal whitespace but keep newlines; trim spaces around newlines
+  // without eating them; then collapse runs of blank lines to a single blank line.
+  .replace(/[ \t\f\v]+/g, ' ')
+  .replace(/ *\n */g, '\n')
+  .replace(/\n{2,}/g, '\n\n')
+  .trim();
 
 async function genOnce(prompt, dropdown, model = '') {
   const explicit = dropdown && dropdown !== 'default' ? dropdown : '';
@@ -174,7 +191,7 @@ async function genOnce(prompt, dropdown, model = '') {
 }
 
 // Same as genOnce but returns the full returnMeta result (for the doc tab metrics).
-async function genOnceMeta(prompt, dropdown, model = '', includeSources = null, materials = null, workspace = null) {
+async function genOnceMeta(prompt, dropdown, model = '', includeSources = null, materials = null, workspace = null, sourceRoute = '', extraOpts = {}) {
   const explicit = dropdown && dropdown !== 'default' ? dropdown : '';
   const cfg = ai.getProviderConfig();
   const pinnedModel = explicit
@@ -192,7 +209,8 @@ async function genOnceMeta(prompt, dropdown, model = '', includeSources = null, 
     selectedModel: '', selectedProviderId: explicit, selectedProviderModel: pinnedModel,
     additionalReviewRounds: Number(workspace?.additionalReviewRounds) || 0, forceDirectMode: false, skipWorkflowAutomation: false,
     useWorkspaceV2, workspaceV2TemplateId: useWorkspaceV2 ? String(workspace?.workspaceV2TemplateId || '') : '',
-    returnMeta: true, includeSources,
+    returnMeta: true, includeSources, sourceRoute: String(sourceRoute || ''),
+    ...(extraOpts || {}),
   });
 }
 
@@ -487,12 +505,12 @@ async function retrieveSourcesLab({ query, kind = 'academic', count = 3, after =
 }
 
 // Public: real document generation (write-with-sources path).
-async function generateDoc({ prompt, dropdown = 'default', model = '', includeSources = null, materials = null, workspace = null }) {
+async function generateDoc({ prompt, dropdown = 'default', model = '', includeSources = null, materials = null, workspace = null, sourceRoute = '' }) {
   const from = beginCapture();
   const t0 = Number(process.hrtime.bigint() / 1000000n);
   let html = '', error = '', meta = null;
   try {
-    const result = await genOnceMeta(prompt, dropdown, model, includeSources, materials, workspace);
+    const result = await genOnceMeta(prompt, dropdown, model, includeSources, materials, workspace, sourceRoute);
     html = typeof result === 'string' ? result : (result?.html || result?.text || '');
     meta = typeof result === 'object' ? { ...result, html: undefined, text: undefined } : null;
   } catch (e) { error = maskWire(e?.message || String(e)); }
@@ -506,7 +524,7 @@ async function generateDoc({ prompt, dropdown = 'default', model = '', includeSo
   try {
     const dbg = JSON.parse(globalThis.localStorage.getItem('wordai_agent_debug_logs') || '[]');
     debugEvents = dbg
-      .filter((r) => /source-retrieval-plan|verified-source-retrieval|verified-source-candidate-rejected|source-output-blocked|verified-source-output-blocked|source-topic-derived|verified-source-bibliography-appended|source-domain-blocked|single-call-source|source-routing-decision|source-lock-applied|stale-lock-rejected/.test(String(r.type || '')))
+      .filter((r) => /source-retrieval-plan|verified-source-retrieval|verified-source-candidate-rejected|source-output-blocked|verified-source-output-blocked|source-topic-derived|verified-source-bibliography-appended|source-domain-blocked|single-call-source|source-relevance-vet|source-routing-decision|source-lock-applied|stale-lock-rejected/.test(String(r.type || '')))
       .map((r) => ({ type: r.type, message: maskWire(String(r.message || '')).slice(0, 300) }));
   } catch {}
   return {
@@ -996,9 +1014,397 @@ async function buildAnalysisFromInput({ csv = '', savBase64 = '', savFileName = 
   }
 }
 
+// ---- SPSS plan revision — reviseAssignmentProfile smoke test ----
+// Same CSV/analysis pipeline as runSpssProject (spss.parseCsvText → columns digest).
+// 3 steps: (1) analyzeSpssAssignment builds an initial plan, (2) reviseAssignmentProfile
+// applies a real variable-swap change request, (3) a second revise call asks for a
+// variable that does not exist in the dataset — anti-hallucination gate must reject it
+// (ok:false, or the bogus name never lands in the returned profile's analyses).
+const SPSS_REVISE_SAMPLE_CSV = [
+  'מגדר,גיל,שביעות_רצון,הכנסה',
+  'זכר,22,4,8500',
+  'נקבה,25,5,9200',
+  'זכר,31,3,7600',
+  'נקבה,28,4,10100',
+  'זכר,45,2,6200',
+  'נקבה,36,5,11400',
+  'זכר,29,3,7900',
+  'נקבה,41,4,9800',
+  'זכר,24,2,6600',
+  'נקבה,33,5,10600',
+].join('\n');
+const SPSS_REVISE_DEFAULT_ASSIGNMENT = 'בדוק האם יש הבדל בשביעות רצון בין גברים לנשים, וחשב מתאם בין גיל לשביעות רצון.';
+const SPSS_REVISE_DEFAULT_CHANGE = 'במקום גיל תשתמש במשתנה אחר שקיים בקובץ.';
+const SPSS_REVISE_REJECT_CHANGE = 'תוסיף ניתוח עם המשתנה בלה_בלה_לא_קיים.';
+
+async function runSpssRevisePlan({
+  csv = '',
+  assignmentText = SPSS_REVISE_DEFAULT_ASSIGNMENT,
+  changeRequest = SPSS_REVISE_DEFAULT_CHANGE,
+  rejectChangeRequest = SPSS_REVISE_REJECT_CHANGE,
+  provider = '',
+  model = '',
+} = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  const route = provider ? { providerOverride: provider, modelOverride: model } : {};
+  const steps = [];
+  try {
+    const analysis = spss.parseCsvText(String(csv || '').trim() || SPSS_REVISE_SAMPLE_CSV, { fileName: 'lab.csv' });
+    const columns = spssColumnDigest(analysis);
+
+    // 1) plan
+    const planned = await spss.analyzeSpssAssignment({ assignmentText, analysis, ...route });
+    steps.push({ step: 'plan', ok: planned.ok, model: planned.model, error: planned.error || '' });
+    if (!planned.ok) {
+      return { ok: false, stage: 'plan', error: planned.error, columns, steps, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+    }
+    const profileBefore = planned.profile;
+
+    // 2) revise — real change request (variable swap)
+    const revised = await spss.reviseAssignmentProfile({
+      profile: profileBefore, changeRequest, assignmentText, analysis, ...route,
+    });
+    steps.push({ step: 'revise', ok: revised.ok, model: revised.model, error: revised.error || '' });
+
+    // 3) revise — anti-hallucination smoke test: request a variable that isn't in the file
+    const baseForReject = revised.ok && revised.profile ? revised.profile : profileBefore;
+    const rejected = await spss.reviseAssignmentProfile({
+      profile: baseForReject, changeRequest: rejectChangeRequest, assignmentText, analysis, ...route,
+    });
+    const bogusToken = 'בלה_בלה_לא_קיים';
+    const bogusInPlan = rejected.ok && rejected.profile
+      ? (rejected.profile.analyses || []).some((item) => JSON.stringify(item).includes(bogusToken))
+      : false;
+    const rejectionWorked = rejected.ok === false || !bogusInPlan;
+    steps.push({ step: 'revise-reject', ok: rejected.ok, rejectionWorked, error: rejected.error || '' });
+
+    return {
+      ok: true,
+      columns,
+      assignmentText,
+      changeRequest,
+      rejectChangeRequest,
+      profileBefore,
+      profileAfterRevise: revised.ok ? revised.profile : null,
+      changeSummary: revised.changeSummary || '',
+      reviseError: revised.error || '',
+      profileAfterReject: rejected.ok ? rejected.profile : null,
+      rejectionWorked,
+      rejectError: rejected.error || '',
+      steps,
+      providerId: revised.providerId || planned.providerId || '',
+      model: revised.model || planned.model || '',
+      wire: endCapture(from),
+      durationMs: Number(process.hrtime.bigint() / 1000000n) - t0,
+    };
+  } catch (e) {
+    return { ok: false, error: maskWire(e?.message || String(e)), stack: String(e?.stack || '').split('\n').slice(0, 5), steps, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+  }
+}
+
+// ---- SPSS consult flow — consultAssignmentPlan → reviseAssignmentProfile → generateSpssSyntax ----
+// End-to-end smoke test for the "consult produces a derived-variable change, revise applies
+// it prep-first, codegen actually emits it" chain. All provider calls pinned to Gemini per
+// the LAB's Gemini-only test convention (keys load from encrypted config like every other run).
+const SPSS_CONSULT_SAMPLE_CSV = [
+  'gender,age,income_level,education_years,occupation_prestige,satisfaction',
+  'male,22,4,12,5,5',
+  'female,25,6,16,7,6',
+  'male,31,3,10,4,3',
+  'female,28,7,18,8,6',
+  'male,45,8,14,7,4',
+  'female,36,5,16,6,5',
+  'male,29,4,12,5,4',
+  'female,41,9,20,9,7',
+  'male,24,3,10,3,3',
+  'female,33,6,16,6,5',
+  'male,52,7,14,7,4',
+  'female,38,8,18,8,6',
+].join('\n');
+const SPSS_CONSULT_DEFAULT_ASSIGNMENT = 'בדוק האם קיים קשר בין גיל לשביעות רצון, והשווה שביעות רצון בין גברים לנשים.';
+const SPSS_CONSULT_DEFAULT_QUESTION = 'במקום גיל, תבנה משתנה מדד שמשקף מעמד סוציו-אקונומי והשתמש בו בניתוח';
+const SPSS_CONSULT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+async function runSpssConsultFlow({
+  csv = '',
+  assignmentText = SPSS_CONSULT_DEFAULT_ASSIGNMENT,
+  question = SPSS_CONSULT_DEFAULT_QUESTION,
+} = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  const route = { providerOverride: 'gemini' };
+  const steps = {};
+  const failures = [];
+  try {
+    const analysis = spss.parseCsvText(String(csv || '').trim() || SPSS_CONSULT_SAMPLE_CSV, { fileName: 'lab.csv' });
+    const columns = spssColumnDigest(analysis);
+
+    // 1) plan
+    const planned = await spss.analyzeSpssAssignment({ assignmentText, analysis, ...route });
+    steps.plan = { ok: planned.ok, model: planned.model, error: planned.error || '' };
+    if (!planned.ok) {
+      failures.push(`plan: ${planned.error || 'analyzeSpssAssignment failed'}`);
+      return { ok: false, columns, steps, failures, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+    }
+    const profile = planned.profile;
+
+    // 2) consult — ask for a derived socio-economic index instead of raw age
+    const consulted = await spss.consultAssignmentPlan({ profile, question, assignmentText, analysis, ...route });
+    const proposedChange = consulted.proposedChange || null;
+    const newVariable = proposedChange?.newVariable || null;
+    const consultOk = Boolean(consulted.ok && proposedChange);
+    if (!consulted.ok) failures.push(`consult: ${consulted.error || 'consultAssignmentPlan failed'}`);
+    if (consulted.ok && !proposedChange) failures.push('consult: proposedChange is null — expected a concrete change for this question');
+    if (newVariable?.name && !SPSS_CONSULT_NAME_RE.test(newVariable.name)) {
+      failures.push(`consult: newVariable.name "${newVariable.name}" is not a valid identifier`);
+    }
+    steps.consult = {
+      ok: consulted.ok, model: consulted.model, error: consulted.error || '',
+      consultOk, proposedChange, answer: String(consulted.answer || '').slice(0, 500),
+    };
+    if (!consultOk) {
+      return { ok: false, columns, profile, steps, failures, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+    }
+
+    // 3) revise — apply the proposed change the same way the UI's "apply advice" flow does
+    const derivedName = newVariable?.name || '';
+    const changeRequest = [
+      proposedChange.changeRequest || '',
+      derivedName ? `\n\nמשתנה נגזר לבניה: ${derivedName} — מבוסס על ${(newVariable.buildFrom || []).join(', ')} — ${newVariable.how || ''}` : '',
+    ].join('');
+    const advisoryContext = `${question}\n${String(consulted.answer || '').slice(0, 1000)}`;
+    const revised = await spss.reviseAssignmentProfile({
+      profile, changeRequest, assignmentText, analysis,
+      advisoryContext, expectedAnalysis: proposedChange.expectedAnalysis || '', ...route,
+    });
+    const revisedProfile = revised.ok ? revised.profile : null;
+    let prepStepFirst = false;
+    let nameInBoth = true; // vacuously true when there's no derived variable to check
+    if (revisedProfile && Array.isArray(revisedProfile.analyses)) {
+      const analyses = revisedProfile.analyses;
+      const prepIndex = analyses.findIndex((item) => spssIsPrep(item));
+      if (derivedName) {
+        const mentions = (item) => `${item?.request || ''} ${(item?.variables || []).join(' ')}`.includes(derivedName);
+        const prepMentionsIt = prepIndex >= 0 && mentions(analyses[prepIndex]);
+        const consumerIndex = analyses.findIndex((item, idx) => idx !== prepIndex && mentions(item));
+        prepStepFirst = prepMentionsIt && consumerIndex > prepIndex;
+        nameInBoth = prepMentionsIt && consumerIndex >= 0;
+      } else {
+        prepStepFirst = prepIndex >= 0;
+      }
+    }
+    if (!revised.ok) failures.push(`revise: ${revised.error || 'reviseAssignmentProfile failed'}`);
+    if (derivedName && !prepStepFirst) failures.push('revise: prep step (recode/compute) is not positioned before the consuming analysis');
+    if (derivedName && !nameInBoth) failures.push(`revise: derived name "${derivedName}" not found in both the prep step and a consumer analysis`);
+    steps.revise = { ok: revised.ok, model: revised.model, error: revised.error || '', prepStepFirst, nameInBoth };
+    if (!revised.ok || !revisedProfile) {
+      return { ok: false, columns, profile, revisedProfile, steps, failures, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+    }
+
+    // 4) codegen — same holistic combinedRequest shape as runSpssProject/onGenerateAllCode
+    const isPrepItem = (item) => spssIsPrep(item);
+    const orderedAnalyses = [
+      ...revisedProfile.analyses.filter((item) => isPrepItem(item)),
+      ...revisedProfile.analyses.filter((item) => !isPrepItem(item)),
+    ];
+    const planChecklist = orderedAnalyses
+      .map((item, index) => `${index + 1}. ${item.label}${item.method ? ` (${item.method})` : ''} — ${item.request || item.label}`)
+      .join('\n');
+    const combinedRequest = [
+      'בצע עבודת SPSS מלאה שעונה על כל דרישות המטלה, בסינטקס אחד רציף ומלא.',
+      '',
+      'טקסט המטלה:',
+      String(assignmentText || '').trim(),
+      '',
+      'תוכנית הניתוחים הנדרשים (בצע את כולם, בסדר הזה — הכנת נתונים תחילה):',
+      planChecklist,
+      '',
+      'הנחיות פלט: הפק syntax אחד שכולל את כל הניתוחים לפי הסדר. לכל מבחן היסק הוסף בדיקות הנחות רלוונטיות (נורמליות, שוויון שונויות). הפרד בין הבלוקים בהערות תיאוריות (* --- כותרת ---.). ספק קוד עשיר ומלא לעבודת סיום — לא מינימלי. השתמש אך ורק במשתנים שבמטא-דאטה; אל תמציא משתנים.',
+    ].join('\n');
+
+    let genResult = await spss.generateSpssSyntax({ analysis, request: combinedRequest, tutorMode: true, mode: 'prep', extraAllowedNames: derivedName ? [derivedName] : [], ...route });
+    let repaired = false;
+    if (!genResult.ok || !genResult.syntax) {
+      const enrichedRequest = `${combinedRequest}\n(ספק syntax מלא ושמיש; אל תחזיר ERROR אלא אם זה באמת בלתי אפשרי.)`;
+      const retry = await spss.generateSpssSyntax({
+        analysis, request: enrichedRequest, tutorMode: true, mode: 'prep', extraAllowedNames: derivedName ? [derivedName] : [],
+        skipMethodologyGuard: true, repairHint: genResult.guidanceMessage, ...route,
+      });
+      if (retry.ok && retry.syntax) { genResult = retry; repaired = true; }
+      else { genResult = retry || genResult; }
+    }
+    const syntax = genResult.syntax || '';
+    const blockedBy = genResult.blockedBy || '';
+    const codegenOk = Boolean(genResult.ok && syntax && !blockedBy);
+    const hasComputeOrRecode = /COMPUTE|RECODE/i.test(syntax);
+    const hasDerivedName = derivedName ? syntax.includes(derivedName) : true;
+    if (!codegenOk) failures.push(`codegen: ${genResult.guidanceMessage || genResult.error || blockedBy || 'generateSpssSyntax failed'}`);
+    if (codegenOk && !hasComputeOrRecode) failures.push('codegen: syntax has no COMPUTE/RECODE step');
+    if (codegenOk && derivedName && !hasDerivedName) failures.push(`codegen: derived name "${derivedName}" missing from generated syntax`);
+    steps.codegen = {
+      ok: genResult.ok, model: genResult.model, error: genResult.error || '', blockedBy, repaired,
+      codegenOk, hasComputeOrRecode, hasDerivedName, syntax: syntax.slice(0, 800),
+    };
+
+    const ok = failures.length === 0;
+    return {
+      ok,
+      columns,
+      assignmentText,
+      question,
+      profile,
+      revisedProfile,
+      derivedName,
+      steps,
+      failures,
+      providerId: genResult.providerId || revised.providerId || consulted.providerId || planned.providerId || '',
+      model: genResult.model || '',
+      wire: endCapture(from),
+      durationMs: Number(process.hrtime.bigint() / 1000000n) - t0,
+    };
+  } catch (e) {
+    return { ok: false, error: maskWire(e?.message || String(e)), stack: String(e?.stack || '').split('\n').slice(0, 5), steps, failures, wire: endCapture(from), durationMs: Number(process.hrtime.bigint() / 1000000n) - t0 };
+  }
+}
+
+// ============================================================================
+// Personal Style Engine — LAB functions.
+// Drive the REAL style-engine pipeline (ingest → metrics → LLM patterns → enable
+// → generate with engine active → hybrid score) over HTTP. All state lives in the
+// shared localStorage shim (sample store + profile.styleEngine), so it persists
+// across calls within the process, exactly like the browser.
+// ============================================================================
+
+// 1) Ingest raw documents into a styleEngine profile.
+//    Per doc: styleIngest.ingestText → recomputeMetricsFromStore → (once) real LLM
+//    qualitative analysis (runQualitativeAnalysis{force}). Then enable the engine.
+async function styleIngestDocs({ docs = [] } = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  const ingested = [];
+  let error = '';
+  try {
+    const list = Array.isArray(docs) ? docs : [];
+    for (const d of list) {
+      const title = String(d?.title || '').trim() || `doc-${ingested.length + 1}`;
+      const text = String(d?.text || '');
+      const res = styleIngest.ingestText({ title, text });
+      ingested.push({ title, chars: text.length, added: res?.added ?? null, skipped: res?.skipped ?? null });
+    }
+    // E3 — classify each new doc's genre BEFORE recompute so genre sub-profiles build
+    // (mirrors production ingestAndAnalyze). Never blocks the pipeline on failure.
+    try { await styleIngest.classifyPendingGenres(); } catch {}
+    styleIngest.recomputeMetricsFromStore();
+    // Real LLM call — extracts qualitative patterns from representative excerpts.
+    await styleIngest.runQualitativeAnalysis({ force: true });
+    // Ingesting enables the engine so subsequent generation injects the style.
+    styleIngest.setStyleEngineEnabled(true);
+  } catch (e) { error = maskWire(e?.message || String(e)); }
+  const durationMs = Number(process.hrtime.bigint() / 1000000n) - t0;
+  return { ingested, overview: styleIngest.getStyleOverview(), error, wire: endCapture(from), durationMs };
+}
+
+// 2) Generate a document with the styleEngine active, and report how well the
+//    output matches the user's style. styleScore comes from meta.styleScore (Phase 4)
+//    when present, otherwise from a direct scoreStyleForDocument call.
+async function styleGenerate({ prompt = '', dropdown = 'default', model = '', depth = 'auto' } = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  let html = '', plainText = '', styleScore = null, error = '', meta = null;
+  try {
+    const styleDepth = depth === 'deep' ? 'deep' : (depth === 'fast' ? 'fast' : 'normal');
+    const result = await genOnceMeta(prompt, dropdown, model, null, null, null, '', { styleDepth });
+    html = typeof result === 'string' ? result : (result?.html || result?.text || '');
+    meta = typeof result === 'object' && result ? { ...result, html: undefined, text: undefined } : null;
+    plainText = htmlToPlain(html);
+    styleScore = (meta && meta.styleScore) ? meta.styleScore : null;
+    if (!styleScore) {
+      styleScore = await ai.scoreStyleForDocument(plainText, { mode: depth === 'deep' ? 'deep' : 'auto', requestText: prompt });
+    }
+  } catch (e) { error = maskWire(e?.message || String(e)); }
+  const durationMs = Number(process.hrtime.bigint() / 1000000n) - t0;
+  return {
+    prompt: prompt.slice(0, 200),
+    htmlLength: String(html).length,
+    html: maskWire(String(html)),
+    plainText: maskWire(plainText).slice(0, 4000),
+    styleScore,
+    styleRewriteApplied: meta?.styleRewriteApplied === true,
+    meta,
+    error, wire: endCapture(from), durationMs,
+  };
+}
+
+// 3) Score arbitrary text with the hybrid style judge (local + LLM). Distinct from
+//    /api/score which uses the OLD authenticity scorer.
+async function styleScoreText({ text = '', mode = 'auto', genre = null, prompt = '' } = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  let breakdown = null, error = '';
+  try {
+    // genre/prompt אופציונליים — בלעדיהם ה-fallback ב-aiService מסווג את טקסט-הפלט עצמו.
+    breakdown = await ai.scoreStyleForDocument(htmlToPlain(text), { mode: mode === 'deep' ? 'deep' : 'auto', genre, requestText: prompt || '' });
+  } catch (e) { error = maskWire(e?.message || String(e)); }
+  const durationMs = Number(process.hrtime.bigint() / 1000000n) - t0;
+  return { enabled: breakdown !== null, breakdown, error, wire: endCapture(from), durationMs };
+}
+
+// 4) Current style-engine status: overview + sample-store stats.
+function styleEngineStatus() {
+  return { overview: styleIngest.getStyleOverview(), sampleStore: styleSamples.getSampleStoreStats() };
+}
+
+// 5) Reset — clear the sample store and disable/empty the styleEngine so experiments
+//    start clean.
+function styleReset() {
+  let error = '';
+  try {
+    styleSamples.clearSampleStore();
+    const profile = ai.getPersonalStyleProfile();
+    ai.savePersonalStyleProfile({ ...profile, styleEngine: undefined });
+  } catch (e) { error = maskWire(e?.message || String(e)); }
+  return { ok: !error, error, overview: styleIngest.getStyleOverview(), sampleStore: styleSamples.getSampleStoreStats() };
+}
+
+// 6) Injection preview — return the EXACT styleEngine block that would be injected
+//    into the model prompt for a given request (chunks + patterns + metrics).
+//    buildPersonalStyleInstructions is NOT exported from aiService, so we build the
+//    block directly via styleProfile.buildStyleEngineInjectionBlock (the same builder
+//    aiService uses), with the RAG chunk block from styleRetrieval.
+async function styleInjectionPreview({ prompt = '' } = {}) {
+  const from = beginCapture();
+  const t0 = Number(process.hrtime.bigint() / 1000000n);
+  let block = '', chunkBlock = '', chunkCount = 0, error = '', genre = '';
+  try {
+    // Match production (aiService): classify the request genre and thread it through
+    // both retrieval and the injection builder so the preview reflects real generation.
+    genre = typeof styleProfile.classifyRequestGenre === 'function'
+      ? (styleProfile.classifyRequestGenre(String(prompt || '')) || '')
+      : '';
+    const chunks = await styleRetrieval.selectChunks(prompt, { k: 4, genre: genre || null });
+    chunkCount = Array.isArray(chunks) ? chunks.length : 0;
+    chunkBlock = styleRetrieval.buildChunkInjectionText(chunks);
+    const styleEngine = styleProfile.normalizeStyleEngine(ai.getPersonalStyleProfile().styleEngine);
+    block = styleProfile.buildStyleEngineInjectionBlock(styleEngine, { seed: 1, chunkBlock, genre: genre || null });
+  } catch (e) { error = maskWire(e?.message || String(e)); }
+  const durationMs = Number(process.hrtime.bigint() / 1000000n) - t0;
+  return {
+    prompt: prompt.slice(0, 200),
+    genre,
+    chunkCount,
+    chunkBlock: maskWire(chunkBlock),
+    injectionBlock: maskWire(block),
+    injectionBlockLength: block.length,
+    builtVia: 'styleProfile.buildStyleEngineInjectionBlock (buildPersonalStyleInstructions not exported)',
+    error, wire: endCapture(from), durationMs,
+  };
+}
+
 export const lab = {
   seedConfig, seedAppSettings, getAgents, getProviders, inspectAgent, runAgent, runAgentMulti,
-  retrieveSourcesLab, generateDoc, getStyleProfile, runStyleComparison, scoreText, runSpssSyntax, simulateSpssPreview, runSpssProject,
+  retrieveSourcesLab, generateDoc, getStyleProfile, runStyleComparison, scoreText, runSpssSyntax, simulateSpssPreview, runSpssProject, runSpssRevisePlan, runSpssConsultFlow,
+  styleIngestDocs, styleGenerate, styleScoreText, styleEngineStatus, styleReset, styleInjectionPreview,
   getProviderConfig: () => ai.getProviderConfig(),
   getBlockedDomains: () => ai.getBlockedSourceDomains(),
   saveBlockedDomains: (list) => ai.saveBlockedSourceDomains(list),

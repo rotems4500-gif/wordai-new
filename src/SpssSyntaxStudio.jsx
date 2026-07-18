@@ -14,6 +14,14 @@ import {
   runSpssGuidance,
   splitMergedSpssLines,
 } from './services/spssSyntaxService';
+import {
+  createLocalId,
+  PREP_METHOD_PATTERN,
+  buildSafeFileStem,
+  formatTime,
+  normalizeBlockTitle,
+  buildMasterSyntax,
+} from './services/spssStudioShared';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { BROWSER_DOC_ACCEPT, pickDesktopDocument, readBrowserDocumentFile } from './services/documentUpload';
 import {
@@ -26,38 +34,16 @@ import {
 } from './services/aiService';
 import { generateSpssChart } from './services/chartService';
 
-// Methods that write new variables back to the data — these belong in prep mode.
-const PREP_METHOD_PATTERN = /(reliability|cronbach|recode|compute|scale|index|reverse|מהימנות|סולם|מדד|היפוך|recoding)/i;
-
-const createLocalId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `spss-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const downloadTextFile = (content = '', fileName = 'wordflow-spss-syntax.sps') => {
+  const blob = new Blob([String(content || '')], { type: 'text/plain;charset=utf-8' });
+  return saveBlobInBrowser(blob, fileName);
 };
-
-const formatTime = (value = 0) => new Date(value || Date.now()).toLocaleTimeString('he-IL', {
-  hour: '2-digit',
-  minute: '2-digit',
-});
 
 const sourceLabelMap = {
   ai: 'AI',
   local: 'SPSS בטוח',
   'quick-action': 'פעולה מהירה',
   guardrail: 'הכוונה',
-};
-
-const normalizeBlockTitle = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
-
-const buildSafeFileStem = (value = 'wordflow-spss') => {
-  const base = String(value || '')
-    .replace(/\.[^.]+$/, '')
-    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 42);
-  return base || 'wordflow-spss';
 };
 
 const buildSyntaxFileName = ({ analysis = null, mode = 'master', blockCount = 0, block = null } = {}) => {
@@ -70,21 +56,6 @@ const buildSyntaxFileName = ({ analysis = null, mode = 'master', blockCount = 0,
     .replace('T', '-');
   const modePart = mode === 'block' ? `block-${countPart || 1}` : `master-${countPart}`;
   return `${datasetStem}-${modePart}-${timePart}.sps`;
-};
-
-const buildMasterSyntax = (blocks = []) => blocks
-  .map((block, index) => [
-    `* --- Block ${index + 1}: ${normalizeBlockTitle(block.title) || 'SPSS block'} | ${formatTime(block.createdAt)} ---.`,
-    // מפצל שורות שהתמזגו ב-round-trip של המודל (פקודה. * הערה) — ב-SPSS מיזוג
-    // כזה מבליע פקודות בתוך הערות וגורם ל-"undefined variable" בהמשך.
-    splitMergedSpssLines(String(block.syntax || '').trim()),
-  ].filter(Boolean).join('\n'))
-  .join('\n\n')
-  .trim();
-
-const downloadTextFile = (content = '', fileName = 'wordflow-spss-syntax.sps') => {
-  const blob = new Blob([String(content || '')], { type: 'text/plain;charset=utf-8' });
-  return saveBlobInBrowser(blob, fileName);
 };
 
 const noticeToneClassMap = {
@@ -190,7 +161,7 @@ export default function SpssSyntaxStudio({ onOpenProjectMode = null, onOpenHelp 
   }, []);
 
   const suggestions = React.useMemo(() => buildSmartSuggestions(analysis), [analysis]);
-  const masterSyntax = React.useMemo(() => buildMasterSyntax(blocks), [blocks]);
+  const masterSyntax = React.useMemo(() => buildMasterSyntax(blocks, { stripArtifacts: false }), [blocks]);
   const priorCreatedNames = React.useMemo(
     () => Array.from(new Set(blocks.flatMap((block) => Array.from(collectDeclaredTargetNames(block.syntax))))),
     [blocks],

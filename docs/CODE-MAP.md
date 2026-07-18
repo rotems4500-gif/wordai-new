@@ -41,7 +41,6 @@
 | DocumentDraftStudio.jsx | ~198 | סטודיו טיוטת מסמך |
 | SourceManager.jsx | ~150 | ניהול מקורות |
 | WelcomeGate.jsx | ~150 | שער welcome |
-| `__TEMP_ROUTING_OVERRIDE.js` | ~137 | override זמני — בדוק רלוונטיות לפני שימוש |
 | CommentsPanel.jsx | ~115 | פאנל תגובות |
 | TrackChangesPanel.jsx | ~109 | פאנל מעקב שינויים |
 | MobileToolbar.jsx | ~99 | סרגל כלים למובייל (מחליף Ribbon ב-≤640px) |
@@ -255,7 +254,7 @@ Stack: React 19.2 · TipTap 3.22 · Tauri 2.11 · Firebase 12 · framer-motion 1
 
 ## legacy/זבל בשורש הריפו — אל תתבסס
 
-`StartScreen.old.jsx`, `_injector.js`, `run-grid.js`, `temp-scholar.js`, `test_gemini.js`, `tmp-gemini-p0-*.mjs`, `temp.txt`, `output_lines.txt`, `draft-ui.html`, `preview-onboarding.html`, `before_tailwind.css`, `*.exe.blockmap` (שאריות Electron), `legacy-reference/` (Office add-in ישן), קבצי `.cmd` של release (פונקציונליים — לא לזרוק)
+`_injector.js`, `run-grid.js`, `temp-scholar.js`, `test_gemini.js`, `tmp-gemini-p0-*.mjs`, `temp.txt`, `output_lines.txt`, `draft-ui.html`, `preview-onboarding.html`, `before_tailwind.css`, `*.exe.blockmap` (שאריות Electron), `legacy-reference/` (Office add-in ישן), קבצי `.cmd` של release (פונקציונליים — לא לזרוק)
 
 Untracked scratch (לא ב-git בהכרח): `temp-docx-inspect*/`, `temp-ocr-cache*/`, `ocr-data/`, `PAST-DOC/`, `past-works/`, zips/PDFs בעברית בשורש
 

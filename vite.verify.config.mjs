@@ -28,6 +28,12 @@ export default defineConfig({
     wls: path.join(PROJECT, 'src/services/workspaceLearningService.js'),
     srcretr: path.join(PROJECT, 'src/services/sourceRetrieval/index.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
+    // Personal Style Engine services (LAB style-engine endpoints).
+    styleprofile: path.join(PROJECT, 'src/services/styleProfileService.js'),
+    stylesamples: path.join(PROJECT, 'src/services/styleSampleStore.js'),
+    styleingest: path.join(PROJECT, 'src/services/styleIngestService.js'),
+    styleretrieval: path.join(PROJECT, 'src/services/styleRetrievalService.js'),
+    stylejudge: path.join(PROJECT, 'src/services/styleJudgeService.js'),
     spss: path.join(PROJECT, 'src/services/spssSyntaxService.js'),
     // .sav parsing in the LAB (tools/test-bench/lab-entry.mjs) — same alias as
     // vite.config.js: SavReader core without SavBufferReader's browser-only

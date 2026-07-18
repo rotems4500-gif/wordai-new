@@ -1,5 +1,6 @@
 import React from 'react';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
+import { isDesktopApp } from './platform';
 
 export default function TopBar({
   onSave = () => {},
@@ -31,6 +32,8 @@ export default function TopBar({
   onCloudPull = () => {},
   onCloudSignOut = () => {},
   documentTitle = '',
+  startScreenActive = false,
+  onOpenSettings = () => {},
 }) {
   const isSpssMode = appMode === 'spss';
   const isPresentationsMode = appMode === 'presentation';
@@ -83,17 +86,18 @@ export default function TopBar({
             <div className="mx-1 hidden h-6 w-px bg-white/30 sm:block"></div>
           </>
         )}
+        {!isWordMode && quickBtn('ph ph-gear', 'הגדרות', onOpenSettings)}
         <button onClick={onFocus} title="מצב מיקוד" className="hidden h-8 w-8 rounded-full hover:bg-white/20 sm:flex items-center justify-center transition">
           <i className="ph ph-arrows-out-simple text-lg text-amber-100"></i>
         </button>
         <div className="hidden lg:flex items-center gap-1 rounded-full bg-white/10 p-1 mr-1">
           {modeBtn('word', 'Word')}
           {modeBtn('spss', 'SPSS AI')}
-          {modeBtn('spss-project', 'עבודת סיום')}
+          {modeBtn('spss-project', 'עבודת SPSS')}
           {modeBtn('presentation', 'מצגות')}
         </div>
         <i className={`${isSpssMode ? 'ph-fill ph-chart-scatter' : isPresentationsMode ? 'ph-fill ph-presentation-chart' : 'ph-fill ph-file-word'} text-2xl ml-1`}></i>
-        <span className="truncate max-w-[7rem] sm:max-w-[12rem] xl:max-w-[16rem]">{isSpssMode ? 'SPSS Syntax Studio' : isPresentationsMode ? 'Presentation Studio' : `${documentTitle || 'מסמך חדש'} - Word`}</span>
+        <span className="truncate max-w-[7rem] sm:max-w-[12rem] xl:max-w-[16rem]">{isSpssMode ? 'SPSS AI' : isPresentationsMode ? 'Presentation Studio' : `${documentTitle || 'מסמך חדש'} - Word`}</span>
       </div>
       {isSpssMode ? (
         <div className="hidden min-w-0 items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90 md:flex">
@@ -107,7 +111,7 @@ export default function TopBar({
         </div>
       ) : (
         <div className="flex w-auto min-w-0 flex-wrap items-center gap-2 sm:w-full lg:w-auto lg:min-w-[260px] lg:max-w-[560px] lg:flex-1 lg:flex-nowrap">
-          {isWordMode && (
+          {isWordMode && !startScreenActive && (
             <button
               type="button"
               onClick={onToggleAssignmentBrief}
@@ -124,17 +128,19 @@ export default function TopBar({
               <span className="hidden sm:inline">{assignmentBriefOpen ? 'הסתר הוראות' : (assignmentBriefAvailable ? 'הוראות המטלה' : 'הוסף הוראות')}</span>
             </button>
           )}
-          <div className="hidden md:flex bg-white/20 rounded px-3 py-1 w-full md:w-[320px] lg:w-full flex items-center gap-2">
-            <i className="ph ph-magnifying-glass"></i>
-            <input
-              type="text"
-              placeholder="חיפוש והחלפה (Ctrl+F)"
-              readOnly
-              onFocus={onOpenSearch}
-              onClick={onOpenSearch}
-              className="bg-transparent border-none text-white outline-none w-full placeholder-white/70 font-[inherit] cursor-pointer"
-            />
-          </div>
+          {!startScreenActive && (
+            <div className="hidden md:flex bg-white/20 rounded px-3 py-1 w-full md:w-[320px] lg:w-full flex items-center gap-2">
+              <i className="ph ph-magnifying-glass"></i>
+              <input
+                type="text"
+                placeholder="חיפוש והחלפה (Ctrl+F)"
+                readOnly
+                onFocus={onOpenSearch}
+                onClick={onOpenSearch}
+                className="bg-transparent border-none text-white outline-none w-full placeholder-white/70 font-[inherit] cursor-pointer"
+              />
+            </div>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 lg:flex-nowrap lg:shrink-0">
@@ -149,8 +155,8 @@ export default function TopBar({
         </button>
         <div className="hidden sm:flex lg:hidden items-center gap-1 rounded-full bg-white/10 p-1">
           {modeBtn('word', 'Word')}
-          {modeBtn('spss', 'SPSS')}
-          {modeBtn('spss-project', 'עבודה')}
+          {modeBtn('spss', 'SPSS AI')}
+          {modeBtn('spss-project', 'עבודת SPSS')}
           {modeBtn('presentation', 'מצגות')}
         </div>
         {isWordMode && cloudAvailable && (
@@ -218,7 +224,7 @@ export default function TopBar({
             </div>
           </>
         )}
-        {isWordMode && (
+        {isWordMode && isDesktopApp() && (
           <>
             <button
               onClick={onOpenUpdates}

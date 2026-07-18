@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { getToolLinksConfig } from './services/aiService';
-import { showToast } from './services/uiFeedback';
+import { getToolLinksConfig, getPersonalStyleProfile, COVER_TEMPLATE_FIELDS } from './services/aiService';
+import { showToast, showConfirm } from './services/uiFeedback';
+import { isDesktopApp } from './platform';
 import { getCustomStyles } from './services/stylesRegistry';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 
@@ -96,10 +97,6 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
   };
 
   const handleNewWindow = () => {
-    if (window.desktopApp?.createAppWindow) {
-      Promise.resolve(window.desktopApp.createAppWindow()).catch(() => {});
-      return;
-    }
     window.open(window.location.href, '_blank');
   };
 
@@ -121,9 +118,45 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
     };
     switch (fixedDrop.type) {
 
-      case 'coverpage': return (
-        <div ref={dropRef} style={{ ...ms, padding: '10px 12px', minWidth: '260px' }}>
-          <div style={{ fontSize: '12px', fontWeight: '600', color: '#323130', marginBottom: '8px' }}>בחר סגנון עמוד שער</div>
+      case 'coverpage': {
+      const savedCover = (() => { try { return String(getPersonalStyleProfile()?.coverTemplateHtml || '').trim(); } catch { return ''; } })();
+      return (
+        <div ref={dropRef} style={{ ...ms, padding: '10px 12px', minWidth: '280px' }}>
+          {/* ── עמוד השער האישי ── */}
+          <div style={{ fontSize: '12px', fontWeight: '700', color: '#1D4ED8', marginBottom: '6px' }}>עמוד השער שלי</div>
+          <button
+            className="r-btn"
+            style={{ width: '100%', justifyContent: 'flex-start', gap: 8, padding: '9px 12px', marginBottom: '4px', borderRadius: 8, border: '1px solid #BFDBFE', background: savedCover ? '#EFF6FF' : '#F8FAFC', opacity: savedCover ? 1 : 0.7 }}
+            onClick={() => { onCommand('insertMyCoverPage'); closeDrop(); }}
+          >
+            <i className="ph-fill ph-user-focus" style={{ color: '#1D4ED8' }}></i>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <span style={{ fontSize: '12px', fontWeight: 700 }}>הוסף את עמוד השער שלי</span>
+              <span style={{ fontSize: '10px', color: '#64748B' }}>{savedCover ? 'כולל מילוי קורס/מרצה אוטומטי' : 'עדיין לא נשמרה תבנית'}</span>
+            </div>
+          </button>
+          <button
+            className="r-btn"
+            style={{ width: '100%', justifyContent: 'flex-start', gap: 8, padding: '8px 12px', marginBottom: '6px', borderRadius: 8, border: '1px dashed #CBD5E1' }}
+            onClick={() => { onCommand('saveCurrentAsCoverTemplate'); closeDrop(); }}
+          >
+            <i className="ph-fill ph-floppy-disk" style={{ color: '#0F766E' }}></i>
+            <span style={{ fontSize: '12px', fontWeight: 600 }}>שמור עמוד נוכחי כתבנית</span>
+          </button>
+          <div style={{ fontSize: '10px', color: '#64748B', marginBottom: '4px' }}>הוסף שדה דינמי (יתמלא אוטומטית):</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: '8px' }}>
+            {COVER_TEMPLATE_FIELDS.map((f) => (
+              <button
+                key={f.key}
+                className="r-btn"
+                title={`הוספת השדה ${f.label} כ-${f.token}`}
+                style={{ fontSize: '10.5px', padding: '3px 8px', borderRadius: 999, border: '1px solid #E2E8F0', background: 'white' }}
+                onClick={() => { onCommand('insertCoverField', f.token); closeDrop(); }}
+              >{f.label}</button>
+            ))}
+          </div>
+          <hr style={{ border: 'none', borderTop: '1px solid #E1DFDD', margin: '2px 0 8px' }} />
+          <div style={{ fontSize: '12px', fontWeight: '600', color: '#323130', marginBottom: '8px' }}>או בחר סגנון מוכן</div>
           {[
             { id: 'classic', label: 'קלאסי', preview: 'כותרת רשמית עם קו מפריד' },
             { id: 'modern', label: 'מודרני', preview: 'כותרת גדולה עם תגית עליונה' },
@@ -156,6 +189,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
           ))}
         </div>
       );
+      }
 
       case 'table': return (
         <div ref={dropRef} style={{ ...ms, padding: '12px', width: 'auto' }}>
@@ -511,7 +545,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             { id: 'tsAPI', label: 'פתרון תקלות - API', icon: 'ph-plugs-connected' },
             { id: 'shortcuts', label: 'קיצורי מקלדת', icon: 'ph-keyboard' },
             { id: 'about', label: 'אודות', icon: 'ph-info' },
-          ].map(opt => (
+          ].filter(opt => opt.id !== 'checkUpdates' || isDesktopApp()).map(opt => (
             <button key={opt.id} className="r-btn" style={{ width: '100%', justifyContent: 'start', padding: '8px 16px', borderRadius: 0, gap: '8px' }}
               onClick={() => { onCommand('openHelp', opt.id); closeDrop(); }}>
               <i className={`ph-fill ${opt.icon} text-gray-600`}></i> <span style={{ fontWeight: '500', fontSize: '13px' }}>{opt.label}</span>
@@ -665,9 +699,14 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                             style={{ position: 'relative' }}
                             title={`החל את הסגנון "${style.name}" (קליק ימני / החזק להסרה)`}
                             onClick={() => onCommand('applyNamedStyle', style.id)}
-                            onContextMenu={(e) => {
+                            onContextMenu={async (e) => {
                               e.preventDefault();
-                              if (window.confirm(`למחוק את הסגנון "${style.name}"?`)) {
+                              const ok = await showConfirm(`למחוק את הסגנון "${style.name}"?`, {
+                                title: 'מחיקת סגנון',
+                                confirmLabel: 'מחק',
+                                tone: 'danger',
+                              });
+                              if (ok) {
                                 onCommand('deleteNamedStyle', style.id);
                               }
                             }}
@@ -953,7 +992,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                     <button className="r-btn r-btn-large" onClick={() => onCommand('exportHTML')}><i className="ph-fill ph-file-html text-orange-600"></i><span>ייצוא<br />HTML</span></button>
                     <div className="btn-column">
                         <button className="r-btn r-btn-medium" onClick={() => onCommand('exportText')}><i className="ph-fill ph-file-text"></i> ייצוא טקסט</button>
-                        <button className="r-btn r-btn-medium" onClick={() => window.print()}><i className="ph-fill ph-printer"></i> הדפסה</button>
+                        <button className="r-btn r-btn-medium" onClick={() => onCommand('print')}><i className="ph-fill ph-printer"></i> הדפסה</button>
                     </div>
                 </div>
                 <div className="toolbar-group-label">שמירה וייצוא</div>
@@ -1049,7 +1088,9 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
 
             <div className="toolbar-group">
                 <div className="toolbar-group-items">
+                {!isDesktopApp() && (
                 <button className="r-btn r-btn-large" onClick={handleNewWindow}><i className="ph-fill ph-plus-square"></i><span>חלון<br />חדש</span></button>
+                )}
                     <button className="r-btn r-btn-large" onClick={() => onCommand('splitWindow')}><i className="ph-fill ph-split-horizontal"></i><span>פצל</span></button>
                 </div>
                 <div className="toolbar-group-label">חלון</div>

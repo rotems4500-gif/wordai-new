@@ -30,6 +30,10 @@ import {
   retrieveSources,
   formatSourcesReply,
   canonicalizeSourceUrl,
+  nonContentPageReason,
+  setVetModelTransport,
+  buildSourcesQueryOverride,
+  buildHoleFillSourceQueryOverride,
 } from 'srcretr';
 
 let failures = 0;
@@ -163,7 +167,8 @@ console.log('\n[5] pipeline e2e (mock provider)');
     && result.sources.some((source) => source.url?.includes('ok.news-site'))
     && result.sources.some((source) => source.verification?.missingUrl === true));
   check('citations של המודל לא נכנסו', !JSON.stringify(result.sources).includes('model-invented'));
-  check('verification מוצמד', Boolean(result.sources[0]?.verification?.httpStatus === 200));
+  // לא sources[0]: הצינור מחזיר קודם מקור ביבליוגרפי בלי URL (נשמר בכוונה, בלי httpStatus).
+  check('verification מוצמד', result.sources.some((source) => source.verification?.httpStatus === 200));
 
   // cache hit: אותה שאילתה ⇒ אפס קריאות ספק נוספות.
   const before = session.stats().providerCalls;
@@ -204,6 +209,145 @@ console.log('\n[6] after-date filter');
   check('מקור מ-2026 נשאר', urls.includes('2026/new'));
   check('מקור מ-2019 (לפני הסף) נזרק', !urls.includes('2019/old'));
   check('מקור בלי שנה נשאר (אי אפשר להוכיח שישן)', urls.includes('ok.c.co.il'));
+}
+
+// ---- 7. contentPageFilter: דפי לא-תוכן נפסלים, תוכן אמיתי עובר ----
+console.log('\n[7] contentPageFilter');
+{
+  check('דף מאגרי-מידע של ספרייה נפסל',
+    Boolean(nonContentPageReason({ url: 'https://med-lib.tau.ac.il/dbforoccupationaltherapy', title: 'מאגרי מידע וכלי מחקר | הספרייה' })));
+  check('דף בית (URL שורש) נפסל',
+    Boolean(nonContentPageReason({ url: 'https://matanhakimi.com/', title: 'דף הבית' })));
+  check('אינדקס כתבי-עת רדוד נפסל',
+    Boolean(nonContentPageReason({ url: 'https://example.ac.il/journals', title: 'רשימת כתבי עת' })));
+  check('מאמר עמוק עובר',
+    nonContentPageReason({ url: 'https://www.jipts.com/article/4-21skira.pdf', title: 'סקירת ספרות שיטתית' }) === '');
+  check('מועמד עם DOI מוגן גם ב-URL רדוד',
+    nonContentPageReason({ url: 'https://journal.org/home', title: 'Journal home', doi: '10.1/x' }) === '');
+  check('מועמד עם citedBy מוגן',
+    nonContentPageReason({ url: 'https://scholar.site/index', title: 'Index', citedBy: 12 }) === '');
+  check('כתבת תוכן בעומק 1 עוברת (רלוונטיות היא לא תפקיד הפילטר)',
+    nonContentPageReason({ url: 'https://rambam-medicine.org.il/better-muscle-protocol/', title: 'האם עדיף להתאמן מעט כל יום' }) === '');
+}
+
+// ---- 8. pipeline + contentPageFilter: דף ספרייה חי לא נכנס לתוצאות ----
+console.log('\n[8] pipeline drops non-content pages');
+{
+  const payload = {
+    search_results: [
+      { title: 'מאמר אמיתי על הרגלי למידה', url: 'https://ok.journal.co.il/articles/2026/study-habits', snippet: 'תקציר', date: '2026-01-01' },
+      { title: 'מאגרי מידע | הספרייה', url: 'https://ok.med-lib.tau.ac.il/dbforstudents', snippet: '', date: '' },
+      { title: 'אתר כלשהו', url: 'https://ok.some-site.co.il/', snippet: '', date: '' },
+    ],
+  };
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, status: 200, body: JSON.stringify(payload) }),
+    text: async () => '',
+  });
+  const session = createRetrievalSession({ runId: 'noncontent' });
+  const result = await retrieveSources({
+    query: 'הרגלי למידה של סטודנטים', kind: 'web', count: 5,
+    cfg: { perplexity: { key: 'pplx-test', model: 'sonar' } }, session,
+  });
+  const urls = JSON.stringify(result.sources);
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('המאמר האמיתי נשאר', urls.includes('study-habits'));
+  check('דף הספרייה נזרק', !urls.includes('med-lib'));
+  check('URL שורש נזרק', !urls.includes('some-site.co.il'));
+}
+
+// ---- 9. relevanceVet (מאחורי דגל): מסנן לפי המודל, fail-open על שגיאה ----
+console.log('\n[9] relevance vetting (flagged)');
+{
+  const payload = {
+    search_results: [
+      { title: 'מאמר על הרגלי למידה', url: 'https://ok.a.co.il/articles/2026/learning', snippet: 't', date: '2026-01-01' },
+      { title: 'בלוג כושר', url: 'https://ok.b.co.il/articles/2022/muscles', snippet: 't', date: '2022-01-01' },
+      { title: 'בלוג יומנים', url: 'https://ok.c.co.il/articles/2024/journaling', snippet: 't', date: '2024-01-01' },
+    ],
+  };
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, status: 200, body: JSON.stringify(payload) }),
+    text: async () => '',
+  });
+
+  setVetModelTransport(async () => '[0]');
+  const vetted = await retrieveSources({
+    query: 'הרגלי למידה של סטודנטים', kind: 'web', count: 5, vetRelevance: true,
+    cfg: { perplexity: { key: 'pplx-test', model: 'sonar' } },
+    session: createRetrievalSession({ runId: 'vet1' }),
+  });
+  check('המודל השאיר רק את הרלוונטי', vetted.ok && vetted.sources.length === 1 && vetted.sources[0].url.includes('learning'));
+
+  setVetModelTransport(async () => { throw new Error('vet model down'); });
+  const failOpen = await retrieveSources({
+    query: 'הרגלי למידה של סטודנטים', kind: 'web', count: 5, vetRelevance: true,
+    cfg: { perplexity: { key: 'pplx-test', model: 'sonar' } },
+    session: createRetrievalSession({ runId: 'vet2' }),
+  });
+  check('fail-open: כשל ווטינג משאיר את כולם', failOpen.ok && failOpen.sources.length === 3);
+
+  setVetModelTransport(null);
+  const defaultOff = await retrieveSources({
+    query: 'הרגלי למידה של סטודנטים', kind: 'web', count: 5,
+    cfg: { perplexity: { key: 'pplx-test', model: 'sonar' } },
+    session: createRetrievalSession({ runId: 'vet3' }),
+  });
+  check('ברירת מחדל: ווטינג כבוי, כל המקורות נשארים', defaultOff.ok && defaultOff.sources.length === 3);
+}
+
+// ---- 10. continue-ladder: ספק ראשון דל אחרי סינון ⇒ ממשיכים לספק הבא ומאחדים ----
+console.log('\n[10] continue ladder on insufficient results');
+{
+  const scholarPayload = {
+    search_metadata: { status: 'success' },
+    organic_results: [
+      { title: 'Scholarly article on study habits', link: 'https://ok.scholar-a.org/articles/2026/habits', snippet: 'abstract' },
+    ],
+  };
+  const perplexityPayload = {
+    search_results: [
+      { title: 'מאמר נוסף', url: 'https://ok.journal-b.co.il/articles/2026/more', snippet: 't', date: '2026-01-01' },
+      { title: 'מאמר שלישי', url: 'https://ok.journal-c.co.il/articles/2025/third', snippet: 't', date: '2025-01-01' },
+    ],
+  };
+  globalThis.fetch = async (url, init) => {
+    const probe = `${String(url || '')} ${String(init?.body || '')}`;
+    const body = probe.includes('serpapi') ? scholarPayload : perplexityPayload;
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, status: 200, body: JSON.stringify(body) }),
+      text: async () => '',
+    };
+  };
+  const session = createRetrievalSession({ runId: 'ladder' });
+  const result = await retrieveSources({
+    query: 'study habits of students', kind: 'academic', count: 5,
+    cfg: { scholar: { provider: 'serpapi', key: 'serp-test' }, perplexity: { key: 'pplx-test', model: 'sonar' } },
+    session,
+  });
+  const urls = JSON.stringify(result.sources);
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('תוצאת Scholar הדלה נשמרה', urls.includes('scholar-a.org'));
+  check('הסולם המשיך ל-Perplexity והתוצאות אוחדו', urls.includes('journal-b') && result.sources.length >= 2);
+  const trailProviders = result.providerTrail.map((step) => step.providerId);
+  check('providerTrail מתעד את שני הספקים', trailProviders.includes('serpapi-scholar') && trailProviders.includes('perplexity-search'));
+}
+
+// ---- 11. sourceQueryBuilder: "מה שסימנת זה מה שנשלח" ----
+console.log('\n[11] query fidelity');
+{
+  const selection = 'השפעת משימות למידה יומיות קצרות על הישגים אקדמיים של סטודנטים';
+  const fromSelection = buildSourcesQueryOverride('מצא לי 3 מקורות אקדמיים על הנושא', { selectedText: selection, currentBlockText: 'טקסט אחר לגמרי בבלוק' });
+  check('סימון גובר על ניחוש מהפרומפט/בלוק', fromSelection === selection, fromSelection);
+
+  const quoted = buildSourcesQueryOverride('מצא מקורות על "אקלים ארגוני ושחיקת עובדים"', { selectedText: selection });
+  check('טקסט בגרשיים בבקשה גובר גם על סימון', quoted === 'אקלים ארגוני ושחיקת עובדים', quoted);
+
+  const holeFill = buildHoleFillSourceQueryOverride('השלם חורים במסמך', { messages: [{ content: 'נושא ישן מהשיחה: דיני עבודה' }], selectedText: selection });
+  check('מילוי-חורים עם סימון: הסימון נשלח, בלי כריית היסטוריה', holeFill === selection, holeFill);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL PASS');

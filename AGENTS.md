@@ -110,8 +110,7 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 - **קבצים ענקיים:** `main.jsx` (~8.7k) ו-`aiService.js` (~12k) הם monoliths. השתמש ב-Grep/offset, אל תקרא במלואם.
 - **עברית RTL בכל מקום** — prompts, UI, regex. ה-regex ב-main.jsx מטפלים בעברית+אנגלית (ordinals, structural cues, quote chars `" “ ” ״`).
 - **anti-hallucination הוא עיקרון מרכזי:** סוכני sources/holeFill אסור להם להמציא מקורות. ראה `articleSourceValidation.js`.
-- **זבל בשורש הריפו:** הרבה `temp-*`, `release-*/`, `tmp-*.mjs`, `.exe`, `.pdf`, `StartScreen.old.jsx`. אלה ארטיפקטים/legacy — אל תתבסס עליהם.
-- שורש כולל `__TEMP_ROUTING_OVERRIDE.js` — override זמני, בדוק רלוונטיות לפני שימוש.
+- **זבל בשורש הריפו:** הרבה `temp-*`, `release-*/`, `tmp-*.mjs`, `.exe`, `.pdf`. אלה ארטיפקטים/legacy — אל תתבסס עליהם.
 - Caveman mode פעיל ב-session (plugin). קוד/קומיטים/PR — תמיד בעברית/אנגלית רגילה.
 
 ---

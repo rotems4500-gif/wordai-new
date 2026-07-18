@@ -8,6 +8,7 @@ import { getPassiveLedger } from "../v3/api/ledger";
 import { chat as v3Chat } from "../v3/api/client";
 import { streamOpenAICompatible as v3StreamOpenAICompatible } from "../v3/api/streaming";
 import { deriveGateQuery } from "../v3/orchestration/retrievalGate";
+import { deriveResearchTopicQuery } from "./sourceQueryBuilder";
 import { ApiError, ErrorCodes as V3ErrorCodes } from "../v3/api/errors";
 import { getRetryDecision as getV3RetryDecision } from "../v3/api/retryPolicy";
 import { attachSourceLock, createRunScope } from "../v3/orchestration/runScope";
@@ -35,10 +36,15 @@ import {
   formatSourceItem,
   extractGeminiGroundedSources,
   dedupeSources as dedupeRetrievedSources,
+  nonContentPageReason,
+  vetSourceRelevance,
 } from "./sourceRetrieval";
 import { classifySourceIntent, isSourceReuseOrIntegrationRequest } from "./sourceIntent";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService";
+import { normalizeStyleEngine, buildStyleEngineInjectionBlock, classifyRequestGenre } from "./styleProfileService";
+import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from "./styleRetrievalService";
+import { scoreStyleMatch, runStyleRewriteLoop, rewriteDocumentHtmlTowardStyle } from "./styleJudgeService";
 export {
   WORKSPACE_V2_VERSION,
   WORKSPACE_V2_TEMPLATE_IDS,
@@ -261,6 +267,8 @@ export const DEFAULT_PERSONAL_STYLE = {
   studentId: '',
   aiAssistanceDeclaration: '',
   submissionDate: '',
+  coverTemplateHtml: '',
+  coverTemplateSavedAt: '',
   syllabusImportProvenance: {
     assignmentType: '',
     submissionDate: '',
@@ -1596,6 +1604,60 @@ export const savePersonalStyleProfile = (profile) => {
     last_updated: new Date().toISOString(),
   }));
   syncPersistedAppSettings();
+};
+
+// ── תבנית עמוד שער אישית: שדות דינמיים + מילוי ערכים ─────────────────────────
+// כל שדה הוא token טקסטואלי ({{key}}) שנשמר בתוך ה-HTML של התבנית. בהזרקה הוא
+// מוחלף בערך מהפרופיל אם ידוע, אחרת נשאר ריק (כדי שהמשתמש ימלא ידנית).
+export const COVER_TEMPLATE_FIELDS = [
+  { key: 'title',       token: '{{title}}',       label: 'כותרת המסמך' },
+  { key: 'subtitle',    token: '{{subtitle}}',    label: 'כותרת משנה' },
+  { key: 'course',      token: '{{course}}',      label: 'שם הקורס' },
+  { key: 'lecturer',    token: '{{lecturer}}',    label: 'מרצה / מנחה' },
+  { key: 'studentName', token: '{{studentName}}', label: 'שם המגיש' },
+  { key: 'studentId',   token: '{{studentId}}',   label: 'ת.ז.' },
+  { key: 'institution', token: '{{institution}}', label: 'מוסד' },
+  { key: 'date',        token: '{{date}}',        label: 'תאריך' },
+];
+
+const escapeCoverHtmlValue = (txt) => String(txt ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+// שולף את הערכים שהסוכן "מכיר" עבור שדות עמוד השער מתוך הפרופיל. overrides גובר
+// (למשל כותרת מהמסמך עצמו). ערך חסר → מחרוזת ריקה.
+export const resolveCoverTemplateValues = (profile = {}, overrides = {}) => {
+  const p = normalizePersonalStyleProfile(profile);
+  const firstOf = (list) => (Array.isArray(list) ? list.map((v) => String(v || '').trim()).find(Boolean) : '') || '';
+  let monthYear = '';
+  try { monthYear = new Date().toLocaleDateString('he-IL', { year: 'numeric', month: 'long' }); } catch { monthYear = ''; }
+  const values = {
+    title: '',
+    subtitle: '',
+    course: firstOf(p.currentCourses),
+    lecturer: firstOf(p.lecturerNames) || String(p.lecturerName || '').trim(),
+    studentName: String(p.displayName || '').trim(),
+    studentId: String(p.studentId || '').trim(),
+    institution: String(p.institutionName || '').trim(),
+    date: monthYear,
+  };
+  for (const [key, raw] of Object.entries(overrides || {})) {
+    if (raw != null && String(raw).trim()) values[key] = String(raw).trim();
+  }
+  return values;
+};
+
+// מחליף את כל ה-tokens בתבנית ה-HTML בערכים הידועים (escaped). token לא ידוע → ריק.
+export const fillCoverTemplateTokens = (html = '', profile = {}, overrides = {}) => {
+  const values = resolveCoverTemplateValues(profile, overrides);
+  let out = String(html || '');
+  for (const field of COVER_TEMPLATE_FIELDS) {
+    const value = values[field.key];
+    out = out.split(field.token).join(value ? escapeCoverHtmlValue(value) : '');
+  }
+  return out;
 };
 
 // ── דומיינים אסורים מותאמי-משתמש (בנוסף לרשימה הקשיחה בקוד) ──────────────────
@@ -3521,7 +3583,11 @@ export const extractVerifiedSourceQuery = ({ userPrompt = '', documentContext = 
   const merged = promptNeedsContext && contextText
     ? [effectivePromptText, contextText].filter(Boolean).join(' ')
     : effectivePromptText;
-  const query = String(merged || '').slice(0, 420).trim();
+  let query = String(merged || '').slice(0, 420).trim();
+  if (promptNeedsContext && contextText) {
+    const refined = deriveResearchTopicQuery(query);
+    if (refined) query = refined;
+  }
   if (isLikelyAssignmentInstructionQuery(query)) return '';
   return query;
 };
@@ -3794,49 +3860,8 @@ const parseJsonArrayFromText = (text = '') => {
   }
 };
 
-// ווטינג רלוונטיות: Scholar/חיפוש עלול להחזיר מקור משיק (למשל מאמר על "עוני ושוויון הזדמנויות"
-// כשהמטלה על אנשים עם מוגבלויות) כי השאילתה חלקה מילים כלליות. בודקים מול המטלה עצמה
-// ופוסלים רק מקור שבבירור לא על הנושא. שמרני: בספק/שגיאה/over-filter — מחזירים הכל.
-const vetSourceRelevanceWithModel = async ({ assignmentText = '', sources = [], cfg = null, allowEmpty = false } = {}) => {
-  const safeSources = (Array.isArray(sources) ? sources : []).filter(Boolean);
-  if (!safeSources.length) return safeSources;
-  const material = String(assignmentText || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
-  if (!material) return safeSources;
-
-  const list = safeSources
-    .map((source, index) => {
-      const title = String(source.title || source.finalUrl || source.url || '').slice(0, 160);
-      const snippet = source.snippet ? ` — ${String(source.snippet).slice(0, 160)}` : '';
-      return `${index}. ${title}${snippet}`;
-    })
-    .join('\n');
-  const prompt = [
-    'להלן מטלה/נושא, ואחריו רשימת מקורות ממוספרים (מספר 0 והלאה) שנשלפו לחיפוש.',
-    'החזר JSON בלבד: מערך של מספרי המקורות ששייכים לנושא המרכזי של המטלה.',
-    'פסול מקור רק אם הוא בבירור לא על הנושא — למשל אם המטלה על אנשים עם מוגבלויות ומקור עוסק בעוני כללי או בנושא אחר בלי קשר ישיר למוגבלות.',
-    'בספק — כלול. אל תפסול מקור רק כי הוא נוגע גם בהיבטים נוספים מעבר לנושא.',
-    '',
-    'המטלה/הנושא:',
-    material,
-    '',
-    'המקורות:',
-    list,
-  ].join('\n');
-
-  try {
-    const text = await callCheapModelText({ prompt, cfg, maxTokens: 120 });
-    const indices = parseJsonArrayFromText(text);
-    if (!indices) return safeSources; // כשל פירוק — לא פוסלים על סמך ניחוש
-    const keep = new Set(indices.map((value) => Number(value)).filter((value) => Number.isInteger(value)));
-    const filtered = safeSources.filter((_, index) => keep.has(index));
-    // allowEmpty (זרימת מסמך): אם כל המקורות משיקים — עדיף [דרוש מקור] ישר על פני מקור שגוי.
-    // בלי allowEmpty (בקשת-רשימה): עדיף להציג משהו מאשר כלום — מחזירים הכל אם המודל פסל את כולם.
-    if (!filtered.length) return allowEmpty ? [] : safeSources;
-    return filtered;
-  } catch {
-    return safeSources;
-  }
-};
+// ווטינג רלוונטיות במודל זול עבר ל-sourceRetrieval/relevanceVet.js (מאחורי דגל
+// cfg.retrieval.vetRelevance, כבוי כברירת מחדל) — רץ בתוך הצינור עצמו.
 
 const deriveSourceRetrievalPlanWithModel = async ({ userPrompt = '', documentContext = '', cfg = null } = {}) => {
   const requestText = String(userPrompt || '').trim().slice(0, 3000);
@@ -5822,6 +5847,18 @@ const shouldIncludeAcademicProfileContext = ({ requestText = '', templateId = ''
 
 const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   const omitStructuralHints = options.omitStructuralHints === true;
+  // מנוע הסגנון האישי (Personal Style Engine): כשהפרופיל מכיל styleEngine מופעל,
+  // מזריקים sub-block מדיד (עוגני מדד + negative-space) ומדכאים את השדות הישנים החופפים
+  // (vocab/phrases/connectors/openers/fingerprint) כדי למנוע הזרקה כפולה (תוכנית §7).
+  // כשהמנוע כבוי/נעדר — styleEngineBlock ריק וכל ההתנהגות הקיימת נשמרת byte-identical.
+  const styleEngine = normalizeStyleEngine(profile?.styleEngine);
+  const styleEngineActive = styleEngine.enabled && !options.suppressStyleEngine;
+  // chunks אמיתיים נשלפים אסינכרונית ב-call sites (chat/stream) ומועברים כאן דרך
+  // options.styleChunkBlock (buildStyleEngineInjectionBlock עצמו טהור/סינכרוני).
+  const styleChunkBlock = styleEngineActive ? String(options.styleChunkBlock || '') : '';
+  const styleEngineBlock = styleEngineActive
+    ? buildStyleEngineInjectionBlock(styleEngine, { seed: options.styleEngineSeed || 0, chunkBlock: styleChunkBlock, genre: options.styleGenre || null })
+    : '';
   const labels = {
     school: 'בית ספר',
     undergraduate: 'תואר ראשון',
@@ -5873,10 +5910,12 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   // אמיתית בראש כ-few-shot. אין שדות מוסד/מרצה/סילבוס/הגשה — לא רלוונטיים למייל/הודעה.
   if (options.emphasizeVoice === true) {
     const voiceParts = [];
-    if (normalizedGoldenExample) {
+    // goldenExample: כשהמנוע פעיל ויש לו chunks אמיתיים (styleChunkBlock) — בלוק ה-chunks
+    // הוא התחליף העדיף, אז משמיטים את הדוגמה הישנה כדי למנוע כפילות. בלי chunks עדיין מוזרקת.
+    if (normalizedGoldenExample && !(styleEngineBlock && styleChunkBlock)) {
       voiceParts.push(`דוגמה אמיתית לכתיבה של המשתמש (חקה ממנה קצב, אורך משפטים, בחירת מילים, מעברים וטון — אל תעתיק תוכן או משפטים):\n"${normalizedGoldenExample.slice(0, 1600)}${normalizedGoldenExample.length > 1600 ? '…' : ''}"`);
     }
-    if (profile.preferredTrainingExamples?.length) {
+    if (!styleEngineBlock && profile.preferredTrainingExamples?.length) {
       voiceParts.push(`דוגמאות ניסוח שסומנו כקרובות במיוחד לקול שלו: ${profile.preferredTrainingExamples.slice(0, 3).map((ex) => `"${String(ex).trim()}"`).join(' | ')}`);
     }
     if (profile.tonePreference) voiceParts.push(`טון: ${toneLabels[profile.tonePreference] || profile.tonePreference}`);
@@ -5885,14 +5924,16 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
       const registerLabels = { academic: 'אקדמית ומדויקת', standard: 'תקנית ומאוזנת', conversational: 'שיחתית ונגישה' };
       voiceParts.push(`רמה לשונית: ${registerLabels[profile.linguisticRegisterPreference] || profile.linguisticRegisterPreference}`);
     }
-    const activeVocab = [...(profile.manualVocabulary || []), ...((profile.learningConsent !== false && profile.learnedVocabulary) || [])].filter(Boolean);
+    // מנוע פעיל: משמיטים רק את התרומה של learnedVocabulary/learnedPhrases (חופף למנוע),
+    // אך שומרים על manualVocabulary/manualPhrases שהמשתמש הגדיר ידנית ואינם חלק מהמנוע.
+    const activeVocab = [...(profile.manualVocabulary || []), ...((!styleEngineBlock && profile.learningConsent !== false && profile.learnedVocabulary) || [])].filter(Boolean);
     if (activeVocab.length) voiceParts.push(`העדף לשלב מילים ומונחים שאופייניים לו כשהם מתאימים: ${[...new Set(activeVocab)].slice(0, 16).join(', ')}`);
-    const activePhrases = [...(profile.manualPhrases || []), ...((profile.learningConsent !== false && profile.learnedPhrases) || [])].filter(Boolean);
+    const activePhrases = [...(profile.manualPhrases || []), ...((!styleEngineBlock && profile.learningConsent !== false && profile.learnedPhrases) || [])].filter(Boolean);
     if (activePhrases.length) voiceParts.push(`צירופים אופייניים שלו: ${[...new Set(activePhrases)].slice(0, 8).join(', ')}`);
-    if (profile.favoritePhrases) voiceParts.push(`ביטויים אהובים לשילוב טבעי כשמתאים: ${String(profile.favoritePhrases).trim()}`);
-    if (profile.learningConsent !== false && profile.preferredSentenceOpeners?.length) voiceParts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.slice(0, 6).join(', ')}`);
-    if (profile.learningConsent !== false && profile.preferredConnectors?.length) voiceParts.push(`מחברים שחוזרים אצלו: ${profile.preferredConnectors.slice(0, 6).join(', ')}`);
-    if (fingerprint.avgSentenceWords) voiceParts.push(`קצב אופייני: ~${fingerprint.avgSentenceWords} מילים למשפט בממוצע — שמור על ערבוב אורכים דומה, לא משפטים אחידים.`);
+    if (!styleEngineBlock && profile.favoritePhrases) voiceParts.push(`ביטויים אהובים לשילוב טבעי כשמתאים: ${String(profile.favoritePhrases).trim()}`);
+    if ((!styleEngineBlock) && profile.learningConsent !== false && profile.preferredSentenceOpeners?.length) voiceParts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.slice(0, 6).join(', ')}`);
+    if ((!styleEngineBlock) && profile.learningConsent !== false && profile.preferredConnectors?.length) voiceParts.push(`מחברים שחוזרים אצלו: ${profile.preferredConnectors.slice(0, 6).join(', ')}`);
+    if ((!styleEngineBlock) && fingerprint.avgSentenceWords) voiceParts.push(`קצב אופייני: ~${fingerprint.avgSentenceWords} מילים למשפט בממוצע — שמור על ערבוב אורכים דומה, לא משפטים אחידים.`);
     if (profile.emojiPreference) voiceParts.push(`אימוג'י: ${emojiLabels[profile.emojiPreference] || profile.emojiPreference}`);
     if (profile.greetingStyle) voiceParts.push(`אם פותחים בברכה — בסגנון: ${String(profile.greetingStyle).trim()}`);
     if (profile.signOffStyle) voiceParts.push(`אם מסיימים בחתימה — בסגנון: ${String(profile.signOffStyle).trim()}`);
@@ -5901,12 +5942,13 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     if (profile.dislikedStylePatterns?.length) voiceParts.push(`להימנע מדפוסים ש"נשמעים כמו AI": ${profile.dislikedStylePatterns.join(', ')}`);
     if (profile.customStyleGuidance) voiceParts.push(`הנחיות סגנון נוספות: ${String(profile.customStyleGuidance).trim()}`);
     const cleanVoiceParts = voiceParts.filter(Boolean);
-    if (!cleanVoiceParts.length) return '';
+    if (!cleanVoiceParts.length && !styleEngineBlock) return '';
     return [
       'המטרה: התוצר חייב להישמע כאילו המשתמש עצמו כתב אותו — הקול האישי שלו, לא ניסוח AI גנרי. זו דרישה מרכזית, לא המלצה. העדף התאמה לקול על פני "כתיבה נכונה" סטנדרטית.',
       'הימנע מפתיחות שבלוניות, מחברים פורמליים שחוקים, קלישאות AI ומשפטים באורך אחיד. שמור על אנושיות וזרימה טבעית.',
       'הפרופיל הוא מקור לסגנון בלבד, לעולם לא לנושא — כתוב על מה שהמשתמש ביקש עכשיו.',
       ...cleanVoiceParts,
+      ...(styleEngineBlock ? [styleEngineBlock] : []),
     ].join('\n');
   }
 
@@ -5930,8 +5972,8 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
   if (profile.learningGameInsights?.length) parts.push(`תובנות שנלמדו ממשחקי ההיכרות: ${profile.learningGameInsights.join(' | ')}`);
-  if (profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
-  if (profile.preferredTrainingExamples?.length) parts.push(`דוגמאות ניסוח שקרובות במיוחד לסגנון המועדף: ${profile.preferredTrainingExamples.join(' | ')}`);
+  if (!styleEngineBlock && profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
+  if (!styleEngineBlock && profile.preferredTrainingExamples?.length) parts.push(`דוגמאות ניסוח שקרובות במיוחד לסגנון המועדף: ${profile.preferredTrainingExamples.join(' | ')}`);
   if (profile.dislikedStylePatterns?.length) parts.push(`יש להימנע במיוחד מ: ${profile.dislikedStylePatterns.join(', ')}`);
     if (profile.linguisticRegisterPreference) {
       const registerLabels = { academic: 'אקדמי — מינוח מקצועי ודיוק לשוני', standard: 'תקנית — שפה תקנית ומאוזנת', conversational: 'שיחתית — שפה נגישה וקרובה לקורא' };
@@ -5947,7 +5989,7 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (!omitStructuralHints && profile.formatPreferences) parts.push(`העדפות מבנה ותצורה: ${String(profile.formatPreferences).trim()}`);
   if (profile.manualVocabulary?.length) parts.push(`העדף את המונחים: ${profile.manualVocabulary.join(', ')}`);
   if (profile.manualPhrases?.length) parts.push(`ביטויים שמועדפים על המשתמש: ${profile.manualPhrases.join(', ')}`);
-  if (profile.favoritePhrases) parts.push(`ביטויים אהובים שכדאי לשלב כשזה מתאים: ${String(profile.favoritePhrases).trim()}`);
+  if (!styleEngineBlock && profile.favoritePhrases) parts.push(`ביטויים אהובים שכדאי לשלב כשזה מתאים: ${String(profile.favoritePhrases).trim()}`);
   if (profile.preferredSentenceStructures?.length) parts.push(`מבני משפטים מועדפים: ${profile.preferredSentenceStructures.join(', ')}`);
   if (!omitStructuralHints && profile.paragraphPreferences) parts.push(`העדפות לגבי אורך ומבנה פסקאות: ${String(profile.paragraphPreferences).trim()}`);
   if (profile.tonePreferences?.length) parts.push(`טון כתיבה מועדף: ${profile.tonePreferences.join(', ')}`);
@@ -5959,7 +6001,7 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.signOffStyle) parts.push(`אם מתאים לסיים בחתימה או סגירה, העדף: ${String(profile.signOffStyle).trim()}`);
   if (profile.emojiPreference) parts.push(`שימוש באימוג'י: ${emojiLabels[profile.emojiPreference] || profile.emojiPreference}`);
   if (profile.listPreference) parts.push(`פורמט רשימות מועדף: ${listLabels[profile.listPreference] || profile.listPreference}`);
-  if (normalizedGoldenExample) {
+  if (normalizedGoldenExample && !(styleEngineBlock && styleChunkBlock)) {
     parts.push(`דוגמת כתיבה אישית לחיקוי מבוקר: ${normalizedGoldenExample.slice(0, 1400)}${normalizedGoldenExample.length > 1400 ? '...' : ''}`);
     parts.push('בעת שימוש בדוגמת הכתיבה: חלץ ממנה קצב, רמת פירוט, מבני משפטים, מעברים וטון; אל תעתיק משפטים שלמים ואל תשמר טעויות, פרטים אישיים או עובדות שאינם רלוונטיים לבקשה הנוכחית.');
   }
@@ -5969,17 +6011,20 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     parts.push('המשתמש ביקש שהמערכת תישען בעיקר על ההעדפות שהגדיר ידנית, בלי הרחבה אוטומטית מעבר להן.');
   } else {
     if (profile.learnedSentencePatterns?.length) parts.push(`דפוסי כתיבה שנלמדו: ${profile.learnedSentencePatterns.join(', ')}`);
-    if (profile.preferredConnectors?.length) parts.push(`מחברי טקסט שחוזרים אצל המשתמש: ${profile.preferredConnectors.join(', ')}`);
-    if (profile.preferredSentenceOpeners?.length) parts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.join(', ')}`);
-    if (profile.toneDescriptors?.length) parts.push(`מאפייני טון שנלמדו: ${profile.toneDescriptors.join(', ')}`);
-    if (profile.learnedVocabulary?.length) parts.push(`מונחים שנלמדו מהכתיבה שלך: ${profile.learnedVocabulary.slice(0, 14).join(', ')}`);
-    if (profile.learnedPhrases?.length) parts.push(`צירופים אופייניים שנלמדו: ${profile.learnedPhrases.slice(0, 8).join(', ')}`);
-    if (fingerprint.avgSentenceWords) parts.push(`ממוצע מילים למשפט: ${fingerprint.avgSentenceWords}`);
+    // guard נגד הזרקה כפולה (§7): כשמנוע הסגנון פעיל הוא מכסה את השדות החופפים —
+    // connectors / openers / learnedVocabulary / learnedPhrases / fingerprint אורך משפט.
+    if (!styleEngineBlock && profile.preferredConnectors?.length) parts.push(`מחברי טקסט שחוזרים אצל המשתמש: ${profile.preferredConnectors.join(', ')}`);
+    if (!styleEngineBlock && profile.preferredSentenceOpeners?.length) parts.push(`פתיחות משפט אופייניות: ${profile.preferredSentenceOpeners.join(', ')}`);
+    if (!styleEngineBlock && profile.toneDescriptors?.length) parts.push(`מאפייני טון שנלמדו: ${profile.toneDescriptors.join(', ')}`);
+    if (!styleEngineBlock && profile.learnedVocabulary?.length) parts.push(`מונחים שנלמדו מהכתיבה שלך: ${profile.learnedVocabulary.slice(0, 14).join(', ')}`);
+    if (!styleEngineBlock && profile.learnedPhrases?.length) parts.push(`צירופים אופייניים שנלמדו: ${profile.learnedPhrases.slice(0, 8).join(', ')}`);
+    if (!styleEngineBlock && fingerprint.avgSentenceWords) parts.push(`ממוצע מילים למשפט: ${fingerprint.avgSentenceWords}`);
     if (fingerprint.avgParagraphWords) parts.push(`ממוצע מילים לפסקה: ${fingerprint.avgParagraphWords}`);
     if (profile.learnedNotes?.length) parts.push(`תובנות שנלמדו מהקבצים: ${profile.learnedNotes.join(' | ')}`);
   }
   if (profile.notes) parts.push(`הערות סגנון אישיות: ${String(profile.notes).trim()}`);
 
+  if (styleEngineBlock) parts.push(styleEngineBlock);
   const cleanParts = parts.filter(Boolean);
   if (!cleanParts.length) return '';
   return [
@@ -5991,6 +6036,126 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     'אם הבקשה הנוכחית אינה מכילה נושא ברור וקריא (למשל טקסט משובש, סימני שאלה או קידוד פגום) — אל תבחר נושא מהפרופיל ואל תמציא נושא. החזר במקום זאת בקשה קצרה למשתמש לנסח מחדש את הנושא.',
     ...cleanParts,
   ].join('\n');
+};
+
+// אחזור RAG של chunks אמיתיים לפני בניית הפרומפט (Phase 3). מקומי+מהיר; לעולם
+// לא שובר יצירה — כל כשל → '' (בלי chunks). מדלג כשהמנוע כבוי או שהסגנון מדוכא.
+const retrieveStyleChunkBlock = async (requestText, options = {}) => {
+  if (options.suppressStyleEngine === true || options.suppressPersonalStyle === true) return '';
+  try {
+    const styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine);
+    if (!styleEngine.enabled) return '';
+    // E3 — ז'אנר תואם (מהאופציות אם הועבר, אחרת מסווג מהבקשה) מוזרם ל-boost אחזור.
+    const genre = options.styleGenre !== undefined ? options.styleGenre : classifyRequestGenre(String(requestText || ''));
+    const chunks = await selectChunks(String(requestText || ''), { k: 4, mode: 'local', genre });
+    let block = buildChunkInjectionText(chunks);
+    if (block) {
+      const exemplars = selectExemplarSentences(chunks, {
+        mean: styleEngine.metrics?.avgSentenceWords,
+        std: styleEngine.metricsSpread?.avgSentenceWords?.std,
+        count: 3,
+      });
+      if (exemplars.length) {
+        block += `\nמשפטים אופייניים שלך (חקה את האורך והקצב): ${exemplars.map((s) => `"${s}"`).join(' | ')}`;
+      }
+    }
+    return block;
+  } catch {
+    return '';
+  }
+};
+
+// עוטף את הספק הפעיל כ-invokeModel לשופט/rewrite הסגנון. suppressStyleEngine:true
+// קריטי — מונע מהשופט להזריק את בלוק הסגנון לתוך הקריאות של עצמו (recursion/contamination).
+// skipAutomation+skipMultiModel שומרים על קריאה יחידה נקייה בלי workflow/ריבוי מודלים.
+const makeStyleJudgeInvokeModel = (runId = '') => (prompt) => chatWithActiveProvider(String(prompt || ''), '', '', {
+  skipAutomation: true,
+  skipMultiModel: true,
+  suppressStyleEngine: true,
+  suppressPersonalStyle: true,
+  agentLabel: 'Style Judge',
+  runId,
+});
+
+// שופט סגנון + rewrite אופציונלי על טקסט נקי (לא HTML). מיועד ל-LAB ולקוראים עתידיים.
+// מנקד את הטקסט מול הפרופיל (scoreStyleMatch, mode 'auto'); אם ≤70 והמנוע פעיל —
+// מריץ runStyleRewriteLoop. לעולם לא זורק. { text, score, rewritten, penalties, usedLlm }.
+export const applyStyleJudgeToText = async (plainText, { runId = '', mode = 'auto', target = 71, genre = null, requestText = '' } = {}) => {
+  const original = String(plainText || '');
+  const fallback = { text: original, score: null, rewritten: false, penalties: [], usedLlm: false };
+  try {
+    const styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine);
+    if (!styleEngine.enabled) return { ...fallback, disabled: true };
+    const invokeModel = makeStyleJudgeInvokeModel(runId);
+    // מודעות ז'אנר: request-first, נפילה אחרונה לסיווג טקסט-הפלט עצמו.
+    const resolvedGenre = genre || (requestText ? classifyRequestGenre(requestText) : null) || classifyRequestGenre(original);
+    const scored = await scoreStyleMatch(original, { styleEngine, invokeModel, mode, genre: resolvedGenre });
+    const result = {
+      text: original,
+      score: scored.score,
+      local: scored.local,
+      llm: scored.llm,
+      usedLlm: scored.usedLlm,
+      llmSkipReason: scored.llmSkipReason || '',
+      penalties: scored.penalties,
+      rewritten: false,
+    };
+    if (Number.isFinite(scored.score) && scored.score <= 70) {
+      const rewrite = await runStyleRewriteLoop({ text: original, styleEngine, invokeModel, target, genre: resolvedGenre });
+      if (rewrite?.improved && rewrite.text && rewrite.text !== original) {
+        result.text = rewrite.text;
+        result.score = rewrite.score;
+        result.rewritten = true;
+        result.rewritePasses = rewrite.passes;
+      }
+    }
+    return result;
+  } catch {
+    return fallback;
+  }
+};
+
+// שכתוב סגנון ברמת ה-HTML של מסמך שלם (Stage A): משכתב את הפסקאות הגרועות ביותר לכיוון
+// סגנון הכותב, אי-הרסני-מבנית. suppressStyleEngine:true קריטי — מונע recursion. מדלג
+// כשהמנוע כבוי → { html, skipped:true }. עומק 'deep' → 2 סבבים, אחרת סבב יחיד.
+export const rewriteDocumentStyle = async (html, { runId = '', styleDepth = 'normal', target = 75, genre = null, requestText = '' } = {}) => {
+  const original = String(html || '');
+  try {
+    const styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine);
+    if (!styleEngine.enabled) return { html: original, skipped: true };
+    const invokeModel = makeStyleJudgeInvokeModel(runId);
+    const maxPasses = styleDepth === 'deep' ? 2 : 1;
+    // מודעות ז'אנר: request-first, נפילה אחרונה לסיווג טקסט-הפלט (הנקי מ-HTML).
+    const resolvedGenre = genre || (requestText ? classifyRequestGenre(requestText) : null) || classifyRequestGenre(String(original || '').replace(/<[^>]+>/g, ' '));
+    return await rewriteDocumentHtmlTowardStyle(original, { styleEngine, invokeModel, target, maxPasses, genre: resolvedGenre });
+  } catch {
+    return { html: original, skipped: true };
+  }
+};
+
+// ניקוד סגנון בלבד (בלי rewrite) — ל-attach ל-meta של יצירת מסמך שלם (Phase 4, אי-הרסני).
+// מקבל טקסט נקי; מחזיר { score, local, llm, usedLlm } או null אם המנוע כבוי/כשל.
+export const scoreStyleForDocument = async (plainText, { runId = '', mode = 'auto', genre = null, requestText = '' } = {}) => {
+  try {
+    const styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine);
+    if (!styleEngine.enabled) return null;
+    const invokeModel = makeStyleJudgeInvokeModel(runId);
+    const text = String(plainText || '');
+    // מודעות ז'אנר: request-first, נפילה אחרונה לסיווג טקסט-הפלט עצמו.
+    const resolvedGenre = genre || (requestText ? classifyRequestGenre(requestText) : null) || classifyRequestGenre(text);
+    const scored = await scoreStyleMatch(text, { styleEngine, invokeModel, mode, genre: resolvedGenre });
+    return {
+      score: scored.score,
+      local: scored.local,
+      llm: scored.llm,
+      usedLlm: scored.usedLlm,
+      llmSkipReason: scored.llmSkipReason || '',
+      breakdown: scored.breakdown,
+      penalties: scored.penalties,
+    };
+  } catch {
+    return null;
+  }
 };
 
 // בלוק קול אישי רזה (emphasizeVoice) לשימוש חיצוני — למשל בהזרקת סגנון המשתמש
@@ -7954,6 +8119,7 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
       messages,
       baseUrl,
       apiKey,
+      temperature: Number.isFinite(options.temperature) ? options.temperature : null,
       bodyExtras: requestBodyExtras,
       signal,
       extractWebResults: (data) => extractPerplexityGroundedWebResultsFromPayload(data, GROUNDED_WEB_RESULT_LIMIT),
@@ -7969,6 +8135,7 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
     messages,
     max_tokens: 4096,
     stream: false,
+    ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
     ...(requestBodyExtras || {}),
   });
   const buildResponse = (data = {}) => {
@@ -8025,6 +8192,7 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
         { role: 'user', content: userMessage },
       ],
       apiKey,
+      temperature: Number.isFinite(options.temperature) ? options.temperature : null,
       signal,
     });
     return finalizeProviderTextResponse(chatResultToLegacyResponse(result, { legacyStopReason: true }), '', includeCompletionMetadata);
@@ -8041,6 +8209,7 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
   };
   const bodyStr = JSON.stringify({
     model, max_tokens: 4096,
+    ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
   });
@@ -8298,14 +8467,23 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   // כתיבה כללית: קול אישי מקסימלי (emphasizeVoice → בלוק סגנון רזה וממוקד-קול).
   const suppressPersonalStyleForScope = isGeneralKnowledgeScope;
   // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
+  const personalStyleRequestText = [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
+  // E3 — ז'אנר מסווג פעם אחת מהבקשה, מוזרם גם לאחזור וגם לעוגני המדד (תת-פרופיל).
+  const styleGenre = classifyRequestGenre(personalStyleRequestText);
+  const styleChunkBlock = (options.suppressPersonalStyle === true || suppressPersonalStyleForScope)
+    ? ''
+    : await retrieveStyleChunkBlock(personalStyleRequestText, { ...options, styleGenre });
   const personalStylePrompt = (options.suppressPersonalStyle === true || suppressPersonalStyleForScope)
     ? ''
     : buildPersonalStyleInstructions(getPersonalStyleProfile(), {
       omitStructuralHints: omitPersonalStyleStructureHints,
       emphasizeVoice: isGeneralWritingScope,
-      requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+      requestText: personalStyleRequestText,
       templateId: String(options.templateId || '').trim(),
       isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : (Date.now() % 9973),
+      styleChunkBlock,
+      styleGenre,
     });
   const sharedInstructions = getSharedAgentInstructions();
   // בכללי לא כופים חוקי workspace/צוות — זו שיחה כללית, לא עבודה על המסמך.
@@ -8464,6 +8642,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   // אותו במקום לרוץ חופשי (הבאג ההיסטורי: continuation בלי נעילה = המצאת מקורות).
   let singleCallSourceMode = false;
   let singleCallGroundedSources = [];
+  // נושא החיפוש של מסלול הקריאה-האחת ("מה שכתבת זה מה שנשלח"): נגזר באותה לוגיקה
+  // כמו בצינור, מוזרק כהנחיית-חיפוש ל-prompt ומשמש גם כ-topic לווטינג הרלוונטיות.
+  let singleCallTopicQuery = '';
+  let singleCallSearchDirectivePrompt = '';
   const sourceGroundingPrompt = buildSourceGroundingPrompt({
     enforce: strictSourceGroundingEnabled && sourceGroundingRequired,
     providerSupportsGrounding: providerSupportsSourceGrounding,
@@ -8766,10 +8948,42 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     //    (finalizeSingleCallSourceLock) והופכים ל-SourceLock — audit, ביבליוגרפיה והמשכים.
     //    רלוונטי רק לכתיבת מסמך; בקשות "מצא מקורות" טהורות עדיין עוברות דרך pipeline.
     singleCallSourceMode = true;
-    logEvent('single-call-source-mode', 'מסלול קריאה-אחת: Gemini יחפש ויכתוב באותה קריאה (בלי pipeline אחזור נפרד)', {
+    // גזירת נושא באותה לוגיקה כמו הצינור ("מה שכתבת זה מה שנשלח") — בלי fallback
+    // לשאילתה ישנה מהזיכרון. נושא ריק/הוראות-מטלה ⇒ הנחיה גנרית בלבד.
+    if (useRunScope && !sourceQueryOverride) {
+      singleCallTopicQuery = deriveGateQuery({ scope: requestRunScope, prompt: cleanUserPrompt }).query || '';
+    } else {
+      singleCallTopicQuery = extractVerifiedSourceQuery({
+        userPrompt: cleanUserPrompt,
+        documentContext,
+        fallbackQuery: '',
+        workspaceId: activeWorkspaceId,
+        stripFollowOnWork: shouldUseVerifiedSourceFollowOnGrounding,
+        sourceQueryOverride,
+        blockAssignmentPromptFallback,
+      });
+    }
+    if (singleCallTopicQuery
+      && (isLikelyAssignmentInstructionQuery(singleCallTopicQuery)
+        // בלוק-בקשה שנכרה מהקשר המסמך ("בקשת המשתמש למסמך: ...") או טקסט ארוך מדי — לא נושא.
+        || /^בקשת\s+המשתמש/.test(singleCallTopicQuery)
+        || singleCallTopicQuery.length > 140)) {
+      singleCallTopicQuery = '';
+    }
+    singleCallSearchDirectivePrompt = [
+      singleCallTopicQuery
+        ? `נושא החיפוש הוא אך ורק: "${singleCallTopicQuery}". חפש בכלי החיפוש שאילתות ממוקדות על הנושא הזה בלבד (בעברית ו/או באנגלית) — לא את נוסח הוראות המטלה, לא דרישות הגשה ולא ניסוחים כלליים.`
+        : 'חפש בכלי החיפוש שאילתות ממוקדות על הנושא התוכני של המסמך בלבד — לא את נוסח הוראות המטלה ולא דרישות הגשה.',
+      'הסתפק ב-1–3 חיפושים ממוקדים לכל היותר. אל תבצע סבבי חיפוש חוזרים.',
+      'השתמש רק בתוצאות שעוסקות ישירות בנושא. תוצאה משיקה, כללית או דף שירות/מאגר — התעלם ממנה וכתוב "[דרוש מקור]" במקום להסתמך עליה.',
+      'אסור בהחלט לכתוב סימוני ציטוט ממוספרים כמו [1] או [2][5] בגוף הטקסט.',
+      'אסור לתאר את מקורות החיפוש בפרוזה ("ויקיפדיה מציינת", "אתרים אקדמיים מדגישים", "לפי האתר", "מסמכים מציינים") — שלב את המידע עצמו בכתיבה טבעית. כשנדרש אזכור מקור, ציין לפי מחבר/כותרת ושנה בלבד.',
+    ].join('\n');
+    logEvent('single-call-source-mode', `מסלול קריאה-אחת: Gemini יחפש ויכתוב באותה קריאה (בלי pipeline אחזור נפרד)${singleCallTopicQuery ? ` — נושא החיפוש: "${singleCallTopicQuery}"` : ''}`, {
       state: 'info',
       provider: activeProvider,
       model: resolvedModel,
+      topicQuery: singleCallTopicQuery,
     });
   } else if (!externalSourceLock && (shouldRetrieveVerifiedSourcesFirst || shouldRetrieveGroundedWebResultsFirst || academicQuotaPipelinePreferred)) {
     // ── אחזור דרך מודול sourceRetrieval: מועמדים מ-metadata בלבד, ולידציה, אימות URL חי,
@@ -8878,7 +9092,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       // מנחה [דרוש מקור], והסניטייזר מוחק URLs לא-מאומתים. אם ל-Gemini עדיין יש כלי
       // googleSearch (לא כובה כי לא רץ אחזור) — זו בפועל קריאה-אחת, אז מסמנים אותה
       // כדי שה-groundingChunks של התשובה ינעלו וההמשכים לא ירוצו חופשי.
-      if (providerSupportsGeminiInternetBackedSourceTools) singleCallSourceMode = true;
+      if (providerSupportsGeminiInternetBackedSourceTools) {
+        singleCallSourceMode = true;
+        singleCallSearchDirectivePrompt = [
+          'חפש בכלי החיפוש שאילתות ממוקדות על הנושא התוכני של המסמך בלבד — לא את נוסח הוראות המטלה ולא דרישות הגשה.',
+          'הסתפק ב-1–3 חיפושים ממוקדים לכל היותר. אל תבצע סבבי חיפוש חוזרים.',
+          'השתמש רק בתוצאות שעוסקות ישירות בנושא. תוצאה משיקה, כללית או דף שירות/מאגר — התעלם ממנה וכתוב "[דרוש מקור]" במקום להסתמך עליה.',
+          'אסור בהחלט לכתוב סימוני ציטוט ממוספרים כמו [1] או [2][5] בגוף הטקסט.',
+          'אסור לתאר את מקורות החיפוש בפרוזה ("ויקיפדיה מציינת", "אתרים אקדמיים מדגישים", "לפי האתר", "מסמכים מציינים") — שלב את המידע עצמו בכתיבה טבעית. כשנדרש אזכור מקור, ציין לפי מחבר/כותרת ושנה בלבד.',
+        ].join('\n');
+      }
     } else {
       const articleQueryMeta = analyzeArticleQuery(verifiedSourceQuery);
       const academicSignalText = [cleanUserPrompt, extraSystemPrompt, documentContext].filter(Boolean).join('\n');
@@ -8900,11 +9123,16 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       const planEntries = retrievalPlan.length ? retrievalPlan : [fallbackEntry];
       // הרחבה: כל פריט אקדמי עם queryEn מתפצל לשאילתה עברית + שאילתה אנגלית — הקורפוס
       // האקדמי העדכני באנגלית עשיר בהרבה. חדשות/web נשארות ישראליות (שאילתה אחת).
-      const expandedEntries = planEntries.flatMap((entry) => (
-        entry.kind === 'academic' && entry.queryEn
-          ? [entry, { ...entry, query: entry.queryEn, queryEn: undefined, lang: 'en' }]
-          : [entry]
-      ));
+      // בקשה מפורשת למקורות באנגלית/בינלאומיים ("מה שביקשת זה מה שנשלח") — השאילתה
+      // האנגלית היא היחידה, לא תוספת לעברית.
+      const wantsEnglishSources = /(?:באנגלית|בשפה\s+האנגלית|מקורות?\s+לועזיי?ם?|מאמר(?:ים)?\s+לועזיי?ם?|מחקר(?:ים)?\s+בי?נלאומיי?ם?|international\s+(?:research|studies|sources|articles)|in\s+english)/i.test(cleanUserPrompt);
+      const expandedEntries = planEntries.flatMap((entry) => {
+        if (entry.kind === 'academic' && entry.queryEn) {
+          const englishEntry = { ...entry, query: entry.queryEn, queryEn: undefined, lang: 'en' };
+          return wantsEnglishSources ? [englishEntry] : [entry, englishEntry];
+        }
+        return [entry];
+      });
       emitStatus(onStatus, {
         state: 'running',
         progress: 18,
@@ -9066,7 +9294,7 @@ ${isGeneralWritingScope
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${singleCallSearchDirectivePrompt ? `\n\nחיפוש מקורות בתוך הכתיבה (קריאה אחת):\n${singleCallSearchDirectivePrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
   const sysPrompt = isGeneralScope ? generalScopeSysPrompt : documentScopeSysPrompt;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
@@ -10109,6 +10337,8 @@ ${isGeneralWritingScope
           const finalUrl = verdict.finalUrl && verdict.finalUrl !== candidate.url ? verdict.finalUrl : candidate.url;
           const resolvedDomain = extractArticleDomainFromUrl(finalUrl) || candidate.domain;
           if (isUniversallyBlockedSourceDomain(resolvedDomain)) return null;
+          // דפי לא-תוכן (דף ספרייה/מאגר/שורש-אתר) — אותו פילטר דטרמיניסטי כמו בצינור.
+          if (nonContentPageReason({ url: finalUrl, title: candidate.title, doi: candidate.doi, citedBy: candidate.citedBy })) return null;
           // כותרות chunk של grounding הן לרוב שם-דומיין — אם הטרנספורט חילץ <title> אמיתי, עדיף.
           const chunkTitle = String(candidate.title || '').trim();
           const domainLikeTitle = !chunkTitle || /^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(chunkTitle);
@@ -10136,6 +10366,18 @@ ${isGeneralWritingScope
           errorMessage: error?.message || '',
         });
       }
+    }
+    // ווטינג רלוונטיות — אותה שכבה כמו בצינור, אבל כאן דולק כברירת מחדל
+    // (cfg.retrieval.vetRelevance === false מכבה): שאילתות החיפוש במסלול הזה הן של
+    // המודל עצמו, אז ה-chunks הם הנקודה החלשה ביותר לרלוונטיות. fail-open תמיד.
+    if (verifiedSources.length >= 2 && cfg?.retrieval?.vetRelevance !== false) {
+      const vet = await vetSourceRelevance({
+        topic: singleCallTopicQuery || cleanUserPrompt,
+        sources: verifiedSources,
+        cfg,
+        log: logEvent,
+      });
+      verifiedSources = vet.sources;
     }
     activeSourceLock = lockSources(verifiedSources, {
       workspaceId: activeWorkspaceId,
@@ -10167,6 +10409,7 @@ ${isGeneralWritingScope
         const geminiModelConfig = providerSupportsGeminiInternetBackedSourceTools
           ? { model: resolvedModel, tools: [{ googleSearch: {} }] }
           : { model: resolvedModel };
+        if (Number.isFinite(options.temperature)) geminiModelConfig.generationConfig = { temperature: options.temperature };
         const mdl = genAI.getGenerativeModel(geminiModelConfig);
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
         const geminiGroundedSources = providerSupportsGeminiInternetBackedSourceTools
@@ -10207,18 +10450,18 @@ ${isGeneralWritingScope
         return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
       }
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
@@ -10229,7 +10472,7 @@ ${isGeneralWritingScope
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
@@ -10241,6 +10484,7 @@ ${isGeneralWritingScope
           { role: 'user', content: cleanUserPrompt },
         ], signal, {
           includeCompletionMetadata: preserveProviderCompletionMetadata,
+          temperature: options.temperature,
           ...(perplexityRequestBodyExtras ? { requestBodyExtras: perplexityRequestBodyExtras } : {}),
         });
       }
@@ -10253,7 +10497,7 @@ ${isGeneralWritingScope
         return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
       }
       default:
         throw new Error('ספק AI לא ידוע');
@@ -11294,6 +11538,8 @@ export const streamOpenAI_API = async (baseUrl, apiKey, model, messages, signal,
       messages,
       baseUrl,
       apiKey,
+      // streamOpenAICompatible אינו מקבל temperature ישירות — מזריקים דרך bodyExtras (נכנס ל-body).
+      ...(Number.isFinite(options.temperature) ? { bodyExtras: { temperature: options.temperature } } : {}),
       signal,
       onDelta: options.onChunk ? (fullText) => options.onChunk(fullText) : null,
     });
@@ -11302,7 +11548,7 @@ export const streamOpenAI_API = async (baseUrl, apiKey, model, messages, signal,
   const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-  const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: true });
+  const bodyStr = JSON.stringify({ model, messages, max_tokens: 4096, stream: true, ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}) });
   
   const res = await fetch(url, {
     method: 'POST',
@@ -11384,13 +11630,22 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
 
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
+  const personalStyleRequestText = [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
+  // E3 — ז'אנר מסווג פעם אחת מהבקשה, מוזרם גם לאחזור וגם לעוגני המדד (תת-פרופיל).
+  const styleGenre = classifyRequestGenre(personalStyleRequestText);
+  const styleChunkBlock = options.suppressPersonalStyle === true
+    ? ''
+    : await retrieveStyleChunkBlock(personalStyleRequestText, { ...options, styleGenre });
   const personalStylePrompt = options.suppressPersonalStyle === true
     ? ''
     : buildPersonalStyleInstructions(getPersonalStyleProfile(), {
       omitStructuralHints: omitPersonalStyleStructureHints,
-      requestText: [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+      requestText: personalStyleRequestText,
       templateId: String(options.templateId || '').trim(),
       isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
+      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : (Date.now() % 9973),
+      styleChunkBlock,
+      styleGenre,
     });
   const sharedInstructions = getSharedAgentInstructions();
   const automation = getWorkspaceAutomation();

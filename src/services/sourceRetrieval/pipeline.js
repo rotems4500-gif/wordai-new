@@ -7,6 +7,8 @@
 
 import { extractDomainFromUrl, isUniversallyBlockedSourceDomain } from '../articleSourceValidation';
 import { dedupeSources } from './candidates';
+import { filterNonContentCandidates } from './contentPageFilter';
+import { vetSourceRelevance } from './relevanceVet';
 import { getDefaultRetrievalSession } from './cache';
 import { fetchGeminiGroundedSources } from './providers/geminiGrounded';
 import { fetchPerplexitySources } from './providers/perplexitySearch';
@@ -271,6 +273,11 @@ export const retrieveSources = async ({
   cfg = {},
   logEvent = null,
   requireLiveUrl = true,
+  // ווטינג רלוונטיות במודל זול — כבוי כברירת מחדל (חיסכון במכסה). מדליקים דרך
+  // cfg.retrieval.vetRelevance === true או העברת true מפורש מהקורא.
+  vetRelevance = null,
+  // הקשר-נושא עשיר לווטינג (למשל תקציר המטלה) — ברירת מחדל: השאילתה עצמה.
+  vetTopic = '',
 } = {}) => {
   const log = makeRetrievalLogger(logEvent);
   const safeKind = normalizeKind(kind);
@@ -317,6 +324,19 @@ export const retrieveSources = async ({
   const providerTrail = [];
   const deadlineAt = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS);
   let lastError = null;
+  const shouldVetRelevance = typeof vetRelevance === 'boolean'
+    ? vetRelevance
+    : cfg?.retrieval?.vetRelevance === true;
+  // מאגר מצטבר בין ספקים: ספק שהחזיר רק 0-1 מקורות רלוונטיים אחרי הסינון לא עוצר
+  // את הסולם — התוצאות נשמרות וממשיכים לספק הבא, במקום להחזיר תוצאה מורעבת.
+  let bestPool = [];
+  const sufficientCount = Math.min(safeCount, 2);
+  const finalizePoolResult = () => {
+    const collapsed = rankSources(dedupeSources(bestPool), safeKind).slice(0, safeCount);
+    const result = { ...baseResult, ok: true, sources: collapsed, providerTrail };
+    activeSession.setCached(cacheParams, result);
+    return result;
+  };
 
   for (const attempt of attempts) {
     if (!activeSession.canCallProvider()) {
@@ -328,6 +348,7 @@ export const retrieveSources = async ({
     const providerTimeoutMs = Math.min(PER_PROVIDER_TIMEOUT_MS, timeRemaining);
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const startedAt = Date.now();
+    let attemptYielded = false; // הספק תרם משהו ל-pool — לא רושמים לו כישלון בסוף
 
     for (const searchQuery of searchQueries) {
       if (!activeSession.canCallProvider()) break;
@@ -364,10 +385,24 @@ export const retrieveSources = async ({
           continue;
         }
 
-        // שלב 5: ולידציית תוכן לחדשות (דומיינים, שנים) — על ה-URL הסופי האמיתי.
+        // שלב 5א: פילטר דטרמיניסטי לדפי לא-תוכן (דפי ספרייה/מאגר/אינדקס/שורש) —
+        // חינם, על ה-finalUrl אחרי resolve. רץ בכל ה-kinds (כתבה אמיתית לעולם
+        // אינה URL שורש). מועמד עם doi/citedBy מוגן בתוך הפילטר.
         let validated = verified;
+        {
+          const { accepted, rejected } = filterNonContentCandidates(validated);
+          rejected.forEach(({ candidate, reason }) => {
+            log('verified-source-candidate-rejected', `מועמד נפסל: ${candidate.finalUrl || candidate.url} — ${reason}`, {
+              state: 'error', url: candidate.finalUrl || candidate.url, reason,
+            });
+          });
+          validated = accepted;
+        }
+        if (!validated.length) continue;
+
+        // שלב 5: ולידציית תוכן לחדשות (דומיינים, שנים) — על ה-URL הסופי האמיתי.
         if (safeKind === 'news') {
-          const { accepted, rejected } = filterNewsCandidates(queryMeta, verified);
+          const { accepted, rejected } = filterNewsCandidates(queryMeta, validated);
           rejected.forEach(({ candidate, reason }) => {
             log('verified-source-candidate-rejected', `מועמד נפסל: ${candidate.finalUrl || candidate.url} — ${reason}`, {
               state: 'error', url: candidate.finalUrl || candidate.url, reason,
@@ -379,17 +414,33 @@ export const retrieveSources = async ({
         validated = filterSourcesByAfterDate(validated, safeAfter, log);
         if (!validated.length) continue;
 
+        // שלב 5ג: ווטינג רלוונטיות במודל זול (רק כשהודלק, ולא לחדשות — להן יש
+        // ולידציית תוכן משלהן). fail-open: כשל ווטינג לא מפיל את האחזור.
+        if (shouldVetRelevance && safeKind !== 'news' && validated.length) {
+          const vet = await vetSourceRelevance({
+            topic: vetTopic || safeQuery, sources: validated, cfg, log,
+          });
+          validated = vet.sources;
+        }
+        if (!validated.length) continue;
+
         // שלב 6: dedup סופי + דירוג + חיתוך.
         // Gemini grounding מחזיר לעיתים כמה chunks מאותו אתר (למשל 2× bizportal) —
         // אחרי אימות ה-domain האמיתי ידוע, אז מכווצים לפריט אחד לדומיין. שאר הספקים
         // (Perplexity/Scholar) לא מכווצים per-domain: שם לגיטימי כמה כתבות מאותו אתר.
         const collapsed = attempt.providerId === 'gemini-google-search'
           ? dedupeByDomain(validated) : validated;
-        const sources = rankSources(dedupeSources(collapsed), safeKind).slice(0, safeCount);
-        providerTrail.push({ providerId: attempt.providerId, resultCount: sources.length, ms: Date.now() - startedAt });
-        const result = { ...baseResult, ok: true, sources, providerTrail };
-        activeSession.setCached(cacheParams, result);
-        return result;
+        bestPool = dedupeSources([...bestPool, ...collapsed]);
+        attemptYielded = true;
+        providerTrail.push({ providerId: attempt.providerId, resultCount: collapsed.length, ms: Date.now() - startedAt });
+        if (bestPool.length >= sufficientCount) {
+          return finalizePoolResult();
+        }
+        // מעט מדי אחרי הסינון — שומרים את מה שיש וממשיכים לספק הבא בסולם.
+        log('source-insufficient-after-filter', `רק ${bestPool.length} מקורות רלוונטיים אחרי סינון (יעד ${sufficientCount}) — ממשיכים לספק הבא`, {
+          state: 'info', provider: attempt.providerId, poolCount: bestPool.length,
+        });
+        continue;
       } catch (error) {
         lastError = error;
         log('verified-source-provider-error', `שגיאת אחזור: provider=${attempt.providerId} error="${error?.message || String(error)}"`, {
@@ -397,7 +448,15 @@ export const retrieveSources = async ({
         });
       }
     }
-    providerTrail.push({ providerId: attempt.providerId, resultCount: 0, ms: Date.now() - startedAt, error: lastError?.message || 'no-results' });
+    if (!attemptYielded) {
+      providerTrail.push({ providerId: attempt.providerId, resultCount: 0, ms: Date.now() - startedAt, error: lastError?.message || 'no-results' });
+    }
+  }
+
+  // הסולם הסתיים בלי לעמוד ביעד — אם הצטבר משהו, מחזירים אותו (תוצאה דלה עדיפה
+  // על כישלון; ההנחיה [דרוש מקור] מכסה את הפער בהמשך).
+  if (bestPool.length > 0) {
+    return finalizePoolResult();
   }
 
   const timedOut = Date.now() >= deadlineAt;

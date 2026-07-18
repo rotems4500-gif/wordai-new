@@ -24,10 +24,17 @@ export const buildSourcesQueryOverride = (promptText = '', { selectedText = '', 
     .replace(/^[\s"'“”״׳:;,.!?()-]+|[\s"'“”״׳:;,.!?()-]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+  // עיקרון "מה שכתבת זה מה שנשלח": טקסט בגרשיים בבקשה הוא הנושא המפורש ביותר;
+  // אחריו — טקסט שהמשתמש סימן בעורך (סימנת שורה וביקשת מקורות ⇒ השורה היא הנושא,
+  // לא ניחוש מתוך שאר הפרומפט). רק בהיעדר שניהם נופלים לפרומפט/בלוק.
+  const quotedCandidate = cleanCandidate(quotedTextMatch?.[1] || '');
+  const selectionCandidate = cleanCandidate(selectedText);
+  if (quotedCandidate.length >= 12) return quotedCandidate.slice(0, 260).trim();
+  if (selectionCandidate.length >= 12) return selectionCandidate.slice(0, 260).trim();
   const candidates = [
-    cleanCandidate(quotedTextMatch?.[1] || ''),
+    quotedCandidate,
     cleanCandidate(promptText),
-    cleanCandidate(selectedText),
+    selectionCandidate,
     cleanCandidate(currentBlockText),
   ].filter(Boolean);
   const preferred = candidates.find((candidate) => candidate.length >= 18 && !/^(?:מקורות|כתבות|מאמרים|sources?|articles?)\b/i.test(candidate)) || candidates[0] || '';
@@ -56,6 +63,10 @@ export const buildHoleFillSourceQueryOverride = (promptText = '', { messages = [
     .replace(/^[\s\d.):-]+/gm, '')
     .replace(/\s+/g, ' ')
     .trim();
+  // עיקרון "מה שכתבת זה מה שנשלח": כשהמשתמש סימן טקסט — הסימון הוא נושא ההשלמה.
+  // נשלח ישירות, בלי כריית 8 הודעות אחורה (שמחזירה לפעמים נושא ישן מהשיחה).
+  const selectionCandidate = cleanCandidate(selectedText);
+  if (selectionCandidate.length >= 12) return selectionCandidate.slice(0, 320).trim();
   const candidates = [
     promptText,
     ...messages.slice(-8).reverse().map((message) => message?.content || ''),
@@ -67,4 +78,30 @@ export const buildHoleFillSourceQueryOverride = (promptText = '', { messages = [
     .filter((candidate) => candidate && sourceNeedPattern.test(candidate) && !genericContextPattern.test(candidate) && !priorSourceListPattern.test(candidate));
   const preferred = candidates.find((candidate) => /(?:מקור|מקורות|פסיקה|פסק(?:י)?\s+דין|ספרות|אקדמ|משפט|ציטוט|אזכור)/i.test(candidate)) || candidates[0] || '';
   return preferred.slice(0, 320).trim();
+};
+
+// חילוץ נושא-מחקר משותף — אותם regex כמו deriveDocumentResearchTopic ב-workspaceLearningService.js,
+// לשימוש retrievalGate/SPSS/aiService בלי import מעגלי. הבדל מכוון: כשאין סימון "הנושא:" ואין
+// פועל-כתיבה+"על X" — מוחזר '' (לא הטקסט המלא), כדי שה-callers ישמרו על ה-fallback הקיים שלהם.
+export const deriveResearchTopicQuery = (promptText = '', instructionsText = '') => {
+  let text = [String(promptText || ''), String(instructionsText || '')].filter((s) => s.trim()).join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  // הערה: אין להשתמש ב-\b סביב עברית — ב-JS regex \b הוא ASCII בלבד ולא תופס גבול-מילה עברי.
+  // עדיפות: "הנושא: X" מפורש
+  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?)\s*[:：\-–]\s*([^\n.;]+)/i);
+  if (explicit) {
+    text = explicit[1];
+  } else {
+    // "כתוב/צור/הכן ... על X" — לוקחים מהמופע הראשון של מילת-קישור אחרי פועל-הכתיבה
+    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
+    if (!afterVerb) return '';
+    text = afterVerb[1];
+  }
+  // הסרת סעיפי-דרישות/מבנה נגררים (הכולל.., בהיקף.., לפי APA, עם N מקורות..). בלי \b.
+  text = text
+    .replace(/[\s,،]+(?:ה?כולל(?:ת|ים)?|שתכלול|שיכלול|בהיקף|באורך|לפי|על[- ]?פי|בפורמט|בסגנון|בעימוד|עם|כולל|בצירוף|בליווי|including|with)(?:\s.*)?$/i, '')
+    .replace(/[\s.,;:"'״׳()\-–]+$/g, '')
+    .replace(/^[\s.,;:"'״׳()\-–]+/g, '')
+    .trim();
+  return text.slice(0, 200).trim();
 };

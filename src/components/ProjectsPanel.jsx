@@ -7,6 +7,7 @@ import {
   getProjectDocuments,
   assignDocumentToProject,
   unassignDocumentFromProject,
+  computeProjectProgress,
   PROJECTS_UPDATED_EVENT,
 } from '../services/projectService';
 import { showToast, showConfirm } from '../services/uiFeedback';
@@ -19,6 +20,7 @@ export default function ProjectsPanel({
   onOpenProjectSettings = () => {},
   onOpenDocument = () => {},
   onNewDocumentInProject = () => {},
+  onOpenProjectHub = null,
 }) {
   const [projects, setProjects] = useState(() => listProjects());
   const [expandedId, setExpandedId] = useState(null);
@@ -158,7 +160,35 @@ export default function ProjectsPanel({
 
               <div className="mt-1 text-[10.5px] text-[#6f87a1]">{docCount} מסמכים</div>
 
+              {/* פס התקדמות מתווה — מוצג רק לפרויקט עם roadmap; לחיצה פותחת את ה-Hub */}
+              {Boolean(project.milestones?.length) && (() => {
+                const progress = computeProjectProgress(project);
+                return (
+                  <div className="mt-1.5">
+                    <div className="flex items-center justify-between text-[9.5px] text-[#8ba3bd]">
+                      <span>{progress.doneCount}/{progress.totalCount} שלבים</span>
+                      <span>{progress.percent}%</span>
+                    </div>
+                    <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-l from-cyan-400 to-teal-300 transition-all duration-300"
+                        style={{ width: `${progress.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="mt-2 flex flex-wrap gap-1.5">
+                {typeof onOpenProjectHub === 'function' && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProjectHub(project)}
+                    className="rounded-lg border border-teal-200/30 bg-gradient-to-l from-teal-500/25 to-cyan-500/20 px-2 py-1 text-[10.5px] font-bold text-teal-50 shadow-[0_0_12px_rgba(45,212,191,0.15)] transition hover:from-teal-500/40 hover:to-cyan-500/30"
+                  >
+                    🚀 פתח פרויקט
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onOpenProjectBrainstorm(project)}

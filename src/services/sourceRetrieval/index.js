@@ -19,6 +19,8 @@ export {
   SOURCE_GROUNDING_FAILURE_TOKEN,
 } from './lock';
 export { verifyUrls, setUrlVerifierTransport, isGoogleGroundingRedirectUrl } from './urlVerifier';
+export { nonContentPageReason, filterNonContentCandidates } from './contentPageFilter';
+export { vetSourceRelevance, setVetModelTransport } from './relevanceVet';
 export { formatSourcesReply, formatSourcesFailureReply, formatSourceItem } from './format';
 export { fetchScholarSources } from './providers/serpApiScholar';
 export { extractGeminiGroundedSources } from './providers/geminiGrounded';

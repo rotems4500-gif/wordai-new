@@ -1,8 +1,15 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import ProfileOnboarding from './ProfileOnboarding';
+import StyleProfilePanel from './components/StyleProfilePanel';
 import { normalizeDelimitedList } from './delimitedListInput';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { AGENTS_CONFIG } from './agentConfig';
+import { isDesktopApp } from './platform';
 import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/copyleaksService';
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
@@ -60,6 +67,8 @@ import {
   getPersonalStyleProfile,
   normalizePersonalStyleProfile,
   savePersonalStyleProfile,
+  COVER_TEMPLATE_FIELDS,
+  fillCoverTemplateTokens,
   getSharedAgentInstructions,
   saveSharedAgentInstructions,
   getWorkspaceAutomation,
@@ -559,6 +568,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
   debug: ['debug', 'logs', 'log', 'console', 'לוגים', 'ניפוי'],
   personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי'],
+  styleEngine: ['style engine', 'personal style engine', 'writing samples', 'blacklist', 'qualitative patterns', 'confidence', 'מנוע סגנון', 'מנוע הסגנון', 'דוגמאות כתיבה', 'רשימה שחורה', 'דפוסים'],
 };
 
 const SETTINGS_TAB_GROUPS = [
@@ -570,7 +580,7 @@ const SETTINGS_TAB_GROUPS = [
   {
     title: 'הכתיבה שלי',
     desc: 'הפרופיל, הסגנון וברירות המחדל למסמך',
-    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 עריכת סגנון'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
+    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 עריכת סגנון'], ['styleEngine', '🖋️ מנוע סגנון'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
   },
   {
     title: 'תוכן וויזואל',
@@ -592,6 +602,7 @@ const SETTINGS_TAB_META = {
   workspaceV2: { icon: '🧩', title: 'סביבות עבודה', desc: 'הצוותים שמופיעים במסך הבית — תפקיד, יעד ותוצר לכל סוכן.' },
   onboarding: { icon: '👤', title: 'פרופיל הכתיבה שלך', desc: 'הפרטים שמלמדים את WordAI לכתוב בדיוק כמוך.' },
   personal: { icon: '🧬', title: 'עריכת הסגנון', desc: 'כיוונון עדין של איך הכתיבה נשמעת ונראית — וכל שינוי כאן נכנס מיד לפרומפט הסגנון שבתחתית.' },
+  styleEngine: { icon: '🖋️', title: 'מנוע הסגנון האישי', desc: 'העלאת עבודות שכתבת, ניתוח דפוסי כתיבה, מדדים ורשימת ביטויים חסומים.' },
   prompt: { icon: '📌', title: 'הנחיות קבועות', desc: 'הנחיות שמצורפות לכל ספקי ה-AI, וייבוא ניתוח סגנון חיצוני.' },
   writing: { icon: '✍️', title: 'ברירות מחדל למסמך', desc: 'טיפוגרפיה, בדיקות, עריכה חכמה ושמירה אוטומטית.' },
   media: { icon: '🖼️', title: 'תמונות וגרפים', desc: 'ה-API שמייצרים תוכן ויזואלי: תמונות סטוק וגרפים מנתוני SPSS.' },
@@ -4026,6 +4037,110 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
   );
 }
 
+const COVER_EDITOR_FONTS = ['Alef', 'Heebo', 'Assistant', 'Frank Ruhl Libre', 'Miriam Libre', 'David', 'Times New Roman', 'Arial'];
+const COVER_EDITOR_SIZES = ['12', '14', '16', '18', '20', '24', '28', '36', '48'];
+const COVER_STARTER_HTML = `<p style="text-align:center">{{institution}}</p><h1 style="text-align:center">{{title}}</h1><h3 style="text-align:center">{{subtitle}}</h3><p></p><p></p><p style="text-align:center">בקורס: {{course}}</p><p style="text-align:center">מרצה: {{lecturer}}</p><p></p><p style="text-align:center">מגיש/ה: {{studentName}} · ת.ז. {{studentId}}</p><p style="text-align:center">{{date}}</p>`;
+
+// עורך WYSIWYG קומפקטי לעיצוב תבנית עמוד השער האישית ישירות מההגדרות (מסלול "מיני-עורך").
+function CoverTemplateSettings({ profile, setProfile }) {
+  const initialInner = useMemo(() => {
+    const raw = String(profile.coverTemplateHtml || '').trim();
+    if (!raw) return COVER_STARTER_HTML;
+    return raw
+      .replace(/^<div[^>]*data-cover-page="true"[^>]*>/i, '')
+      .replace(/<\/div>\s*$/i, '')
+      .trim() || COVER_STARTER_HTML;
+  // מאותחל פעם אחת בלבד כדי לא לקטוע את הקלדת המשתמש
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [savedAt, setSavedAt] = useState(String(profile.coverTemplateSavedAt || ''));
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Underline,
+      TextStyle, FontFamily, FontSize, LineHeight,
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    ],
+    content: initialInner,
+    editorProps: { attributes: { dir: 'rtl', style: 'min-height:200px;padding:14px;outline:none;' } },
+  });
+
+  const apply = (fn) => { if (editor) fn(editor.chain().focus()).run(); };
+  const insertField = (token) => { if (editor) editor.chain().focus().insertContent(token).run(); };
+
+  const handleSave = () => {
+    if (!editor) return;
+    const inner = editor.getHTML();
+    const plain = inner.replace(/<[^>]+>/g, '').replace(/ /g, ' ').trim();
+    if (!plain) { showToast('התבנית ריקה — כתוב תוכן לפני שמירה.', { tone: 'warning' }); return; }
+    const html = `<div data-cover-page="true">${inner}</div>`;
+    const at = new Date().toISOString();
+    setProfile((prev) => ({ ...prev, coverTemplateHtml: html, coverTemplateSavedAt: at }));
+    setSavedAt(at);
+    showToast('תבנית עמוד השער נשמרה. הוסף אותה בכל מסמך דרך "עמוד שער ← עמוד השער שלי".', { tone: 'success', duration: 6000 });
+  };
+
+  const handleClear = async () => {
+    if (!(await showConfirm('למחוק את תבנית עמוד השער השמורה?', { title: 'מחיקת תבנית', confirmLabel: 'מחק', tone: 'danger' }))) return;
+    setProfile((prev) => ({ ...prev, coverTemplateHtml: '', coverTemplateSavedAt: '' }));
+    setSavedAt('');
+    editor?.commands.setContent(COVER_STARTER_HTML);
+    showToast('התבנית נמחקה.', { tone: 'info' });
+  };
+
+  const previewHtml = useMemo(
+    () => fillCoverTemplateTokens(String(profile.coverTemplateHtml || ''), profile),
+    [profile.coverTemplateHtml, profile.currentCourses, profile.lecturerNames, profile.lecturerName, profile.displayName, profile.studentId, profile.institutionName]
+  );
+
+  const btn = (active) => ({ padding: '5px 9px', borderRadius: 6, border: `1px solid ${active ? '#1D4ED8' : '#C8C6C4'}`, background: active ? '#DBEAFE' : 'white', color: active ? '#1D4ED8' : '#323130', cursor: 'pointer', fontSize: 12 });
+
+  return (
+    <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>עמוד שער אישי 📄</div>
+      <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 10, lineHeight: 1.6 }}>
+        עצב כאן את עמוד השער המועדף — פונט, גודל, יישור ומיקום שורות נשמרים במדויק. שדות דינמיים (קורס, מרצה, שם) יתמלאו אוטומטית בהוספה אם ידועים, אחרת יישארו ריקים. אפשר גם לעצב עמוד בעורך עצמו וללחוץ שם "שמור עמוד נוכחי כתבנית".
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+        <select onChange={(e) => { apply((c) => c.setFontFamily(e.target.value)); }} defaultValue="" style={{ ...btn(false), padding: '5px 8px' }}>
+          <option value="" disabled>פונט</option>
+          {COVER_EDITOR_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+        </select>
+        <select onChange={(e) => { apply((c) => c.setFontSize(`${e.target.value}pt`)); }} defaultValue="" style={{ ...btn(false), padding: '5px 8px' }}>
+          <option value="" disabled>גודל</option>
+          {COVER_EDITOR_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button type="button" style={btn(editor?.isActive('bold'))} onClick={() => apply((c) => c.toggleBold())}><b>B</b></button>
+        <button type="button" style={btn(editor?.isActive('underline'))} onClick={() => apply((c) => c.toggleUnderline())}><u>U</u></button>
+        <button type="button" style={btn(editor?.isActive({ textAlign: 'right' }))} onClick={() => apply((c) => c.setTextAlign('right'))}>ימין</button>
+        <button type="button" style={btn(editor?.isActive({ textAlign: 'center' }))} onClick={() => apply((c) => c.setTextAlign('center'))}>מרכז</button>
+        <button type="button" style={btn(editor?.isActive({ textAlign: 'left' }))} onClick={() => apply((c) => c.setTextAlign('left'))}>שמאל</button>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: 'var(--s-muted)' }}>הוסף שדה:</span>
+        {COVER_TEMPLATE_FIELDS.map((f) => (
+          <button key={f.key} type="button" title={f.token} onClick={() => insertField(f.token)}
+            style={{ fontSize: 10.5, padding: '3px 8px', borderRadius: 999, border: '1px solid #E2E8F0', background: '#F8FAFC', cursor: 'pointer' }}>{f.label}</button>
+        ))}
+      </div>
+      <div style={{ border: '1px solid #C8C6C4', borderRadius: 8, background: '#fff' }}>
+        <EditorContent editor={editor} />
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+        <button type="button" onClick={handleSave} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#1D4ED8', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>שמור תבנית</button>
+        {savedAt ? <button type="button" onClick={handleClear} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 12 }}>מחק תבנית</button> : null}
+        {savedAt ? <span style={{ fontSize: 10, color: '#059669' }}>✓ נשמרה</span> : <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>לא נשמרה עדיין</span>}
+      </div>
+      {String(profile.coverTemplateHtml || '').trim() ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6 }}>תצוגה מקדימה (עם הערכים הידועים כרגע):</div>
+          <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 14, background: '#FCFCFD', direction: 'rtl' }}
+            dangerouslySetInnerHTML={{ __html: previewHtml }} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PersonalStyleSettings({ profile, setProfile }) {
   const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
   const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
@@ -4192,6 +4307,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
           </div>
         </div>
       </div>
+
+      <CoverTemplateSettings profile={profile} setProfile={setProfile} />
 
       <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>פרופיל היכרות</div>
@@ -7472,18 +7589,15 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const normalizedSettingsSearch = normalizeSettingsSearchValue(settingsSearchQuery);
   const settingsSearchTokens = normalizedSettingsSearch ? normalizedSettingsSearch.split(' ').filter(Boolean) : [];
   const settingsSearchResults = settingsSearchTokens.length
-    ? SETTINGS_TAB_SEARCH_INDEX.filter((entry) => settingsSearchTokens.every((token) => entry.searchText.includes(token)))
+    ? SETTINGS_TAB_SEARCH_INDEX.filter((entry) => (entry.id !== 'updates' || isDesktopApp()) && settingsSearchTokens.every((token) => entry.searchText.includes(token)))
     : [];
-  const settingsSearchResultIds = new Set(settingsSearchResults.map((entry) => entry.id));
-  const visibleSettingsGroups = settingsSearchTokens.length
-    ? SETTINGS_TAB_GROUPS
-      .map((group) => ({
-        ...group,
-        tabs: group.tabs.filter(([id]) => settingsSearchResultIds.has(id)),
-      }))
-      .filter((group) => group.tabs.length)
-    : SETTINGS_TAB_GROUPS;
-  const settingsSearchHasNoResults = settingsSearchTokens.length > 0 && settingsSearchResults.length === 0;
+  // טאב העדכונים רלוונטי רק לאפליקציית הדסקטופ — באתר מסתירים אותו מהרייל ומהחיפוש.
+  const visibleSettingsGroups = SETTINGS_TAB_GROUPS
+    .map((group) => ({
+      ...group,
+      tabs: group.tabs.filter(([id]) => id !== 'updates' || isDesktopApp()),
+    }))
+    .filter((group) => group.tabs.length);
   const activeSettingsTabLabel = (SETTINGS_TAB_GROUPS.flatMap((group) => group.tabs).find(([id]) => id === settingsTab) || [])[1] || '';
   const activeSettingsTabMeta = SETTINGS_TAB_META[settingsTab] || null;
 
@@ -7831,6 +7945,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
 
           <div className="px-2 py-1 text-[10px] font-bold text-slate-500 tracking-widest mb-1">הגדרות מערכת</div>
           <div className="flex flex-col gap-1">
+            {isDesktopApp() && (
             <button
               className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 hover:translate-x-[-2px] transition-transform w-full text-right group outline-none focus:ring-1 focus:ring-indigo-400/50"
               disabled={inlineUpdateState.status === 'checking'}
@@ -7868,7 +7983,9 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
               </div>
             </button>
 
-            {inlineUpdateState.status === 'available' && (
+            )}
+
+            {isDesktopApp() && inlineUpdateState.status === 'available' && (
               <div className="px-4">
                 <button
                   className="text-[10px] bg-yellow-400/20 border border-yellow-400/40 text-yellow-300 px-2 py-0.5 rounded-lg hover:bg-yellow-400/40 transition-colors"
@@ -7999,7 +8116,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                 {/* ─── NAV RAIL ─── */}
                 <aside className="w-full md:w-64 shrink-0 bg-[var(--wf-rail)] border-b md:border-b-0 md:border-l border-slate-200 flex flex-col min-h-0 max-h-[40vh] md:max-h-none dark:border-white/10">
                   <nav className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-4 custom-scrollbar-slim">
-                    {SETTINGS_TAB_GROUPS.map((group) => (
+                    {visibleSettingsGroups.map((group) => (
                       <div key={group.title}>
                         <div className="px-2.5 mb-2 text-[10.5px] font-extrabold text-slate-400 tracking-[0.12em] uppercase dark:text-[#7e96b0]">{group.title}</div>
                         <div className="flex flex-col gap-1">
@@ -8077,6 +8194,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
                       {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
                       {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                      {settingsTab === 'styleEngine' && <StyleProfilePanel />}
                       {settingsTab === 'appearance'  && <AppearanceSettings />}
                     </div>
                   </div>

@@ -27,7 +27,6 @@ PAST-DOC/*
 !PAST-DOC/index.json
 past-works/*
 !past-works/.gitkeep
-src/__TEMP_ROUTING_OVERRIDE.js
 
 # Large/temp files that should never be committed
 temp-docx-inspect/

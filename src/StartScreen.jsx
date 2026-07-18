@@ -4,6 +4,7 @@ import ChefModeDialog from './ChefModeDialog';
 import ProjectsPanel from './components/ProjectsPanel';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import ProjectBrainstormPanel from './components/ProjectBrainstormPanel';
+import StyleEngineControls, { getStyleCreativityTemperature, getStyleDepth } from './components/StyleEngineControls';
 import { showToast, showConfirm } from './services/uiFeedback';
 import {
   listProjects,
@@ -339,50 +340,24 @@ const buildDirectGenerationSummary = ({ providerId = '', modelId = '', choices =
   return cleanModel ? `${providerLabel} · ${cleanModel}` : providerLabel;
 };
 
-const ONBOARDING_AREAS = ['אקדמיה ומחקר', 'עסקים וניהול', 'משפט ומסמכים רשמיים', 'שיווק ותוכן', 'עבודה משרדית', 'שימוש כללי'];
-const ONBOARDING_AUDIENCES = ['מרצים ובודקים', 'לקוחות ושותפים', 'מנהלים בארגון', 'קהל רחב', 'שימוש פנימי'];
-const ONBOARDING_FORMATS = ['פסקאות קצרות וברורות', 'סגנון מפורט ומעמיק', 'תוכן עם כותרות וסעיפים', 'ניסוח תכליתי ומהיר'];
-const ONBOARDING_TONES = ['רשמי', 'אקדמי', 'אנושי', 'ישיר', 'משכנע', 'ידידותי'];
-const LENGTH_OPTIONS = ['קצר', 'מאוזן', 'מעמיק'];
-const PARAGRAPH_OPTIONS = ['תמציתי', 'בינוני', 'מפורט'];
-const LEARNING_GAMES = [
-  {
-    id: 'tone-game',
-    title: 'איזה קול אתה רוצה מהסוכן?',
-    options: [
-      { id: 'formal', label: 'רשמי ומדויק', insight: 'להעדיף טון רשמי ומדויק', tone: 'רשמי' },
-      { id: 'human', label: 'אנושי וזורם', insight: 'להעדיף ניסוח אנושי וזורם', tone: 'אנושי' },
-      { id: 'direct', label: 'ישיר ולעניין', insight: 'להעדיף תשובות ישירות וללא מריחות', tone: 'ישיר' },
-    ],
-  },
-  {
-    id: 'depth-game',
-    title: 'איזו רמת פירוט עובדת הכי טוב בשבילך?',
-    options: [
-      { id: 'short', label: 'קצר ומהיר', insight: 'להעדיף תמצות ותשובות קצרות', sentenceLength: 'קצר', paragraphLength: 'תמציתי' },
-      { id: 'balanced', label: 'מאוזן וברור', insight: 'להעדיף איזון בין קיצור להסבר', sentenceLength: 'מאוזן', paragraphLength: 'בינוני' },
-      { id: 'deep', label: 'מעמיק ומפורט', insight: 'להעדיף עומק ופירוט כשיש צורך', sentenceLength: 'מעמיק', paragraphLength: 'מפורט' },
-    ],
-  },
-  {
-    id: 'structure-game',
-    title: 'איך הכי נוח לך לקבל טקסט?',
-    options: [
-      { id: 'headings', label: 'כותרות וסעיפים', insight: 'להעדיף מבנה היררכי עם כותרות', format: 'תוכן עם כותרות וסעיפים' },
-      { id: 'paragraphs', label: 'פסקאות זורמות', insight: 'להעדיף כתיבה רציפה בפסקאות', format: 'סגנון מפורט ומעמיק' },
-      { id: 'quick', label: 'נקודות קצרות', insight: 'להעדיף נקודות תכליתיות ומהירות', format: 'ניסוח תכליתי ומהיר' },
-    ],
-  },
-  {
-    id: 'avoid-game',
-    title: 'מה הכי חשוב לך שהסוכן ימנע ממנו?',
-    options: [
-      { id: 'invent', label: 'לא להמציא מקורות', insight: 'לא להמציא עובדות או מקורות חסרים' },
-      { id: 'repeat', label: 'לא לחזור על עצמו', insight: 'להימנע מחזרתיות וניפוח' },
-      { id: 'robotic', label: 'לא להיות רובוטי', insight: 'להעדיף שפה טבעית ולא מכנית' },
-    ],
-  },
-];
+const formatRelativeSavedAt = (iso) => {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 0) return '';
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 1) return 'לפני פחות מדקה';
+  if (diffMinutes === 1) return 'לפני דקה';
+  if (diffMinutes < 60) return `לפני ${diffMinutes} דקות`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours === 1) return 'לפני שעה';
+  if (diffHours === 2) return 'לפני שעתיים';
+  if (diffHours < 24) return `לפני ${diffHours} שעות`;
+  if (diffHours < 48) return 'אתמול';
+  return date.toLocaleDateString('he-IL');
+};
+
 
 const splitInlineList = (value = '') => String(value || '')
   .split(/[\n,•]+/)
@@ -473,8 +448,10 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
+  // seed שהגיע מ-Project Hub ("צור מסמך לשלב"): נשמר כדי לשייך את המסמך שנוצר לשלב.
+  const [pendingProjectSeed, setPendingProjectSeed] = useState(null);
   const [outputType, setOutputType] = useState('document');
   const [pptSlideCount, setPptSlideCount] = useState(10);
   const [pptSlideAuto, setPptSlideAuto] = useState(false);
@@ -755,6 +732,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [templateCards, setTemplateCards] = useState(() => applyStartScreenCustomizations(MODERN_TEMPLATES, 'templates'));
   const [editingCard, setEditingCard] = useState(null);
   const [showExtraTemplates, setShowExtraTemplates] = useState(false);
+  const [showAdvancedUploads, setShowAdvancedUploads] = useState(false);
+  const [showEngineSettings, setShowEngineSettings] = useState(false);
+  const advancedUploadsCount = (materials?.length || 0) + (instructions?.trim() ? 1 : 0) + (instructionFileName ? 1 : 0);
   const primaryTemplateCards = templateCards.slice(0, PRIMARY_TEMPLATE_CARD_LIMIT);
   const extraTemplateCards = templateCards.slice(PRIMARY_TEMPLATE_CARD_LIMIT);
   const hasSelectedHiddenTemplate = extraTemplateCards.some((template) => template.id === selectedTemplate);
@@ -1352,6 +1332,23 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
   };
 
+  // seed "צור מסמך לשלב" מה-Project Hub: ממלא את הפרומפט ושומר את השיוך לשלב.
+  useEffect(() => {
+    if (!projectDocSeed || !projectDocSeed.token) return;
+    setPrompt(String(projectDocSeed.prompt || ''));
+    setOutputType('document');
+    setPendingProjectSeed({
+      projectId: String(projectDocSeed.projectId || ''),
+      milestoneId: String(projectDocSeed.milestoneId || ''),
+    });
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.querySelector('input[placeholder*="נושא"]')?.focus();
+      });
+    }
+    onProjectDocSeedConsumed();
+  }, [projectDocSeed?.token]);
+
   const handleDeleteMaterial = async (event, item) => {
     event?.preventDefault?.();
     event?.stopPropagation?.();
@@ -1435,7 +1432,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         additionalReviewRounds: 0,
         humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
         aiAppendix: aiAppendixEnabled,
+        temperature: getStyleCreativityTemperature(),
+        styleDepth: getStyleDepth(),
+        projectSeed: pendingProjectSeed,
+        // Direct מבטיח "קריאה יחידה ונקייה": כשנדרשים מקורות הם מאוחזרים בקריאה-אחת
+        // (googleSearch בתוך הכתיבה), לא ב-pipeline רב-קריאות. סביבות עבודה — היוריסטיקה.
+        ...(workspaceBypassActive ? { sourceRoute: 'single-call' } : {}),
       });
+      setPendingProjectSeed(null);
     } finally {
       setIsGenerating(false);
     }
@@ -1502,6 +1506,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         additionalReviewRounds: 0,
         humanizeLoop: humanizeLoopEnabled ? { enabled: true, convergence: true, target: getHumanizerPreferences().target } : null,
         aiAppendix: aiAppendixEnabled,
+        temperature: getStyleCreativityTemperature(),
+        styleDepth: getStyleDepth(),
         forceDirectMode: true,
         skipWorkflowAutomation: true,
         directModeReason: 'chef-final-compose',
@@ -1652,6 +1658,27 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
           </div>
 
+          {/* Continue Last Draft Banner */}
+          {hasDraft && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 max-w-5xl mx-auto mb-6 rounded-2xl border border-emerald-200/40 bg-gradient-to-l from-emerald-500/25 via-teal-500/15 to-white/10 backdrop-blur-2xl px-5 sm:px-7 py-4 sm:py-5 shadow-[0_16px_50px_rgba(4,120,87,0.35)]">
+              <div className="flex items-center gap-3 text-right">
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-emerald-400/25 border border-emerald-200/50 text-xl">⚡</div>
+                <div>
+                  <div className="text-white font-bold text-base sm:text-lg">יש לך טיוטה פתוחה</div>
+                  {formatRelativeSavedAt(lastSavedAt) ? (
+                    <div className="text-emerald-100/80 text-xs sm:text-sm">נשמרה {formatRelativeSavedAt(lastSavedAt)}</div>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                onClick={onOpenLastDraft}
+                className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500/80 to-emerald-600/80 hover:from-green-600/80 hover:to-emerald-700/80 border border-white/30 rounded-xl text-white font-bold transition-all duration-300 transform hover:scale-105 shadow-lg"
+              >
+                המשך מאיפה שעצרת
+              </button>
+            </div>
+          )}
+
           {/* Main Input Area */}
           <div className="bg-white/12 backdrop-blur-2xl border border-white/35 rounded-3xl p-4 sm:p-8 max-w-5xl mx-auto shadow-[0_24px_80px_rgba(3,7,18,0.55)]">
             <div className="flex justify-center mb-6">
@@ -1790,6 +1817,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 </span>
               </label>
             )}
+
+            {!isPresentationOutput && <StyleEngineControls />}
 
             {isPresentationOutput && (
               <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
@@ -1938,7 +1967,22 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
             {/* Advance Options Area */}
             <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6">
-               <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedUploads((v) => !v)}
+                aria-expanded={showAdvancedUploads}
+                aria-controls="start-screen-advanced-uploads"
+                className="w-full flex items-center justify-between gap-3 text-right"
+              >
+                <span className="text-white/85 text-sm font-semibold">
+                  📎 אפשרויות מתקדמות — קבצים, חומרים והנחיות
+                  {advancedUploadsCount > 0 ? ` (${advancedUploadsCount})` : ''}
+                </span>
+                <span className="text-white/60 text-xs">{showAdvancedUploads ? '▲ סגור' : '▼ הרחב'}</span>
+              </button>
+
+              {showAdvancedUploads && (
+              <div id="start-screen-advanced-uploads" className="pt-4 mt-4 border-t border-white/10">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
                    <div>
                      <div className="text-white/80 font-medium whitespace-nowrap">📎 קבצים, חומרי עזר והנחיות</div>
@@ -2147,8 +2191,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                    </div>
                  </div>
                </div>
+              )}
             </div>
-            
+
           </div>
         </div>
 
@@ -2207,16 +2252,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             >
               📁 פתח מסמך קיים
             </button>
-            
-            {hasDraft && (
-              <button
-                onClick={onOpenLastDraft}
-                className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500/80 to-emerald-600/80 hover:from-green-600/80 hover:to-emerald-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
-              >
-                ⚡ המשך טיוטה אחרונה
-              </button>
-            )}
-            
+
             <button
               onClick={() => onOpenSettings('onboarding')}
               className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500/80 to-orange-600/80 hover:from-amber-600/80 hover:to-orange-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
@@ -2279,6 +2315,25 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
             <button type="button" onClick={() => onOpenSettings('onboarding')} title="פרופיל והיכרות" className="text-[17px] text-[#7e96b0] transition hover:text-white">⚙</button>
           </div>
+
+          {/* מנוע וסביבת עבודה */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowEngineSettings((v) => !v)}
+              aria-expanded={showEngineSettings}
+              aria-controls="start-screen-engine-settings"
+              className="w-full flex items-center justify-between gap-2 text-right"
+            >
+              <span className="flex items-center gap-2 text-[13px] font-extrabold text-[#cfe0ef]"><span>🧠</span>מנוע וסביבת עבודה</span>
+              <span className="text-white/60 text-[11px]">{showEngineSettings ? '▲ סגור' : '▼ הרחב'}</span>
+            </button>
+            <div className="mt-1.5 flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-bold text-[#7fd4c4]">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#7fd4c4]" />{activeGenerationSummary}
+            </div>
+
+            {showEngineSettings && (
+            <div id="start-screen-engine-settings" className="mt-3">
 
           {/* מנוע AI ומודל */}
           <div>
@@ -2361,6 +2416,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
             {/* טייס אוטומטי הוסתר: מפעיל את ה-orchestrator הישן שנמצא ב-quarantine (aiService WORKSPACE_AUTOMATION_QUARANTINED). */}
           </div>
+            </div>
+            )}
+          </div>
 
           {/* פרויקטים */}
           <ProjectsPanel
@@ -2368,6 +2426,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             onOpenProjectSettings={(project) => setSelectedProjectForSettings(project)}
             onOpenDocument={(doc) => handleOpenRecentDoc(doc)}
             onNewDocumentInProject={handleNewDocumentInProject}
+            onOpenProjectHub={onOpenProjectHub}
           />
 
           {/* מסמכים אחרונים (ללא פרויקט, אם קיימים פרויקטים — אחרת כל המסמכים) */}

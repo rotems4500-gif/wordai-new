@@ -4788,47 +4788,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, padding: '8px 12px', background: '#FAF9F8', borderBottom: '1px solid #EDEBE9', flexShrink: 0, alignItems: 'stretch' }}>
-            <div style={{ flex: 1, display: 'grid', gap: 6 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 6 }}>
-                <select
-                  value={selectedProviderId || 'default'}
-                  onChange={(e) => {
-                    clearPendingMentionSelection();
-                    setSelectedProviderId(e.target.value);
-                    setSelectedAgentId('');
-                  }}
-                  disabled={isSettingsLocked || forceGlobalSidebarProvider}
-                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
-                >
-                  <option value="default">ברירת מחדל</option>
-                  {configuredProviderChoices.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={activeProviderChoice ? resolvedSelectedProviderModel : ''}
-                  onChange={(e) => {
-                    clearPendingMentionSelection();
-                    setSelectedProviderModel(e.target.value);
-                  }}
-                  disabled={isSettingsLocked || forceGlobalSidebarProvider || !activeProviderChoice || !providerModelChoices.length}
-                  style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
-                >
-                  {activeProviderChoice ? providerModelChoices.map((modelId) => (
-                    <option key={modelId} value={modelId}>
-                      {modelId}
-                    </option>
-                  )) : <option value="">מודל מההגדרות</option>}
-                </select>
-              </div>
-              <div style={{ padding: '0 2px', fontSize: 11, color: '#605E5C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {`סוכן פעיל: ${effectiveAgentSummary} • ${effectiveProviderSummary}`}
-              </div>
-            </div>
-
+          <div style={{ display: 'flex', gap: 8, padding: '8px 12px', background: '#FAF9F8', borderBottom: '1px solid #EDEBE9', flexShrink: 0, alignItems: 'center' }}>
             <button
               type="button"
               onClick={() => {
@@ -4859,6 +4819,47 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', marginBottom: 4 }}>⚙️ הגדרות השיחה בצד</div>
                   <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.6 }}>
                     ההגדרות כאן משפיעות רק על החלונית הימנית. הן לא מחליפות את מסך ההגדרות המלא של האפליקציה, ולא פותחות את תפריט הקובץ בדרך.
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, background: '#FFFFFF' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6 }}>🧠 מנוע ומודל</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 6 }}>
+                    <select
+                      value={selectedProviderId || 'default'}
+                      onChange={(e) => {
+                        clearPendingMentionSelection();
+                        setSelectedProviderId(e.target.value);
+                        setSelectedAgentId('');
+                      }}
+                      disabled={isSettingsLocked || forceGlobalSidebarProvider}
+                      style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
+                    >
+                      <option value="default">ברירת מחדל</option>
+                      {configuredProviderChoices.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={activeProviderChoice ? resolvedSelectedProviderModel : ''}
+                      onChange={(e) => {
+                        clearPendingMentionSelection();
+                        setSelectedProviderModel(e.target.value);
+                      }}
+                      disabled={isSettingsLocked || forceGlobalSidebarProvider || !activeProviderChoice || !providerModelChoices.length}
+                      style={{ padding: '7px 10px', border: '1px solid #D1D5DB', borderRadius: 6, background: forceGlobalSidebarProvider ? '#F8FAFC' : '#FFFFFF', fontSize: 12, color: '#323130', outline: 'none', minWidth: 0, ...(isSettingsLocked || forceGlobalSidebarProvider ? { opacity: 0.56, cursor: 'not-allowed', boxShadow: 'none' } : {}) }}
+                    >
+                      {activeProviderChoice ? providerModelChoices.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      )) : <option value="">מודל מההגדרות</option>}
+                    </select>
+                  </div>
+                  <div style={{ padding: '6px 2px 0', fontSize: 11, color: '#605E5C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {`סוכן פעיל: ${effectiveAgentSummary} • ${effectiveProviderSummary}`}
                   </div>
                 </div>
 

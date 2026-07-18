@@ -2,20 +2,21 @@
 // בדסקטופ (Tauri) פותחים דיאלוג native שמחזיר HTML+טקסט (תומך docx/txt/html דרך ה-shim);
 // בדפדפן: txt/md/html נקראים ישירות, ו-Word (docx) + PDF מחולצים דרך materialExtractBrowser.
 
-import { extractMaterialTextFromBytes } from './materialExtractBrowser';
+import { extractMaterialTextFromBytes, decodeTextSmart } from './materialExtractBrowser';
 import { extractSpvTablesText, extractSpvChartImages } from './spvOutputParser';
 import {
   CHART_IMAGE_EXTENSIONS,
   readImageFileAsBase64,
   describeChartImages,
   extractDocxChartImages,
+  extractPptxChartImages,
   extractPdfChartPageImages,
 } from './chartVisionService';
 
 // קבצים שנקראים כטקסט/HTML גולמי (file.text()).
 const BROWSER_TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'html', 'htm', 'csv', 'tsv', 'rtf', 'xml', 'log'];
 // קבצים עשירים שמחולצים לטקסט דרך המחלץ (mammoth ל-docx, pdfjs ל-PDF, XLSX ל-Excel).
-const BROWSER_RICH_EXTENSIONS = ['docx', 'pdf', 'xlsx', 'xls'];
+const BROWSER_RICH_EXTENSIONS = ['docx', 'pdf', 'xlsx', 'xls', 'xlsm', 'pptx'];
 // קובץ Output נייטיב של SPSS (.spv) — ZIP עם טבלאות light בינאריות; פענוח ב-spvOutputParser.
 const SPV_EXTENSION = 'spv';
 const MAX_EXTRACT_CHARS = 100000;
@@ -24,7 +25,7 @@ const MAX_EXTRACT_CHARS = 100000;
 export const BROWSER_DOC_ACCEPT = '.txt,.md,.markdown,.html,.htm,.docx,.pdf';
 // פלט SPSS: כולל גם פורמטים שמייצאים אליהם Output — Excel, csv, html, .spv נייטיב,
 // ותמונות גרפים (נקראות דרך מודל vision — ראה chartVisionService).
-export const BROWSER_OUTPUT_ACCEPT = '.txt,.md,.html,.htm,.csv,.tsv,.rtf,.docx,.pdf,.xlsx,.xls,.spv,.png,.jpg,.jpeg,.webp,.gif,.bmp';
+export const BROWSER_OUTPUT_ACCEPT = '.txt,.md,.html,.htm,.csv,.tsv,.rtf,.docx,.pdf,.xlsx,.xls,.xlsm,.pptx,.spv,.png,.jpg,.jpeg,.webp,.gif,.bmp';
 
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -92,7 +93,9 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
   const ext = String(file.name || '').toLowerCase().split('.').pop();
 
   if (BROWSER_TEXT_EXTENSIONS.includes(ext)) {
-    const rawText = await file.text();
+    // decodeTextSmart ולא file.text(): ייצוא "Text - UTF16" של SPSS מגיע עם BOM,
+    // ו-file.text() (UTF-8 בלבד) הופך אותו לג'יבריש.
+    const rawText = decodeTextSmart(new Uint8Array(await file.arrayBuffer()));
     const looksLikeHtml = /<(html|body|p|h1|h2|h3|div|span|br|ul|ol|li)\b/i.test(rawText);
     return normalizeDocumentPayload({
       name: file.name,
@@ -112,7 +115,7 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
     // גרפים מוטמעים: ב-Word הם תמונות (או EMF), ב-PDF הם ציור וקטורי בעמוד — קוראים
     // אותם דרך מודל vision. כשל כאן לא מפיל את הטקסט שכבר חולץ.
     let chartStatus = null;
-    if (readCharts && (ext === 'pdf' || ext === 'docx')) {
+    if (readCharts && (ext === 'pdf' || ext === 'docx' || ext === 'pptx')) {
       let chartsText = '';
       try {
         if (ext === 'docx') {
@@ -123,8 +126,18 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
             chartStatus = { kind: 'docx', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 };
           } else if (extracted.vectorCount) {
             // גרפי SPSS ב-Word הם EMF/WMF וקטורי — דפדפן לא מרנדר אותו.
-            chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-Word — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה עם "העלה גרף (תמונה)".]`;
+            chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-Word — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה עם "העלה גרף (תמונה)". או ייצא ב-SPSS עם Type: None (Graphics only) והעלה את תיקיית התמונות.]`;
             chartStatus = { kind: 'docx', described: 0, failures: 0, total: extracted.vectorCount, vectorOnly: extracted.vectorCount };
+          }
+        } else if (ext === 'pptx') {
+          const extracted = await extractPptxChartImages(bytes);
+          if (extracted.images.length) {
+            const described = await describeChartImages(extracted.images);
+            if (described.described > 0) chartsText = described.text;
+            chartStatus = { kind: 'pptx', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 };
+          } else if (extracted.vectorCount) {
+            chartsText = `[נמצאו ${extracted.vectorCount} גרפים בפורמט EMF/WMF בתוך ה-PowerPoint — פורמט וקטורי של Windows שלא ניתן לקרוא בדפדפן. ייצא את ה-Output ל-PDF‏ (File → Export → PDF) והעלה אותו, או ייצא כל גרף כ-PNG והעלה עם "העלה גרף (תמונה)". או ייצא ב-SPSS עם Type: None (Graphics only) והעלה את תיקיית התמונות.]`;
+            chartStatus = { kind: 'pptx', described: 0, failures: 0, total: extracted.vectorCount, vectorOnly: extracted.vectorCount };
           }
         } else {
           const extracted = await extractPdfChartPageImages(bytes);
@@ -187,5 +200,9 @@ export const readBrowserDocumentFile = async (file, { readCharts = false } = {})
     return { ...normalizeDocumentPayload({ name: file.name, text: described.text, source: 'browser' }), chartStatus: { kind: 'image', described: described.described, failures: described.failures, total: described.total, vectorOnly: 0 } };
   }
 
-  throw new Error('בדפדפן אפשר להעלות קובצי טקסט (txt, csv, html), Word‏ (docx), PDF, Excel‏ (xlsx), SPSS Output‏ (.spv) או תמונת גרף (png/jpg). לתוצאה הטובה ביותר עם פלט SPSS — ייצא ל-Excel‏/Word‏/HTML.');
+
+  if (ext === 'doc' || ext === 'ppt') {
+    throw new Error('קובץ Word/PowerPoint ישן (בינארי) אינו נתמך בדפדפן — ב-SPSS בחר File → Export → PDF או Word (docx).');
+  }
+  throw new Error('בדפדפן אפשר להעלות קובצי טקסט (txt, csv, html), Word‏ (docx), PDF, Excel‏ (xlsx, xlsm), PowerPoint‏ (pptx), SPSS Output‏ (.spv) או תמונת גרף (png/jpg). לתוצאה הטובה ביותר עם פלט SPSS — ייצא ל-Excel‏/Word‏/PowerPoint‏/HTML.');
 };

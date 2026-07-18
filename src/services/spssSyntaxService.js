@@ -2602,7 +2602,7 @@ const buildSpssSystemPrompt = ({ analysis = null, tutorMode = false, mode = 'ana
     'בדוק תאימות פרוצדורה לפני ההחזרה: T-TEST חייב /GROUPS עם קודים קיימים; ONEWAY צריך /STATISTICS DESCRIPTIVES HOMOGENEITY כאשר בודקים הנחות; CROSSTABS עם /STATISTICS=CHISQ ו-/CELLS=COUNT ROW COLUMN; REGRESSION עם /DEPENDENT ו-/METHOD=ENTER; FREQUENCIES/DESCRIPTIVES עם רשימת משתנים אמיתית בלבד.',
     'אם חסר מידע כדי לבחור קוד קטגוריה, אל תנחש. השתמש רק ב-observedValues/valueLabels מה-metadata, או כתוב comment קצר שמסביר מה המשתמש צריך להשלים ידנית במקום לייצר קוד שגוי.',
     repairHint
-      ? `ניסיון קודם ליצור syntax לבקשה הזו נחסם בגלל: "${String(repairHint).slice(0, 300)}". זוהי בקשה אמיתית ממטלת סטטיסטיקה שכבר אומתה מול הנתונים — ספק את ה-syntax הטוב ביותר שאפשר. אם נדרשת הכנת נתונים (חישוב ציון/מדד, היפוך פריטים, recode) — בצע אותה תחילה ואז את הניתוח. החזר * ERROR: רק אם זה באמת בלתי אפשרי עם המשתנים הקיימים, ואז נמק בקצרה.`
+      ? `ניסיון קודם ליצור syntax לבקשה הזו נחסם בגלל: "${String(repairHint || '').slice(0, 300)}". זוהי בקשה אמיתית ממטלת סטטיסטיקה שכבר אומתה מול הנתונים — ספק את ה-syntax הטוב ביותר שאפשר. אם נדרשת הכנת נתונים (חישוב ציון/מדד, היפוך פריטים, recode) — בצע אותה תחילה ואז את הניתוח. החזר * ERROR: רק אם זה באמת בלתי אפשרי עם המשתנים הקיימים, ואז נמק בקצרה.`
       : 'אם הבקשה לא תקפה מתודולוגית, החזר רק שורות comment שמתחילות ב-* ERROR:.',
     tutorMode
       ? 'Tutor mode פעיל: לפני הבלוק הוסף 1-2 שורות comment קצרות בעברית שמסבירות למה בחרת בפרוצדורה.'
@@ -2629,6 +2629,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
       providerId: '',
       model: '',
       source: 'guardrail',
+      blockedBy: '',
     };
   }
 
@@ -2644,6 +2645,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
       providerId: '',
       model: '',
       source: 'guardrail',
+      blockedBy: 'methodology',
     };
   }
 
@@ -2661,6 +2663,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
       providerId: '',
       model: '',
       source: guardrailHit ? 'guardrail' : 'local',
+      blockedBy: guardrailHit ? 'guardrail' : '',
     };
   }
 
@@ -2707,6 +2710,7 @@ export const generateSpssSyntax = async ({ analysis = null, request = '', tutorM
     providerId,
     model: providerModel,
     source: guardrailHit ? 'guardrail' : 'ai',
+    blockedBy: guardrailHit ? 'guardrail' : '',
   };
 };
 
@@ -3016,7 +3020,7 @@ const buildSpssGuidanceSystemPrompt = ({ analysis = null, mode = 'analysis', his
   ].filter(Boolean).join('\n\n');
 };
 
-const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', agentName = 'SPSS Tutor', providerOverride = '', modelOverride = '' } = {}) => {
+const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', agentName = 'SPSS Tutor', providerOverride = '', modelOverride = '', tier = '' } = {}) => {
   const { chatWithActiveProvider, getProviderConfig, getFeatureProviderConfig } = await import('./aiService.js');
   const providerConfig = getProviderConfig();
   // An explicit on-page pick (studio model picker) wins over the feature config.
@@ -3027,7 +3031,12 @@ const callGuidanceProvider = async ({ tokenizedMessage = '', systemPrompt = '', 
     ? { providerId: feat.providerId, model: feat.model }
     : resolveActiveProviderMeta(providerConfig);
   const providerId = studioProvider || resolved.providerId;
-  const model = studioModel || resolved.model;
+  let model = studioModel || resolved.model;
+  // tier 'advisory' — ייעוץ/ביקורת/התייעצות רצים על מודל זול (חיסכון במכסה): טקסט
+  // מייעץ, לא קוד. בחירת מודל מפורשת בבורר הסטודיו גוברת; רוויזיה/קוד לא מסומנים advisory.
+  if (tier === 'advisory' && !studioModel && providerId === 'gemini') {
+    model = 'gemini-2.5-flash';
+  }
 
   const rawResponse = await chatWithActiveProvider(tokenizedMessage, '', systemPrompt, {
     providerOverride: providerId || undefined,
@@ -3165,18 +3174,36 @@ const formatAcademicReference = (source = {}) => {
   return parts.join('. ');
 };
 
-export const buildLiteratureReview = async ({ topic = '', count = 5, providerOverride = '', modelOverride = '' } = {}) => {
+export const buildLiteratureReview = async ({ topic = '', topicEn = '', vetTopic = '', count = 5, providerOverride = '', modelOverride = '' } = {}) => {
   const cleanTopic = String(topic || '').trim();
+  const cleanTopicEn = String(topicEn || '').trim();
   if (!cleanTopic) {
     return { ok: false, review: '', references: [], sources: [], providerId: '', model: '', error: 'ציין את נושא המחקר כדי לאתר מקורות.' };
   }
   try {
-    const { retrieveSources } = await import('./sourceRetrieval/index.js');
+    const { retrieveSources, createRetrievalSession, dedupeSources } = await import('./sourceRetrieval/index.js');
     const { getProviderConfig } = await import('./aiService.js');
     const cfg = getProviderConfig();
-    const retrieval = await retrieveSources({ query: cleanTopic, kind: 'academic', count: Math.max(3, Math.min(8, Number(count) || 5)), cfg });
-    const sources = Array.isArray(retrieval?.sources) ? retrieval.sources.filter(Boolean) : [];
-    if (!retrieval?.ok || !sources.length) {
+    const safeCount = Math.max(3, Math.min(8, Number(count) || 5));
+    // שאילתה כפולה עברית+אנגלית (כמו מסלול המקורות הראשי) — הקורפוס האקדמי העדכני
+    // באנגלית עשיר בהרבה. session משותף = cache+תקציב משותפים לשתי הקריאות.
+    const session = createRetrievalSession();
+    const queries = [cleanTopic, ...(cleanTopicEn ? [cleanTopicEn] : [])];
+    const mergedSources = [];
+    let anyOk = false;
+    let retrieval = null;
+    for (const query of queries) {
+      retrieval = await retrieveSources({
+        query, kind: 'academic', count: safeCount, cfg, session,
+        vetTopic: String(vetTopic || '').trim() || cleanTopic,
+      });
+      if (retrieval?.ok) {
+        anyOk = true;
+        mergedSources.push(...(retrieval.sources || []));
+      }
+    }
+    const sources = dedupeSources(mergedSources.filter(Boolean)).slice(0, safeCount);
+    if (!anyOk || !sources.length) {
       return {
         ok: false,
         review: '',
@@ -3308,8 +3335,16 @@ const normalizeAssignmentProfile = (raw = {}, analysis = null) => {
     ? String(restored.deliverable).trim()
     : 'findings-chapter';
 
+  // topic/topicEn — נושא המחקר לשאילתת איתור מקורות (סקירת ספרות). topicEn חייב
+  // אותיות לטיניות — אחרת המודל החזיר "תרגום" עברי בטעות ואין ערך לשאילתה כפולה.
+  const topic = String(restored.topic || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  const topicEnRaw = String(restored.topicEn || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  const topicEn = /[a-z]/i.test(topicEnRaw) && topicEnRaw.length >= 4 ? topicEnRaw : '';
+
   return {
     summary: String(restored.summary || '').trim(),
+    topic,
+    topicEn,
     deliverable,
     needsExplanation: restored.needsExplanation !== false,
     analyses,
@@ -3579,7 +3614,7 @@ export const ensureGraphCoverage = ({ profile = null, analysis = null, masterSyn
   return { changed: true, syntax, missing };
 };
 
-export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null, draftText = '', providerOverride = '', modelOverride = '' } = {}) => {
+export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = null, draftText = '', extraGuidance = '', providerOverride = '', modelOverride = '' } = {}) => {
   const cleanAssignment = String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS);
   if (!cleanAssignment) {
     return { ok: false, profile: null, providerId: '', model: '', error: 'הדבק את טקסט המטלה כדי שאבין מה צריך לעשות.' };
@@ -3591,12 +3626,19 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
   try {
     const tokenizedAssignment = tokenizeSpssRequest(cleanAssignment, analysis);
     const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
+    // הנחיה חופשית מהסטודנט (אופציונלי) — נכתבה לפני הניתוח כדי לכוון את בניית התוכנית
+    // (משתנה תלוי, מבחן להוסיף/להסיר, דגשים). מטוקנת ל-VAR_n כמו כל טקסט משתמש.
+    const tokenizedGuidance = String(extraGuidance || '').trim()
+      ? tokenizeSpssRequest(String(extraGuidance).trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis)
+      : '';
     const systemPrompt = [
       'אתה יועץ סטטיסטי מומחה שמכין סטודנט ישראלי לעבודת סיום ב-SPSS.',
       'קיבלת טקסט מטלה ומטא-דאטה של dataset (שמות משתנים מתוקנים VAR_n + סטטיסטיקות סיכום, בלי שורות גולמיות).',
       'נתח את המטלה והחזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
       '{',
       '  "summary": "תקציר קצר של מה המטלה דורשת",',
+      '  "topic": "נושא המחקר התוכני במשפט אחד — בלי הוראות הגשה, בלי שם קורס, בלי שמות משתנים (VAR_n)",',
+      '  "topicEn": "the same research topic as a short English academic search phrase",',
       '  "deliverable": "findings-chapter" | "interpretation" | "code",',
       '  "needsExplanation": true|false,',
       '  "analyses": [',
@@ -3629,6 +3671,7 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
     const userMessage = [
       tokenizedDraft ? `הטיוטה הקיימת של העבודה (מקור אמת להגדרות משתנים):\n${tokenizedDraft}` : '',
       `טקסט המטלה:\n${tokenizedAssignment}`,
+      tokenizedGuidance ? `הנחיות נוספות מהסטודנט (כבד אותן במלואן — הן גוברות על ברירות מחדל, אך עדיין רק משתנים אמיתיים מהמטא-דאטה):\n${tokenizedGuidance}` : '',
     ].filter(Boolean).join('\n\n');
 
     const { text, providerId, model } = await callGuidanceProvider({
@@ -3659,7 +3702,318 @@ export const analyzeSpssAssignment = async ({ assignmentText = '', analysis = nu
   }
 };
 
-export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', providerOverride = '', modelOverride = '' } = {}) => {
+// ---------------------------------------------------------------------------
+// Plan revision (free-text, Hebrew) — the student looks at the generated code or
+// the SPSS run and says "במקום גיל תשתמש בסטטוס סוציו-אקונומי" / "תוריד את ניתוח X".
+// Takes the EXISTING profile + the change request, returns a full updated profile
+// in the same schema. Anti-hallucination: variables are re-tokenized to VAR_n on
+// the way in, and on the way out every unresolved variable is a hard failure
+// unless the plan contains a prep step that derives it (same rule as
+// validateAssignmentProfile, but enforced — a revision must never smuggle in a
+// variable that does not exist in the file).
+// ---------------------------------------------------------------------------
+const tokenizeProfileVariables = (profile = null, analysis = null) => {
+  const aliasMap = buildAliasToColumnMap(analysis);
+  const analyses = (Array.isArray(profile?.analyses) ? profile.analyses : []).map((entry) => ({
+    label: tokenizeSpssRequest(entry?.label || '', analysis),
+    method: String(entry?.method || '').trim(),
+    variables: (Array.isArray(entry?.variables) ? entry.variables : []).map((name) => {
+      const column = aliasMap.get(String(name || '').trim().toLowerCase());
+      return column ? column.token : String(name || '').trim();
+    }).filter(Boolean),
+    request: tokenizeSpssRequest(entry?.request || '', analysis),
+    rationale: tokenizeSpssRequest(entry?.rationale || '', analysis),
+  }));
+  return {
+    summary: tokenizeSpssRequest(profile?.summary || '', analysis),
+    deliverable: String(profile?.deliverable || 'findings-chapter'),
+    needsExplanation: profile?.needsExplanation !== false,
+    analyses,
+    notes: '',
+  };
+};
+
+// זיכרון-סבבים ליועצים: בלוק "מה כבר הומלץ ויושם" שמוזרק לפרומפט של advise/critique/consult,
+// כדי שהמודל לא יחזור על אותה עצה בכל סבב (שורש לולאת הייעוץ). מטוקן כמו כל טקסט משתמש.
+const buildPriorAdviceBlock = (priorAdvice = [], analysis = null) => {
+  const entries = (Array.isArray(priorAdvice) ? priorAdvice : [])
+    .filter((entry) => entry && String(entry.text || '').trim())
+    .slice(-12); // הסבבים האחרונים בלבד — חיסכון בטוקנים
+  if (!entries.length) return '';
+  const lines = entries.map((entry, index) => {
+    const source = entry.source === 'critique' ? 'תיקון' : entry.source === 'consult' ? 'התייעצות' : 'המלצה';
+    const applied = String(entry.appliedAs || '').trim();
+    return `${index + 1}. [${source}] ${tokenizeSpssRequest(String(entry.text).trim().slice(0, 300), analysis)}${applied ? ` — יושם: ${tokenizeSpssRequest(applied.slice(0, 200), analysis)}` : ' — טרם יושם'}`;
+  });
+  return [
+    'המלצות ותיקונים מסבבים קודמים (כבר הוצגו לסטודנט; המסומנים "יושם" כבר בוצעו):',
+    ...lines,
+    'אל תחזור על המלצה מהרשימה. אם בעיה נמשכת למרות שיושמה — אמור זאת במפורש והצע גישה שונה. אם אין עוד מה לשפר — אמור זאת בכנות במקום להמציא המלצות.',
+  ].join('\n');
+};
+
+export const reviseAssignmentProfile = async ({ profile = null, changeRequest = '', assignmentText = '', analysis = null, advisoryContext = '', expectedAnalysis = '', providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanChange = String(changeRequest || '').trim().slice(0, MAX_ASSIGNMENT_CHARS);
+  if (!profile || !Array.isArray(profile.analyses) || !profile.analyses.length) {
+    return { ok: false, profile: null, changeSummary: '', providerId: '', model: '', error: 'אין עדיין תוכנית ניתוח לעדכן — נתח קודם את המטלה.' };
+  }
+  if (!cleanChange) {
+    return { ok: false, profile: null, changeSummary: '', providerId: '', model: '', error: 'כתוב מה לשנות בתוכנית (למשל: "במקום גיל תשתמש בסטטוס סוציו-אקונומי").' };
+  }
+  if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
+    return { ok: false, profile: null, changeSummary: '', providerId: '', model: '', error: 'טען קובץ נתונים כדי שאוכל לוודא שהשינוי משתמש במשתנים אמיתיים.' };
+  }
+
+  try {
+    const tokenizedProfile = tokenizeProfileVariables(profile, analysis);
+    const tokenizedChange = tokenizeSpssRequest(cleanChange, analysis);
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    // הקשר ייעוצי (המלצת מרצה / נקודת ביקורת שממנה נולד השינוי) — מוזרם verbatim כדי
+    // שהמעדכן "יסכים" עם היועץ: resolutionNote בפלט מסביר איך השינוי עונה על ההמלצה.
+    const tokenizedAdvisory = String(advisoryContext || '').trim()
+      ? tokenizeSpssRequest(String(advisoryContext).trim().slice(0, 1200), analysis)
+      : '';
+    const cleanExpectedAnalysis = String(expectedAnalysis || '').trim();
+
+    const systemPrompt = [
+      'אתה יועץ סטטיסטי שמעדכן תוכנית ניתוח SPSS קיימת לפי בקשת שינוי של הסטודנט.',
+      'קיבלת: תוכנית ניתוחים קיימת (JSON), בקשת שינוי בעברית, טקסט המטלה המקורי, ומטא-דאטה של הנתונים (VAR_n).',
+      'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה זהה לתוכנית הקיימת:',
+      '{',
+      '  "summary": "תקציר מעודכן",',
+      '  "deliverable": "findings-chapter" | "interpretation" | "code",',
+      '  "needsExplanation": true|false,',
+      '  "analyses": [',
+      '    {"label":"שם קצר","method":"t-test|anova|correlation|regression|chi-square|descriptives|reliability|frequencies|graph|recode|compute|missing-values|other",',
+      '     "variables":["VAR_1","VAR_2"],',
+      '     "request":"בקשה אחת בעברית מוכנה ליצירת syntax, שמזכירה את שמות המשתנים (VAR_n)",',
+      '     "rationale":"למה"}',
+      '  ],',
+      '  "notes":"אזהרות",',
+      '  "changeSummary":"משפט אחד בעברית: מה שונה בתוכנית לעומת הקודמת"' + (tokenizedAdvisory ? ',' : ''),
+      ...(tokenizedAdvisory ? ['  "resolutionNote":"משפט אחד בעברית: איך השינוי עונה על ההמלצה/הביקורת שצורפה"'] : []),
+      '}',
+      'כללים מחייבים:',
+      'החזר את התוכנית **המלאה** — כל הניתוחים, לא רק אלה ששונו. שנה אך ורק מה שבקשת השינוי דורשת; שמור את שאר הניתוחים בדיוק כפי שהם (label, method, variables, request, rationale).',
+      'השתמש אך ורק במשתנים מהמטא-דאטה (VAR_n). אל תמציא משתנים. אם הבקשה מזכירה משתנה שלא קיים בקובץ — אל תוסיף אותו; במקום זאת כתוב ב-changeSummary שהמשתנה לא נמצא ואל תשנה את הניתוח הזה.',
+      'אם השינוי מחליף משתנה בניתוח, עדכן בעקביות את variables, את ה-request ואת ה-rationale של אותו ניתוח, ובדוק שהמבחן עדיין מתאים לרמת המדידה של המשתנה החדש (role במטא-דאטה): אם לא — החלף לשיטה הנכונה וציין זאת ב-notes.',
+      'אם השינוי דורש משתנה נגזר חדש (מדד, קיבוץ, היפוך) — הוסף שלב הכנה (method "recode"/"compute") **לפני** הניתוח שמשתמש בו. תן למשתנה הנגזר שם אנגלי קצר וברור (למשל SES_index). פרט ב-request של שלב ההכנה את שיטת הצירוף (ממוצע/סכום), את כיוון ההיפוך של כל פריט הפוך, ואת טווח הקידוד. בניתוח הצרכן, ה-variables וה-request חייבים להשתמש באותו שם בדיוק שנוצר בשלב ההכנה — לא לתאר אותו מחדש במילים אחרות.',
+      'אם צורף בבקשה תיאור "משתנה נגזר לבניה" (name/buildFrom/how מההתייעצות) — בנה את שלב ההכנה בדיוק לפיו, אל תסטה ואל תמציא שם אחר.',
+      'אם הבקשה מוחקת ניתוח — הסר אותו, אבל אל תסיר שלבי הכנה שניתוחים אחרים עדיין תלויים בהם.',
+      tokenizedAdvisory ? 'צורפה ההמלצה/הביקורת המקורית שממנה נולדה בקשת השינוי — ודא שהתוכנית המעודכנת באמת עונה עליה, וסכם זאת ב-resolutionNote.' : '',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const buildUserMessage = (retryFeedback = '') => [
+      `התוכנית הקיימת:\n${JSON.stringify(tokenizedProfile, null, 1)}`,
+      tokenizedAssignment ? `טקסט המטלה המקורי (להקשר בלבד):\n${tokenizedAssignment}` : '',
+      tokenizedAdvisory ? `ההמלצה/הביקורת המקורית:\n${tokenizedAdvisory}` : '',
+      `בקשת השינוי של הסטודנט:\n${tokenizedChange}`,
+      retryFeedback ? `ניסיון קודם נפסל — תקן זאת:\n${retryFeedback}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    // ניסיון אחד + ניסיון-חוזר אחד לכל היותר (תקרה קשיחה: 2 קריאות). ה"הסכמה" בין
+    // היועץ למעדכן היא דטרמיניסטית: גייט אנטי-ההזיה + בדיקת "הניתוח המומלץ אכן בתוכנית".
+    let lastError = '';
+    let providerId = '';
+    let model = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await callGuidanceProvider({
+        tokenizedMessage: buildUserMessage(lastError),
+        systemPrompt,
+        agentName: 'SPSS Plan Reviser',
+        providerOverride,
+        modelOverride,
+      });
+      providerId = response.providerId;
+      model = response.model;
+
+      const parsed = extractJsonPayload(response.text);
+      if (!parsed) {
+        lastError = 'הפלט לא היה JSON תקין. החזר אך ורק JSON במבנה המבוקש.';
+        continue;
+      }
+
+      const nextProfile = normalizeAssignmentProfile(parsed, analysis);
+      if (!nextProfile.analyses.length) {
+        lastError = 'התוכנית שהוחזרה יצאה ריקה. החזר את התוכנית המלאה עם השינוי המבוקש.';
+        continue;
+      }
+
+      // Hard anti-hallucination gate: any variable that neither resolves to a real
+      // column nor can be produced by a prep step in the plan kills the revision.
+      const aliasMap = buildAliasToColumnMap(analysis);
+      const planHasDerivation = nextProfile.analyses.some((entry) => DERIVATION_METHOD_PATTERN.test(`${entry?.method || ''} ${entry?.label || ''}`));
+      const unresolved = [];
+      nextProfile.analyses.forEach((entry) => {
+        (Array.isArray(entry.variables) ? entry.variables : []).forEach((name) => {
+          const key = String(name || '').trim().toLowerCase();
+          if (key && !aliasMap.has(key) && !planHasDerivation) unresolved.push(name);
+        });
+      });
+      if (unresolved.length) {
+        const uniqueNames = [...new Set(unresolved)].join(', ');
+        lastError = `המשתנים הבאים אינם קיימים בקובץ הנתונים ואינם נגזרים בשלב הכנה: ${uniqueNames}. השתמש אך ורק במשתני VAR_n מהמטא-דאטה.`;
+        continue;
+      }
+
+      // בדיקת "הסכמה" דטרמיניסטית: כשהשינוי נולד מהמלצה עם ניתוח מוצע — ודא שהוא
+      // אכן מופיע בתוכנית החדשה (method/label/request), אחרת ההמלצה לא באמת טופלה.
+      if (cleanExpectedAnalysis) {
+        const expectedNeedle = cleanExpectedAnalysis.toLowerCase();
+        const covered = nextProfile.analyses.some((entry) => `${entry.method || ''} ${entry.label || ''} ${entry.request || ''}`.toLowerCase().includes(expectedNeedle)
+          || expectedNeedle.includes(String(entry.method || '').toLowerCase().trim() || '§'));
+        if (!covered) {
+          lastError = `ההמלצה ביקשה "${cleanExpectedAnalysis}" אבל הניתוח הזה לא מופיע בתוכנית שהוחזרה. הוסף אותו לתוכנית.`;
+          continue;
+        }
+      }
+
+      const warnings = validateAssignmentProfile(nextProfile, analysis);
+      if (warnings.length) {
+        const warningBlock = `⚠️ בדיקת התאמה אוטומטית:\n• ${warnings.join('\n• ')}`;
+        nextProfile.notes = nextProfile.notes ? `${nextProfile.notes}\n\n${warningBlock}` : warningBlock;
+      }
+
+      const changeSummary = String(restoreTokensDeep(parsed?.changeSummary || '', analysis) || '').trim();
+      const resolutionNote = String(restoreTokensDeep(parsed?.resolutionNote || '', analysis) || '').trim();
+      return { ok: true, profile: nextProfile, changeSummary, resolutionNote, providerId, model, error: '' };
+    }
+
+    return { ok: false, profile: null, changeSummary: '', resolutionNote: '', providerId, model, error: lastError ? `עדכון התוכנית נפסל גם אחרי ניסיון חוזר: ${lastError}` : 'עדכון התוכנית נכשל.' };
+  } catch (error) {
+    return { ok: false, profile: null, changeSummary: '', resolutionNote: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'עדכון התוכנית נכשל.' };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Plan consultation (advisory, Hebrew) — AFTER the task+variables+plan are known
+// but BEFORE code is generated, the student asks a free-text question ("האם
+// t-test הוא הנכון כאן?", "מה ההבדל בין המבחנים?", "כדאי להוסיף בקרה על גיל?").
+// UNLIKE reviseAssignmentProfile this NEVER mutates the plan and returns no JSON —
+// only advisory text. Same anti-hallucination discipline: the model reasons in
+// VAR_n space over the real metadata, and the answer is restored to real names.
+// Multi-turn: pass prior {question, answer} exchanges as `history`.
+// ---------------------------------------------------------------------------
+export const consultAssignmentPlan = async ({ profile = null, question = '', assignmentText = '', analysis = null, history = [], priorAdvice = [], providerOverride = '', modelOverride = '' } = {}) => {
+  const cleanQuestion = String(question || '').trim().slice(0, MAX_ASSIGNMENT_CHARS);
+  if (!profile || !Array.isArray(profile.analyses) || !profile.analyses.length) {
+    return { ok: false, answer: '', providerId: '', model: '', error: 'אין עדיין תוכנית ניתוח להתייעץ עליה — נתח קודם את המטלה.' };
+  }
+  if (!cleanQuestion) {
+    return { ok: false, answer: '', providerId: '', model: '', error: 'כתוב על מה תרצה להתייעץ (למשל: "האם t-test הוא המבחן הנכון כאן?").' };
+  }
+  if (!analysis || !Array.isArray(analysis.columns) || !analysis.columns.length) {
+    return { ok: false, answer: '', providerId: '', model: '', error: 'טען קובץ נתונים כדי שאוכל להתייחס למשתנים האמיתיים.' };
+  }
+
+  try {
+    const tokenizedProfile = tokenizeProfileVariables(profile, analysis);
+    const tokenizedQuestion = tokenizeSpssRequest(cleanQuestion, analysis);
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    // רק ההיסטוריה האחרונה (עד 6 חילופי שאלה-תשובה) כדי לחסוך טוקנים.
+    const recentHistory = (Array.isArray(history) ? history : []).slice(-6);
+
+    const systemPrompt = [
+      'אתה יועץ סטטיסטי מומחה. סטודנט ישראלי מתייעץ איתך לעבודת סיום ב-SPSS, בשלב שבו כבר זוהו המשימה, המשתנים ותוכנית הניתוחים — אבל לפני יצירת קוד ה-syntax.',
+      'קיבלת: תוכנית הניתוחים הקיימת (JSON), טקסט המטלה, ומטא-דאטה של הנתונים (VAR_n + role לכל משתנה).',
+      'זו התייעצות בלבד: אל תשנה את התוכנית בעצמך ואל תייצר קוד.',
+      'החזר אך ורק JSON תקין (בלי טקסט מסביב, בלי ```), במבנה:',
+      '{',
+      '  "answer": "התשובה המלאה בעברית — הסבר והמלצה, טקסט חופשי",',
+      '  "proposedChange": {',
+      '    "changeRequest": "הוראה קונקרטית אחת-שתיים משפטים, מוכנה ליישום בתוכנית",',
+      '    "expectedAnalysis": "method או label קצר של הניתוח שאמור להופיע בתוכנית אחרי היישום",',
+      '    "suggestedVariables": ["VAR_n"],',
+      '    "newVariable": {"name": "SES_index", "buildFrom": ["VAR_n","VAR_m"], "how": "איך נבנה: ממוצע/סכום, אילו פריטים להפוך, טווח קידוד"}',
+      '  }',
+      '}',
+      'answer: היה ממוקד ומעשי: הסבר, המלץ, הצע חלופות, והזהר מטעויות סטטיסטיות. אם השאלה על התאמת מבחן — התייחס לרמות המדידה (role) של המשתנים בפועל.',
+      'proposedChange: השאר null כשהשאלה מושגית טהורה ואין שינוי קונקרטי להציע. אם יש המלצה שאפשר ליישם בתוכנית — מלא אותו.',
+      'התוכנית תומכת בשלבי הכנה (analysis עם method "recode"/"compute" שמוצב לפני הניתוח הצרכן) — אם אתה ממליץ על מדד/סולם/משתנה נגזר, מלא את newVariable בפועל ולא רק בפרוזה. newVariable = null כשאין צורך במשתנה נגזר.',
+      'newVariable.name חייב להיות מזהה אנגלי קצר (אותיות/ספרות/קו תחתון, מתחיל באות) — לעולם לא תיאור במילים.',
+      'היה קונקרטי: רכיבים (VAR_n), כיוון היפוך פריטים, שיטת צירוף (ממוצע/סכום), טווח קידוד.',
+      'אל תמציא משתנים או מבחנים שלא רלוונטיים למטא-דאטה — השתמש אך ורק במשתנים שמופיעים בה.',
+      'זו התייעצות בלבד — אל תבנה מחדש את כל התוכנית, רק הצע שינוי ממוקד אחד.',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const historyBlock = recentHistory.length
+      ? `היסטוריית ההתייעצות עד כה:\n${recentHistory.map((turn, index) => `שאלה ${index + 1}: ${tokenizeSpssRequest(String(turn?.question || '').trim(), analysis)}\nתשובה ${index + 1}: ${tokenizeSpssRequest(String(turn?.answer || '').trim(), analysis)}`).join('\n\n')}`
+      : '';
+
+    const userMessage = [
+      `תוכנית הניתוחים הקיימת:\n${JSON.stringify(tokenizedProfile, null, 1)}`,
+      tokenizedAssignment ? `טקסט המטלה (להקשר):\n${tokenizedAssignment}` : '',
+      buildPriorAdviceBlock(priorAdvice, analysis),
+      historyBlock,
+      `שאלת ההתייעצות של הסטודנט:\n${tokenizedQuestion}`,
+    ].filter(Boolean).join('\n\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: userMessage,
+      systemPrompt,
+      agentName: 'SPSS Plan Advisor',
+      providerOverride,
+      modelOverride,
+      tier: 'advisory',
+    });
+
+    const parsed = extractJsonPayload(text);
+    let answer = '';
+    let proposedChange = null;
+    if (parsed) {
+      const restored = restoreTokensDeep(parsed, analysis) || {};
+      answer = String(restored?.answer || '').trim();
+      const rawChange = restored?.proposedChange && typeof restored.proposedChange === 'object' ? restored.proposedChange : null;
+      if (rawChange) {
+        const aliasMap = buildAliasToColumnMap(analysis);
+        const rawVariables = Array.isArray(rawChange.suggestedVariables) ? rawChange.suggestedVariables : [];
+        const resolvedColumns = rawVariables
+          .map((name) => aliasMap.get(String(name || '').trim().toLowerCase()))
+          .filter(Boolean);
+        const resolvedNames = resolvedColumns.map((column) => column.originalName || column.outputName || column.token);
+        const rawBuildFrom = Array.isArray(rawChange.newVariable?.buildFrom) ? rawChange.newVariable.buildFrom : [];
+        const resolvedBuildFrom = rawBuildFrom
+          .map((name) => aliasMap.get(String(name || '').trim().toLowerCase()))
+          .map((column) => column && (column.originalName || column.outputName || column.token))
+          .filter(Boolean);
+        // אנטי-הזיה: אם ההמלצה הפנתה במפורש למשתנים וכולם לא נפתרו מול הקובץ האמיתי — כל ה-proposedChange לא אמין.
+        if (rawVariables.length && !resolvedNames.length) {
+          proposedChange = null;
+        } else {
+          let newVariable = rawChange.newVariable && typeof rawChange.newVariable === 'object' ? {
+            name: String(rawChange.newVariable.name || '').trim(),
+            buildFrom: resolvedBuildFrom,
+            how: String(rawChange.newVariable.how || '').trim(),
+          } : null;
+          if (newVariable && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(newVariable.name)) {
+            newVariable = null;
+          }
+          proposedChange = {
+            changeRequest: String(rawChange.changeRequest || '').trim(),
+            expectedAnalysis: String(rawChange.expectedAnalysis || '').trim(),
+            suggestedVariables: resolvedNames,
+            newVariable,
+          };
+          if (!proposedChange.changeRequest) proposedChange = null;
+        }
+      }
+    } else {
+      // המודל כתב פרוזה במקום JSON — fallback: הטקסט הגולמי כתשובה, בלי הצעת שינוי מובנית.
+      answer = String(restoreTokensDeep(String(text || '').trim(), analysis) || '').trim();
+    }
+
+    if (!answer) {
+      return { ok: false, answer: '', proposedChange: null, providerId, model, error: 'לא התקבלה תשובה. נסח את השאלה אחרת ונסה שוב.' };
+    }
+    return { ok: true, answer, proposedChange, providerId, model, error: '' };
+  } catch (error) {
+    return { ok: false, answer: '', proposedChange: null, providerId: '', model: '', error: error instanceof Error ? error.message : 'ההתייעצות נכשלה.' };
+  }
+};
+
+export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, masterSyntax = '', output = '', priorAdvice = [], providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, verdict: 'needs-output', issues: [], summary: '', providerId: '', model: '', error: 'הדבק את הפלט מ-SPSS כדי שאבדוק אותו מול המטלה.' };
@@ -3713,8 +4067,9 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
     const message = [
       `טקסט המטלה:\n${tokenizedAssignment || '(לא סופק)'}`,
       `ה-syntax שהורץ:\n${tokenizedSyntax || '(לא סופק)'}`,
+      buildPriorAdviceBlock(priorAdvice, analysis),
       `הפלט מ-SPSS:\n${tokenizedOutput}`,
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
 
     const { text, providerId, model } = await callGuidanceProvider({
       tokenizedMessage: message,
@@ -3722,6 +4077,7 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
       agentName: 'SPSS Run Critic',
       providerOverride,
       modelOverride,
+      tier: 'advisory',
     });
 
     const parsed = extractJsonPayload(text);
@@ -3755,7 +4111,7 @@ export const critiqueSpssRun = async ({ assignmentText = '', analysis = null, ma
 // a variable outside the metadata is stripped (never trusted from the model alone).
 // Recommendations that imply a post-hoc hypothesis change must carry integrityNote (HARKing).
 // ---------------------------------------------------------------------------
-export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = null, profile = null, masterSyntax = '', output = '', interpretations = [], providerOverride = '', modelOverride = '' } = {}) => {
+export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = null, profile = null, masterSyntax = '', output = '', interpretations = [], priorAdvice = [], providerOverride = '', modelOverride = '' } = {}) => {
   const cleanOutput = clampSpssOutputText(output);
   if (!cleanOutput) {
     return { ok: false, recommendations: [], summary: '', providerId: '', model: '', error: 'הדבק פלט מ-SPSS כדי לקבל המלצת מרצה על סמך התוצאות.' };
@@ -3803,6 +4159,7 @@ export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = 
       planDigest ? `תוכנית הניתוחים:\n${planDigest}` : '',
       `ה-syntax שהורץ:\n${tokenizedSyntax || '(לא סופק)'}`,
       tokenizedInterpretationDigest ? `פירושים שכבר הופקו:\n${tokenizedInterpretationDigest}` : '',
+      buildPriorAdviceBlock(priorAdvice, analysis),
       `הפלט הגולמי מ-SPSS:\n${tokenizedOutput}`,
     ].filter(Boolean).join('\n\n');
 
@@ -3812,6 +4169,7 @@ export const adviseLecturerNextSteps = async ({ assignmentText = '', analysis = 
       agentName: 'SPSS Lecturer Advisor',
       providerOverride,
       modelOverride,
+      tier: 'advisory',
     });
 
     const parsed = extractJsonPayload(text);
@@ -4008,11 +4366,11 @@ const FINDINGS_CONTINUATION_INSTRUCTION = 'זה סוף הפרק שנכתב עד 
 
 // לולאת continuation משותפת לבוני פרקי ה-HTML הארוכים (ממצאים / סיכום ודיון):
 // כל עוד ה-HTML נראה קטוע, מבקשים מהמודל להמשיך מהזנב, עד MAX_FINDINGS_CONTINUATION_ROUNDS.
-const runHtmlContinuationLoop = async ({ initialHtml, systemPrompt, analysis, providerOverride, modelOverride, agentName }) => {
+const runHtmlContinuationLoop = async ({ initialHtml, systemPrompt, analysis, providerOverride, modelOverride, agentName, maxRounds = MAX_FINDINGS_CONTINUATION_ROUNDS }) => {
   let accumulatedHtml = initialHtml;
   let truncated = isTruncatedHtml(accumulatedHtml);
   let round = 0;
-  while (truncated && round < MAX_FINDINGS_CONTINUATION_ROUNDS) {
+  while (truncated && round < maxRounds) {
     round += 1;
     const tail = accumulatedHtml.slice(-FINDINGS_CONTINUATION_TAIL_CHARS);
     const tokenizedTail = tokenizeSpssRequest(tail, analysis);
@@ -4234,5 +4592,123 @@ export const buildSpssSummaryChapter = async ({ assignmentText = '', analysis = 
     return { ok: true, html: continuation.html, title: 'פרק סיכום ודיון', providerId, model, error: '', truncated: continuation.truncated };
   } catch (error) {
     return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת פרק הסיכום נכשלה.', truncated: false };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// "עבודה מוכנה להגשה" — משכתב את העבודה כולה על בסיס הטיוטה + הפרקים שנבנו,
+// ומחזיר מסמך שלם אחד. המבנה נגזר מהמטלה ומהטיוטה — אין תבנית פרקים מחייבת:
+// פרק קיים רק אם המטלה דרשה אותו או שהוא קיים בטיוטה. הטיוטה כאן היא הבסיס
+// לשכתוב (לא רק הקשר), ופרק הממצאים שסופק הוא המקור היחיד למספרים.
+// ---------------------------------------------------------------------------
+const MAX_SUBMISSION_FINDINGS_CHARS = 30000;
+const MAX_SUBMISSION_SUMMARY_CHARS = 15000;
+const MAX_SUBMISSION_OUTPUT_CHARS = 10000;
+
+export const buildSpssSubmissionWork = async ({
+  assignmentText = '', analysis = null, masterSyntax = '', output = '',
+  interpretations = [], draftText = '', findingsHtml = '', summaryHtml = '',
+  litReview = null, figures = [], providerOverride = '', modelOverride = '',
+} = {}) => {
+  const cleanFindings = stripFigureHtmlForContext(findingsHtml).trim().slice(0, MAX_SUBMISSION_FINDINGS_CHARS);
+  if (!cleanFindings) {
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: 'אין פרק ממצאים — בנה קודם את הממצאים (או ודא שהודבק פלט).', truncated: false };
+  }
+
+  try {
+    const tokenizedAssignment = tokenizeSpssRequest(String(assignmentText || '').trim().slice(0, MAX_ASSIGNMENT_CHARS), analysis);
+    const tokenizedDraft = buildDraftContextBlock(draftText, analysis);
+    const tokenizedFindings = tokenizeSpssRequest(cleanFindings, analysis);
+    const cleanSummary = stripFigureHtmlForContext(summaryHtml).trim().slice(0, MAX_SUBMISSION_SUMMARY_CHARS);
+    const tokenizedSummary = cleanSummary ? tokenizeSpssRequest(cleanSummary, analysis) : '';
+    // הפלט הגולמי נשלח קצוץ מאוד — הפרק כבר מכיל את המספרים; זה גיבוי בלבד.
+    const tokenizedOutput = tokenizeSpssRequest(String(clampSpssOutputText(output) || '').slice(0, MAX_SUBMISSION_OUTPUT_CHARS), analysis);
+
+    const interpretationBlock = (Array.isArray(interpretations) ? interpretations : [])
+      .map((entry) => {
+        const label = String(entry?.label || '').trim();
+        const answer = String(entry?.answer || '').trim();
+        return answer ? `### ${label || 'ניתוח'}\n${answer}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+
+    const reviewText = String(litReview?.review || '').trim();
+    const referencesList = (Array.isArray(litReview?.references) ? litReview.references : [])
+      .map((ref) => String(typeof ref === 'string' ? ref : ref?.citation || ref?.text || '').trim())
+      .filter(Boolean);
+    const literatureBlock = [
+      reviewText ? `סקירת הספרות של העבודה:\n${reviewText}` : '',
+      referencesList.length ? `רשימת המקורות המאושרת (אין להוסיף מקורות מעבר לרשימה זו):\n${referencesList.map((ref, index) => `${index + 1}. ${ref}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    // מרקרי התרשימים חיים בתוך פרק הממצאים שסופק — המודל צריך רק לשמר אותם.
+    const safeFigures = (Array.isArray(figures) ? figures : []).filter((figure) => figure && figure.token && figure.html);
+
+    const systemPrompt = [
+      'אתה כותב אקדמי שמרכיב עבודת סיום שלמה ומוכנה להגשה בעברית, על בסיס טיוטת הסטודנט והפרקים שנבנו מניתוח SPSS.',
+      'החזר אך ורק HTML נקי (בלי ```), עם <h1>/<h2>/<h3>/<p>/<table> בלבד. בלי <html> או <body>.',
+      'המבנה נגזר אך ורק מהמטלה ומהטיוטה — אין תבנית פרקים קבועה: כלול רק פרקים שהמטלה דורשת או שקיימים בטיוטה. אם המטלה דורשת מבוא — כתוב מבוא; אם היא לא דורשת דיון או סקירת ספרות — אל תמציא פרק כזה. סדר הפרקים לפי המטלה, ואם אינה מפרטת — לפי סדר הטיוטה.',
+      'הטיוטה היא הבסיס: שמור על הקול, הניסוחים והתוכן של הסטודנט. שכתב, השלם וסדר — אל תחליף את התוכן שלו בטקסט גנרי. כל פסקה טובה בטיוטה נשארת (משופצת בעדינות אם צריך), וכל חור מושלם.',
+      'מלא כל הערת placeholder בטיוטה ("(הערה: חלק זה יורחב לאחר הרצת הניתוח...)" וכדומה) בתוכן האמיתי מהממצאים — אסור שתישאר בעבודה המוגשת אף הערה כזו.',
+      'פרק הממצאים שסופק הוא המקור היחיד למספרים: שלב אותו כמעט כמות שהוא במקום המתאים בעבודה. אסור לשנות ערכים, מובהקויות או מסקנות סטטיסטיות, ואסור להמציא מספרים שאינם בו.',
+      'אם סופק גם פרק סיכום ודיון — שלב אותו רק אם המטלה או הטיוטה כוללות פרק כזה; מותר לקצר/להתאים את ניסוחו לסגנון העבודה.',
+      'מקורות: השתמש אך ורק ברשימת המקורות המאושרת אם סופקה. אסור בהחלט להמציא מקורות, מחברים או שנים. אם אין רשימה — אל תוסיף רשימת מקורות.',
+      'פרק הממצאים שסופק מכיל מרקרי תרשימים בצורת [[FIG:...]] — שמור אותם בדיוק במקומם בטקסט. אל תמחק, אל תשכפל ואל תמציא מרקרים חדשים, ואל תכתוב תגי img/figure בעצמך.',
+      'דגל אדום: אם בפרק הממצאים צוין שהתוצאות מוטות עקב ערכי missing לא-מוגדרים — שמר את ההערה הזו בעבודה, אל תעלים אותה.',
+      'כתוב עברית אקדמית רהוטה וזורמת, פסקאות מלאות. פתח בכותרת העבודה (<h1>) לפי המטלה/הטיוטה.',
+      buildGuidanceMetadataBlock(analysis),
+    ].filter(Boolean).join('\n');
+
+    const message = [
+      `טקסט המטלה (קובע אילו פרקים נדרשים):\n${tokenizedAssignment || '(לא סופק)'}`,
+      tokenizedDraft ? `טיוטת העבודה של הסטודנט (הבסיס לשכתוב):\n${tokenizedDraft}` : 'אין טיוטה — הרכב את העבודה מהחומרים בלבד, לפי דרישות המטלה.',
+      `פרק הממצאים שנבנה (המקור היחיד למספרים; מכיל מרקרי [[FIG:...]]):\n${tokenizedFindings}`,
+      tokenizedSummary ? `פרק סיכום ודיון שנבנה (לשילוב רק אם נדרש):\n${tokenizedSummary}` : '',
+      interpretationBlock ? `פירושים שהופקו במהלך העבודה:\n${interpretationBlock}` : '',
+      literatureBlock,
+      tokenizedOutput ? `הפלט הגולמי מ-SPSS (גיבוי בלבד — המספרים המחייבים הם אלה שבפרק הממצאים):\n${tokenizedOutput}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    const { text, providerId, model } = await callGuidanceProvider({
+      tokenizedMessage: message,
+      systemPrompt,
+      agentName: 'SPSS Submission Writer',
+      providerOverride,
+      modelOverride,
+    });
+
+    const restoredHtml = (restoreColumnTokens(text, analysis) || text)
+      .replace(/```html/gi, '')
+      .replace(/```/g, '')
+      .trim();
+    if (!restoredHtml) {
+      return { ok: false, html: '', title: '', providerId, model, error: 'המודל לא החזיר עבודה. נסה שוב.', truncated: false };
+    }
+
+    // עבודה שלמה ארוכה בהרבה מפרק בודד — מתירים עד 5 סבבי continuation.
+    const continuation = await runHtmlContinuationLoop({
+      initialHtml: restoredHtml,
+      systemPrompt,
+      analysis,
+      providerOverride,
+      modelOverride,
+      agentName: 'SPSS Submission Writer',
+      maxRounds: 5,
+    });
+    let accumulatedHtml = continuation.html;
+
+    let figuresReplaced = 0;
+    let figuresAppended = 0;
+    if (safeFigures.length) {
+      const applied = applyFigureMarkersToHtml(accumulatedHtml, safeFigures);
+      accumulatedHtml = applied.html;
+      figuresReplaced = applied.replacedCount;
+      figuresAppended = applied.appendedCount;
+    }
+
+    return { ok: true, html: accumulatedHtml, title: 'עבודה מוכנה להגשה', providerId, model, error: '', truncated: continuation.truncated, figuresReplaced, figuresAppended };
+  } catch (error) {
+    return { ok: false, html: '', title: '', providerId: '', model: '', error: error instanceof Error ? error.message : 'הרכבת העבודה להגשה נכשלה.', truncated: false };
   }
 };

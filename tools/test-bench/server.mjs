@@ -21,6 +21,13 @@
 //   /api/retrieve         → real srcretr.retrieveSources with event trail
 //   /api/doc              → real wls.generateDocumentFromPrompt (write-with-sources)
 //   GET  /api/models      → per-provider model list (connectivity/key check)
+//   Personal Style Engine (real styleIngest/styleJudge/styleRetrieval pipeline):
+//   /api/style-ingest              → ingest docs → metrics → LLM patterns → enable
+//   /api/style-generate            → generate with engine active + styleScore
+//   /api/style-score               → hybrid style judge on arbitrary text
+//   GET  /api/style-engine-status  → overview + sample-store stats
+//   /api/style-reset               → clear samples + disable engine
+//   /api/style-injection-preview   → exact styleEngine injection block for a prompt
 //
 //   node tools/test-bench/server.mjs        → http://localhost:5178
 // ============================================================================
@@ -320,7 +327,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url === '/api/doc') {
       const b = await readBody(req);
-      return json(res, await LAB.generateDoc({ prompt: b.prompt || '', dropdown: b.dropdown || 'default', model: b.model || '', includeSources: b.includeSources ?? null, materials: b.materials || null, workspace: b.workspace || null }));
+      return json(res, await LAB.generateDoc({ prompt: b.prompt || '', dropdown: b.dropdown || 'default', model: b.model || '', includeSources: b.includeSources ?? null, materials: b.materials || null, workspace: b.workspace || null, sourceRoute: b.sourceRoute || '' }));
     }
     if (req.method === 'GET' && url.startsWith('/api/style-profile')) return json(res, LAB.getStyleProfile());
     if (req.method === 'POST' && url === '/api/style-compare') {
@@ -332,6 +339,36 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url === '/api/score') {
       const b = await readBody(req);
       return json(res, LAB.scoreText({ text: b.text || '' }));
+    }
+    // ── Personal Style Engine endpoints ──────────────────────────────────────
+    if (req.method === 'POST' && url === '/api/style-ingest') {
+      const b = await readBody(req);
+      const out = await LAB.styleIngestDocs({ docs: b.docs || [] });
+      await saveResult('style-ingest', out);
+      return json(res, out);
+    }
+    if (req.method === 'POST' && url === '/api/style-generate') {
+      const b = await readBody(req);
+      const out = await LAB.styleGenerate({ prompt: b.prompt || '', dropdown: b.dropdown || 'default', model: b.model || '', depth: b.depth || 'auto' });
+      await saveResult('style-generate', out);
+      return json(res, out);
+    }
+    if (req.method === 'POST' && url === '/api/style-score') {
+      const b = await readBody(req);
+      const out = await LAB.styleScoreText({ text: b.text || '', mode: b.mode || 'auto', genre: b.genre || null, prompt: b.prompt || '' });
+      return json(res, out);
+    }
+    if (req.method === 'GET' && url.startsWith('/api/style-engine-status')) {
+      return json(res, LAB.styleEngineStatus());
+    }
+    if (req.method === 'POST' && url === '/api/style-reset') {
+      return json(res, LAB.styleReset());
+    }
+    if (req.method === 'POST' && url === '/api/style-injection-preview') {
+      const b = await readBody(req);
+      const out = await LAB.styleInjectionPreview({ prompt: b.prompt || '' });
+      await saveResult('style-injection-preview', out);
+      return json(res, out);
     }
     if (req.method === 'POST' && url === '/api/spss-syntax') {
       const b = await readBody(req);
@@ -385,6 +422,29 @@ const server = createServer(async (req, res) => {
         provider: b.provider || '', model: b.model || '',
       });
       await saveResult('spss', out);
+      return json(res, out);
+    }
+    if (req.method === 'POST' && url === '/api/spss-revise-plan') {
+      const b = await readBody(req);
+      const out = await LAB.runSpssRevisePlan({
+        csv: b.csv || '',
+        assignmentText: b.assignmentText || undefined,
+        changeRequest: b.changeRequest || undefined,
+        rejectChangeRequest: b.rejectChangeRequest || undefined,
+        provider: b.provider || '',
+        model: b.model || '',
+      });
+      await saveResult('spss-revise-plan', out);
+      return json(res, out);
+    }
+    if (req.method === 'POST' && url === '/api/spss-consult-flow') {
+      const b = await readBody(req);
+      const out = await LAB.runSpssConsultFlow({
+        csv: b.csv || '',
+        assignmentText: b.assignmentText || undefined,
+        question: b.question || undefined,
+      });
+      await saveResult('spss-consult-flow', out);
       return json(res, out);
     }
     if (req.method === 'POST' && url === '/api/spss-advise') {

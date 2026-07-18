@@ -36,6 +36,8 @@ import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
 import SpssProjectStudio from './SpssProjectStudio';
+import ProjectHubStudio from './components/projectHub/ProjectHubStudio';
+import { assignDocumentToProject, linkDocToMilestone } from './services/projectService';
 import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
 import DocumentDraftStudio from './DocumentDraftStudio';
@@ -46,12 +48,14 @@ import { importDocumentDraft } from './services/documentDraftService';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange, chatWithActiveProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, savePersonalStyleProfile, fillCoverTemplateTokens, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange, chatWithActiveProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from './services/aiService';
 import { AGENTS_CONFIG } from './agentConfig';
+import { isDesktopApp } from './platform';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
 import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/documentLayout';
 import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEditor } from './services/stylesRegistry';
+import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { Modal, Button, Input, TextArea } from './components/ui';
@@ -3297,6 +3301,20 @@ function App() {
   const cloudAvailable = isCloudAvailable();
   const [editor, setEditor] = React.useState(null);
   const [appMode, setAppMode] = React.useState('word');
+  // זוכר מאיפה נכנסנו לסטודיו (start screen או העורך) כדי שהיציאה תחזור לאותו מקום.
+  const studioEntryOriginRef = React.useRef('editor');
+  // קורא דרך ref כי handlers עטופים ב-useCallback([]) סוגרים על העותק הראשון של הפונקציה.
+  const enterStudioMode = (mode) => {
+    studioEntryOriginRef.current = showStartScreenRef.current ? 'start' : 'editor';
+    setAppMode(mode);
+  };
+  const exitStudioMode = () => {
+    setAppMode('word');
+    if (studioEntryOriginRef.current === 'start') setShowStartScreen(true);
+  };
+  // Project Hub: הפרויקט הפתוח במסך-מלא + seed של "צור מסמך לשלב" שמוזרם ל-StartScreen.
+  const [projectHubProjectId, setProjectHubProjectId] = React.useState(null);
+  const [projectHubDocSeed, setProjectHubDocSeed] = React.useState(null);
   const [presentationDeck, setPresentationDeck] = React.useState(null);
   const [presentationBusy, setPresentationBusy] = React.useState(false);
   const [pptxDraft, setPptxDraft] = React.useState(null);
@@ -3375,6 +3393,8 @@ function App() {
     if (isLegacyHomeEnabled()) return true;
     return getWordPreferences().showStartExperience !== false;
   });
+  const showStartScreenRef = React.useRef(showStartScreen);
+  showStartScreenRef.current = showStartScreen;
   const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [showWelcome, setShowWelcome] = React.useState(false);
@@ -3415,6 +3435,9 @@ function App() {
     autosaveEnabled: false,
   }));
   const [activeDocumentSessionId, setActiveDocumentSessionId] = React.useState(() => createDocumentSessionId());
+  // ref מסונכרן לזהות המסמך הפעיל — מתעדכן סינכרונית (state async) כדי ש-snapshot ה-delta
+  // וה-diff ישתמשו באותו docId גם בתוך אותו callback (Personal Style Engine, Phase 5).
+  const activeDocumentSessionIdRef = React.useRef(activeDocumentSessionId);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -3582,7 +3605,9 @@ function App() {
     setCurrentCloudDocumentId(String(payload?.cloudDocumentId || ''));
     currentCloudDocumentIdRef.current = String(payload?.cloudDocumentId || '');
     lastCloudSavedHtmlRef.current = '';
-    setActiveDocumentSessionId(createDocumentSessionId());
+    const nextSessionId = createDocumentSessionId();
+    activeDocumentSessionIdRef.current = nextSessionId;
+    setActiveDocumentSessionId(nextSessionId);
     resetDocumentInteractionState();
   }, [resetDocumentInteractionState]);
   const [lastEditorActivityAt, setLastEditorActivityAt] = React.useState(Date.now());
@@ -4723,7 +4748,7 @@ function App() {
   }, [shortcuts, editor, appMode]);
 
   React.useEffect(() => {
-    if (appMode !== 'spss') return;
+    if (appMode === 'word') return;
     setFileMenuOpen(false);
     setFileMenuTargetTab(null);
   }, [appMode]);
@@ -5552,6 +5577,12 @@ ${sidebarReviewContext}`
     if (!editor || !lastManualStyleLearningAt) return;
 
     const timer = window.setTimeout(() => {
+      // E4: כשמנוע הסגנון האישי פעיל, ה-delta tracker (diffAfterEdit, ~:6913) הוא
+      // שאחראי על הלמידה — מדלגים על הלומד הישן כדי למנוע כפילות/סתירה בין שני נתיבי למידה.
+      const engineOn = (() => {
+        try { return getPersonalStyleProfile()?.styleEngine?.enabled === true; } catch { return false; }
+      })();
+      if (engineOn) return;
       try {
         const html = String(editor.getHTML?.() || '');
         learnFromDocumentDraft({
@@ -5682,8 +5713,12 @@ ${sidebarReviewContext}`
     const workspaceV2TemplateId = String(payload.workspaceV2TemplateId || '').trim();
     const includeSources = typeof payload.includeSources === 'boolean' ? payload.includeSources : null;
     const sourceRoute = String(payload.sourceRoute || '').trim();
+    const temperature = Number.isFinite(payload.temperature) ? payload.temperature : null;
+    const styleDepth = payload.styleDepth || 'normal';
     const preserveCurrentDocumentOnError = payload.preserveCurrentDocumentOnError === true;
     const workspaceBypassActive = payload.workspaceBypassActive === true;
+    // seed מ-Project Hub: שיוך המסמך שייווצר לפרויקט ולשלב במתווה.
+    const projectSeed = payload.projectSeed && typeof payload.projectSeed === 'object' ? payload.projectSeed : null;
 
     if (!options.skipConfirmReplace) {
       beginDocumentIdentity({ filePath: '' });
@@ -5800,10 +5835,13 @@ ${sidebarReviewContext}`
             additionalReviewRounds,
             humanizeLoop,
             forceDirectMode,
+            includeSources,
+            sourceRoute,
+            ...(Number.isFinite(temperature) ? { temperature } : {}),
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, includeSources, sourceRoute, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, includeSources, sourceRoute, ...(Number.isFinite(temperature) ? { temperature } : {}), styleDepth, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
@@ -5821,8 +5859,29 @@ ${sidebarReviewContext}`
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
       lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
       editor.commands.setContent(generated);
+      // Personal Style Engine (Phase 5): snapshot של הטקסט שנוצר, כדי לזהות בהמשך את
+      // העריכות שהמשתמש עושה עליו (delta tracking). plain text מתוך העורך אחרי setContent.
+      try {
+        snapshotStyleGeneration({
+          docId: activeDocumentSessionIdRef.current,
+          generatedText: String(editor.getText?.() || ''),
+        });
+      } catch {}
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
-      saveDocumentHistory({ title: resolvedTitle, content: generated, templateId, source: 'start-screen' });
+      const historyAfterSave = saveDocumentHistory({
+        title: resolvedTitle,
+        content: generated,
+        templateId,
+        source: 'start-screen',
+        projectId: String(projectSeed?.projectId || ''),
+      });
+      // שיוך לשלב במתווה של ה-Project Hub (הרשומה החדשה נכנסת ראשונה להיסטוריה).
+      if (projectSeed?.projectId && projectSeed?.milestoneId && Array.isArray(historyAfterSave) && historyAfterSave[0]?.id) {
+        try {
+          assignDocumentToProject(historyAfterSave[0].id, projectSeed.projectId);
+          linkDocToMilestone(projectSeed.projectId, projectSeed.milestoneId, historyAfterSave[0].id);
+        } catch {}
+      }
       persistLocalCache(generated);
       // נספח AI אופציונלי מהמסך הבית: קריאת API נוספת שמייצרת פרק תיעוד שימוש ומוסיפה לסוף המסמך.
       if (wantsAiAppendix && !usedFallback) {
@@ -5963,8 +6022,8 @@ ${sidebarReviewContext}`
 
   // פותח את סטודיו המצגות (עם או בלי deck קיים)
   const openPresentationStudio = React.useCallback(() => {
+    enterStudioMode('presentation');
     setShowStartScreen(false);
-    setAppMode('presentation');
   }, []);
 
   // מייצר deck JSON אמיתי (לא HTML) ומציג אותו בסטודיו המצגות
@@ -5995,8 +6054,8 @@ ${sidebarReviewContext}`
       return false;
     }
 
+    enterStudioMode('presentation');
     setShowStartScreen(false);
-    setAppMode('presentation');
     setPresentationBusy(true);
     try {
       const deck = await generateDeck({
@@ -6854,6 +6913,42 @@ ${sidebarReviewContext}`
     return () => window.clearTimeout(timer);
   }, [cloudSyncState.autosaveEnabled, cloudUser, editor, lastEditorContentActivityAt, persistDocumentToCloud]);
 
+  // Personal Style Engine (Phase 5): delta diff trigger — מחובר ל-debounce המקומי
+  // (בלי גייט cloudUser/autosave), כדי שהלמידה מהעריכות עובדת גם offline וללא חשבון.
+  // רץ רק כשמנוע הסגנון מופעל; diffAfterEdit מזהה בעצמו אם אין snapshot / הטקסט זהה.
+  React.useEffect(() => {
+    if (!editor || !lastEditorContentActivityAt) return undefined;
+    let enabled = false;
+    try { enabled = getPersonalStyleProfile()?.styleEngine?.enabled === true; } catch { enabled = false; }
+    if (!enabled) return undefined;
+
+    const scheduledActivityAt = lastEditorContentActivityAt;
+    const timer = window.setTimeout(() => {
+      if (scheduledActivityAt !== lastEditorContentActivityAt) return;
+      try {
+        const diffResult = diffStyleAfterEdit({
+          docId: activeDocumentSessionIdRef.current,
+          currentText: String(editor.getText?.() || ''),
+        });
+        // Phase 6: אחרי diff מוצלח — אם נצברו מספיק עריכות (editsSinceSynthesis>=15),
+        // סינתזה אוטומטית של הפרופיל מהעריכות. fire-and-forget (לא חוסם את ה-effect).
+        if (diffResult && shouldAutoSynthesizeStyle()) {
+          const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
+            skipAutomation: true,
+            skipMultiModel: true,
+            suppressStyleEngine: true,
+            suppressPersonalStyle: true,
+            agentLabel: 'Style Synthesis',
+            runId: `style-synth-${Date.now()}`,
+          });
+          synthesizeStyleProfileUpdate({ invokeModel }).catch(() => {});
+        }
+      } catch {}
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
+  }, [editor, lastEditorContentActivityAt]);
+
   const cloudStatusLabel = React.useMemo(() => {
     if (!cloudAvailable) return 'Firebase לא מוגדר';
     if (!cloudAuthReady) return 'בודק התחברות לענן...';
@@ -7264,6 +7359,7 @@ ${sidebarReviewContext}`
         setComments((prev) => [...prev, { id, quote, body: '', replies: [], resolved: false }]);
         setActiveCommentId(id);
         setCommentsPanelOpen(true);
+        setTrackPanelOpen(false);
         break;
       }
       case 'removeComment': {
@@ -7993,9 +8089,64 @@ ${sidebarReviewContext}`
   persistActiveTemplateId('cover');
         syncPersistedAppSettings();
         setActiveTemplateId('cover');
+        // המחרוזת <div data-type="page-break"> נטענת כ-node תקין ע"י PageBreak.parseHTML — לא להמיר ל-setPageBreak (כאן חייבים setContent של המסמך המלא).
         const existingHtml = String(editor.getHTML() || '').replace(/<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i, '').trim();
         const cover = `${coverTemplates[styleType] || coverTemplates.classic}<div data-type="page-break"></div>${existingHtml || '<h1>כותרת פרק</h1><p></p>'}`;
         editor.commands.setContent(cover);
+        break;
+      }
+      case 'insertCoverField': {
+        // הוספת שדה דינמי ({{token}}) בנקודת הסמן בזמן עיצוב תבנית עמוד שער.
+        const token = String(value || '').trim();
+        if (!token) break;
+        editor.chain().focus().insertContent(token).run();
+        break;
+      }
+      case 'saveCurrentAsCoverTemplate': {
+        // לוכד את עמוד השער הנוכחי (כולל פונט/גודל/יישור/שורות ריקות) כתבנית אישית.
+        const fullHtml = String(editor.getHTML() || '');
+        const coverMatch = fullHtml.match(/<div data-cover-page="true">[\s\S]*?<\/div>/i);
+        let captured;
+        if (coverMatch) {
+          captured = coverMatch[0];
+        } else {
+          const pbIdx = fullHtml.search(/<div data-type="page-break">/i);
+          const head = (pbIdx >= 0 ? fullHtml.slice(0, pbIdx) : fullHtml).trim();
+          captured = `<div data-cover-page="true">${head}</div>`;
+        }
+        const plain = captured.replace(/<[^>]+>/g, '').replace(/ /g, ' ').trim();
+        if (!plain) {
+          showToast('העמוד ריק — כתוב ועצב עמוד שער לפני שמירה כתבנית.', { tone: 'warning' });
+          break;
+        }
+        const profile = getPersonalStyleProfile();
+        savePersonalStyleProfile({ ...profile, coverTemplateHtml: captured, coverTemplateSavedAt: new Date().toISOString() });
+        showToast('עמוד השער הנוכחי נשמר כתבנית האישית שלך. הוסף אותו בכל מסמך דרך "עמוד שער ← עמוד השער שלי".', { tone: 'success', duration: 6000 });
+        break;
+      }
+      case 'insertMyCoverPage': {
+        // מזריק את תבנית עמוד השער האישית, ממלא שדות ידועים (קורס/מרצה/שם/מוסד) ומשאיר ריק אם לא ידוע.
+        const profile = getPersonalStyleProfile();
+        const templateHtml = String(profile.coverTemplateHtml || '').trim();
+        if (!templateHtml) {
+          showToast('עדיין לא שמרת תבנית עמוד שער. עצב עמוד שער ולחץ "שמור עמוד נוכחי כתבנית", או בנה אחת בהגדרות ← סגנון אישי.', { tone: 'info', duration: 7000 });
+          break;
+        }
+        const existingHtml = String(editor.getHTML() || '').replace(/<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i, '').trim();
+        let bodyTitle = '';
+        try {
+          const holder = document.createElement('div');
+          holder.innerHTML = existingHtml;
+          bodyTitle = (holder.textContent || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
+        } catch { bodyTitle = ''; }
+        const filled = fillCoverTemplateTokens(templateHtml, profile, { title: bodyTitle });
+        const coverBlock = /data-cover-page="true"/i.test(filled) ? filled : `<div data-cover-page="true">${filled}</div>`;
+        persistActiveTemplateId('cover');
+        syncPersistedAppSettings();
+        setActiveTemplateId('cover');
+        const cover = `${coverBlock}<div data-type="page-break"></div>${existingHtml || '<h1>כותרת פרק</h1><p></p>'}`;
+        editor.commands.setContent(cover);
+        showToast('עמוד השער שלך נוסף.', { tone: 'success' });
         break;
       }
       case 'insertBlankPage': {
@@ -8006,19 +8157,27 @@ ${sidebarReviewContext}`
 
       /* ---- פקודות סקירה ---- */
       case 'toggleComments': {
-        setCommentsPanelOpen((prev) => !prev);
+        setCommentsPanelOpen((prev) => {
+          const next = !prev;
+          if (next) setTrackPanelOpen(false);
+          return next;
+        });
         break;
       }
       case 'toggleTracking': {
         const newVal = !trackChanges;
         setTrackChanges(newVal);
         editor.commands.setTrackChangesEnabled?.(newVal);
-        if (newVal) setTrackPanelOpen(true);
+        if (newVal) { setTrackPanelOpen(true); setCommentsPanelOpen(false); }
         showToast(newVal ? 'מעקב שינויים: פעיל (הוספות ומחיקות מסומנות)' : 'מעקב שינויים: כבוי', { tone: 'info' });
         break;
       }
       case 'toggleTrackPanel': {
-        setTrackPanelOpen((prev) => !prev);
+        setTrackPanelOpen((prev) => {
+          const next = !prev;
+          if (next) setCommentsPanelOpen(false);
+          return next;
+        });
         break;
       }
       case 'acceptAllChanges': {
@@ -8245,10 +8404,10 @@ ${sidebarReviewContext}`
     }
   }, [editor, generateAiAppendixHtml, triggerDocumentArrival]);
 
-  const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים', withAiAppendix = false } = {}) => {
+  const handleEmitSpssDocument = React.useCallback(({ html = '', title = 'פרק ממצאים', withAiAppendix = false, mode = 'merge' } = {}) => {
     if (!String(html || '').trim()) return;
     let placed = false;
-    if (editor) {
+    if (mode !== 'replace' && editor) {
       try {
         const merge = mergeSpssFindingsIntoDraftHtml(editor.getHTML(), html);
         if (merge && merge.replacedCount > 0) {
@@ -8265,6 +8424,9 @@ ${sidebarReviewContext}`
     if (!placed) {
       applyImportedDocument({ ok: true, html, title, filePath: '', source: 'spss-project' });
       setAppMode('word');
+      if (mode === 'replace') {
+        showToast('העבודה המלאה נטענה לעורך.', { tone: 'success', duration: 7000 });
+      }
     }
     if (withAiAppendix) {
       // ממתינים ריצה קצרה כדי שהתוכן יתייצב בעורך לפני קריאת הנספח.
@@ -8281,8 +8443,8 @@ ${sidebarReviewContext}`
   // העלאת מצגת קיימת (.pptx) כטיוטה לעריכת טקסט/שכתוב — נכנס למצב טיוטת מצגת.
   const handleUploadPptxDraft = React.useCallback(async (file) => {
     if (!file) return false;
+    enterStudioMode('presentation');
     setShowStartScreen(false);
-    setAppMode('presentation');
     setPresentationBusy(true);
     try {
       const buf = await file.arrayBuffer();
@@ -8301,8 +8463,8 @@ ${sidebarReviewContext}`
   // העלאת מסמך Word קיים (.docx) כטיוטה לשכתוב לסגנון המשתמש — נכנס למצב טיוטת מסמך.
   const handleUploadDocDraft = React.useCallback(async (file) => {
     if (!file) return false;
+    enterStudioMode('docdraft');
     setShowStartScreen(false);
-    setAppMode('docdraft');
     try {
       const buf = await file.arrayBuffer();
       const draft = await importDocumentDraft(new Uint8Array(buf), file.name || 'document.docx');
@@ -8310,7 +8472,7 @@ ${sidebarReviewContext}`
       return true;
     } catch (error) {
       showToast(error?.message || 'טעינת המסמך נכשלה', { tone: 'error' });
-      setAppMode('word');
+      exitStudioMode();
       return false;
     }
   }, []);
@@ -8333,7 +8495,6 @@ ${sidebarReviewContext}`
   const isCopyleaksConfigured = Boolean(copyleaksConfig.email && copyleaksConfig.key);
   const canSubmitCopyleaks = Boolean(!copyleaksDetector.submitting && isCopyleaksConfigured && copyleaksTextStats.isValid);
   const shouldHideEditorWrapper = showStartScreen && !isInputDialogVisible;
-  const canCreateDesktopWindow = Boolean(window.desktopApp?.createAppWindow);
   return (
     <div className="flex flex-col h-[100dvh] min-h-[100dvh] bg-[var(--page-bg,#E1DFDD)] text-[var(--text-color,#323130)] overflow-hidden" dir="rtl">
       {showSplash && <AppStartupSplash onDone={() => setShowSplash(false)} />}
@@ -8343,11 +8504,8 @@ ${sidebarReviewContext}`
         onOpenSearch={() => setFindReplace({ open: true, mode: 'find' })}
         onOpen={() => handleCommand('openFile')}
         onNew={() => handleCommand('newDoc')}
-        onNewWindow={() => {
-          if (!window.desktopApp?.createAppWindow) return;
-          Promise.resolve(window.desktopApp.createAppWindow()).catch(() => {});
-        }}
-        newWindowDisabled={!canCreateDesktopWindow}
+        onNewWindow={() => window.open(window.location.href, '_blank')}
+        newWindowDisabled={isDesktopApp()}
         onSave={() => handleCommand('saveLocal')}
         onSaveAs={() => handleCommand('saveAs')}
         onUndo={() => editor?.chain().focus().undo().run()}
@@ -8362,7 +8520,7 @@ ${sidebarReviewContext}`
         assignmentBriefAvailable={Boolean(assignmentBrief.text)}
         assignmentBriefOpen={assignmentBriefOpen}
         appMode={appMode}
-        onModeChange={setAppMode}
+        onModeChange={enterStudioMode}
         cloudAvailable={cloudAvailable}
         cloudUser={cloudUser}
         cloudStatusLabel={cloudStatusLabel}
@@ -8376,6 +8534,8 @@ ${sidebarReviewContext}`
         }}
         onCloudSignOut={handleCloudSignOut}
         documentTitle={getDraftTitleFromFilePath(currentFilePath)}
+        startScreenActive={showStartScreen}
+        onOpenSettings={() => { setFileMenuTargetTab('ai'); setFileMenuOpen(true); }}
       />
       {isWordMode && isPhoneViewport && !showStartScreen && (
         <MobileToolbar
@@ -8426,14 +8586,40 @@ ${sidebarReviewContext}`
       
       <main id="workspace" className="flex flex-1 overflow-hidden relative">
         <div className="min-w-0 flex-1" style={{ display: isSpssMode ? 'flex' : 'none' }}>
-          <SpssSyntaxStudio onOpenProjectMode={() => setAppMode('spss-project')} onOpenHelp={openHelpTopic} />
+          <SpssSyntaxStudio onOpenProjectMode={() => enterStudioMode('spss-project')} onOpenHelp={openHelpTopic} />
         </div>
 
         {isSpssProjectMode && (
           <div className="min-w-0 flex-1 flex">
             <SpssProjectStudio
-              onExit={() => setAppMode('word')}
+              onExit={exitStudioMode}
               onEmitDocument={handleEmitSpssDocument}
+              onOpenHelp={openHelpTopic}
+            />
+          </div>
+        )}
+
+        {appMode === 'project-hub' && projectHubProjectId && (
+          <div className="min-w-0 flex-1 flex">
+            <ProjectHubStudio
+              projectId={projectHubProjectId}
+              onExit={() => {
+                setProjectHubProjectId(null);
+                exitStudioMode();
+              }}
+              onOpenDocument={(payload) => {
+                // מסמך שנפתח מה-Hub נטען לעורך — יוצאים ממצב ה-Hub למצב עריכה.
+                setProjectHubProjectId(null);
+                setAppMode('word');
+                applyImportedDocument(payload);
+              }}
+              onGenerateDocForMilestone={(seed) => {
+                // חזרה למסך הבית עם הפרומפט של השלב; השיוך לשלב נסגר אחרי היצירה.
+                setProjectHubDocSeed({ ...seed, token: Date.now() });
+                setProjectHubProjectId(null);
+                setAppMode('word');
+                setShowStartScreen(true);
+              }}
               onOpenHelp={openHelpTopic}
             />
           </div>
@@ -8443,7 +8629,7 @@ ${sidebarReviewContext}`
           <div className="min-w-0 flex-1 flex">
             <PptxDraftStudio
               draft={pptxDraft}
-              onExit={() => { setPptxDraft(null); setAppMode('word'); }}
+              onExit={() => { setPptxDraft(null); exitStudioMode(); }}
               showToast={showToast}
               onOpenHelp={openHelpTopic}
             />
@@ -8454,7 +8640,7 @@ ${sidebarReviewContext}`
           <div className="min-w-0 flex-1 flex">
             <DocumentDraftStudio
               draft={docDraft}
-              onExit={() => { setDocDraft(null); setAppMode('word'); }}
+              onExit={() => { setDocDraft(null); exitStudioMode(); }}
               onLoadToEditor={handleLoadDocDraftToEditor}
               showToast={showToast}
             />
@@ -8468,7 +8654,7 @@ ${sidebarReviewContext}`
               onDeckChange={setPresentationDeck}
               onGenerate={handleStudioGenerate}
               onUploadPptx={handleUploadPptxDraft}
-              onExit={() => setAppMode('word')}
+              onExit={exitStudioMode}
               busy={presentationBusy}
               hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}
               documentTitle={getDraftTitleFromFilePath(currentFilePath)}
@@ -9360,7 +9546,14 @@ ${sidebarReviewContext}`
                 })}
                 onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
                 onUploadDocDraft={handleUploadDocDraft}
-                onOpenSpssProject={() => setAppMode('spss-project')}
+                onOpenSpssProject={() => enterStudioMode('spss-project')}
+                onOpenProjectHub={(project) => {
+                  if (!project?.id) return;
+                  setProjectHubProjectId(project.id);
+                  enterStudioMode('project-hub');
+                }}
+                projectDocSeed={projectHubDocSeed}
+                onProjectDocSeedConsumed={() => setProjectHubDocSeed(null)}
               />
             </div>
           </div>
@@ -9518,8 +9711,8 @@ ${sidebarReviewContext}`
         )}
       </footer>
 
-      {/* File Menu Backstage */}
-      {isWordMode && fileMenuOpen && (
+      {/* File Menu Backstage — מחוץ ל-word רק במצב settings-only (deep-link עם טאב יעד) */}
+      {(isWordMode || fileMenuTargetTab) && fileMenuOpen && (
         <FileMenuErrorBoundary
           onClose={() => {
             setFileMenuOpen(false);
@@ -9574,7 +9767,7 @@ ${sidebarReviewContext}`
 
       <CloudUnlockGate user={cloudUser} />
 
-      {appMode === 'word' && findReplace.open && editor && (
+      {appMode === 'word' && findReplace.open && editor && !showStartScreen && (
         <FindReplace
           editor={editor}
           open={findReplace.open}

@@ -175,7 +175,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
     { id: "sourcesAcademic", type: "assistant", row: 1, icon: <GraduationCap size={14} className="text-indigo-600" />, label: "מקור אקדמי", payload: { classicAgentId: 'sources', composerMode: 'chat', prompt: 'מצא לי מקורות אקדמיים מאומתים בלבד לטקסט או למסמך הפעיל. אם חסר הקשר, התבסס על המסמך והשיחה הקודמת.' } },
     { id: "summary", type: "inline", row: 1, icon: <Wand2 size={14} className="text-blue-600" />, label: "סיכום" },
     { id: "humanize", type: "inline", row: 1, icon: <Sparkles size={14} className="text-purple-600" />, label: "האנשה" },
-    { id: "reviewFix", type: "inline", row: 1, icon: <CheckCheck size={14} className="text-rose-600" />, label: "תצרה+תיקון" },
+    { id: "reviewFix", type: "inline", row: 1, icon: <CheckCheck size={14} className="text-rose-600" />, label: "בדיקה+תיקון" },
     { id: "fix", type: "inline", row: 1, icon: <CheckCheck size={14} className="text-green-600" />, label: "תיקון" },
     { id: "aiDetect", type: "command", row: 2, icon: <Shield size={14} className="text-fuchsia-600" />, label: "זיהוי AI", command: "openCopyleaksDetector", commandValue: { source: 'selection' } },
     { id: "textToTable", type: "inline", row: 2, icon: <Table2 size={14} className="text-teal-600" />, label: "לטבלה" },

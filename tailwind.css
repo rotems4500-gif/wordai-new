@@ -520,7 +520,6 @@
             border-bottom-color: #DDD6FE;
         }
         .page-surface[data-doc-style="presentation"] p { text-align: center; }
-        .page-break-marker,
         .page-break-node,
         .page-break-indicator {
             page-break-after: always;
@@ -650,7 +649,6 @@
             #workspace { display: block; overflow: visible; }
             #editor-wrapper { padding: 0; display: block; overflow: visible; background-color: white; }
             .ProseMirror { box-shadow: none !important; margin: 0 !important; }
-            .page-break-marker,
             .page-break-node,
             .page-break-indicator {
                 height: 0 !important;

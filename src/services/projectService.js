@@ -17,15 +17,36 @@ import {
   updateDocumentHistoryEntry,
 } from './workspaceLearningService';
 export const PROJECTS_STORAGE_KEY = 'wordai_projects_v1';
-export const PROJECTS_SCHEMA_VERSION = 1;
+// v2: roadmap — milestones/tasks/goal/targetDate על אותו blob. readBlob סובלני לכל גרסה;
+// מיזוג הענן (mergeProjectsV1Blobs) עובד ברמת רשומה שלמה לפי updatedAt, כך שהשדות
+// החדשים עוברים אוטומטית. הערה: מכשיר ישן (v1) שכותב רשומה חדשה יותר ידרוס milestones —
+// מקובל למשתמש יחיד.
+export const PROJECTS_SCHEMA_VERSION = 2;
 export const PROJECTS_UPDATED_EVENT = 'wordai-projects-updated';
+
+export const PROJECT_TYPES = ['seminar', 'assignment', 'thesis', 'custom'];
+export const PROJECT_STATUSES = ['active', 'done', 'archived'];
+export const MILESTONE_STATUSES = ['todo', 'in-progress', 'review', 'done'];
+
+// תבנית סמינריון — fallback כשיצירת מתווה AI נכשלת, וגם נקודת פתיחה ידנית.
+export const SEMINAR_MILESTONE_TEMPLATE = [
+  'עמוד שער',
+  'נושא ושאלת מחקר',
+  'סקירת ספרות',
+  'מתודולוגיה',
+  'ממצאים',
+  'דיון',
+  'מסקנות',
+  'ביבליוגרפיה',
+];
 
 // תקרות קונטקסט (תווים). הקונטקסט של הפרויקט הוא משלים — מוגבל כך שלא ידחק את
 // קונטקסט המסמך עצמו (שמוגבל ב-48k ב-workspaceLearningService).
 const PROJECT_INSTRUCTIONS_MAX_CHARS = 3000;
 const PROJECT_INSTRUCTION_FILE_MAX_CHARS = 6000;
 const PROJECT_MATERIALS_CONTEXT_MAX_CHARS = 8000;
-const PROJECT_MEMORY_CONTEXT_MAX_CHARS = 6000;
+const PROJECT_MEMORY_CONTEXT_MAX_CHARS = 4500;
+const PROJECT_ROADMAP_CONTEXT_MAX_CHARS = 1500;
 const PROJECT_CONTEXT_TOTAL_MAX_CHARS = 16000;
 const MEMORY_SUMMARY_MAX_CHARS = 800;
 const MEMORY_TITLE_MAX_CHARS = 80;
@@ -46,6 +67,14 @@ const nowIso = () => new Date().toISOString();
 const makeId = () => `prj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const makeMemoryId = () => `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const makeMilestoneId = () => `mls-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const makeTaskId = () => `tsk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+// תקרות שדות roadmap — שומרות על ה-blob וה-context builder רזים.
+const MILESTONE_TEXT_MAX_CHARS = 1200;
+const MAX_ACTIVITY_ENTRIES = 60;
 
 function emitProjectsUpdated() {
   if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
@@ -80,6 +109,32 @@ function writeBlob(blob) {
   emitProjectsUpdated();
 }
 
+function normalizeTask(raw = {}) {
+  return {
+    id: String(raw.id || '').trim(),
+    text: String(raw.text || '').trim().slice(0, 300),
+    done: Boolean(raw.done),
+  };
+}
+
+function normalizeMilestone(raw = {}) {
+  return {
+    id: String(raw.id || '').trim(),
+    title: String(raw.title || '').trim().slice(0, 120),
+    description: String(raw.description || '').trim().slice(0, MILESTONE_TEXT_MAX_CHARS),
+    order: Number.isFinite(+raw.order) ? +raw.order : 0,
+    status: MILESTONE_STATUSES.includes(raw.status) ? raw.status : 'todo',
+    targetDate: String(raw.targetDate || ''),
+    wordTarget: Number.isFinite(+raw.wordTarget) ? Math.max(0, Math.round(+raw.wordTarget)) : 0,
+    docHistoryIds: Array.isArray(raw.docHistoryIds) ? raw.docHistoryIds.map(String).filter(Boolean) : [],
+    tasks: Array.isArray(raw.tasks)
+      ? raw.tasks.filter(isPlainObject).map(normalizeTask).filter((t) => t.id && t.text)
+      : [],
+    aiTips: String(raw.aiTips || '').trim().slice(0, MILESTONE_TEXT_MAX_CHARS),
+    updatedAt: String(raw.updatedAt || ''),
+  };
+}
+
 function normalizeProject(raw = {}) {
   return {
     id: String(raw.id || '').trim(),
@@ -94,6 +149,19 @@ function normalizeProject(raw = {}) {
     memory: Array.isArray(raw.memory) ? raw.memory.filter(isPlainObject) : [],
     linkedWorkspaceId: String(raw.linkedWorkspaceId || ''),
     deletedAt: raw.deletedAt || null,
+    // ── v2: roadmap ──
+    projectType: PROJECT_TYPES.includes(raw.projectType) ? raw.projectType : '',
+    goal: String(raw.goal || '').trim().slice(0, 1500),
+    targetDate: String(raw.targetDate || ''),
+    wordTarget: Number.isFinite(+raw.wordTarget) ? Math.max(0, Math.round(+raw.wordTarget)) : 0,
+    status: PROJECT_STATUSES.includes(raw.status) ? raw.status : 'active',
+    milestones: Array.isArray(raw.milestones)
+      ? raw.milestones.filter(isPlainObject).map(normalizeMilestone).filter((m) => m.id)
+      : [],
+    roadmapGeneratedAt: String(raw.roadmapGeneratedAt || ''),
+    activityLog: Array.isArray(raw.activityLog)
+      ? raw.activityLog.filter(isPlainObject).slice(-MAX_ACTIVITY_ENTRIES)
+      : [],
   };
 }
 
@@ -276,6 +344,197 @@ export function getProjectForDocument({ filePath = '', docHistoryId = '' } = {})
   return pid ? getProject(pid) : null;
 }
 
+// ── roadmap: מתווה עבודה (v2) ──
+
+export function updateProjectMeta(projectId, patch = {}) {
+  return mutateProject(projectId, (p) => {
+    if ('projectType' in patch) p.projectType = PROJECT_TYPES.includes(patch.projectType) ? patch.projectType : '';
+    if ('goal' in patch) p.goal = String(patch.goal || '').trim().slice(0, 1500);
+    if ('targetDate' in patch) p.targetDate = String(patch.targetDate || '');
+    if ('wordTarget' in patch) p.wordTarget = Number.isFinite(+patch.wordTarget) ? Math.max(0, Math.round(+patch.wordTarget)) : 0;
+    if ('status' in patch) p.status = PROJECT_STATUSES.includes(patch.status) ? patch.status : p.status;
+    return p;
+  });
+}
+
+// החלפה מלאה של המתווה (אחרי יצירת AI / תבנית). דואג ל-id, order ו-updatedAt.
+export function setProjectMilestones(projectId, milestones = [], { source = '' } = {}) {
+  const clean = (Array.isArray(milestones) ? milestones : [])
+    .filter(isPlainObject)
+    .map((m, idx) => normalizeMilestone({
+      ...m,
+      id: String(m.id || '').trim() || makeMilestoneId(),
+      order: idx,
+      updatedAt: nowIso(),
+    }))
+    .filter((m) => m.title);
+  return mutateProject(projectId, (p) => {
+    p.milestones = clean;
+    p.roadmapGeneratedAt = nowIso();
+    p.activityLog = [...p.activityLog, { at: nowIso(), kind: 'roadmap-generated', label: source || 'מתווה עבודה נוצר' }].slice(-MAX_ACTIVITY_ENTRIES);
+    return p;
+  });
+}
+
+function mutateMilestone(projectId, milestoneId, mutator) {
+  const cleanMilestoneId = String(milestoneId || '').trim();
+  if (!cleanMilestoneId) return null;
+  return mutateProject(projectId, (p) => {
+    p.milestones = p.milestones.map((m) => {
+      if (m.id !== cleanMilestoneId) return m;
+      const next = mutator({ ...m }) || m;
+      next.updatedAt = nowIso();
+      return normalizeMilestone(next);
+    });
+    return p;
+  });
+}
+
+export function updateMilestone(projectId, milestoneId, patch = {}) {
+  return mutateMilestone(projectId, milestoneId, (m) => ({ ...m, ...patch, id: m.id }));
+}
+
+export function addMilestone(projectId, { title = '', description = '' } = {}) {
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) return null;
+  return mutateProject(projectId, (p) => {
+    p.milestones = [...p.milestones, normalizeMilestone({
+      id: makeMilestoneId(),
+      title: cleanTitle,
+      description,
+      order: p.milestones.length,
+      updatedAt: nowIso(),
+    })];
+    return p;
+  });
+}
+
+export function removeMilestone(projectId, milestoneId) {
+  const cleanId = String(milestoneId || '').trim();
+  return mutateProject(projectId, (p) => {
+    p.milestones = p.milestones
+      .filter((m) => m.id !== cleanId)
+      .map((m, idx) => ({ ...m, order: idx }));
+    return p;
+  });
+}
+
+export function reorderMilestone(projectId, milestoneId, direction) {
+  const cleanId = String(milestoneId || '').trim();
+  const delta = direction === 'up' ? -1 : 1;
+  return mutateProject(projectId, (p) => {
+    const sorted = [...p.milestones].sort((a, b) => a.order - b.order);
+    const idx = sorted.findIndex((m) => m.id === cleanId);
+    const swapIdx = idx + delta;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= sorted.length) return p;
+    [sorted[idx], sorted[swapIdx]] = [sorted[swapIdx], sorted[idx]];
+    p.milestones = sorted.map((m, i) => ({ ...m, order: i }));
+    return p;
+  });
+}
+
+export function addMilestoneTask(projectId, milestoneId, text) {
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return null;
+  return mutateMilestone(projectId, milestoneId, (m) => ({
+    ...m,
+    tasks: [...m.tasks, { id: makeTaskId(), text: cleanText, done: false }],
+  }));
+}
+
+export function toggleMilestoneTask(projectId, milestoneId, taskId) {
+  const cleanTaskId = String(taskId || '').trim();
+  return mutateMilestone(projectId, milestoneId, (m) => ({
+    ...m,
+    tasks: m.tasks.map((t) => (t.id === cleanTaskId ? { ...t, done: !t.done } : t)),
+  }));
+}
+
+export function removeMilestoneTask(projectId, milestoneId, taskId) {
+  const cleanTaskId = String(taskId || '').trim();
+  return mutateMilestone(projectId, milestoneId, (m) => ({
+    ...m,
+    tasks: m.tasks.filter((t) => t.id !== cleanTaskId),
+  }));
+}
+
+// שיוך מסמך לשלב: מסמך יכול להיות בשלב אחד בלבד בתוך הפרויקט,
+// והשיוך מבטיח שהוא גם משויך לפרויקט עצמו.
+export function linkDocToMilestone(projectId, milestoneId, docHistoryId) {
+  const cleanDocId = String(docHistoryId || '').trim();
+  const cleanMilestoneId = String(milestoneId || '').trim();
+  if (!cleanDocId) return null;
+  assignDocumentToProject(cleanDocId, projectId);
+  return mutateProject(projectId, (p) => {
+    p.milestones = p.milestones.map((m) => {
+      const has = m.docHistoryIds.includes(cleanDocId);
+      if (m.id === cleanMilestoneId) {
+        return has ? m : { ...m, docHistoryIds: [...m.docHistoryIds, cleanDocId], updatedAt: nowIso() };
+      }
+      return has ? { ...m, docHistoryIds: m.docHistoryIds.filter((id) => id !== cleanDocId), updatedAt: nowIso() } : m;
+    });
+    return p;
+  });
+}
+
+export function unlinkDocFromMilestone(projectId, docHistoryId) {
+  return linkDocToMilestone(projectId, '', docHistoryId);
+}
+
+export function appendProjectActivity(projectId, kind, label) {
+  const cleanLabel = String(label || '').trim();
+  if (!cleanLabel) return null;
+  return mutateProject(projectId, (p) => {
+    p.activityLog = [...p.activityLog, { at: nowIso(), kind: String(kind || 'event'), label: cleanLabel.slice(0, 160) }]
+      .slice(-MAX_ACTIVITY_ENTRIES);
+    return p;
+  });
+}
+
+/**
+ * חישוב התקדמות טהור (בלי IO). docs — רשומות היסטוריה של הפרויקט (אופציונלי,
+ * לספירת מילים). מחזיר percent משוקלל: שלב done = 1, אחרת חלק המשימות שהושלמו.
+ */
+export function computeProjectProgress(project, docs = []) {
+  const milestones = Array.isArray(project?.milestones) ? project.milestones : [];
+  const total = milestones.length;
+  let score = 0;
+  milestones.forEach((m) => {
+    if (m.status === 'done') { score += 1; return; }
+    const tasks = Array.isArray(m.tasks) ? m.tasks : [];
+    const taskPart = tasks.length ? tasks.filter((t) => t.done).length / tasks.length : 0;
+    const statusFloor = m.status === 'review' ? 0.75 : m.status === 'in-progress' ? 0.25 : 0;
+    score += Math.max(taskPart * 0.9, statusFloor);
+  });
+  const percent = total ? Math.round((score / total) * 100) : 0;
+
+  const wordsByDocId = new Map(
+    (Array.isArray(docs) ? docs : [])
+      .filter((d) => isPlainObject(d) && Number.isFinite(+d.wordCount))
+      .map((d) => [String(d.id || ''), Math.max(0, Math.round(+d.wordCount))]),
+  );
+  let wordsWritten = 0;
+  milestones.forEach((m) => {
+    (m.docHistoryIds || []).forEach((id) => { wordsWritten += wordsByDocId.get(String(id)) || 0; });
+  });
+
+  const doneCount = milestones.filter((m) => m.status === 'done').length;
+  let daysToDeadline = null;
+  const deadline = Date.parse(project?.targetDate || '');
+  if (Number.isFinite(deadline)) {
+    daysToDeadline = Math.ceil((deadline - Date.now()) / (24 * 60 * 60 * 1000));
+  }
+
+  return {
+    percent,
+    doneCount,
+    totalCount: total,
+    wordsWritten,
+    wordTarget: Number.isFinite(+project?.wordTarget) ? Math.max(0, Math.round(+project.wordTarget)) : 0,
+    daysToDeadline,
+  };
+}
+
 // ── זיכרון שיחות ──
 
 export function getProjectMemory(projectId) {
@@ -401,6 +660,22 @@ export async function buildProjectContextBlock(projectId) {
 
   const fileText = clip(project.instructionFileText, PROJECT_INSTRUCTION_FILE_MAX_CHARS);
   if (fileText) sections.push(`קובץ הנחיות (${project.instructionFileName || 'קובץ'}):\n${fileText}`);
+
+  // מפת דרכים: איפה המשתמש בתהליך — כדי שהעוזר ידע להתאים את עצמו לשלב הנוכחי.
+  if (project.milestones.length) {
+    const statusLabel = { todo: 'טרם התחיל', 'in-progress': 'בעבודה', review: 'בבדיקה', done: 'הושלם' };
+    const current = [...project.milestones].sort((a, b) => a.order - b.order)
+      .find((m) => m.status === 'in-progress' || m.status === 'review')
+      || project.milestones.find((m) => m.status !== 'done');
+    const lines = [...project.milestones].sort((a, b) => a.order - b.order)
+      .map((m) => `- ${m.title}: ${statusLabel[m.status] || m.status}`);
+    const roadmap = [
+      project.goal ? `מטרת הפרויקט: ${project.goal}` : '',
+      current ? `השלב הנוכחי בעבודה: ${current.title}${current.description ? ` — ${current.description.slice(0, 200)}` : ''}` : '',
+      `מתווה השלבים:\n${lines.join('\n')}`,
+    ].filter(Boolean).join('\n');
+    sections.push(`מפת הדרכים של הפרויקט:\n${clip(roadmap, PROJECT_ROADMAP_CONTEXT_MAX_CHARS)}`);
+  }
 
   try {
     const materials = await loadProjectScopedMaterials(project.id);

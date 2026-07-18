@@ -239,6 +239,26 @@ export const extractDocxChartImages = async (bytes) => {
   return { images, vectorCount };
 };
 
+export const extractPptxChartImages = async (bytes) => {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(bytes);
+  const paths = Object.keys(zip.files).filter((path) => !zip.files[path].dir);
+  const pptxMediaImagePattern = /^ppt\/media\/.*\.(png|jpe?g|gif|bmp|webp)$/i;
+  const pptxMediaVectorPattern = /^ppt\/media\/.*\.(emf|wmf)$/i;
+  const vectorCount = paths.filter((path) => pptxMediaVectorPattern.test(path)).length;
+  const images = [];
+  for (const path of paths.filter((p) => pptxMediaImagePattern.test(p)).sort().slice(0, MAX_EMBEDDED_CHART_IMAGES)) {
+    try {
+      const base64 = await zip.files[path].async('base64');
+      if (base64.length < MIN_CHART_IMAGE_BASE64_LENGTH) continue;
+      images.push({ base64, mimeType: imageMimeFromFileName(path), fileName: path.split('/').pop() });
+    } catch {
+      /* דלג על תמונה לא קריאה */
+    }
+  }
+  return { images, vectorCount };
+};
+
 // זיהוי עמוד-גרף ב-PDF שיוצא מ-Word: הגרפים הם ציור וקטורי (constructPath), לא
 // תמונות מוטמעות. ספירת paths גולמית לבדה תופסת גם עמודי טקסט/טבלאות (שגם להם
 // יש קווים/מסגרות) — נמדד על פלט SPSS אמיתי: עמוד טקסט ~100 paths, עמוד טבלה
