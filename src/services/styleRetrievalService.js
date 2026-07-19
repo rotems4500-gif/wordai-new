@@ -116,6 +116,30 @@ export function scoreChunkRelevance(chunk, queryTermsSet, idf = null) {
   return score / Math.sqrt(length);
 }
 
+// ---------- embedding hybrid (וקטורים מוזרקים דרך opts, בלי import — שמירה על leaf) ----------
+
+// משקל המיזוג ההיברידי בין דמיון סמנטי (cosine) ל-TF-IDF מנורמל.
+// 0.55 cosine / 0.45 tfidf — הסמנטי מוביל אך ה-lexical עדיין תורם דיוק על מונחים נדירים.
+const ALPHA_COSINE = 0.55;
+
+// cosine מקומי (dot/norm). מחזיר 0 אם חסר/אורך שונה. לא מייבא cosineSim (leaf).
+// הווקטורים כבר מנורמלים (e5) אך מחשבים norm בכל מקרה — זול ל-384 ממדים ובטוח.
+function cosineLocal(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
 // ---------- MMR similarity ----------
 
 const jaccard = (aArr, bArr) => {
@@ -143,8 +167,18 @@ function chunkSimilarity(a, b) {
 
 const MMR_LAMBDA = 0.7;
 
-function mmrSelect(scored, k) {
+function mmrSelect(scored, k, vectorById = null) {
   // scored: [{chunk, relevance}] ממויין יורד לפי relevance.
+  const useVec = vectorById instanceof Map;
+  // דמיון לגיוון: cosine בין הווקטורים כשקיימים לשני המועמדים, אחרת chunkSimilarity הקיים.
+  const simOf = (a, b) => {
+    if (useVec) {
+      const va = vectorById.get(a?.id);
+      const vb = vectorById.get(b?.id);
+      if (va && vb) return cosineLocal(va, vb);
+    }
+    return chunkSimilarity(a, b);
+  };
   const selected = [];
   const pool = [...scored];
   while (selected.length < k && pool.length) {
@@ -154,7 +188,7 @@ function mmrSelect(scored, k) {
       const cand = pool[i];
       let maxSim = 0;
       for (const pick of selected) {
-        const sim = chunkSimilarity(cand.chunk, pick.chunk);
+        const sim = simOf(cand.chunk, pick.chunk);
         if (sim > maxSim) maxSim = sim;
       }
       const mmr = (MMR_LAMBDA * cand.relevance) - ((1 - MMR_LAMBDA) * maxSim);
@@ -239,10 +273,12 @@ async function selectChunksLlm({ requestText, candidates, k, invokeModel }) {
 /**
  * בוחר עד k chunks אמיתיים של המשתמש, מגוונים סגנונית, הרלוונטיים לבקשה.
  * @param {string} requestText
- * @param {{k?:number, mode?:('local'|'llm'), chunks?:(Array<object>|null), invokeModel?:(function|null)}} opts
+ * @param {{k?:number, mode?:('local'|'llm'), chunks?:(Array<object>|null), invokeModel?:(function|null), genre?:(string|null), queryVector?:(Float32Array|null), vectorById?:(Map<string,Float32Array>|null)}} opts
+ * queryVector/vectorById אופציונליים לגמרי — כשקיימים, הדירוג היברידי (cosine+TF-IDF)
+ * והגיוון (MMR) עוברים לדמיון סמנטי. בלי → TF-IDF טהור כמו קודם. הזרקה בלבד, אין import.
  * @returns {Promise<Array<object>>}
  */
-export async function selectChunks(requestText, { k = 4, mode = 'local', chunks = null, invokeModel = null, genre = null } = {}) {
+export async function selectChunks(requestText, { k = 4, mode = 'local', chunks = null, invokeModel = null, genre = null, queryVector = null, vectorById = null } = {}) {
   // ה-store נטען אסינכרונית מ-IndexedDB — בלי ההמתנה, קריאה מוקדמת מחזירה קורפוס ריק.
   if (!Array.isArray(chunks)) {
     try { await ensureSampleStoreReady(); } catch {}
@@ -256,9 +292,28 @@ export async function selectChunks(requestText, { k = 4, mode = 'local', chunks 
   const targetGenre = genre ? String(genre).trim() : '';
 
   const idf = buildIdf(corpus);
+  // דירוג היברידי רק כשהוזרקו וקטורים תקפים (queryVector + מפת וקטורים per-chunk).
+  const useVectors = queryVector instanceof Float32Array && vectorById instanceof Map;
+
+  // שלב 1: ציון TF-IDF גולמי לכל chunk. במיזוג נורמל אותו ב-max הבאטצ' לטווח [0,1].
+  const rawTfidf = corpus.map((chunk) => scoreChunkRelevance(chunk, queryTermsSet, idf));
+  let maxTfidf = 0;
+  for (const s of rawTfidf) if (s > maxTfidf) maxTfidf = s;
+
   const scored = corpus
-    .map((chunk) => {
-      let relevance = scoreChunkRelevance(chunk, queryTermsSet, idf);
+    .map((chunk, i) => {
+      let relevance;
+      if (useVectors) {
+        const vec = vectorById.get(chunk?.id);
+        // graceful: chunk בלי וקטור → cosine=0, נשען על ה-TF-IDF המנורמל בלבד.
+        const cos = vec ? cosineLocal(queryVector, vec) : 0;
+        const tfidfNorm = maxTfidf > 0 ? rawTfidf[i] / maxTfidf : 0;
+        relevance = (ALPHA_COSINE * cos) + ((1 - ALPHA_COSINE) * tfidfNorm);
+      } else {
+        // בלי וקטורים — TF-IDF טהור כמו קודם (בלי נרמול, כדי לשמר התנהגות זהה).
+        relevance = rawTfidf[i];
+      }
+      // ה-boosts נשמרים ומופעלים אחרי המיזוג.
       if (targetGenre) {
         if (String(chunk?.genre || '').trim() === targetGenre) relevance *= 1.4;
         if (chunk?.isGold) relevance *= 1.15;
@@ -274,10 +329,10 @@ export async function selectChunks(requestText, { k = 4, mode = 'local', chunks 
     try {
       selected = await selectChunksLlm({ requestText, candidates: scored, k: kClamped, invokeModel });
     } catch {
-      selected = mmrSelect(scored, kClamped);
+      selected = mmrSelect(scored, kClamped, vectorById);
     }
   } else {
-    selected = mmrSelect(scored, kClamped);
+    selected = mmrSelect(scored, kClamped, vectorById);
   }
 
   selected = ensureGold(selected, scored);

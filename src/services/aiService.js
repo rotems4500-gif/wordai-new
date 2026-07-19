@@ -44,6 +44,9 @@ import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksCo
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService";
 import { normalizeStyleEngine, buildStyleEngineInjectionBlock, classifyRequestGenre } from "./styleProfileService";
 import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from "./styleRetrievalService";
+import { ensureSampleStoreReady, getChunks } from "./styleSampleStore";
+import { ensureEmbeddingStoreReady, getVectors } from "./styleEmbeddingStore";
+import { embedText } from "./styleEmbeddingService";
 import { scoreStyleMatch, runStyleRewriteLoop, rewriteDocumentHtmlTowardStyle } from "./styleJudgeService";
 export {
   WORKSPACE_V2_VERSION,
@@ -6047,7 +6050,39 @@ const retrieveStyleChunkBlock = async (requestText, options = {}) => {
     if (!styleEngine.enabled) return '';
     // E3 — ז'אנר תואם (מהאופציות אם הועבר, אחרת מסווג מהבקשה) מוזרם ל-boost אחזור.
     const genre = options.styleGenre !== undefined ? options.styleGenre : classifyRequestGenre(String(requestText || ''));
-    const chunks = await selectChunks(String(requestText || ''), { k: 4, mode: 'local', genre });
+
+    // Retrieval סמנטי: טוענים את ה-chunks פעם אחת ומחשבים וקטור לבקשה + וקטורים per-chunk
+    // מה-store (כבר שמורים, לא מחשבים מחדש). כל כשל → queryVector:null → נשארים ב-TF-IDF.
+    let candidateChunks = null;
+    let queryVector = null;
+    let vectorById = null;
+    try {
+      await ensureSampleStoreReady();
+      candidateChunks = getChunks();
+    } catch { candidateChunks = null; }
+    if (Array.isArray(candidateChunks) && candidateChunks.length) {
+      try {
+        await ensureEmbeddingStoreReady();
+        queryVector = await embedText(String(requestText || ''), { kind: 'query' });
+        if (queryVector) {
+          const chunkIds = candidateChunks.map((c) => c?.id).filter(Boolean);
+          vectorById = getVectors(chunkIds);
+        }
+      } catch {
+        queryVector = null;
+        vectorById = null;
+      }
+    }
+
+    const chunks = await selectChunks(String(requestText || ''), {
+      k: 4,
+      mode: 'local',
+      genre,
+      // כשהטעינה נכשלה (null) — selectChunks יטען בעצמו, בדיוק כמו קודם.
+      chunks: candidateChunks,
+      queryVector,
+      vectorById,
+    });
     let block = buildChunkInjectionText(chunks);
     if (block) {
       const exemplars = selectExemplarSentences(chunks, {
