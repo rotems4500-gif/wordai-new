@@ -10,10 +10,17 @@ import { buildSourcesQueryOverride as buildSourcesQueryOverridePure, isSourcesNe
 import { startRunScope, getActiveRunScope, endRunScope, setScopeTopic } from "./v3/orchestration/runScope";
 import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext } from "./services/chatSourceCheck";
 import { classifyChatScope } from "./services/chatScope";
-import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from "./services/aiService";
+import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock, applyStyleJudgeToText } from "./services/aiService";
 import { isV3FlagEnabled } from "./v3/flags";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
+
+// סוכני AGENTS_CONFIG שהתוצר שלהם הוא שכתוב/ליטוש סגנוני של טקסט קיים בפורמט טקסט-נקי
+// (לא HTML, לא שפה אחרת) — מועמדים ל-applyStyleJudgeToText כדי שיישמעו יותר כמו המשתמש.
+// בכוונה לא כולל: summary/organize/textToTable (מחזירים HTML/רשימות, לא פרוזה),
+// synonyms/translate (מילה בודדת / שפה אחרת), sources/holeFill/lecturer (ידע/מחקר, לא סגנון),
+// continue/draft/brainstorm/chef/aiAppendix (יצירת תוכן חדש, לא ליטוש טקסט קיים).
+const STYLE_JUDGE_CLASSIC_AGENT_IDS = ['fix', 'reviewFix', 'humanize', 'academic'];
 
 const CONTEXT_PROMPTS = [
   '🤔 נראה ארוך אה?',
@@ -4297,6 +4304,18 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           if (styleLoop?.text && isCurrentRequestCycle(requestCycle)) reply = styleLoop.text;
         } catch {
           // כשל בלולאה לא מפיל את התשובה — נשארים עם הנוסח המקורי.
+        }
+      }
+      // שופט סגנון לסוכנים סגנוניים קלאסיים בלבד (תיקון/בדיקה+תיקון/האנשה/אקדמי) — לא
+      // בצ'אט כללי, לא ב-general-knowledge, ולא בסוכני ידע/מחקר (sources/holeFill/lecturer).
+      // effectiveDirectAgentMeta.id מזהה סוכן קלאסי פעיל בלבד; ב-scope 'document' של צ'אט
+      // רגיל (בלי סוכן) הוא נופל ל-'assistant-main' ולכן לא נכנס לרשימה. לעולם לא זורק.
+      if (STYLE_JUDGE_CLASSIC_AGENT_IDS.includes(effectiveDirectAgentMeta.id) && String(reply || '').trim()) {
+        try {
+          const judged = await applyStyleJudgeToText(reply, { requestText: txt });
+          if (judged?.text && isCurrentRequestCycle(requestCycle)) reply = judged.text;
+        } catch {
+          // כשל בשופט הסגנון לא מפיל את התשובה — נשארים עם הנוסח המקורי.
         }
       }
       const applyResult = shouldSkipTaskpaneApply

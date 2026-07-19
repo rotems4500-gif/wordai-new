@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { chatWithActiveProvider, matchShortcut, shouldUseWorkspaceAutomation } from './services/aiService';
+import { chatWithActiveProvider, matchShortcut, shouldUseWorkspaceAutomation, applyStyleJudgeToText } from './services/aiService';
 import { scoreTextAuthenticity, formatAuthenticityResultText } from './services/styleAuthenticityService';
+import { getStyleDepth } from './components/StyleEngineControls';
 
 const MAX_WAND_CONTEXT = 1200;
 
@@ -58,13 +59,17 @@ const buildWandRequest = (actionPrompt, selectedText, documentText, selectionCon
   };
 };
 
+// styleJudge:true — פעולות שכתוב/ליטוש סגנוני טהור על טקסט (לא HTML, לא שפה אחרת,
+// לא שינוי פורמט) — מועמדות ל-applyStyleJudgeToText כדי שיישמעו יותר כמו המשתמש.
+// מודגש מוצא: סכם (בתבליטים, לא פרוזה), תרגם (שפה אחרת) והרחב (תוכן חדש, לא ליטוש) —
+// אלה לא "שכתוב סגנוני" של טקסט קיים, אלא טרנספורמציה/תוכן חדש.
 const WAND_ACTIONS = [
-  { icon: '✏️', label: 'שפר',      prompt: 'שפר את הטקסט הנבחר מבחינה סגנונית ולשונית' },
+  { icon: '✏️', label: 'שפר',      prompt: 'שפר את הטקסט הנבחר מבחינה סגנונית ולשונית', styleJudge: true },
   { icon: '📝', label: 'סכם',      prompt: 'סכם את הטקסט הנבחר בנקודות קצרות' },
   { icon: '🌐', label: 'תרגם',     prompt: 'תרגם את הטקסט הנבחר לאנגלית' },
   { icon: '📖', label: 'הרחב',     prompt: 'הרחב את הטקסט עם פרטים ודוגמאות נוספות' },
-  { icon: '🎓', label: 'אקדמי',    prompt: 'שכתב בסגנון אקדמי ופורמלי' },
-  { icon: '✂️', label: 'קצר',      prompt: 'קצר את הטקסט ב-40% בלי לאבד את המשמעות העיקרית' },
+  { icon: '🎓', label: 'אקדמי',    prompt: 'שכתב בסגנון אקדמי ופורמלי', styleJudge: true },
+  { icon: '✂️', label: 'קצר',      prompt: 'קצר את הטקסט ב-40% בלי לאבד את המשמעות העיקרית', styleJudge: true },
   { icon: '🔍', label: 'בדיקת סגנון', kind: 'authenticity' },
 ];
 
@@ -146,7 +151,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     }
   };
 
-  const run = async (prompt) => {
+  const run = async (prompt, { styleJudge = false } = {}) => {
     const reqId = ++activeRequestId.current;
     const sourceContext = typeof documentContext === 'function' ? documentContext() : documentContext;
     const request = buildWandRequest(prompt, selectedText, sourceContext, selectionContext);
@@ -154,7 +159,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     setLoading(true);
     setResult('');
     try {
-      const res = await chatWithActiveProvider(request.prompt, request.context, '', {
+      let res = await chatWithActiveProvider(request.prompt, request.context, '', {
         skipAutomation: true,
         skipMultiModel: true,
         skipSkillSelection: true,
@@ -165,6 +170,16 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
         includeAppMemory: false,
         omitPersonalStyleStructureHints: true,
       });
+      // שופט סגנון: רק לפעולות ליטוש/שכתוב סגנוני (styleJudge:true), ורק בעומק 'normal'/'deep'
+      // (מדלגים ב-'fast' — כיבוד מפורש של המשתמש לתגובה מהירה). לעולם לא תוקע UI — כשל שקט.
+      if (styleJudge && res && getStyleDepth() !== 'fast') {
+        try {
+          const judged = await applyStyleJudgeToText(res, { requestText: prompt });
+          if (judged?.text) res = judged.text;
+        } catch {
+          // כשל בשופט הסגנון לא מפיל את התוצאה — נשארים עם הנוסח המקורי.
+        }
+      }
       if (isOpenRef.current && activeRequestId.current === reqId) {
         setResult(res);
       }
@@ -212,7 +227,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
           {/* כפתורי פעולה מהירה */}
           <div style={{ display: 'flex', gap: 4, padding: '10px 10px 6px', flexWrap: 'wrap' }}>
             {WAND_ACTIONS.map(a => (
-              <button key={a.label} onClick={() => (a.kind === 'authenticity' ? runStyleCheck() : run(a.prompt))} title={a.prompt || a.label}
+              <button key={a.label} onClick={() => (a.kind === 'authenticity' ? runStyleCheck() : run(a.prompt, { styleJudge: a.styleJudge === true }))} title={a.prompt || a.label}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '6px 8px', border: '1px solid #E1DFDD', borderRadius: 8, background: 'white', cursor: 'pointer', fontSize: 11, minWidth: 44, transition: 'all 0.12s' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; e.currentTarget.style.borderColor = '#2B579A'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = '#E1DFDD'; }}>
