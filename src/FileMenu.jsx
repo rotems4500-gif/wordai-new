@@ -3679,7 +3679,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
   const resolvedQuickSetupProviderId = String(quickSetupProviderId || selectedExternalProviderId || 'gemini').trim() || 'gemini';
   const externalAnalysisAvailability = getExternalAnalysisAvailability('', providerConfig);
   const externalAnalysisPreparationHint = getExternalAnalysisProviderHint(selectedExternalProviderId);
-  const externalAnalysisPrompt = buildExternalStyleAnalysisPrompt({ providerId: selectedExternalProviderId, profile });
   const openRouterBaseUrl = normalizeProviderIdentity('https://openrouter.ai/api/v1');
   const CUSTOM_PROVIDER_PRESETS = {
     deepseek: {
@@ -3986,19 +3985,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       profile={profile}
       updateField={updateField}
       updateList={updateList}
-      externalAnalysis={{
-        selectedProviderId: selectedExternalProviderId,
-        quickSetupProviderId: resolvedQuickSetupProviderId,
-        preparationHint: externalAnalysisPreparationHint,
-        promptText: externalAnalysisPrompt,
-        hasLocalProvider: externalAnalysisAvailability.hasLocalProvider,
-        processingProviderLabel: externalAnalysisAvailability.processingProviderLabel,
-        status: String(profile.externalStyleAnalysisStatus || '').trim(),
-        error: String(profile.externalStyleAnalysisLastError || '').trim(),
-        isBusy: externalAnalysisBusy,
-        quickProviderSetup,
-      }}
-      onExternalProviderChange={(value) => updateField('externalStyleAnalysisProvider', value)}
       onQuickProviderChange={(value) => {
         setQuickSetupProviderId(value);
 
@@ -4015,9 +4001,7 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
           return;
         }
       }}
-      onExternalAnalysisRawChange={updateExternalAnalysisRaw}
       onQuickProviderKeyChange={updateQuickProviderKey}
-      onSubmitExternalAnalysis={onSubmitExternalAnalysis}
       STYLE_TRAINING_QUESTIONS={STYLE_TRAINING_QUESTIONS}
       STYLE_PRESET_OPTIONS={STYLE_PRESET_OPTIONS}
       trainingAnswers={trainingAnswers}

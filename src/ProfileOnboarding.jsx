@@ -1,26 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
-import { ingestAndAnalyze, setStyleEngineEnabled } from './services/styleIngestService';
-import { getSampleStoreStats } from './services/styleSampleStore';
-
-const PAST_WORKS_ACCEPT = '.docx,.pdf,.txt,.md,.rtf,.html';
-
-const EXTERNAL_PROVIDER_OPTIONS = [
-  { id: 'gemini', label: 'Gemini' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'claude', label: 'Claude' },
-  { id: 'groq', label: 'Groq' },
-  { id: 'perplexity', label: 'Perplexity' },
-  { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'mistral', label: 'Mistral' },
-  { id: 'together', label: 'Together.ai' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'xai', label: 'xAI (Grok)' },
-  { id: 'ollama', label: 'Ollama' },
-  { id: 'lmstudio', label: 'LM Studio' },
-  { id: 'custom', label: 'ספק אחר / מותאם' },
-];
+import StyleSetupFlow from './components/StyleSetupFlow';
 
 const ONBOARDING_AI_PROVIDERS = [
   ['gemini', 'Gemini'], ['openai', 'OpenAI'], ['claude', 'Claude'], ['groq', 'Groq'],
@@ -53,10 +34,6 @@ export default function ProfileOnboarding({
   profile,
   updateField,
   updateList,
-  externalAnalysis = {},
-  onExternalProviderChange = () => {},
-  onExternalAnalysisRawChange = () => {},
-  onSubmitExternalAnalysis = () => {},
   STYLE_TRAINING_QUESTIONS,
   trainingAnswers,
   selectLearningOption,
@@ -74,12 +51,7 @@ export default function ProfileOnboarding({
   const [step, setStep] = useState(1);
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [copyPromptState, setCopyPromptState] = useState('');
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
-  const [pastWorksUploading, setPastWorksUploading] = useState(false);
-  const [pastWorksProgress, setPastWorksProgress] = useState('');
-  const [pastWorksStats, setPastWorksStats] = useState(null);
-  const pastWorksFileInputRef = useRef(null);
   const [selectedAiProviders, setSelectedAiProviders] = useState(() =>
     ONBOARDING_AI_PROVIDERS.filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).map(([id]) => id),
   );
@@ -91,12 +63,6 @@ export default function ProfileOnboarding({
   useEffect(() => {
     setMounted(true);
   }, []);
-
-  useEffect(() => {
-    if (!copyPromptState) return undefined;
-    const timer = setTimeout(() => setCopyPromptState(''), 2000);
-    return () => clearTimeout(timer);
-  }, [copyPromptState]);
 
   const nextStep = () => {
     goToStep(step + 1);
@@ -119,16 +85,6 @@ export default function ProfileOnboarding({
   const lecturerNamesValue = Array.isArray(profile.lecturerNames) && profile.lecturerNames.length
     ? profile.lecturerNames
     : (String(profile.lecturerName || '').trim() ? [String(profile.lecturerName || '').trim()] : []);
-  const externalProviderOptions = EXTERNAL_PROVIDER_OPTIONS;
-  const externalStatusText = externalAnalysis.status === 'processed'
-    ? 'הניתוח החיצוני עובד בהצלחה ונשמר בפרופיל.'
-    : externalAnalysis.status === 'processing'
-      ? 'מעבד כרגע את התוצאה החיצונית לפרופיל מובנה...'
-      : externalAnalysis.status === 'pending-provider'
-        ? 'התוצאה נשמרה מקומית וממתינה לחיבור ספק AI מקומי כדי להשלים מיפוי אוטומטי.'
-        : externalAnalysis.status === 'error'
-          ? (externalAnalysis.error || 'העיבוד נכשל. אפשר לשמור ולנסות שוב אחרי חיבור ספק.')
-          : 'הדבק כאן תשובת AI חיצונית כדי לחסוך קריאות פנימיות יקרות.';
   const tonePreferenceLabel = {
     very_formal: 'רשמי לחלוטין',
     formal: 'מכובד ומקצועי',
@@ -146,12 +102,12 @@ export default function ProfileOnboarding({
     .filter(Boolean)
     .join(' · ');
   const styleSummary = String(profile.styleTrainingSummary || '').trim() || 'העדפות הכתיבה האישיות שלך נשמרו וימשיכו לחדד את התוצאות.';
-  const providerSummary = externalAnalysis.hasLocalProvider
-    ? `מחובר ל-${externalAnalysis.processingProviderLabel || 'AI'}`
+  const configuredAiProviderCount = ONBOARDING_AI_PROVIDERS
+    .filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).length;
+  const providerSummary = configuredAiProviderCount > 0
+    ? `מחוברים ${configuredAiProviderCount} מנועי AI`
     : 'אפשר להשלים חיבור ספק AI בכל רגע';
-  const analysisSummary = externalAnalysis.status && externalAnalysis.status !== 'idle'
-    ? externalStatusText
-    : 'ניתוח חיצוני והגדרות מתקדמות נשארים זמינים מחוץ למסך הסיום.';
+  const analysisSummary = 'פרופיל הסגנון וההגדרות המתקדמות זמינים בכל רגע מהמסכים הייעודיים.';
   const syllabusImportStatus = String(syllabusImport.status || 'idle').trim() || 'idle';
   const syllabusImportBusy = syllabusImportStatus === 'reading' || syllabusImportStatus === 'processing';
   const syllabusImportSignature = `${syllabusImportCycle}:${String(syllabusImport.fileName || '').trim()}::${syllabusImportStatus}`;
@@ -186,9 +142,7 @@ export default function ProfileOnboarding({
         : syllabusImportBusy
           ? 'בתהליך'
           : 'מומלץ';
-  const syllabusImportHint = externalAnalysis.hasLocalProvider
-    ? 'העלה סילבוס כדי למלא אוטומטית קורסים, מרצים, נושאי לימוד ותאריך הגשה.'
-    : 'גם בלי ספק AI מחובר ננסה לחלץ מהסילבוס פרטים בסיסיים לפרופיל.';
+  const syllabusImportHint = 'העלה סילבוס כדי למלא אוטומטית קורסים, מרצים, נושאי לימוד ותאריך הגשה. גם בלי ספק AI מחובר ננסה לחלץ פרטים בסיסיים.';
 
   const unlockSyllabusListEditing = () => {
     if (syllabusImportBusy) return;
@@ -201,56 +155,25 @@ export default function ProfileOnboarding({
     event.target.value = '';
   };
 
-  const handlePastWorksFileSelection = async (event) => {
-    const files = Array.from(event.target.files || []).filter(Boolean);
-    event.target.value = '';
-    if (!files.length) return;
-    setPastWorksUploading(true);
-    setPastWorksProgress(`מנתח מסמך 1/${files.length}...`);
-    try {
-      await ingestAndAnalyze(files, {
-        onProgress: (info) => {
-          const current = Number(info?.current ?? info?.index ?? 0) + 1;
-          const total = Number(info?.total ?? files.length);
-          setPastWorksProgress(`מנתח מסמך ${Math.min(current, total)}/${total}...`);
-        },
-        runPatterns: true,
-      });
-      const stats = getSampleStoreStats();
-      setPastWorksStats(stats);
-      if (stats?.docCount > 0) {
-        try { setStyleEngineEnabled(true); } catch {}
-      }
-    } catch (err) {
-      console.error('ingestAndAnalyze (onboarding) failed:', err);
-      setPastWorksProgress('');
-    } finally {
-      setPastWorksUploading(false);
-    }
-  };
+  // מיזוג שמרני של פרופיל-הסגנון ש-StyleSetupFlow בונה (שלב 10) לתוך ה-state של האונבורדינג.
+  // metaPatch הוא אובייקט פרופיל מלא שנקרא מהדיסק — אסור לו לדרוס ערכים שהמשתמש הקליד
+  // בשלבים 2-8 וטרם נשמרו. לכן ממלאים רק שדות שריקים כרגע ב-state; שדות רשימה עוברים
+  // דרך updateList (נורמליזציה), השאר דרך updateField.
+  const isEmptyProfileValue = (value) => (
+    value === null || value === undefined
+    || (typeof value === 'string' && value.trim() === '')
+    || (Array.isArray(value) && value.length === 0)
+    || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+  );
 
-  const handleCopyExternalPrompt = async () => {
-    const promptText = String(externalAnalysis.promptText || '').trim();
-    if (!promptText) {
-      setCopyPromptState('אין prompt להעתקה');
-      return;
-    }
-
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(promptText);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = promptText;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      setCopyPromptState('הועתק ללוח');
-    } catch {
-      setCopyPromptState('ההעתקה נכשלה');
-    }
+  const handleStyleMetaPatch = (metaPatch) => {
+    if (!metaPatch || typeof metaPatch !== 'object') return;
+    Object.entries(metaPatch).forEach(([field, value]) => {
+      if (isEmptyProfileValue(value)) return;              // אין מה למזג משדה ריק ב-patch
+      if (!isEmptyProfileValue(profile?.[field])) return;  // ה-state כבר מכיל ערך — לא דורסים
+      if (Array.isArray(value)) updateList(field, value);
+      else updateField(field, value);
+    });
   };
 
   const stepIcons = {
@@ -262,8 +185,8 @@ export default function ProfileOnboarding({
     6: '⚖️',
     7: '🎨',
     8: '📝',
-    9: '🗂️',
-    10: '🔌',
+    9: '🔌',
+    10: '🖋️',
     11: '✨',
   };
 
@@ -276,8 +199,8 @@ export default function ProfileOnboarding({
     6: 'חוקים',
     7: 'סגנון',
     8: 'ניסוח',
-    9: 'עבודות עבר',
-    10: 'חיבור AI',
+    9: 'חיבור AI',
+    10: 'פרופיל הסגנון',
     11: 'סיום',
   };
 
@@ -966,150 +889,11 @@ export default function ProfileOnboarding({
                       className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
                     />
                   </div>
-
-                  <div className="bg-slate-900/40 border border-slate-700/70 rounded-2xl p-4 space-y-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-bold text-white mb-1">🧠 ניתוח סגנון חיצוני מוזל</div>
-                        <div className="text-xs text-white/80 leading-relaxed max-w-2xl">
-                          אפשר לשלוח prompt מוכן לספק חיצוני, לצרף עבודות עבר, ואז להדביק כאן את התוצאה. אם אין כרגע ספק מקומי פעיל, אשמור את הטקסט ואעבד אותו אוטומטית כשתחבר ספק בהגדרות ה-AI.
-                        </div>
-                      </div>
-                      <div className={`px-3 py-1 rounded-full text-[11px] font-semibold ${externalAnalysis.hasLocalProvider ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-300/30' : 'bg-amber-500/20 text-amber-100 border border-amber-300/30'}`}>
-                        {externalAnalysis.hasLocalProvider
-                          ? `עיבוד מקומי זמין: ${externalAnalysis.processingProviderLabel || 'AI'}`
-                          : 'אין כרגע ספק מקומי זמין'}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-white mb-1">בחר לאיזה ספק חיצוני תשלח את ה-prompt</label>
-                        <select
-                          value={externalAnalysis.selectedProviderId || 'gemini'}
-                          onChange={(e) => onExternalProviderChange(e.target.value)}
-                          className="w-full px-4 py-2 bg-slate-800/60 border border-slate-600 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400"
-                        >
-                          {externalProviderOptions.map((provider) => (
-                            <option key={provider.id} value={provider.id} className="bg-slate-800 text-white">{provider.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={handleCopyExternalPrompt}
-                          className="w-full px-4 py-2 rounded-xl bg-cyan-500/70 hover:bg-cyan-500 text-white text-sm font-semibold transition-colors"
-                        >
-                          העתק prompt לניתוח חיצוני
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="bg-cyan-950/35 border border-cyan-400/20 rounded-xl p-3">
-                      <div className="text-xs font-semibold text-cyan-100 mb-1">לפני ההעתקה</div>
-                      <div className="text-xs text-cyan-50/90 leading-relaxed">
-                        {externalAnalysis.preparationHint || 'צרף את הקבצים והחומרים בממשק החיצוני לפני שליחת ה-prompt.'}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-white mb-1">ה-prompt להעתקה</label>
-                      <textarea
-                        readOnly
-                        value={externalAnalysis.promptText || ''}
-                        rows={7}
-                        className="w-full px-4 py-2 bg-slate-950/70 border border-slate-700 rounded-xl text-white/90 text-xs leading-relaxed resize-none outline-none"
-                      />
-                      <div className="text-[11px] text-cyan-100 mt-2 min-h-[18px]">{copyPromptState || 'ההעתקה מכילה רק את ה-prompt עצמו; הוראות ההכנה נשארות מחוץ לטקסט כדי להקל על ההדבקה.'}</div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-white mb-1">הדבק כאן את תשובת ה-AI החיצוני</label>
-                      <textarea
-                        value={profile.externalStyleAnalysisRaw || ''}
-                        onChange={(e) => onExternalAnalysisRawChange(e.target.value)}
-                        placeholder="הדבק כאן את כל התשובה שקיבלת מהספק החיצוני. עדיף JSON מלא, אבל גם טקסט חופשי יתקבל."
-                        rows={6}
-                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-xs text-white/80 leading-relaxed max-w-2xl">
-                        {externalStatusText}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={onSubmitExternalAnalysis}
-                        disabled={!String(profile.externalStyleAnalysisRaw || '').trim() || externalAnalysis.isBusy}
-                        className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${!String(profile.externalStyleAnalysisRaw || '').trim() || externalAnalysis.isBusy ? 'bg-slate-700/60 text-white/50 cursor-not-allowed' : 'bg-emerald-500/80 hover:bg-emerald-500 text-white'}`}
-                      >
-                        {externalAnalysis.isBusy ? 'מעבד...' : externalAnalysis.hasLocalProvider ? 'שמור ונתח עכשיו' : 'שמור להמשך'}
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
 
             {step === 9 && (
-              <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
-                <div className="text-center mb-4">
-                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
-                    📚 העבודות שכתבת = הסגנון שלך
-                  </h2>
-                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
-                    העלה עבודות ומסמכים שכתבת בעצמך (Word/PDF). המערכת תלמד מהם את טביעת האצבע הסגנונית שלך — אורכי משפטים, ביטויים חוזרים, מבנה. עובד גם בלי חיבור AI; ככל שתעלה יותר, החיקוי יהיה מדויק יותר. הקבצים נשארים במכשיר שלך.
-                  </p>
-                </div>
-
-                <div
-                  className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-[#efab4d]/30 bg-white/5 rounded-2xl px-4 py-8 text-center transition-colors hover:bg-white/10"
-                >
-                  <span className="text-[28px]">📄</span>
-                  <p className="text-sm font-semibold text-white">
-                    <button
-                      type="button"
-                      onClick={() => pastWorksFileInputRef.current?.click()}
-                      disabled={pastWorksUploading}
-                      className="text-[#efab4d] hover:text-[#f0b65f] underline disabled:opacity-50"
-                    >
-                      בחר קבצים להעלאה
-                    </button>
-                  </p>
-                  <p className="text-xs text-[#8f7e69] max-w-[46ch]">
-                    תומך ב-Word, PDF, טקסט, Markdown, RTF ו-HTML. אפשר לבחור כמה קבצים יחד.
-                  </p>
-                  <input
-                    ref={pastWorksFileInputRef}
-                    type="file"
-                    multiple
-                    accept={PAST_WORKS_ACCEPT}
-                    onChange={handlePastWorksFileSelection}
-                    disabled={pastWorksUploading}
-                    className="hidden"
-                  />
-                  {pastWorksUploading && (
-                    <div className="flex items-center gap-2 mt-2 text-[12.5px] font-semibold text-[#efab4d]">
-                      <span className="w-3.5 h-3.5 border-2 border-[#efab4d]/40 border-t-[#efab4d] rounded-full animate-spin" />
-                      {pastWorksProgress || 'מעלה ומנתח...'}
-                    </div>
-                  )}
-                  {!pastWorksUploading && pastWorksStats && (
-                    <div className="mt-2 text-[12.5px] font-semibold text-emerald-300">
-                      נקלטו {pastWorksStats.docCount} מסמכים ({pastWorksStats.totalWords.toLocaleString('he-IL')} מילים) ✓
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-2xl border border-[#efab4d]/16 bg-white/5 p-4 text-[12.5px] text-[#8f7e69] leading-relaxed">
-                  זה שלב אופציונלי — אפשר לדלג ולחזור אליו מאוחר יותר דרך הגדרות מנוע הסגנון.
-                </div>
-              </div>
-            )}
-
-            {step === 10 && (
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -1174,6 +958,20 @@ export default function ProfileOnboarding({
                 </div>
               </div>
             )}
+
+            {step === 10 && (
+              <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
+                <StyleSetupFlow
+                  variant="onboarding"
+                  profile={profile}
+                  providerConfig={providerConfig}
+                  onProfileMetaPatch={handleStyleMetaPatch}
+                  onComplete={() => nextStep()}
+                  onSkip={() => nextStep()}
+                />
+              </div>
+            )}
+
             {step === 11 && (
               <div className="space-y-4 animate-in slide-in-from-top-5 duration-700">
                 <div className="text-center mb-4">
@@ -1253,8 +1051,8 @@ export default function ProfileOnboarding({
             )}
           </div>
 
-          {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/חיבור/סיום (full-width) */}
-          {![1, 10, 11].includes(step) && (
+          {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/חיבור/פרופיל-סגנון/סיום (full-width) */}
+          {![1, 9, 10, 11].includes(step) && (
             <aside className="hidden lg:block lg:sticky lg:top-2 rounded-2xl border border-[#efab4d]/16 p-5 shadow-xl" style={{ background: 'rgba(26,21,18,0.55)', boxShadow: '0 20px 44px rgba(10,7,5,0.4)' }}>
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2.5">
