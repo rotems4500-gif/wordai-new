@@ -8,6 +8,14 @@
 //
 // עובד בדפדפן בלבד (בלי Node APIs). ES modules, JS רגיל.
 // תוכנית מלאה: docs/style-engine-plan.md (במיוחד סעיפים 5a, 6, 7).
+//
+// שני ה-imports הבאים הם מודולי style* אחיים שכבר מייבאים *מכאן* (getChunks/
+// selectExemplarSentences → styleSampleStore/styleRetrievalService, ושניהם מייבאים
+// חזרה computeLocalMetrics/STYLE_CONNECTORS). זה מעגל ESM, אך בטוח: כל שימוש הדדי
+// נעשה רק בתוך גופי פונקציות (בזמן קריאה), לא בזמן טעינת המודול. משמשים רק את
+// deriveManualDefaultsFromMetrics; שאר המודול נשאר טהור וללא תלות ב-aiService.
+import { getChunks } from './styleSampleStore';
+import { selectExemplarSentences } from './styleRetrievalService';
 
 export const STYLE_ENGINE_SCHEMA_VERSION = 3;
 
@@ -368,6 +376,100 @@ export function aggregateDocumentMetrics(perDocMetricsList) {
   );
 
   return { metrics, metricsSpread, totalWordCount, docCount };
+}
+
+// ---------- deriveManualDefaultsFromMetrics ----------
+
+// ערכים קנוניים ל-lengthPreference (חייבים להתאים לפרופיל הידני/UI). הסדר = קצר→מפורט,
+// כדי לאפשר "דחיפה" של צעד אחד לפי אורך הפסקה (ראה למטה).
+const LENGTH_PREF_VALUES = ['short', 'default', 'detailed'];
+// ערכים קנוניים ל-tonePreference: 'very_formal'|'formal'|'balanced'|'casual'|'very_casual'.
+
+/**
+ * גוזר ברירות-מחדל "ידניות" (length/tone) + משפטי-דוגמה מתוך מדדי ה-baseline של המשתמש,
+ * כדי לאתחל בחוכמה את הפרופיל הידני בלי לשאול אותו. **הערכה גסה (היוריסטיקה)** — לא
+ * מדידה ישירה של העדפה, ולכן tonePreferenceConfidence הוא 'medium' (או 'low' כשהראיות
+ * דלילות/סותרות). טהורה ככל האפשר: קוראת רק getChunks/selectExemplarSentences (תלות
+ * מקומית) — לא שומרת ולא מעדכנת פרופיל.
+ * @param {object} overview  תוצר getStyleOverview(): { stats:{docCount,...}, metrics, metricsSpread }
+ * @returns {{lengthPreference?:string, tonePreference?:string, tonePreferenceConfidence?:string, exemplars?:string[]}}
+ */
+export function deriveManualDefaultsFromMetrics(overview = {}) {
+  const ov = isPlainObject(overview) ? overview : {};
+  const stats = isPlainObject(ov.stats) ? ov.stats : {};
+  const docCount = Math.max(0, Math.round(toNum(stats.docCount, 0)));
+  const metrics = isPlainObject(ov.metrics) ? ov.metrics : null;
+  // אין baseline (בלי metrics או בלי מסמכים) → מחזירים {} ולא מנחשים ברירות-מחדל.
+  if (!metrics || docCount < 1) return {};
+
+  const metricsSpread = isPlainObject(ov.metricsSpread) ? ov.metricsSpread : {};
+
+  // גישה בטוחה לכל מדד — תמיד fallback מספרי.
+  const avgSentenceWords = toNum(metrics.avgSentenceWords, 0);
+  const avgParagraphWords = toNum(metrics.avgParagraphWords, 0);
+  const typeTokenRatio = toNum(metrics.typeTokenRatio, 0);
+  const parenthesesDensity = toNum(metrics.parenthesesDensity, 0);
+  const exclamationRate = toNum(metrics.exclamationRate, 0);
+  const rhetoricalQuestionRate = toNum(metrics.rhetoricalQuestionRate, 0);
+  const oneWordSentenceRate = toNum(metrics.oneWordSentenceRate, 0);
+  const registerShiftRate = toNum(metrics.registerShiftRate, 0);
+  const connectorFreq = isPlainObject(metrics.connectorFrequency) ? metrics.connectorFrequency : {};
+
+  // --- lengthPreference: מבוסס אורך משפט; אמינות גבוהה (מדד ישיר, לא היוריסטי). ---
+  // ≥18 → מפורט, ≥11 → ברירת מחדל, אחרת קצר.
+  let lengthIdx = avgSentenceWords >= 18 ? 2 : (avgSentenceWords >= 11 ? 1 : 0);
+  // תיקון עדין של צעד אחד לפי אורך הפסקה: פסקה ארוכה מאוד דוחפת ל-detailed, קצרה מאוד
+  // ל-short. הגנה: avgParagraphWords>0 מונע דחיפה ל-short כשאין נתון פסקה כלל.
+  if (avgParagraphWords >= 90) lengthIdx = Math.min(2, lengthIdx + 1);
+  else if (avgParagraphWords > 0 && avgParagraphWords <= 35) lengthIdx = Math.max(0, lengthIdx - 1);
+  const lengthPreference = LENGTH_PREF_VALUES[lengthIdx];
+
+  // --- tonePreference: ציון פורמליות 0-1 מכמה מדדים מנורמלים ומשוקללים (היוריסטיקה). ---
+  // מעלי פורמליות — כל אחד מנורמל ל-0..1 מול סף "גבוה" סביר, ואז משוקלל:
+  const fSentence = clamp(avgSentenceWords / 24, 0, 1);        // ~24 מילים/משפט = פורמלי מאוד
+  const fTtr = clamp((typeTokenRatio - 0.35) / 0.35, 0, 1);    // עושר לקסיקלי (TTR) גבוה
+  const fParen = clamp(parenthesesDensity / 4, 0, 1);          // סוגריים תכופים = כתיבה עיונית
+  const connectorRichness = Object.values(connectorFreq)
+    .reduce((sum, v) => sum + toNum(v, 0), 0);                 // סך תדירות מילות הקישור (ל-100 מילים)
+  const fConnectors = clamp(connectorRichness / 3, 0, 1);      // שפע מילות קישור אקדמיות
+  // מורידי פורמליות (מעלי casual):
+  const cExcl = clamp(exclamationRate / 0.15, 0, 1);
+  const cRhet = clamp(rhetoricalQuestionRate / 0.15, 0, 1);
+  const cOneWord = clamp(oneWordSentenceRate / 0.15, 0, 1);
+  const cRegister = clamp(registerShiftRate / 0.3, 0, 1);
+
+  const formalUp = (fSentence * 0.35) + (fTtr * 0.25) + (fParen * 0.15) + (fConnectors * 0.25);
+  const casualUp = (cExcl * 0.30) + (cRhet * 0.25) + (cOneWord * 0.20) + (cRegister * 0.25);
+  // ציון סופי סביב 0.5: בסיס ניטרלי + הפרש (פורמלי פחות דיבורי), מוגבל ל-0..1.
+  const formalityScore = clamp(0.5 + (formalUp - casualUp) * 0.5, 0, 1);
+
+  let tonePreference;
+  if (formalityScore >= 0.8) tonePreference = 'very_formal';
+  else if (formalityScore >= 0.6) tonePreference = 'formal';
+  else if (formalityScore >= 0.4) tonePreference = 'balanced';
+  else if (formalityScore >= 0.2) tonePreference = 'casual';
+  else tonePreference = 'very_casual';
+
+  // אמינות הטון: זו היוריסטיקה גסה (לא מדידה ישירה של העדפת המשתמש) → 'medium' כברירת מחדל.
+  // 'low' כשהראיות דלילות (docCount<2) או כשהאותות סותרים (גם פורמלי וגם דיבורי חזקים).
+  const conflicting = formalUp > 0.45 && casualUp > 0.45;
+  const tonePreferenceConfidence = (docCount < 2 || conflicting) ? 'low' : 'medium';
+
+  // --- exemplars: עד 3 משפטים אמיתיים מתוך ה-chunks (best-effort; לעולם לא שובר). ---
+  let exemplars = [];
+  try {
+    const chunks = getChunks();
+    const picked = selectExemplarSentences(chunks, {
+      mean: avgSentenceWords,
+      std: toNum(metricsSpread?.avgSentenceWords?.std, 0),
+      count: 3,
+    });
+    exemplars = Array.isArray(picked) ? picked : [];
+  } catch {
+    exemplars = [];
+  }
+
+  return { lengthPreference, tonePreference, tonePreferenceConfidence, exemplars };
 }
 
 // ---------- normalizeStyleEngine ----------
