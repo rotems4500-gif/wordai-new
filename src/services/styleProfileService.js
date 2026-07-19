@@ -16,6 +16,8 @@
 // deriveManualDefaultsFromMetrics; שאר המודול נשאר טהור וללא תלות ב-aiService.
 import { getChunks } from './styleSampleStore';
 import { selectExemplarSentences } from './styleRetrievalService';
+// styleReferenceService הוא LEAF (מייבא רק את קובץ הנתונים) — ייבוא ממנו בטוח, בלי מעגל.
+import { getReferenceDistribution, getReferenceNgramFreq, getCachedReference } from './styleReferenceService';
 
 export const STYLE_ENGINE_SCHEMA_VERSION = 3;
 
@@ -1032,18 +1034,51 @@ const roundDisplay = (value, digits = 0) => {
   return Math.round(n * factor) / factor;
 };
 
+// ספי-רצפה ל-std בחישוב zPop של עוגני-המדד (כשאין std-קורפוס אמין לאוכלוסייה).
+const METRIC_POP_STD_FLOOR = {
+  avgSentenceWords: 3,
+  avgCommasPerSentence: 0.6,
+  parenthesesDensity: 1.0,
+  avgParagraphWords: 15,
+};
+// סף distinctiveness: מזריקים עוגן-מדד רק כשהמשתמש חורג מהאוכלוסייה מעליו.
+const POP_DISTINCTIVE_Z = 0.8;
+
+/**
+ * האם להזריק עוגן-מדד: כן אם אין נתוני-אוכלוסייה למדד (graceful), או שהמשתמש חורג
+ * מהנורמה האוכלוסייתית (zPop ≥ סף). מדד "רגיל" (קרוב לאוכלוסייה) מושמט — הוא לא מלמד
+ * את המודל דבר ורק מדלל את הבלוק.
+ * @param {object} reference  נכס-הייחוס (או {}/null)
+ * @param {string} key
+ * @param {number} userVal
+ * @param {string} genreName
+ * @returns {boolean}
+ */
+const shouldInjectMetricAnchor = (reference, key, userVal, genreName) => {
+  const dist = getReferenceDistribution(reference, key, genreName || null);
+  if (!dist) return true; // אין נתוני אוכלוסייה למדד → מזריקים כרגיל (התנהגות מקורית)
+  const popStd = Math.max(Number(dist.std) || 0, METRIC_POP_STD_FLOOR[key] || 0);
+  if (!(popStd > 0)) return true;
+  const zPop = Math.abs(Number(userVal) - Number(dist.mean)) / popStd;
+  return zPop >= POP_DISTINCTIVE_Z;
+};
+
 /**
  * בונה בלוק הזרקה עברי רזה (~≤350 מילים) מהפרופיל, או '' אם אין מה להזריק.
  * @param {object} styleEngine
- * @param {{seed?:number}} opts
+ * @param {{seed?:number, chunkBlock?:string, genre?:string, reference?:object}} opts
+ *   reference — נכס-ייחוס האוכלוסייה (מקורא async), אחרת נלקח מהמטמון הסינכרוני.
  * @returns {string}
  */
-export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null } = {}) {
+export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null, reference = null } = {}) {
   if (!isPlainObject(styleEngine) || styleEngine.enabled === false) return '';
 
   // E3 — כשיש ז'אנר תואם עם תת-פרופיל מדדים → משתמשים ב-metrics/metricsSpread שלו
   // לעוגני המדד (הדפוסים/blacklist נשארים גלובליים). אחרת נופלים לפרופיל הגלובלי.
   const gName = genre ? String(genre).trim() : '';
+  // נכס-ייחוס האוכלוסייה: מהפרמטר (קורא async), אחרת מהמטמון הסינכרוני. חסר/ריק →
+  // shouldInjectMetricAnchor יחזיר תמיד true → כל העוגנים מוזרקים (התנהגות מקורית).
+  const ref = isPlainObject(reference) ? reference : getCachedReference();
   const genreProfiles = isPlainObject(styleEngine.genreProfiles) ? styleEngine.genreProfiles : {};
   const genreProfile = gName && isPlainObject(genreProfiles[gName]) ? genreProfiles[gName] : null;
   const useGenreMetrics = Boolean(genreProfile && isPlainObject(genreProfile.metrics));
@@ -1073,7 +1108,8 @@ export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlo
   if (hasMetrics) {
     const anchors = [];
     const avgSent = roundDisplay(metrics.avgSentenceWords, 0);
-    if (avgSent) {
+    // עוגן אורך-המשפט מוזרק רק אם המשתמש חורג מהאוכלוסייה (או שאין נתוני-אוכלוסייה).
+    if (avgSent && shouldInjectMetricAnchor(ref, 'avgSentenceWords', Number(metrics.avgSentenceWords), gName)) {
       const meanSent = Number(metrics.avgSentenceWords);
       const spread = activeSpread;
       const stdRaw = Number(spread.avgSentenceWords && spread.avgSentenceWords.std);
@@ -1085,18 +1121,27 @@ export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlo
         anchors.push('הקפד על משפטים קצרים יחסית — אל תמתח אותם.');
       }
     }
+    // פסיקים/סוגריים — כל אחד מגודר בנפרד מול האוכלוסייה (מדד רגיל לא מוזרק).
     const commas = roundDisplay(metrics.avgCommasPerSentence, 1);
     const parenD = Number(metrics.parenthesesDensity);
     const punctBits = [];
-    if (commas !== null && commas > 0) punctBits.push(`פסיקים: ~${commas} למשפט`);
-    if (Number.isFinite(parenD) && parenD > 0) {
+    if (commas !== null && commas > 0
+      && shouldInjectMetricAnchor(ref, 'avgCommasPerSentence', Number(metrics.avgCommasPerSentence), gName)) {
+      punctBits.push(`פסיקים: ~${commas} למשפט`);
+    }
+    if (Number.isFinite(parenD) && parenD > 0
+      && shouldInjectMetricAnchor(ref, 'parenthesesDensity', parenD, gName)) {
       punctBits.push(`סוגריים: ${parenD >= 3 ? 'תכופים' : parenD >= 1 ? 'מדי פעם' : 'נדירים'}`);
     }
     if (punctBits.length) anchors.push(`${punctBits.join('. ')}.`);
 
     const avgPara = roundDisplay(metrics.avgParagraphWords, 0);
-    if (avgPara) anchors.push(`פסקה אופיינית: ~${avgPara} מילים.`);
+    if (avgPara && shouldInjectMetricAnchor(ref, 'avgParagraphWords', Number(metrics.avgParagraphWords), gName)) {
+      anchors.push(`פסקה אופיינית: ~${avgPara} מילים.`);
+    }
 
+    // מילות-קישור/ניגודי-קישור נשארים ללא גידור-אוכלוסייה: אין להם התפלגות {mean,std}
+    // בנכס-הייחוס (הם לקסיקליים), והם ממילא נושאי-חתימה מטבעם.
     const connectors = isPlainObject(metrics.connectorFrequency)
       ? Object.keys(metrics.connectorFrequency).slice(0, 5)
       : [];
@@ -1782,10 +1827,13 @@ const findNgramEvidence = (prepared, phrase) => {
  * מזהה n-gram (2/3/4 מילים) חוזרים, ממזג וריאציות תחיליות עברית, מסנן stopwords/ספרות,
  * מיישם subsumption (מעדיף n-gram ארוך יותר), ומחזיר patterns מסוג signature_phrase.
  * @param {Array<{docId?:string, text?:string, wordCount?:number}>} chunks
- * @param {{minDocFraction?:number, minCount?:number, top?:number}} opts
+ * @param {{minDocFraction?:number, minCount?:number, top?:number, populationNgramFreq?:object}} opts
+ *   populationNgramFreq — טבלת תדירויות n-gram באוכלוסייה (ref.ngramFreq). ביטוי נפוץ-
+ *   באוכלוסייה = "עברית תקנית" (מוריד דירוג/משקל); ביטוי נדיר-באוכלוסייה + שכיח-אצל-
+ *   המשתמש = חתימה חזקה (מעלה). חסר/ריק → התנהגות מקורית (graceful).
  * @returns {Array<object>} patterns {id, label, type, weight, evidence, frequencyPer100Words, docFraction}
  */
-export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8, top = 10 } = {}) {
+export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8, top = 10, populationNgramFreq = null } = {}) {
   const prepared = (Array.isArray(chunks) ? chunks : [])
     .filter(isPlainObject)
     .map((c) => ({
@@ -1795,6 +1843,18 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     .map((c) => ({ ...c, tokens: matchWords(c.text) }))
     .filter((c) => c.tokens.length >= 2);
   if (!prepared.length) return [];
+
+  // ניגוד מול אוכלוסייה: מכפיל-חתימה על משקל+דירוג. ללא נתוני-אוכלוסייה → 1 (graceful).
+  const popRef = isPlainObject(populationNgramFreq) ? { ngramFreq: populationNgramFreq } : null;
+  const populationSignatureMult = (label, userFreqPer100) => {
+    if (!popRef) return 1;
+    const popF = getReferenceNgramFreq(popRef, label);
+    if (popF <= 0) return 1.15;                    // נעדר מהאוכלוסייה → חתימה אישית
+    const ratio = toNum(userFreqPer100, 0) / popF; // >1 = המשתמש מעל הנורמה האוכלוסייתית
+    if (ratio >= 2) return 1.15;                    // שכיח אצל המשתמש הרבה מעל האוכלוסייה
+    if (ratio <= 0.8) return 0.7;                   // נפוץ באוכלוסייה → "תקני", לא חתימה
+    return 1;
+  };
 
   const uniqueDocCount = new Set(prepared.map((c) => c.docId)).size || 1;
   const totalWords = prepared.reduce((s, c) => s + c.tokens.length, 0) || 1;
@@ -1874,17 +1934,20 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     .filter((q) => !dropped.has(q.key))
     .map((q) => {
       const docFractionPct = (q.docCount / uniqueDocCount) * 100;
-      const weight = clamp(0.5 + (0.05 * docFractionPct) / 10 + 0.03 * Math.log(q.count), 0.5, 0.95);
+      const freqPer100 = round((q.count / totalWords) * 100, 3);
+      const sigMult = populationSignatureMult(q.label, freqPer100);
+      const weight = clamp((0.5 + (0.05 * docFractionPct) / 10 + 0.03 * Math.log(q.count)) * sigMult, 0.5, 0.95);
       return {
         id: `sp_${djb2Hex(q.canonTokens.join(' '))}`,
         label: q.label,
         type: 'signature_phrase',
         weight: round(weight, 3),
         evidence: findNgramEvidence(prepared, q.label),
-        frequencyPer100Words: round((q.count / totalWords) * 100, 3),
+        frequencyPer100Words: freqPer100,
         docFraction: round(q.docCount / uniqueDocCount, 3),
         mined: true,
         _count: q.count,
+        _sigMult: sigMult,
         _key: q.key,
       };
     });
@@ -1909,17 +1972,20 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     // evidence — לפי הצורה השכיחה ביותר במשפחה (דטרמיניסטי).
     const topSurface = [...e.surfaces.entries()]
       .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0][0];
-    const weight = clamp(0.5 + (0.05 * docFraction * 100) / 10 + 0.03 * Math.log(e.count), 0.5, 0.95);
+    const uniFreq = round(freqPer100, 3);
+    const sigMult = populationSignatureMult(word, uniFreq);
+    const weight = clamp((0.5 + (0.05 * docFraction * 100) / 10 + 0.03 * Math.log(e.count)) * sigMult, 0.5, 0.95);
     patterns.push({
       id: `sp_${djb2Hex(word)}`,
       label: word,
       type: 'signature_phrase',
       weight: round(weight, 3),
       evidence: findNgramEvidence(prepared, topSurface) || findNgramEvidence(prepared, word),
-      frequencyPer100Words: round(freqPer100, 3),
+      frequencyPer100Words: uniFreq,
       docFraction: round(docFraction, 3),
       mined: true,
       _count: e.count,
+      _sigMult: sigMult,
       _key: `1|${word}`,
     });
   });
@@ -1940,25 +2006,32 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     const topVariant = [...baofen.variants.entries()]
       .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0][0];
     const docFraction = baofen.docIds.size / uniqueDocCount;
-    const weight = clamp(0.5 + (0.05 * docFraction * 100) / 10 + 0.03 * Math.log(baofen.count), 0.5, 0.95);
+    const baofenFreq = round((baofen.count / totalWords) * 100, 3);
+    const sigMult = populationSignatureMult('באופן + תואר', baofenFreq);
+    const weight = clamp((0.5 + (0.05 * docFraction * 100) / 10 + 0.03 * Math.log(baofen.count)) * sigMult, 0.5, 0.95);
     patterns.push({
       id: 'sp_baofen_toar',
       label: 'באופן + תואר',
       type: 'signature_phrase',
       weight: round(weight, 3),
       evidence: findNgramEvidence(prepared, topVariant),
-      frequencyPer100Words: round((baofen.count / totalWords) * 100, 3),
+      frequencyPer100Words: baofenFreq,
       docFraction: round(docFraction, 3),
       mined: true,
       _count: baofen.count,
+      _sigMult: sigMult,
       _key: '2|באופן + תואר',
     });
   }
 
-  patterns.sort((a, b) => b._count - a._count || (a._key < b._key ? -1 : a._key > b._key ? 1 : 0));
+  // מיון לפי ספירה משוקללת-חתימה (count × מכפיל-אוכלוסייה): ביטוי נדיר-באוכלוסייה עולה,
+  // ביטוי "תקני" יורד. ללא נתוני-אוכלוסייה כל המכפילים=1 → זהה למיון המקורי לפי _count.
+  patterns.sort((a, b) =>
+    (b._count * (b._sigMult || 1)) - (a._count * (a._sigMult || 1))
+    || (a._key < b._key ? -1 : a._key > b._key ? 1 : 0));
   return patterns
     .slice(0, Math.max(0, top))
-    .map(({ _count, _key, ...p }) => p);
+    .map(({ _count, _key, _sigMult, ...p }) => p);
 }
 
 // ---------- mineStructuralFormulas ----------

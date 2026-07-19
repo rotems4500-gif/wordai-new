@@ -33,6 +33,7 @@ import {
   seedStyleEngineFromLegacyProfile,
   GENRES,
 } from './styleProfileService';
+import { loadStyleReference, primeStyleReference } from './styleReferenceService';
 import {
   addDocumentSamples,
   removeDocument,
@@ -690,8 +691,13 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
 
   const { results, failed } = await runLocalPatternBatches();
 
+  // נכס-ייחוס האוכלוסייה לניגוד-חתימה בכריית ה-n-gram (graceful: ריק על כישלון).
+  let popNgramFreq = null;
+  try { const ref = await loadStyleReference(); popNgramFreq = ref && ref.ngramFreq ? ref.ngramFreq : null; } catch { popNgramFreq = null; }
+
   const saved = finishQualitativeMerge(profile, engine, results, {
     extraMeta: { llmBatchesFailed: failed },
+    populationNgramFreq: popNgramFreq,
   });
   return { skipped: false, engine: saved };
 }
@@ -706,17 +712,18 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
  * @param {object} profile
  * @param {object} engine
  * @param {Array<{patterns:Array, negativeSpace:Array}>} batchResults
- * @param {{extraMeta?:object}} opts
+ * @param {{extraMeta?:object, populationNgramFreq?:object}} opts
+ *   populationNgramFreq — טבלת n-gram אוכלוסייתית (ref.ngramFreq) לניגוד-חתימה בכרייה.
  * @returns {object} savedEngine
  */
-function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {} } = {}) {
+function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {}, populationNgramFreq = null } = {}) {
   const results = (Array.isArray(batchResults) ? batchResults : []).filter(isPlainObject);
   const batchCount = results.length;
 
   const consensus = consensusMergePatterns(results, { batchCount });
 
   // ביטויי-חתימה דטרמיניסטיים — ground truth; חייבים לשרוד את המיזוג.
-  const minedPatterns = mineSignatureNgrams(getChunks(), {});
+  const minedPatterns = mineSignatureNgrams(getChunks(), { populationNgramFreq });
   // נוסחאות מבניות (פתיחי/סיומי פסקה) — דטרמיניסטיות גם הן, אותה עדיפות-שרידות.
   const minedFormulas = mineStructuralFormulas(getChunks(), {});
 
@@ -874,8 +881,11 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
   const allResults = [...localResults, ...externalResults];
 
   // 4 — זנב המיזוג המשותף. externalBatches + כשלי הבאטצ'ים המקומיים נכנסים ל-extractionMeta.
+  let popNgramFreq = null;
+  try { const ref = await loadStyleReference(); popNgramFreq = ref && ref.ngramFreq ? ref.ngramFreq : null; } catch { popNgramFreq = null; }
   const savedEngine = finishQualitativeMerge(profile, engine, allResults, {
     extraMeta: { externalBatches: externalResults.length, llmBatchesFailed: localFailed },
+    populationNgramFreq: popNgramFreq,
   });
 
   // 5 — החלת המטא (אחרי שמירת ה-engine).
@@ -1025,6 +1035,11 @@ export function getStyleOverview() {
  * @returns {object} engine מנורמל
  */
 export function setStyleEngineEnabled(enabled) {
+  // חימום המטמון הסינכרוני של נכס-ייחוס האוכלוסייה — נקודת async מוקדמת יחידה, כדי
+  // שקוראים סינכרוניים (buildStyleEngineInjectionBlock, scoreStyleMatchLocal בלולאת
+  // rewrite) יקבלו getCachedReference() מלא ולא {}. fire-and-forget, graceful.
+  if (enabled !== false) { try { primeStyleReference(); } catch { /* noop */ } }
+
   const { profile, engine } = loadEngine();
   const next = { ...engine, enabled: enabled !== false };
 

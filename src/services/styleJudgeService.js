@@ -13,6 +13,7 @@
 import { scoreTextAuthenticity } from './styleAuthenticityService';
 import { computeLocalMetrics, buildStyleEngineInjectionBlock } from './styleProfileService';
 import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from './styleRetrievalService';
+import { loadStyleReference, getReferenceDistribution, getCachedReference } from './styleReferenceService';
 
 // ---------- עזרי בסיס ----------
 
@@ -96,9 +97,12 @@ function findBlacklistedInText(text, styleEngine) {
  * @param {object} styleEngine
  * @returns {{score:number, breakdown:object, penalties:Array<{key:string,label:string,severity:number}>}}
  */
-export function scoreStyleMatchLocal(text, styleEngine, genre = null) {
+export function scoreStyleMatchLocal(text, styleEngine, genre = null, reference = null) {
   const se = isPlainObject(styleEngine) ? styleEngine : {};
   const penalties = [];
+  // נכס-ייחוס האוכלוסייה: מהפרמטר (קורא async שעשה await), אחרת מהמטמון הסינכרוני.
+  // חסר/ריק → getReferenceDistribution יחזיר null לכל מדד → משקלים=1 → התנהגות מקורית.
+  const ref = isPlainObject(reference) ? reference : getCachedReference();
 
   const tMetrics = computeLocalMetrics(text);
   if (!tMetrics) return { score: 50, breakdown: { reason: 'too-short' }, penalties: [] };
@@ -111,7 +115,9 @@ export function scoreStyleMatchLocal(text, styleEngine, genre = null) {
   const P = isPlainObject(gp?.metrics) ? gp.metrics : (isPlainObject(se.metrics) ? se.metrics : {});
   const S = isPlainObject(gp?.metricsSpread) ? gp.metricsSpread : (isPlainObject(se.metricsSpread) ? se.metricsSpread : {});
 
-  // (1) metricMatch 0-1 — מרחק-z גאוסיאני מנורמל לפי פיזור-הקורפוס.
+  // (1) metricMatch 0-1 — מרחק-z גאוסיאני מנורמל לפי פיזור-הקורפוס, משוקלל
+  // distinctiveness מול האוכלוסייה: מדד שבו המשתמש חורג מהנורמה האוכלוסייתית הוא
+  // "חתימה" (משקל גבוה); מדד קרוב לאוכלוסייה ("רגיל") לא מזהה סגנון → משקל נמוך.
   const matches = [];
   for (const [key, floorStd] of METRIC_SPECS) {
     const mean = Number(P[key]);
@@ -119,10 +125,26 @@ export function scoreStyleMatchLocal(text, styleEngine, genre = null) {
     if (!Number.isFinite(mean) || !Number.isFinite(tVal)) continue;
     const std = Math.max(Number(S[key]?.std) || 0, floorStd);
     const z = Math.min(Math.abs(tVal - mean) / std, 4);
-    matches.push({ key, m: Math.exp(-0.5 * z * z), z: round(z, 3) });
+    // משקל distinctiveness ∈ [0,1]: הפוך מהגאוסיאני של zPop (חריגה גבוהה = חתימה).
+    // ללא reference למדד → משקל 1 (כמו היום, ניטרלי).
+    let weight = 1;
+    const popDist = getReferenceDistribution(ref, key, gKey || null);
+    if (popDist) {
+      const popStd = Math.max(Number(popDist.std) || 0, floorStd);
+      if (popStd > 0) {
+        const zPop = Math.abs(mean - Number(popDist.mean)) / popStd;
+        weight = 1 - Math.exp(-0.5 * zPop * zPop);
+      }
+    }
+    matches.push({ key, m: Math.exp(-0.5 * z * z), z: round(z, 3), w: weight });
   }
+  // ממוצע משוקלל-distinctiveness. כשאין reference כל המשקלים=1 → ממוצע רגיל (זהה למקור).
+  // fallback לממוצע רגיל אם סך המשקלים ≈0 (המשתמש זהה לאוכלוסייה בכל המדדים) — מונע חלוקה באפס.
+  const totalW = matches.reduce((s, x) => s + x.w, 0);
   const metricMatch = matches.length
-    ? matches.reduce((s, x) => s + x.m, 0) / matches.length
+    ? (totalW > 1e-6
+      ? matches.reduce((s, x) => s + x.m * x.w, 0) / totalW
+      : matches.reduce((s, x) => s + x.m, 0) / matches.length)
     : 0.6; // ניטרלי אם אין מדדים משותפים
 
   // (2) connectorSignature 0-1 — חפיפת מילות-קישור + ביטויי-חתימה.
@@ -296,7 +318,10 @@ async function scoreStyleMatchLLM({ text, sampleTexts, invokeModel }) {
  */
 export async function scoreStyleMatch(text, { styleEngine = null, invokeModel = null, mode = 'auto', samples = null, genre = null } = {}) {
   const se = isPlainObject(styleEngine) ? styleEngine : {};
-  const localResult = scoreStyleMatchLocal(text, se, genre);
+  // נכס-ייחוס האוכלוסייה — נטען אסינכרונית ומועבר לניקוד המקומי (graceful: {} על כישלון).
+  let reference = null;
+  try { reference = await loadStyleReference(); } catch { reference = null; }
+  const localResult = scoreStyleMatchLocal(text, se, genre, reference);
   const localScore = localResult.score;
 
   const inGrayBand = localScore >= 55 && localScore <= 80;

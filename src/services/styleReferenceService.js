@@ -21,6 +21,7 @@ let _testRef = null;
 export function __setReferenceForTests(obj) {
   _testRef = obj || null;
   _refPromise = null; // איפוס cache כדי שהעקיפה תיתפס
+  _cachedRef = obj || null; // מסנכרן גם את ה-accessor הסינכרוני המטמון
 }
 
 /**
@@ -31,10 +32,33 @@ export async function loadStyleReference() {
   if (_testRef) return _testRef;
   if (!_refPromise) {
     _refPromise = import('./styleReferenceCorpus.data.js')
-      .then((mod) => mod.STYLE_REFERENCE || {})
+      .then((mod) => {
+        const ref = mod.STYLE_REFERENCE || {};
+        _cachedRef = ref; // כל טעינה מוצלחת מחממת גם את ה-accessor הסינכרוני
+        return ref;
+      })
       .catch(() => ({})); // defensive: קובץ חסר/שבור → נכס ריק
   }
   return _refPromise;
+}
+
+// ---------------------------------------------------------------------------
+// accessor סינכרוני מטמון — לקוראים סינכרוניים שאינם יכולים ל-await את
+// loadStyleReference (buildStyleEngineInjectionBlock, scoreStyleMatchLocal בלולאת
+// ה-rewrite). primeStyleReference() נקרא פעם אחת מנקודת async מוקדמת (למשל
+// setStyleEngineEnabled) כדי לחמם את המטמון; getCachedReference() מחזיר את הנכס
+// אם כבר נטען, אחרת {} — כך הקוד הסינכרוני נופל בחן להתנהגות הנוכחית.
+// ---------------------------------------------------------------------------
+let _cachedRef = null;
+
+/** מחמם את המטמון הסינכרוני ברקע (fire-and-forget, לא זורק). */
+export function primeStyleReference() {
+  loadStyleReference().then((r) => { _cachedRef = r; }).catch(() => { /* noop */ });
+}
+
+/** מחזיר את הנכס המטמון אם נטען (דרך primeStyleReference/loadStyleReference), אחרת {}. */
+export function getCachedReference() {
+  return _cachedRef || {};
 }
 
 // ---------------------------------------------------------------------------
