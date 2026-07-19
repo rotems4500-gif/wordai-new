@@ -1077,6 +1077,40 @@ const VALID_PATTERN_TYPES = new Set([
   'signature_phrase', 'structure', 'lexical_habit', 'punctuation', 'register',
 ]);
 
+// תוויות עבריות לסוגי דפוסים — מקור-אמת יחיד (משמש גם ב-StyleProfilePanel וגם
+// ב-buildVerificationQuestions). מיוצא כדי למנוע שכפול המפה.
+export const PATTERN_TYPE_LABELS = {
+  signature_phrase: 'ביטוי חתימה',
+  structure: 'מבנה',
+  lexical_habit: 'הרגל מילולי',
+  punctuation: 'פיסוק',
+  register: 'רגיסטר',
+};
+
+// שורות הסכימה+הכללים המשותפות לפרומפט הפנימי ולפרומפט החיצוני. חילוץ זה שומר
+// זהות-ביטים ל-buildPatternExtractionPrompt (המנוע הפנימי רגיש לפרומפט המדויק).
+const PATTERN_SCHEMA_INSTRUCTIONS = [
+  'חובה לכלול ביטויי חתימה מילוליים — צירופים מדויקים שהכותב חוזר עליהם (למשל פתיח טיעון קבוע, פועל מועדף) — עם סוג signature_phrase.',
+  'לכל דפוס חובה ציטוט ראיה מילולי מהטקסט (evidence).',
+  'אל תציין מאפיינים גנריים של עברית אקדמית (למשל "משפטים ארוכים", "שימוש במונחים מקצועיים", "כתיבה פורמלית") — רק הרגלים שמבדילים את הכותב הזה מכותבים אקדמיים אחרים.',
+  '',
+  'לכל דפוס החזר:',
+  '- label: תיאור קצר בעברית של הדפוס',
+  '- type: אחד מ- signature_phrase | structure | lexical_habit | punctuation | register',
+  '- weight: מספר 0-1 (עד כמה הדפוס דומיננטי אצלו)',
+  '- evidence: ציטוט ראיה מילולי אחד מהטקסט (חובה)',
+  '',
+  'בנוסף, זהה negativeSpace — מה הכותב הזה לעולם *לא* עושה',
+  '(שאלות רטוריות? הומור? סימני קריאה? משפטים בני מילה אחת? מטפורות?).',
+  '',
+  'החזר JSON בלבד, ללא טקסט נוסף וללא הסברים:',
+  '{ "patterns": [ { "label": "...", "type": "...", "weight": 0.0, "evidence": "..." } ], "negativeSpace": [ "..." ] }',
+];
+
+// סכימת style/coverPageDefaults לפרומפט החיצוני — ליטרל מילולי המועתק מ-aiService.js
+// (~שורה 6955). מועתק במכוון כליטרל כדי ש-styleProfileService יישאר בלי תלות ב-aiService.
+const EXTERNAL_STYLE_SCHEMA_LINE = '{"profileSummary":"","style":{"defaultAudience":"","writingGoals":"","formatPreferences":"","paragraphPreferences":"","customStyleGuidance":"","manualVocabulary":[],"manualPhrases":[],"preferredSentenceStructures":[],"preferredConnectors":[],"preferredSentenceOpeners":[],"toneDescriptors":[],"tonePreferences":[],"sentenceLengthPreference":"","paragraphLengthPreference":"","defaultDocumentStyle":"","notes":""},"coverPageDefaults":{"institutionName":"","studyTrack":"","courseName":"","lecturerName":"","assignmentType":"","displayName":"","studentId":"","aiAssistanceDeclaration":"","submissionDate":""}}';
+
 /**
  * בונה את פרומפט חילוץ הדפוסים האיכותניים (עברי, §6 שלב 2).
  * @param {string[]} excerpts
@@ -1093,25 +1127,109 @@ export function buildPatternExtractionPrompt(excerpts) {
     'המשימה: לזהות את הדפוסים האישיים החוזרים שלו — לא כללי כתיבה טובה גנריים,',
     'אלא ההרגלים הספציפיים שמזהים דווקא אותו.',
     '',
-    'חובה לכלול ביטויי חתימה מילוליים — צירופים מדויקים שהכותב חוזר עליהם (למשל פתיח טיעון קבוע, פועל מועדף) — עם סוג signature_phrase.',
-    'לכל דפוס חובה ציטוט ראיה מילולי מהטקסט (evidence).',
-    'אל תציין מאפיינים גנריים של עברית אקדמית (למשל "משפטים ארוכים", "שימוש במונחים מקצועיים", "כתיבה פורמלית") — רק הרגלים שמבדילים את הכותב הזה מכותבים אקדמיים אחרים.',
-    '',
-    'לכל דפוס החזר:',
-    '- label: תיאור קצר בעברית של הדפוס',
-    '- type: אחד מ- signature_phrase | structure | lexical_habit | punctuation | register',
-    '- weight: מספר 0-1 (עד כמה הדפוס דומיננטי אצלו)',
-    '- evidence: ציטוט ראיה מילולי אחד מהטקסט (חובה)',
-    '',
-    'בנוסף, זהה negativeSpace — מה הכותב הזה לעולם *לא* עושה',
-    '(שאלות רטוריות? הומור? סימני קריאה? משפטים בני מילה אחת? מטפורות?).',
-    '',
-    'החזר JSON בלבד, ללא טקסט נוסף וללא הסברים:',
-    '{ "patterns": [ { "label": "...", "type": "...", "weight": 0.0, "evidence": "..." } ], "negativeSpace": [ "..." ] }',
+    ...PATTERN_SCHEMA_INSTRUCTIONS,
     '',
     'הקטעים:',
     joined,
   ].join('\n');
+}
+
+/**
+ * פרומפט לספק AI חיצוני (ChatGPT/Claude/Gemini): המשתמש מצרף את עבודותיו לשיחה,
+ * מריץ את הפרומפט, ומדביק את פלט ה-JSON חזרה. משתמש באותם כללי סכימה כמו הפרומפט
+ * הפנימי + סקשן מטא (style/coverPageDefaults) כדי לחלץ גם ברירות מחדל אישיות.
+ * @param {{profile?:object}} opts
+ * @returns {string}
+ */
+export function buildExternalPatternAnalysisPrompt({ profile = {} } = {}) {
+  const p = isPlainObject(profile) ? profile : {};
+  const knownContext = [
+    p.displayName ? `- שם משתמש ידוע: ${String(p.displayName).trim()}` : '',
+    p.institutionName ? `- מוסד/מרכז אקדמי ידוע: ${String(p.institutionName).trim()}` : '',
+    p.studyTrack ? `- חוג/מסלול ידוע: ${String(p.studyTrack).trim()}` : '',
+  ].filter(Boolean).join('\n');
+
+  return [
+    'צירפתי לשיחה הזו עבודות שכתבתי. נתח את סגנון הכתיבה האישי שלי לפי ההנחיות הבאות.',
+    '',
+    ...PATTERN_SCHEMA_INSTRUCTIONS,
+    '',
+    'בנוסף, חלץ מהעבודות ומעמוד השער (אם צורף) ברירות מחדל אישיות, לפי הסכימה הבאה:',
+    EXTERNAL_STYLE_SCHEMA_LINE,
+    knownContext ? `הקשר שכבר ידוע:\n${knownContext}` : '',
+    '',
+    'מבנה הפלט הסופי: החזר JSON יחיד בלבד, ללא טקסט נוסף, כל הערכים בעברית, במבנה:',
+    '{ "patterns": [...], "negativeSpace": [...], "profileSummary": "", "style": {...}, "coverPageDefaults": {...} }',
+    'אל תמציא — אם שדה לא ידוע החזר "" או [].',
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * בונה שאלות אימות ("זה נשמע כמוך?") מתוך overview (getStyleOverview). פונקציה טהורה.
+ * מועמדי דפוסים: לא-pinned בלבד; מיון: mined:true קודם (ground truth), בתוך כל קבוצה
+ * weight יורד. גיוון: עד 2 שאלות לכל type, ואם לא התמלא — סבב שני בלי מגבלת type.
+ * שאלות negativeSpace אחרי שאלות הדפוסים.
+ * @param {object} overview
+ * @param {{maxPatternQuestions?:number, maxNegativeQuestions?:number}} opts
+ * @returns {Array<object>}
+ */
+export function buildVerificationQuestions(overview = {}, { maxPatternQuestions = 7, maxNegativeQuestions = 3 } = {}) {
+  const ov = isPlainObject(overview) ? overview : {};
+  const patterns = Array.isArray(ov.qualitativePatterns) ? ov.qualitativePatterns : [];
+  const negativeSpace = Array.isArray(ov.negativeSpace) ? ov.negativeSpace : [];
+
+  const patternQuestion = (p) => ({
+    kind: 'pattern',
+    patternId: p.id,
+    typeLabel: PATTERN_TYPE_LABELS[p.type] || p.type,
+    label: p.label,
+    evidence: p.evidence || '',
+    question: 'זה נשמע כמוך?',
+  });
+
+  // מועמדים: לא-pinned; מיון mined→weight.
+  const candidates = patterns
+    .filter((p) => isPlainObject(p) && !p.pinned)
+    .slice()
+    .sort((a, b) => {
+      const am = a.mined === true ? 1 : 0;
+      const bm = b.mined === true ? 1 : 0;
+      if (am !== bm) return bm - am;
+      return toNum(b.weight, 0) - toNum(a.weight, 0);
+    });
+
+  const questions = [];
+  const used = new Set();
+  const typeCount = new Map();
+  // סבב ראשון: עד 2 לכל type (גיוון).
+  for (const p of candidates) {
+    if (questions.length >= maxPatternQuestions) break;
+    const t = String(p.type || '');
+    const c = typeCount.get(t) || 0;
+    if (c >= 2) continue;
+    typeCount.set(t, c + 1);
+    used.add(p);
+    questions.push(patternQuestion(p));
+  }
+  // סבב שני: השלמה בלי מגבלת type.
+  if (questions.length < maxPatternQuestions) {
+    for (const p of candidates) {
+      if (questions.length >= maxPatternQuestions) break;
+      if (used.has(p)) continue;
+      used.add(p);
+      questions.push(patternQuestion(p));
+    }
+  }
+
+  const negQuestions = [];
+  for (const item of negativeSpace) {
+    if (negQuestions.length >= maxNegativeQuestions) break;
+    const str = String(item || '').trim();
+    if (!str) continue;
+    negQuestions.push({ kind: 'negative', item: str, question: 'נכון שאתה כמעט אף פעם לא —' });
+  }
+
+  return [...questions, ...negQuestions];
 }
 
 // ---------- parsePatternExtractionResult ----------
@@ -1123,10 +1241,13 @@ const stripJsonFences = (raw) => String(raw || '')
 
 /**
  * פענוח סובלני של פלט ה-LLM. לעולם לא זורק — נכשל → {patterns:[], negativeSpace:[]}.
+ * lenientTypes:true — type לא-חוקי ממופה ל-'lexical_habit' במקום שהדפוס יופל (משמש
+ * רק במסלול ההדבקה החיצונית; המסלול הפנימי נשאר קפדני).
  * @param {string} raw
+ * @param {{lenientTypes?:boolean}} opts
  * @returns {{patterns:Array<object>, negativeSpace:string[]}}
  */
-export function parsePatternExtractionResult(raw) {
+export function parsePatternExtractionResult(raw, { lenientTypes = false } = {}) {
   const empty = { patterns: [], negativeSpace: [] };
   if (raw === null || raw === undefined) return empty;
 
@@ -1151,8 +1272,11 @@ export function parsePatternExtractionResult(raw) {
     if (!isPlainObject(item)) continue;
     const label = String(item.label || '').trim();
     if (!label) continue;
-    const type = String(item.type || '').trim();
-    if (!VALID_PATTERN_TYPES.has(type)) continue;
+    let type = String(item.type || '').trim();
+    if (!VALID_PATTERN_TYPES.has(type)) {
+      if (lenientTypes) type = 'lexical_habit';
+      else continue;
+    }
     const weightNum = Number(item.weight);
     if (!Number.isFinite(weightNum)) continue;
     const evidence = String(item.evidence || '').trim();

@@ -13,6 +13,7 @@ import {
   getPersonalStyleProfile,
   resolveCheapModelForProvider,
   savePersonalStyleProfile,
+  mergeExternalStyleExtractionIntoProfile,
 } from './aiService';
 import {
   normalizeStyleEngine,
@@ -20,6 +21,7 @@ import {
   aggregateDocumentMetrics,
   recomputeConfidence,
   extractQualitativePatterns,
+  parsePatternExtractionResult,
   mergeQualitativePatterns,
   selectRepresentativeExcerpts,
   mineSignatureNgrams,
@@ -632,7 +634,30 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
     }
   }
 
-  const consensus = consensusMergePatterns(successfulResults, { batchCount: successfulResults.length });
+  const saved = finishQualitativeMerge(profile, engine, successfulResults, {
+    extraMeta: { llmBatchesFailed: Math.max(0, batches.length - successfulResults.length) },
+  });
+  return { skipped: false, engine: saved };
+}
+
+// ---------- finishQualitativeMerge ----------
+
+/**
+ * זנב המיזוג האיכותני — משותף למסלול המקומי (runQualitativeAnalysis) ולמסלול החיצוני
+ * (applyExternalPatternAnalyses). מקבל מערך תוצאות-parse של באטצ'ים; ממזג קונצנזוס +
+ * כרייה דטרמיניסטית, dedupe קנוני, קיורציה, negativeSpace, blacklist auto, מעדכן
+ * extractionMeta (עם מיזוג extraMeta) + confidence, ושומר. מחזיר את המנוע השמור.
+ * @param {object} profile
+ * @param {object} engine
+ * @param {Array<{patterns:Array, negativeSpace:Array}>} batchResults
+ * @param {{extraMeta?:object}} opts
+ * @returns {object} savedEngine
+ */
+function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {} } = {}) {
+  const results = (Array.isArray(batchResults) ? batchResults : []).filter(isPlainObject);
+  const batchCount = results.length;
+
+  const consensus = consensusMergePatterns(results, { batchCount });
 
   // ביטויי-חתימה דטרמיניסטיים — ground truth; חייבים לשרוד את המיזוג.
   const minedPatterns = mineSignatureNgrams(getChunks(), {});
@@ -675,16 +700,178 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
   engine.qualitativePatternsStale = false;
   engine.lastAnalysisAt = Date.now();
   engine.extractionMeta = {
-    batches: successfulResults.length,
+    batches: batchCount,
     crossValidated: consensus.crossValidated,
     minedSignatures: minedPatterns.length + minedFormulas.length,
     at: Date.now(),
-    llmBatchesFailed: Math.max(0, batches.length - successfulResults.length),
+    llmBatchesFailed: 0,
+    ...(isPlainObject(extraMeta) ? extraMeta : {}),
   };
   engine.confidence = recomputeConfidence(engine);
 
-  const saved = saveEngine(profile, engine);
-  return { skipped: false, engine: saved };
+  return saveEngine(profile, engine);
+}
+
+// ---------- מסלול הדבקה חיצוני (external paste pipeline) ----------
+
+// פענוח JSON גמיש: מסיר גדרות ```json``` ואז JSON.parse; נפילה ללכידת האובייקט
+// הראשון {...}. לעולם לא זורק — כשל → null.
+function decodeLooseJson(raw) {
+  const stripped = String(raw || '')
+    .replace(/```(?:json)?\s*/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  if (!stripped) return null;
+  try { return JSON.parse(stripped); } catch { /* fallthrough */ }
+  const match = stripped.match(/\{[\s\S]*\}/);
+  if (match) { try { return JSON.parse(match[0]); } catch { return null; } }
+  return null;
+}
+
+/**
+ * קולט פלטי-JSON שהמשתמש הדביק מספק חיצוני, ומזין אותם לאותו pipeline של דפוסים.
+ * כל הדבקה נספרת כבאטצ' (≥3 → cross-validation אמיתי). אופציונלית מריץ גם באטצ'ים
+ * מקומיים (includeLocalLlm). בנוסף מחלץ מטא (style/coverPageDefaults/profileSummary)
+ * וממזג לפרופיל (applyMetaPatch).
+ * @param {string[]} rawTexts
+ * @param {{includeLocalLlm?:boolean, applyMetaPatch?:boolean}} opts
+ * @returns {Promise<{ok:boolean, engine?:object, metaPatch?:object|null, externalBatches?:number, totalBatches?:number, crossValidated?:boolean, error?:string}>}
+ */
+export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocalLlm = false, applyMetaPatch = true } = {}) {
+  const list = (Array.isArray(rawTexts) ? rawTexts : [])
+    .map((r) => String(r || ''))
+    .filter((r) => r.trim());
+
+  // 1 — parse סלחני-type לכל הדבקה. תוצאות עם דפוסים בלבד → externalResults.
+  const externalResults = [];
+  for (const raw of list) {
+    const parsed = parsePatternExtractionResult(raw, { lenientTypes: true });
+    if (parsed && Array.isArray(parsed.patterns) && parsed.patterns.length > 0) {
+      externalResults.push(parsed);
+    }
+  }
+  if (!externalResults.length) {
+    return { ok: false, error: 'לא זוהה JSON תקין באף פלט' };
+  }
+
+  const { profile, engine } = loadEngine();
+
+  // 3 — אופציונלי: הרצת הבאטצ'ים המקומיים (אותה לולאה סדרתית כמו runQualitativeAnalysis).
+  const localResults = [];
+  if (includeLocalLlm) {
+    const chunks = getChunks();
+    let providerAvailable = false;
+    try { providerAvailable = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { providerAvailable = false; }
+    if (chunks.length && providerAvailable) {
+      const batches = buildPatternBatches(chunks, {
+        maxChars: PATTERN_BATCH_MAX_CHARS,
+        maxBatches: PATTERN_BATCH_MAX_BATCHES,
+      });
+      const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
+        ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
+      });
+      for (const batch of batches) {
+        try {
+          const res = await extractQualitativePatterns(batch, invokeModel);
+          if (isPlainObject(res)) localResults.push(res);
+        } catch {
+          // batch נכשל — ממשיכים
+        }
+      }
+    }
+  }
+
+  const allResults = [...localResults, ...externalResults];
+
+  // 4 — זנב המיזוג המשותף. externalBatches נכנס ל-extractionMeta.
+  const savedEngine = finishQualitativeMerge(profile, engine, allResults, {
+    extraMeta: { externalBatches: externalResults.length },
+  });
+
+  // 5 — פיצול מטא: לכל הדבקה שיש בה style/coverPageDefaults/profileSummary — מיזוג
+  // מצטבר (כל הדבקה על גבי הקודמת). מתחילים מהפרופיל הטרי (אחרי saveEngine).
+  let metaPatch = null;
+  let acc = getPersonalStyleProfile();
+  for (const raw of list) {
+    const parsedJson = decodeLooseJson(raw);
+    if (isPlainObject(parsedJson) &&
+      (isPlainObject(parsedJson.style) || isPlainObject(parsedJson.coverPageDefaults) || typeof parsedJson.profileSummary === 'string')) {
+      acc = mergeExternalStyleExtractionIntoProfile(parsedJson, acc);
+      metaPatch = acc;
+    }
+  }
+
+  if (metaPatch && applyMetaPatch) {
+    // קוראים את הפרופיל מחדש (עם ה-engine ששמר finishQualitativeMerge) כדי לא לדרוס אותו.
+    const fresh = getPersonalStyleProfile();
+    savePersonalStyleProfile({ ...fresh, ...metaPatch });
+    if (typeof window !== 'undefined') {
+      try { window.dispatchEvent(new CustomEvent(STYLE_UPDATED_EVENT)); } catch { /* noop */ }
+    }
+  }
+
+  return {
+    ok: true,
+    engine: savedEngine,
+    metaPatch,
+    externalBatches: externalResults.length,
+    totalBatches: allResults.length,
+    crossValidated: Boolean(savedEngine?.extractionMeta?.crossValidated),
+    error: '',
+  };
+}
+
+/**
+ * ניתוח סגנון מאוחד: בוחר בין מסלול מקומי, חיצוני, או משולב לפי הקלט.
+ * @param {{externalRawTexts?:string[], onProgress?:function, applyMetaPatch?:boolean}} opts
+ * @returns {Promise<{ok:boolean, mode?:string, engine?:object|null, metaPatch?:object|null, crossValidated?:boolean, externalBatches?:number, error?:string}>}
+ */
+export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgress, applyMetaPatch = true } = {}) {
+  const pastes = (Array.isArray(externalRawTexts) ? externalRawTexts : [])
+    .map((r) => String(r || ''))
+    .filter((r) => r.trim());
+  const hasChunks = getChunks().length > 0;
+  const emit = (t) => { if (typeof onProgress === 'function') { try { onProgress(t); } catch { /* noop */ } } };
+
+  // אין הדבקות + יש chunks → מסלול מקומי בלבד.
+  if (!pastes.length && hasChunks) {
+    emit('מריץ ניתוח מקומי...');
+    const res = await runQualitativeAnalysis({ force: true });
+    return {
+      ok: !res.skipped,
+      mode: 'local',
+      engine: res.engine || null,
+      metaPatch: null,
+      crossValidated: Boolean(res.engine?.extractionMeta?.crossValidated),
+      externalBatches: 0,
+      error: res.skipped ? (res.reason || 'הניתוח דולג') : '',
+    };
+  }
+
+  // יש הדבקות → external / combined.
+  if (pastes.length) {
+    let providerAvailable = false;
+    try { providerAvailable = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { providerAvailable = false; }
+    const includeLocalLlm = hasChunks && providerAvailable;
+    const mode = includeLocalLlm ? 'combined' : 'external';
+    if (includeLocalLlm) emit('מריץ ניתוח מקומי...');
+    emit(`משלב ${pastes.length} פלטים חיצוניים...`);
+    const res = await applyExternalPatternAnalyses(pastes, { includeLocalLlm, applyMetaPatch });
+    if (!res.ok) {
+      return { ok: false, mode, engine: null, metaPatch: null, crossValidated: false, externalBatches: 0, error: res.error };
+    }
+    return {
+      ok: true,
+      mode,
+      engine: res.engine,
+      metaPatch: res.metaPatch,
+      crossValidated: Boolean(res.crossValidated),
+      externalBatches: res.externalBatches,
+      error: '',
+    };
+  }
+
+  return { ok: false, error: 'אין חומר לניתוח' };
 }
 
 // ---------- removeDocumentAndRecompute ----------
@@ -947,6 +1134,32 @@ export function pinPattern(patternId, pinned = true) {
   target.userAdjustedAt = Date.now();
   saveEngine(profile, engine);
   return { ok: true };
+}
+
+// ---------- אימות סגנון: negativeSpace + finalize ----------
+
+/**
+ * מסיר פריט מ-negativeSpace (השוואת מחרוזת מנורמלת trim/lowercase).
+ * @param {string} item
+ * @returns {object} engine מנורמל
+ */
+export function removeNegativeSpaceItem(item) {
+  const norm = String(item || '').trim().toLowerCase();
+  const { profile, engine } = loadEngine();
+  engine.negativeSpace = (Array.isArray(engine.negativeSpace) ? engine.negativeSpace : [])
+    .filter((x) => String(x || '').trim().toLowerCase() !== norm);
+  return saveEngine(profile, engine);
+}
+
+/**
+ * חותם על אימות הסגנון: מחשב מחדש confidence ושומר.
+ * @returns {{confidence:*}}
+ */
+export function finalizeStyleVerification() {
+  const { profile, engine } = loadEngine();
+  engine.confidence = recomputeConfidence(engine);
+  const saved = saveEngine(profile, engine);
+  return { confidence: saved.confidence };
 }
 
 // re-export לנוחות ה-UI (איפוס מלא של ה-store).

@@ -17,6 +17,7 @@ import {
   pinPattern,
 } from '../services/styleIngestService';
 import { getSampleDocuments } from '../services/styleSampleStore';
+import { PATTERN_TYPE_LABELS } from '../services/styleProfileService';
 
 const CONFIDENCE_STYLES = {
   low: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -25,14 +26,6 @@ const CONFIDENCE_STYLES = {
 };
 
 const CONFIDENCE_LABELS = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
-
-const PATTERN_TYPE_LABELS = {
-  signature_phrase: 'ביטוי חתימה',
-  structure: 'מבנה',
-  lexical_habit: 'הרגל מילולי',
-  punctuation: 'פיסוק',
-  register: 'רגיסטר',
-};
 
 const ACCEPT_EXTENSIONS = '.docx,.pdf,.txt,.md,.html,.rtf';
 
