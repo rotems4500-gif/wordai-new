@@ -588,6 +588,43 @@ export async function computeChunkEmbeddings({ onProgress = null, force = false 
   };
 }
 
+// ---------- runLocalPatternBatches ----------
+
+/**
+ * לולאת החילוץ המקומית המשותפת (F4/F8): בונה באטצ'ים מכל ה-chunks, מריץ אותם סדרתית
+ * מול המודל הזול (cheap + CHEAP_EXTRACTION_EXCLUDE), וסופר כשלי-באטצ'. מחזיר ריק אם אין
+ * chunks או אין באטצ'ים. משמש גם את runQualitativeAnalysis וגם את applyExternalPatternAnalyses
+ * כדי שכשלי הבאטצ'ים ייספרו זהה בשני המסלולים (כולל ה-combined).
+ * @returns {Promise<{results:Array<object>, failed:number, attempted:number}>}
+ */
+async function runLocalPatternBatches() {
+  const chunks = getChunks();
+  if (!chunks.length) return { results: [], failed: 0, attempted: 0 };
+
+  const batches = buildPatternBatches(chunks, {
+    maxChars: PATTERN_BATCH_MAX_CHARS,
+    maxBatches: PATTERN_BATCH_MAX_BATCHES,
+  });
+  if (!batches.length) return { results: [], failed: 0, attempted: 0 };
+
+  const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
+    ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
+  });
+
+  // קריאות סדרתיות (מונע rate-limit storm); כשלון בבאטצ' בודד — מדלגים, סופרים הצלחות.
+  const results = [];
+  for (const batch of batches) {
+    try {
+      const res = await extractQualitativePatterns(batch, invokeModel);
+      if (isPlainObject(res)) results.push(res);
+    } catch {
+      // batch נכשל — ממשיכים
+    }
+  }
+
+  return { results, failed: Math.max(0, batches.length - results.length), attempted: batches.length };
+}
+
 // ---------- runQualitativeAnalysis ----------
 
 /**
@@ -611,6 +648,8 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
     return { skipped: true, reason: 'no-chunks' };
   }
 
+  // בדיקת 'no-excerpts' נשמרת לפני הלולאה (כדי לשמר את reason המדויק) — הלולאה עצמה
+  // מרוכזת ב-runLocalPatternBatches (F4), שיבנה מחדש את אותם באטצ'ים.
   const batches = buildPatternBatches(chunks, {
     maxChars: PATTERN_BATCH_MAX_CHARS,
     maxBatches: PATTERN_BATCH_MAX_BATCHES,
@@ -619,23 +658,10 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
     return { skipped: true, reason: 'no-excerpts' };
   }
 
-  const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
-    ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
-  });
+  const { results, failed } = await runLocalPatternBatches();
 
-  // קריאות סדרתיות (מונע rate-limit storm); כשלון בבאטצ' בודד — מדלגים, סופרים הצלחות.
-  const successfulResults = [];
-  for (const batch of batches) {
-    try {
-      const res = await extractQualitativePatterns(batch, invokeModel);
-      if (isPlainObject(res)) successfulResults.push(res);
-    } catch {
-      // batch נכשל — ממשיכים
-    }
-  }
-
-  const saved = finishQualitativeMerge(profile, engine, successfulResults, {
-    extraMeta: { llmBatchesFailed: Math.max(0, batches.length - successfulResults.length) },
+  const saved = finishQualitativeMerge(profile, engine, results, {
+    extraMeta: { llmBatchesFailed: failed },
   });
   return { skipped: false, engine: saved };
 }
@@ -750,65 +776,80 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
       externalResults.push(parsed);
     }
   }
-  if (!externalResults.length) {
+
+  // 2 — פענוח מטא (style/coverPageDefaults/profileSummary) מראש: פלט לגיטימי עם
+  // patterns:[] אבל מטא מלא הוא תקין ואסור לזרוק אותו (F2). שומרים על סדר ההדבקות.
+  const metaJsons = [];
+  for (const raw of list) {
+    const parsedJson = decodeLooseJson(raw);
+    if (isPlainObject(parsedJson) &&
+      (isPlainObject(parsedJson.style) || isPlainObject(parsedJson.coverPageDefaults) || typeof parsedJson.profileSummary === 'string')) {
+      metaJsons.push(parsedJson);
+    }
+  }
+
+  // early-fail רק אם גם אין דפוסים באף הדבקה וגם אין מטא באף הדבקה.
+  if (!externalResults.length && !metaJsons.length) {
     return { ok: false, error: 'לא זוהה JSON תקין באף פלט' };
   }
 
   const { profile, engine } = loadEngine();
 
-  // 3 — אופציונלי: הרצת הבאטצ'ים המקומיים (אותה לולאה סדרתית כמו runQualitativeAnalysis).
+  // החלת המטא (מצטבר, כל הדבקה על גבי הקודמת) — משותף לשני הענפים. מתחיל מהפרופיל הטרי
+  // (במסלול הדפוסים זה אחרי saveEngine, כדי לא לדרוס את ה-engine ששמר finishQualitativeMerge).
+  const applyMeta = () => {
+    let patch = null;
+    let acc = getPersonalStyleProfile();
+    for (const parsedJson of metaJsons) {
+      acc = mergeExternalStyleExtractionIntoProfile(parsedJson, acc);
+      patch = acc;
+    }
+    if (patch && applyMetaPatch) {
+      const fresh = getPersonalStyleProfile();
+      savePersonalStyleProfile({ ...fresh, ...patch });
+      if (typeof window !== 'undefined') {
+        try { window.dispatchEvent(new CustomEvent(STYLE_UPDATED_EVENT)); } catch { /* noop */ }
+      }
+    }
+    return patch;
+  };
+
+  // מטא בלבד (אין דפוסים באף הדבקה) — לא קוראים ל-finishQualitativeMerge עם מערך ריק (F2).
+  if (!externalResults.length) {
+    const metaPatch = applyMeta();
+    return {
+      ok: true,
+      engine: null,
+      metaPatch,
+      externalBatches: 0,
+      totalBatches: 0,
+      crossValidated: false,
+      error: '',
+    };
+  }
+
+  // 3 — אופציונלי: הרצת הבאטצ'ים המקומיים (helper משותף — F4). כשלים נספרים ל-combined (F8).
   const localResults = [];
+  let localFailed = 0;
   if (includeLocalLlm) {
-    const chunks = getChunks();
     let providerAvailable = false;
     try { providerAvailable = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { providerAvailable = false; }
-    if (chunks.length && providerAvailable) {
-      const batches = buildPatternBatches(chunks, {
-        maxChars: PATTERN_BATCH_MAX_CHARS,
-        maxBatches: PATTERN_BATCH_MAX_BATCHES,
-      });
-      const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
-        ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
-      });
-      for (const batch of batches) {
-        try {
-          const res = await extractQualitativePatterns(batch, invokeModel);
-          if (isPlainObject(res)) localResults.push(res);
-        } catch {
-          // batch נכשל — ממשיכים
-        }
-      }
+    if (providerAvailable) {
+      const local = await runLocalPatternBatches();
+      localResults.push(...local.results);
+      localFailed = local.failed;
     }
   }
 
   const allResults = [...localResults, ...externalResults];
 
-  // 4 — זנב המיזוג המשותף. externalBatches נכנס ל-extractionMeta.
+  // 4 — זנב המיזוג המשותף. externalBatches + כשלי הבאטצ'ים המקומיים נכנסים ל-extractionMeta.
   const savedEngine = finishQualitativeMerge(profile, engine, allResults, {
-    extraMeta: { externalBatches: externalResults.length },
+    extraMeta: { externalBatches: externalResults.length, llmBatchesFailed: localFailed },
   });
 
-  // 5 — פיצול מטא: לכל הדבקה שיש בה style/coverPageDefaults/profileSummary — מיזוג
-  // מצטבר (כל הדבקה על גבי הקודמת). מתחילים מהפרופיל הטרי (אחרי saveEngine).
-  let metaPatch = null;
-  let acc = getPersonalStyleProfile();
-  for (const raw of list) {
-    const parsedJson = decodeLooseJson(raw);
-    if (isPlainObject(parsedJson) &&
-      (isPlainObject(parsedJson.style) || isPlainObject(parsedJson.coverPageDefaults) || typeof parsedJson.profileSummary === 'string')) {
-      acc = mergeExternalStyleExtractionIntoProfile(parsedJson, acc);
-      metaPatch = acc;
-    }
-  }
-
-  if (metaPatch && applyMetaPatch) {
-    // קוראים את הפרופיל מחדש (עם ה-engine ששמר finishQualitativeMerge) כדי לא לדרוס אותו.
-    const fresh = getPersonalStyleProfile();
-    savePersonalStyleProfile({ ...fresh, ...metaPatch });
-    if (typeof window !== 'undefined') {
-      try { window.dispatchEvent(new CustomEvent(STYLE_UPDATED_EVENT)); } catch { /* noop */ }
-    }
-  }
+  // 5 — החלת המטא (אחרי שמירת ה-engine).
+  const metaPatch = applyMeta();
 
   return {
     ok: true,
@@ -844,7 +885,12 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
       metaPatch: null,
       crossValidated: Boolean(res.engine?.extractionMeta?.crossValidated),
       externalBatches: 0,
-      error: res.skipped ? (res.reason || 'הניתוח דולג') : '',
+      // F5 — מיפוי קוד ה-skip הגולמי להודעה עברית ידידותית.
+      error: res.skipped
+        ? ((res.reason === 'no-chunks' || res.reason === 'no-excerpts')
+          ? 'אין מספיק טקסט לניתוח — העלה מסמכים ארוכים יותר או הוסף פלט חיצוני.'
+          : 'הניתוח דולג.')
+        : '',
     };
   }
 

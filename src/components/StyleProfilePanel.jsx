@@ -16,7 +16,7 @@ import {
   pinPattern,
 } from '../services/styleIngestService';
 import { getSampleDocuments } from '../services/styleSampleStore';
-import { PATTERN_TYPE_LABELS } from '../services/styleProfileService';
+import { PATTERN_TYPE_LABELS, CONFIDENCE_LABELS } from '../services/styleProfileService';
 import { getPersonalStyleProfile } from '../services/aiService';
 import StyleSetupFlow from './StyleSetupFlow';
 
@@ -25,8 +25,6 @@ const CONFIDENCE_STYLES = {
   medium: 'border-cyan-200 bg-cyan-50 text-cyan-700',
   high: 'border-emerald-200 bg-emerald-50 text-emerald-700',
 };
-
-const CONFIDENCE_LABELS = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
 
 function formatNumber(n, digits = 0) {
   const num = Number(n);

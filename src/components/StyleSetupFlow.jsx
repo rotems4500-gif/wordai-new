@@ -24,7 +24,9 @@ import {
   buildExternalPatternAnalysisPrompt,
   buildVerificationQuestions,
   parsePatternExtractionResult,
+  CONFIDENCE_LABELS,
 } from '../services/styleProfileService';
+import { getExternalAnalysisProviderHint } from '../services/aiService';
 
 // סוגי קבצים לעבודות עבר — זהה ל-PAST_WORKS_ACCEPT ב-ProfileOnboarding.jsx.
 const PAST_WORKS_ACCEPT = '.docx,.pdf,.txt,.md,.rtf,.html';
@@ -45,8 +47,6 @@ const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'custom', label: 'ספק אחר / מותאם' },
 ];
-
-const CONFIDENCE_LABELS = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
 
 const PHASE_STEPS = [
   { key: 'intake', label: 'קליטה' },
@@ -156,6 +156,7 @@ export default function StyleSetupFlow({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [uploadReport, setUploadReport] = useState(null); // result.ingest האחרון
   const [docStats, setDocStats] = useState(() => {
     try { return getSampleStoreStats(); } catch { return null; }
   });
@@ -174,6 +175,15 @@ export default function StyleSetupFlow({
       return '';
     }
   }, [profile]);
+
+  // F6 — רמז ספציפי-ספק (טקסט עברי מ-aiService) מתחת ל-select לפי הספק הנבחר.
+  const providerHint = useMemo(() => {
+    try {
+      return getExternalAnalysisProviderHint(externalProviderId) || '';
+    } catch {
+      return '';
+    }
+  }, [externalProviderId]);
 
   // --- Phase 2: עיבוד ---
   const [processingText, setProcessingText] = useState('מאחד את מקורות הסגנון...');
@@ -197,10 +207,11 @@ export default function StyleSetupFlow({
     const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
     setUploadError('');
+    setUploadReport(null);
     setUploading(true);
     setUploadProgress(`מנתח מסמך 1/${files.length}...`);
     try {
-      await ingestAndAnalyze(files, {
+      const result = await ingestAndAnalyze(files, {
         runPatterns: false,
         onProgress: (info) => {
           const current = Number(info?.current ?? info?.index ?? 0) + 1;
@@ -208,8 +219,16 @@ export default function StyleSetupFlow({
           setUploadProgress(`מנתח מסמך ${Math.min(current, total)}/${total}...`);
         },
       });
+      // F3.1 — דוח העלאה מפורט (נוספו/דולגו/פונו/כשלים) מוצג מתחת לאזור ההעלאה.
+      setUploadReport(result?.ingest || null);
       const stats = getSampleStoreStats();
       setDocStats(stats);
+      // F3.2 — משתמש שהעלה ומדלג (בלי "נתח והמשך") עדיין מקבל מנוע פעיל (כמו בזרימה הישנה).
+      if ((stats?.docCount || 0) > 0) {
+        try { setStyleEngineEnabled(true); } catch (err) {
+          console.error('StyleSetupFlow: setStyleEngineEnabled failed', err);
+        }
+      }
     } catch (err) {
       console.error('StyleSetupFlow: ingestAndAnalyze failed', err);
       setUploadError(`העלאת הקבצים נכשלה: ${err?.message || 'שגיאה לא ידועה'}`);
@@ -260,7 +279,9 @@ export default function StyleSetupFlow({
     if (!raw) return;
     setPasteError('');
     try {
-      const parsed = parsePatternExtractionResult(raw);
+      // lenientTypes:true — יישור למיזוג בשירות (applyExternalPatternAnalyses), כדי שפלט
+      // תקין עם type לא-סטנדרטי לא יידחה כאן ולא יגיע כלל למסלול הלניאנטי.
+      const parsed = parsePatternExtractionResult(raw, { lenientTypes: true });
       const count = parsed?.patterns?.length || 0;
       if (count <= 0) {
         setPasteError('לא זוהה JSON תקין — ודא שהדבקת את כל התשובה מה-AI.');
@@ -520,6 +541,24 @@ export default function StyleSetupFlow({
                 {!uploading && uploadError && (
                   <div className={`${T.errorBox} mt-1`}>{uploadError}</div>
                 )}
+                {!uploading && uploadReport && (
+                  <div className="w-full mt-2 flex flex-col gap-1.5 text-right">
+                    {(Number(uploadReport.added) > 0 || Number(uploadReport.skipped) > 0) && (
+                      <div className={T.muted}>
+                        נוספו {Number(uploadReport.added) || 0} · דולגו {Number(uploadReport.skipped) || 0}
+                      </div>
+                    )}
+                    {Number(uploadReport.evicted) > 0 && (
+                      <div className={T.muted}>⚠ פונו {uploadReport.evicted} קטעים ישנים כדי לפנות מקום.</div>
+                    )}
+                    {uploadReport.writeError && (
+                      <div className={T.errorBox}>שגיאת שמירה: {uploadReport.writeError}</div>
+                    )}
+                    {(uploadReport.failed || []).map((f) => (
+                      <div key={f.name} className={T.errorBox}>✗ {f.name}: {f.error}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -534,12 +573,15 @@ export default function StyleSetupFlow({
               <select
                 value={externalProviderId}
                 onChange={(e) => setExternalProviderId(e.target.value)}
-                className={`${T.input} mb-3`}
+                className={`${T.input} mb-1`}
               >
                 {EXTERNAL_PROVIDER_OPTIONS.map((p) => (
                   <option key={p.id} value={p.id}>{p.label}</option>
                 ))}
               </select>
+              {providerHint && (
+                <p className={`${T.muted} mb-3`}>{providerHint}</p>
+              )}
 
               <label className={T.label}>הפרומפט להעתקה</label>
               <textarea

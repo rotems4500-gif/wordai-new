@@ -1087,6 +1087,9 @@ export const PATTERN_TYPE_LABELS = {
   register: 'רגיסטר',
 };
 
+// תוויות רמת-ודאות — מקור-אמת יחיד (נצרך ב-StyleSetupFlow / StyleProfilePanel).
+export const CONFIDENCE_LABELS = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
+
 // שורות הסכימה+הכללים המשותפות לפרומפט הפנימי ולפרומפט החיצוני. חילוץ זה שומר
 // זהות-ביטים ל-buildPatternExtractionPrompt (המנוע הפנימי רגיש לפרומפט המדויק).
 const PATTERN_SCHEMA_INSTRUCTIONS = [
@@ -1143,10 +1146,18 @@ export function buildPatternExtractionPrompt(excerpts) {
  */
 export function buildExternalPatternAnalysisPrompt({ profile = {} } = {}) {
   const p = isPlainObject(profile) ? profile : {};
+  const lecturersRaw = Array.isArray(p.lecturerNames)
+    ? p.lecturerNames.map((n) => String(n || '').trim()).filter(Boolean).join(', ')
+    : String(p.lecturerName || '').trim();
+  const coursesRaw = Array.isArray(p.currentCourses)
+    ? p.currentCourses.map((c) => String(c || '').trim()).filter(Boolean).join(', ')
+    : String(p.currentCourses || '').trim();
   const knownContext = [
     p.displayName ? `- שם משתמש ידוע: ${String(p.displayName).trim()}` : '',
     p.institutionName ? `- מוסד/מרכז אקדמי ידוע: ${String(p.institutionName).trim()}` : '',
     p.studyTrack ? `- חוג/מסלול ידוע: ${String(p.studyTrack).trim()}` : '',
+    lecturersRaw ? `- מרצים/מנחים ידועים: ${lecturersRaw}` : '',
+    coursesRaw ? `- קורסים ידועים: ${coursesRaw}` : '',
   ].filter(Boolean).join('\n');
 
   return [

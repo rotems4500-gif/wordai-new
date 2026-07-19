@@ -41,7 +41,6 @@ import {
   DEFAULT_WORKSPACE_AUTOMATION,
   normalizeSidebarModeSettings,
   buildExternalStyleAnalysisPrompt,
-  getExternalAnalysisProviderHint,
   getProviderConfig,
   getConfiguredProviderChoices,
   getProviderModelChoices,
@@ -3681,7 +3680,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
   const [quickSetupProviderId, setQuickSetupProviderId] = useState(selectedExternalProviderId);
   const resolvedQuickSetupProviderId = String(quickSetupProviderId || selectedExternalProviderId || 'gemini').trim() || 'gemini';
   const externalAnalysisAvailability = getExternalAnalysisAvailability('', providerConfig);
-  const externalAnalysisPreparationHint = getExternalAnalysisProviderHint(selectedExternalProviderId);
   const openRouterBaseUrl = normalizeProviderIdentity('https://openrouter.ai/api/v1');
   const CUSTOM_PROVIDER_PRESETS = {
     deepseek: {
@@ -3796,36 +3794,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
     });
   };
   const customPreset = CUSTOM_PROVIDER_PRESETS[resolvedQuickSetupProviderId] || null;
-  const customLooksLikeSelectedPreset = customProviderMatchesPreset(providerConfig, customPreset);
-  const quickProviderSetup = (() => {
-    switch (resolvedQuickSetupProviderId) {
-      case 'gemini':
-        return { label: 'Gemini', keyValue: providerConfig?.gemini?.key || '', placeholder: 'AIza...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Gemini.', acceptsKey: true };
-      case 'openai':
-        return { label: 'OpenAI', keyValue: providerConfig?.openai?.key || '', placeholder: 'sk-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-OpenAI.', acceptsKey: true };
-      case 'claude':
-        return { label: 'Claude', keyValue: providerConfig?.claude?.key || '', placeholder: 'sk-ant-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Claude.', acceptsKey: true };
-      case 'groq':
-        return { label: 'Groq', keyValue: providerConfig?.groq?.key || '', placeholder: 'gsk_...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Groq.', acceptsKey: true };
-      case 'perplexity':
-        return { label: 'Perplexity', keyValue: providerConfig?.perplexity?.key || '', placeholder: 'pplx-...', helpText: 'אפשר להדביק כאן את המפתח, והוא יישמר ישירות ל-Perplexity.', acceptsKey: true };
-      case 'scholar':
-        return { label: 'Google Scholar', keyValue: providerConfig?.scholar?.key || '', placeholder: 'api_key...', helpText: 'אפשר להדביק כאן את המפתח אליו (SerpAPI), והוא יישמר ישירות.', acceptsKey: true };
-      case 'deepseek':
-      case 'mistral':
-      case 'together':
-      case 'openrouter':
-      case 'xai':
-      case 'lmstudio':
-        return { ...customPreset, keyValue: customLooksLikeSelectedPreset ? (providerConfig?.custom?.key || '') : '' };
-      case 'ollama':
-        return { label: 'Ollama', keyValue: '', placeholder: 'לא נדרש מפתח', helpText: 'ל-Ollama מקומי לא נדרש מפתח. מספיק להפעיל את השרת המקומי ולוודא שהמודל טעון.', acceptsKey: false };
-      case 'custom':
-        return { label: 'ספק מותאם', keyValue: providerConfig?.custom?.key || '', placeholder: 'API key', helpText: 'אפשר להדביק כאן את המפתח. אם צריך גם Base URL או מודל, פתח אחר כך את הגדרות ה-AI.', acceptsKey: true };
-      default:
-        return { label: 'ספק חיצוני', keyValue: '', placeholder: 'API key', helpText: 'לספק הזה אין שדה הדבקה מהיר כאן. אפשר לעבור להגדרות ה-AI המלאות.', acceptsKey: false };
-    }
-  })();
 
   const updateQuickProviderKey = (value) => {
     const nextValue = String(value || '');
@@ -3904,18 +3872,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
     }));
   };
 
-  const updateExternalAnalysisRaw = (value) => setProfile((prev) => {
-    const nextRaw = String(value || '');
-    const rawChanged = String(prev.externalStyleAnalysisRaw || '').trim() !== nextRaw.trim();
-    return {
-      ...prev,
-      externalStyleAnalysisRaw: nextRaw,
-      externalStyleAnalysisStatus: rawChanged ? '' : prev.externalStyleAnalysisStatus,
-      externalStyleAnalysisProcessedAt: rawChanged ? '' : prev.externalStyleAnalysisProcessedAt,
-      externalStyleAnalysisLastError: rawChanged ? '' : prev.externalStyleAnalysisLastError,
-      externalStyleAnalysisPendingAt: rawChanged ? '' : (nextRaw.trim() ? prev.externalStyleAnalysisPendingAt : ''),
-    };
-  });
 
   const formatSyllabusImportError = (error) => {
     const code = String(error?.message || '').trim();
