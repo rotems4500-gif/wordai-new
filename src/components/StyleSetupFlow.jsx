@@ -55,6 +55,15 @@ const PHASE_STEPS = [
   { key: 'summary', label: 'סיכום' },
 ];
 
+// --- stage: אילו שלבים מהזרימה פעילים (אורתוגונלי ל-variant שהוא רק theme). ---
+// full = ההתנהגות הנוכחית (StyleProfilePanel). collect = מוקדם, העלאה בלבד ללא verify.
+// refine = מאוחר, הדבקה+ניתוח עמוק→verify, עם אזור העלאה קומפקטי.
+const STAGE_CONFIG = {
+  full:    { showUpload: true,  showExternal: true,  runVerify: true },   // התנהגות נוכחית — StyleProfilePanel
+  collect: { showUpload: true,  showExternal: false, runVerify: false },  // מוקדם: העלאה בלבד → baseline → summary קצר
+  refine:  { showUpload: true,  showExternal: true,  runVerify: true, compactUpload: true }, // מאוחר: הדבקה+ניתוח עמוק→verify
+};
+
 // --- ערכות עיצוב לפי variant. מחלקה אחת לכל תפקיד — משומשת בכל ה-JSX, בלי תנאים מפוזרים. ---
 const THEME_PANEL = {
   wrapper: 'text-slate-800',
@@ -139,6 +148,7 @@ function resolveConfidence(confidence) {
 
 export default function StyleSetupFlow({
   variant = 'panel',
+  stage = 'full',
   profile = {},
   onProfileMetaPatch = null,
   onComplete = null,
@@ -146,6 +156,8 @@ export default function StyleSetupFlow({
   providerConfig = null,
 }) {
   const T = variant === 'onboarding' ? THEME_ONBOARDING : THEME_PANEL;
+  // stage — אילו שלבים פעילים. ברירת מחדל 'full' = אפס שינוי התנהגות למי שקורא בלי stage.
+  const stageCfg = STAGE_CONFIG[stage] || STAGE_CONFIG.full;
 
   // --- שלב הזרימה ---
   const [phase, setPhase] = useState('intake');
@@ -346,6 +358,11 @@ export default function StyleSetupFlow({
 
   // עובר משלב העיבוד הלאה: בונה תור אימות מהפרופיל הנוכחי; אם ריק — ישר לסיכום.
   const proceedFromProcessing = useCallback(() => {
+    // stage: ב-collect אין verify — דלג ישר לסיכום בלי לבנות תור.
+    if (!stageCfg.runVerify) {
+      goToSummary();
+      return;
+    }
     let builtQuestions = [];
     try {
       const overview = getStyleOverview();
@@ -469,20 +486,25 @@ export default function StyleSetupFlow({
 
   const confidenceInfo = resolveConfidence(summaryData?.confidence);
   const progressPercent = questions.length > 0 ? Math.round(((questionIndex + 1) / questions.length) * 100) : 0;
-  const currentPhaseIndex = PHASE_STEPS.findIndex((s) => s.key === phase);
+  // stage: ב-collect מסתירים את שלב 'verify' מהמחוון (אין אימות בזרימה הזו).
+  const visibleSteps = useMemo(
+    () => (stageCfg.runVerify ? PHASE_STEPS : PHASE_STEPS.filter((s) => s.key !== 'verify')),
+    [stageCfg.runVerify],
+  );
+  const currentPhaseIndex = visibleSteps.findIndex((s) => s.key === phase);
 
   // ============================ רינדור ============================
 
   return (
     <div className={`flex flex-col gap-4 ${T.wrapper}`} dir="rtl">
-      {/* מחוון שלבים */}
+      {/* מחוון שלבים — visibleSteps מסונן לפי stage (collect ללא 'verify'). */}
       <div className="flex items-center gap-2">
-        {PHASE_STEPS.map((step, idx) => (
+        {visibleSteps.map((step, idx) => (
           <React.Fragment key={step.key}>
             <span className={`text-[11.5px] ${idx === currentPhaseIndex ? T.stepperCurrent : T.stepperMuted}`}>
               {idx + 1}. {step.label}
             </span>
-            {idx < PHASE_STEPS.length - 1 && (
+            {idx < visibleSteps.length - 1 && (
               <span className={`flex-1 h-[2px] rounded-full ${idx < currentPhaseIndex ? T.stepperDone : T.stepperTrack}`} />
             )}
           </React.Fragment>
@@ -492,13 +514,40 @@ export default function StyleSetupFlow({
       {/* ================= Phase 1: intake ================= */}
       {phase === 'intake' && (
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* stage: כשאין כרטיס חיצוני (collect) — כרטיס ההעלאה במרכז/רוחב מלא, עמודה אחת. */}
+          <div className={stageCfg.showExternal ? 'grid grid-cols-1 md:grid-cols-2 gap-4' : 'w-full max-w-xl mx-auto'}>
             {/* כרטיס א' — העלאת עבודות */}
             <div className={T.card}>
               <div className={T.title}>📄 העלאת עבודות</div>
               <p className={`${T.subtitle} mt-1 mb-3`}>
-                העלה עבודות שכתבת בעצמך — ככל שיותר, החיקוי מדויק יותר. הטקסט נשאר במכשיר שלך.
+                {/* stage: ב-collect מדגישים שאין צורך במפתח AI — לומדים כבר עכשיו מההעלאה. */}
+                {stage === 'collect'
+                  ? 'העלה עבודות שכתבת — נלמד את הסגנון האמיתי שלך כבר עכשיו (בלי צורך במפתח AI).'
+                  : 'העלה עבודות שכתבת בעצמך — ככל שיותר, החיקוי מדויק יותר. הטקסט נשאר במכשיר שלך.'}
               </p>
+              {/* stage: ב-refine עם compactUpload ומסמכים שכבר נקלטו — שורת סטטוס קומפקטית במקום dropzone גדול (עדיין אפשר להוסיף). */}
+              {stageCfg.compactUpload && docCount > 0 && !uploading ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className={T.successBox}>
+                    נקלטו {docCount} מסמכים ✓
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`${T.buttonGhost} shrink-0`}
+                  >
+                    ➕ הוסף עוד
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept={PAST_WORKS_ACCEPT}
+                    onChange={handleFileInputChange}
+                    className="hidden"
+                  />
+                </div>
+              ) : (
               <div
                 onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
                 onDragLeave={() => setDragActive(false)}
@@ -560,9 +609,11 @@ export default function StyleSetupFlow({
                   </div>
                 )}
               </div>
+              )}
             </div>
 
-            {/* כרטיס ב' — ניתוח דרך AI חיצוני */}
+            {/* כרטיס ב' — ניתוח דרך AI חיצוני. stage: מוסתר ב-collect (showExternal=false). */}
+            {stageCfg.showExternal && (
             <div className={T.card}>
               <div className={T.title}>🧠 ניתוח דרך AI חיצוני</div>
               <p className={`${T.subtitle} mt-1 mb-3`}>
@@ -637,6 +688,7 @@ export default function StyleSetupFlow({
                 💡 הדבק 3 פלטים או יותר (הרצות חוזרות או ספקים שונים) — דפוס שחוזר בכמה הרצות מקבל משקל גבוה. הדבקה בודדת נקלטת במשקל מוקטן.
               </div>
             </div>
+            )}
           </div>
 
           {/* כפתורים תחתונים */}
@@ -747,18 +799,31 @@ export default function StyleSetupFlow({
       {phase === 'summary' && (
         <div className={`${T.card} flex flex-col items-center gap-3 py-10 text-center`}>
           <div className="text-[30px]">✓</div>
-          <div className={`${T.title} text-[17px]`}>הפרופיל שלך מוכן ✓</div>
-          <p className={T.subtitle}>
-            {summaryData?.patternsCount || 0} דפוסים בפרופיל · אישרת {answerCounts.pinned} · דחית {answerCounts.rejected}
-          </p>
-          {confidenceInfo.label && (
-            <span className={`${T.confidenceBadge} ${T.chip}`}>
-              ודאות פרופיל: {confidenceInfo.label}
-              {confidenceInfo.score !== null ? ` (${confidenceInfo.score}%)` : ''}
-            </span>
+          {/* stage: ב-collect זה בסיס ראשוני בלבד — כותרת/טקסט מרוככים, בלי pinned/rejected. */}
+          {stage === 'collect' ? (
+            <>
+              <div className={`${T.title} text-[17px]`}>הבסיס מוכן ✓</div>
+              <p className={T.subtitle}>
+                למדנו את הבסיס — {docCount} מסמכים, {summaryData?.patternsCount || 0} דפוסים ראשוניים. נחדד בהמשך.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className={`${T.title} text-[17px]`}>הפרופיל שלך מוכן ✓</div>
+              <p className={T.subtitle}>
+                {summaryData?.patternsCount || 0} דפוסים בפרופיל · אישרת {answerCounts.pinned} · דחית {answerCounts.rejected}
+              </p>
+              {confidenceInfo.label && (
+                <span className={`${T.confidenceBadge} ${T.chip}`}>
+                  ודאות פרופיל: {confidenceInfo.label}
+                  {confidenceInfo.score !== null ? ` (${confidenceInfo.score}%)` : ''}
+                </span>
+              )}
+            </>
           )}
+          {/* stage: ב-collect הכפתור מוביל הלאה בזרימה ("המשך"), בשאר "סיום". שניהם קוראים ל-onComplete. */}
           <button type="button" onClick={handleComplete} className={`${T.buttonPrimary} mt-2`}>
-            סיום
+            {stage === 'collect' ? 'המשך' : 'סיום'}
           </button>
         </div>
       )}
