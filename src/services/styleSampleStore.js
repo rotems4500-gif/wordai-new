@@ -5,26 +5,35 @@
 //
 // בכוונה *לא* מסונכרן לענן (בניגוד ל-wordai_personal_style): ה-raw text גדול מדי
 // למגבלת מסמך Firestore 1MB (תוכנית §4/§12). לכן זה store מקומי טהור —
-// localStorage + CustomEvent בלבד, בלי syncPersistedAppSettings ובלי רישום ב-cloudSyncManager.
+// IndexedDB + CustomEvent בלבד, בלי syncPersistedAppSettings ובלי רישום ב-cloudSyncManager.
 //
-// תלות יחידה: computeLocalMetrics מ-styleProfileService (בשביל metricsLite). אין ייבוא
-// מ-aiService / workspaceLearningService (סיכון מעגל — המודול הזה עלה, כמו projectService).
-// עובד בדפדפן בלבד (localStorage), ES modules, JS רגיל. תוכנית: docs/style-engine-plan.md §5b, §9.
+// אחסון: IndexedDB (styleKvStore) עם cache בזיכרון, כדי לשמור על ה-API הסינכרוני.
+// היסטוריה: עד יולי 2026 האחסון היה localStorage — תקרת ה-~5MB שלו (יחד עם caps של
+// 200 chunks) גרמה לכך שאחרי 3-4 מסמכים כל העלאה חדשה פינתה את הישנים, וכתיבה שחרגה
+// מהמכסה נבלעה ב-catch ריק. עכשיו: caps גבוהים, מיגרציה חד-פעמית מ-localStorage,
+// ושגיאות כתיבה נחשפות דרך getSampleStoreStats().lastWriteError.
+//
+// תלויות: computeLocalMetrics מ-styleProfileService (בשביל metricsLite) + styleKvStore (LEAF).
+// אין ייבוא מ-aiService / workspaceLearningService (סיכון מעגל).
+// עובד בדפדפן בלבד, ES modules, JS רגיל. תוכנית: docs/style-engine-plan.md §5b, §9.
 
 import { computeLocalMetrics } from './styleProfileService';
+import { idbGet, idbSet, isIdbAvailable } from './styleKvStore';
 
 export const STYLE_SAMPLES_STORAGE_KEY = 'wordai_style_samples_v1';
 export const STYLE_SAMPLES_SCHEMA_VERSION = 1;
 export const STYLE_SAMPLES_UPDATED_EVENT = 'wordai-style-samples-updated';
 
-// תקרות ברירת מחדל (§5b). eviction אוכף אותן — אף פעם לא מפנה gold.
-const DEFAULT_MAX_CHUNKS = 200;
-const DEFAULT_MAX_CHARS = 600000;
+// תקרות ברירת מחדל. eviction אוכף אותן — אף פעם לא מפנה gold.
+// הועלו מ-200/600k (מגבלת localStorage) ל-IndexedDB scale: ~60-80 עבודות אקדמיות.
+const DEFAULT_MAX_CHUNKS = 4000;
+const DEFAULT_MAX_CHARS = 8000000;
 
 // כללי chunking (§5b behavior details).
-const CHUNK_MIN_WORDS = 40;   // מתחת לזה — נמזג עם הבא
-const CHUNK_DROP_WORDS = 25;  // מתחת לזה — נזרק (קצר מדי לדגימת סגנון)
-const CHUNK_MAX_WORDS = 200;  // מעל לזה — נחתך לראשונים
+const CHUNK_MIN_WORDS = 40;    // מתחת לזה — נמזג עם הבא
+const CHUNK_DROP_WORDS = 25;   // מתחת לזה — נזרק (קצר מדי לדגימת סגנון)
+const CHUNK_MAX_WORDS = 200;   // מעל לזה — מפוצל למשפטים (בעבר: נחתך והשאר נזרק)
+const CHUNK_TARGET_WORDS = 160; // גודל יעד לחתיכה שנחתכת מפסקה ארוכה
 const TOP_TERMS = 8;
 
 // stoplist עברי זעיר משוכפל מקומית (feeds RAG keyword scorer ב-Phase 3).
@@ -72,26 +81,23 @@ function defaultBlob() {
   };
 }
 
+// caps ישנים ששמורים ב-blob (200/600k) לא אמורים לכבול משתמש קיים אחרי המעבר
+// ל-IndexedDB — לכן לוקחים תמיד את הגבוה מבין השמור לברירת המחדל.
 function normalizeCaps(raw) {
   const src = isPlainObject(raw) ? raw : {};
   const maxChunks = Math.round(Number(src.maxChunks));
   const maxChars = Math.round(Number(src.maxChars));
   return {
-    maxChunks: Number.isFinite(maxChunks) && maxChunks > 0 ? maxChunks : DEFAULT_MAX_CHUNKS,
-    maxChars: Number.isFinite(maxChars) && maxChars > 0 ? maxChars : DEFAULT_MAX_CHARS,
+    maxChunks: Number.isFinite(maxChunks) && maxChunks > 0
+      ? Math.max(maxChunks, DEFAULT_MAX_CHUNKS)
+      : DEFAULT_MAX_CHUNKS,
+    maxChars: Number.isFinite(maxChars) && maxChars > 0
+      ? Math.max(maxChars, DEFAULT_MAX_CHARS)
+      : DEFAULT_MAX_CHARS,
   };
 }
 
-/**
- * קורא ומנרמל את ה-blob. סובלני לחלוטין: חסר/פגום → default טרי.
- * @returns {object}
- */
-export function readSampleStore() {
-  if (typeof window === 'undefined') return defaultBlob();
-  let parsed = null;
-  try {
-    parsed = JSON.parse(localStorage.getItem(STYLE_SAMPLES_STORAGE_KEY) || '');
-  } catch {}
+function normalizeBlob(parsed) {
   if (!isPlainObject(parsed)) return defaultBlob();
   return {
     schemaVersion: STYLE_SAMPLES_SCHEMA_VERSION,
@@ -102,6 +108,68 @@ export function readSampleStore() {
   };
 }
 
+// ---------- cache + persistence (IndexedDB, fallback localStorage) ----------
+
+let cache = null;          // ה-blob החי בזיכרון (מקור האמת אחרי hydrate)
+let cacheDirty = false;    // בוצעה כתיבה — ה-cache מנצח גם אם ה-hydrate יסתיים אחריה
+let hydrated = false;      // האם נטען מה-persistence
+let hydratePromise = null;
+let lastWriteError = null; // מחרוזת — נחשף ב-getSampleStoreStats
+let pendingWrite = null;   // Promise של הכתיבה האחרונה (flush)
+
+function readLegacyLocalStorage() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(STYLE_SAMPLES_STORAGE_KEY);
+    if (!raw) return null;
+    return normalizeBlob(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * טוען את ה-store מ-IndexedDB (פעם אחת). אם אין שם כלום — מהגר את ה-blob הישן
+ * מ-localStorage. כשל IndexedDB → נופלים ל-localStorage בלבד (התנהגות ישנה).
+ * @returns {Promise<object>} ה-blob
+ */
+export function ensureSampleStoreReady() {
+  if (hydrated) return Promise.resolve(cache);
+  if (hydratePromise) return hydratePromise;
+
+  hydratePromise = (async () => {
+    let loaded = null;
+    if (isIdbAvailable()) {
+      try {
+        const stored = await idbGet(STYLE_SAMPLES_STORAGE_KEY);
+        if (isPlainObject(stored)) loaded = normalizeBlob(stored);
+      } catch (err) {
+        lastWriteError = `IndexedDB: ${String(err?.message || err)}`;
+      }
+    }
+    if (!loaded) {
+      // מיגרציה חד-פעמית: ה-blob הישן מ-localStorage. לא מוחקים אותו — נשאר גיבוי.
+      loaded = readLegacyLocalStorage() || defaultBlob();
+    }
+    // אם כבר בוצעו כתיבות לפני שה-hydrate הסתיים — הן מנצחות (cache הוא האמת).
+    // קריאה סינכרונית מוקדמת (getCache) מילאה cache מה-blob הישן בלבד — אותו כן דורסים.
+    if (!cacheDirty) cache = loaded;
+    hydrated = true;
+    if (loaded.documents.length || loaded.chunks.length) persist();
+    emitUpdated(); // ה-UI נטען לפני שה-hydrate הסתיים — מרענן אותו עם הנתונים האמיתיים.
+    return cache;
+  })();
+
+  return hydratePromise;
+}
+
+// מחזיר את ה-cache; לפני hydrate — קריאה סינכרונית מה-blob הישן כדי שלא נחזיר ריק.
+function getCache() {
+  if (cache) return cache;
+  cache = readLegacyLocalStorage() || defaultBlob();
+  return cache;
+}
+
 function emitUpdated() {
   if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
   try {
@@ -109,25 +177,114 @@ function emitUpdated() {
   } catch {}
 }
 
+// כותב את ה-cache ל-persistence. שגיאות *לא* נבלעות — נשמרות ב-lastWriteError.
+function persist() {
+  const snapshot = cache;
+  if (typeof window === 'undefined' || !snapshot) return Promise.resolve();
+  pendingWrite = (async () => {
+    if (isIdbAvailable()) {
+      try {
+        await idbSet(STYLE_SAMPLES_STORAGE_KEY, snapshot);
+        lastWriteError = null;
+        return;
+      } catch (err) {
+        lastWriteError = `IndexedDB: ${String(err?.message || err)}`;
+      }
+    }
+    // fallback: localStorage (עלול לחרוג מהמכסה — מדווחים במקום לבלוע).
+    try {
+      localStorage.setItem(STYLE_SAMPLES_STORAGE_KEY, JSON.stringify(snapshot));
+      lastWriteError = null;
+    } catch (err) {
+      lastWriteError = String(err?.name === 'QuotaExceededError'
+        ? 'אחסון הדפדפן מלא — הדגימות האחרונות לא נשמרו.'
+        : (err?.message || err));
+    }
+  })();
+  return pendingWrite;
+}
+
+/** ממתין לסיום הכתיבה האחרונה. @returns {Promise<void>} */
+export function flushSampleStore() {
+  return Promise.resolve(pendingWrite);
+}
+
+/** שגיאת הכתיבה האחרונה (או null). */
+export function getSampleStoreWriteError() {
+  return lastWriteError;
+}
+
+/**
+ * קורא ומנרמל את ה-blob (סינכרוני, מה-cache). סובלני לחלוטין.
+ * @returns {object}
+ */
+export function readSampleStore() {
+  if (typeof window === 'undefined') return defaultBlob();
+  return getCache();
+}
+
 function writeBlob(blob) {
   if (typeof window === 'undefined') return;
-  const next = {
+  cache = {
     schemaVersion: STYLE_SAMPLES_SCHEMA_VERSION,
     updatedAt: nowTs(),
     documents: Array.isArray(blob?.documents) ? blob.documents : [],
     chunks: Array.isArray(blob?.chunks) ? blob.chunks : [],
     caps: normalizeCaps(blob?.caps),
   };
-  try {
-    localStorage.setItem(STYLE_SAMPLES_STORAGE_KEY, JSON.stringify(next));
-  } catch {}
+  cacheDirty = true;
+  persist();
   emitUpdated();
+}
+
+// hydrate מוקדם — מתחיל ברגע טעינת המודול כדי שקוראים סינכרוניים יקבלו נתונים אמיתיים.
+if (typeof window !== 'undefined') {
+  try { ensureSampleStoreReady(); } catch {}
 }
 
 // ---------- chunking + metricsLite + terms ----------
 
+// מפצל טקסט ארוך לחתיכות של ~CHUNK_TARGET_WORDS מילים על גבול משפט.
+// קריטי: שום מילה לא נזרקת. (בעבר פסקה >200 מילים נחתכה ל-200 והשאר אבד — מסמכי PDF
+// מגיעים כפסקה אחת ענקית לעמוד, כך שכל עמוד תרם 200 מילים בלבד.)
+function splitLongParagraph(paragraph) {
+  const sentences = String(paragraph || '')
+    .split(/(?<=[.!?…:;])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!sentences.length) return [];
+
+  const out = [];
+  let buffer = [];
+  let bufferWords = 0;
+  const flush = () => {
+    if (!buffer.length) return;
+    out.push(buffer.join(' '));
+    buffer = [];
+    bufferWords = 0;
+  };
+
+  for (const sentence of sentences) {
+    const words = sentence.match(WORD_RE) || [];
+    // משפט בודד ענק (למשל טקסט בלי פיסוק) — מפוצל לפי מילים, בלי לאבד שארית.
+    if (words.length > CHUNK_MAX_WORDS) {
+      flush();
+      for (let i = 0; i < words.length; i += CHUNK_TARGET_WORDS) {
+        out.push(words.slice(i, i + CHUNK_TARGET_WORDS).join(' '));
+      }
+      continue;
+    }
+    buffer.push(sentence);
+    bufferWords += words.length;
+    if (bufferWords >= CHUNK_TARGET_WORDS) flush();
+  }
+  flush();
+  return out;
+}
+
 // חיתוך טקסט ל-chunks בסדר גודל פסקה (40-200 מילים).
-// split על שורה כפולה; פסקה קצרה (<40) נמזגת בחמדנות עם הבאה; <25 מילים נזרק; >200 נחתך.
+// split על שורה כפולה; פסקה קצרה (<40) נמזגת בחמדנות עם הבאה; <25 מילים נזרק;
+// >200 מילים — מפוצל למשפטים (splitLongParagraph), לא נחתך.
 function chunkText(text) {
   const clean = String(text || '')
     .replace(/\r\n/g, '\n')
@@ -153,7 +310,9 @@ function chunkText(text) {
     const words = raw.match(WORD_RE) || [];
     if (words.length < CHUNK_DROP_WORDS) continue; // קצר מדי לדגימת סגנון
     if (words.length > CHUNK_MAX_WORDS) {
-      out.push(words.slice(0, CHUNK_MAX_WORDS).join(' '));
+      splitLongParagraph(raw).forEach((piece) => {
+        if ((piece.match(WORD_RE) || []).length >= CHUNK_DROP_WORDS) out.push(piece);
+      });
     } else {
       out.push(raw.trim());
     }
@@ -285,6 +444,8 @@ export function addDocumentSamples({ title, text, source = 'upload', isGold = fa
   // אם כל ה-chunks של המסמך פונו (מקרה קצה) — עדיין רושמים את המסמך; added משקף כמה נשמרו בפועל.
   const survivingIds = new Set(nextChunks.map((c) => c.id));
   const added = newChunks.filter((c) => survivingIds.has(c.id)).length;
+  // כמה chunks *קיימים* פונו כדי לפנות מקום — מדווח למעלה כדי שה-UI יזהיר במקום לשתוק.
+  const evicted = blob.chunks.filter((c) => !survivingIds.has(c.id)).length;
 
   writeBlob({
     ...blob,
@@ -292,7 +453,7 @@ export function addDocumentSamples({ title, text, source = 'upload', isGold = fa
     chunks: nextChunks,
   });
 
-  return { docId, added, skipped: false };
+  return { docId, added, evicted, skipped: false };
 }
 
 // ---------- removeDocument ----------
@@ -408,5 +569,7 @@ export function getSampleStoreStats() {
     goldCount,
     totalChars,
     totalWords,
+    caps: blob.caps,
+    lastWriteError,
   };
 }

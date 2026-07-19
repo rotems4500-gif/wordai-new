@@ -448,6 +448,8 @@ export function normalizeStyleEngine(raw) {
     docCount: Math.max(0, Math.round(toNum(confSrc.docCount, 0))),
     wordCount: Math.max(0, Math.round(toNum(confSrc.wordCount, 0))),
     level: ['low', 'medium', 'high'].includes(confSrc.level) ? confSrc.level : 'low',
+    crossValidated: confSrc.crossValidated === true,
+    patternCount: Math.max(0, Math.round(toNum(confSrc.patternCount, 0))),
   };
 
   const spreadSrc = isPlainObject(src.metricsSpread) ? src.metricsSpread : {};
@@ -565,6 +567,20 @@ export function normalizeStyleEngine(raw) {
     // confidence.docCount שסופר את כל המסמכים שהועלו (ראו recomputeMetricsFromStore).
     legacyMigratedAt: Math.max(0, Math.round(toNum(src.legacyMigratedAt, 0))),
     metricsEligibleDocCount: Math.max(0, Math.round(toNum(src.metricsEligibleDocCount, 0))),
+    // שכבת embeddings סמנטית מקומית (טרום-API): מזהי ה-chunks המייצגים (מרכז+MMR)
+    // ומטא על מצב הוקטורים. representativeChunkIds cap 24. embeddingMeta additive.
+    representativeChunkIds: cleanStringArray(src.representativeChunkIds, 24),
+    embeddingMeta: isPlainObject(src.embeddingMeta)
+      ? {
+          available: src.embeddingMeta.available === true,
+          model: String(src.embeddingMeta.model || ''),
+          dim: Math.max(0, Math.round(toNum(src.embeddingMeta.dim, 0))),
+          count: Math.max(0, Math.round(toNum(src.embeddingMeta.count, 0))),
+          coverage: Math.max(0, Math.min(1, toNum(src.embeddingMeta.coverage, 0))),
+          reason: String(src.embeddingMeta.reason || ''),
+          at: Math.max(0, Math.round(toNum(src.embeddingMeta.at, 0))),
+        }
+      : {},
     extractionMeta: isPlainObject(src.extractionMeta)
       ? {
           batches: Math.max(0, Math.round(toNum(src.extractionMeta.batches, 0))),
@@ -580,20 +596,32 @@ export function normalizeStyleEngine(raw) {
 
 // ---------- recomputeConfidence ----------
 
+// יעדי כיסוי לחישוב הוודאות. WORD_TARGET הוא "מספיק חומר כדי לחקות סגנון" —
+// ~60k מילים ≈ 12-15 עבודות. הועלה מהנוסחה הישנה שהתמקדה במספר המסמכים בלבד
+// (בה docCount*8 הגיע לתקרה כבר ב-7.5 מסמכים והציון נתקע גם עם קורפוס גדול).
+const CONFIDENCE_WORD_TARGET = 60000;
+const CONFIDENCE_DOC_TARGET = 10;
+const CONFIDENCE_PATTERN_TARGET = 12;
+
 /**
- * מחשב ודאות פרופיל 0-100 מ-docCount + wordCount + יציבות מדדים.
- * level: low (<3 מסמכים), medium (3-15), high (>15).
+ * מחשב ודאות פרופיל 0-100 מכיסוי הקורפוס (מילים + מסמכים), עושר הדפוסים שחולצו
+ * ויציבות המדדים. level נגזר מהציון ומהכיסוי בפועל — לא ממספר מסמכים בלבד.
  * @param {object} styleEngine
- * @returns {{score:number, docCount:number, wordCount:number, level:string}}
+ * @returns {{score:number, docCount:number, wordCount:number, level:string, crossValidated:boolean, patternCount:number}}
  */
 export function recomputeConfidence(styleEngine) {
   const se = isPlainObject(styleEngine) ? styleEngine : {};
   const conf = isPlainObject(se.confidence) ? se.confidence : {};
   const docCount = Math.max(0, Math.round(toNum(conf.docCount, 0)));
   const wordCount = Math.max(0, Math.round(toNum(conf.wordCount, 0)));
+  const patternCount = Array.isArray(se.qualitativePatterns) ? se.qualitativePatterns.length : 0;
 
-  const base = Math.min(60, docCount * 8);
-  const wordBonus = Math.min(25, wordCount / 2000);
+  // כיסוי טקסטואלי — המרכיב הכבד: כמה מילים אמיתיות שלך יש במאגר.
+  const wordPart = clamp(wordCount / CONFIDENCE_WORD_TARGET, 0, 1) * 40;
+  // גיוון מקורות — מסמכים שונים מלמדים יותר מאותו אורך בטקסט אחד.
+  const docPart = clamp(docCount / CONFIDENCE_DOC_TARGET, 0, 1) * 30;
+  // עושר דפוסים — כמה סימני סגנון ניתן היה לחלץ בפועל.
+  const patternPart = clamp(patternCount / CONFIDENCE_PATTERN_TARGET, 0, 1) * 10;
 
   // בונוס יציבות: CV נמוך של המדדים בין מסמכים → יותר. עד 15.
   const spread = isPlainObject(se.metricsSpread) ? se.metricsSpread : {};
@@ -603,18 +631,27 @@ export function recomputeConfidence(styleEngine) {
   let stabilityBonus = 0;
   if (docCount >= 2 && cvs.length) {
     const avgCv = mean(cvs);
-    // CV 0 → בונוס מלא (15); CV ≥0.5 → 0.
-    stabilityBonus = clamp((0.5 - avgCv) / 0.5, 0, 1) * 15;
+    // CV 0 → בונוס מלא (15); CV ≥0.8 → 0. הסף הורחב מ-0.5: קורפוס מרובה ז'אנרים
+    // (סמינר + מאמר + מכתב) פיזור גבוה מטבעו, וזה לא אמור לאפס את הוודאות.
+    stabilityBonus = clamp((0.8 - avgCv) / 0.8, 0, 1) * 15;
   }
 
   // בונוס יציבות חילוץ: אם הדפוסים אומתו בין באטצ'ים (consensus) — +5.
   const em = isPlainObject(se.extractionMeta) ? se.extractionMeta : {};
   const crossValidatedBonus = em.crossValidated === true ? 5 : 0;
 
-  const score = clamp(Math.round(base + wordBonus + stabilityBonus) + crossValidatedBonus, 0, 100);
-  const level = docCount < 3 ? 'low' : docCount <= 15 ? 'medium' : 'high';
+  const score = clamp(
+    Math.round(wordPart + docPart + patternPart + stabilityBonus + crossValidatedBonus),
+    0,
+    100,
+  );
 
-  return { score, docCount, wordCount, level, crossValidated: em.crossValidated === true };
+  // level לפי כיסוי אמיתי: 'high' דורש גם ציון וגם מסה קריטית של טקסט.
+  let level = 'low';
+  if (score >= 70 && docCount >= 6 && wordCount >= 25000) level = 'high';
+  else if (score >= 35 || (docCount >= 3 && wordCount >= 4000)) level = 'medium';
+
+  return { score, docCount, wordCount, level, crossValidated: em.crossValidated === true, patternCount };
 }
 
 // ---------- seedStyleEngineFromLegacyProfile ----------

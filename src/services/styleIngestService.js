@@ -39,8 +39,25 @@ import {
   clearSampleStore,
   addGoldChunk,
   setDocumentGenre,
+  ensureSampleStoreReady,
+  flushSampleStore,
+  getSampleStoreWriteError,
 } from './styleSampleStore';
 import { readBrowserDocumentFile } from './documentUpload';
+import {
+  embedTexts,
+  cosineSim,
+  isEmbeddingUnavailable,
+  STYLE_EMBEDDING_MODEL_ID,
+  STYLE_EMBEDDING_DIM,
+} from './styleEmbeddingService';
+import {
+  getEmbeddedChunkIds,
+  putVectors,
+  getVectors,
+  pruneVectors,
+  ensureEmbeddingStoreReady,
+} from './styleEmbeddingStore';
 
 // safeJsonParse אינו נדרש בשלב זה: אינו מיוצא מ-aiService (והמודול אסור לנגוע בו);
 // הפענוח נעשה בתוך styleProfileService.parsePatternExtractionResult.
@@ -285,10 +302,15 @@ function saveEngine(profile, engine) {
  * @returns {Promise<{added:number, skipped:number, failed:Array<{name:string, error:string}>}>}
  */
 export async function ingestFiles(fileList, { onProgress } = {}) {
+  // מוודא שה-store נטען מ-IndexedDB לפני הכתיבה הראשונה — אחרת הדגימות הקיימות
+  // ידרסו ע"י cache ריק.
+  await ensureSampleStoreReady();
+
   const files = Array.from(fileList || []);
   const total = files.length;
   let added = 0;
   let skipped = 0;
+  let evicted = 0;
   const failed = [];
 
   for (let i = 0; i < files.length; i += 1) {
@@ -310,8 +332,10 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
         source: 'upload',
       });
       if (result.skipped) skipped += 1;
-      else if (result.docId) added += 1;
-      else failed.push({ name, error: 'הקובץ קצר מדי לדגימת סגנון.' });
+      else if (result.docId) {
+        added += 1;
+        evicted += Number(result.evicted) || 0;
+      } else failed.push({ name, error: 'הקובץ קצר מדי לדגימת סגנון.' });
     } catch (err) {
       failed.push({ name, error: String(err?.message || err || 'חילוץ נכשל.') });
     }
@@ -320,7 +344,9 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
     }
   }
 
-  return { added, skipped, failed };
+  // מוודא שהכתיבה הגיעה לדיסק ומדווח כשל אחסון אמיתי (במקום לבלוע אותו).
+  await flushSampleStore();
+  return { added, skipped, evicted, failed, writeError: getSampleStoreWriteError() };
 }
 
 // ---------- ingestText ----------
@@ -407,6 +433,143 @@ export function recomputeMetricsFromStore() {
   engine.confidence = recomputeConfidence(engine);
 
   return saveEngine(profile, engine);
+}
+
+// ---------- computeChunkEmbeddings (שכבת embeddings סמנטית מקומית, טרום-API) ----------
+
+const EMBED_PER_RUN_BUDGET = 600; // כמה chunks לחשב embedding בריצה אחת (השאר בהרצה הבאה)
+const REPRESENTATIVE_K = 8;      // כמה chunks מייצגים לשמור
+const REPRESENTATIVE_MMR_LAMBDA = 0.7; // איזון מרכזיות מול גיוון
+
+// centroid (ממוצע) של מפת וקטורים → Float32Array (לא מנורמל; cosineSim מטפל בנרמול).
+function computeCentroid(vectorList) {
+  if (!vectorList.length) return null;
+  const dim = vectorList[0].length;
+  const c = new Float32Array(dim);
+  for (const v of vectorList) {
+    for (let i = 0; i < dim; i += 1) c[i] += v[i];
+  }
+  for (let i = 0; i < dim; i += 1) c[i] /= vectorList.length;
+  return c;
+}
+
+/**
+ * בוחר עד k chunks מייצגים: מרכזיים (קרובים ל-centroid) אך מגוונים (MMR).
+ * @param {Array<{id:string, vec:Float32Array}>} items
+ * @param {number} k
+ * @returns {string[]} מזהי chunks בסדר מרכזיות/MMR
+ */
+function selectRepresentativeChunks(items, k = REPRESENTATIVE_K) {
+  if (!items.length) return [];
+  const centroid = computeCentroid(items.map((it) => it.vec));
+  if (!centroid) return [];
+  const scored = items
+    .map((it) => ({ ...it, centrality: cosineSim(it.vec, centroid) }))
+    .sort((a, b) => b.centrality - a.centrality);
+
+  const kClamped = Math.max(1, Math.min(k, scored.length));
+  const selected = [];
+  const pool = [...scored];
+  while (selected.length < kClamped && pool.length) {
+    let bestIdx = 0;
+    let bestVal = -Infinity;
+    for (let i = 0; i < pool.length; i += 1) {
+      let maxSim = 0;
+      for (const pick of selected) {
+        const sim = cosineSim(pool[i].vec, pick.vec);
+        if (sim > maxSim) maxSim = sim;
+      }
+      const mmr = (REPRESENTATIVE_MMR_LAMBDA * pool[i].centrality) - ((1 - REPRESENTATIVE_MMR_LAMBDA) * maxSim);
+      if (mmr > bestVal) { bestVal = mmr; bestIdx = i; }
+    }
+    selected.push(pool.splice(bestIdx, 1)[0]);
+  }
+  return selected.map((s) => s.id);
+}
+
+/**
+ * מחשב embeddings סמנטיים לכל chunk שחסר להם וקטור (מקומי, WASM, בלי מפתח API),
+ * שומר int8 ב-styleEmbeddingStore, ובוחר representativeChunkIds (מרכז+MMR) לפרופיל.
+ * DEGRADE חינני: אם שכבת ה-embeddings לא זמינה (טעינת מודל נכשלה) — מסמן
+ * embeddingMeta.available=false + reason ולא נכשל. נקרא מ-ingestAndAnalyze (טרום-API).
+ * @param {{onProgress?:function, force?:boolean}} opts
+ * @returns {Promise<{available:boolean, embedded:number, coverage:number, reason?:string, representativeCount:number}>}
+ */
+export async function computeChunkEmbeddings({ onProgress = null, force = false } = {}) {
+  // הוקטורים יושבים ב-IndexedDB — בלי ההמתנה getEmbeddedChunkIds מחזיר ריק וכל
+  // הוקטורים היו מחושבים מחדש בכל העלאה.
+  try { await ensureEmbeddingStoreReady(); } catch {}
+  const { profile, engine } = loadEngine();
+  const chunks = getChunks();
+
+  if (!chunks.length) {
+    engine.representativeChunkIds = [];
+    engine.embeddingMeta = { available: false, model: STYLE_EMBEDDING_MODEL_ID, dim: STYLE_EMBEDDING_DIM, count: 0, coverage: 0, reason: 'no-chunks', at: Date.now() };
+    saveEngine(profile, engine);
+    return { available: false, embedded: 0, coverage: 0, reason: 'no-chunks', representativeCount: 0 };
+  }
+
+  // prune וקטורים של chunks שכבר לא קיימים.
+  const liveIds = new Set(chunks.map((c) => String(c.id)));
+  pruneVectors(liveIds);
+
+  // אילו chunks חסרים וקטור תקף?
+  const already = getEmbeddedChunkIds();
+  const missingAll = force
+    ? chunks
+    : chunks.filter((c) => !already.has(String(c.id)));
+  // תקציב לריצה אחת: עם caps של אלפי chunks, embedding של הכל בבת אחת תוקע את
+  // ההעלאה לדקות. השאר יחושב בהעלאה/ניתוח הבא (הכיסוי מדווח ב-embeddingMeta).
+  const missing = missingAll.slice(0, EMBED_PER_RUN_BUDGET);
+
+  if (missing.length) {
+    const vectors = await embedTexts(missing.map((c) => String(c.text || '')), {
+      kind: 'passage',
+      onProgress,
+    });
+    if (!vectors) {
+      // degrade — המודל לא נטען/נכשל. שומרים דגל, לא נכשלים.
+      const reason = String(isEmbeddingUnavailable() || 'embedding-unavailable');
+      engine.embeddingMeta = { available: false, model: STYLE_EMBEDDING_MODEL_ID, dim: STYLE_EMBEDDING_DIM, count: already.size, coverage: chunks.length ? already.size / chunks.length : 0, reason, at: Date.now() };
+      saveEngine(profile, engine);
+      return { available: false, embedded: 0, coverage: engine.embeddingMeta.coverage, reason, representativeCount: (engine.representativeChunkIds || []).length };
+    }
+    const entries = [];
+    for (let i = 0; i < missing.length; i += 1) {
+      if (vectors[i]) entries.push({ chunkId: String(missing[i].id), vector: vectors[i] });
+    }
+    putVectors(entries);
+  }
+
+  // בחירת מייצגים מכל הוקטורים הקיימים כעת.
+  const allIds = chunks.map((c) => String(c.id));
+  const vecMap = getVectors(allIds);
+  const items = [];
+  for (const id of allIds) {
+    const v = vecMap.get(id);
+    if (v) items.push({ id, vec: v });
+  }
+  const representativeChunkIds = selectRepresentativeChunks(items, REPRESENTATIVE_K);
+  const coverage = chunks.length ? items.length / chunks.length : 0;
+
+  engine.representativeChunkIds = representativeChunkIds;
+  engine.embeddingMeta = {
+    available: items.length > 0,
+    model: STYLE_EMBEDDING_MODEL_ID,
+    dim: STYLE_EMBEDDING_DIM,
+    count: items.length,
+    coverage,
+    reason: items.length ? '' : 'no-vectors',
+    at: Date.now(),
+  };
+  saveEngine(profile, engine);
+
+  return {
+    available: items.length > 0,
+    embedded: missing.length,
+    coverage,
+    representativeCount: representativeChunkIds.length,
+  };
 }
 
 // ---------- runQualitativeAnalysis ----------
@@ -536,11 +699,14 @@ export async function ingestAndAnalyze(fileList, { onProgress, runPatterns = tru
   // כשל בסיווג לעולם לא חוסם את שאר הצינור.
   try { await classifyPendingGenres(); } catch {}
   recomputeMetricsFromStore();
+  // שכבת embeddings סמנטית מקומית — רצה טרום-API (WASM, בלי מפתח). כשל לעולם לא חוסם.
+  let embeddings = null;
+  try { embeddings = await computeChunkEmbeddings({ onProgress }); } catch {}
   let patterns = null;
   if (runPatterns) {
     patterns = await runQualitativeAnalysis({ force: true });
   }
-  return { ingest, patterns };
+  return { ingest, patterns, embeddings };
 }
 
 // ---------- getStyleOverview ----------
@@ -569,6 +735,8 @@ export function getStyleOverview() {
     metricsEligibleDocCount: engine.metricsEligibleDocCount || 0,
     extractionMeta: isPlainObject(engine.extractionMeta) ? engine.extractionMeta : null,
     genreProfiles: isPlainObject(engine.genreProfiles) ? engine.genreProfiles : {},
+    embeddingMeta: isPlainObject(engine.embeddingMeta) ? engine.embeddingMeta : {},
+    representativeChunkIds: Array.isArray(engine.representativeChunkIds) ? engine.representativeChunkIds : [],
   };
 }
 

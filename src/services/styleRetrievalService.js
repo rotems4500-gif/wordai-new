@@ -11,7 +11,7 @@
 // אין ייבוא מ-aiService / workspaceLearningService (סיכון מעגל). עובד בדפדפן (localStorage).
 // תוכנית: docs/style-engine-plan.md §7, §4.
 
-import { getChunks } from './styleSampleStore';
+import { getChunks, ensureSampleStoreReady } from './styleSampleStore';
 // STYLE_CONNECTORS מיובא לתיעוד/עתיד; לא בשימוש ישיר כרגע — נשמר leaf-only import.
 // eslint-disable-next-line no-unused-vars
 import { STYLE_CONNECTORS } from './styleProfileService';
@@ -243,6 +243,10 @@ async function selectChunksLlm({ requestText, candidates, k, invokeModel }) {
  * @returns {Promise<Array<object>>}
  */
 export async function selectChunks(requestText, { k = 4, mode = 'local', chunks = null, invokeModel = null, genre = null } = {}) {
+  // ה-store נטען אסינכרונית מ-IndexedDB — בלי ההמתנה, קריאה מוקדמת מחזירה קורפוס ריק.
+  if (!Array.isArray(chunks)) {
+    try { await ensureSampleStoreReady(); } catch {}
+  }
   const corpus = Array.isArray(chunks) ? chunks.filter(isPlainObject) : getChunks();
   if (!corpus.length) return [];
 

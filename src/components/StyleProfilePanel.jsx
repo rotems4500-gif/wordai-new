@@ -74,6 +74,7 @@ export default function StyleProfilePanel({ onClose }) {
   const [progressText, setProgressText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadReport, setUploadReport] = useState(null);
   const [userBlacklistDraft, setUserBlacklistDraft] = useState('');
   const fileInputRef = useRef(null);
 
@@ -113,9 +114,10 @@ export default function StyleProfilePanel({ onClose }) {
     const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
     setUploading(true);
+    setUploadReport(null);
     setProgressText(`מנתח מסמך 1/${files.length}...`);
     try {
-      await ingestAndAnalyze(files, {
+      const result = await ingestAndAnalyze(files, {
         onProgress: (info) => {
           const current = Number(info?.current ?? info?.index ?? 1);
           const total = Number(info?.total ?? files.length);
@@ -123,8 +125,12 @@ export default function StyleProfilePanel({ onClose }) {
         },
         runPatterns: true,
       });
+      // דיווח מלא למשתמש: עד יולי 2026 failed[] נזרק לקונסול בלבד, כך שקובץ שנפל
+      // (או פינוי בגלל תקרת אחסון) נראה בדיוק כמו העלאה מוצלחת.
+      setUploadReport(result?.ingest || null);
     } catch (err) {
       console.error('ingestAndAnalyze failed:', err);
+      setUploadReport({ added: 0, skipped: 0, failed: [], fatal: String(err?.message || err) });
     } finally {
       setUploading(false);
       setProgressText('');
@@ -242,6 +248,23 @@ export default function StyleProfilePanel({ onClose }) {
 
   const confidence = overview?.confidence || {};
   const metrics = overview?.metrics || null;
+
+  // מה בדיוק חסר כדי להעלות את הוודאות — במקום "נמוכה" בלי הסבר.
+  // היעדים תואמים ל-recomputeConfidence (60k מילים, 10 מסמכים).
+  const confidenceHint = (() => {
+    if (confidence.level === 'high') return '';
+    const words = Number(confidence.wordCount) || 0;
+    const docs = Number(confidence.docCount) || 0;
+    const needWords = Math.max(0, 25000 - words);
+    const needDocs = Math.max(0, 6 - docs);
+    if (!docs) return '';
+    if (needDocs > 0 && needWords > 0) {
+      return `כדי להגיע לוודאות גבוהה: עוד ${needDocs} מסמכים וכ-${Math.round(needWords / 1000)}k מילים.`;
+    }
+    if (needDocs > 0) return `כדי להגיע לוודאות גבוהה: עוד ${needDocs} מסמכים.`;
+    if (needWords > 0) return `כדי להגיע לוודאות גבוהה: עוד כ-${Math.round(needWords / 1000)}k מילים.`;
+    return 'עוד קצת חומר והוודאות תעלה — נסה "נתח מחדש".';
+  })();
   // E3 — פיזור ז'אנרים מתוך תת-פרופילי המדדים (ז'אנרים עם ≥3 מסמכים).
   const genreDistribution = overview?.genreProfiles
     ? Object.entries(overview.genreProfiles)
@@ -284,6 +307,11 @@ export default function StyleProfilePanel({ onClose }) {
     && !extractionMeta.llmBatchesFailed
     && !extractionMeta.genreClassificationFailed;
 
+  // שכבת embeddings סמנטית מקומית (טרום-API) — צ'יפ סטטוס.
+  const embeddingMeta = overview?.embeddingMeta || null;
+  const embeddingAvailable = Boolean(embeddingMeta?.available) && (embeddingMeta.count || 0) > 0;
+  const embeddingCount = embeddingMeta?.count || 0;
+
   const metricCards = [];
   if (metrics) {
     const avgSentenceLen = formatNumber(metrics.avgSentenceWords ?? metrics.averageSentenceLength);
@@ -325,10 +353,14 @@ export default function StyleProfilePanel({ onClose }) {
                 className={`text-[10px] font-semibold rounded-full border px-2 py-0.5 ${CONFIDENCE_STYLES[confidence.level] || CONFIDENCE_STYLES.low}`}
                 title="ככל שתעלה יותר מסמכים שכתבת, החיקוי יהיה מדויק יותר"
               >
+                {/* confidence.score כבר בסולם 0-100 (recomputeConfidence) — בלי ×100 נוסף. */}
                 ודאות פרופיל: {CONFIDENCE_LABELS[confidence.level] || CONFIDENCE_LABELS.low}
-                {Number.isFinite(confidence.score) ? ` (${Math.round(confidence.score * 100)}%)` : ''}
+                {Number.isFinite(confidence.score) ? ` (${Math.round(confidence.score)}%)` : ''}
               </span>
             </h2>
+            {confidenceHint && (
+              <p className="text-[11.5px] font-semibold text-indigo-600 mt-1">{confidenceHint}</p>
+            )}
             <p className="text-[12px] text-slate-400 mt-1">
               {overview?.stats
                 ? `${overview.stats.docCount || 0} מסמכים · ${overview.stats.totalWords || 0} מילים · ${overview.stats.chunkCount || 0} קטעים`
@@ -393,6 +425,35 @@ export default function StyleProfilePanel({ onClose }) {
           <div className="flex items-center gap-2 mt-2 text-[12.5px] font-semibold text-indigo-600">
             <span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
             {progressText || 'מעלה ומנתח...'}
+          </div>
+        )}
+        {!uploading && uploadReport && (
+          <div className="w-full mt-3 flex flex-col gap-1.5 text-right">
+            {Number(uploadReport.added) > 0 && (
+              <div className="text-[12px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-1.5">
+                ✓ נוספו {uploadReport.added} מסמכים לפרופיל
+              </div>
+            )}
+            {Number(uploadReport.skipped) > 0 && (
+              <div className="text-[12px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5">
+                {uploadReport.skipped} מסמכים דולגו — כבר קיימים במאגר (תוכן זהה).
+              </div>
+            )}
+            {Number(uploadReport.evicted) > 0 && (
+              <div className="text-[12px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-1.5">
+                ⚠ המאגר הגיע לתקרה — {uploadReport.evicted} קטעים ישנים פונו כדי לפנות מקום.
+              </div>
+            )}
+            {(uploadReport.writeError || uploadReport.fatal) && (
+              <div className="text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-1.5">
+                שגיאת שמירה: {uploadReport.writeError || uploadReport.fatal}
+              </div>
+            )}
+            {(uploadReport.failed || []).map((f) => (
+              <div key={f.name} className="text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-1.5">
+                ✗ {f.name}: {f.error}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -488,6 +549,14 @@ export default function StyleProfilePanel({ onClose }) {
       {llmComplete && (
         <div className="inline-flex items-center gap-1.5 self-start text-[11.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
           ✓ ניתוח AI מלא
+        </div>
+      )}
+      {hasLocalProfile && embeddingAvailable && (
+        <div
+          className="inline-flex items-center gap-1.5 self-start text-[11.5px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-3 py-1"
+          title="וקטורים סמנטיים מקומיים (multilingual-e5) — נבנו ללא מפתח API, לזיהוי קטעים מייצגים לפי משמעות"
+        >
+          🧬 מפה סמנטית מקומית · {embeddingCount} קטעים
         </div>
       )}
 

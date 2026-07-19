@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@huggingface/transformers": "^4.2.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tiptap/extension-blockquote": "^3.22.3",

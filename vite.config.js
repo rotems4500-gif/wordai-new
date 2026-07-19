@@ -322,6 +322,9 @@ export default async () => defineConfig({
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
+    // transformers.js (+onnxruntime-web WASM) — נטען dynamic-import בלבד (styleEmbeddingService);
+    // exclude מ-pre-bundle מונע בעיות עם ה-WASM assets/worker של onnxruntime.
+    exclude: ['@huggingface/transformers'],
   },
   define: {
     global: 'globalThis',
