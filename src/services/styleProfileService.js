@@ -17,7 +17,7 @@
 import { getChunks } from './styleSampleStore';
 import { selectExemplarSentences } from './styleRetrievalService';
 // styleReferenceService הוא LEAF (מייבא רק את קובץ הנתונים) — ייבוא ממנו בטוח, בלי מעגל.
-import { getReferenceDistribution, getReferenceNgramFreq, getCachedReference } from './styleReferenceService';
+import { getReferenceDistribution, getReferenceNgramFreq, getCachedReference, isRealReference } from './styleReferenceService';
 
 export const STYLE_ENGINE_SCHEMA_VERSION = 3;
 
@@ -1055,6 +1055,9 @@ const POP_DISTINCTIVE_Z = 0.8;
  * @returns {boolean}
  */
 const shouldInjectMetricAnchor = (reference, key, userVal, genreName) => {
+  // F4 — גיוד anchors (סינון) מותר רק על נכס-ייחוס מקורפוס אמיתי. עם bootstrap
+  // (mean/std מנוחשים) מזריקים הכל כמו לפני Phase 4 — אין סינון על נתונים מנוחשים.
+  if (!isRealReference(reference)) return true;
   const dist = getReferenceDistribution(reference, key, genreName || null);
   if (!dist) return true; // אין נתוני אוכלוסייה למדד → מזריקים כרגיל (התנהגות מקורית)
   const popStd = Math.max(Number(dist.std) || 0, METRIC_POP_STD_FLOOR[key] || 0);
@@ -1829,8 +1832,9 @@ const findNgramEvidence = (prepared, phrase) => {
  * @param {Array<{docId?:string, text?:string, wordCount?:number}>} chunks
  * @param {{minDocFraction?:number, minCount?:number, top?:number, populationNgramFreq?:object}} opts
  *   populationNgramFreq — טבלת תדירויות n-gram באוכלוסייה (ref.ngramFreq). ביטוי נפוץ-
- *   באוכלוסייה = "עברית תקנית" (מוריד דירוג/משקל); ביטוי נדיר-באוכלוסייה + שכיח-אצל-
- *   המשתמש = חתימה חזקה (מעלה). חסר/ריק → התנהגות מקורית (graceful).
+ *   באוכלוסייה = "עברית תקנית" (מוריד דירוג/משקל, demote בטוח). F4: אין יותר boost על
+ *   ביטוי נדיר/נעדר — נייטרלי בלבד, כדי לא לנפח חתימות על נתוני bootstrap מנוחשים.
+ *   חסר/ריק → התנהגות מקורית (graceful).
  * @returns {Array<object>} patterns {id, label, type, weight, evidence, frequencyPer100Words, docFraction}
  */
 export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8, top = 10, populationNgramFreq = null } = {}) {
@@ -1845,15 +1849,18 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
   if (!prepared.length) return [];
 
   // ניגוד מול אוכלוסייה: מכפיל-חתימה על משקל+דירוג. ללא נתוני-אוכלוסייה → 1 (graceful).
+  // F4 — ה-boost המלאכותי (1.15) בוטל: על נתוני bootstrap מנוחשים אסור להעלות ngram
+  // רק כי הוא "נעדר" מהטבלה המנוחשת. נשאר רק ה-demote של boilerplate מוכר-ושכיח
+  // באוכלוסייה (0.7) — הוא נשען על רשימה מפורשת ובטוח גם עם bootstrap, לכן אינו
+  // מותנה ב-isRealReference.
   const popRef = isPlainObject(populationNgramFreq) ? { ngramFreq: populationNgramFreq } : null;
   const populationSignatureMult = (label, userFreqPer100) => {
     if (!popRef) return 1;
     const popF = getReferenceNgramFreq(popRef, label);
-    if (popF <= 0) return 1.15;                    // נעדר מהאוכלוסייה → חתימה אישית
-    const ratio = toNum(userFreqPer100, 0) / popF; // >1 = המשתמש מעל הנורמה האוכלוסייתית
-    if (ratio >= 2) return 1.15;                    // שכיח אצל המשתמש הרבה מעל האוכלוסייה
-    if (ratio <= 0.8) return 0.7;                   // נפוץ באוכלוסייה → "תקני", לא חתימה
-    return 1;
+    if (popF <= 0) return 1;                         // לא-מוכר בטבלה → נייטרלי (בלי boost מלאכותי)
+    const ratio = toNum(userFreqPer100, 0) / popF;  // <1 = המשתמש מתחת/סביב הנורמה האוכלוסייתית
+    if (ratio <= 0.8) return 0.7;                    // מוכר ושכיח באוכלוסייה → boilerplate, demote בטוח
+    return 1;                                         // אין boost — מקסימום נייטרלי
   };
 
   const uniqueDocCount = new Set(prepared.map((c) => c.docId)).size || 1;

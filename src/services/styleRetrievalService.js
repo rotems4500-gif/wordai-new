@@ -171,6 +171,8 @@ function mmrSelect(scored, k, vectorById = null) {
   // scored: [{chunk, relevance}] ממויין יורד לפי relevance.
   const useVec = vectorById instanceof Map;
   // דמיון לגיוון: cosine בין הווקטורים כשקיימים לשני המועמדים, אחרת chunkSimilarity הקיים.
+  // ה-gate של הקורא על vectorById.size>0 (useVectors) ממזער זוגות מעורבים (וקטור מול
+  // ללא-וקטור) — ברוב המקרים או שלכולם יש וקטור או שלאף אחד אין.
   const simOf = (a, b) => {
     if (useVec) {
       const va = vectorById.get(a?.id);
@@ -292,8 +294,10 @@ export async function selectChunks(requestText, { k = 4, mode = 'local', chunks 
   const targetGenre = genre ? String(genre).trim() : '';
 
   const idf = buildIdf(corpus);
-  // דירוג היברידי רק כשהוזרקו וקטורים תקפים (queryVector + מפת וקטורים per-chunk).
-  const useVectors = queryVector instanceof Float32Array && vectorById instanceof Map;
+  // דירוג היברידי רק כשהוזרקו וקטורים תקפים (queryVector + מפת וקטורים per-chunk לא-ריקה).
+  // size===0 → נשארים בנתיב ה-TF-IDF המקורי בדיוק (בלי הנרמול ההיברידי), כדי לשמר
+  // התנהגות זהה כשאין וקטורים כלל.
+  const useVectors = queryVector instanceof Float32Array && vectorById instanceof Map && vectorById.size > 0;
 
   // שלב 1: ציון TF-IDF גולמי לכל chunk. במיזוג נורמל אותו ב-max הבאטצ' לטווח [0,1].
   const rawTfidf = corpus.map((chunk) => scoreChunkRelevance(chunk, queryTermsSet, idf));
@@ -305,10 +309,16 @@ export async function selectChunks(requestText, { k = 4, mode = 'local', chunks 
       let relevance;
       if (useVectors) {
         const vec = vectorById.get(chunk?.id);
-        // graceful: chunk בלי וקטור → cosine=0, נשען על ה-TF-IDF המנורמל בלבד.
-        const cos = vec ? cosineLocal(queryVector, vec) : 0;
         const tfidfNorm = maxTfidf > 0 ? rawTfidf[i] / maxTfidf : 0;
-        relevance = (ALPHA_COSINE * cos) + ((1 - ALPHA_COSINE) * tfidfNorm);
+        // הוגנות per-chunk: chunk *עם* וקטור → מיזוג היברידי ALPHA·cos+(1-ALPHA)·tfidf.
+        // chunk *בלי* וקטור → tfidfNorm במלוא המשקל (נייטרלי) — היעדר וקטור לא נספר
+        // כ-cos=0 ולא מדלל את הציון, כדי לא להפלות chunks לא-מוטמעים (partial coverage).
+        if (vec) {
+          const cos = cosineLocal(queryVector, vec);
+          relevance = (ALPHA_COSINE * cos) + ((1 - ALPHA_COSINE) * tfidfNorm);
+        } else {
+          relevance = tfidfNorm;
+        }
       } else {
         // בלי וקטורים — TF-IDF טהור כמו קודם (בלי נרמול, כדי לשמר התנהגות זהה).
         relevance = rawTfidf[i];

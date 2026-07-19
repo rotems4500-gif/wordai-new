@@ -106,3 +106,18 @@ export function getReferenceNgramFreq(ref, ngram) {
   const value = Number(table[ngram]);
   return Number.isFinite(value) ? value : 0;
 }
+
+/**
+ * מזהה אם נכס-הייחוס נבנה מקורפוס אמיתי (ולא bootstrap ידני מנוחש).
+ * גיוד anchors ושקלול distinctiveness מותרים רק על ref אמיתי — ראה F4.
+ * @param {object} ref
+ * @returns {boolean}
+ */
+export function isRealReference(ref) {
+  return ref?.meta?.builtFrom === 'corpus';
+}
+
+// חימום מוקדם בטעינת המודול: כך שהמטמון הסינכרוני (getCachedReference) חם בכל
+// session ללא תלות ב-setStyleEngineEnabled — מונע {} ריק אצל משתמש חוזר שהמנוע כבר
+// דלוק אצלו. fire-and-forget, לא זורק (primeStyleReference כבר עטוף).
+primeStyleReference();

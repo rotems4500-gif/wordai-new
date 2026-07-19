@@ -13,7 +13,7 @@
 import { scoreTextAuthenticity } from './styleAuthenticityService';
 import { computeLocalMetrics, buildStyleEngineInjectionBlock } from './styleProfileService';
 import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from './styleRetrievalService';
-import { loadStyleReference, getReferenceDistribution, getCachedReference } from './styleReferenceService';
+import { loadStyleReference, getReferenceDistribution, getCachedReference, isRealReference } from './styleReferenceService';
 
 // ---------- עזרי בסיס ----------
 
@@ -103,6 +103,9 @@ export function scoreStyleMatchLocal(text, styleEngine, genre = null, reference 
   // נכס-ייחוס האוכלוסייה: מהפרמטר (קורא async שעשה await), אחרת מהמטמון הסינכרוני.
   // חסר/ריק → getReferenceDistribution יחזיר null לכל מדד → משקלים=1 → התנהגות מקורית.
   const ref = isPlainObject(reference) ? reference : getCachedReference();
+  // F4 — שקלול distinctiveness מותר רק על נכס-ייחוס מקורפוס אמיתי. עם bootstrap
+  // (mean/std מנוחשים ידנית) המשקלים נשארים 1 → ממוצע רגיל, no-op מול הניחוש.
+  const realRef = isRealReference(ref);
 
   const tMetrics = computeLocalMetrics(text);
   if (!tMetrics) return { score: 50, breakdown: { reason: 'too-short' }, penalties: [] };
@@ -126,9 +129,9 @@ export function scoreStyleMatchLocal(text, styleEngine, genre = null, reference 
     const std = Math.max(Number(S[key]?.std) || 0, floorStd);
     const z = Math.min(Math.abs(tVal - mean) / std, 4);
     // משקל distinctiveness ∈ [0,1]: הפוך מהגאוסיאני של zPop (חריגה גבוהה = חתימה).
-    // ללא reference למדד → משקל 1 (כמו היום, ניטרלי).
+    // ללא reference אמיתי למדד → משקל 1 (כמו היום, ניטרלי). bootstrap → תמיד 1.
     let weight = 1;
-    const popDist = getReferenceDistribution(ref, key, gKey || null);
+    const popDist = realRef ? getReferenceDistribution(ref, key, gKey || null) : null;
     if (popDist) {
       const popStd = Math.max(Number(popDist.std) || 0, floorStd);
       if (popStd > 0) {

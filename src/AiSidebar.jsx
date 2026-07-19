@@ -15,12 +15,15 @@ import { isV3FlagEnabled } from "./v3/flags";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
 
-// סוכני AGENTS_CONFIG שהתוצר שלהם הוא שכתוב/ליטוש סגנוני של טקסט קיים בפורמט טקסט-נקי
-// (לא HTML, לא שפה אחרת) — מועמדים ל-applyStyleJudgeToText כדי שיישמעו יותר כמו המשתמש.
-// בכוונה לא כולל: summary/organize/textToTable (מחזירים HTML/רשימות, לא פרוזה),
-// synonyms/translate (מילה בודדת / שפה אחרת), sources/holeFill/lecturer (ידע/מחקר, לא סגנון),
-// continue/draft/brainstorm/chef/aiAppendix (יצירת תוכן חדש, לא ליטוש טקסט קיים).
-const STYLE_JUDGE_CLASSIC_AGENT_IDS = ['fix', 'reviewFix', 'humanize', 'academic'];
+// סוכני AGENTS_CONFIG שהתוצר שלהם הוא *תמיד* פרוזה טקסט-נקי (לא HTML, לא רשימה, לא שפה
+// אחרת) — מועמדים ל-applyStyleJudgeToText כדי שיישמעו יותר כמו המשתמש. השופט משכתב פרוזה;
+// אם היעד רשימה/HTML הוא ישבש אותה, לכן רק סוכני פרוזה טהורה נכללים.
+// בכוונה לא כולל: fix (ב-taskpane ה-taskpaneSystemCtx שלו = GAP REVIEWER שמחזיר רשימה
+// ממוספרת, לא פרוזה), reviewFix (מחזיר החלפה/רשימת תיקונים תלוית-הקשר, לא פרוזה יציבה),
+// summary/organize/textToTable (HTML/רשימות), synonyms/translate (מילה בודדת / שפה אחרת),
+// sources/holeFill/lecturer (ידע/מחקר), continue/draft/brainstorm/chef/aiAppendix (תוכן חדש).
+// humanize+academic חסרי taskpaneSystemCtx → משתמשים ב-systemCtx (פרוזה) בשני ההקשרים.
+const STYLE_JUDGE_CLASSIC_AGENT_IDS = ['humanize', 'academic'];
 
 const CONTEXT_PROMPTS = [
   '🤔 נראה ארוך אה?',
@@ -4306,7 +4309,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           // כשל בלולאה לא מפיל את התשובה — נשארים עם הנוסח המקורי.
         }
       }
-      // שופט סגנון לסוכנים סגנוניים קלאסיים בלבד (תיקון/בדיקה+תיקון/האנשה/אקדמי) — לא
+      // שופט סגנון לסוכני פרוזה טהורה בלבד (האנשה/אקדמי) — לא
       // בצ'אט כללי, לא ב-general-knowledge, ולא בסוכני ידע/מחקר (sources/holeFill/lecturer).
       // effectiveDirectAgentMeta.id מזהה סוכן קלאסי פעיל בלבד; ב-scope 'document' של צ'אט
       // רגיל (בלי סוכן) הוא נופל ל-'assistant-main' ולכן לא נכנס לרשימה. לעולם לא זורק.

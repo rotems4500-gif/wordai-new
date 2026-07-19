@@ -45,7 +45,7 @@ import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService
 import { normalizeStyleEngine, buildStyleEngineInjectionBlock, classifyRequestGenre } from "./styleProfileService";
 import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from "./styleRetrievalService";
 import { ensureSampleStoreReady, getChunks } from "./styleSampleStore";
-import { ensureEmbeddingStoreReady, getVectors } from "./styleEmbeddingStore";
+import { ensureEmbeddingStoreReady, getVectors, getEmbeddedChunkIds } from "./styleEmbeddingStore";
 import { embedText } from "./styleEmbeddingService";
 import { scoreStyleMatch, runStyleRewriteLoop, rewriteDocumentHtmlTowardStyle } from "./styleJudgeService";
 export {
@@ -6063,10 +6063,16 @@ const retrieveStyleChunkBlock = async (requestText, options = {}) => {
     if (Array.isArray(candidateChunks) && candidateChunks.length) {
       try {
         await ensureEmbeddingStoreReady();
-        queryVector = await embedText(String(requestText || ''), { kind: 'query' });
-        if (queryVector) {
-          const chunkIds = candidateChunks.map((c) => c?.id).filter(Boolean);
-          vectorById = getVectors(chunkIds);
+        const chunkIds = candidateChunks.map((c) => c?.id).filter(Boolean);
+        // גייט: אם לאף אחד מה-chunks המועמדים אין עדיין וקטור — דלג לגמרי על embedText
+        // (מונע טעינת מודל ה-WASM לחינם). בלי חפיפה → queryVector נשאר null → TF-IDF טהור.
+        const embeddedIds = getEmbeddedChunkIds();
+        const hasAnyEmbedding = chunkIds.some((id) => embeddedIds.has(id));
+        if (hasAnyEmbedding) {
+          queryVector = await embedText(String(requestText || ''), { kind: 'query' });
+          if (queryVector) {
+            vectorById = getVectors(chunkIds);
+          }
         }
       } catch {
         queryVector = null;
@@ -6182,6 +6188,7 @@ export const scoreStyleForDocument = async (plainText, { runId = '', mode = 'aut
     const scored = await scoreStyleMatch(text, { styleEngine, invokeModel, mode, genre: resolvedGenre });
     return {
       score: scored.score,
+      genre: resolvedGenre,
       local: scored.local,
       llm: scored.llm,
       usedLlm: scored.usedLlm,
