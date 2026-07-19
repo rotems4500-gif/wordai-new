@@ -6068,6 +6068,7 @@ const retrieveStyleChunkBlock = async (requestText, options = {}) => {
 // עוטף את הספק הפעיל כ-invokeModel לשופט/rewrite הסגנון. suppressStyleEngine:true
 // קריטי — מונע מהשופט להזריק את בלוק הסגנון לתוך הקריאות של עצמו (recursion/contamination).
 // skipAutomation+skipMultiModel שומרים על קריאה יחידה נקייה בלי workflow/ריבוי מודלים.
+// בכוונה בלי מודל זול: השופט מניע rewrite על תוצר גלוי — שופט חלש = נזק; עלותו נמוכה ממילא.
 const makeStyleJudgeInvokeModel = (runId = '') => (prompt) => chatWithActiveProvider(String(prompt || ''), '', '', {
   skipAutomation: true,
   skipMultiModel: true,
@@ -7849,6 +7850,24 @@ export const resolveStrongGeneralModelForProvider = (providerId = '', cfg = null
   const available = getProviderModelChoices(provider, cfg || getProviderConfig());
   // רק אם המודל החזק באמת זמין לספק — אחרת נשארים על המוגדר.
   return Array.isArray(available) && available.includes(strong) ? strong : '';
+};
+
+// מודל "זול" לכל ספק — לקריאות פנימיות של מנוע הסגנון (סיווג ז'אנר, חילוץ דפוסים).
+// אותה שיטה כמו STRONG_GENERAL_MODEL_BY_PROVIDER, בכיוון ההפוך: להוזיל בלי לפגוע ביכולת.
+const CHEAP_MODEL_BY_PROVIDER = {
+  gemini: 'gemini-2.5-flash',
+  openai: 'gpt-4o-mini',
+  claude: 'claude-haiku-4-5',
+  groq: 'llama-3.1-8b-instant',
+  perplexity: 'sonar',
+};
+export const resolveCheapModelForProvider = (providerId = '', cfg = null) => {
+  const provider = String(providerId || '').trim();
+  const cheap = CHEAP_MODEL_BY_PROVIDER[provider];
+  if (!cheap) return '';
+  const available = getProviderModelChoices(provider, cfg || getProviderConfig());
+  // רק אם המודל הזול באמת זמין לספק — אחרת נשארים על המוגדר.
+  return Array.isArray(available) && available.includes(cheap) ? cheap : '';
 };
 
 export const getAgentDebugLogs = (filters = {}) => {

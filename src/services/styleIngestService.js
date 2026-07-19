@@ -9,9 +9,10 @@
 
 import {
   chatWithActiveProvider,
-  getPersonalStyleProfile,
-  savePersonalStyleProfile,
   getExternalAnalysisAvailability,
+  getPersonalStyleProfile,
+  resolveCheapModelForProvider,
+  savePersonalStyleProfile,
 } from './aiService';
 import {
   normalizeStyleEngine,
@@ -72,13 +73,18 @@ const CAP_BLACKLIST_USER = 50;
 const PATTERN_BATCH_MAX_CHARS = 5000;
 const PATTERN_BATCH_MAX_BATCHES = 8;
 
+// חילוץ דפוסים במודל זול — למעט ספקים שהמודל הזול שלהם חלש מדי בעברית ניואנסית.
+const CHEAP_EXTRACTION_EXCLUDE = new Set(['groq']);
+
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 // בונה options לקריאת chatWithActiveProvider שלא עיוורות לספק הפעיל: אם יש ספק מוגדר
 // זמין (getExternalAnalysisAvailability — אותו helper ששולף "Syllabus Profile Import"),
 // מכוונים אליו במפורש עם strictProviderOverride כדי שספק פעיל שבור (כמו quota מת) לא
 // יפיל בשקט את כל קריאות ה-LLM של מנוע הסגנון. בלי ספק מוגדר — נופלים לספק הפעיל כרגיל.
-function buildStyleLlmOptions(agentLabel, runId) {
+// cheap:true מוסיף modelOverride למודל זול (resolveCheapModelForProvider) כשהספק ידוע
+// ולא ברשימת cheapExclude — רק לקריאות פנימיות (סיווג/חילוץ), לא לתוצר שהמשתמש רואה.
+function buildStyleLlmOptions(agentLabel, runId, { cheap = false, cheapExclude } = {}) {
   const base = {
     strictFormatting: true,
     skipAutomation: true,
@@ -89,11 +95,19 @@ function buildStyleLlmOptions(agentLabel, runId) {
   try {
     const availability = getExternalAnalysisAvailability();
     if (availability?.hasLocalProvider && availability.processingProviderId) {
-      return {
+      const providerId = availability.processingProviderId;
+      const result = {
         ...base,
-        providerOverride: availability.processingProviderId,
+        providerOverride: providerId,
         strictProviderOverride: true,
       };
+      if (cheap && !(cheapExclude && cheapExclude.has(providerId))) {
+        const cheapModel = resolveCheapModelForProvider(providerId);
+        if (cheapModel) {
+          result.modelOverride = cheapModel;
+        }
+      }
+      return result;
     }
   } catch {
     // כשל בשליפת זמינות — נופלים לספק הפעיל (התנהגות קודמת)
@@ -234,7 +248,7 @@ export async function classifyPendingGenres() {
   // מבחוץ (ולא לבלוע את הכשל לגמרי) עוטפים את invokeModel ומסמנים דגל מקומי.
   let llmFailed = false;
   const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
-    ...buildStyleLlmOptions('Style Genre Classification', `style-genre-${Date.now()}`),
+    ...buildStyleLlmOptions('Style Genre Classification', `style-genre-${Date.now()}`, { cheap: true }),
     suppressStyleEngine: true,
     suppressPersonalStyle: true,
   }).catch((err) => {
@@ -604,7 +618,7 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
   }
 
   const invokeModel = (prompt) => chatWithActiveProvider(prompt, '', '', {
-    ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`),
+    ...buildStyleLlmOptions('Style Pattern Extraction', `style-patterns-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
   });
 
   // קריאות סדרתיות (מונע rate-limit storm); כשלון בבאטצ' בודד — מדלגים, סופרים הצלחות.
