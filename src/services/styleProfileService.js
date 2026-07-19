@@ -535,6 +535,28 @@ const normalizePattern = (raw) => {
   };
 };
 
+// היסטוריית איכות מתגלגלת (feedback-loop): רשומות { score, at, genre? } של ציוני
+// scoreStyleForDocument על פלט שנוצר. cap 20, שומר את האחרונות. מסנן לא-תקינים,
+// clamp ל-0-100. משפיע על recomputeConfidence דרך qualityAdjustment.
+const CAP_QUALITY_HISTORY = 20;
+const normalizeQualityHistory = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const item of arr) {
+    if (!isPlainObject(item)) continue;
+    if (!Number.isFinite(Number(item.score))) continue;
+    const entry = {
+      score: clamp(Math.round(toNum(item.score, 0)), 0, 100),
+      at: Math.max(0, Math.round(toNum(item.at, 0))),
+    };
+    const genre = String(item.genre || '').trim();
+    if (genre) entry.genre = genre;
+    out.push(entry);
+  }
+  // שומר את האחרונות (cap 20).
+  return out.slice(-CAP_QUALITY_HISTORY);
+};
+
 /**
  * מנרמל אובייקט styleEngine גולמי לסכמה המלאה (5a) עם ברירות מחדל בטוחות.
  * סובלני לכל קלט (null/זבל → defaults).
@@ -672,6 +694,9 @@ export function normalizeStyleEngine(raw) {
     // שכבת embeddings סמנטית מקומית (טרום-API): מזהי ה-chunks המייצגים (מרכז+MMR)
     // ומטא על מצב הוקטורים. representativeChunkIds cap 24. embeddingMeta additive.
     representativeChunkIds: cleanStringArray(src.representativeChunkIds, 24),
+    // feedback-loop: היסטוריית איכות פלט מתגלגלת (cap 20). default [] סופג ישנים
+    // ללא bump ל-schemaVersion. משפיע על confidence דרך qualityAdjustment.
+    qualityHistory: normalizeQualityHistory(src.qualityHistory),
     embeddingMeta: isPlainObject(src.embeddingMeta)
       ? {
           available: src.embeddingMeta.available === true,
@@ -704,6 +729,26 @@ export function normalizeStyleEngine(raw) {
 const CONFIDENCE_WORD_TARGET = 60000;
 const CONFIDENCE_DOC_TARGET = 10;
 const CONFIDENCE_PATTERN_TARGET = 12;
+
+/**
+ * התאמת feedback-loop: ממפה ממוצע ציוני איכות הפלט האחרונים ל-[-8,+8]. ציון גבוה
+ * (פלט "נשמע כמוך") → בונוס; נמוך → קנס. עוגן ~70. פחות מ-5 רשומות → 0 (תאימות
+ * לאחור, לא מזיז את הוודאות של פרופילים קיימים).
+ * @param {Array<{score:number}>} qualityHistory
+ * @returns {number} מספר שלם ב-[-8,+8]
+ */
+function qualityAdjustment(qualityHistory) {
+  if (!Array.isArray(qualityHistory) || qualityHistory.length < 5) return 0;
+  const recent = qualityHistory
+    .slice(-10)
+    .map((e) => toNum(e?.score, NaN))
+    .filter((v) => Number.isFinite(v));
+  if (recent.length < 5) return 0;
+  const avg = mean(recent);
+  // לינארי סביב עוגן 70: avg≥80 → +8, avg≤50 → -8. שיפוע 8/10 ליחידת ציון מעל/מתחת ל-70.
+  const raw = (avg - 70) * (8 / 10);
+  return Math.round(clamp(raw, -8, 8));
+}
 
 /**
  * מחשב ודאות פרופיל 0-100 מכיסוי הקורפוס (מילים + מסמכים), עושר הדפוסים שחולצו
@@ -742,11 +787,9 @@ export function recomputeConfidence(styleEngine) {
   const em = isPlainObject(se.extractionMeta) ? se.extractionMeta : {};
   const crossValidatedBonus = em.crossValidated === true ? 5 : 0;
 
-  const score = clamp(
-    Math.round(wordPart + docPart + patternPart + stabilityBonus + crossValidatedBonus),
-    0,
-    100,
-  );
+  const baseScore = Math.round(wordPart + docPart + patternPart + stabilityBonus + crossValidatedBonus);
+  // התאמת feedback-loop לפי איכות הפלט שנוצר בפועל (אפס השפעה עד 5 רשומות).
+  const score = clamp(baseScore + qualityAdjustment(se.qualityHistory), 0, 100);
 
   // level לפי כיסוי אמיתי: 'high' דורש גם ציון וגם מסה קריטית של טקסט.
   let level = 'low';

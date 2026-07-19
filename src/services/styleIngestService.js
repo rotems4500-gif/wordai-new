@@ -309,6 +309,36 @@ function saveEngine(profile, engine) {
   return normalized;
 }
 
+// ---------- recordGenerationQuality ----------
+
+/**
+ * סוגר את ה-feedback-loop בין איכות פלט ל-confidence: מוסיף ציון של
+ * scoreStyleForDocument (על טקסט שנוצר) להיסטוריה המתגלגלת (cap 20), מחשב מחדש את
+ * ה-confidence כדי שההשפעה תיכנס מיד, ושומר. נקרא מזרימת היצירה — לעולם לא זורק.
+ * @param {number} score ציון 0-100 של הפלט (עד כמה "נשמע כמוך")
+ * @param {{genre?:string|null}} [opts]
+ * @returns {void}
+ */
+export function recordGenerationQuality(score, { genre = null } = {}) {
+  try {
+    if (!Number.isFinite(Number(score))) return;
+    const { profile, engine } = loadEngine();
+    if (!engine || engine.enabled === false) return;
+    const history = Array.isArray(engine.qualityHistory) ? engine.qualityHistory.slice() : [];
+    const entry = {
+      score: Math.max(0, Math.min(100, Math.round(Number(score)))),
+      at: Date.now(),
+    };
+    const g = String(genre || '').trim();
+    if (g) entry.genre = g;
+    history.push(entry);
+    // cap 20 — שומר את האחרונות (normalizeStyleEngine גם עושה זאת, אך שומרים כאן עקביות).
+    engine.qualityHistory = history.slice(-20);
+    engine.confidence = recomputeConfidence(engine);
+    saveEngine(profile, engine);
+  } catch { /* noop — לא שוברים את זרימת היצירה */ }
+}
+
 // ---------- ingestFiles ----------
 
 /**

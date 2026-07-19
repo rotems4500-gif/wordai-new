@@ -12,6 +12,7 @@ import {
   scoreStyleForDocument,
   rewriteDocumentStyle,
 } from './aiService';
+import { recordGenerationQuality } from './styleIngestService';
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService';
 import { createRunScope, setScopeTopic } from '../v3/orchestration/runScope';
@@ -4412,6 +4413,16 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
           }
         } catch {
           // כשל שכתוב לעולם לא שובר יצירה ולא מאפס את הציון הקיים.
+        }
+      }
+
+      // סגירת ה-feedback-loop: רושמים את הציון הסופי (אחרי rescore אם בוצע שכתוב)
+      // להיסטוריית האיכות של מנוע הסגנון, כדי שישפיע על ה-confidence. best-effort.
+      if (styleScore && Number.isFinite(styleScore.score)) {
+        try {
+          recordGenerationQuality(styleScore.score, { genre: styleScore.genre });
+        } catch {
+          // רישום איכות לעולם לא שובר יצירה.
         }
       }
     }
