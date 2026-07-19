@@ -2,9 +2,8 @@
 // עוטף upload/analyze/blacklist/מדדים. מדבר רק עם styleIngestService + styleSampleStore.
 // עיצוב: תואם לסקין wf-settings-pane (כרטיסי לבן/סלייט, אקסנט אינדיגו) כדי להשתלב בטאב הגדרות.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ingestAndAnalyze,
   getStyleOverview,
   removeDocumentAndRecompute,
   runQualitativeAnalysis,
@@ -18,6 +17,8 @@ import {
 } from '../services/styleIngestService';
 import { getSampleDocuments } from '../services/styleSampleStore';
 import { PATTERN_TYPE_LABELS } from '../services/styleProfileService';
+import { getPersonalStyleProfile } from '../services/aiService';
+import StyleSetupFlow from './StyleSetupFlow';
 
 const CONFIDENCE_STYLES = {
   low: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -26,8 +27,6 @@ const CONFIDENCE_STYLES = {
 };
 
 const CONFIDENCE_LABELS = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
-
-const ACCEPT_EXTENSIONS = '.docx,.pdf,.txt,.md,.html,.rtf';
 
 function formatNumber(n, digits = 0) {
   const num = Number(n);
@@ -63,13 +62,12 @@ function formatDate(ts) {
 export default function StyleProfilePanel({ onClose }) {
   const [overview, setOverview] = useState(null);
   const [documents, setDocuments] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const [progressText, setProgressText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-  const [uploadReport, setUploadReport] = useState(null);
   const [userBlacklistDraft, setUserBlacklistDraft] = useState('');
-  const fileInputRef = useRef(null);
+  // פרופיל מלא (ל-StyleSetupFlow — בונה ממנו את הפרומפט לניתוח חיצוני).
+  const [profile, setProfile] = useState(() => {
+    try { return getPersonalStyleProfile(); } catch { return {}; }
+  });
 
   const refresh = useCallback(() => {
     try {
@@ -81,6 +79,11 @@ export default function StyleProfilePanel({ onClose }) {
       setDocuments(getSampleDocuments() || []);
     } catch (err) {
       console.error('getSampleDocuments failed:', err);
+    }
+    try {
+      setProfile(getPersonalStyleProfile());
+    } catch (err) {
+      console.error('getPersonalStyleProfile failed:', err);
     }
   }, []);
 
@@ -102,46 +105,6 @@ export default function StyleProfilePanel({ onClose }) {
   useEffect(() => {
     setUserBlacklistDraft((overview?.blacklist?.user || []).join('\n'));
   }, [overview?.blacklist?.user]);
-
-  const handleFiles = useCallback(async (fileList) => {
-    const files = Array.from(fileList || []).filter(Boolean);
-    if (!files.length) return;
-    setUploading(true);
-    setUploadReport(null);
-    setProgressText(`מנתח מסמך 1/${files.length}...`);
-    try {
-      const result = await ingestAndAnalyze(files, {
-        onProgress: (info) => {
-          const current = Number(info?.current ?? info?.index ?? 1);
-          const total = Number(info?.total ?? files.length);
-          setProgressText(`מנתח מסמך ${current}/${total}...`);
-        },
-        runPatterns: true,
-      });
-      // דיווח מלא למשתמש: עד יולי 2026 failed[] נזרק לקונסול בלבד, כך שקובץ שנפל
-      // (או פינוי בגלל תקרת אחסון) נראה בדיוק כמו העלאה מוצלחת.
-      setUploadReport(result?.ingest || null);
-    } catch (err) {
-      console.error('ingestAndAnalyze failed:', err);
-      setUploadReport({ added: 0, skipped: 0, failed: [], fatal: String(err?.message || err) });
-    } finally {
-      setUploading(false);
-      setProgressText('');
-      refresh();
-    }
-  }, [refresh]);
-
-  const handleFileInputChange = (e) => {
-    const files = e.target.files;
-    handleFiles(files);
-    e.target.value = '';
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-    handleFiles(e.dataTransfer?.files);
-  };
 
   const handleToggleEnabled = () => {
     const next = !overview?.enabled;
@@ -381,75 +344,12 @@ export default function StyleProfilePanel({ onClose }) {
         </label>
       </div>
 
-      {/* 2. Upload zone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-        onDragLeave={() => setDragActive(false)}
-        onDrop={handleDrop}
-        className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-2xl px-4 py-8 text-center transition-colors ${
-          dragActive ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 bg-slate-50'
-        }`}
-      >
-        <span className="text-[28px]">📄</span>
-        <p className="text-[13.5px] font-semibold text-slate-700">
-          גרור לכאן קבצים או
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="mx-1 text-indigo-600 hover:text-indigo-700 underline disabled:opacity-50"
-          >
-            בחר קבצים
-          </button>
-        </p>
-        <p className="text-[12px] text-slate-400 max-w-[46ch]">
-          העלה עבודות שכתבת — ככל שיותר, החיקוי מדויק יותר. הטקסט נשאר במכשיר שלך.
-        </p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept={ACCEPT_EXTENSIONS}
-          onChange={handleFileInputChange}
-          disabled={uploading}
-          className="hidden"
-        />
-        {uploading && (
-          <div className="flex items-center gap-2 mt-2 text-[12.5px] font-semibold text-indigo-600">
-            <span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
-            {progressText || 'מעלה ומנתח...'}
-          </div>
-        )}
-        {!uploading && uploadReport && (
-          <div className="w-full mt-3 flex flex-col gap-1.5 text-right">
-            {Number(uploadReport.added) > 0 && (
-              <div className="text-[12px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-1.5">
-                ✓ נוספו {uploadReport.added} מסמכים לפרופיל
-              </div>
-            )}
-            {Number(uploadReport.skipped) > 0 && (
-              <div className="text-[12px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5">
-                {uploadReport.skipped} מסמכים דולגו — כבר קיימים במאגר (תוכן זהה).
-              </div>
-            )}
-            {Number(uploadReport.evicted) > 0 && (
-              <div className="text-[12px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-1.5">
-                ⚠ המאגר הגיע לתקרה — {uploadReport.evicted} קטעים ישנים פונו כדי לפנות מקום.
-              </div>
-            )}
-            {(uploadReport.writeError || uploadReport.fatal) && (
-              <div className="text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-1.5">
-                שגיאת שמירה: {uploadReport.writeError || uploadReport.fatal}
-              </div>
-            )}
-            {(uploadReport.failed || []).map((f) => (
-              <div key={f.name} className="text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-1.5">
-                ✗ {f.name}: {f.error}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* 2. Upload zone — זרימת קליטה/עיבוד/אימות/סיכום מאוחדת (זהה לאונבורדינג, עיצוב פאנל). */}
+      <StyleSetupFlow
+        variant="panel"
+        profile={profile}
+        onComplete={() => refresh()}
+      />
 
       {/* 3. Documents list */}
       <div>
