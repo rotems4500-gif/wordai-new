@@ -614,13 +614,14 @@ export default function ProfileOnboarding({
                     🗂️ העבודות שלך
                   </h2>
                   <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
-                    העלה כמה עבודות קודמות שכתבת — אני אלמד מהן את הסגנון שלך ואמלא עבורך חלק מההעדפות בהמשך. אפשר גם לדלג ולהזין הכול ידנית.
+                    העלה כמה עבודות קודמות שכתבת — או הדבק ניתוח מ-AI חיצוני, או גם וגם. אלמד מהן את הסגנון שלך ואמלא עבורך חלק מההעדפות בהמשך. אפשר גם לדלג ולהזין הכול ידנית.
                   </p>
                 </div>
                 <StyleSetupFlow
                   variant="onboarding"
                   stage="collect"
                   profile={profile}
+                  onProfileMetaPatch={handleStyleMetaPatch}
                   onComplete={() => nextStep()}
                   onSkip={() => nextStep()}
                 />

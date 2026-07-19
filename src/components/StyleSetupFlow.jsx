@@ -60,7 +60,7 @@ const PHASE_STEPS = [
 // refine = מאוחר, הדבקה+ניתוח עמוק→verify, עם אזור העלאה קומפקטי.
 const STAGE_CONFIG = {
   full:    { showUpload: true,  showExternal: true,  runVerify: true },   // התנהגות נוכחית — StyleProfilePanel
-  collect: { showUpload: true,  showExternal: false, runVerify: false },  // מוקדם: העלאה בלבד → baseline → summary קצר
+  collect: { showUpload: true,  showExternal: true,  runVerify: false },  // מוקדם: העלאה ו/או הדבקת פלט חיצוני → baseline → summary קצר (בלי אימות)
   refine:  { showUpload: true,  showExternal: true,  runVerify: true, compactUpload: true }, // מאוחר: הדבקה+ניתוח עמוק→verify
 };
 
