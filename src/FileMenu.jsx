@@ -1997,6 +1997,9 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
   );
 }
 
+// legacy — זרם הניתוח החיצוני בסכימה הישנה (מילוי-חורים לפרופיל). הזרם החדש:
+// StyleSetupFlow (טאב "מנוע סגנון" + אונבורדינג שלב 10) שמזין את מנוע v3 ישירות.
+// נשמר לתאימות לאחור; הסרה = פיצ'ר עתידי נפרד.
 function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle, setPersonalStyle }) {
   const [copyState, setCopyState] = useState('');
   const [analysisOutput, setAnalysisOutput] = useState('');
