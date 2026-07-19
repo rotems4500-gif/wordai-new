@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
+import { getStyleOverview } from './services/styleIngestService';
+import { deriveManualDefaultsFromMetrics } from './services/styleProfileService';
 import StyleSetupFlow from './components/StyleSetupFlow';
 
 const ONBOARDING_AI_PROVIDERS = [
@@ -51,6 +53,7 @@ export default function ProfileOnboarding({
   const [step, setStep] = useState(1);
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [styleDerived, setStyleDerived] = useState(null);
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
   const [selectedAiProviders, setSelectedAiProviders] = useState(() =>
     ONBOARDING_AI_PROVIDERS.filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).map(([id]) => id),
@@ -73,7 +76,7 @@ export default function ProfileOnboarding({
   };
 
   const goToStep = (targetStep) => {
-    const safeStep = Math.max(1, Math.min(11, Number(targetStep) || 1));
+    const safeStep = Math.max(1, Math.min(12, Number(targetStep) || 1));
     if (safeStep === step || animating) return;
     setAnimating(true);
     setTimeout(() => {
@@ -155,7 +158,7 @@ export default function ProfileOnboarding({
     event.target.value = '';
   };
 
-  // מיזוג שמרני של פרופיל-הסגנון ש-StyleSetupFlow בונה (שלב 10) לתוך ה-state של האונבורדינג.
+  // מיזוג שמרני של פרופיל-הסגנון ש-StyleSetupFlow בונה (שלב 11) לתוך ה-state של האונבורדינג.
   // metaPatch הוא אובייקט פרופיל מלא שנקרא מהדיסק — אסור לו לדרוס ערכים שהמשתמש הקליד
   // בשלבים 2-8 וטרם נשמרו. לכן ממלאים רק שדות שריקים כרגע ב-state; שדות רשימה עוברים
   // דרך updateList (נורמליזציה), השאר דרך updateField.
@@ -176,32 +179,50 @@ export default function ProfileOnboarding({
     });
   };
 
+  // Pre-fill שמרני של השלבים הידניים לפי baseline שנלמד מהעבודות שלב 4 (StyleSetupFlow collect).
+  // ממלא רק שדות ריקים (isEmptyProfileValue) — לא דורס ערכים שהמשתמש כבר הזין.
+  // אם אין baseline (המשתמש דילג) — יוצא בשקט והשלבים נשארים ריקים (graceful).
+  useEffect(() => {
+    if (step !== 6 && step !== 8) return;
+    let ov;
+    try { ov = getStyleOverview(); } catch { return; }
+    if (!ov?.stats?.docCount) return;
+    const d = deriveManualDefaultsFromMetrics(ov);
+    setStyleDerived(d);
+    if (step === 6) {
+      if (isEmptyProfileValue(profile?.lengthPreference) && d.lengthPreference) updateField('lengthPreference', d.lengthPreference);
+      if (isEmptyProfileValue(profile?.tonePreference) && d.tonePreference) updateField('tonePreference', d.tonePreference);
+    }
+  }, [step]);
+
   const stepIcons = {
     1: '👋',
     2: '👤',
     3: '📚',
-    4: '👥',
-    5: '🎯',
-    6: '⚖️',
-    7: '🎨',
-    8: '📝',
-    9: '🔌',
-    10: '🖋️',
-    11: '✨',
+    4: '🗂️',
+    5: '👥',
+    6: '🎯',
+    7: '⚖️',
+    8: '🎨',
+    9: '📝',
+    10: '🔌',
+    11: '🖋️',
+    12: '✨',
   };
 
   const stepTitles = {
     1: 'ברוכים הבאים',
     2: 'פרטים',
     3: 'קורסים',
-    4: 'קהל ומטרות',
-    5: 'קהל יעד',
-    6: 'חוקים',
-    7: 'סגנון',
-    8: 'ניסוח',
-    9: 'חיבור AI',
-    10: 'פרופיל הסגנון',
-    11: 'סיום',
+    4: 'העבודות שלך',
+    5: 'קהל ומטרות',
+    6: 'קהל יעד',
+    7: 'חוקים',
+    8: 'סגנון',
+    9: 'ניסוח',
+    10: 'חיבור AI',
+    11: 'חידוד הסגנון',
+    12: 'סיום',
   };
 
   // פאנל "הפרופיל מתגבש" החי (עיצוב המוקאפ) — נגזר מהשדות שכבר מולאו
@@ -215,6 +236,11 @@ export default function ProfileOnboarding({
     String(profile.syllabusTopics || '').trim() && `נושאי לימוד: ${String(profile.syllabusTopics).trim().slice(0, 40)}`,
     String(profile.styleTrainingSummary || '').trim() && 'סגנון אישי: נלמד ✓',
   ].filter(Boolean);
+
+  // האם יש baseline שנלמד מהעבודות (שלב 4) — משמש להצגת באנרים/דוגמאות בשלבים הידניים.
+  const styleExemplars = Array.isArray(styleDerived?.exemplars) ? styleDerived.exemplars : [];
+  const styleBaselineReady = !!(styleDerived && (styleDerived.tonePreference || styleDerived.lengthPreference || styleExemplars.length));
+  const styleToneIsSuggestion = ['medium', 'low'].includes(styleDerived?.tonePreferenceConfidence);
 
   return (
     <div className="relative flex flex-col justify-center min-h-[500px] overflow-y-auto custom-scrollbar-slim py-6" dir="rtl">
@@ -244,7 +270,7 @@ export default function ProfileOnboarding({
                 <div 
                   className="h-full bg-gradient-to-r from-[#efab4d] via-[#e0a04a] to-[#cba24f] rounded-full shadow-lg transition-all duration-1000 ease-out"
                   style={{
-                    width: `${(step / 11) * 100}%`,
+                    width: `${(step / 12) * 100}%`,
                     boxShadow: '0 0 20px rgba(239, 171, 77, 0.4)'
                   }}
                 ></div>
@@ -253,7 +279,7 @@ export default function ProfileOnboarding({
             
             {/* Step Indicators */}
             <div className="relative flex justify-between">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((s) => (
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((s) => (
                 <div key={s} className="flex flex-col items-center">
                   <button
                     type="button"
@@ -285,7 +311,7 @@ export default function ProfileOnboarding({
         </div>
 
         {/* Content Area — דו-פאנל: טופס + פאנל פרופיל חי (עיצוב המוקאפ) */}
-        <div className={`px-4 pb-4 ${[1, 10, 11].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
+        <div className={`px-4 pb-4 ${[1, 4, 11, 12].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
           <div 
             className={`bg-[#1a1512]/55 backdrop-blur-md rounded-2xl p-4 border border-[#efab4d]/12 shadow-xl transition-all duration-700 ${
               animating 
@@ -575,6 +601,26 @@ export default function ProfileOnboarding({
             )}
 
             {step === 4 && (
+              <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
+                <div className="text-center mb-4">
+                  <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
+                    🗂️ העבודות שלך
+                  </h2>
+                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
+                    העלה כמה עבודות קודמות שכתבת — אני אלמד מהן את הסגנון שלך ואמלא עבורך חלק מההעדפות בהמשך. אפשר גם לדלג ולהזין הכול ידנית.
+                  </p>
+                </div>
+                <StyleSetupFlow
+                  variant="onboarding"
+                  stage="collect"
+                  profile={profile}
+                  onComplete={() => nextStep()}
+                  onSkip={() => nextStep()}
+                />
+              </div>
+            )}
+
+            {step === 5 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -640,7 +686,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-                        {step === 5 && (
+                        {step === 6 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -651,10 +697,20 @@ export default function ProfileOnboarding({
                   </p>
                 </div>
 
+                {styleBaselineReady && (
+                  <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-[13px] leading-relaxed text-[#ddcfb9]">
+                    <span className="shrink-0 text-emerald-300 font-extrabold">✓</span>
+                    <span>מילאנו לפי מה שלמדנו מהעבודות שלך — אשר או שנה.</span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="group">
-                    <label className="block text-sm font-medium text-white mb-1 group-hover:text-pink-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
-                      סגנון רשמי או חברי? (Tone)
+                    <label className="flex items-center gap-2 text-sm font-medium text-white mb-1 group-hover:text-pink-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
+                      <span>סגנון רשמי או חברי? (Tone)</span>
+                      {styleBaselineReady && styleToneIsSuggestion && (
+                        <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-[#bcac96]">הצעה לפי הכתיבה שלך</span>
+                      )}
                     </label>
                     <select
                       value={profile.tonePreference || 'balanced'}
@@ -687,7 +743,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 6 && (
+            {step === 7 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -745,7 +801,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 7 && (
+            {step === 8 && (
               <div className="space-y-3 animate-in slide-in-from-bottom-5 duration-700">
                 <div className="text-center mb-4">
                   <div className="flex justify-between items-center mb-4">
@@ -764,6 +820,22 @@ export default function ProfileOnboarding({
                     בחר את הניסוחים שמתאימים לך כדי שאלמד את הסגנון האישי שלך
                   </p>
                 </div>
+
+                {styleBaselineReady && styleExemplars.length > 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4" dir="rtl">
+                    <div className="text-sm font-bold text-[#f4ecde] mb-2">ככה אתה כותב:</div>
+                    <div className="space-y-2">
+                      {styleExemplars.slice(0, 3).map((sentence, i) => (
+                        <blockquote
+                          key={i}
+                          className="border-r-2 border-[#efab4d]/40 pr-3 text-[13px] leading-relaxed text-[#ddcfb9]"
+                        >
+                          {String(sentence || '').trim()}
+                        </blockquote>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
                   {STYLE_TRAINING_QUESTIONS.map((question, index) => (
@@ -808,7 +880,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-                        {step === 8 && (
+                        {step === 9 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -893,7 +965,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 9 && (
+            {step === 10 && (
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -959,10 +1031,11 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 10 && (
+            {step === 11 && (
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <StyleSetupFlow
                   variant="onboarding"
+                  stage="refine"
                   profile={profile}
                   providerConfig={providerConfig}
                   onProfileMetaPatch={handleStyleMetaPatch}
@@ -972,7 +1045,7 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 11 && (
+            {step === 12 && (
               <div className="space-y-4 animate-in slide-in-from-top-5 duration-700">
                 <div className="text-center mb-4">
                   <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 text-white rounded-full flex items-center justify-center text-5xl mb-4 mx-auto animate-bounce shadow-2xl shadow-green-400/50">
@@ -1052,7 +1125,7 @@ export default function ProfileOnboarding({
           </div>
 
           {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/חיבור/פרופיל-סגנון/סיום (full-width) */}
-          {![1, 9, 10, 11].includes(step) && (
+          {![1, 4, 11, 12].includes(step) && (
             <aside className="hidden lg:block lg:sticky lg:top-2 rounded-2xl border border-[#efab4d]/16 p-5 shadow-xl" style={{ background: 'rgba(26,21,18,0.55)', boxShadow: '0 20px 44px rgba(10,7,5,0.4)' }}>
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2.5">
@@ -1106,12 +1179,12 @@ export default function ProfileOnboarding({
           </button>
           
           <button
-            onClick={step === 11 ? onComplete : nextStep}
+            onClick={step === 12 ? onComplete : nextStep}
             className="group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 bg-gradient-to-r from-[#efab4d] to-[#e0a04a] text-[#251f1c] hover:from-[#f0b65f] hover:to-[#e6a851] shadow-lg hover:shadow-2xl transform hover:scale-105 border border-[#f4ecde]/25"
             style={{ boxShadow: '0 10px 30px rgba(239, 171, 77, 0.32)' }}
           >
             <span className="flex items-center gap-2">
-              {step === 11 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
+              {step === 12 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
             </span>
           </button>
         </div>
