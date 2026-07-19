@@ -54,6 +54,7 @@ export default function ProfileOnboarding({
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [styleDerived, setStyleDerived] = useState(null);
+  const [styleFilled, setStyleFilled] = useState({ tone: false, length: false }); // האם ה-pre-fill באמת מילא (לא לדווח "מילאנו" כששדה כבר היה מלא)
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
   const [selectedAiProviders, setSelectedAiProviders] = useState(() =>
     ONBOARDING_AI_PROVIDERS.filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).map(([id]) => id),
@@ -160,7 +161,7 @@ export default function ProfileOnboarding({
 
   // מיזוג שמרני של פרופיל-הסגנון ש-StyleSetupFlow בונה (שלב 11) לתוך ה-state של האונבורדינג.
   // metaPatch הוא אובייקט פרופיל מלא שנקרא מהדיסק — אסור לו לדרוס ערכים שהמשתמש הקליד
-  // בשלבים 2-8 וטרם נשמרו. לכן ממלאים רק שדות שריקים כרגע ב-state; שדות רשימה עוברים
+  // בשלבים הידניים (2-3, 5-9) וטרם נשמרו. לכן ממלאים רק שדות שריקים כרגע ב-state; שדות רשימה עוברים
   // דרך updateList (נורמליזציה), השאר דרך updateField.
   const isEmptyProfileValue = (value) => (
     value === null || value === undefined
@@ -190,8 +191,13 @@ export default function ProfileOnboarding({
     const d = deriveManualDefaultsFromMetrics(ov);
     setStyleDerived(d);
     if (step === 6) {
-      if (isEmptyProfileValue(profile?.lengthPreference) && d.lengthPreference) updateField('lengthPreference', d.lengthPreference);
-      if (isEmptyProfileValue(profile?.tonePreference) && d.tonePreference) updateField('tonePreference', d.tonePreference);
+      // מסמנים filled רק כשבאמת מילאנו שדה ריק — כדי שהבאנר "מילאנו לפי הכתיבה שלך"
+      // לא יופיע כשהערך כבר היה מוגדר (מ-session קודם / הזנה ידנית).
+      let length = false;
+      let tone = false;
+      if (isEmptyProfileValue(profile?.lengthPreference) && d.lengthPreference) { updateField('lengthPreference', d.lengthPreference); length = true; }
+      if (isEmptyProfileValue(profile?.tonePreference) && d.tonePreference) { updateField('tonePreference', d.tonePreference); tone = true; }
+      setStyleFilled({ tone, length });
     }
   }, [step]);
 
@@ -240,7 +246,8 @@ export default function ProfileOnboarding({
   // האם יש baseline שנלמד מהעבודות (שלב 4) — משמש להצגת באנרים/דוגמאות בשלבים הידניים.
   const styleExemplars = Array.isArray(styleDerived?.exemplars) ? styleDerived.exemplars : [];
   const styleBaselineReady = !!(styleDerived && (styleDerived.tonePreference || styleDerived.lengthPreference || styleExemplars.length));
-  const styleToneIsSuggestion = ['medium', 'low'].includes(styleDerived?.tonePreferenceConfidence);
+  const styleAutoFilled = styleFilled.tone || styleFilled.length; // האם באמת מילאנו משהו בשלב 6
+  const styleToneIsSuggestion = styleFilled.tone && ['medium', 'low'].includes(styleDerived?.tonePreferenceConfidence);
 
   return (
     <div className="relative flex flex-col justify-center min-h-[500px] overflow-y-auto custom-scrollbar-slim py-6" dir="rtl">
@@ -697,7 +704,7 @@ export default function ProfileOnboarding({
                   </p>
                 </div>
 
-                {styleBaselineReady && (
+                {styleAutoFilled && (
                   <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-[13px] leading-relaxed text-[#ddcfb9]">
                     <span className="shrink-0 text-emerald-300 font-extrabold">✓</span>
                     <span>מילאנו לפי מה שלמדנו מהעבודות שלך — אשר או שנה.</span>
@@ -708,7 +715,7 @@ export default function ProfileOnboarding({
                   <div className="group">
                     <label className="flex items-center gap-2 text-sm font-medium text-white mb-1 group-hover:text-pink-200 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                       <span>סגנון רשמי או חברי? (Tone)</span>
-                      {styleBaselineReady && styleToneIsSuggestion && (
+                      {styleToneIsSuggestion && (
                         <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-[#bcac96]">הצעה לפי הכתיבה שלך</span>
                       )}
                     </label>
@@ -1124,8 +1131,8 @@ export default function ProfileOnboarding({
             )}
           </div>
 
-          {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/חיבור/פרופיל-סגנון/סיום (full-width) */}
-          {![1, 4, 11, 12].includes(step) && (
+          {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/עבודות/חיבור/חידוד-סגנון/סיום */}
+          {![1, 4, 10, 11, 12].includes(step) && (
             <aside className="hidden lg:block lg:sticky lg:top-2 rounded-2xl border border-[#efab4d]/16 p-5 shadow-xl" style={{ background: 'rgba(26,21,18,0.55)', boxShadow: '0 20px 44px rgba(10,7,5,0.4)' }}>
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2.5">
