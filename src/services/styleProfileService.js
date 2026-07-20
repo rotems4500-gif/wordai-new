@@ -541,6 +541,84 @@ export function summarizeStyleLearning(overview = {}, { hasLlmProvider = false }
   };
 }
 
+// ---------- buildStyleWritingReport ----------
+
+/**
+ * מסמך תיאורי בעברית: "ככה אתה כותב" + הצעות לשיפור — נגזר כולו ממדדים/דפוסים מקומיים
+ * (בלי קריאת LLM, זמין תמיד וזול). משמש במסך "חידוד הסגנון" באונבורדינג (שלב 11) במקום
+ * להציג שוב את טפסי ההעלאה שכבר מולאו בשלב 4. טהורה וסובלנית לקלט חלקי/ריק.
+ * @param {object} overview  תוצר getStyleOverview()
+ * @returns {{description: string[], suggestions: string[]}}
+ */
+export function buildStyleWritingReport(overview = {}) {
+  const ov = isPlainObject(overview) ? overview : {};
+  const stats = isPlainObject(ov.stats) ? ov.stats : {};
+  const metrics = isPlainObject(ov.metrics) ? ov.metrics : null;
+  const patterns = Array.isArray(ov.qualitativePatterns) ? ov.qualitativePatterns : [];
+  const negativeSpace = Array.isArray(ov.negativeSpace) ? ov.negativeSpace : [];
+  const conf = isPlainObject(ov.confidence) ? ov.confidence : {};
+
+  const docCount = toNum(stats.docCount, 0);
+  if (docCount <= 0) {
+    return {
+      description: ['עדיין אין מספיק חומר כדי לתאר את הכתיבה שלך.'],
+      suggestions: ['העלה כמה עבודות שכתבת כדי לקבל תיאור וסגנון מדויקים.'],
+    };
+  }
+
+  const description = [];
+  const suggestions = [];
+
+  if (metrics) {
+    const avgSentence = toNum(metrics.avgSentenceWords, 0);
+    if (avgSentence >= 18) description.push(`אתה נוטה לכתוב משפטים ארוכים ומורכבים — בממוצע כ-${Math.round(avgSentence)} מילים למשפט.`);
+    else if (avgSentence > 0 && avgSentence <= 11) description.push(`אתה נוטה לכתוב משפטים קצרים וממוקדים — בממוצע כ-${Math.round(avgSentence)} מילים למשפט.`);
+    else if (avgSentence > 0) description.push(`אורך המשפטים שלך מאוזן — בממוצע כ-${Math.round(avgSentence)} מילים למשפט.`);
+
+    const cv = toNum(metrics.sentenceLengthCV, 0);
+    if (avgSentence > 0 && cv > 0 && cv < 0.25) {
+      suggestions.push('אורך המשפטים שלך אחיד יחסית — לשקול לערבב משפטים קצרים וארוכים כדי לשפר את הקצב והזרימה.');
+    }
+
+    const commas = toNum(metrics.avgCommasPerSentence, 0);
+    if (commas >= 2) description.push('אתה משתמש הרבה בפסיקים ובמשפטים מרובי-סעיפים.');
+
+    const parens = toNum(metrics.parenthesesDensity, 0);
+    if (parens >= 1.5) description.push('יש לך נטייה בולטת להוסיף הערות אגביות בסוגריים.');
+
+    const connectors = Object.keys(metrics.connectorFrequency || {}).slice(0, 4);
+    if (connectors.length) description.push(`מילות הקישור הבולטות אצלך: ${connectors.join(', ')}.`);
+    else suggestions.push('לא זוהו מילות קישור בולטות אצלך — גיוון במחברים (לעומת זאת, יתרה מזו, בהתאם) יכול לחזק את הזרימה בין רעיונות.');
+  }
+
+  const signaturePatterns = patterns.filter((p) => isPlainObject(p) && p.type === 'signature_phrase').slice(0, 3);
+  if (signaturePatterns.length) {
+    description.push(`ביטויי חתימה שחוזרים אצלך: ${signaturePatterns.map((p) => `"${p.label}"`).join(', ')}.`);
+  }
+
+  patterns
+    .filter((p) => isPlainObject(p) && p.type === 'structure')
+    .slice(0, 2)
+    .forEach((p) => { if (p.label) description.push(String(p.label)); });
+
+  if (negativeSpace.length) {
+    const items = negativeSpace.slice(0, 3).map((item) => (typeof item === 'string' ? item : item?.label || '')).filter(Boolean);
+    if (items.length) description.push(`דברים שאתה כמעט אף פעם לא עושה: ${items.join(', ')}.`);
+  }
+
+  const confLevel = ['low', 'medium', 'high'].includes(conf.level) ? conf.level : 'low';
+  if (confLevel === 'low') {
+    suggestions.push('עדיין מעט חומר לפרופיל מדויק — כל עבודה נוספת שתעלה תחדד את הדיוק.');
+  } else if (patterns.length < 4) {
+    suggestions.push('עוד לא זוהו הרבה דפוסים ייחודיים — עבודות נוספות עשויות לחשוף עוד הרגלי כתיבה שלך.');
+  }
+
+  if (!description.length) description.push('עדיין אין מספיק נתונים לתיאור מפורט — ככל שתעלה עוד חומר, התיאור יתעדכן.');
+  if (!suggestions.length) suggestions.push('הפרופיל שלך נראה מגובש. אפשר תמיד לחדד אותו עוד דרך העלאת עבודות נוספות או הערות ידניות.');
+
+  return { description, suggestions };
+}
+
 // ---------- normalizeStyleEngine ----------
 
 const DEFAULT_CONFIDENCE = () => ({ score: 0, docCount: 0, wordCount: 0, level: 'low' });

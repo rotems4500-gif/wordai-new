@@ -8,7 +8,7 @@
 // שלב 3 (verify): שאלת אימות אחת בכל פעם — pin / reject / skip על דפוסים ועל "negative space".
 // שלב 4 (summary): finalizeStyleVerification + סיכום קצר וכפתור סיום.
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ingestAndAnalyze,
   runUnifiedStyleAnalysis,
@@ -24,6 +24,7 @@ import {
   buildExternalPatternAnalysisPrompt,
   buildVerificationQuestions,
   parsePatternExtractionResult,
+  buildStyleWritingReport,
   CONFIDENCE_LABELS,
 } from '../services/styleProfileService';
 import { getExternalAnalysisProviderHint } from '../services/aiService';
@@ -47,6 +48,16 @@ const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'custom', label: 'ספק אחר / מותאם' },
 ];
+
+// תוויות עבריות לשדות שהמילוי האוטומטי (deriveProfileFactsFromSamples) יכול למלא.
+const AUTO_FILLED_FIELD_LABELS = {
+  displayName: 'שם',
+  institutionName: 'מוסד',
+  studyTrack: 'חוג או מסלול',
+  studentId: 'ת.ז.',
+  lecturerNames: 'מרצים',
+  currentCourses: 'קורסים',
+};
 
 const PHASE_STEPS = [
   { key: 'intake', label: 'קליטה' },
@@ -155,13 +166,28 @@ export default function StyleSetupFlow({
   onSkip = null,
   onIngestReport = null,
   providerConfig = null,
+  // autoStart — כשיש כבר מסמכים שנקלטו קודם (למשל בשלב 'collect' המוקדם) מדלגים על שלב
+  // ה-intake כאן ומריצים ניתוח מיד, כדי לא להציג שוב את אותם טפסי העלאה/הדבקת JSON.
+  autoStart = false,
+  // refinementNotes/onRefinementNotesChange — שדה "דיוקים" חופשי המוצג רק ב-stage='refine'
+  // summary (ProfileOnboarding שלב 11). נשמר לפרופיל דרך ה-callback, לא דרך onProfileMetaPatch
+  // (שממזג רק לתוך שדה ריק — כאן רוצים לאפשר עריכה חוזרת בתוך אותו ביקור).
+  refinementNotes = '',
+  onRefinementNotesChange = null,
 }) {
   const T = variant === 'onboarding' ? THEME_ONBOARDING : THEME_PANEL;
   // stage — אילו שלבים פעילים. ברירת מחדל 'full' = אפס שינוי התנהגות למי שקורא בלי stage.
   const stageCfg = STAGE_CONFIG[stage] || STAGE_CONFIG.full;
 
+  // נבדק פעם אחת ב-mount (סינכרוני, לפני הרינדור הראשון) כדי שלא יהיה הבזק של שלב ה-intake
+  // כשעומדים לדלג עליו. אותו מקור-אמת כמו docStats למטה.
+  const [shouldAutoStart] = useState(() => {
+    if (!autoStart) return false;
+    try { return (getSampleStoreStats()?.docCount || 0) > 0; } catch { return false; }
+  });
+
   // --- שלב הזרימה ---
-  const [phase, setPhase] = useState('intake');
+  const [phase, setPhase] = useState(shouldAutoStart ? 'processing' : 'intake');
 
   // --- Phase 1: העלאת עבודות ---
   const fileInputRef = useRef(null);
@@ -199,6 +225,18 @@ export default function StyleSetupFlow({
     }
   }, [externalProviderId]);
 
+  // stage='refine' summary: "ככה אתה כותב" + הצעות לשיפור, במקום להציג שוב טפסי העלאה.
+  // נגזר מ-getStyleOverview() העדכני ברגע שמגיעים לסיכום — אחרי שהניתוח (auto או ידני) רץ.
+  const writingReport = useMemo(() => {
+    if (stage !== 'refine' || phase !== 'summary') return null;
+    try {
+      return buildStyleWritingReport(getStyleOverview());
+    } catch {
+      return null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, phase]);
+
   // --- Phase 2: עיבוד ---
   const [processingText, setProcessingText] = useState('מאחד את מקורות הסגנון...');
   const [processingError, setProcessingError] = useState('');
@@ -211,6 +249,8 @@ export default function StyleSetupFlow({
 
   // --- Phase 4: סיכום ---
   const [summaryData, setSummaryData] = useState(null); // { confidence, patternsCount, docCount }
+  // שדות פרופיל שהניתוח מילא אוטומטית מהעבודות — מוצג למשתמש כדי שכתיבה לפרופיל לא תהיה שקטה.
+  const [autoFilledFields, setAutoFilledFields] = useState([]);
 
   const docCount = docStats?.docCount || 0;
   const canAnalyze = docCount > 0 || pastedOutputs.length > 0;
@@ -368,6 +408,8 @@ export default function StyleSetupFlow({
         }
       }
 
+      setAutoFilledFields(Array.isArray(result?.profileFactsFilled) ? result.profileFactsFilled : []);
+
       if (result?.ok) {
         try { setStyleEngineEnabled(true); } catch (err) {
           console.error('StyleSetupFlow: setStyleEngineEnabled failed', err);
@@ -418,6 +460,13 @@ export default function StyleSetupFlow({
     setPhase('processing');
     runAnalysis();
   }, [runAnalysis]);
+
+  // shouldAutoStart: phase כבר אותחל ל-'processing' (למעלה) כדי שלא יהיה הבזק intake — כאן
+  // רק מפעילים בפועל את הניתוח, פעם אחת ב-mount.
+  useEffect(() => {
+    if (shouldAutoStart) runAnalysis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRetryAnalysis = useCallback(() => {
     runAnalysis();
@@ -867,7 +916,67 @@ export default function StyleSetupFlow({
       )}
 
       {/* ================= Phase 4: summary ================= */}
-      {phase === 'summary' && (
+      {phase === 'summary' && stage === 'refine' ? (
+        // refine — במקום להציג שוב טפסי העלאה/JSON (כבר מולאו בשלב האיסוף המוקדם): מסמך
+        // תיאורי קצר ("ככה אתה כותב" + הצעות לשיפור) ושדה חופשי לדיוקים, שממשיך להשפיע
+        // על כל כתיבה עתידית (customStyleGuidance-style). חידוד נוסף אפשרי תמיד דרך הגדרות → סגנון אישי.
+        <div className={`${T.card} flex flex-col gap-4 py-8 text-right`} dir="rtl">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <div className="text-[26px]">✓</div>
+            <div className={`${T.title} text-[17px]`}>ככה אתה כותב</div>
+            {confidenceInfo.label && (
+              <span className={`${T.confidenceBadge} ${T.chip}`}>
+                ודאות פרופיל: {confidenceInfo.label}
+                {confidenceInfo.score !== null ? ` (${confidenceInfo.score}%)` : ''}
+              </span>
+            )}
+          </div>
+
+          {writingReport && (
+            <>
+              <ul className="flex flex-col gap-1.5">
+                {writingReport.description.map((line, i) => (
+                  <li key={`desc_${i}`} className={`${T.subtitle} flex gap-2`}>
+                    <span>•</span><span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+              <div>
+                <div className={`${T.title} text-[13.5px] mb-1.5`}>הצעות לשיפור</div>
+                <ul className="flex flex-col gap-1.5">
+                  {writingReport.suggestions.map((line, i) => (
+                    <li key={`sugg_${i}`} className={`${T.subtitle} flex gap-2`}>
+                      <span>💡</span><span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+
+          {autoFilledFields.length > 0 && (
+            <div className={T.successBox}>
+              ✓ מילאתי מהעבודות גם: {autoFilledFields.map((f) => AUTO_FILLED_FIELD_LABELS[f] || f).join(', ')}. אפשר לתקן בהגדרות ← סגנון אישי.
+            </div>
+          )}
+
+          <div>
+            <label className={T.label}>משהו לא מדויק? כתוב דיוקים כאן</label>
+            <textarea
+              value={refinementNotes}
+              onChange={(e) => onRefinementNotesChange?.(e.target.value)}
+              placeholder="למשל: אני כותב יותר ענייני ממה שזה נשמע, או: אני לא באמת משתמש בביטוי הזה."
+              rows={3}
+              className={T.textarea}
+            />
+            <p className={`${T.muted} mt-1`}>הדיוקים נכנסים מיד לפרומפט הסגנון. אפשר לחדד עוד בכל שלב דרך הגדרות ← סגנון אישי.</p>
+          </div>
+
+          <button type="button" onClick={handleComplete} className={`${T.buttonPrimary} self-center mt-1`}>
+            סיום
+          </button>
+        </div>
+      ) : phase === 'summary' && (
         <div className={`${T.card} flex flex-col items-center gap-3 py-10 text-center`}>
           <div className="text-[30px]">✓</div>
           {/* stage: ב-collect זה בסיס ראשוני בלבד — כותרת/טקסט מרוככים, בלי pinned/rejected. */}
@@ -891,6 +1000,11 @@ export default function StyleSetupFlow({
                 </span>
               )}
             </>
+          )}
+          {autoFilledFields.length > 0 && (
+            <div className={T.successBox}>
+              ✓ מילאתי מהעבודות גם: {autoFilledFields.map((f) => AUTO_FILLED_FIELD_LABELS[f] || f).join(', ')}
+            </div>
           )}
           {/* stage: ב-collect הכפתור מוביל הלאה בזרימה ("המשך"), בשאר "סיום". שניהם קוראים ל-onComplete. */}
           <button type="button" onClick={handleComplete} className={`${T.buttonPrimary} mt-2`}>

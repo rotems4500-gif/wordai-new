@@ -31,6 +31,7 @@ import {
   filterRejectedPatterns,
   deriveAutoBlacklist,
   seedStyleEngineFromLegacyProfile,
+  deriveManualDefaultsFromMetrics,
   GENRES,
 } from './styleProfileService';
 import { loadStyleReference, primeStyleReference } from './styleReferenceService';
@@ -915,10 +916,145 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
   };
 }
 
+// ---------- מילוי אוטומטי של הפרופיל מהעבודות שהועלו ----------
+//
+// עד כה המסלול המקומי (העלאת קבצים בלי הדבקת JSON חיצוני) החזיר metaPatch:null — כלומר
+// שום שדה פרופיל לא התמלא, גם כשהמידע ישב בתוך המסמכים עצמם. שתי שכבות סוגרות את זה:
+//   1. deriveManualDefaultPatch — טון/אורך מתוך המדדים המחושבים. מקומי, בלי LLM.
+//   2. deriveProfileFactsFromSamples — זהות והקשר (שם/מוסד/מרצה/קורס/ת"ז) מעמודי השער
+//      שבראש המסמכים. דורש ספק LLM.
+// שתיהן **ממלאות רק שדות ריקים** ולעולם לא דורסות מה שהמשתמש הזין.
+
+const isEmptyProfileValue = (value) => (
+  value === null || value === undefined
+  || (typeof value === 'string' && value.trim() === '')
+  || (Array.isArray(value) && value.length === 0)
+);
+
+// שדות זהות/הקשר בלבד. סגנון לא נמצא כאן בכוונה — אותו המנוע מזריק ישירות דרך
+// buildStyleEngineInjectionBlock, בלי לעבור דרך שדות הפרופיל.
+const PROFILE_FACT_SCALARS = ['displayName', 'institutionName', 'studyTrack', 'studentId'];
+const PROFILE_FACT_LISTS = ['lecturerNames', 'currentCourses'];
+
+const PROFILE_FACTS_HEAD_CHUNKS_PER_DOC = 2;
+const PROFILE_FACTS_MAX_CHARS = 4000;
+
+/**
+ * טון/אורך מתוך המדדים. סינכרוני, בלי LLM. ממלא רק שדות ריקים.
+ * @returns {object} patch חלקי (יכול להיות ריק)
+ */
+function deriveManualDefaultPatch() {
+  let derived = {};
+  try { derived = deriveManualDefaultsFromMetrics(getStyleOverview()) || {}; } catch { return {}; }
+  const live = getPersonalStyleProfile();
+  const patch = {};
+  // רק שני השדות האלה הם שדות פרופיל אמיתיים; tonePreferenceConfidence/exemplars הם
+  // מטא-נתונים של הגזירה ואסור שייכתבו לפרופיל.
+  ['tonePreference', 'lengthPreference'].forEach((field) => {
+    if (derived[field] && isEmptyProfileValue(live[field])) patch[field] = derived[field];
+  });
+  return patch;
+}
+
+// עמוד השער יושב בתחילת המסמך — לוקחים רק את ה-chunks הראשונים של כל מסמך.
+function buildProfileFactsExcerpt() {
+  const chunks = getChunks();
+  if (!chunks.length) return '';
+  const perDoc = new Map();
+  for (const chunk of chunks) {
+    if (!isPlainObject(chunk)) continue;
+    const key = String(chunk.docId || '');
+    const list = perDoc.get(key) || [];
+    if (list.length >= PROFILE_FACTS_HEAD_CHUNKS_PER_DOC) continue;
+    list.push(String(chunk.text || '').trim());
+    perDoc.set(key, list);
+  }
+  let out = '';
+  for (const [, texts] of perDoc) {
+    for (const text of texts) {
+      if (!text) continue;
+      if (out.length >= PROFILE_FACTS_MAX_CHARS) return out.slice(0, PROFILE_FACTS_MAX_CHARS);
+      out += `${text}\n---\n`;
+    }
+  }
+  return out.slice(0, PROFILE_FACTS_MAX_CHARS);
+}
+
+/**
+ * מחלץ פרטי זהות והקשר מעמודי השער של העבודות שהועלו. ממלא רק שדות ריקים.
+ * anti-hallucination: הפרומפט אוסר להמציא, וכל שדה שלא מופיע מפורשות חוזר ריק.
+ * @returns {Promise<{patch:object, filled:string[], reason?:string}>}
+ */
+export async function deriveProfileFactsFromSamples() {
+  let providerAvailable = false;
+  try { providerAvailable = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { providerAvailable = false; }
+  if (!providerAvailable) return { patch: {}, filled: [], reason: 'no-provider' };
+
+  const live = getPersonalStyleProfile();
+  // אם כל שדות היעד כבר מלאים — לא מבזבזים קריאת LLM.
+  const anyEmpty = [...PROFILE_FACT_SCALARS, ...PROFILE_FACT_LISTS]
+    .some((field) => isEmptyProfileValue(live[field]));
+  if (!anyEmpty) return { patch: {}, filled: [], reason: 'nothing-to-fill' };
+
+  const excerpt = buildProfileFactsExcerpt();
+  if (!excerpt.trim()) return { patch: {}, filled: [], reason: 'no-text' };
+
+  const prompt = [
+    'לפניך קטעי פתיחה מתוך עבודות שהמשתמש כתב (בדרך כלל עמוד השער והפסקה הראשונה).',
+    'חלץ מהם אך ורק פרטי זיהוי והקשר לימודי שמופיעים בטקסט במפורש.',
+    'החזר JSON יחיד בלבד, בלי טקסט מסביב, במבנה:',
+    '{"displayName":"","institutionName":"","studyTrack":"","studentId":"","lecturerNames":[],"currentCourses":[]}',
+    'כללים מחייבים:',
+    '- אל תמציא ואל תנחש. שדה שלא מופיע מפורשות בטקסט — החזר "" או [].',
+    '- displayName = שם הכותב/המגיש בלבד, לא שם המרצה.',
+    '- lecturerNames = שמות מרצים/מנחים בלבד.',
+    '- currentCourses = שמות קורסים בלבד, בלי מספרי קורס ובלי שם המוסד.',
+    '- studentId = מספר תעודת זהות/מספר סטודנט רק אם מופיע במפורש.',
+    '',
+    'הקטעים:',
+    excerpt,
+  ].join('\n');
+
+  let raw = '';
+  try {
+    raw = await chatWithActiveProvider(prompt, '', '', {
+      ...buildStyleLlmOptions('Style Profile Facts', `style-facts-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
+    });
+  } catch {
+    return { patch: {}, filled: [], reason: 'llm-failed' };
+  }
+
+  const parsed = decodeLooseJson(raw);
+  if (!isPlainObject(parsed)) return { patch: {}, filled: [], reason: 'unparsable' };
+
+  const patch = {};
+  const filled = [];
+  PROFILE_FACT_SCALARS.forEach((field) => {
+    const value = String(parsed[field] ?? '').trim();
+    if (value && isEmptyProfileValue(live[field])) { patch[field] = value; filled.push(field); }
+  });
+  PROFILE_FACT_LISTS.forEach((field) => {
+    const values = Array.isArray(parsed[field])
+      ? parsed[field].map((v) => String(v ?? '').trim()).filter(Boolean).slice(0, 6)
+      : [];
+    if (!values.length) return;
+    // lecturerNames נחשב ריק רק אם גם lecturerName הסקלרי ריק (הם מסונכרנים בנרמול).
+    const currentlyEmpty = field === 'lecturerNames'
+      ? isEmptyProfileValue(live.lecturerNames) && isEmptyProfileValue(live.lecturerName)
+      : isEmptyProfileValue(live[field]);
+    if (!currentlyEmpty) return;
+    patch[field] = values;
+    if (field === 'lecturerNames') patch.lecturerName = values[0];
+    filled.push(field);
+  });
+
+  return { patch, filled };
+}
+
 /**
  * ניתוח סגנון מאוחד: בוחר בין מסלול מקומי, חיצוני, או משולב לפי הקלט.
  * @param {{externalRawTexts?:string[], onProgress?:function, applyMetaPatch?:boolean}} opts
- * @returns {Promise<{ok:boolean, mode?:string, engine?:object|null, metaPatch?:object|null, crossValidated?:boolean, externalBatches?:number, error?:string}>}
+ * @returns {Promise<{ok:boolean, mode?:string, engine?:object|null, metaPatch?:object|null, profileFactsFilled?:string[], crossValidated?:boolean, externalBatches?:number, error?:string}>}
  */
 export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgress, applyMetaPatch = true } = {}) {
   const pastes = (Array.isArray(externalRawTexts) ? externalRawTexts : [])
@@ -931,11 +1067,34 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
   if (!pastes.length && hasChunks) {
     emit('מריץ ניתוח מקומי...');
     const res = await runQualitativeAnalysis({ force: true });
+
+    // מילוי אוטומטי של שדות ריקים בפרופיל מתוך אותן עבודות (מדדים + עמודי שער).
+    // עד כאן המסלול הזה החזיר metaPatch:null והשאיר את הפרופיל ריק.
+    emit('משלים פרטי פרופיל מהעבודות...');
+    let patch = deriveManualDefaultPatch();
+    let profileFactsFilled = [];
+    try {
+      const facts = await deriveProfileFactsFromSamples();
+      patch = { ...patch, ...facts.patch };
+      profileFactsFilled = facts.filled;
+    } catch {
+      // חילוץ הזהות הוא bonus — כישלון בו לא מפיל את הניתוח.
+    }
+    const metaPatch = Object.keys(patch).length ? patch : null;
+    if (metaPatch && applyMetaPatch) {
+      const fresh = getPersonalStyleProfile();
+      savePersonalStyleProfile({ ...fresh, ...metaPatch });
+      if (typeof window !== 'undefined') {
+        try { window.dispatchEvent(new CustomEvent(STYLE_UPDATED_EVENT)); } catch { /* noop */ }
+      }
+    }
+
     return {
       ok: !res.skipped,
       mode: 'local',
       engine: res.engine || null,
-      metaPatch: null,
+      metaPatch,
+      profileFactsFilled,
       crossValidated: Boolean(res.engine?.extractionMeta?.crossValidated),
       externalBatches: 0,
       // F5 — מיפוי קוד ה-skip הגולמי להודעה עברית ידידותית.

@@ -41,11 +41,12 @@ function burstinessLabel(cv) {
   return 'נמוכה';
 }
 
-function parenthesesLabel(rate) {
-  const n = Number(rate);
+// density = זוגות סוגריים לכל 100 מילים (parenthesesDensity ב-computeLocalMetrics, קלאמפ ל-0-4 ב-registerScore).
+function parenthesesLabel(density) {
+  const n = Number(density);
   if (!Number.isFinite(n)) return null;
-  if (n >= 0.3) return 'תכופים';
-  if (n >= 0.08) return 'מדי פעם';
+  if (n >= 1.5) return 'תכופים';
+  if (n >= 0.4) return 'מדי פעם';
   return 'נדירים';
 }
 
@@ -58,7 +59,9 @@ function formatDate(ts) {
   }
 }
 
-export default function StyleProfilePanel({ onClose }) {
+// embedded — מוטמע בתוך סעיף שכבר נושא את הכותרת "מנוע הסגנון האישי" (טאב הגדרות → סגנון אישי).
+// במצב הזה מדלגים על ה-h2 כדי לא לכפול כותרת, אבל שומרים על תג הוודאות ועל מתג ההפעלה.
+export default function StyleProfilePanel({ onClose, embedded = false }) {
   const [overview, setOverview] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
@@ -300,7 +303,7 @@ export default function StyleProfilePanel({ onClose }) {
     const commasPerSentence = formatNumber(metrics.avgCommasPerSentence ?? metrics.commasPerSentence, 1);
     if (commasPerSentence) metricCards.push({ label: 'פסיקים למשפט', value: `~${commasPerSentence}` });
 
-    const parenLabel = parenthesesLabel(metrics.parenthesesRate ?? metrics.parenthesisFrequency);
+    const parenLabel = parenthesesLabel(metrics.parenthesesDensity);
     if (parenLabel) metricCards.push({ label: 'סוגריים', value: parenLabel });
 
     if (connectorEntries.length) metricCards.push({ label: 'מילות קישור מזהות', value: connectorEntries.join(', ') });
@@ -323,8 +326,8 @@ export default function StyleProfilePanel({ onClose }) {
             </button>
           )}
           <div>
-            <h2 className="text-[18px] font-extrabold text-slate-800 flex items-center gap-2">
-              🖋️ מנוע הסגנון האישי
+            <h2 className={`font-extrabold text-slate-800 flex items-center gap-2 ${embedded ? 'text-[13px]' : 'text-[18px]'}`}>
+              {embedded ? '' : '🖋️ מנוע הסגנון האישי'}
               <span
                 className={`text-[10px] font-semibold rounded-full border px-2 py-0.5 ${CONFIDENCE_STYLES[confidence.level] || CONFIDENCE_STYLES.low}`}
                 title="ככל שתעלה יותר מסמכים שכתבת, החיקוי יהיה מדויק יותר"

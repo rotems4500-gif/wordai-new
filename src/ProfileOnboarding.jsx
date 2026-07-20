@@ -1148,6 +1148,9 @@ export default function ProfileOnboarding({
                   onIngestReport={handleIngestReport}
                   onComplete={() => nextStep()}
                   onSkip={() => nextStep()}
+                  autoStart
+                  refinementNotes={profile.styleRefinementNotes || ''}
+                  onRefinementNotesChange={(text) => updateField('styleRefinementNotes', text)}
                 />
               </div>
             )}

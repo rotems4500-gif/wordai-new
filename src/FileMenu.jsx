@@ -6,6 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import ProfileOnboarding from './ProfileOnboarding';
 import StyleProfilePanel from './components/StyleProfilePanel';
+import { getSampleStoreStats } from './services/styleSampleStore';
 import { normalizeDelimitedList } from './delimitedListInput';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { AGENTS_CONFIG } from './agentConfig';
@@ -40,7 +41,6 @@ import {
   DEFAULT_PROVIDER_CONFIG,
   DEFAULT_WORKSPACE_AUTOMATION,
   normalizeSidebarModeSettings,
-  buildExternalStyleAnalysisPrompt,
   getProviderConfig,
   getConfiguredProviderChoices,
   getProviderModelChoices,
@@ -566,8 +566,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   spss: ['spss', 'syntax', 'statistics', 'analysis', 'tutor', 'data', 'סטטיסטיקה', 'תחביר', 'ניתוח', 'סטודיו spss'],
   appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
   debug: ['debug', 'logs', 'log', 'console', 'לוגים', 'ניפוי'],
-  personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי'],
-  styleEngine: ['style engine', 'personal style engine', 'writing samples', 'blacklist', 'qualitative patterns', 'confidence', 'מנוע סגנון', 'מנוע הסגנון', 'דוגמאות כתיבה', 'רשימה שחורה', 'דפוסים'],
+  personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי', 'style engine', 'personal style engine', 'writing samples', 'blacklist', 'qualitative patterns', 'confidence', 'מנוע סגנון', 'מנוע הסגנון', 'דוגמאות כתיבה', 'רשימה שחורה', 'דפוסים'],
 };
 
 const SETTINGS_TAB_GROUPS = [
@@ -579,7 +578,7 @@ const SETTINGS_TAB_GROUPS = [
   {
     title: 'הכתיבה שלי',
     desc: 'הפרופיל, הסגנון וברירות המחדל למסמך',
-    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 עריכת סגנון'], ['styleEngine', '🖋️ מנוע סגנון'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
+    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 סגנון אישי'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
   },
   {
     title: 'תוכן וויזואל',
@@ -600,9 +599,8 @@ const SETTINGS_TAB_META = {
   skills: { icon: '🧠', title: 'סקילים', desc: 'איזה סקיל פועל אוטומטית, איזה נשאר ידני, ואיך כל אחד עובד.' },
   workspaceV2: { icon: '🧩', title: 'סביבות עבודה', desc: 'הצוותים שמופיעים במסך הבית — תפקיד, יעד ותוצר לכל סוכן.' },
   onboarding: { icon: '👤', title: 'פרופיל הכתיבה שלך', desc: 'הפרטים שמלמדים את WordAI לכתוב בדיוק כמוך.' },
-  personal: { icon: '🧬', title: 'עריכת הסגנון', desc: 'כיוונון עדין של איך הכתיבה נשמעת ונראית — וכל שינוי כאן נכנס מיד לפרומפט הסגנון שבתחתית.' },
-  styleEngine: { icon: '🖋️', title: 'מנוע הסגנון האישי', desc: 'העלאת עבודות שכתבת, ניתוח דפוסי כתיבה, מדדים ורשימת ביטויים חסומים.' },
-  prompt: { icon: '📌', title: 'הנחיות קבועות', desc: 'הנחיות שמצורפות לכל ספקי ה-AI, וייבוא ניתוח סגנון חיצוני.' },
+  personal: { icon: '🧬', title: 'סגנון אישי', desc: 'מי אתה, איך אתה כותב, ומה מנוע הסגנון למד מהעבודות שלך.' },
+  prompt: { icon: '📌', title: 'הנחיות קבועות', desc: 'הנחיות שמצורפות לכל ספקי ה-AI, וייצוא/ייבוא ההגדרות בין מכשירים.' },
   writing: { icon: '✍️', title: 'ברירות מחדל למסמך', desc: 'טיפוגרפיה, בדיקות, עריכה חכמה ושמירה אוטומטית.' },
   media: { icon: '🖼️', title: 'תמונות וגרפים', desc: 'ה-API שמייצרים תוכן ויזואלי: תמונות סטוק וגרפים מנתוני SPSS.' },
   presentation: { icon: '📊', title: 'ברירות מחדל למצגות', desc: 'מה ימולא אוטומטית בטופס יצירת מצגת חדשה.' },
@@ -1999,9 +1997,9 @@ function SidebarPanelSettings({ behavior, setBehavior, config }) {
 // legacy — זרם הניתוח החיצוני בסכימה הישנה (מילוי-חורים לפרופיל). הזרם החדש:
 // StyleSetupFlow (טאב "מנוע סגנון" + אונבורדינג שלב 10) שמזין את מנוע v3 ישירות.
 // נשמר לתאימות לאחור; הסרה = פיצ'ר עתידי נפרד.
-function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle, setPersonalStyle }) {
+function PromptSettings({ sharedInstructions, setSharedInstructions, personalStyle, setPersonalStyle, onNavigate = null }) {
   const [copyState, setCopyState] = useState('');
-  const [analysisOutput, setAnalysisOutput] = useState('');
+  const [importRaw, setImportRaw] = useState('');
   const [applyState, setApplyState] = useState(''); // '' | 'ok' | 'error'
   const [applyMessage, setApplyMessage] = useState('');
   const [portablePrompt, setPortablePrompt] = useState('');
@@ -2009,7 +2007,6 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
 
   const deferredSharedInstructions = useDeferredValue(sharedInstructions);
   const deferredPersonalStyle = useDeferredValue(personalStyle);
-  const analysisPrompt = useMemo(() => buildExternalStyleAnalysisPrompt({ profile: deferredPersonalStyle }), [deferredPersonalStyle]);
   const promptsReady = deferredSharedInstructions === sharedInstructions && deferredPersonalStyle === personalStyle;
 
   useEffect(() => {
@@ -2039,40 +2036,43 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
     }
   };
 
-  const applyAnalysisOutput = () => {
-    const raw = String(analysisOutput || '').trim();
-    if (!raw) { setApplyState('error'); setApplyMessage('אין פלט להדבקה.'); return; }
+  // ייבוא חבילת WordFlow (הצד השני של ה-Portable Prompt שמייצאים כאן). ניתוח סגנון דרך AI
+  // חיצוני *לא* חי כאן יותר — הוא כפילות מלאה של הכרטיס שבטאב "סגנון אישי", שהפרומפט שלו
+  // כבר מבקש את אותה סכימת style/coverPageDefaults ומריץ את אותו mergeExternalStyleExtractionIntoProfile.
+  // מי שמדביק כאן פלט ניתוח בטעות מקבל הפנייה לשם במקום שגיאת parse סתומה.
+  const applyImportPackage = () => {
+    const raw = String(importRaw || '').trim();
+    if (!raw) { setApplyState('error'); setApplyMessage('אין מה לייבא.'); return; }
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('לא נמצא JSON בפלט.');
+      if (!jsonMatch) throw new Error('לא נמצא JSON בטקסט שהודבק.');
       const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed?.kind === 'wordflow-portable-profile') {
-        const imported = applyPortableProfilePackage(parsed);
-        if (!imported?.ok) throw new Error(imported?.error || 'ייבוא החבילה נכשל.');
-        if (setSharedInstructions && typeof parsed.sharedInstructions === 'string') setSharedInstructions(parsed.sharedInstructions);
-        if (setPersonalStyle) setPersonalStyle(getPersonalStyleProfile());
-        setApplyState('ok');
-        setApplyMessage('חבילת WordFlow יובאה בהצלחה במחשב הזה.');
-        setAnalysisOutput('');
-        return;
+      if (parsed?.kind !== 'wordflow-portable-profile') {
+        const looksLikeStyleAnalysis = parsed && typeof parsed === 'object'
+          && (Array.isArray(parsed.patterns) || parsed.style || parsed.coverPageDefaults || typeof parsed.profileSummary === 'string');
+        throw new Error(looksLikeStyleAnalysis
+          ? 'זה נראה כמו פלט ניתוח סגנון — הדבק אותו בהגדרות ← סגנון אישי, בכרטיס "ניתוח דרך AI חיצוני".'
+          : 'זו לא חבילת WordFlow. הדבק כאן רק פלט של "העתק Prompt" מהכרטיס הזה במכשיר אחר.');
       }
-      const merged = mergeExternalStyleExtractionIntoProfile(parsed, personalStyle);
-      if (setPersonalStyle) setPersonalStyle(merged);
+      const imported = applyPortableProfilePackage(parsed);
+      if (!imported?.ok) throw new Error(imported?.error || 'ייבוא החבילה נכשל.');
+      if (setSharedInstructions && typeof parsed.sharedInstructions === 'string') setSharedInstructions(parsed.sharedInstructions);
+      if (setPersonalStyle) setPersonalStyle(getPersonalStyleProfile());
       setApplyState('ok');
-      setApplyMessage('הפרופיל עודכן בהצלחה מהניתוח!');
-      setAnalysisOutput('');
+      setApplyMessage('חבילת WordFlow יובאה בהצלחה במחשב הזה.');
+      setImportRaw('');
     } catch (e) {
       setApplyState('error');
-      setApplyMessage(`שגיאה בפירוש הפלט: ${e.message}`);
+      setApplyMessage(e.message);
     } finally {
-      setTimeout(() => { setApplyState(''); setApplyMessage(''); }, 3500);
+      setTimeout(() => { setApplyState(''); setApplyMessage(''); }, 6000);
     }
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 0, lineHeight: 1.7 }}>
-        כאן מגדירים הנחיות קבועות לכל ספקי AI, ואפשר גם לנתח עבודות קיימות דרך AI חיצוני ולייבא את הממצאים לפרופיל.
+        כאן מגדירים הנחיות קבועות שנשלחות לכל ספקי ה-AI, ומייצאים או מייבאים את ההגדרות כחבילה אחת בין מכשירים.
       </p>
       {!promptsReady && (
         <div style={{ fontSize: 11, color: '#1D4ED8', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '8px 10px' }}>
@@ -2093,58 +2093,21 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
         <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>הפרופיל האישי והלמידה הקיימת מצטרפים אוטומטית ל-Portable Prompt למטה.</div>
       </div>
 
-      {/* ניתוח סגנון דרך AI חיצוני */}
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A8A', marginBottom: 4 }}>🔍 ניתוח סגנון דרך AI חיצוני → ייבוא לפרופיל</div>
-        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 12, lineHeight: 1.7 }}>
-          העתק את פרומפט הניתוח, הדבק אותו ב-Claude / Gemini / ChatGPT יחד עם 2-3 עבודות לדוגמה, ואז הדבק כאן את הפלט JSON שתקבל.
+      {/* ניתוח סגנון דרך AI חיצוני היה כאן — הוסר כי היה כפילות מלאה של הכרטיס שבטאב
+          "סגנון אישי" (אותה סכימה מילולית, אותה פונקציית מיזוג). נשארה הפנייה בלבד. */}
+      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface-2)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, flex: 1, minWidth: 240 }}>
+          <span style={{ fontWeight: 700, color: '#1E3A8A' }}>🔍 מנתח את הכתיבה שלך דרך AI חיצוני?</span> הזרימה הזו עברה לטאב "סגנון אישי" — שם היא מזינה גם את מנוע הסגנון וגם את פרטי הזהות וההגשה (מוסד, מרצה, קורס, ת"ז) בהדבקה אחת.
         </div>
-
-        {/* שלב 1 */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A' }}>שלב 1 — פרומפט הניתוח</div>
-            <button
-              type="button"
-              onClick={() => copyText(analysisPrompt, 'פרומפט הניתוח הועתק ✓')}
-              style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
-            >
-              📋 העתק פרומפט ניתוח
-            </button>
-          </div>
-          <textarea
-            readOnly
-            value={analysisPrompt}
-            rows={6}
-            style={{ width: '100%', padding: '8px 10px', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 11, resize: 'vertical', background: 'white', color: 'var(--s-text-strong)', direction: 'ltr' }}
-          />
-          <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>צרף לפרומפט גם 2-3 עבודות שכתבת בעבר — ככה הניתוח יהיה מדויק יותר.</div>
-        </div>
-
-        {/* שלב 2 */}
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#1E3A8A', marginBottom: 6 }}>שלב 2 — הדבק את הפלט מה-AI</div>
-          <textarea
-            value={analysisOutput}
-            onChange={(e) => setAnalysisOutput(e.target.value)}
-            rows={5}
-            placeholder='הדבק כאן את ה-JSON שהחזיר ה-AI (מתחיל ב-{"profileSummary":...)'
-            style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 11, resize: 'vertical', direction: 'ltr', marginBottom: 8 }}
-          />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={applyAnalysisOutput}
-              disabled={!analysisOutput.trim()}
-              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: analysisOutput.trim() ? '#1D4ED8' : 'var(--s-border)', color: 'white', cursor: analysisOutput.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 700 }}
-            >
-              ✅ החל על הפרופיל
-            </button>
-            {applyMessage && (
-              <div style={{ fontSize: 11, color: applyState === 'ok' ? '#166534' : '#991B1B', fontWeight: 600 }}>{applyMessage}</div>
-            )}
-          </div>
-        </div>
+        {onNavigate && (
+          <button
+            type="button"
+            onClick={() => onNavigate('personal')}
+            style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}
+          >
+            פתח סגנון אישי ↗
+          </button>
+        )}
       </div>
 
       {/* Portable Prompt */}
@@ -2185,6 +2148,32 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
           <div style={{ fontSize: 11, color: '#B45309', marginTop: 8 }}>הפרופיל השתנה. לחץ העתק או הצג מחדש כדי לרענן את ה-Prompt.</div>
         ) : null}
         {copyState ? <div style={{ fontSize: 11, color: copyState.includes('נכשלה') ? '#991B1B' : '#166534', marginTop: 8 }}>{copyState}</div> : null}
+
+        {/* ייבוא — הצד השני של אותו כרטיס: מדביקים כאן חבילה שיוצאה במכשיר אחר. */}
+        <div style={{ borderTop: '1px solid var(--s-border)', marginTop: 12, paddingTop: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>ייבוא חבילה ממכשיר אחר</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6, lineHeight: 1.6 }}>הדבק כאן חבילת WordFlow שהעתקת מהכרטיס הזה במכשיר אחר, כדי לשחזר את הפרופיל וההנחיות.</div>
+          <textarea
+            value={importRaw}
+            onChange={(e) => setImportRaw(e.target.value)}
+            rows={4}
+            placeholder='הדבק כאן חבילת WordFlow (מתחילה ב-{"kind":"wordflow-portable-profile"...)'
+            style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 11, resize: 'vertical', direction: 'ltr', marginBottom: 8 }}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={applyImportPackage}
+              disabled={!importRaw.trim()}
+              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: importRaw.trim() ? '#1D4ED8' : 'var(--s-border)', color: 'white', cursor: importRaw.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 700 }}
+            >
+              ⬇️ ייבא חבילה
+            </button>
+            {applyMessage && (
+              <div style={{ fontSize: 11, color: applyState === 'ok' ? '#166534' : '#991B1B', fontWeight: 600, lineHeight: 1.6, flex: 1, minWidth: 200 }}>{applyMessage}</div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -4084,6 +4073,47 @@ function CoverTemplateSettings({ profile, setProfile }) {
   );
 }
 
+// --- עזרי פריסה לטאב "סגנון אישי" ---
+// הטאב מאחד ארבעה נושאים נפרדים (זהות / חוקי כתיבה ידניים / מנוע הסגנון / תבניות וחומרים).
+// בלי היררכיה זה היה גליל אחד ארוך; SettingsSection נותן כותרת, תיאור וקיפול לכל נושא.
+function SettingsSection({ title, desc = '', badge = null, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section style={{ border: '1px solid var(--s-border)', borderRadius: 14, background: 'white', marginBottom: 12, overflow: 'hidden' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: open ? 'var(--s-surface-2)' : 'white', border: 'none', borderBottom: open ? '1px solid var(--s-border)' : 'none', cursor: 'pointer', textAlign: 'right' }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--s-muted)', transform: open ? 'rotate(90deg)' : 'rotate(180deg)', transition: 'transform .15s' }}>▶</span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13.5, fontWeight: 800, color: 'var(--s-text-strong)' }}>{title}</span>
+          {desc ? <span style={{ display: 'block', fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6, marginTop: 2 }}>{desc}</span> : null}
+        </span>
+        {badge ? <span style={{ fontSize: 10, fontWeight: 700, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999, whiteSpace: 'nowrap' }}>{badge}</span> : null}
+      </button>
+      {open ? <div style={{ padding: 14 }}>{children}</div> : null}
+    </section>
+  );
+}
+
+// שדה עם תווית אמיתית. רוב השדות בטאב הזה היו textarea "עירומים" עם placeholder בלבד —
+// ברגע שיש ערך ה-placeholder נעלם ואי אפשר לדעת מה השדה מייצג.
+function ProfileField({ label, hint = '', children }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>{label}</label>
+      {hint ? <div style={{ fontSize: 10.5, color: 'var(--s-muted)', lineHeight: 1.5, marginBottom: 4 }}>{hint}</div> : null}
+      {children}
+    </div>
+  );
+}
+
+const PROFILE_INPUT_STYLE = { width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12 };
+const PROFILE_TEXTAREA_STYLE = { ...PROFILE_INPUT_STYLE, resize: 'vertical' };
+const PROFILE_SELECT_STYLE = { ...PROFILE_INPUT_STYLE, background: 'white' };
+
 function PersonalStyleSettings({ profile, setProfile }) {
   const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
   const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
@@ -4103,8 +4133,25 @@ function PersonalStyleSettings({ profile, setProfile }) {
   const [styleProbeResult, setStyleProbeResult] = useState(null);
   const [recentMaterials, setRecentMaterials] = useState([]);
   const [lastUploadedMaterials, setLastUploadedMaterials] = useState([]);
-  const [uploadKind, setUploadKind] = useState('writing-sample');
+  const [uploadKind, setUploadKind] = useState('general');
   const fileInputRef = useRef(null);
+  // מנוע הסגנון (טאב מאוחד, למטה) מכסה כבר "העלה עבודות ללמוד סגנון" — כרטיסי הזהב/הלמידה
+  // האוטומטית כאן מיותרים ברגע שיש לו chunks אמיתיים. engineHasChunks נבדק פעם אחת + על אירועי עדכון.
+  const [engineHasChunks, setEngineHasChunks] = useState(false);
+  useEffect(() => {
+    const refreshEngineChunks = () => {
+      try { setEngineHasChunks((getSampleStoreStats()?.chunkCount || 0) > 0); } catch { setEngineHasChunks(false); }
+    };
+    refreshEngineChunks();
+    window.addEventListener('wordai-style-samples-updated', refreshEngineChunks);
+    window.addEventListener('wordai-personal-style-updated', refreshEngineChunks);
+    return () => {
+      window.removeEventListener('wordai-style-samples-updated', refreshEngineChunks);
+      window.removeEventListener('wordai-personal-style-updated', refreshEngineChunks);
+    };
+  }, []);
+  const styleEngineActive = Boolean(profile.styleEngine?.enabled);
+  const styleEngineSupersedesLegacy = styleEngineActive && engineHasChunks;
   const currentCoursesInput = useDelimitedListInput(profile.currentCourses, (value) => updateList('currentCourses', value));
   const lecturerNamesInput = useDelimitedListInput(getLecturerNamesFromProfile(profile), (value) => updateList('lecturerNames', value));
   const syllabusTopicsInput = useDelimitedListInput(profile.syllabusTopics, (value) => updateList('syllabusTopics', value));
@@ -4214,142 +4261,176 @@ function PersonalStyleSettings({ profile, setProfile }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: 'var(--s-muted)', marginBottom: 16 }}>
-        הקובץ האישי שלך מחובר עכשיו לעוזר, כך שהוא יכתוב בהתאם לרמה, למונחים ולהעדפות שלך.
-      </p>
-
-      <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: onboardingDone ? 'var(--s-surface-2)' : '#FFF7ED', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700, marginBottom: 6 }}>היכרות אישית עם הסוכן</div>
-        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
-          {onboardingDone
-            ? 'ההיכרות הושלמה. הסוכן מתאים את עצמו אליך ויכול להמשיך ללמוד מהחומרים המקומיים שלך לאורך הזמן.'
-            : 'עדיין לא בוצעה היכרות מלאה. אפשר למלא כאן את המידע הידני, או לפתוח את מסך הבית ולבצע היכרות מהירה.'}
+      {/* רצועת מצב קומפקטית — מחליפה כרטיס "היכרות" גדול שתפס את ראש הטאב בלי לתת מידע חדש. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', border: '1px solid var(--s-border)', borderRadius: 12, padding: '10px 12px', background: onboardingDone ? 'var(--s-surface-2)' : '#FFF7ED', marginBottom: 14 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 200 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, background: onboardingDone ? '#DCFCE7' : '#FEF3C7', color: onboardingDone ? '#166534' : '#92400E', padding: '4px 8px', borderRadius: 999 }}>
+            {onboardingDone ? '✓ ההיכרות הושלמה' : 'ההיכרות לא הושלמה'}
+          </span>
+          {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
+          {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
+          <span style={{ fontSize: 10, background: styleEngineActive ? '#EEF2FF' : '#F1F5F9', color: styleEngineActive ? '#4338CA' : 'var(--s-muted)', padding: '4px 8px', borderRadius: 999 }}>
+            מנוע הסגנון: {styleEngineActive ? 'פעיל' : 'כבוי'}
+          </span>
+          <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
+            {profile.learningConsent === false ? 'למידה ברקע כבויה' : 'למידה ברקע פעילה'}
+          </span>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {profile.displayName ? <span style={{ fontSize: 10, background: '#FAE8FF', color: '#A21CAF', padding: '4px 8px', borderRadius: 999 }}>{profile.displayName}</span> : null}
-            {profile.institutionName ? <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', padding: '4px 8px', borderRadius: 999 }}>{profile.institutionName}</span> : null}
-            {profile.userBackground ? <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1D4ED8', padding: '4px 8px', borderRadius: 999 }}>{profile.userBackground}</span> : null}
-            {profile.defaultAudience ? <span style={{ fontSize: 10, background: '#F1F5F9', color: 'var(--s-text)', padding: '4px 8px', borderRadius: 999 }}>קהל יעד: {profile.defaultAudience}</span> : null}
-            {(profile.tonePreferences || []).slice(0, 4).map((tone) => (
-              <span key={tone} style={{ fontSize: 10, background: '#EEF2FF', color: '#4338CA', padding: '4px 8px', borderRadius: 999 }}>{tone}</span>
-            ))}
-            <span style={{ fontSize: 10, background: profile.learningConsent === false ? '#FEF3C7' : '#DCFCE7', color: profile.learningConsent === false ? '#92400E' : '#166534', padding: '4px 8px', borderRadius: 999 }}>
-              {profile.learningConsent === false ? 'למידה אוטומטית כבויה' : 'למידה אוטומטית פעילה'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-            <button
-              type="button"
-              onClick={handleResetProfile}
-              style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
-            >
-              אפס פרופיל בלבד
-            </button>
-            <div style={{ fontSize: 11, color: 'var(--s-muted)' }}>מאפס העדפות, onboarding ולמידה שמורה בפרופיל בלבד. חומרי מקור והיסטוריית למידה מקומית נשארים כפי שהם.</div>
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={handleResetProfile}
+          title="מאפס העדפות, onboarding ולמידה שמורה בפרופיל בלבד. חומרי מקור, עבודות עבר והיסטוריית הלמידה המקומית נשארים."
+          style={{ padding: '6px 11px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}
+        >
+          אפס פרופיל
+        </button>
       </div>
 
-      <CoverTemplateSettings profile={profile} setProfile={setProfile} />
+      <SettingsSection title="👤 מי אני" desc="הפרטים וההקשר שמאפשרים לסוכן לדעת למי ובשביל מה הוא כותב.">
 
-      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>פרופיל היכרות</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0 12px' }}>
+          <ProfileField label="שם">
+            <input
+              value={profile.displayName || ''}
+              onChange={(e) => updateField('displayName', e.target.value)}
+              placeholder="איך תרצה שהסוכן יקרא לך"
+              style={PROFILE_INPUT_STYLE}
+            />
+          </ProfileField>
 
-        <input
-          value={profile.displayName || ''}
-          onChange={(e) => updateField('displayName', e.target.value)}
-          placeholder="שם או איך תרצה שהסוכן יקרא לך"
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
-        />
+          <ProfileField label="מוסד או מקום עבודה">
+            <input
+              value={profile.institutionName || ''}
+              onChange={(e) => updateField('institutionName', e.target.value)}
+              placeholder="מוסד לימודים, ארגון או מקום עבודה"
+              style={PROFILE_INPUT_STYLE}
+            />
+          </ProfileField>
 
-        <input
-          value={profile.institutionName || ''}
-          onChange={(e) => updateField('institutionName', e.target.value)}
-          placeholder="מוסד לימודים, ארגון או מקום עבודה"
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
-        />
+          <ProfileField label="חוג או מסלול">
+            <input
+              value={profile.studyTrack || ''}
+              onChange={(e) => updateField('studyTrack', e.target.value)}
+              placeholder="חוג, מסלול, התמחות או תחום מרכזי"
+              style={PROFILE_INPUT_STYLE}
+            />
+          </ProfileField>
 
-        <input
-          value={profile.studyTrack || ''}
-          onChange={(e) => updateField('studyTrack', e.target.value)}
-          placeholder="חוג, מסלול, התמחות או תחום מרכזי"
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
-        />
+          <ProfileField label="תפקיד או סטטוס">
+            <input
+              value={profile.userRole || ''}
+              onChange={(e) => updateField('userRole', e.target.value)}
+              placeholder="למשל: סטודנט, מרצה, מנהל"
+              style={PROFILE_INPUT_STYLE}
+            />
+          </ProfileField>
+        </div>
 
-        <input
-          value={profile.userRole || ''}
-          onChange={(e) => updateField('userRole', e.target.value)}
-          placeholder="סטטוס או תפקיד, למשל: סטודנט, מרצה, מנהל"
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8 }}
-        />
+        <ProfileField label="רמה אקדמית">
+          <select
+            value={profile.academic_level || 'undergraduate'}
+            onChange={(e) => updateField('academic_level', e.target.value)}
+            style={PROFILE_SELECT_STYLE}
+          >
+            <option value="school">בית ספר</option>
+            <option value="undergraduate">תואר ראשון</option>
+            <option value="graduate">תואר שני</option>
+            <option value="doctoral">דוקטורט</option>
+            <option value="professional">מקצועי</option>
+          </select>
+        </ProfileField>
 
-        <textarea
-          {...currentCoursesInput}
-          placeholder="קורסים, שיעורים או נושאים פעילים כרגע"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="קורסים פעילים" hint="אפשר להפריד בפסיק או שורה חדשה.">
+          <textarea {...currentCoursesInput} placeholder="קורסים, שיעורים או נושאים פעילים כרגע" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
 
-        <textarea
-          {...lecturerNamesInput}
-          placeholder="מרצים או מנחים קבועים. אפשר להפריד בפסיק או שורה חדשה"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="מרצים או מנחים" hint="אפשר להפריד בפסיק או שורה חדשה.">
+          <textarea {...lecturerNamesInput} placeholder="מרצים או מנחים קבועים" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
 
-        <textarea
-          {...syllabusTopicsInput}
-          placeholder="נושאי סילבוס, יחידות לימוד או דגשים חוזרים. אפשר להפריד בפסיק או שורה חדשה"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="נושאי סילבוס ודגשים" hint="אפשר להפריד בפסיק או שורה חדשה.">
+          <textarea {...syllabusTopicsInput} placeholder="נושאי סילבוס, יחידות לימוד או דגשים חוזרים" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
 
-        <textarea
-          value={profile.userBackground || ''}
-          onChange={(e) => updateField('userBackground', e.target.value)}
-          placeholder="מי אתה ככותב או באיזה הקשר אתה בדרך כלל כותב"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="הרקע שלך ככותב">
+          <textarea
+            value={profile.userBackground || ''}
+            onChange={(e) => updateField('userBackground', e.target.value)}
+            placeholder="מי אתה ככותב או באיזה הקשר אתה בדרך כלל כותב"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
 
-        <textarea
-          value={profile.writingGoals || ''}
-          onChange={(e) => updateField('writingGoals', e.target.value)}
-          placeholder="מטרות הכתיבה שלך, למשל: עבודה אקדמית מדויקת, ניסוח עסקי חד, סיכומים קצרים"
-          rows={3}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="מטרות הכתיבה">
+          <textarea
+            value={profile.writingGoals || ''}
+            onChange={(e) => updateField('writingGoals', e.target.value)}
+            placeholder="למשל: עבודה אקדמית מדויקת, ניסוח עסקי חד, סיכומים קצרים"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
 
-        <textarea
-          value={profile.defaultAudience || ''}
-          onChange={(e) => updateField('defaultAudience', e.target.value)}
-          placeholder="מי קהל היעד הטיפוסי שלך"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="קהל היעד">
+          <textarea
+            value={profile.defaultAudience || ''}
+            onChange={(e) => updateField('defaultAudience', e.target.value)}
+            placeholder="מי קהל היעד הטיפוסי שלך"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
 
-        <textarea
-          value={profile.formatPreferences || ''}
-          onChange={(e) => updateField('formatPreferences', e.target.value)}
-          placeholder="איך אתה מעדיף שהטקסט ייראה: קצר, מובנה, עם סעיפים, מפורט, וכדומה"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+        <ProfileField label="הקשר נוסף">
+          <textarea
+            value={profile.additionalContext || ''}
+            onChange={(e) => updateField('additionalContext', e.target.value)}
+            placeholder="כל פרט נוסף שיעזור לסוכן להכיר אותך ולהתאים את התשובות"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
+      </SettingsSection>
 
-        <textarea
-          value={profile.additionalContext || ''}
-          onChange={(e) => updateField('additionalContext', e.target.value)}
-          placeholder="כל פרט נוסף שיעזור לסוכן להכיר אותך ולהתאים את התשובות"
-          rows={2}
-          style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-        />
+      <SettingsSection
+        title="🖋️ מנוע הסגנון האישי"
+        desc="העלה עבודות שכתבת — מכאן נלמדים דפוסי הכתיבה האמיתיים שלך."
+        badge={styleEngineActive ? 'פעיל' : 'כבוי'}
+      >
+        <StyleProfilePanel embedded />
 
-        <div style={{ borderTop: '1px solid var(--s-border)', marginTop: 10, paddingTop: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 10 }}>התאמת סגנונות אישית</div>
+        <div style={{ borderTop: '1px solid var(--s-border)', marginTop: 14, paddingTop: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', borderRadius: 10, padding: '8px 10px', marginBottom: 10 }}>
+            בנוסף לעבודות שמעלים כאן, האפליקציה יכולה ללמוד ברקע מהמסמך הפעיל ומהתיקונים שלך לאורך הזמן.
+            {profile.autoLearnedFromEditorAt ? <div style={{ marginTop: 4 }}>עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}</div> : null}
+          </div>
 
-          <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6 }}>סגנונות מועדפים במסך הבית</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
+            <input type="checkbox" checked={profile.learningConsent === true} onChange={(e) => updateField('learningConsent', e.target.checked)} />
+            אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
+          </label>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="✍️ איך אני כותב"
+        desc={styleEngineSupersedesLegacy
+          ? 'חוקים ידניים שגוברים על המנוע או משלימים אותו. מלא כאן רק מה שהמנוע לא קלע אליו.'
+          : 'חוקים ידניים שאתה קובע. כל עוד לא העלית עבודות למנוע, זה מה שמכתיב את הסגנון.'}
+      >
+        <ProfileField label="העדפות מבנה ותצורה">
+          <textarea
+            value={profile.formatPreferences || ''}
+            onChange={(e) => updateField('formatPreferences', e.target.value)}
+            placeholder="איך אתה מעדיף שהטקסט ייראה: קצר, מובנה, עם סעיפים, מפורט, וכדומה"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
+
+        <ProfileField label="סגנונות מועדפים במסך הבית">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {STYLE_PRESET_OPTIONS.map((style) => {
               const active = (profile.preferredHomeStyleIds || []).includes(style.id);
               return (
@@ -4364,60 +4445,109 @@ function PersonalStyleSettings({ profile, setProfile }) {
               );
             })}
           </div>
+        </ProfileField>
 
-          <select
-            value={profile.defaultDocumentStyle || 'academic'}
-            onChange={(e) => updateField('defaultDocumentStyle', e.target.value)}
-            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
-          >
-            {STYLE_PRESET_OPTIONS.map((style) => <option key={style.id} value={style.id}>ברירת מחדל: {style.label}</option>)}
-          </select>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0 12px' }}>
+          <ProfileField label="סגנון מסמך ברירת מחדל">
+            <select
+              value={profile.defaultDocumentStyle || 'academic'}
+              onChange={(e) => updateField('defaultDocumentStyle', e.target.value)}
+              style={PROFILE_SELECT_STYLE}
+            >
+              {STYLE_PRESET_OPTIONS.map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}
+            </select>
+          </ProfileField>
 
-          <select
-            value={profile.sentenceLengthPreference || 'מאוזן'}
-            onChange={(e) => updateField('sentenceLengthPreference', e.target.value)}
-            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
-          >
-            <option value="קצר">משפטים קצרים</option>
-            <option value="מאוזן">משפטים מאוזנים</option>
-            <option value="מעמיק">משפטים מעמיקים</option>
-          </select>
+          <ProfileField label="אורך משפטים">
+            <select
+              value={profile.sentenceLengthPreference || 'מאוזן'}
+              onChange={(e) => updateField('sentenceLengthPreference', e.target.value)}
+              style={PROFILE_SELECT_STYLE}
+            >
+              <option value="קצר">משפטים קצרים</option>
+              <option value="מאוזן">משפטים מאוזנים</option>
+              <option value="מעמיק">משפטים מעמיקים</option>
+            </select>
+          </ProfileField>
 
-          <select
-            value={profile.paragraphLengthPreference || 'בינוני'}
-            onChange={(e) => updateField('paragraphLengthPreference', e.target.value)}
-            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, marginBottom: 8, background: 'white' }}
-          >
-            <option value="תמציתי">פסקאות קצרות</option>
-            <option value="בינוני">פסקאות בינוניות</option>
-            <option value="מפורט">פסקאות מפורטות</option>
-          </select>
+          <ProfileField label="אורך פסקאות">
+            <select
+              value={profile.paragraphLengthPreference || 'בינוני'}
+              onChange={(e) => updateField('paragraphLengthPreference', e.target.value)}
+              style={PROFILE_SELECT_STYLE}
+            >
+              <option value="תמציתי">פסקאות קצרות</option>
+              <option value="בינוני">פסקאות בינוניות</option>
+              <option value="מפורט">פסקאות מפורטות</option>
+            </select>
+          </ProfileField>
+        </div>
 
+        <ProfileField label="חוקי סגנון אישיים" hint="הנחיות חופשיות שיצורפו לכל בקשת כתיבה.">
           <textarea
             value={profile.customStyleGuidance || ''}
             onChange={(e) => updateField('customStyleGuidance', e.target.value)}
-            placeholder="חוקים אישיים לסגנון הכתיבה שלך"
+            placeholder="למשל: אל תפתח פסקה במילת קישור, הימנע ממשפטים בסביל"
             rows={2}
-            style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
+            style={PROFILE_TEXTAREA_STYLE}
           />
-        </div>
+        </ProfileField>
 
-        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', borderRadius: 10, padding: '8px 10px', marginBottom: 10 }}>
-          סקיל הסגנון הקיים משתמש עכשיו גם בלמידה אוטומטית מהרקע. כשהאפשרות פעילה, האפליקציה לומדת מקומית מהמסמך הפעיל ומהתיקונים שלך לאורך הזמן.
-          {profile.autoLearnedFromEditorAt ? <div style={{ marginTop: 4, color: 'var(--s-muted)' }}>עודכן לאחרונה: {new Date(profile.autoLearnedFromEditorAt).toLocaleString('he-IL')}</div> : null}
-        </div>
+        <ProfileField label="מונחים מועדפים" hint="מונחים שהעוזר יעדיף להשתמש בהם. הפרד בפסיק או שורה חדשה.">
+          <textarea {...manualVocabularyInput} placeholder="למשל: תפיסה, מסגור, הבניה" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)' }}>
-          <input type="checkbox" checked={profile.learningConsent === true} onChange={(e) => updateField('learningConsent', e.target.checked)} />
-          אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
-        </label>
-      </div>
+        <ProfileField label="מונחים מוגנים" hint="מונחים שלא ישונו לעולם בעריכה או בשכתוב.">
+          <textarea {...protectedVocabularyInput} placeholder="מונחים שחייבים להישאר בדיוק כפי שהם" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
 
+        <ProfileField label="ביטויים אופייניים" hint="ביטויים שתרצה שישולבו כשמתאים.">
+          <textarea {...manualPhrasesInput} placeholder="ביטויים אופייניים שתרצה לשלב" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
+
+        <ProfileField label="מבני משפט מועדפים">
+          <textarea {...preferredSentenceStructuresInput} placeholder="למשל: מצד אחד... מצד שני, יתרה מזו, ניתן לראות כי" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
+
+        <ProfileField label="טון כתיבה מועדף">
+          <textarea {...tonePreferencesInput} placeholder="למשל: ענייני, אקדמי, רהוט, ישיר" rows={2} style={PROFILE_TEXTAREA_STYLE} />
+        </ProfileField>
+
+        <ProfileField label="העדפות לפסקאות">
+          <textarea
+            value={profile.paragraphPreferences || ''}
+            onChange={(e) => updateField('paragraphPreferences', e.target.value)}
+            placeholder="למשל: פסקאות קצרות של 3–4 שורות, או פסקאות ארוכות ומעמיקות"
+            rows={2}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
+
+        <ProfileField label="הערות נוספות">
+          <textarea
+            value={profile.notes || ''}
+            onChange={(e) => updateField('notes', e.target.value)}
+            placeholder="כל דבר נוסף על הסגנון האישי שלך"
+            rows={3}
+            style={PROFILE_TEXTAREA_STYLE}
+          />
+        </ProfileField>
+      </SettingsSection>
+
+      {/* כלים משניים. defaultOpen קבוע ולא תלוי-מצב בכוונה: engineHasChunks נקבע ב-useEffect
+          אחרי הרינדור הראשון, ו-SettingsSection קורא את defaultOpen רק ב-useState ההתחלתי —
+          ערך תלוי-מצב היה נתפס תמיד כ-false ומתעלם מהמנוע. */}
+      <SettingsSection
+        title="🧪 כלים נוספים ואבחון"
+        desc="דוגמת זהב ידנית, בדיקת השפעת הסגנון, ומה נלמד אוטומטית."
+        defaultOpen={false}
+      >
+      {!styleEngineSupersedesLegacy && (
       <div style={{ border: '1px solid #C7D2FE', borderRadius: 12, padding: '14px', background: '#F8FAFF', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 13, color: '#3730A3', fontWeight: 800 }}>דוגמת זהב לסגנון אישי</div>
-            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>העוזר משתמש בדוגמה הזו כדי לחקות קצב, טון ומבני משפטים בלי להעתיק משפטים.</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>העוזר משתמש בדוגמה הזו כדי לחקות קצב, טון ומבני משפטים בלי להעתיק משפטים. ברגע שמנוע הסגנון למטה לומד מעבודות אמיתיות, הוא מחליף את הדוגמה הזו.</div>
           </div>
           <button
             type="button"
@@ -4442,6 +4572,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
           </div>
         ) : null}
       </div>
+      )}
 
       <div style={{ border: '1px solid #FBCFE8', borderRadius: 12, padding: '14px', background: '#FFF7FC', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
@@ -4489,16 +4620,46 @@ function PersonalStyleSettings({ profile, setProfile }) {
         ) : null}
       </div>
 
+      {/* מה נלמד אוטומטית — שייך למנוע, לא לחוקים הידניים. כשהמנוע פעיל השדות האלה
+          (learnedVocabulary/preferredSentenceOpeners/toneDescriptors) מדוכאים בפרומפט, אז
+          מציגים הסבר במקום רשימות מתות. השדות הידניים בסעיף "איך אני כותב" ממשיכים לפעול. */}
+      {styleEngineActive ? (
+        <div style={{ marginTop: 12, border: '1px solid var(--s-border)', borderRadius: 10, padding: '10px 12px', background: '#F9FAFB', fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.7 }}>
+          המנוע פעיל — הוא מזהה בעצמו מונחים, פתיחות משפט וטון, ולכן הרשימות שנלמדו בעבר לא נשלחות יותר. החוקים הידניים שבסעיף "איך אני כותב" ממשיכים לחול כרגיל.
+        </div>
+      ) : (
+        <div style={{ marginTop: 12, border: '1px solid var(--s-border)', borderRadius: 10, padding: '10px 12px', background: '#F9FAFB' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>מה נלמד אוטומטית מהקבצים</div>
+          <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.8 }}>
+            מונחים בולטים: {(profile.learnedVocabulary || []).slice(0, 8).join(', ') || 'עדיין אין'}
+            <br />
+            פתיחות משפט: {(profile.preferredSentenceOpeners || []).slice(0, 4).join(', ') || 'עדיין אין'}
+            <br />
+            טון שנלמד: {(profile.toneDescriptors || []).slice(0, 4).join(', ') || 'עדיין אין'}
+            <br />
+            למידה ממשחקים: {(profile.learningGameInsights || []).slice(0, 4).join(' • ') || 'עדיין אין'}
+          </div>
+        </div>
+      )}
+      </SettingsSection>
+
+      <SettingsSection
+        title="📎 תבניות וחומרים"
+        desc="עמוד שער אישי וקובצי הקשר. לא משפיע על אופן הכתיבה עצמו."
+        defaultOpen={false}
+      >
+        <CoverTemplateSettings profile={profile} setProfile={setProfile} />
+
       <div style={{ border: '1px solid #DBEAFE', borderRadius: 12, padding: '14px', background: 'var(--s-surface-2)', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>העלה קבצים ללמידת סגנון</div>
+          <div style={{ fontSize: 13, color: '#1E3A8A', fontWeight: 700 }}>חומרי עזר נוספים</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <select
               value={uploadKind}
               onChange={(e) => setUploadKind(e.target.value)}
               style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #C8C6C4', background: 'white', fontSize: 12 }}
             >
-              {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              {Object.values(MATERIAL_UPLOAD_PRESETS).filter((item) => item.id !== 'writing-sample').map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
             <button
               type="button"
@@ -4518,7 +4679,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
           <input ref={fileInputRef} type="file" multiple accept={getHelperMaterialAcceptList()} style={{ display: 'none' }} onChange={handleUpload} />
         </div>
         <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
-          אפשר לצרף עבודות קודמות, סיכומים, PDF, מצגות, דפי שער לדוגמה, תבניות מסמך או טיוטות. בחר את סוג הקובץ לפני ההעלאה כדי שהסוכן ילמד בדיוק ממה להשתמש.
+          לחומרי הקשר כלליים, דפי שער לדוגמה, תבניות מסמך או חומרי קורס — בחר את סוג הקובץ לפני ההעלאה. לעבודות כתיבה שלך שממנן לומדים את הסגנון עצמו — בקטע "מנוע הסגנון האישי" למטה.
         </div>
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--s-text)', background: 'white', border: '1px solid #DBEAFE', borderRadius: 10, padding: '8px 10px' }}>
           נסרקו: {profile.scanStats?.totalScanned || 0} מתוך {profile.scanStats?.totalKnown || 0} • חדשים בריענון האחרון: {profile.scanStats?.newlyScanned || 0}
@@ -4573,84 +4734,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
         ) : null}
       </div>
 
-      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
-        <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 4, fontWeight: 500 }}>רמה אקדמית</div>
-        <select
-          value={profile.academic_level || 'undergraduate'}
-          onChange={(e) => updateField('academic_level', e.target.value)}
-          style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
-        >
-          <option value="school">בית ספר</option>
-          <option value="undergraduate">תואר ראשון</option>
-          <option value="graduate">תואר שני</option>
-          <option value="doctoral">דוקטורט</option>
-          <option value="professional">מקצועי</option>
-        </select>
-      </div>
-
-      <textarea
-        {...manualVocabularyInput}
-        placeholder="מונחים שהעוזר יעדיף להשתמש בהם"
-        rows={3}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        {...protectedVocabularyInput}
-        placeholder="מונחים שלא תרצה לשנות לעולם"
-        rows={3}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        {...manualPhrasesInput}
-        placeholder="ביטויים אופייניים שתרצה לשלב"
-        rows={3}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        {...preferredSentenceStructuresInput}
-        placeholder="מבני משפט מועדפים, למשל: מצד אחד... מצד שני, יתרה מזו, ניתן לראות כי"
-        rows={3}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        {...tonePreferencesInput}
-        placeholder="טון כתיבה מועדף, למשל: ענייני, אקדמי, רהוט, ישיר"
-        rows={2}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        value={profile.paragraphPreferences || ''}
-        onChange={(e) => updateField('paragraphPreferences', e.target.value)}
-        placeholder="העדפות לפסקאות, למשל: פסקאות קצרות של 3–4 שורות, או פסקאות ארוכות ומעמיקות"
-        rows={3}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical', marginBottom: 8 }}
-      />
-
-      <textarea
-        value={profile.notes || ''}
-        onChange={(e) => updateField('notes', e.target.value)}
-        placeholder="הערות נוספות על הסגנון האישי שלך"
-        rows={4}
-        style={{ width: '100%', padding: '9px 10px', border: '1px solid #C8C6C4', borderRadius: 8, fontSize: 12, resize: 'vertical' }}
-      />
-
-      <div style={{ marginTop: 12, border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px', background: '#F9FAFB' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 6 }}>מה נלמד אוטומטית מהקבצים</div>
-        <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.8 }}>
-          מונחים בולטים: {(profile.learnedVocabulary || []).slice(0, 8).join(', ') || 'עדיין אין'}
-          <br />
-          פתיחות משפט: {(profile.preferredSentenceOpeners || []).slice(0, 4).join(', ') || 'עדיין אין'}
-          <br />
-          טון שנלמד: {(profile.toneDescriptors || []).slice(0, 4).join(', ') || 'עדיין אין'}
-          <br />
-          למידה ממשחקים: {(profile.learningGameInsights || []).slice(0, 4).join(' • ') || 'עדיין אין'}
-        </div>
-      </div>
+      </SettingsSection>
     </div>
   );
 }
@@ -8111,7 +8195,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                           </div>
                         </div>
                       )}
-                      {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} />}
+                      {settingsTab === 'prompt'      && <PromptSettings sharedInstructions={sharedInstructionsState} setSharedInstructions={setSharedInstructionsState} personalStyle={personalStyleState} setPersonalStyle={setPersonalStyleState} onNavigate={setSettingsTab} />}
                       {settingsTab === 'skills'      && <SkillsSettings skillsState={skillsState} setSkillsState={setSkillsState} />}
                       {settingsTab === 'workspaceV2' && <WorkspaceV2Settings config={config} />}
                       {settingsTab === 'security'    && <SecuritySettings />}
@@ -8137,7 +8221,6 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
                       {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
                       {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
-                      {settingsTab === 'styleEngine' && <StyleProfilePanel />}
                       {settingsTab === 'appearance'  && <AppearanceSettings />}
                     </div>
                   </div>

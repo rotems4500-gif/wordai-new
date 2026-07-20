@@ -283,6 +283,7 @@ export const DEFAULT_PERSONAL_STYLE = {
   defaultDocumentStyle: 'academic',
   preferredHomeStyleIds: ['academic'],
   customStyleGuidance: '',
+  styleRefinementNotes: '',
   learningGameAnswers: {},
   learningGameInsights: [],
   learningGamesCompletedAt: '',
@@ -5944,6 +5945,7 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     if (profile.avoidRules) voiceParts.push(`להימנע במיוחד מ: ${String(profile.avoidRules).trim()}`);
     if (profile.dislikedStylePatterns?.length) voiceParts.push(`להימנע מדפוסים ש"נשמעים כמו AI": ${profile.dislikedStylePatterns.join(', ')}`);
     if (profile.customStyleGuidance) voiceParts.push(`הנחיות סגנון נוספות: ${String(profile.customStyleGuidance).trim()}`);
+    if (profile.styleRefinementNotes) voiceParts.push(`דיוקים שהמשתמש ביקש על הסגנון: ${String(profile.styleRefinementNotes).trim()}`);
     const cleanVoiceParts = voiceParts.filter(Boolean);
     if (!cleanVoiceParts.length && !styleEngineBlock) return '';
     return [
@@ -5974,6 +5976,7 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (!omitStructuralHints && profile.defaultDocumentStyle) parts.push(`סגנון מסמך מועדף כברירת מחדל: ${String(profile.defaultDocumentStyle).trim()}`);
   if (!omitStructuralHints && profile.preferredHomeStyleIds?.length) parts.push(`סגנונות מועדפים להצגה ושימוש: ${profile.preferredHomeStyleIds.join(', ')}`);
   if (profile.customStyleGuidance) parts.push(`כללי סגנון אישיים נוספים: ${String(profile.customStyleGuidance).trim()}`);
+  if (profile.styleRefinementNotes) parts.push(`דיוקים שהמשתמש ביקש על הסגנון שלו: ${String(profile.styleRefinementNotes).trim()}`);
   if (profile.learningGameInsights?.length) parts.push(`תובנות שנלמדו ממשחקי ההיכרות: ${profile.learningGameInsights.join(' | ')}`);
   if (!styleEngineBlock && profile.styleTrainingSummary) parts.push(`סיכום העדפות הסגנון ממשחק 'למד אותי': ${String(profile.styleTrainingSummary).trim()}`);
   if (!styleEngineBlock && profile.preferredTrainingExamples?.length) parts.push(`דוגמאות ניסוח שקרובות במיוחד לסגנון המועדף: ${profile.preferredTrainingExamples.join(' | ')}`);
