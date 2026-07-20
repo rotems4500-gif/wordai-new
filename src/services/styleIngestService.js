@@ -52,15 +52,18 @@ import {
   embedTexts,
   cosineSim,
   isEmbeddingUnavailable,
+  resetEmbeddingState,
   STYLE_EMBEDDING_MODEL_ID,
   STYLE_EMBEDDING_DIM,
 } from './styleEmbeddingService';
+import { clearDeltas } from './styleDeltaService';
 import {
   getEmbeddedChunkIds,
   putVectors,
   getVectors,
   pruneVectors,
   ensureEmbeddingStoreReady,
+  clearEmbeddingStore,
 } from './styleEmbeddingStore';
 
 // safeJsonParse אינו נדרש בשלב זה: אינו מיוצא מ-aiService (והמודול אסור לנגוע בו);
@@ -366,28 +369,38 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
     if (typeof onProgress === 'function') {
       try { onProgress({ index: i, total, name, status: 'reading' }); } catch {}
     }
+    // outcome פר-קובץ ('added'|'skipped'|'failed') — נשלח באירוע ה-'done' כדי שה-UI יציג
+    // ✓/⏭/✗ ישירות בלי הצלבת שמות (עמיד גם לקבצים כפולי-שם). ברירת-מחדל 'failed' עד הצלחה.
+    let outcome = 'failed';
     try {
       const doc = await readBrowserDocumentFile(file);
       const text = String(doc?.text || '').trim();
       if (!text) {
         failed.push({ name, error: 'לא חולץ טקסט מהקובץ.' });
-        continue;
+      } else {
+        const result = addDocumentSamples({
+          title: String(doc?.title || name),
+          text,
+          source: 'upload',
+        });
+        if (result.skipped) { skipped += 1; outcome = 'skipped'; }
+        else if (result.docId && Number(result.added) > 0) {
+          added += 1;
+          evicted += Number(result.evicted) || 0;
+          outcome = 'added';
+        } else {
+          // המסמך נרשם אך לא הניב אף chunk (טקסט קצר מדי לדגימה). מסירים אותו כדי
+          // ש-docCount לא ינפח את הוודאות, וכדי שגרסה מתוקנת של אותו קובץ לא תיחסם
+          // לנצח כ-duplicate לפי hash.
+          if (result.docId) removeDocument(result.docId);
+          failed.push({ name, error: 'הקובץ קצר מדי לדגימת סגנון.' });
+        }
       }
-      const result = addDocumentSamples({
-        title: String(doc?.title || name),
-        text,
-        source: 'upload',
-      });
-      if (result.skipped) skipped += 1;
-      else if (result.docId) {
-        added += 1;
-        evicted += Number(result.evicted) || 0;
-      } else failed.push({ name, error: 'הקובץ קצר מדי לדגימת סגנון.' });
     } catch (err) {
       failed.push({ name, error: String(err?.message || err || 'חילוץ נכשל.') });
     }
     if (typeof onProgress === 'function') {
-      try { onProgress({ index: i, total, name, status: 'done' }); } catch {}
+      try { onProgress({ index: i, total, name, status: 'done', outcome }); } catch {}
     }
   }
 
@@ -1255,3 +1268,137 @@ export function finalizeStyleVerification() {
 
 // re-export לנוחות ה-UI (איפוס מלא של ה-store).
 export { clearSampleStore };
+
+// ---------- resetStyleLearning ----------
+
+/**
+ * איפוס מלא של הלמידה — "להתחיל מחדש". מוחק את כל מה שנלמד מהמשתמש בכל שלוש
+ * שכבות האחסון (דגימות, וקטורים סמנטיים, דלתות עריכה) ומחזיר את אובייקט המנוע
+ * לברירת המחדל, כך ש-normalizeStyleEngine מייצר סכמה נקייה.
+ *
+ * מה *נשמר* בכוונה: הדגל enabled (העדפת משתמש, לא נתון שנלמד), וכן — לפי בחירה —
+ * רשימת הדפוסים שנדחו ידנית ("לא אני"), שהיא קיורציה של המשתמש ולא תוצר חילוץ.
+ * העדפות יצירתיות/עומק חיות מחוץ למנוע (app settings) ולכן אינן מושפעות.
+ *
+ * הפעולה בלתי הפיכה — ה-UI חייב לבקש אישור מפורש לפני הקריאה.
+ *
+ * @param {{keepRejections?:boolean}} [opts] keepRejections — לשמר rejectedPatternKeys.
+ * @returns {{cleared:{documents:number,chunks:number,words:number}, keptRejections:number}}
+ */
+export function resetStyleLearning({ keepRejections = false } = {}) {
+  const { profile, engine } = loadEngine();
+
+  // צילום "מה נמחק" *לפני* המחיקה — ה-UI מדווח למשתמש מה בדיוק ירד.
+  let before = { docCount: 0, chunkCount: 0, totalWords: 0 };
+  try { before = getSampleStoreStats() || before; } catch {}
+
+  const keptKeys = keepRejections
+    ? (Array.isArray(engine.rejectedPatternKeys) ? engine.rejectedPatternKeys : [])
+    : [];
+
+  // שלוש שכבות אחסון נפרדות — מחיקה חלקית משאירה וקטורים/דלתות יתומים שימשיכו
+  // להשפיע על retrieval ועל editCounters.
+  try { clearSampleStore(); } catch {}
+  try { clearEmbeddingStore(); } catch {}
+  try { resetEmbeddingState(); } catch {}
+  try { clearDeltas(); } catch {}
+
+  // מנוע נקי: normalizeStyleEngine על אובייקט מינימלי מייצר את כל שדות ברירת המחדל.
+  saveEngine(profile, {
+    enabled: engine.enabled !== false,
+    ...(keptKeys.length ? { rejectedPatternKeys: keptKeys } : {}),
+  });
+
+  // מאפשר לחילוץ העמוק האוטומטי לרוץ שוב אחרי איפוס (המכסה היא לכל סשן).
+  deepExtractionAutoAttempts = 0;
+
+  return {
+    cleared: {
+      documents: Math.max(0, Math.round(Number(before.docCount) || 0)),
+      chunks: Math.max(0, Math.round(Number(before.chunkCount) || 0)),
+      words: Math.max(0, Math.round(Number(before.totalWords) || 0)),
+    },
+    keptRejections: keptKeys.length,
+  };
+}
+
+// ---------- auto deep-extraction on provider connect (MAJOR 1) ----------
+
+// דגל in-flight — מונע ריצה כפולה במקביל (אירוע config-changed עלול להיירות פעמיים,
+// וגם ה-onboarding קורא לפונקציה ישירות כשהוא מזהה שהשכבה העמוקה טרם רצה).
+let deepExtractionInFlight = false;
+
+// מונה ניסיונות אוטומטיים ברמת module — כשכל הבאטצ'ים נכשלים, finishQualitativeMerge
+// שומר batches:0 (רק הצלחות נספרות), כך שהשער batches===0 לעולם לא נסגר. בלי מכסה, כל
+// שמירת settings / hydration / אירוע style-updated בזמן onboarding פתוח היה מריץ שוב עד
+// 8 קריאות LLM כושלות. cap 2 לסשן (retry לגיטימי אחד אחרי הראשון), reset רק ב-reload.
+let deepExtractionAutoAttempts = 0;
+const DEEP_EXTRACTION_MAX_AUTO_ATTEMPTS = 2;
+// cooldown אחרי ניסיון כושל (llmBatchesFailed>0): לא מריצים שוב בתוך החלון. משמר retry
+// לגיטימי אחרי restart/כשל חולף (extractionMeta.at ישן מספיק), בלי לולאת-כשל הדוקה.
+const DEEP_EXTRACTION_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
+
+/**
+ * מריץ חילוץ עמוק אוטומטי (סיווג ז'אנר דרך LLM + חילוץ דפוסים איכותניים) כאשר כל
+ * התנאים מתקיימים: המנוע פעיל, יש chunks ב-store, יש ספק LLM זמין
+ * (getExternalAnalysisAvailability), וחילוץ עמוק מעולם לא רץ (extractionMeta.batches===0).
+ * זה המנגנון שמאחורי ההבטחה "דפוסים עמוקים+ז'אנר יושלמו אוטומטית אחרי חיבור מפתח AI".
+ * סובלני לחלוטין — לעולם לא זורק. saveEngine מדליק את wordai-personal-style-updated
+ * בסיום, כך שה-UI מתרענן מעצמו.
+ * @returns {Promise<{ran:boolean, reason?:string}>}
+ */
+export async function maybeRunDeepExtractionOnProviderReady() {
+  if (deepExtractionInFlight) return { ran: false, reason: 'in-flight' };
+  deepExtractionInFlight = true;
+  try {
+    await ensureSampleStoreReady();
+    const { engine } = loadEngine();
+    if (!engine || engine.enabled === false) return { ran: false, reason: 'disabled' };
+    if (getChunks().length < 1) return { ran: false, reason: 'no-chunks' };
+    let hasProvider = false;
+    try { hasProvider = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { hasProvider = false; }
+    if (!hasProvider) return { ran: false, reason: 'no-provider' };
+    // חילוץ עמוק כבר רץ (batches>0) — אין מה לעשות (המנגנון חד-פעמי).
+    if ((Number(engine.extractionMeta?.batches) || 0) > 0) return { ran: false, reason: 'already-ran' };
+
+    // מכסת ניסיונות אוטומטיים לסשן — חוסמת retry בלתי-פוסק כשכל הבאטצ'ים נכשלים
+    // (batches נשאר 0, כך שהשער למעלה לא נסגר). לא תלוי בסדר microtasks כמו ה-in-flight.
+    if (deepExtractionAutoAttempts >= DEEP_EXTRACTION_MAX_AUTO_ATTEMPTS) {
+      return { ran: false, reason: 'max-attempts' };
+    }
+    // cooldown — היה ניסיון כושל לאחרונה (llmBatchesFailed>0 עם at בתוך החלון): לא מריצים
+    // שוב. אחרי restart/כשל חולף (at ישן מ-30 דק') הניסיון מתאפשר מחדש.
+    const meta = isPlainObject(engine.extractionMeta) ? engine.extractionMeta : {};
+    const lastAt = Number(meta.at) || 0;
+    if ((Number(meta.llmBatchesFailed) || 0) > 0 && lastAt > 0 &&
+        (Date.now() - lastAt) < DEEP_EXTRACTION_FAILURE_COOLDOWN_MS) {
+      return { ran: false, reason: 'failure-cooldown' };
+    }
+
+    // נספר כניסיון עוד לפני הריצה — כשל LLM לא מגדיל את batches, אז הספירה כאן היא
+    // מה שחוסם את הלולאה (גם אם הריצה תיזרוק/תיכשל בהמשך).
+    deepExtractionAutoAttempts += 1;
+
+    // סיווג ז'אנר (LLM) + recompute כדי שתת-פרופילי הז'אנר ייבנו — כשל לעולם לא חוסם
+    // את חילוץ הדפוסים שאחריו.
+    try {
+      await classifyPendingGenres();
+      recomputeMetricsFromStore();
+    } catch { /* noop */ }
+
+    await runQualitativeAnalysis({ force: true });
+    return { ran: true };
+  } catch {
+    return { ran: false, reason: 'error' };
+  } finally {
+    deepExtractionInFlight = false;
+  }
+}
+
+// styleIngestService נטען גם ב-LAB/node (בלי window) — רישום ה-listener מוגן.
+if (typeof window !== 'undefined') {
+  window.addEventListener('wordai-provider-config-changed', () => {
+    // fire-and-forget; כל הבדיקות (זמינות ספק, batches===0 וכו') בתוך הפונקציה.
+    try { maybeRunDeepExtractionOnProviderReady(); } catch { /* noop */ }
+  });
+}

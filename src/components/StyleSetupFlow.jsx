@@ -153,6 +153,7 @@ export default function StyleSetupFlow({
   onProfileMetaPatch = null,
   onComplete = null,
   onSkip = null,
+  onIngestReport = null,
   providerConfig = null,
 }) {
   const T = variant === 'onboarding' ? THEME_ONBOARDING : THEME_PANEL;
@@ -169,6 +170,7 @@ export default function StyleSetupFlow({
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [uploadReport, setUploadReport] = useState(null); // result.ingest האחרון
+  const [fileLog, setFileLog] = useState([]); // [{name,status}] — כל קובץ שהסתיים בהעלאה הנוכחית
   const [docStats, setDocStats] = useState(() => {
     try { return getSampleStoreStats(); } catch { return null; }
   });
@@ -220,19 +222,47 @@ export default function StyleSetupFlow({
     if (!files.length) return;
     setUploadError('');
     setUploadReport(null);
+    setFileLog([]);
     setUploading(true);
     setUploadProgress(`מנתח מסמך 1/${files.length}...`);
     try {
       const result = await ingestAndAnalyze(files, {
         runPatterns: false,
         onProgress: (info) => {
-          const current = Number(info?.current ?? info?.index ?? 0) + 1;
-          const total = Number(info?.total ?? files.length);
-          setUploadProgress(`מנתח מסמך ${Math.min(current, total)}/${total}...`);
+          // onProgress מ-ingestFiles שולח { index, total, name, status } לכל קובץ; אותו
+          // callback משמש גם ל-computeChunkEmbeddings (צורה אחרת) — לכן סובלנות מלאה.
+          if (!info || typeof info !== 'object') return;
+          const total = Number(info.total ?? files.length) || files.length;
+          const name = String(info.name || '').trim();
+          if (info.status === 'done') {
+            // צובר את outcome פר-קובץ ('added'|'skipped'|'failed') — התצוגה נשענת עליו
+            // ישירות (בלי הצלבת שמות), כך שגם קבצים כפולי-שם מסומנים נכון.
+            // outcome לא מזוהה → לא רושמים שורה כלל (עדיף כלום על ✓ שקרי).
+            const outcome = ['added', 'skipped', 'failed'].includes(info.outcome) ? info.outcome : null;
+            if (name && outcome) setFileLog((prev) => [...prev, { name, outcome }]);
+            return;
+          }
+          // computeChunkEmbeddings→embedTexts שולח { done:<n>, total:<n> } בלי name/index —
+          // שלב בניית טביעת-האצבע. מציגים הודעה קבועה במקום להשאיר את שם הקובץ האחרון (progress קופא).
+          if (typeof info.done === 'number' && !name && !Number.isFinite(Number(info.index))) {
+            setUploadProgress('בונה טביעת-אצבע סגנונית...');
+            return;
+          }
+          const idx = Number(info.index);
+          const current = Number.isFinite(idx) ? Math.min(idx + 1, total) : null;
+          if (name && current) {
+            setUploadProgress(`מנתח את «${name}» (${current}/${total})...`);
+          } else if (current) {
+            setUploadProgress(`מנתח מסמך ${current}/${total}...`);
+          }
         },
       });
       // F3.1 — דוח העלאה מפורט (נוספו/דולגו/פונו/כשלים) מוצג מתחת לאזור ההעלאה.
       setUploadReport(result?.ingest || null);
+      // שלב B.3 — מדווח את דוח ההעלאה החוצה (best-effort; לעולם לא שובר את הזרימה).
+      if (typeof onIngestReport === 'function') {
+        try { onIngestReport(result?.ingest || null); } catch { /* noop */ }
+      }
       const stats = getSampleStoreStats();
       setDocStats(stats);
       // F3.2 — משתמש שהעלה ומדלג (בלי "נתח והמשך") עדיין מקבל מנוע פעיל (כמו בזרימה הישנה).
@@ -244,11 +274,13 @@ export default function StyleSetupFlow({
     } catch (err) {
       console.error('StyleSetupFlow: ingestAndAnalyze failed', err);
       setUploadError(`העלאת הקבצים נכשלה: ${err?.message || 'שגיאה לא ידועה'}`);
+      // כשל כולל — מנקים את ה-✓ הפר-קובציים כדי שלא יוצגו סימוני הצלחה ירוקים לצד השגיאה.
+      setFileLog([]);
     } finally {
       setUploading(false);
       setUploadProgress('');
     }
-  }, []);
+  }, [onIngestReport]);
 
   const handleFileInputChange = useCallback((event) => {
     const files = event.target.files;
@@ -587,28 +619,67 @@ export default function StyleSetupFlow({
                     נקלטו {docCount} מסמכים ({(docStats?.totalWords || 0).toLocaleString('he-IL')} מילים) ✓
                   </div>
                 )}
-                {!uploading && uploadError && (
-                  <div className={`${T.errorBox} mt-1`}>{uploadError}</div>
-                )}
-                {!uploading && uploadReport && (
-                  <div className="w-full mt-2 flex flex-col gap-1.5 text-right">
-                    {(Number(uploadReport.added) > 0 || Number(uploadReport.skipped) > 0) && (
-                      <div className={T.muted}>
-                        נוספו {Number(uploadReport.added) || 0} · דולגו {Number(uploadReport.skipped) || 0}
-                      </div>
-                    )}
-                    {Number(uploadReport.evicted) > 0 && (
-                      <div className={T.muted}>⚠ פונו {uploadReport.evicted} קטעים ישנים כדי לפנות מקום.</div>
-                    )}
-                    {uploadReport.writeError && (
-                      <div className={T.errorBox}>שגיאת שמירה: {uploadReport.writeError}</div>
-                    )}
-                    {(uploadReport.failed || []).map((f) => (
-                      <div key={f.name} className={T.errorBox}>✗ {f.name}: {f.error}</div>
-                    ))}
-                  </div>
-                )}
               </div>
+              )}
+
+              {/* MAJOR 2 — פידבק ההעלאה (שגיאה / יומן פר-קובץ / דוח מסכם) מחוץ ל-ternary,
+                  כדי שיוצג גם במצב הקומפקטי (refine) וגם במצב ה-dropzone הרגיל. */}
+              {!uploading && uploadError && (
+                <div className={`${T.errorBox} mt-2`}>{uploadError}</div>
+              )}
+              {/* יומן פר-קובץ חי — מוצג גם בזמן העלאה. MINOR 3: outcome ישיר (added/skipped/failed).
+                  MINOR — צירוף טקסט השגיאה לשורת קובץ כושל (מתוך uploadReport.failed לפי שם/סדר),
+                  כדי לא לכפול את אותו קובץ גם ביומן וגם ברשימת failed הנפרדת. */}
+              {fileLog.length > 0 && (() => {
+                // תור-שגיאות לכל שם — תומך בקבצים כפולי-שם (שולף לפי סדר ההופעה).
+                const failedQueues = {};
+                (uploadReport?.failed || []).forEach((f) => {
+                  const n = String(f?.name || '');
+                  (failedQueues[n] = failedQueues[n] || []).push(String(f?.error || ''));
+                });
+                const consumed = {};
+                return (
+                  <div className="w-full mt-2 flex flex-col gap-1 text-right">
+                    {fileLog.map((f, i) => {
+                      const cfg = f.outcome === 'failed'
+                        ? { cls: 'text-rose-300', icon: '✗', suffix: '' }
+                        : f.outcome === 'skipped'
+                          ? { cls: 'text-amber-300', icon: '⏭', suffix: ' — כבר נקלט בעבר' }
+                          : { cls: 'text-emerald-300', icon: '✓', suffix: '' };
+                      let errText = '';
+                      if (f.outcome === 'failed') {
+                        const q = failedQueues[f.name] || [];
+                        const k = consumed[f.name] || 0;
+                        consumed[f.name] = k + 1;
+                        errText = q[k] || '';
+                      }
+                      return (
+                        <div key={`${f.name}_${i}`} className={`text-[12px] font-semibold ${cfg.cls}`}>
+                          {cfg.icon} {f.name}{errText ? `: ${errText}` : cfg.suffix}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+              {!uploading && uploadReport && (
+                <div className="w-full mt-2 flex flex-col gap-1.5 text-right">
+                  {(Number(uploadReport.added) > 0 || Number(uploadReport.skipped) > 0) && (
+                    <div className={T.muted}>
+                      נוספו {Number(uploadReport.added) || 0} · דולגו {Number(uploadReport.skipped) || 0}
+                    </div>
+                  )}
+                  {Number(uploadReport.evicted) > 0 && (
+                    <div className={T.muted}>⚠ פונו {uploadReport.evicted} קטעים ישנים כדי לפנות מקום.</div>
+                  )}
+                  {uploadReport.writeError && (
+                    <div className={T.errorBox}>שגיאת שמירה: {uploadReport.writeError}</div>
+                  )}
+                  {/* רשימת failed הנפרדת — רק כשאין יומן פר-קובץ (אחרת השגיאה כבר מצורפת שם). */}
+                  {fileLog.length === 0 && (uploadReport.failed || []).map((f) => (
+                    <div key={f.name} className={T.errorBox}>✗ {f.name}: {f.error}</div>
+                  ))}
+                </div>
               )}
             </div>
 

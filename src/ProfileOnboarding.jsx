@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useDelimitedListInput } from './useDelimitedListInput';
 import { getSyllabusFileAcceptList } from './services/workspaceLearningService';
-import { getStyleOverview } from './services/styleIngestService';
-import { deriveManualDefaultsFromMetrics } from './services/styleProfileService';
+import { getStyleOverview, maybeRunDeepExtractionOnProviderReady } from './services/styleIngestService';
+import { ensureSampleStoreReady } from './services/styleSampleStore';
+import { getExternalAnalysisAvailability } from './services/aiService';
+import { deriveManualDefaultsFromMetrics, summarizeStyleLearning } from './services/styleProfileService';
 import StyleSetupFlow from './components/StyleSetupFlow';
 
 const ONBOARDING_AI_PROVIDERS = [
@@ -54,6 +56,7 @@ export default function ProfileOnboarding({
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [styleDerived, setStyleDerived] = useState(null);
+  const [learn, setLearn] = useState(null); // מודל-תצוגה "מה למדתי עליך" מנתוני מנוע הסגנון (summarizeStyleLearning)
   const [styleFilled, setStyleFilled] = useState({ tone: false, length: false }); // האם ה-pre-fill באמת מילא (לא לדווח "מילאנו" כששדה כבר היה מלא)
   const [syllabusImportCycle, setSyllabusImportCycle] = useState(0);
   const [selectedAiProviders, setSelectedAiProviders] = useState(() =>
@@ -105,7 +108,6 @@ export default function ProfileOnboarding({
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join(' · ');
-  const styleSummary = String(profile.styleTrainingSummary || '').trim() || 'העדפות הכתיבה האישיות שלך נשמרו וימשיכו לחדד את התוצאות.';
   const configuredAiProviderCount = ONBOARDING_AI_PROVIDERS
     .filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).length;
   const providerSummary = configuredAiProviderCount > 0
@@ -180,6 +182,56 @@ export default function ProfileOnboarding({
     });
   };
 
+  // שלב B.3 — רענון מיידי של "מה למדתי עליך" מיד אחרי העלאה (מעבר לרענון מונע-האירועים).
+  const handleIngestReport = useCallback(() => {
+    let hasLlm = false;
+    try { hasLlm = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { hasLlm = false; }
+    let ov = null;
+    try { ov = getStyleOverview(); } catch { ov = null; }
+    try { setLearn(summarizeStyleLearning(ov || {}, { hasLlmProvider: hasLlm })); } catch { /* noop */ }
+    if (ov?.stats?.docCount) {
+      try { setStyleDerived(deriveManualDefaultsFromMetrics(ov)); } catch { /* noop */ }
+    }
+  }, []);
+
+  // שלב C/D — מרענן את "מה למדתי עליך" (learn) ואת ה-derive (styleDerived) מנתוני מנוע
+  // הסגנון. רץ ב-mount ובכל עדכון פרופיל-סגנון או קונפיג-ספק, כך ש-tone/length/exemplars
+  // מוכנים כבר לפני שמגיעים לשלבים הידניים. לא ממלא שדות — תצוגה בלבד (המילוי גדור לשלב 6).
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      try { await ensureSampleStoreReady(); } catch { /* noop */ }
+      if (!alive) return;
+      let hasLlm = false;
+      try { hasLlm = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { hasLlm = false; }
+      let ov = null;
+      try { ov = getStyleOverview(); } catch { ov = null; }
+      if (!alive) return;
+      let summary = null;
+      try { summary = summarizeStyleLearning(ov || {}, { hasLlmProvider: hasLlm }); } catch { summary = null; }
+      if (summary) setLearn(summary);
+      // derive מוקדם — ל-state לצורך תצוגה (exemplars/tone/length), בלי updateField.
+      if (ov?.stats?.docCount) {
+        try { setStyleDerived(deriveManualDefaultsFromMetrics(ov)); } catch { /* noop */ }
+      }
+      // MAJOR 1/7 — יש ספק LLM זמין אך חילוץ עמוק מעולם לא רץ (למשל המפתח חובר לפני
+      // ההעלאה, כך שאירוע config-changed לא יירה אחרי שנוצרו chunks). מפעילים את אותו
+      // auto-run במפורש; ה-in-flight guard ב-service מונע כפילות מול ה-listener הגלובלי.
+      if (summary?.deepLayerNotRun) {
+        try { maybeRunDeepExtractionOnProviderReady(); } catch { /* noop */ }
+      }
+    };
+    refresh();
+    const onRefresh = () => { refresh(); };
+    window.addEventListener('wordai-personal-style-updated', onRefresh);
+    window.addEventListener('wordai-provider-config-changed', onRefresh);
+    return () => {
+      alive = false;
+      window.removeEventListener('wordai-personal-style-updated', onRefresh);
+      window.removeEventListener('wordai-provider-config-changed', onRefresh);
+    };
+  }, []);
+
   // Pre-fill שמרני של השלבים הידניים לפי baseline שנלמד מהעבודות שלב 4 (StyleSetupFlow collect).
   // ממלא רק שדות ריקים (isEmptyProfileValue) — לא דורס ערכים שהמשתמש כבר הזין.
   // אם אין baseline (המשתמש דילג) — יוצא בשקט והשלבים נשארים ריקים (graceful).
@@ -231,8 +283,15 @@ export default function ProfileOnboarding({
     12: 'סיום',
   };
 
-  // פאנל "הפרופיל מתגבש" החי (עיצוב המוקאפ) — נגזר מהשדות שכבר מולאו
+  // תווית ודאות עברית לפי level (משמש גם בפאנל החי וגם במסך הסיום).
+  const confidenceLevelLabel = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
+
+  // פאנל "הפרופיל מתגבש" החי (עיצוב המוקאפ) — נגזר מהשדות שכבר מולאו.
+  // שלב C.2 — בראש: שורות אמת מנתוני מנוע הסגנון (learn), כשיש מה שנלמד.
   const liveProfileLines = [
+    learn?.ready && `נלמדו ${(learn.docCount || 0).toLocaleString('he-IL')} מסמכים · ${(learn.wordCount || 0).toLocaleString('he-IL')} מילים`,
+    learn?.ready && learn.signatureCount > 0 && `${(learn.signatureCount || 0).toLocaleString('he-IL')} ביטויי-חתימה זוהו`,
+    learn?.ready && `ודאות פרופיל: ${confidenceLevelLabel[learn.confidenceLevel] || 'נמוכה'} (${learn.confidenceScore || 0}%)`,
     profile.displayName && `שם: ${profile.displayName}`,
     profile.institutionName && `מוסד: ${profile.institutionName}`,
     (profile.studyTrack || profile.userRole) && `מסלול / תפקיד: ${profile.studyTrack || profile.userRole}`,
@@ -240,7 +299,9 @@ export default function ProfileOnboarding({
     profile.tonePreference && `טון: ${tonePreferenceLabel}`,
     profile.lengthPreference && `אורך ופירוט: ${lengthPreferenceLabel}`,
     String(profile.syllabusTopics || '').trim() && `נושאי לימוד: ${String(profile.syllabusTopics).trim().slice(0, 40)}`,
-    String(profile.styleTrainingSummary || '').trim() && 'סגנון אישי: נלמד ✓',
+    // שלב E — כשמנוע הסגנון כבר למד (learn.ready) השורות למעלה הן המקור; ה-✓ הישן
+    // ממשחק הלמידה נשאר רק כ-fallback כשעדיין אין נתוני מנוע.
+    !learn?.ready && String(profile.styleTrainingSummary || '').trim() && 'סגנון אישי: נלמד ✓',
   ].filter(Boolean);
 
   // האם יש baseline שנלמד מהעבודות (שלב 4) — משמש להצגת באנרים/דוגמאות בשלבים הידניים.
@@ -248,6 +309,28 @@ export default function ProfileOnboarding({
   const styleBaselineReady = !!(styleDerived && (styleDerived.tonePreference || styleDerived.lengthPreference || styleExemplars.length));
   const styleAutoFilled = styleFilled.tone || styleFilled.length; // האם באמת מילאנו משהו בשלב 6
   const styleToneIsSuggestion = styleFilled.tone && ['medium', 'low'].includes(styleDerived?.tonePreferenceConfidence);
+
+  // שלב C.3 — סיכום "כתיבה וסגנון" למסך הסיום, מנתוני מנוע הסגנון (learn) במקום styleTrainingSummary.
+  const styleFinishSummary = (() => {
+    // MINOR 6 — נקלטו מסמכים אך לא חולץ מהם טקסט (docCount>0, wordCount=0) — מצב שונה מ"לא הועלה כלום".
+    if (learn?.docsButNoText) return 'נקלטו מסמכים אך לא חולץ מהם טקסט — נסה קבצים אחרים (Word/PDF עם טקסט נבחר, לא סרוק).';
+    if (!learn?.ready) return 'עדיין לא הועלו עבודות — אפשר להעלות בכל רגע ממנוע הסגנון.';
+    const parts = [
+      `נלמדו ${(learn.docCount || 0).toLocaleString('he-IL')} מסמכים · ${(learn.wordCount || 0).toLocaleString('he-IL')} מילים`,
+    ];
+    if (learn.signatureCount > 0) parts.push(`${(learn.signatureCount).toLocaleString('he-IL')} ביטויי-חתימה`);
+    parts.push(`ודאות ${confidenceLevelLabel[learn.confidenceLevel] || 'נמוכה'} (${learn.confidenceScore || 0}%)`);
+    let text = parts.join(' · ');
+    // חילוץ עמוק כבר רץ אך כל הבאטצ'ים נכשלו — לא מבטיחים "יופקו ברקע" לשווא.
+    if (learn.deepLayerFailed) text += ' · החילוץ העמוק נכשל, ננסה שוב מאוחר יותר.';
+    // MAJOR 7 — יש ספק אבל חילוץ עמוק טרם רץ: מובטח שיופק אוטומטית ברקע (ה-auto-run אמיתי).
+    else if (learn.deepLayerNotRun) text += ' · דפוסים עמוקים וסיווג ז\'אנר טרם הופקו — יופקו אוטומטית ברקע.';
+    // אין ספק עדיין: יופקו אחרי חיבור מפתח AI.
+    else if (learn.deepLayerPending) text += ' · דפוסים עמוקים וסיווג ז\'אנר יושלמו אוטומטית אחרי חיבור מפתח AI.';
+    return text;
+  })();
+  // דוגמאות קומפקטיות (1-2 משפטים) — למסך הסיום ולשלב 6.
+  const styleExemplarsCompact = styleExemplars.slice(0, 2).map((s) => String(s || '').trim()).filter(Boolean);
 
   return (
     <div className="relative flex flex-col justify-center min-h-[500px] overflow-y-auto custom-scrollbar-slim py-6" dir="rtl">
@@ -622,6 +705,7 @@ export default function ProfileOnboarding({
                   stage="collect"
                   profile={profile}
                   onProfileMetaPatch={handleStyleMetaPatch}
+                  onIngestReport={handleIngestReport}
                   onComplete={() => nextStep()}
                   onSkip={() => nextStep()}
                 />
@@ -709,6 +793,20 @@ export default function ProfileOnboarding({
                   <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-[13px] leading-relaxed text-[#ddcfb9]">
                     <span className="shrink-0 text-emerald-300 font-extrabold">✓</span>
                     <span>מילאנו לפי מה שלמדנו מהעבודות שלך — אשר או שנה.</span>
+                  </div>
+                )}
+
+                {/* שלב D.2 — דוגמאות קומפקטיות "ככה אתה כותב" גם בשלב 6 (1-2 משפטים). */}
+                {styleBaselineReady && styleExemplarsCompact.length > 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3" dir="rtl">
+                    <div className="text-[12px] font-bold text-[#f4ecde] mb-1.5">ככה אתה כותב:</div>
+                    <div className="space-y-1.5">
+                      {styleExemplarsCompact.map((sentence, i) => (
+                        <blockquote key={i} className="border-r-2 border-[#efab4d]/40 pr-2.5 text-[12.5px] leading-relaxed text-[#ddcfb9]">
+                          {sentence}
+                        </blockquote>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -1047,6 +1145,7 @@ export default function ProfileOnboarding({
                   profile={profile}
                   providerConfig={providerConfig}
                   onProfileMetaPatch={handleStyleMetaPatch}
+                  onIngestReport={handleIngestReport}
                   onComplete={() => nextStep()}
                   onSkip={() => nextStep()}
                 />
@@ -1090,8 +1189,23 @@ export default function ProfileOnboarding({
                         {tonePreferenceLabel} · {lengthPreferenceLabel}
                       </div>
                       <div className="text-xs text-white/70 mt-2 leading-relaxed">
-                        {styleSummary}
+                        {styleFinishSummary}
                       </div>
+                      {learn?.writeError && (
+                        <div className="text-xs text-rose-200 mt-2 leading-relaxed">
+                          ⚠ שגיאת שמירה: {learn.writeError}
+                        </div>
+                      )}
+                      {styleExemplarsCompact.length > 0 && (
+                        <div className="mt-2 space-y-1" dir="rtl">
+                          <div className="text-[11px] font-semibold text-fuchsia-100/80">ככה אתה כותב:</div>
+                          {styleExemplarsCompact.map((sentence, i) => (
+                            <blockquote key={i} className="border-r-2 border-[#efab4d]/40 pr-2 text-[11.5px] leading-relaxed text-white/70">
+                              {sentence}
+                            </blockquote>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">

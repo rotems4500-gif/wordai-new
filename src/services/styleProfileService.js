@@ -474,6 +474,73 @@ export function deriveManualDefaultsFromMetrics(overview = {}) {
   return { lengthPreference, tonePreference, tonePreferenceConfidence, exemplars };
 }
 
+// ---------- summarizeStyleLearning ----------
+
+/**
+ * ממפה את פלט getStyleOverview() למודל-תצוגה רזה למסכי ה-onboarding / העלאה
+ * ("מה למדתי עליך"). טהורה לחלוטין — בלי imports נוספים, בלי side-effects,
+ * סובלנית לכל קלט (null/זבל → ברירות-מחדל בטוחות).
+ * @param {object} overview  תוצר getStyleOverview(): { stats, metrics, confidence, qualitativePatterns, extractionMeta, ... }
+ * @param {{hasLlmProvider?:boolean}} [opts]  hasLlmProvider — האם קיים ספק LLM זמין לחילוץ עמוק
+ * @returns {{ready:boolean, docCount:number, wordCount:number, chunkCount:number, signatureCount:number, patternCount:number, confidenceLevel:string, confidenceScore:number, localLayerDone:boolean, deepLayerPending:boolean, deepLayerNotRun:boolean, deepLayerFailed:boolean, docsButNoText:boolean, writeError:(string|null)}}
+ */
+export function summarizeStyleLearning(overview = {}, { hasLlmProvider = false } = {}) {
+  const ov = isPlainObject(overview) ? overview : {};
+  const stats = isPlainObject(ov.stats) ? ov.stats : {};
+  const conf = isPlainObject(ov.confidence) ? ov.confidence : {};
+  const patterns = Array.isArray(ov.qualitativePatterns) ? ov.qualitativePatterns : [];
+  const extractionMeta = isPlainObject(ov.extractionMeta) ? ov.extractionMeta : {};
+
+  const docCount = Math.max(0, Math.round(toNum(stats.docCount, 0)));
+  const wordCount = Math.max(0, Math.round(toNum(stats.totalWords, 0)));
+  const chunkCount = Math.max(0, Math.round(toNum(stats.chunkCount, 0)));
+  const patternCount = patterns.length;
+  // ביטויי-חתימה = דפוסים מסוג signature_phrase (ביטוי חוזר) או structure (נוסחה מבנית).
+  const signatureCount = patterns.filter(
+    (p) => isPlainObject(p) && (p.type === 'signature_phrase' || p.type === 'structure'),
+  ).length;
+
+  const confidenceLevel = ['low', 'medium', 'high'].includes(conf.level) ? conf.level : 'low';
+  const confidenceScore = clamp(Math.round(toNum(conf.score, 0)), 0, 100);
+
+  // השכבה המקומית (מדדים חינמיים) "בשלה" ברגע שיש מסמכים עם מילים — לא דורשת LLM.
+  const ready = docCount > 0 && wordCount > 0;
+  const localLayerDone = ready;
+
+  // "דפוסים עמוקים" = חילוץ איכותני דרך LLM (extractionMeta.batches>0).
+  const deepExtractionRan = toNum(extractionMeta.batches, 0) > 0;
+  // ניסיון חילוץ עמוק כבר רץ אך כל הבאטצ'ים נכשלו: extractionMeta.at קיים ו-llmBatchesFailed>0,
+  // אבל batches נשאר 0. מבחינים בזה מ"טרם רץ" כדי לא להבטיח לשווא שהדפוסים "יופקו ברקע".
+  const deepLayerFailed = ready && !deepExtractionRan &&
+    toNum(extractionMeta.at, 0) > 0 && toNum(extractionMeta.llmBatchesFailed, 0) > 0;
+  // אין ספק LLM זמין וטרם רץ חילוץ — השכבה העמוקה ממתינה לחיבור מפתח AI.
+  const deepLayerPending = ready && !hasLlmProvider && !deepExtractionRan && !deepLayerFailed;
+  // יש ספק LLM זמין אך חילוץ עמוק מעולם לא רץ (ולא נכשל) — יופק אוטומטית ברקע (עקבי עם
+  // ה-auto-run ב-styleIngestService שמאזין ל-wordai-provider-config-changed).
+  const deepLayerNotRun = ready && hasLlmProvider && !deepExtractionRan && !deepLayerFailed;
+  // נקלטו מסמכים אך לא חולץ מהם טקסט (docCount>0 אבל wordCount=0) — מצב שונה מ"לא הועלה כלום".
+  const docsButNoText = docCount > 0 && wordCount <= 0;
+
+  const writeError = stats.lastWriteError ? String(stats.lastWriteError) : null;
+
+  return {
+    ready,
+    docCount,
+    wordCount,
+    chunkCount,
+    signatureCount,
+    patternCount,
+    confidenceLevel,
+    confidenceScore,
+    localLayerDone,
+    deepLayerPending,
+    deepLayerNotRun,
+    deepLayerFailed,
+    docsButNoText,
+    writeError,
+  };
+}
+
 // ---------- normalizeStyleEngine ----------
 
 const DEFAULT_CONFIDENCE = () => ({ score: 0, docCount: 0, wordCount: 0, level: 'low' });

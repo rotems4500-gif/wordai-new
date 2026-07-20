@@ -14,6 +14,7 @@ import {
   rejectPattern,
   unrejectPattern,
   pinPattern,
+  resetStyleLearning,
 } from '../services/styleIngestService';
 import { getSampleDocuments } from '../services/styleSampleStore';
 import { PATTERN_TYPE_LABELS, CONFIDENCE_LABELS } from '../services/styleProfileService';
@@ -62,6 +63,10 @@ export default function StyleProfilePanel({ onClose }) {
   const [documents, setDocuments] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [userBlacklistDraft, setUserBlacklistDraft] = useState('');
+  // איפוס למידה — אישור דו-שלבי (הפעולה בלתי הפיכה), + דיווח מה נמחק בפועל.
+  const [resetArmed, setResetArmed] = useState(false);
+  const [resetKeepRejections, setResetKeepRejections] = useState(true);
+  const [resetDone, setResetDone] = useState(null);
   // פרופיל מלא (ל-StyleSetupFlow — בונה ממנו את הפרומפט לניתוח חיצוני).
   const [profile, setProfile] = useState(() => {
     try { return getPersonalStyleProfile(); } catch { return {}; }
@@ -99,6 +104,23 @@ export default function StyleProfilePanel({ onClose }) {
       window.removeEventListener('wordai-provider-config-changed', handler);
     };
   }, [refresh]);
+
+  const handleResetLearning = useCallback(() => {
+    let result = null;
+    try {
+      result = resetStyleLearning({ keepRejections: resetKeepRejections });
+    } catch (err) {
+      console.error('resetStyleLearning failed:', err);
+    }
+    setResetArmed(false);
+    setResetDone(result || { cleared: { documents: 0, chunks: 0, words: 0 }, keptRejections: 0 });
+    refresh();
+  }, [refresh, resetKeepRejections]);
+
+  // הודעת "אופס בהצלחה" נשארת עד שנכנס מידע חדש — אחרת היא מטעה אחרי העלאה חוזרת.
+  useEffect(() => {
+    if (resetDone && (overview?.stats?.docCount || 0) > 0) setResetDone(null);
+  }, [overview?.stats?.docCount, resetDone]);
 
   useEffect(() => {
     setUserBlacklistDraft((overview?.blacklist?.user || []).join('\n'));
@@ -604,6 +626,65 @@ export default function StyleProfilePanel({ onClose }) {
             />
           </div>
         </div>
+      </div>
+
+      {/* 7.5 איפוס למידה — פעולה בלתי הפיכה, לכן אישור דו-שלבי ולא כפתור יחיד */}
+      <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50/60 p-4">
+        <div className="text-[13px] font-bold text-rose-800 mb-1">🗑️ איפוס הלמידה</div>
+        <p className="text-[12px] text-rose-700/90 leading-relaxed mb-3">
+          מוחק את כל מה שנלמד ממך — העבודות שהעלית, הדפוסים, החתימות והמדדים — ומתחיל מאפס.
+          שימושי אם נקלטו קבצים לא נכונים או שהפרופיל לא מייצג אותך. הפעולה אינה הפיכה.
+        </p>
+
+        {resetDone ? (
+          <div className="text-[12px] text-slate-700 bg-white border border-rose-200 rounded-xl px-3 py-2">
+            ✓ הלמידה אופסה — נמחקו {resetDone.cleared.documents.toLocaleString('he-IL')} מסמכים
+            {' · '}{resetDone.cleared.words.toLocaleString('he-IL')} מילים.
+            {resetDone.keptRejections > 0 && ` נשמרו ${resetDone.keptRejections} דפוסים שדחית.`}
+            {' '}אפשר להעלות עבודות חדשות ולהתחיל מחדש.
+          </div>
+        ) : !resetArmed ? (
+          <button
+            type="button"
+            onClick={() => setResetArmed(true)}
+            disabled={!(overview?.stats?.docCount || overview?.qualitativePatterns?.length || overview?.confidence?.score)}
+            className="px-4 py-2 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-[13px] font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            אפס והתחל מחדש
+          </button>
+        ) : (
+          <div className="flex flex-col gap-2.5">
+            <div className="text-[12.5px] font-bold text-rose-900">
+              בטוח? יימחקו {(overview?.stats?.docCount || 0).toLocaleString('he-IL')} מסמכים
+              ו-{(overview?.stats?.totalWords || 0).toLocaleString('he-IL')} מילים.
+            </div>
+            <label className="flex items-center gap-2 text-[12px] text-rose-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={resetKeepRejections}
+                onChange={(e) => setResetKeepRejections(e.target.checked)}
+                className="accent-rose-600"
+              />
+              שמור את הדפוסים שסימנתי "לא אני"
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleResetLearning}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[13px] font-bold transition-colors"
+              >
+                כן, מחק הכול
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetArmed(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 text-[13px] font-bold transition-colors"
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 8. Footer actions */}
