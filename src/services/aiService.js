@@ -1337,6 +1337,41 @@ const isProviderAllowedForUse = (providerId, cfg = null) => {
   return !allowed || allowed.has(String(providerId || '').trim());
 };
 
+// ── בריאות ספק ─────────────────────────────────────────────────────────────
+// "מפתח קיים" אינו "מפתח עובד": מפתח שפג/מיצה מכסה עובר את isProviderAllowedForUse
+// ועדיין זוכה ב-auto-route, כך שכל בקשה ממשיכה למות על 401/429 אצל אותו ספק.
+// כישלון AUTH/מכסה מסמן את הספק כלא-בריא לזמן קצוב — רק לצורכי ניתוב אוטומטי.
+// בחירה מפורשת של המשתמש בספק אינה מושפעת מכאן.
+const PROVIDER_UNHEALTHY_TTL_MS = { auth: 6 * 60 * 60 * 1000, quota: 30 * 60 * 1000 };
+const unhealthyProviderMarks = new Map();
+
+export const markProviderUnhealthy = (providerId, reason = 'auth') => {
+  const id = String(providerId || '').trim();
+  if (!id) return;
+  const ttl = PROVIDER_UNHEALTHY_TTL_MS[reason] || PROVIDER_UNHEALTHY_TTL_MS.auth;
+  unhealthyProviderMarks.set(id, { until: Date.now() + ttl, reason });
+};
+
+export const clearProviderUnhealthyMark = (providerId = '') => {
+  const id = String(providerId || '').trim();
+  if (id) unhealthyProviderMarks.delete(id);
+  else unhealthyProviderMarks.clear();
+};
+
+export const getProviderUnhealthyReason = (providerId) => {
+  const mark = unhealthyProviderMarks.get(String(providerId || '').trim());
+  if (!mark) return '';
+  if (mark.until <= Date.now()) {
+    unhealthyProviderMarks.delete(String(providerId || '').trim());
+    return '';
+  }
+  return mark.reason;
+};
+
+// גייט לניתוב אוטומטי בלבד: גם מותר לשימוש וגם לא סומן כמת לאחרונה.
+const isProviderAllowedForAutoRoute = (providerId, cfg = null) => isProviderAllowedForUse(providerId, cfg)
+  && !getProviderUnhealthyReason(providerId);
+
 const extractTaggedModelRouting = (text = '') => {
   const originalText = String(text || '');
   let cleanText = originalText;
@@ -2818,6 +2853,12 @@ export const saveProviderConfig = (config, options = {}) => {
     copyleaks: resolvePersistedCopyleaksConfig(config?.copyleaks, previousConfig?.copyleaks),
   });
   providerConfigCache = safeConfig;
+  // מפתח שהתחלף = הזדמנות חדשה: מנקים סימון "ספק לא-בריא" כדי שהניתוב האוטומטי יחזור.
+  Object.keys(safeConfig).forEach((providerId) => {
+    const nextKey = String(safeConfig?.[providerId]?.key || '');
+    const prevKey = String(previousConfig?.[providerId]?.key || '');
+    if (nextKey && nextKey !== prevKey) clearProviderUnhealthyMark(providerId);
+  });
   localStorage.setItem('ai_provider_config', JSON.stringify(safeConfig));
   if (safeConfig.gemini?.key) localStorage.setItem('GEMINI_API_KEY', safeConfig.gemini.key);
   else localStorage.removeItem('GEMINI_API_KEY');
@@ -8504,10 +8545,17 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     && !FACT_CHECK_REQUEST_PATTERN.test(directChatRoutingInstruction)
     && !EXPLICIT_GROUNDED_WEB_RESULTS_PATTERN.test(directChatRoutingInstruction)
     && !needsInternetBackedCurrentInfo(directChatRoutingInstruction);
+  // סוכן/מיומנות שכל תפקידם איתור מקורות — עליהם החסימה לא חלה גם אם הניסוח נשמע כמו "תקן את המסמך".
+  const explicitSourceAgentRequest = String(options.agentId || '').trim() === 'sources'
+    || SOURCE_GROUNDING_SKILL_IDS.has(String(options.skillId || '').trim());
+  // בקשת "בדוק/תקן את המסמך" לא צריכה אחזור מקורות. הבדיקה הזו הייתה מגודרת ב-directChatRequest,
+  // כך שריצת full-revision (שאינה צ'אט ישיר) חמקה ממנה ונחטפה ל-auto-route של מקורות —
+  // גם כשהסיגנל האקדמי הגיע מחוזה הדרישות שהוזרק ל-extraSystemPrompt ולא מהמשתמש.
   const suppressResearchRoutingForDocumentReview = !suppressResearchRoutingForEditMode
     && !suppressResearchRoutingForDirectAgent
-    && directChatRequest
     && !holeFillAgentRequest
+    && !explicitSourceAgentRequest
+    && !isExplicitSourceRequest(cleanUserPrompt)
     && isDocumentReviewOrEditRequest({
       userPrompt: cleanUserPrompt,
       extraSystemPrompt,
@@ -8553,7 +8601,10 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   // בכללי לא כופים חוקי workspace/צוות — זו שיחה כללית, לא עבודה על המסמך.
   const workspaceAutomationPrompt = buildWorkspaceAutomationInstructions({ disabled: skipAutomationPrompt || isGeneralScope });
   const skillsConfig = getSkillsConfig();
-  const skillResolution = (skipSkillSelection || (suppressResearchRoutingForDocumentReview && !options.skillId) || (editModeRequest && !editModeExplicitSkillInvocation))
+  // דילוג על בחירת מיומנות נשאר מוגבל לצ'אט ישיר (התנהגות קיימת) — הרחבת ה-suppression
+  // למעלה נועדה לניתוב מקורות בלבד, לא לשינוי בחירת המיומנות בריצות יצירה/רוויזיה.
+  const skipSkillSelectionForDocumentReview = suppressResearchRoutingForDocumentReview && directChatRequest && !options.skillId;
+  const skillResolution = (skipSkillSelection || skipSkillSelectionForDocumentReview || (editModeRequest && !editModeExplicitSkillInvocation))
     ? { skill: null, reason: 'skipped' }
     : resolveSkillForRequest({
       userPrompt: cleanUserPrompt,
@@ -8656,13 +8707,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   const requestedProvider = activeProvider;
   const internetBackedAutoRouteTarget = INTERNET_BACKED_SOURCE_PROVIDER_IDS.has(activeProvider)
     ? activeProvider
-    : ['gemini', 'perplexity'].find((providerId) => isProviderAllowedForUse(providerId, cfg)) || '';
+    : ['gemini', 'perplexity'].find((providerId) => isProviderAllowedForAutoRoute(providerId, cfg)) || '';
   const sourceRequestAutoRouted = sourceAutoRouteEnabled
     && sourceGroundingRequired
     && !shouldUseVerifiedSourceFollowOnGrounding
     && !strictProviderOverride
     && activeProvider !== 'perplexity'
-    && isProviderAllowedForUse('perplexity', cfg);
+    && isProviderAllowedForAutoRoute('perplexity', cfg);
   const internetBackedRequestAutoRouted = sourceAutoRouteEnabled
     && !sourceRequestAutoRouted
     && internetBackedSourceWorkRequired
@@ -8679,7 +8730,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     : taggedRouting.providerModels?.[activeProvider]
     || (preferredProviders.length ? '' : taggedRouting.taggedModel);
   const modelOverride = sourceRequestAutoRouted ? (taggedModelOverride || '') : (options.modelOverride || taggedModelOverride || '');
-  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !shouldUseVerifiedSourceFollowOnGrounding && !strictProviderOverride && isProviderAllowedForUse('perplexity', cfg)
+  const sourceAwareAutomationPreferredProviders = sourceAutoRouteEnabled && sourceGroundingRequired && !shouldUseVerifiedSourceFollowOnGrounding && !strictProviderOverride && isProviderAllowedForAutoRoute('perplexity', cfg)
     ? normalizeProviderIds(['perplexity', ...automationPreferredProviders], '')
     : automationPreferredProviders;
   const responseModePrompt = buildResponseModePrompt({ strictFormatting: options.strictFormatting === true });
@@ -10741,8 +10792,36 @@ ${isGeneralWritingScope
 
   // ─── Fallback: שרשרת גיבוי — מנסה ספקים מוגדרים אחרים לפי סדר עדיפות ─────
   // תחת chatRun: ספק גיבוי אחד לכל היותר, ורק כשסוג השגיאה מצדיק (TIMEOUT/NETWORK/SERVER).
-  if (allowCrossProviderFallback && (!chatRunMode || chatRunFallbackAllowed)) {
+  // ספק שנבחר ע"י auto-route ולא ע"י המשתמש: 401/מכסה שלו הוא כשל של הניתוב, לא בחירה
+  // מודעת. מדיניות ה-retry חוסמת fallback על AUTH/RATE_LIMIT (נכון לספק שהמשתמש בחר),
+  // ולכן כאן פותחים אותו במפורש — ומסמנים את הספק כלא-בריא כדי שלא ייחטף שוב.
+  const autoRoutedProviderFailed = Boolean(lastError)
+    && (sourceRequestAutoRouted || internetBackedRequestAutoRouted)
+    && Boolean(requestedProvider)
+    && requestedProvider !== activeProvider
+    && isProviderAllowedForUse(requestedProvider, cfg);
+  if (autoRoutedProviderFailed) {
+    const failureCode = resolveChatErrorPolicyCode(lastError);
+    if (failureCode === V3ErrorCodes.AUTH || failureCode === V3ErrorCodes.RATE_LIMIT) {
+      markProviderUnhealthy(activeProvider, failureCode === V3ErrorCodes.AUTH ? 'auth' : 'quota');
+      chatRunFallbackAllowed = true;
+      logEvent('provider-auto-route-recover', `הספק ${activeProvider} נבחר אוטומטית ונכשל (${failureCode}) — חוזרים לספק המבוקש`, {
+        state: 'retrying',
+        autoRoutedProvider: activeProvider,
+        requestedProvider,
+        errorClass: failureCode,
+      });
+    }
+  }
+
+  if ((allowCrossProviderFallback || autoRoutedProviderFailed) && (!chatRunMode || chatRunFallbackAllowed)) {
     const allFallbackCandidates = fallbackPool.filter((pid) => pid !== activeProvider);
+    // כשהניתוב האוטומטי הוא שנכשל, הספק שהמשתמש באמת ביקש עומד ראשון בתור.
+    if (autoRoutedProviderFailed) {
+      const requestedIndex = allFallbackCandidates.indexOf(requestedProvider);
+      if (requestedIndex > 0) allFallbackCandidates.splice(requestedIndex, 1);
+      if (requestedIndex !== 0) allFallbackCandidates.unshift(requestedProvider);
+    }
     const fallbackCandidates = chatRunMode ? allFallbackCandidates.slice(0, 1) : allFallbackCandidates;
 
     for (const fallbackProvider of fallbackCandidates) {
