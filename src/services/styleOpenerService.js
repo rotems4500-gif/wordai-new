@@ -17,6 +17,8 @@ import { getChunks, ensureSampleStoreReady, STYLE_SAMPLES_UPDATED_EVENT } from '
 import { detectIntent } from './assignmentSpecService';
 import { containsRareToken, isReady as lexiconReady } from './hebrewLexiconService';
 
+// נמדד: הורדה ל-2 מכפילה את מספר הפתיחים (4→11) אבל כולם רעש — "על פי" חסר תוכן,
+// ו"קמה ע" / "כץ נ" הם שורות ביבליוגרפיה שחוזרות בין עבודות ולכן נראות כהרגל.
 const OPENER_MIN_WORDS = 3;
 const OPENER_MAX_WORDS = 9;
 // הביגרם הפותח חייב להופיע ב**שני מסמכים** לפחות — חזרה בתוך מסמך אחד היא
@@ -54,6 +56,9 @@ function isContentBearing(opener, paragraph = '') {
   if (/\d/.test(s)) return true;                    // מספרים = נתון ספציפי
   if (/[A-Za-z]{3,}/.test(s)) return true;          // שם כלי/מוסד לועזי
   if (/["'״׳]/.test(s)) return true;                // ציטוט או שם בגרשיים
+  // אות עברית בודדת כמילה = ראשי תיבות של שם פרטי בשורת ביבליוגרפיה ("קמה ע",
+  // "כץ נ"). אלה חוזרות בין עבודות ולכן נראות כהרגל ניסוח, אבל הן רשימת מקורות.
+  if (/(?:^|\s)[֐-׿](?:\s|$)/.test(s)) return true;
   // שם פרטי בעברית ("הייג והרופ", "הדסה") — אין אות גדולה שתסגיר אותו, ולכן
   // ההכרעה היא סטטיסטית: מילה שמופיעה בקומץ מסמכים בלבד היא שם/מונח ייחודי.
   // fail-open — בקורפוס קטן מדי הבדיקה מושבתת ולא פוסלת כלום.
@@ -92,22 +97,48 @@ if (typeof window !== 'undefined') {
 
 const countWords = (s = '') => (String(s || '').match(WORD_RE) || []).length;
 
-// המשפט הראשון של הפסקה, חתוך לאורך פתיח סביר.
-function extractOpener(paragraph) {
+// מילות המשפט הראשון בפסקה, עד תקרת אורך. החיתוך עצמו נעשה בהמשך (trimToPhrasing),
+// כי הוא זקוק לאינדקס תדירות-המסמכים שנבנה על כל הקורפוס.
+function openerCandidate(paragraph) {
   const firstSentence = String(paragraph || '')
     .split(/(?<=[.!?…])\s+/)[0]
     .trim();
   if (!firstSentence) return null;
-
   const words = firstSentence.match(WORD_RE) || [];
   if (words.length < OPENER_MIN_WORDS) return null;
+  return words.slice(0, OPENER_MAX_WORDS);
+}
 
-  // משפט קצר נלקח במלואו; משפט ארוך נחתך לפתיח בלבד — הרעיון הוא לתת נקודת
-  // התחלה, לא להשתיל משפט שלם מעבודה אחרת.
-  const take = Math.min(words.length, OPENER_MAX_WORDS);
-  const opener = words.slice(0, take).join(' ');
-  if (BANNED_OPENERS.test(opener)) return null;
-  return opener;
+/**
+ * גוזר את הרצף לחלק הבר-שימוש: הרצף הארוך ביותר שעדיין חוזר בכמה מסמכים.
+ *
+ * הבעיה שזה פותר: חיתוך לפי מספר מילים קבוע תופס את הניסוח **ועוד** את התוכן
+ * שאחריו. נמדד על 24 עבודות אמיתיות — "לסיכום ניתן לראות כי לרשתות החברתיות יש
+ * השפעה עצומה" הוצע כפתיחה, כשהחלק הבר-שימוש הוא ארבע המילים הראשונות בלבד.
+ *
+ * העיקרון: ניסוח חוזר בין מסמכים, תוכן מופיע פעם אחת. מאריכים את הרצף מילה-מילה
+ * כל עוד הוא מופיע ב-MIN_PREFIX_DOCS מסמכים, ועוצרים ברגע שהוא צונח לאחד — שם
+ * בדיוק עובר הגבול בין "איך אני כותב" ל"על מה כתבתי הפעם".
+ *
+ * @param {string[]} words מילות המועמד
+ * @param {(prefix:string)=>number} docFreq בכמה מסמכים מופיע הרצף
+ * @returns {{text:string, docs:number}|null}
+ */
+function trimToPhrasing(words, docFreq) {
+  const prefix = (n) => words.slice(0, n).join(' ');
+  const baseDocs = docFreq(prefix(OPENER_MIN_WORDS).toLowerCase());
+  // אפילו הרצף המינימלי אינו חוזר ⇒ אין כאן הרגל, רק משפט מעבודה אחת.
+  if (baseDocs < MIN_PREFIX_DOCS) return null;
+
+  let best = OPENER_MIN_WORDS;
+  let bestDocs = baseDocs;
+  for (let n = OPENER_MIN_WORDS + 1; n <= words.length; n += 1) {
+    const docs = docFreq(prefix(n).toLowerCase());
+    if (docs < MIN_PREFIX_DOCS) break;
+    best = n;
+    bestDocs = docs;
+  }
+  return { text: prefix(best), docs: bestDocs };
 }
 
 // שני ספים בכוונה. ספירת ההרגל צריכה לראות *כל* פסקה שיש לה פתיחה — פסקה קצרה
@@ -139,28 +170,34 @@ function buildIndex() {
     return { byIntent, paragraphs: paragraphs.length, total: 0, sparse: true };
   }
 
-  // מדד ה"הרגל" = בכמה **מסמכים נפרדים** מופיע הביגרם הפותח.
-  const bigramDocs = new Map();
+  // מדד ה"הרגל" = בכמה **מסמכים נפרדים** מופיע הרצף הפותח. נספר לכל אורך רצף
+  // ולא רק לביגרם, כי אותה ספירה משמשת גם כשער (האם זה הרגל בכלל) וגם כסכין
+  // (איפה הניסוח נגמר) — ראה trimToPhrasing.
+  const prefixDocs = new Map();
   allParagraphs.forEach(({ text, docId }) => {
     const words = text.match(WORD_RE) || [];
-    if (words.length < 2) return;
-    const bg = `${words[0]} ${words[1]}`.toLowerCase();
-    if (!bigramDocs.has(bg)) bigramDocs.set(bg, new Set());
-    bigramDocs.get(bg).add(docId);
+    for (let n = OPENER_MIN_WORDS; n <= Math.min(words.length, OPENER_MAX_WORDS); n += 1) {
+      const key = words.slice(0, n).join(' ').toLowerCase();
+      if (!prefixDocs.has(key)) prefixDocs.set(key, new Set());
+      prefixDocs.get(key).add(docId);
+    }
   });
-  const docFreq = (bg) => (bigramDocs.get(bg)?.size || 0);
+  const docFreq = (key) => (prefixDocs.get(key)?.size || 0);
 
   const seen = new Set();
   paragraphs.forEach(({ text: p }) => {
     // בלוק בלי סימן פיסוק סוגר אינו פסקה אלא כותרת/עמוד שער. נמדד: "המכללה
     // האקדמית הדסה החוג לפוליטיקה ותקשורת במסגרת הקורס" הוצע כפתיחה לסעיף.
     if (!/[.!?…]/.test(p)) return;
-    const opener = extractOpener(p);
-    if (!opener) return;
+    const candidate = openerCandidate(p);
+    if (!candidate) return;
+    // השער והסכין הם אותה מדידה: trimToPhrasing מחזיר null כשאפילו הרצף המינימלי
+    // אינו חוזר, ואחרת מחזיר את החלק שכן.
+    const trimmed = trimToPhrasing(candidate, docFreq);
+    if (!trimmed) return;
+    const opener = trimmed.text;
+    if (BANNED_OPENERS.test(opener)) return;
     if (isContentBearing(opener, p)) return;
-    const words = opener.match(WORD_RE) || [];
-    const bg = `${words[0]} ${words[1]}`.toLowerCase();
-    if (docFreq(bg) < MIN_PREFIX_DOCS) return;
 
     const key = opener.toLowerCase();
     if (seen.has(key)) return;
@@ -168,7 +205,7 @@ function buildIndex() {
 
     const intent = classifyOpener(opener, p);
     if (!byIntent[intent]) byIntent[intent] = [];
-    byIntent[intent].push({ text: opener, weight: docFreq(bg) });
+    byIntent[intent].push({ text: opener, weight: trimmed.docs });
   });
 
   let total = 0;
