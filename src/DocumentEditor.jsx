@@ -37,6 +37,8 @@ import { MathNode } from "./extensions/MathNode";
 import { CrossReferenceNode, HeadingRefId } from "./extensions/CrossReferenceNode";
 import { TocNode } from "./extensions/TocNode";
 import { Pagination } from "./extensions/Pagination";
+import { StyleAutocomplete } from "./extensions/StyleAutocomplete";
+import { getStyleAutocompleteEnabled } from "./components/StyleEngineControls";
 import { getLayoutPageSizeCm } from "./services/documentLayout";
 
 const selectWordUnderCursor = (editor) => {
@@ -299,6 +301,8 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       HeadingRefId,
       TocNode,
       Pagination,
+      // enabled כפונקציה — נקרא בכל טרנזקציה, כך שהמתג בהגדרות משפיע מיד.
+      StyleAutocomplete.configure({ enabled: getStyleAutocompleteEnabled }),
     ],
     content: "<p></p>",
     editorProps: {

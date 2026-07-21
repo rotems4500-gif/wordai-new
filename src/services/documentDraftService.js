@@ -44,11 +44,21 @@ const buildPara = (paraEl) => {
   const text = runs.map((r) => r.textContent || '').join('');
   if (!text.trim()) return null;
   const style = paraStyleOf(paraEl);
+  // הפסקה נכתבת חזרה לתוך run אחד, ולכן העיצוב של אותו run חל על כל הפסקה.
+  // בוחרים את ה-run הארוך ביותר ולא את הראשון: פסקה שמתחילה ב-lead-in מודגש /
+  // הפניית הערת-שוליים קטנה הייתה הופכת כולה למודגשת/זעירה.
+  let dominantRun = 0;
+  let dominantLen = -1;
+  runs.forEach((run, index) => {
+    const len = String(run.textContent || '').length;
+    if (len > dominantLen) { dominantLen = len; dominantRun = index; }
+  });
   return {
     id: nextParaId(),
     text,
     original: text,
     runs,                                   // צמתי <w:t> חיים — לכתיבה חזרה
+    dominantRun,
     style,
     titleish: isHeadingStyle(style),
   };
@@ -59,10 +69,13 @@ const buildPara = (paraEl) => {
 // כדי ש-Word לא ייבלע רווחים מובילים/סוגרים.
 const writePara = (para) => {
   if (!para.runs.length) return;
-  const first = para.runs[0];
-  first.textContent = para.text;
-  try { first.setAttribute('xml:space', 'preserve'); } catch { /* לא קריטי */ }
-  for (let i = 1; i < para.runs.length; i += 1) para.runs[i].textContent = '';
+  const targetIndex = Number.isInteger(para.dominantRun) && para.runs[para.dominantRun]
+    ? para.dominantRun
+    : 0;
+  const target = para.runs[targetIndex];
+  target.textContent = para.text;
+  try { target.setAttribute('xml:space', 'preserve'); } catch { /* לא קריטי */ }
+  para.runs.forEach((run, index) => { if (index !== targetIndex) run.textContent = ''; });
 };
 
 /**

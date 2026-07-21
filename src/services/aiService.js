@@ -272,6 +272,8 @@ export const DEFAULT_PERSONAL_STYLE = {
   submissionDate: '',
   coverTemplateHtml: '',
   coverTemplateSavedAt: '',
+  // כשדולק — עמוד השער האישי מוזרק אוטומטית לכל מסמך חדש (ריק, תבנית או שנוצר ב-AI).
+  coverTemplateAutoInsert: false,
   syllabusImportProvenance: {
     assignmentType: '',
     submissionDate: '',
@@ -1656,6 +1658,7 @@ export const COVER_TEMPLATE_FIELDS = [
   { key: 'studentName', token: '{{studentName}}', label: 'שם המגיש' },
   { key: 'studentId',   token: '{{studentId}}',   label: 'ת.ז.' },
   { key: 'institution', token: '{{institution}}', label: 'מוסד' },
+  { key: 'assignmentType', token: '{{assignmentType}}', label: 'סוג מטלה' },
   { key: 'date',        token: '{{date}}',        label: 'תאריך' },
 ];
 
@@ -1680,7 +1683,8 @@ export const resolveCoverTemplateValues = (profile = {}, overrides = {}) => {
     studentName: String(p.displayName || '').trim(),
     studentId: String(p.studentId || '').trim(),
     institution: String(p.institutionName || '').trim(),
-    date: monthYear,
+    assignmentType: String(p.assignmentType || '').trim(),
+    date: String(p.submissionDate || '').trim() || monthYear,
   };
   for (const [key, raw] of Object.entries(overrides || {})) {
     if (raw != null && String(raw).trim()) values[key] = String(raw).trim();

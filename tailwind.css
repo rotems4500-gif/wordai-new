@@ -231,6 +231,14 @@
         .ProseMirror .comment-mark.comment-active { background: #FDE68A; }
         .ProseMirror .find-match { background: #FEF08A; border-radius: 2px; }
         .ProseMirror .find-match-active { background: #FB923C; color: #1f2937; box-shadow: 0 0 0 1px #EA580C; }
+        /* ghost text של ההשלמה האוטומטית — תצוגה בלבד (Decoration.widget), לא במסמך. */
+        .ProseMirror .wf-autocomplete-ghost {
+            color: #9ca3af;
+            opacity: 0.85;
+            pointer-events: none;
+            user-select: none;
+            white-space: pre;
+        }
         .ProseMirror .pagination-gap { width: 100%; clear: both; }
         .ProseMirror .pagination-gap-band {
             left: 50%;

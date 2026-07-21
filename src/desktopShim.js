@@ -61,8 +61,10 @@ const htmlToPlainText = (html = '') => String(html || '')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 
-const wrapHtmlDocument = (html = '', title = 'Document') =>
-  `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${html}</body></html>`;
+// styleCss מגיע מ-buildDesktopSavePayload (main.jsx) — בלעדיו הקובץ נשמר בלי פונט/גודל/
+// רווח-שורות, כי המאפיינים האלה יושבים על מיכל העורך ולא בתוך ה-HTML עצמו.
+const wrapHtmlDocument = (html = '', title = 'Document', styleCss = '') =>
+  `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${styleCss || ''}</head><body>${html}</body></html>`;
 
 // ── document open/save ──────────────────────────────────────────────────────
 const DOC_FILTERS = [{ name: 'מסמכים', extensions: ['docx', 'txt', 'md', 'markdown', 'html', 'htm'] }];
@@ -144,7 +146,7 @@ const saveDocumentDialog = async (payload = {}) => {
       const r = await invoke('write_file_text', { path: filePath, contents: text || htmlToPlainText(html) });
       if (!r.ok) return { ok: false, error: r.error };
     } else if (ext === 'html' || ext === 'htm') {
-      const r = await invoke('write_file_text', { path: filePath, contents: wrapHtmlDocument(html, title) });
+      const r = await invoke('write_file_text', { path: filePath, contents: wrapHtmlDocument(html, title, exportOptions?.styleCss) });
       if (!r.ok) return { ok: false, error: r.error };
     } else {
       const blob = await buildDocxBlob({ html, text, exportOptions });
@@ -353,6 +355,9 @@ export function installDesktopShim() {
 
     loadProviderConfig: async () => readSecureJson(PROVIDER_CONFIG_FILE),
     saveProviderConfig: async (config) => writeSecureJson(PROVIDER_CONFIG_FILE, config),
+    // גישה גנרית לקובץ מוצפן DPAPI לפי נתיב יחסי (משמש את "זכור במכשיר הזה")
+    readSecureValue: async (rel) => readSecureJson(rel),
+    saveSecureValue: async (rel, value) => writeSecureJson(rel, value),
     loadAppSettings: async () => readSecureJson(APP_SETTINGS_FILE),
     saveAppSettings: async (settings) => writeSecureJson(APP_SETTINGS_FILE, settings),
 

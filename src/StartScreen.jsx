@@ -2114,7 +2114,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm outline-none focus:ring-1 focus:ring-pink-400 focus:border-transparent resize-y min-h-[90px] h-full"
                      />
                    </div>
-                   <div className="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] max-h-[140px] overflow-y-auto">
+                   <div className="bg-white/5 border border-white/10 rounded-xl p-3 min-h-[90px] overflow-y-auto resize-y h-full">
                      {lastUploadedMaterials.length ? (
                        <div className="flex flex-wrap gap-1.5 mb-3">
                          {lastUploadedMaterials.slice(0, 6).map((item) => {

@@ -53,7 +53,12 @@ const splitFontCandidates = (fontValue = '') => String(fontValue || '')
 
 const pickWordSafeFontName = (fontValue = '', fallbackFont = DOCX_DEFAULT_FONT) => {
   const candidates = splitFontCandidates(fontValue);
-  return candidates.find((candidate) => DOCX_WORD_SAFE_FONTS.has(candidate)) || fallbackFont || DOCX_DEFAULT_FONT;
+  // קודם כל מכבדים את הפונט שהמשתמש בחר (Heebo/Alef/Frank Ruhl Libre וכו') — Word
+  // מתמודד יפה עם פונט שמותקן במערכת. רק אם אין בכלל מועמד נופלים לרשימה הבטוחה.
+  return candidates[0]
+    || candidates.find((candidate) => DOCX_WORD_SAFE_FONTS.has(candidate))
+    || fallbackFont
+    || DOCX_DEFAULT_FONT;
 };
 
 const normalizeDocxFontSize = (rawValue = '', fallbackSize = 24) => {
@@ -111,6 +116,8 @@ const resolveDocxExportOptions = ({ html = '', exportOptions = {} } = {}) => {
       eastAsia: fontName,
     },
     fontSize: normalizeDocxFontSize(safeOptions.fontSize, 24),
+    // רווח שורות של המסמך (documentStyle) — נשמר על מיכל העורך ולא ב-HTML, ולכן מגיע כאן.
+    lineSpacing: resolveDocxLineSpacing(safeOptions.lineHeight, 360),
     language: normalizeDocxLanguage(safeOptions.language),
     noProof: safeOptions.disableProofing === true,
     alignment: resolveDocxParagraphAlignment(safeOptions.documentStyle),
@@ -451,7 +458,7 @@ const buildDocxTable = (block = '', typography = {}) => {
   });
 };
 
-const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) => {
+const htmlToDocxParagraphsLegacy = async (html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) => {
   const source = String(html || '')
     .replace(/\r\n/g, '\n')
     .replace(/<(div|p)[^>]*(?:data-type=["']page-break["']|data-page-break=["']true["']|class=["'][^"']*page-break(?:-node)?[^"']*["']|style=["'][^"']*(?:page-break-after\s*:\s*always|break-after\s*:\s*page)[^"']*["'])[^>]*>(?:\s|&nbsp;|&#160;|<br\s*\/?>)*<\/\1>/gi, '\n[[PAGE_BREAK]]\n');
@@ -527,6 +534,339 @@ const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = r
   }
 
   return children.length ? children : [new Paragraph({ text: '' })];
+};
+
+// ── ממיר HTML→DOCX מבוסס DOM ────────────────────────────────────────────────
+// המסלול הישן (htmlToDocxParagraphsLegacy) עבד ב-regex ומחק כל תג inline לפני
+// שקרא עיצוב, ולכן bold/underline/צבע/פונט/גודל/קישורים/מספור רשימות אבדו בייצוא,
+// ועמוד שער (div עוטף) נמעך לפסקה אחת. כאן עוברים על ה-DOM אמיתי ובונים run לכל
+// קטע inline עם המאפיינים שלו.
+export const DOCX_ORDERED_NUMBERING_REF = 'wf-ordered-list';
+
+const DOCX_HEADING_LEVELS = {
+  H1: HeadingLevel.HEADING_1,
+  H2: HeadingLevel.HEADING_2,
+  H3: HeadingLevel.HEADING_3,
+  H4: HeadingLevel.HEADING_4,
+  H5: HeadingLevel.HEADING_5,
+  H6: HeadingLevel.HEADING_6,
+};
+
+const parseExportHtmlRoot = (html = '') => {
+  if (typeof DOMParser === 'undefined') return null;
+  try {
+    const parsed = new DOMParser().parseFromString(`<body><div data-wf-export-root="true">${String(html || '')}</div></body>`, 'text/html');
+    return parsed?.querySelector('[data-wf-export-root="true"]') || null;
+  } catch {
+    return null;
+  }
+};
+
+const isExportPageBreakElement = (el) => {
+  if (!el?.getAttribute) return false;
+  if (el.getAttribute('data-type') === 'page-break') return true;
+  if (el.getAttribute('data-page-break') === 'true') return true;
+  if (/page-break/i.test(el.getAttribute('class') || '')) return true;
+  const style = el.getAttribute('style') || '';
+  return /(page-break-after\s*:\s*always|break-after\s*:\s*page)/i.test(style);
+};
+
+const toDocxFontSpec = (fontName = '') => ({
+  ascii: fontName,
+  hAnsi: fontName,
+  cs: fontName,
+  eastAsia: fontName,
+});
+
+// צובר את מאפייני ה-inline מאלמנט אחד אל תוך הסגנון היורש.
+const extendInlineStyle = (inherited = {}, el, typography = {}) => {
+  const tag = String(el.tagName || '').toUpperCase();
+  const next = { ...inherited };
+  if (tag === 'STRONG' || tag === 'B') next.bold = true;
+  if (tag === 'EM' || tag === 'I') next.italics = true;
+  if (tag === 'U' || tag === 'INS') next.underline = {};
+  if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') next.strike = true;
+  if (tag === 'SUB') next.subScript = true;
+  if (tag === 'SUP') next.superScript = true;
+  if (tag === 'MARK') next.shading = { fill: 'FFF3A3' };
+  if (tag === 'A') { next.underline = {}; next.color = next.color || '1155CC'; }
+  if (tag === 'CODE' || tag === 'PRE' || tag === 'KBD') next.fontName = 'Consolas';
+
+  const style = el.style || {};
+  const weight = String(style.fontWeight || '').trim();
+  if (weight && (/^bold(er)?$/i.test(weight) || Number.parseInt(weight, 10) >= 600)) next.bold = true;
+  if (/^(normal|[1-5]00)$/i.test(weight)) next.bold = false;
+  if (/italic|oblique/i.test(String(style.fontStyle || ''))) next.italics = true;
+  const decoration = `${style.textDecoration || ''} ${style.textDecorationLine || ''}`;
+  if (/underline/i.test(decoration)) next.underline = {};
+  if (/line-through/i.test(decoration)) next.strike = true;
+  if (style.color) {
+    const hex = cssColorToDocxHex(style.color);
+    if (hex) next.color = hex;
+  }
+  if (style.backgroundColor) {
+    const hex = cssColorToDocxHex(style.backgroundColor);
+    if (hex && hex.toUpperCase() !== 'FFFFFF') next.shading = { fill: hex };
+  }
+  if (style.fontFamily) {
+    const picked = pickWordSafeFontName(style.fontFamily, '');
+    if (picked) next.fontName = picked;
+  }
+  if (style.fontSize) {
+    const size = normalizeDocxFontSize(style.fontSize, 0);
+    if (size) next.size = size;
+  }
+  return next;
+};
+
+// עובר רקורסיבית על תוכן inline ומחזיר תיאורי run ({text|break, style}).
+const collectInlineRunDescriptors = (node, inheritedStyle, typography, out = []) => {
+  const kids = node?.childNodes ? Array.from(node.childNodes) : [];
+  for (const child of kids) {
+    if (child.nodeType === 3) {
+      const text = String(child.nodeValue || '').replace(/ /g, ' ').replace(/\s+/g, ' ');
+      if (text) out.push({ text, style: inheritedStyle });
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const tag = String(child.tagName || '').toUpperCase();
+    if (tag === 'BR') { out.push({ break: true, style: inheritedStyle }); continue; }
+    if (tag === 'IMG' || tag === 'SCRIPT' || tag === 'STYLE') continue;
+    collectInlineRunDescriptors(child, extendInlineStyle(inheritedStyle, child, typography), typography, out);
+  }
+  return out;
+};
+
+const buildRunsFromDescriptors = (descriptors = [], typography = {}, baseOptions = {}) => {
+  const trimmed = [...descriptors];
+  while (trimmed.length && trimmed[0].text && !trimmed[0].text.trim()) trimmed.shift();
+  while (trimmed.length && trimmed[trimmed.length - 1].text && !trimmed[trimmed.length - 1].text.trim()) trimmed.pop();
+  if (trimmed.length && trimmed[0].text) trimmed[0] = { ...trimmed[0], text: trimmed[0].text.replace(/^\s+/, '') };
+  const last = trimmed.length - 1;
+  if (last >= 0 && trimmed[last].text) trimmed[last] = { ...trimmed[last], text: trimmed[last].text.replace(/\s+$/, '') };
+
+  const runs = [];
+  let pendingBreaks = 0;
+  for (const descriptor of trimmed) {
+    if (descriptor.break) { pendingBreaks += 1; continue; }
+    const text = String(descriptor.text || '');
+    if (!text) continue;
+    const style = descriptor.style || {};
+    const options = { ...baseOptions };
+    if (style.bold) options.bold = true;
+    if (style.bold === false && baseOptions.bold !== true) delete options.bold;
+    if (style.italics) options.italics = true;
+    if (style.underline) options.underline = style.underline;
+    if (style.strike) options.strike = true;
+    if (style.subScript) options.subScript = true;
+    if (style.superScript) options.superScript = true;
+    if (style.shading) options.shading = style.shading;
+    if (style.color) options.color = style.color;
+    if (style.fontName) options.font = toDocxFontSpec(style.fontName);
+    if (style.size) { options.size = style.size; options.sizeComplexScript = style.size; }
+    if (pendingBreaks) { options.break = pendingBreaks; pendingBreaks = 0; }
+    runs.push(createDocxTextRun(text, options, typography));
+  }
+  return runs;
+};
+
+// יישור/כיווניות של בלוק — גרסת DOM של resolveBlockDocxFormatting.
+const resolveElementDocxFormatting = (el, typography = {}, inheritedBlock = {}) => {
+  const explicitDirection = el?.getAttribute?.('dir') || el?.style?.direction || '';
+  const alignmentValue = el?.style?.textAlign || el?.getAttribute?.('align') || '';
+  const explicitLtr = /^ltr$/i.test(String(explicitDirection || '').trim());
+  const documentIsRtl = isRtlDocxLanguage(typography.language);
+  const bidirectional = explicitDirection
+    ? !explicitLtr
+    : (typeof inheritedBlock.bidirectional === 'boolean' ? inheritedBlock.bidirectional : documentIsRtl);
+  const fallbackAlignment = alignmentValue
+    ? (typography.alignment || AlignmentType.RIGHT)
+    : (inheritedBlock.alignment || typography.alignment || AlignmentType.RIGHT);
+  return {
+    alignment: resolveDocxAlignmentValue(alignmentValue, fallbackAlignment, bidirectional),
+    bidirectional,
+  };
+};
+
+// line-height של CSS → spacing.line של Word (240 = שורה בודדת).
+const resolveDocxLineSpacing = (value = '', fallback = 360) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'normal') return fallback;
+  const numeric = Number.parseFloat(raw);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  if (/(px|pt|rem|em|%)$/.test(raw)) {
+    if (raw.endsWith('%')) return Math.round((numeric / 100) * 240);
+    if (raw.endsWith('px')) return Math.round((numeric / 16) * 240);
+    return Math.round(numeric * 240);
+  }
+  return Math.round(numeric * 240);
+};
+
+const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) => {
+  const root = parseExportHtmlRoot(html);
+  if (!root) return htmlToDocxParagraphsLegacy(html, fallbackText, typography);
+
+  const children = [];
+  const headingSizes = {
+    H1: Math.max(typography.fontSize + 10, 34),
+    H2: Math.max(typography.fontSize + 4, 28),
+    H3: Math.max(typography.fontSize + 2, 24),
+    H4: typography.fontSize + 2,
+    H5: typography.fontSize,
+    H6: typography.fontSize,
+  };
+  let orderedInstance = 0;
+
+  const pushParagraph = (el, {
+    inlineStyle = {},
+    blockFormat = {},
+    heading = null,
+    runOptions = {},
+    bullet = null,
+    numbering = null,
+    lineSpacing = null,
+    extra = {},
+  } = {}) => {
+    const descriptors = collectInlineRunDescriptors(el, inlineStyle, typography);
+    const runs = buildRunsFromDescriptors(descriptors, typography, {
+      ...runOptions,
+      rightToLeft: blockFormat.bidirectional !== false,
+    });
+    if (!runs.length && !bullet && !numbering) return;
+    children.push(new Paragraph({
+      ...(heading ? { heading } : { style: 'Normal' }),
+      alignment: blockFormat.alignment || typography.alignment || AlignmentType.RIGHT,
+      bidirectional: blockFormat.bidirectional !== false,
+      spacing: { after: 160, line: lineSpacing || typography.lineSpacing || 360 },
+      children: runs.length ? runs : [createDocxTextRun('', {}, typography)],
+      ...(bullet ? { bullet } : {}),
+      ...(numbering ? { numbering } : {}),
+      ...extra,
+    }));
+  };
+
+  const walk = async (parent, context) => {
+    const nodes = parent?.childNodes ? Array.from(parent.childNodes) : [];
+    for (const node of nodes) {
+      if (node.nodeType === 3) {
+        const text = String(node.nodeValue || '').replace(/\s+/g, ' ');
+        if (!text.trim()) continue;
+        children.push(new Paragraph({
+          style: 'Normal',
+          alignment: context.blockFormat.alignment || typography.alignment,
+          bidirectional: context.blockFormat.bidirectional !== false,
+          spacing: { after: 160, line: context.lineSpacing || 360 },
+          children: [createDocxTextRun(text.trim(), { rightToLeft: context.blockFormat.bidirectional !== false }, typography)],
+        }));
+        continue;
+      }
+      if (node.nodeType !== 1) continue;
+
+      const tag = String(node.tagName || '').toUpperCase();
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+
+      if (isExportPageBreakElement(node)) {
+        children.push(new Paragraph({ style: 'Normal', text: '', pageBreakBefore: true, bidirectional: true }));
+        continue;
+      }
+
+      const blockFormat = resolveElementDocxFormatting(node, typography, context.blockFormat);
+      const inlineStyle = extendInlineStyle(context.inlineStyle, node, typography);
+      const lineSpacing = node.style?.lineHeight
+        ? resolveDocxLineSpacing(node.style.lineHeight, context.lineSpacing)
+        : context.lineSpacing;
+      const childContext = { ...context, blockFormat, inlineStyle, lineSpacing };
+
+      if (tag === 'TABLE') { children.push(buildDocxTable(node.outerHTML, typography)); continue; }
+      if (tag === 'IMG') { children.push(await createDocxImageParagraph(node.outerHTML, typography)); continue; }
+      if (tag === 'HR') {
+        children.push(new Paragraph({
+          style: 'Normal',
+          bidirectional: true,
+          spacing: { after: 160 },
+          border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: 'C8C6C4', space: 1 } },
+          children: [createDocxTextRun('', {}, typography)],
+        }));
+        continue;
+      }
+      if (tag === 'BR') { continue; }
+
+      if (tag === 'UL' || tag === 'OL') {
+        const isOrdered = tag === 'OL';
+        if (isOrdered) orderedInstance += 1;
+        const instance = orderedInstance;
+        const level = Math.min(context.listLevel ?? 0, 4);
+        for (const li of Array.from(node.children || [])) {
+          if (String(li.tagName || '').toUpperCase() !== 'LI') continue;
+          const nestedLists = Array.from(li.children || []).filter((c) => /^(UL|OL)$/i.test(c.tagName || ''));
+          const liFormat = resolveElementDocxFormatting(li, typography, blockFormat);
+          const liInline = extendInlineStyle(inlineStyle, li, typography);
+          // התוכן הישיר של הפריט (בלי תת-הרשימות) הופך לפסקה אחת עם bullet/מספור.
+          const holder = li.cloneNode(true);
+          Array.from(holder.children || []).forEach((c) => {
+            if (/^(UL|OL)$/i.test(c.tagName || '')) c.remove();
+          });
+          pushParagraph(holder, {
+            inlineStyle: liInline,
+            blockFormat: liFormat,
+            lineSpacing,
+            ...(isOrdered
+              ? { numbering: { reference: DOCX_ORDERED_NUMBERING_REF, level, instance } }
+              : { bullet: { level } }),
+          });
+          for (const nested of nestedLists) {
+            await walk({ childNodes: [nested] }, { ...childContext, listLevel: level + 1 });
+          }
+        }
+        continue;
+      }
+
+      if (DOCX_HEADING_LEVELS[tag]) {
+        pushParagraph(node, {
+          inlineStyle,
+          blockFormat,
+          lineSpacing,
+          heading: DOCX_HEADING_LEVELS[tag],
+          runOptions: { bold: true, size: headingSizes[tag], sizeComplexScript: headingSizes[tag] },
+        });
+        continue;
+      }
+
+      if (tag === 'BLOCKQUOTE') {
+        // ציטוט יכול להכיל פסקאות — נכנסים פנימה עם סגנון נטוי מורש.
+        await walk(node, { ...childContext, inlineStyle: { ...inlineStyle, italics: true, color: inlineStyle.color || '475569' } });
+        continue;
+      }
+
+      if (tag === 'P' || tag === 'PRE') {
+        pushParagraph(node, { inlineStyle, blockFormat, lineSpacing });
+        continue;
+      }
+
+      // DIV / SECTION / ARTICLE / עמוד שער / כל עוטף אחר — נכנסים פנימה במקום למעוך
+      // לפסקה אחת. אם אין בפנים בלוקים כלל, מתייחסים לתוכן כפסקה.
+      const hasBlockChild = Array.from(node.children || []).some((c) => (
+        /^(P|DIV|SECTION|ARTICLE|H[1-6]|UL|OL|TABLE|BLOCKQUOTE|HR|IMG|PRE)$/i.test(c.tagName || '')
+      ));
+      if (hasBlockChild) {
+        await walk(node, childContext);
+      } else {
+        pushParagraph(node, { inlineStyle, blockFormat, lineSpacing });
+      }
+    }
+  };
+
+  await walk(root, {
+    blockFormat: { alignment: typography.alignment, bidirectional: isRtlDocxLanguage(typography.language) },
+    inlineStyle: {},
+    lineSpacing: typography.lineSpacing || 360,
+    listLevel: 0,
+  });
+
+  if (!children.length) {
+    return htmlToDocxParagraphsLegacy(html, fallbackText, typography);
+  }
+  return children;
 };
 
 // בונה header/footer/properties של section מתוך documentLayout (ראה services/documentLayout.js)
@@ -654,6 +994,19 @@ export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} }
   const headingThreeSize = Math.max(typography.fontSize + 2, 24);
   const children = await htmlToDocxParagraphs(html, text, typography);
   const doc = new Document({
+    // מספור אמיתי לרשימות ממוספרות (<ol>) — בלי זה כל פריט היה יוצא כתבליט.
+    numbering: {
+      config: [{
+        reference: DOCX_ORDERED_NUMBERING_REF,
+        levels: [0, 1, 2, 3, 4].map((level) => ({
+          level,
+          format: 'decimal',
+          text: `%${level + 1}.`,
+          alignment: AlignmentType.START,
+          style: { paragraph: { indent: { start: 720 * (level + 1), hanging: 360 } } },
+        })),
+      }],
+    },
     styles: {
       default: {
         document: {
@@ -663,7 +1016,7 @@ export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} }
           paragraph: {
             alignment: typography.alignment,
             bidirectional: true,
-            spacing: { after: 160, line: 360 },
+            spacing: { after: 160, line: typography.lineSpacing || 360 },
           },
         },
         title: {
@@ -738,7 +1091,7 @@ export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} }
           paragraph: {
             alignment: typography.alignment,
             bidirectional: true,
-            spacing: { after: 160, line: 360 },
+            spacing: { after: 160, line: typography.lineSpacing || 360 },
           },
           run: {
             ...buildDocxRunStyle(typography),

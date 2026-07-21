@@ -2153,6 +2153,38 @@ const buildLiveGenerationLogMarkup = (logs = []) => {
   }).join('');
 };
 
+// ── עמוד שער ברירת-מחדל ─────────────────────────────────────────────────────
+// אם המשתמש סימן "הוסף אוטומטית לכל מסמך חדש", מזריקים את תבנית עמוד השער האישית
+// לפני התוכן, עם מילוי אוטומטי של השדות הידועים (קורס/מרצה/סוג מטלה/תאריך...).
+const COVER_BLOCK_STRIP_RE = /<div data-cover-page="true">[\s\S]*?<\/div>\s*(<div data-type="page-break"><\/div>)?/i;
+const TEMPLATE_ASSIGNMENT_LABELS = {
+  academic: 'עבודה אקדמית',
+  legal: 'מסמך משפטי',
+  report: 'דוח',
+  summary: 'סיכום',
+  proposal: 'הצעה',
+  letter: 'מכתב',
+  office: 'מסמך',
+};
+const applyDefaultCoverPage = (html, overrides = {}) => {
+  try {
+    const profile = getPersonalStyleProfile();
+    if (!profile?.coverTemplateAutoInsert) return html;
+    const templateHtml = String(profile.coverTemplateHtml || '').trim();
+    if (!templateHtml) return html;
+    const body = String(html || '').replace(COVER_BLOCK_STRIP_RE, '').trim();
+    let bodyTitle = '';
+    try {
+      const holder = document.createElement('div');
+      holder.innerHTML = body;
+      bodyTitle = (holder.textContent || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
+    } catch { bodyTitle = ''; }
+    const filled = fillCoverTemplateTokens(templateHtml, profile, { title: bodyTitle, ...overrides });
+    const coverBlock = /data-cover-page="true"/i.test(filled) ? filled : `<div data-cover-page="true">${filled}</div>`;
+    return `${coverBlock}<div data-type="page-break"></div>${body || '<h1>כותרת פרק</h1><p></p>'}`;
+  } catch { return html; }
+};
+
 const buildLiveGenerationShell = ({ titleText = 'מסמך חדש', state = 'running', stages = [], logs = [], runId = '' } = {}) => {
   const stateMeta = getLiveGenerationStateMeta(state);
   const safeRunId = escHtml(runId);
@@ -2970,6 +3002,28 @@ const EXPORT_DOC_STYLES = `<style>
     body { direction: rtl; font-family: Arial, sans-serif; padding: 40px; line-height: 1.7; }
     [data-type="page-break"] { display: block; height: 0; page-break-after: always; break-after: page; }
     body > p:first-child { text-align: center; font-size: 11pt; font-weight: 700; color: #64748B; letter-spacing: 1px; margin-top: 20px; }
+    body > h1:nth-child(2) { text-align: center; font-size: 28pt; color: #2B579A; margin: 0 0 10pt; }
+    body > h2:nth-child(3) { text-align: center; font-size: 15pt; color: #475569; margin: 0 0 14pt; }
+    body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
+    body > p:nth-child(5), body > p:nth-child(6) { text-align: center; color: #475569; }
+  </style>`;
+
+// CSS לייצוא HTML — בונה מהפונט/גודל/רווח-שורות שנבחרו בפועל, במקום Arial קשיח.
+// חשוב: המאפיינים האלה יושבים על מיכל העורך (applyDocumentStyleToEditor) ולא ב-getHTML(),
+// ולכן בלי זה קובץ HTML שנשמר יוצא בלי שום עיצוב עמוד.
+const buildExportStyleCss = ({ fontStack = '', fontSize = '', lineHeight = '' } = {}) => `<style>
+    body {
+      direction: rtl;
+      font-family: ${fontStack || 'Arial, sans-serif'};
+      font-size: ${fontSize || '12pt'};
+      line-height: ${lineHeight || '1.7'};
+      padding: 40px;
+    }
+    [data-type="page-break"] { display: block; height: 0; page-break-after: always; break-after: page; }
+    [data-cover-page="true"] { page-break-after: always; break-after: page; }
+    table { border-collapse: collapse; }
+    table td, table th { border: 1px solid #C8C6C4; padding: 6px 8px; }
+    body > p:first-child { text-align: center; font-weight: 700; color: #64748B; letter-spacing: 1px; margin-top: 20px; }
     body > h1:nth-child(2) { text-align: center; font-size: 28pt; color: #2B579A; margin: 0 0 10pt; }
     body > h2:nth-child(3) { text-align: center; font-size: 15pt; color: #475569; margin: 0 0 14pt; }
     body > hr:nth-child(4) { width: 96px; margin: 14px auto; border: none; border-top: 4px solid #93C5FD; }
@@ -5877,7 +5931,12 @@ ${sidebarReviewContext}`
 
       lastLiveGenerationShellRef.current = { runId: '', html: '' };
       lastLiveGenerationPlaceholderRef.current = { runId: '', html: '' };
-      editor.commands.setContent(generated);
+      // עמוד שער אישי כברירת מחדל (אם הופעל בהגדרות) — עם כותרת המסמך שנוצרה.
+      const generatedWithCover = applyDefaultCoverPage(generated, {
+        title: resolvedTitle,
+        assignmentType: TEMPLATE_ASSIGNMENT_LABELS[templateId] || '',
+      });
+      editor.commands.setContent(generatedWithCover);
       // Personal Style Engine (Phase 5): snapshot של הטקסט שנוצר, כדי לזהות בהמשך את
       // העריכות שהמשתמש עושה עליו (delta tracking). plain text מתוך העורך אחרי setContent.
       try {
@@ -5889,7 +5948,7 @@ ${sidebarReviewContext}`
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
       const historyAfterSave = saveDocumentHistory({
         title: resolvedTitle,
-        content: generated,
+        content: generatedWithCover,
         templateId,
         source: 'start-screen',
         projectId: String(projectSeed?.projectId || ''),
@@ -6998,6 +7057,13 @@ ${sidebarReviewContext}`
       || currentPreset.fontSize
       || '12pt'
     ).trim();
+    // רווח השורות של הפריסט נשמר על מיכל העורך (applyDocumentStyleToEditor) ולכן
+    // לא קיים ב-getHTML() — מעבירים אותו במפורש כדי שלא יאבד בייצוא.
+    const lineHeight = String(
+      editor?.view?.dom?.style?.lineHeight
+      || currentPreset.lineHeight
+      || ''
+    ).trim();
 
     return {
       title: inferCurrentDocumentTitle(text),
@@ -7008,6 +7074,8 @@ ${sidebarReviewContext}`
         documentStyle,
         fontStack,
         fontSize,
+        lineHeight,
+        styleCss: buildExportStyleCss({ fontStack, fontSize, lineHeight }),
         language: 'he-IL',
         disableProofing: false,
         layout: documentLayout,
@@ -7650,6 +7718,9 @@ ${sidebarReviewContext}`
           if (shouldShowStartExperience) {
             openHomeSafely();
           } else {
+            // בלי מסך פתיחה נכנסים ישר למסמך ריק — כאן מזריקים עמוד שער ברירת-מחדל אם הופעל.
+            const blankWithCover = applyDefaultCoverPage('<p></p>');
+            if (blankWithCover !== '<p></p>') editor.commands.setContent(blankWithCover);
             setShowStartScreen(false);
           }
         }
@@ -7891,7 +7962,8 @@ ${sidebarReviewContext}`
         break;
       }
       case 'exportHTML': {
-        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${EXPORT_DOC_STYLES}</head><body>${normalizeDocumentExportHtml(editor.getHTML(), { documentStyle })}</body></html>`;
+        const exportCss = String(buildDesktopSavePayload('html')?.exportOptions?.styleCss || EXPORT_DOC_STYLES);
+        const htmlCtx = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8" /><title>WordFlow AI Document</title>${exportCss}</head><body>${normalizeDocumentExportHtml(editor.getHTML(), { documentStyle })}</body></html>`;
         await downloadFile(htmlCtx, 'my-document.html', 'text/html');
         break;
       }
@@ -9623,7 +9695,10 @@ ${sidebarReviewContext}`
                       letter: 'legal',
                     };
                     changeDocumentStyle(recommendedStyle[templateId] || documentStyle);
-                    activeEditor.commands.setContent(buildTemplateSkeleton(templateId, '', templateExamples));
+                    activeEditor.commands.setContent(applyDefaultCoverPage(
+                      buildTemplateSkeleton(templateId, '', templateExamples),
+                      { assignmentType: TEMPLATE_ASSIGNMENT_LABELS[templateId] || '' },
+                    ));
                   }, 'start');
                 }}
                 onOpenDocument={(payload) => {

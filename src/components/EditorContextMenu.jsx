@@ -127,7 +127,9 @@ function MenuList({ editor, items, onClose, depth = 0, width = 290 }) {
     if (!item || item.disabled || item.headerLabel || item.custom) return;
     const hasSubmenu = Array.isArray(item.submenu) && item.submenu.length > 0;
     if (hasSubmenu) {
-      setOpenSubmenuId((prev) => (prev === item.id ? null : item.id));
+      // לא toggle: ה-hover כבר פתח את התת-תפריט, ולחיצה על השורה (התנהגות טבעית של
+      // המשתמש בדרך לפריט) הייתה סוגרת אותו מיד. תמיד פותחים.
+      setOpenSubmenuId(item.id);
       return;
     }
     if (typeof item.onSelect === 'function') {
@@ -230,14 +232,20 @@ function MenuList({ editor, items, onClose, depth = 0, width = 290 }) {
         return (
           <React.Fragment key={item.id ?? idx}>
             {item.separatorBefore ? <div className="my-1 h-px bg-slate-200" /> : null}
-            <div className="relative">
+            {/* ה-hover יושב על העוטף (שורה + תת-תפריט) — אחרת מעבר העכבר אל תוך
+                התת-תפריט מפעיל mouseleave של השורה וסוגר אותו תוך 150ms. */}
+            <div
+              className="relative"
+              onMouseEnter={() => handleRowEnter(item)}
+              onMouseLeave={() => handleRowLeave(item)}
+            >
               <MenuRow
                 item={item}
                 isHighlighted={idx === highlightIndex}
                 isSubmenuOpen={isSubmenuOpen}
                 onRowClick={handleRowClick}
-                onRowEnter={handleRowEnter}
-                onRowLeave={handleRowLeave}
+                onRowEnter={() => {}}
+                onRowLeave={() => {}}
                 rowRef={(el) => {
                   rowRefs.current[item.id ?? idx] = el;
                 }}
