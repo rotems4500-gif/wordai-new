@@ -52,6 +52,9 @@ const WIRE = [];
   };
 }
 
+// סופר קריאות לכל שלב — כדי לענות על "כמה קריאות API עולה סעיף".
+const countFrom = (mark) => WIRE.length - mark;
+
 const ai = await import('aiservice');
 const { draftSectionFromEvidence, buildScaffoldContextBlock } = await import('assignai');
 
@@ -113,9 +116,12 @@ console.log(ctx || '(ריק)');
 
 // ---- 2. טיוטה מעוגנת מול ספק אמיתי ----
 console.log('\n===== draftSectionFromEvidence =====');
+const wireBefore = WIRE.length;
 const t0 = Date.now();
 const result = await draftSectionFromEvidence(SECTION, { evidence: EVIDENCE, scaffold: SCAFFOLD });
 const ms = Date.now() - t0;
+console.log(`קריאות API לסעיף הזה: ${countFrom(wireBefore)}`);
+WIRE.slice(wireBefore).forEach((w, i) => console.log(`  ${i + 1}. ${w.url.slice(0, 90)}`));
 
 if (!result.ok) {
   console.log('❌ נכשל:', result.reason);

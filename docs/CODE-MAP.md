@@ -129,6 +129,11 @@
 ### export/docs
 `browserDocxExport.js` 852, `pptxExport.js` 374, `presentationService.js` 221, `pptxDraftService.js` 256, `documentDraftService.js` 195, `documentLayout.js` 77, `fontEmbed.js` 66, `chartService.js` 267, `imageService.js` 235
 
+### שלד מטלה — המסלול בלי מפתח API → [docs/assignment-scaffold.md](assignment-scaffold.md)
+שלב 1 מקומי: `materialChunkStore.js` 487 (קורפוס חומרי עזר + פרובננס + וקטורים), `assignmentSpecService.js` 432 (פרסר הנחיות דטרמיניסטי), `evidenceMatchService.js` 262 (סעיף→ראיות + סף רלוונטיות), `styleOpenerService.js` 214 (פתיחים מהקורפוס האישי), `assignmentPrepService.js` 184 (פנקס local/needs-ai/blocked).
+שלב 2 + מצב: `assignmentAiService.js` 178 (טיוטה מעוגנת + הקשר לסיידבר), `assignmentScaffoldStore.js` 118, `assignmentScaffoldDoc.js` 151.
+ממשק: `components/assignmentScaffold/AssignmentScaffoldStudio.jsx` 512, `EvidencePanel.jsx` 228. טאב "מטלה" ב-Ribbon.
+
 ### שונות
 `copyleaksService.js` 567 (מקוריות/AI-content), `styleAuthenticityService.js` 420 (מזהה AI מקומי), `humanizerLoopService.js` 160, `materialExtractBrowser.js` 133 (חילוץ docx/txt/xlsx/pptx/pdf/OCR בדפדפן), `httpTransport.js` 90, `webProxyService.js` 62, `uiFeedback.js` 202, `documentUpload.js` 113, `chatScope.js` 61
 

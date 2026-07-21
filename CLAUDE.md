@@ -75,6 +75,7 @@ npm run desktop:build # tauri build — installer NSIS + exe -> src-tauri/target
 - [cloudSyncManager.js](src/services/cloudSyncManager.js) — סנכרון ענן בין מכשירים.
 - [workspaceV2Service.js](src/services/workspaceV2Service.js) — templates של workspaces (re-exported דרך aiService).
 - [browserDocxExport.js](src/services/browserDocxExport.js) — ייצוא DOM → .docx בדפדפן.
+- **שלד מטלה (המסלול בלי מפתח API)** — `materialChunkStore` · `assignmentSpecService` · `evidenceMatchService` · `styleOpenerService` · `assignmentPrepService` · `assignmentAiService` · `assignmentScaffoldStore/Doc` + `src/components/assignmentScaffold/`. שלב 1 מקומי (e5 ב-WASM), שלב 2 משלים רק את השאריות. 📄 **[docs/assignment-scaffold.md](docs/assignment-scaffold.md)**
 
 ### `src/firebase/`
 - [config.js](src/firebase/config.js) — Firebase config keys.
@@ -104,6 +105,7 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 
 ## תיעוד קיים ב-`docs/`
 - [docs/CODE-MAP.md](docs/CODE-MAP.md) — **תוכן עניינים מלא של הקוד** (קבצים, שורות, מפות סקשנים למונוליטים, מפת מערכת העזרה).
+- [docs/assignment-scaffold.md](docs/assignment-scaffold.md) — **שלד מטלה**: הארכיטקטורה הדו-שלבית, ספי הרלוונטיות שנמדדו, גוצ'אס (`\b` בעברית, חטיפת ניתוב), ואיך בודקים ב-LAB.
 - [docs/user-guide.md](docs/user-guide.md) — מדריך משתמש.
 - [docs/api-keys-guide.md](docs/api-keys-guide.md) — חיבור מפתחות LLM.
 - planning עדכני: `open-items.md`, `ux-audit-roadmap.md`, `tauri-migration-plan.md`, `autopilot-full-update.md`, `live-streaming-plan.md`, מסמכי SPSS.
