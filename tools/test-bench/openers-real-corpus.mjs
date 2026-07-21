@@ -41,6 +41,7 @@ let netCalls = 0;
 const samples = await import('stylesamples');
 const openers = await import('openersvc');
 const { INTENT_LABELS, parseAssignmentSpec } = await import('specsvc');
+const lex = await import('hebrewlex');
 
 const CORPUS = process.env.WORDAI_CORPUS_OUT
   || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/5dfe23d5-acbf-4f96-9551-9997128f4b6f/scratchpad/real-corpus';
@@ -67,6 +68,28 @@ const stats = samples.getSampleStoreStats();
 console.log(`═══ הקורפוס האישי ═══`);
 console.log(`עבודות שנטענו: ${loaded} (מתוך ${files.length} קבצים)`);
 console.log(`מילים: ${stats.totalWords} · קטעים: ${stats.chunkCount}`);
+
+// מילון חיצוני אופציונלי: WORDAI_WORDLIST=<path>. הרשימה היא זוגות "מילה תדירות".
+// סף התדירות מסנן ערכים נדירים שהם עצמם שמות או שגיאות כתיב.
+const WORDLIST = process.env.WORDAI_WORDLIST || '';
+const MIN_FREQ = Number(process.env.WORDAI_WORDLIST_MIN_FREQ || 50);
+if (WORDLIST) {
+  const rawList = await readFile(WORDLIST, 'utf8');
+  const lines = rawList.split(/\r?\n/);
+  const words = lines.map((l) => {
+    const parts = l.trim().split(/\s+/);
+    return parts[0] && Number(parts[1]) >= MIN_FREQ ? parts[0] : null;
+  }).filter(Boolean);
+  console.log(`\nמילון חיצוני: ${words.length} מילים (מתוך ${lines.length}, סף ${MIN_FREQ})`);
+  lex.mergeExternalWordlist(words);
+}
+
+console.log(`
+═══ המילון מהקורפוס ═══`);
+console.log(JSON.stringify(lex.lexiconStats()));
+// דגימה: האם המילון מבחין נכון בין שם פרטי למילת שפה?
+['הייג','הדסה','האגודה','ניתן','לראות','תקשורת','משבר','עצומה','לסיכום']
+  .forEach((w) => console.log(`   ${w.padEnd(10)} df=${String(lex.documentFrequency(w)).padStart(3)}  ${lex.isCommonWord(w) ? 'מילת שפה' : '← נדיר / שם'}`));
 
 // ---- כריית הפתיחים ----
 await openers.ensureOpenersReady();

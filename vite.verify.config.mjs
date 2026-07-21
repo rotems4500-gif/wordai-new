@@ -70,6 +70,7 @@ export default defineConfig({
     specsvc: path.join(PROJECT, 'src/services/assignmentSpecService.js'),
     cryptosession: path.join(PROJECT, 'src/services/cloudCryptoSession.js'),
     openersvc: path.join(PROJECT, 'src/services/styleOpenerService.js'),
+    hebrewlex: path.join(PROJECT, 'src/services/hebrewLexiconService.js'),
     cloudcrypto: path.join(PROJECT, 'src/services/cloudCrypto.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     // Personal Style Engine services (LAB style-engine endpoints).

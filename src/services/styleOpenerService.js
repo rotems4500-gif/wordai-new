@@ -15,6 +15,7 @@
 
 import { getChunks, ensureSampleStoreReady, STYLE_SAMPLES_UPDATED_EVENT } from './styleSampleStore';
 import { detectIntent } from './assignmentSpecService';
+import { containsRareToken, isReady as lexiconReady } from './hebrewLexiconService';
 
 const OPENER_MIN_WORDS = 3;
 const OPENER_MAX_WORDS = 9;
@@ -53,6 +54,10 @@ function isContentBearing(opener, paragraph = '') {
   if (/\d/.test(s)) return true;                    // מספרים = נתון ספציפי
   if (/[A-Za-z]{3,}/.test(s)) return true;          // שם כלי/מוסד לועזי
   if (/["'״׳]/.test(s)) return true;                // ציטוט או שם בגרשיים
+  // שם פרטי בעברית ("הייג והרופ", "הדסה") — אין אות גדולה שתסגיר אותו, ולכן
+  // ההכרעה היא סטטיסטית: מילה שמופיעה בקומץ מסמכים בלבד היא שם/מונח ייחודי.
+  // fail-open — בקורפוס קטן מדי הבדיקה מושבתת ולא פוסלת כלום.
+  if (lexiconReady() && containsRareToken(s)) return true;
   return false;
 }
 
