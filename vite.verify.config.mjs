@@ -20,6 +20,10 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/gap-source-harness.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'whole'
     ? 'tools/test-bench/whole-work-harness.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'quota'
+    ? 'tools/test-bench/quota-probe.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'review'
+    ? 'tools/test-bench/review-unit.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -29,7 +33,9 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
     : process.env.WORDAI_VERIFY_ENTRY === 'gap' ? 'out-gap'
-      : process.env.WORDAI_VERIFY_ENTRY === 'whole' ? 'out-whole' : 'out-sf';
+      : process.env.WORDAI_VERIFY_ENTRY === 'whole' ? 'out-whole'
+        : process.env.WORDAI_VERIFY_ENTRY === 'quota' ? 'out-quota'
+          : process.env.WORDAI_VERIFY_ENTRY === 'review' ? 'out-review' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -45,6 +51,7 @@ export default defineConfig({
     prepsvc: path.join(PROJECT, 'src/services/assignmentPrepService.js'),
     pagetext: path.join(PROJECT, 'src/services/pageTextFetch.js'),
     scaffolddoc: path.join(PROJECT, 'src/services/assignmentScaffoldDoc.js'),
+    review: path.join(PROJECT, 'src/services/assignmentReviewService.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     // Personal Style Engine services (LAB style-engine endpoints).
     styleprofile: path.join(PROJECT, 'src/services/styleProfileService.js'),

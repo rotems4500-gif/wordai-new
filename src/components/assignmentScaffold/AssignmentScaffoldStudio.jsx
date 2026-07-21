@@ -26,6 +26,8 @@ import {
 import { buildScaffoldHtml, buildWholeWorkHtml } from '../../services/assignmentScaffoldDoc';
 import { draftWholeWork } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
+import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
+import WorkReviewDialog from './WorkReviewDialog';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
 
 const revealClass = (mounted, extra = '') => (
@@ -56,6 +58,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const [notice, setNotice] = React.useState(null);
   const [evidenceResult, setEvidenceResult] = React.useState(null);
   const [dropActive, setDropActive] = React.useState(false);
+  // הטיוטה ממתינה לאישור: נכתבה, נסקרה, וטרם נכנסה לעורך.
+  const [pendingDraft, setPendingDraft] = React.useState(null);
+  const [review, setReview] = React.useState(null);
 
   const instructionInputRef = React.useRef(null);
   const materialsInputRef = React.useRef(null);
@@ -214,33 +219,71 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
         setNotice({ tone: 'err', text: draft.reason });
         return;
       }
-      // שומרים את השלד לפני הפתיחה — פאנל הראיות בעורך קורא ממנו.
-      saveScaffold({
-        spec,
-        evidence: evidenceResult?.bySection || {},
-        gaps: evidenceResult?.gaps || [],
-        mode: evidenceResult?.mode || 'none',
-        title: spec.title,
-      });
-      onOpenDocument?.({
-        ok: true,
-        html: buildWholeWorkHtml(spec, draft),
-        title: spec.title || 'מטלה',
-        source: 'assignment-scaffold-draft',
-      });
-      const blockedNote = draft.blocked.length
-        ? ` ${draft.blocked.length} סעיפים נותרו חסומים וסומנו במסמך.`
-        : '';
-      setNotice({
-        tone: 'ok',
-        text: `נכתבו ${draft.sections.length} סעיפים מ-${draft.usedEvidence} ראיות, בקריאה אחת.${blockedNote}`,
-      });
+      // לא נכנס ישר לעורך: קודם סבב תיקונים. הסקירה עצמה חינם (אפס קריאות),
+      // והליטוש רץ רק אם המשתמש בוחר אותו שם.
+      setPendingDraft(draft);
+      setReview(reviewDraft(spec, draft, { evidenceBySection: evidenceResult?.bySection || {} }));
     } catch (err) {
       setNotice({ tone: 'err', text: String(err?.message || err) });
     } finally {
       setBusy('');
     }
-  }, [spec, evidenceResult, onOpenDocument]);
+  }, [spec, evidenceResult]);
+
+  // אישור מתוך דיאלוג הסקירה: מריץ את הליטוש שנבחר (אם נבחר) ופותח בעורך.
+  const handleApproveDraft = React.useCallback(async (mode) => {
+    if (!spec || !pendingDraft) return;
+    let html = buildWholeWorkHtml(spec, pendingDraft);
+    const notes = [];
+
+    if (mode && mode !== FINISHING_PASSES.NONE) {
+      setBusy('מלטש…');
+      try {
+        const polished = await applyFinishingPasses(html, {
+          mode,
+          onProgress: (stage) => setBusy(stage === 'style' ? 'מעבר סגנון…' : 'מעבר אנטי-גלאי…'),
+        });
+        html = polished.html;
+        if (polished.style?.score != null) notes.push(`סגנון: ${polished.style.score}`);
+        if (polished.humanize?.score != null) {
+          notes.push(`גלאי: ${polished.humanize.score}${polished.humanize.hitTarget ? ' ✓' : ''}`);
+        }
+        // כישלון של מעבר אינו מבטל את העבודה — אבל המשתמש חייב לדעת עליו.
+        if (polished.style?.error) notes.push(`מעבר הסגנון נכשל: ${polished.style.error}`);
+        if (polished.humanize?.error) notes.push(`מעבר האנטי-גלאי נכשל: ${polished.humanize.error}`);
+      } catch (err) {
+        setNotice({ tone: 'err', text: String(err?.message || err) });
+        setBusy('');
+        return;
+      } finally {
+        setBusy('');
+      }
+    }
+
+    // שומרים את השלד לפני הפתיחה — פאנל הראיות בעורך קורא ממנו.
+    saveScaffold({
+      spec,
+      evidence: evidenceResult?.bySection || {},
+      gaps: evidenceResult?.gaps || [],
+      mode: evidenceResult?.mode || 'none',
+      title: spec.title,
+    });
+    onOpenDocument?.({
+      ok: true,
+      html,
+      title: spec.title || 'מטלה',
+      source: 'assignment-scaffold-draft',
+    });
+    setPendingDraft(null);
+    setReview(null);
+    const blockedNote = pendingDraft.blocked.length
+      ? ` ${pendingDraft.blocked.length} סעיפים נותרו חסומים וסומנו במסמך.`
+      : '';
+    setNotice({
+      tone: 'ok',
+      text: `נכתבו ${pendingDraft.sections.length} סעיפים מ-${pendingDraft.usedEvidence} ראיות, בקריאה אחת.${blockedNote}${notes.length ? ` (${notes.join(' · ')})` : ''}`,
+    });
+  }, [spec, pendingDraft, evidenceResult, onOpenDocument]);
 
   // ---------- עריכת סעיפים ----------
 
@@ -640,6 +683,27 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
           </div>
         </div>
       </div>
+
+      {review && pendingDraft && (
+        <WorkReviewDialog
+          spec={spec}
+          review={review}
+          draft={pendingDraft}
+          busy={busy}
+          onApprove={handleApproveDraft}
+          onCancel={() => { setPendingDraft(null); setReview(null); }}
+          onFixSources={() => {
+            // חיפוש המקורות עצמו חי בפאנל הראיות שבעורך, שם יש הקשר של סעיף
+            // וסמן. מכאן רק מפנים לשם במקום לשכפל את הזרימה.
+            setPendingDraft(null);
+            setReview(null);
+            setNotice({
+              tone: 'warn',
+              text: 'פתח את השלד בעורך וחפש מקורות לסעיף מתוך פאנל הראיות, ואז חזור לכתוב.',
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
