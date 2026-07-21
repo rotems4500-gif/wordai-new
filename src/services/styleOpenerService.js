@@ -7,7 +7,7 @@
 // למה זה עובד בלי מודל: הבעיה של "דף ריק" היא בעיקר בעיית *התחלה*. משפט פתיחה
 // בקול שלך שובר את החסם, וההמשך כבר שלו.
 //
-// אמון: פתיח נשמר רק אם הביגרם הפותח שלו חוזר בקורפוס (MIN_PREFIX_COUNT) — ביטוי
+// אמון: פתיח נשמר רק אם הביגרם הפותח שלו חוזר בקורפוס (MIN_PREFIX_DOCS) — ביטוי
 // שהופיע פעם אחת אינו הרגל כתיבה. זה הלקח מ-v1 של styleAutocompleteService, שם
 // דרישת חזרה מילה-במילה על *כל* הרצף פסלה כמעט כל שאילתה.
 //
@@ -18,7 +18,9 @@ import { detectIntent } from './assignmentSpecService';
 
 const OPENER_MIN_WORDS = 3;
 const OPENER_MAX_WORDS = 9;
-const MIN_PREFIX_COUNT = 2;   // הביגרם הפותח חייב לחזור
+// הביגרם הפותח חייב להופיע ב**שני מסמכים** לפחות — חזרה בתוך מסמך אחד היא
+// תבנית של אותה עבודה ולא הרגל כתיבה.
+const MIN_PREFIX_DOCS = 2;
 const MAX_PER_INTENT = 5;
 const MIN_PARAGRAPHS_TO_TRY = 4;  // מתחת לזה אין טעם אפילו לנסות
 // שער האיכות הוא *מספר הפתיחים החוזרים שנמצאו*, לא נפח הקורפוס: ביגרם פותח שחוזר
@@ -30,6 +32,29 @@ const WORD_RE = /[֐-׿A-Za-z0-9'"׳״-]+/g;
 
 // פתיחים גנריים שאינם מלמדים כלום על הקול האישי.
 const BANNED_OPENERS = /^(?:זה|זאת|הוא|היא|הם|הן|יש|אין|כמו כן|בנוסף|לכן|אבל|אז)\b/;
+
+// ביטויים שאינם ניסוח אלא הצהרה תפעולית של מסמך — אסור להציע אותם כפתיחה.
+const PROCEDURAL_OPENER = /(?:הצהרת\s*AI|אני\s*מצהיר|נעזרתי\s*ב|בסיוע\s*מודל|בינה\s*מלאכות|שם\s*הקורס|מספר\s*הקורס|תעודת\s*זהות|מגיש[יה]?\s*העבודה|רשימה\s*ביבליוגרפית|הוגש\s*ל)/i;
+
+/**
+ * האם הפתיח נושא **תוכן** ולא רק ניסוח.
+ *
+ * זה השומר החשוב ביותר כאן. פתיח אמור להיות פיגום ריק שאפשר להמשיך ממנו בכל
+ * נושא; ברגע שהוא כולל מספר, שם כלי מחקר או ראשי תיבות לועזיים, הוא גורר איתו
+ * עובדות מעבודה אחרת. נמדד על הקורפוס האמיתי: "הגדרה אופרציונלית המשתנה יימדד
+ * באמצעות שאלה 111 בשאלון INES" הוצע כפתיחה לסעיף ניתוח בכל מטלה שהיא —
+ * כלומר שתילת נתון שמעולם לא היה במטלה הנוכחית.
+ */
+function isContentBearing(opener, paragraph = '') {
+  const s = String(opener || '');
+  // הבדיקה התפעולית רצה על **הפסקה המלאה**: הפתיח נחתך ל-9 מילים, וחיתוך
+  // באמצע ביטוי ("נעזרתי בבינה | מלאכותית") ניצח את הפילטר בהרצה הקודמת.
+  if (PROCEDURAL_OPENER.test(s) || PROCEDURAL_OPENER.test(String(paragraph || ''))) return true;
+  if (/\d/.test(s)) return true;                    // מספרים = נתון ספציפי
+  if (/[A-Za-z]{3,}/.test(s)) return true;          // שם כלי/מוסד לועזי
+  if (/["'״׳]/.test(s)) return true;                // ציטוט או שם בגרשיים
+  return false;
+}
 
 // סיווג לפי *הפתיח עצמו*. סיווג לפי הפסקה כולה שביר: מילה אחת באמצע ("...בתחילת
 // הדיון") מטה פסקת סיכום ל'ניתוח'. המשפט הפותח הוא שקובע את התפקיד הרטורי של
@@ -82,7 +107,7 @@ function extractOpener(paragraph) {
 
 // שני ספים בכוונה. ספירת ההרגל צריכה לראות *כל* פסקה שיש לה פתיחה — פסקה קצרה
 // שפותחת ב"לסיכום הפרק" היא ראיה מלאה להרגל. ההצעה עצמה נלקחת רק מפסקאות
-// מהותיות. איחוד שני הספים הוא באג: הוא הוריד ביגרמים אמיתיים מתחת ל-MIN_PREFIX_COUNT
+// מהותיות. איחוד שני הספים הוא באג: הוא הוריד ביגרמים אמיתיים מתחת ל-MIN_PREFIX_DOCS
 // ומחק כוונות שלמות (conclusion/method) מהאינדקס.
 const PARA_MIN_FOR_COUNT = 8;
 const PARA_MIN_FOR_OFFER = 18;
@@ -91,35 +116,46 @@ function buildIndex() {
   const chunks = getChunks();
   const allParagraphs = [];
   chunks.forEach((chunk) => {
+    // מזהה המסמך נשמר לכל פסקה: "הרגל" נמדד בכמה עבודות הביטוי מופיע, לא בכמה
+    // פעמים. נמדד על הקורפוס האמיתי — "הגדרה נומינלית" חזר 8 פעמים בעבודה אחת
+    // בשיטות מחקר וטיפס לראש כל הכוונות, כולל מבוא וסקירת ספרות. זו תבנית של
+    // מסמך בודד, לא קול אישי.
+    const docId = chunk?.documentId || chunk?.docId || chunk?.sourceTitle || 'unknown';
     String(chunk?.text || '')
       .split(/\n{2,}/)
       .map((p) => p.trim())
       .filter((p) => countWords(p) >= PARA_MIN_FOR_COUNT)
-      .forEach((p) => allParagraphs.push(p));
+      .forEach((p) => allParagraphs.push({ text: p, docId }));
   });
-  const paragraphs = allParagraphs.filter((p) => countWords(p) >= PARA_MIN_FOR_OFFER);
+  const paragraphs = allParagraphs.filter((p) => countWords(p.text) >= PARA_MIN_FOR_OFFER);
 
   const byIntent = {};
   if (paragraphs.length < MIN_PARAGRAPHS_TO_TRY) {
     return { byIntent, paragraphs: paragraphs.length, total: 0, sparse: true };
   }
 
-  // ספירת ביגרמים פותחים על פני כל הקורפוס — מדד ה"הרגל".
-  const bigramCount = new Map();
-  allParagraphs.forEach((p) => {
-    const words = p.match(WORD_RE) || [];
+  // מדד ה"הרגל" = בכמה **מסמכים נפרדים** מופיע הביגרם הפותח.
+  const bigramDocs = new Map();
+  allParagraphs.forEach(({ text, docId }) => {
+    const words = text.match(WORD_RE) || [];
     if (words.length < 2) return;
     const bg = `${words[0]} ${words[1]}`.toLowerCase();
-    bigramCount.set(bg, (bigramCount.get(bg) || 0) + 1);
+    if (!bigramDocs.has(bg)) bigramDocs.set(bg, new Set());
+    bigramDocs.get(bg).add(docId);
   });
+  const docFreq = (bg) => (bigramDocs.get(bg)?.size || 0);
 
   const seen = new Set();
-  paragraphs.forEach((p) => {
+  paragraphs.forEach(({ text: p }) => {
+    // בלוק בלי סימן פיסוק סוגר אינו פסקה אלא כותרת/עמוד שער. נמדד: "המכללה
+    // האקדמית הדסה החוג לפוליטיקה ותקשורת במסגרת הקורס" הוצע כפתיחה לסעיף.
+    if (!/[.!?…]/.test(p)) return;
     const opener = extractOpener(p);
     if (!opener) return;
+    if (isContentBearing(opener, p)) return;
     const words = opener.match(WORD_RE) || [];
     const bg = `${words[0]} ${words[1]}`.toLowerCase();
-    if ((bigramCount.get(bg) || 0) < MIN_PREFIX_COUNT) return;
+    if (docFreq(bg) < MIN_PREFIX_DOCS) return;
 
     const key = opener.toLowerCase();
     if (seen.has(key)) return;
@@ -127,7 +163,7 @@ function buildIndex() {
 
     const intent = classifyOpener(opener, p);
     if (!byIntent[intent]) byIntent[intent] = [];
-    byIntent[intent].push({ text: opener, weight: bigramCount.get(bg) });
+    byIntent[intent].push({ text: opener, weight: docFreq(bg) });
   });
 
   let total = 0;
@@ -193,12 +229,16 @@ export function getOpenersForIntent(intent, { limit = 3 } = {}) {
 
   // נפילה לכוונה שכנה מוגבלת לפריט אחד: פתיח ממשפחה אחרת הוא עדיף על רשימה ריקה,
   // אבל רשימה שרובה "מ-הצגה" רק מרעישה ומאבדת אמון.
+  //
+  // ⚠️ הנפילה חייבת להיות **מסומנת**. נמדד: פתיח מתודולוגי מ'הצגה' הוצע כפתיחה
+  // ל'מבוא' ול'סקירת ספרות' בלי שום סימן שהוא לא משם — והמשתמש מקבל משפט
+  // שנשמע כמוהו אבל שייך לסוג פסקה אחר לגמרי. `borrowed` מאפשר ל-UI לומר זאת.
   const fallbackCap = Math.min(limit, out.length + 1);
   for (const alt of (FALLBACK[intent] || [])) {
     if (out.length >= fallbackCap) break;
     push(index.byIntent[alt], alt, fallbackCap);
   }
-  return out;
+  return out.map((o) => (o.fromIntent === intent ? o : { ...o, borrowed: true }));
 }
 
 /** מצב האינדקס לתצוגה ב-UI. */

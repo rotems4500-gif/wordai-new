@@ -30,6 +30,10 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/device-key-unit.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'realinstr'
     ? 'tools/test-bench/real-instructions-probe.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'preview'
+    ? 'tools/test-bench/scaffold-preview.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'openers'
+    ? 'tools/test-bench/openers-real-corpus.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -44,7 +48,9 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
           : process.env.WORDAI_VERIFY_ENTRY === 'review' ? 'out-review'
             : process.env.WORDAI_VERIFY_ENTRY === 'e2e' ? 'out-e2e'
               : process.env.WORDAI_VERIFY_ENTRY === 'devkey' ? 'out-devkey'
-                : process.env.WORDAI_VERIFY_ENTRY === 'realinstr' ? 'out-realinstr' : 'out-sf';
+                : process.env.WORDAI_VERIFY_ENTRY === 'realinstr' ? 'out-realinstr'
+                  : process.env.WORDAI_VERIFY_ENTRY === 'preview' ? 'out-preview'
+                    : process.env.WORDAI_VERIFY_ENTRY === 'openers' ? 'out-openers' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -63,6 +69,7 @@ export default defineConfig({
     review: path.join(PROJECT, 'src/services/assignmentReviewService.js'),
     specsvc: path.join(PROJECT, 'src/services/assignmentSpecService.js'),
     cryptosession: path.join(PROJECT, 'src/services/cloudCryptoSession.js'),
+    openersvc: path.join(PROJECT, 'src/services/styleOpenerService.js'),
     cloudcrypto: path.join(PROJECT, 'src/services/cloudCrypto.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     // Personal Style Engine services (LAB style-engine endpoints).
