@@ -189,6 +189,8 @@ export async function findEvidenceForSection(section, {
       sourceTitle: s.chunk.sourceTitle,
       pageHint: s.chunk.pageHint,
       sectionHint: s.chunk.sectionHint,
+      sourceUrl: s.chunk.sourceUrl || null,
+      strength: s.chunk.strength || 'full',
       text: s.chunk.text,
       score: Number(s.score.toFixed(3)),
       scale: s.scale,
@@ -236,6 +238,9 @@ export function formatProvenance(item) {
   const parts = [String(item?.sourceTitle || '').trim()];
   if (item?.pageHint) parts[0] = `${parts[0]}, עמ' ${item.pageHint}`;
   if (item?.sectionHint) parts.push(item.sectionHint);
+  // ראיה שנפלה לתקציר מסומנת גם בפאנל וגם בבלוק שנשלח למודל — כדי שלא תיקרא
+  // כאילו היא הטקסט המלא של המאמר.
+  if (item?.strength === 'abstract') parts.push('תקציר בלבד');
   return parts.filter(Boolean).join(' · ');
 }
 

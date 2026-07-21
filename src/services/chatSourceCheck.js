@@ -9,14 +9,15 @@
 // האחזור של סוכני sources/holeFill ואסור לחטוף אותה כאן.
 
 import { verifyUrls, isGoogleGroundingRedirectUrl } from './sourceRetrieval/urlVerifier';
+import { fetchPagesText, setPageTextTransport, PAGE_TEXT_TIMEOUT_MS } from './pageTextFetch';
 import { classifySourceIntent } from './sourceIntent';
 import { extractDomainFromUrl, isKnownNewsDomain, isUniversallyBlockedSourceDomain } from './articleSourceValidation';
 
 export const CHAT_SOURCE_CHECK_MAX_URLS = 8;
 // קריאת תוכן היא היקרה בשרשרת — קוראים רק את העמודים החיים הראשונים.
 export const CHAT_SOURCE_CONTENT_MAX_PAGES = 3;
-const PAGE_TEXT_TIMEOUT_MS = 8000;
-const WEB_FETCH_PAGE_ENDPOINT = '/api/fetch-page-text';
+// re-export לתאימות אחורה — הטרנספורט משותף, מזריקים אותו מכאן או מ-pageTextFetch.
+export { setPageTextTransport, PAGE_TEXT_TIMEOUT_MS };
 const EXCERPT_MAX_COUNT = 3;
 const EXCERPT_MAX_CHARS = 500;
 
@@ -69,61 +70,9 @@ export const detectSourceCheckRequest = (promptText = '', {
 };
 
 // ── קריאת תוכן העמוד (חשיבה: לקשר את המקור לטענה, לא רק "חי/מת") ────────────
-
-let injectedPageTextTransport = null;
-// transport(urls, {signal, timeoutMs}) → [{url, ok, status, finalUrl, title, text}]
-export const setPageTextTransport = (transport) => {
-  injectedPageTextTransport = typeof transport === 'function' ? transport : null;
-};
-
-const emptyPageResult = (url, error = 'unavailable') => ({ url, ok: false, status: 0, finalUrl: '', title: '', text: '', error });
-
+// הטרנספורט עצמו חי ב-pageTextFetch.js (משותף עם gapSourceService).
 // fail-open: כשל בקריאת תוכן לא מפיל את הבדיקה — המקור נשאר עם verdict חיות בלבד
 // והמודל מונחה לומר שהתוכן לא נקרא.
-const fetchPagesText = async (urls = [], { signal } = {}) => {
-  const safeUrls = (Array.isArray(urls) ? urls : []).map((url) => String(url || '').trim()).filter(Boolean);
-  if (!safeUrls.length) return [];
-  if (injectedPageTextTransport) {
-    try {
-      return await injectedPageTextTransport(safeUrls, { signal, timeoutMs: PAGE_TEXT_TIMEOUT_MS });
-    } catch {
-      return safeUrls.map((url) => emptyPageResult(url));
-    }
-  }
-  if (typeof window !== 'undefined' && window.desktopApp?.fetchPageText) {
-    return Promise.all(safeUrls.map(async (url) => {
-      try {
-        const result = await window.desktopApp.fetchPageText({ url, timeoutMs: PAGE_TEXT_TIMEOUT_MS });
-        return { url, ok: Boolean(result?.ok), status: Number(result?.status) || 0, finalUrl: result?.finalUrl || '', title: String(result?.title || ''), text: String(result?.text || ''), error: String(result?.error || '') };
-      } catch {
-        return emptyPageResult(url);
-      }
-    }));
-  }
-  if (typeof fetch !== 'undefined') {
-    try {
-      const response = await fetch(WEB_FETCH_PAGE_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls: safeUrls }),
-        signal,
-      });
-      const payload = response.ok ? await response.json().catch(() => null) : null;
-      const returned = payload && Array.isArray(payload.results) ? payload.results : null;
-      if (!returned) return safeUrls.map((url) => emptyPageResult(url));
-      const byUrl = new Map(returned.map((item) => [item?.url, item]));
-      return safeUrls.map((url) => {
-        const item = byUrl.get(url);
-        return item
-          ? { url, ok: Boolean(item.ok), status: Number(item.status) || 0, finalUrl: item.finalUrl || '', title: String(item.title || ''), text: String(item.text || ''), error: String(item.error || '') }
-          : emptyPageResult(url);
-      });
-    } catch {
-      return safeUrls.map((url) => emptyPageResult(url));
-    }
-  }
-  return safeUrls.map((url) => emptyPageResult(url));
-};
 
 // מפרק טענה למילות-מפתח משמעותיות (עברית/אנגלית/מספרים) להשוואה מול תוכן העמוד.
 const extractClaimKeywords = (claimText = '') => {

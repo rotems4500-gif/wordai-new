@@ -320,8 +320,13 @@ export function hasMaterialText(text) {
 /**
  * חותך חומר עזר ל-chunks עם פרובננס ומצרף לאינדקס. dedupe לפי hash תוכן.
  *
+ * strength: 'full' = נמשך גוף העמוד. 'abstract' = רק תקציר/snippet (נפילה מכוונת
+ * כשמשיכת העמוד נכשלה) — נשמר, אבל מסומן כך שגם הפאנל וגם הפרומפט יידעו שזו
+ * ראיה חלשה ולא הטקסט המלא.
+ *
  * @param {{title?:string, text:string, source?:string, projectId?:string|null,
- *          kind?:string, materialKey?:string|null}} args
+ *          kind?:string, materialKey?:string|null, sourceUrl?:string|null,
+ *          strength?:('full'|'abstract')}} args
  * @returns {{materialId:(string|null), added:number, skipped:boolean}}
  */
 export function addMaterialDocument({
@@ -331,6 +336,8 @@ export function addMaterialDocument({
   projectId = null,
   kind = 'course-materials',
   materialKey = null,
+  sourceUrl = null,
+  strength = 'full',
 } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return { materialId: null, added: 0, skipped: false };
@@ -347,6 +354,8 @@ export function addMaterialDocument({
 
   const pageMarks = buildPageMap(raw);
   const addedAt = nowTs();
+  const safeSourceUrl = String(sourceUrl || '').trim() || null;
+  const safeStrength = strength === 'abstract' ? 'abstract' : 'full';
 
   // charStart: חיפוש קדימה בלבד (cursor) — chunkText שומר על סדר המקור, ולכן
   // indexOf מהמיקום האחרון מוצא את המופע הנכון גם כשקטע חוזר על עצמו.
@@ -366,6 +375,8 @@ export function addMaterialDocument({
       charStart,
       pageHint: pageAtOffset(pageMarks, charStart),
       sectionHint: sectionForChunk(raw, piece, charStart),
+      sourceUrl: safeSourceUrl,
+      strength: safeStrength,
       addedAt,
       vec: null,      // base64 int8 — ממולא ע"י putMaterialVectors
       vecSig: null,   // חתימת המודל, כדי לפסול וקטורים ממודל ישן
@@ -383,6 +394,8 @@ export function addMaterialDocument({
     projectId,
     kind,
     materialKey, // מקשר לרשומה ב-wordai_browser_uploaded_materials
+    sourceUrl: safeSourceUrl,
+    strength: safeStrength,
   };
 
   const caps = blob.caps;

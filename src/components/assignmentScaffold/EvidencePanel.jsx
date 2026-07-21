@@ -12,6 +12,7 @@
 import React from 'react';
 import {
   readScaffold,
+  saveScaffold,
   clearScaffold,
   SCAFFOLD_UPDATED_EVENT,
 } from '../../services/assignmentScaffoldStore';
@@ -26,6 +27,20 @@ import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpe
 import { INTENT_LABELS } from '../../services/assignmentSpecService';
 import { draftSectionFromEvidence } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
+import { fillGapAndRematch } from '../../services/gapSourceService';
+
+const GAP_STAGE_LABELS = {
+  search: '🔎 מחפש מקורות…',
+  fetch: '📄 מושך את העמודים…',
+  embed: '🧠 מוסיף לאינדקס…',
+  done: '✓ סיום',
+};
+
+const GAP_FAIL_LABELS = {
+  'no-query': 'אין מספיק טקסט בסעיף כדי לבנות שאילתת חיפוש. הוסף כותרת או הנחיה.',
+  'no-results': 'לא נמצאו מקורות לשאילתה הזו.',
+  'nothing-usable': 'נמצאו מקורות, אך לא הצלחנו למשוך מהם טקסט שמיש.',
+};
 
 export default function EvidencePanel({ editor, onClose }) {
   const [scaffold, setScaffold] = React.useState(() => readScaffold());
@@ -117,6 +132,49 @@ export default function EvidencePanel({ editor, onClose }) {
       setDraftError(String(err?.message || err));
     } finally {
       setDrafting(false);
+    }
+  };
+
+  // סגירת פער: חיפוש מקורות → משיכת טקסט → אינדקס → שיוך מחדש. אפס קריאות למודל
+  // שפה, ולכן אפשר להריץ שוב ושוב בלי עלות.
+  const [gapStage, setGapStage] = React.useState(null);
+  const [gapResult, setGapResult] = React.useState(null);
+
+  const fillGap = async () => {
+    if (!section || gapStage) return;
+    setGapStage('search');
+    setGapResult(null);
+    try {
+      const res = await fillGapAndRematch(section, {
+        spec: scaffold.spec,
+        onProgress: (stage) => setGapStage(stage),
+      });
+      if (!res.ok) {
+        setGapResult({ ok: false, message: GAP_FAIL_LABELS[res.reason] || `החיפוש נכשל (${res.reason}).`, query: res.query });
+        return;
+      }
+      // כתיבה חזרה ל-scaffold מפעילה את SCAFFOLD_UPDATED_EVENT, וה-panel מתרענן.
+      const current = readScaffold();
+      saveScaffold({
+        ...current,
+        evidence: { ...(current.evidence || {}), [section.id]: res.evidence },
+        gaps: (current.gaps || []).filter((id) => id !== section.id),
+        // כשה-scaffold מוגבל לחומרים מסוימים, מקור חדש שלא יתווסף לרשימה
+        // ייעלם בשיוך הבא. null = בלי הגבלה, ואז אין מה לעדכן.
+        materialIds: Array.isArray(current.materialIds)
+          ? [...new Set([...current.materialIds, ...res.ingested.map((s) => s.materialId)])]
+          : current.materialIds,
+      });
+      setGapResult({
+        ok: true,
+        query: res.query,
+        ingested: res.ingested,
+        evidenceCount: res.evidence?.evidence?.length || 0,
+      });
+    } catch (err) {
+      setGapResult({ ok: false, message: String(err?.message || err) });
+    } finally {
+      setGapStage(null);
     }
   };
 
@@ -225,8 +283,34 @@ export default function EvidencePanel({ editor, onClose }) {
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 <div className="font-bold">אין חומר תומך לסעיף הזה.</div>
                 <div className="mt-1 leading-relaxed">
-                  לא נמצא בחומרים שהעלית קטע רלוונטי. שקול להעלות מקור נוסף, או לצמצם את הסעיף.
+                  לא נמצא בחומרים שהעלית קטע רלוונטי. אפשר לחפש מקור ברשת, להעלות מקור בעצמך, או לצמצם את הסעיף.
                 </div>
+
+                <button
+                  type="button"
+                  onClick={fillGap}
+                  disabled={Boolean(gapStage)}
+                  className="mt-2 w-full rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 disabled:opacity-60"
+                >
+                  {gapStage ? GAP_STAGE_LABELS[gapStage] || 'עובד…' : '🔎 חפש מקורות לסעיף הזה'}
+                </button>
+                <div className="mt-1 text-[10px] leading-relaxed text-amber-700/80">
+                  חיפוש ומשיכת עמודים בלבד — לא נכתב כאן טקסט. (אם אין מנוי Scholar/Perplexity,
+                  שלב החיפוש נופל ל-Google Search דרך Gemini — קריאה אחת קצרה.)
+                </div>
+
+                {gapResult && !gapResult.ok && (
+                  <div className="mt-1.5 rounded-lg bg-white/70 px-2 py-1 text-[11px] text-amber-900">
+                    {gapResult.message}
+                    {gapResult.query && <div className="mt-0.5 text-[10px] text-amber-700/70">שאילתה: {gapResult.query}</div>}
+                  </div>
+                )}
+                {gapResult?.ok && gapResult.evidenceCount === 0 && (
+                  <div className="mt-1.5 rounded-lg bg-white/70 px-2 py-1 text-[11px] text-amber-900">
+                    נוספו {gapResult.ingested.length} מקורות, אך אף אחד מהם לא עבר את סף הרלוונטיות לסעיף.
+                  </div>
+                )}
+
                 {aiAvailable && (
                   <div className="mt-1.5 border-t border-amber-200 pt-1.5 text-[11px]">
                     כתיבה בלי מקורות לא תוצע כאן — היא הייתה המצאה.
@@ -235,6 +319,17 @@ export default function EvidencePanel({ editor, onClose }) {
               </div>
             ) : (
               <ul className="space-y-2">
+                {gapResult?.ok && gapResult.evidenceCount > 0 && (
+                  <li className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5 text-[11px] text-emerald-800">
+                    <span className="font-bold">הפער נסגר.</span>{' '}
+                    נוספו {gapResult.ingested.length} מקורות מהרשת ({gapResult.evidenceCount} ראיות לסעיף).
+                    {gapResult.ingested.some((s) => s.strength === 'abstract') && (
+                      <div className="mt-0.5 text-emerald-700/80">
+                        חלק מהעמודים לא נמשכו במלואם — אותם מקורות נשמרו כתקציר ומסומנים ככאלה.
+                      </div>
+                    )}
+                  </li>
+                )}
                 {evidence.map((item) => {
                   const open = expanded === item.chunkId;
                   return (
