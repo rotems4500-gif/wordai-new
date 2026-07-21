@@ -1,0 +1,228 @@
+// EvidencePanel — פאנל הראיות החי, מעוגן לצד העורך.
+//
+// עוקב אחרי הכותרת שהסמן נמצא מתחתיה ומציג את הראיות של אותו סעיף: ציטוט אמיתי
+// מהחומרים של המשתמש + פרובננס, מד התקדמות מול מכסת המילים, וסימון פער כשאין חומר.
+//
+// הכל מקומי — הראיות חושבו מראש בסטודיו ונשמרו ב-assignmentScaffoldStore. הפאנל
+// עצמו לא מריץ retrieval, ולכן הוא מיידי ולא עולה כלום.
+//
+// למה polling ולא event: TipTap לא משדר אירוע "הסמן עבר סעיף". מאזינים ל-selectionUpdate
+// של העורך, ובנוסף לאירוע העדכון של החנות.
+
+import React from 'react';
+import {
+  readScaffold,
+  clearScaffold,
+  SCAFFOLD_UPDATED_EVENT,
+} from '../../services/assignmentScaffoldStore';
+import {
+  findSectionAtCursor,
+  countSectionWords,
+  buildQuoteHtml,
+  insertReplacingQuotaHint,
+} from '../../services/assignmentScaffoldDoc';
+import { formatProvenance } from '../../services/evidenceMatchService';
+import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpenerService';
+import { INTENT_LABELS } from '../../services/assignmentSpecService';
+
+export default function EvidencePanel({ editor, onClose }) {
+  const [scaffold, setScaffold] = React.useState(() => readScaffold());
+  const [current, setCurrent] = React.useState(null);
+  const [wordsWritten, setWordsWritten] = React.useState(0);
+  const [expanded, setExpanded] = React.useState(null);
+
+  React.useEffect(() => {
+    const sync = () => setScaffold(readScaffold());
+    window.addEventListener(SCAFFOLD_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(SCAFFOLD_UPDATED_EVENT, sync);
+  }, []);
+
+  // מעקב אחרי הסמן. selectionUpdate מכסה תזוזת סמן, update מכסה הקלדה (למד המילים).
+  React.useEffect(() => {
+    if (!editor || !scaffold?.spec) return undefined;
+    const refresh = () => {
+      const hit = findSectionAtCursor(editor, scaffold.spec);
+      setCurrent(hit);
+      setWordsWritten(hit ? countSectionWords(editor, hit.title) : 0);
+    };
+    refresh();
+    editor.on('selectionUpdate', refresh);
+    editor.on('update', refresh);
+    return () => {
+      editor.off('selectionUpdate', refresh);
+      editor.off('update', refresh);
+    };
+  }, [editor, scaffold]);
+
+  const section = React.useMemo(() => (
+    current ? (scaffold.spec?.sections || []).find((s) => s.id === current.sectionId) : null
+  ), [current, scaffold]);
+
+  // פתיחים בקול של המשתמש, לפי הכוונה הרטורית של הסעיף. נבנים מהקורפוס האישי
+  // ולכן זמינים רק אחרי שהוא העלה מספיק טקסט משלו.
+  const [openersReady, setOpenersReady] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    ensureOpenersReady().then(() => { if (alive) setOpenersReady(true); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const found = current ? scaffold.evidence?.[current.sectionId] : null;
+  const evidence = found?.evidence || [];
+  const quota = Number(section?.wordQuota) || 0;
+  const pct = quota ? Math.min(100, Math.round((wordsWritten / quota) * 100)) : 0;
+
+  const openers = React.useMemo(() => (
+    openersReady && section ? getOpenersForIntent(section.intent, { limit: 3 }) : []
+  ), [openersReady, section]);
+
+  const insertQuote = (item) => {
+    if (!editor) return;
+    insertReplacingQuotaHint(editor, buildQuoteHtml(item));
+  };
+
+  // פתיח נשתל כטקסט להמשך הקלדה, לא כפסקה סגורה — הסמן נשאר בסוף המשפט.
+  const insertOpener = (text) => {
+    if (!editor) return;
+    insertReplacingQuotaHint(editor, `${text} `);
+  };
+
+  if (!scaffold?.active) return null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[#F8FAFC]" dir="rtl">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2.5">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-bold text-slate-900">📎 ראיות</div>
+          <div className="truncate text-[11px] text-slate-500">{scaffold.title}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => { if (window.confirm('לסיים את העבודה על המטלה ולסגור את פאנל הראיות?')) clearScaffold(); }}
+            className="rounded-lg px-2 py-1 text-[11px] text-slate-400 transition hover:bg-slate-100 hover:text-rose-500"
+          >
+            סיים מטלה
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="סגור פאנל"
+              className="rounded-lg px-2 py-1 text-slate-400 transition hover:bg-slate-100"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {!section ? (
+          <div className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
+            הצב את הסמן מתחת לאחת מכותרות המטלה כדי לראות את הראיות של אותו סעיף.
+          </div>
+        ) : (
+          <>
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-sm font-bold text-slate-900">{section.title}</div>
+              {quota > 0 && (
+                <>
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full transition-all ${pct > 110 ? 'bg-rose-400' : pct >= 80 ? 'bg-emerald-400' : 'bg-sky-400'}`}
+                      style={{ width: `${Math.min(100, pct)}%` }}
+                    />
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {wordsWritten} מתוך ~{quota} מילים
+                    {wordsWritten > quota * 1.1 && <span className="text-rose-500"> · חריגה מהמכסה</span>}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {openers.length > 0 && (
+              <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3">
+                <div className="text-[11px] font-bold text-indigo-900">
+                  פתיחים בקול שלך · {INTENT_LABELS[section.intent] || section.intent}
+                </div>
+                <ul className="mt-1.5 space-y-1">
+                  {openers.map((o) => (
+                    <li key={o.text}>
+                      <button
+                        type="button"
+                        onClick={() => insertOpener(o.text)}
+                        title="הוסף במיקום הסמן"
+                        className="w-full rounded-lg border border-indigo-200/70 bg-white px-2.5 py-1.5 text-right text-[11px] leading-relaxed text-slate-700 transition hover:border-indigo-400 hover:bg-indigo-50"
+                      >
+                        {o.text}…
+                        {o.fromIntent !== section.intent && (
+                          <span className="mr-1 text-[10px] text-slate-400">
+                            (מ{INTENT_LABELS[o.fromIntent] || o.fromIntent})
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {evidence.length === 0 ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                <div className="font-bold">אין חומר תומך לסעיף הזה.</div>
+                <div className="mt-1 leading-relaxed">
+                  לא נמצא בחומרים שהעלית קטע רלוונטי. שקול להעלות מקור נוסף, או לצמצם את הסעיף.
+                </div>
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {evidence.map((item) => {
+                  const open = expanded === item.chunkId;
+                  return (
+                    <li key={item.chunkId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 text-[11px] font-bold text-slate-600">
+                          {formatProvenance(item)}
+                        </div>
+                        <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                          {item.score}
+                        </span>
+                      </div>
+                      <p className={`mt-1.5 text-xs leading-relaxed text-slate-700 ${open ? '' : 'line-clamp-4'}`}>
+                        {item.text}
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => insertQuote(item)}
+                          className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-slate-700"
+                        >
+                          הוסף ציטוט
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExpanded(open ? null : item.chunkId)}
+                          className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] text-slate-600 transition hover:bg-slate-50"
+                        >
+                          {open ? 'כווץ' : 'הצג הכל'}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {scaffold.mode === 'lexical' && (
+              <div className="mt-3 text-[10px] leading-relaxed text-slate-400">
+                ההתאמה רצה במצב מילולי (האינדקס הסמנטי לא היה זמין) — ייתכנו החמצות.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

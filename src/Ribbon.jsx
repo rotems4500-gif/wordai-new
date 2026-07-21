@@ -35,7 +35,7 @@ const SHAPES_LIST = [
   { char: '⬛', label: 'ריבוע גדול שחור' }, { char: '⬜', label: 'ריבוע גדול לבן' },
 ];
 
-export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => {}, zoom = 100, onOpenFileMenu = () => {}, formatPainterActive = false, activeFormats = {}, shortcuts = {}, assistantOpen = false, documentStyle = 'academic' }) {
+export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => {}, zoom = 100, onOpenFileMenu = () => {}, formatPainterActive = false, activeFormats = {}, shortcuts = {}, assistantOpen = false, documentStyle = 'academic', scaffoldActive = false, evidencePanelOpen = false, assignmentTitle = '' }) {
   const [activeTab, setActiveTab] = useState('');
   const [tableHover, setTableHover] = useState({ row: 0, col: 0 });
   const [fixedDrop, setFixedDrop] = useState(null); // { type, x, y }
@@ -568,6 +568,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <li className={`tab-btn ${activeTab === "design" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "design" ? "" : "design")}>עיצוב</li>
             <li className={`tab-btn ${activeTab === "layout" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "layout" ? "" : "layout")}>פריסה</li>
             <li className={`tab-btn ${activeTab === "references" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "references" ? "" : "references")}>הפניות</li>
+            <li className={`tab-btn ${activeTab === "assignment" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "assignment" ? "" : "assignment")}>מטלה</li>
             <li className={`tab-btn ${activeTab === "review" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "review" ? "" : "review")}>סקירה</li>
           <li className={`tab-btn ${activeTab === "detector" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "detector" ? "" : "detector")}>זיהוי AI</li>
             <li className={`tab-btn ${activeTab === "view" ? "active" : ""}`} onClick={() => setActiveTab(activeTab === "view" ? "" : "view")}>תצוגה</li>
@@ -955,6 +956,44 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
         </div>
 
         {/*  */}
+        {/* מטלה — נקודת הכניסה לשלד המטלה ולפאנל הראיות. הפאנל נסגר בקלות (✕),
+            ובלי הטאב הזה אין דרך להחזיר אותו. */}
+        <div id="panel-assignment" className={`toolbar-panel ${activeTab === "assignment" ? "active" : ""}`}>
+            <div className="toolbar-group">
+                <div className="toolbar-group-items">
+                    <button className="r-btn r-btn-large" onClick={() => onCommand('openAssignmentScaffold')}>
+                        <i className="ph-fill ph-compass text-cyan-600"></i><span>שלד<br />מטלה</span>
+                    </button>
+                </div>
+                <div className="toolbar-group-label">בנייה</div>
+            </div>
+            <div className="toolbar-group">
+                <div className="toolbar-group-items">
+                    <button
+                        className="r-btn r-btn-large"
+                        style={evidencePanelOpen && scaffoldActive ? { backgroundColor: '#E1DFDD' } : undefined}
+                        disabled={!scaffoldActive}
+                        title={scaffoldActive ? 'הצג או הסתר את פאנל הראיות' : 'אין מטלה פעילה — בנה שלד קודם'}
+                        onClick={() => onCommand('toggleEvidencePanel')}
+                    >
+                        <i className="ph-fill ph-paperclip text-indigo-600"></i>
+                        <span>פאנל<br />ראיות</span>
+                    </button>
+                    <div className="btn-column">
+                        <button className="r-btn r-btn-medium" disabled={!scaffoldActive} onClick={() => onCommand('refreshAssignmentEvidence')}>
+                            <i className="ph-fill ph-magnifying-glass"></i> רענן ראיות
+                        </button>
+                        <button className="r-btn r-btn-medium" disabled={!scaffoldActive} onClick={() => onCommand('finishAssignment')}>
+                            <i className="ph-fill ph-check-square text-green-600"></i> סיים מטלה
+                        </button>
+                    </div>
+                </div>
+                <div className="toolbar-group-label">
+                    {scaffoldActive ? (assignmentTitle || 'מטלה פעילה') : 'אין מטלה פעילה'}
+                </div>
+            </div>
+        </div>
+
         <div id="panel-review" className={`toolbar-panel ${activeTab === "review" ? "active" : ""}`}>
             <div className="toolbar-group">
                 <div className="toolbar-group-items">

@@ -37,6 +37,9 @@ import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
 import SpssProjectStudio from './SpssProjectStudio';
 import ProjectHubStudio from './components/projectHub/ProjectHubStudio';
+import AssignmentScaffoldStudio from './components/assignmentScaffold/AssignmentScaffoldStudio';
+import EvidencePanel from './components/assignmentScaffold/EvidencePanel';
+import { readScaffold, ensureScaffoldReady, SCAFFOLD_UPDATED_EVENT } from './services/assignmentScaffoldStore';
 import { assignDocumentToProject, linkDocToMilestone } from './services/projectService';
 import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
@@ -3315,6 +3318,20 @@ function App() {
   // Project Hub: הפרויקט הפתוח במסך-מלא + seed של "צור מסמך לשלב" שמוזרם ל-StartScreen.
   const [projectHubProjectId, setProjectHubProjectId] = React.useState(null);
   const [projectHubDocSeed, setProjectHubDocSeed] = React.useState(null);
+  // שלד מטלה: הפאנל הצדדי נפתח כשקיים שלד פעיל בחנות (שורד רענון דף).
+  const [scaffoldActive, setScaffoldActive] = React.useState(false);
+  const [scaffoldTitle, setScaffoldTitle] = React.useState('');
+  const [evidencePanelOpen, setEvidencePanelOpen] = React.useState(true);
+  React.useEffect(() => {
+    const sync = () => {
+      const blob = readScaffold();
+      setScaffoldActive(Boolean(blob?.active));
+      setScaffoldTitle(String(blob?.title || ''));
+    };
+    ensureScaffoldReady().then(sync).catch(() => {});
+    window.addEventListener(SCAFFOLD_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(SCAFFOLD_UPDATED_EVENT, sync);
+  }, []);
   const [presentationDeck, setPresentationDeck] = React.useState(null);
   const [presentationBusy, setPresentationBusy] = React.useState(false);
   const [pptxDraft, setPptxDraft] = React.useState(null);
@@ -7426,6 +7443,46 @@ ${sidebarReviewContext}`
         }
         break;
       }
+      case 'openAssignmentScaffold':
+        enterStudioMode('assignment-scaffold');
+        break;
+      case 'toggleEvidencePanel':
+        setEvidencePanelOpen((v) => !v);
+        break;
+      case 'refreshAssignmentEvidence': {
+        // מריץ את ההתאמה מחדש מול החומרים העדכניים — שימושי אחרי הוספת מקור
+        // באמצע הכתיבה, בלי לחזור לסטודיו ולבנות שלד מחדש.
+        const current = readScaffold();
+        if (!current?.spec) {
+          showToast('אין מטלה פעילה.', { tone: 'warning' });
+          break;
+        }
+        showToast('מחפש ראיות בחומרים שלך…');
+        try {
+          const { findEvidenceForSpec } = await import('./services/evidenceMatchService');
+          const { saveScaffold } = await import('./services/assignmentScaffoldStore');
+          const result = await findEvidenceForSpec(current.spec, { k: 5 });
+          saveScaffold({
+            spec: current.spec,
+            evidence: result.bySection,
+            gaps: result.gaps,
+            mode: result.mode,
+            title: current.title,
+          });
+          setEvidencePanelOpen(true);
+          const supported = current.spec.sections.length - result.gaps.length;
+          showToast(`נמצאו ראיות ל-${supported} מתוך ${current.spec.sections.length} סעיפים.`, { tone: 'success' });
+        } catch (err) {
+          showToast(`חיפוש הראיות נכשל: ${String(err?.message || err)}`, { tone: 'error' });
+        }
+        break;
+      }
+      case 'finishAssignment': {
+        const { clearScaffold } = await import('./services/assignmentScaffoldStore');
+        clearScaffold();
+        showToast('המטלה נסגרה. המסמך נשאר כמו שהוא.', { tone: 'success' });
+        break;
+      }
       case 'wordCount':
       case 'charCount': {
         // דיאלוג סטטיסטיקות מלא (כמו "ספירת מילים" של Word)
@@ -8563,6 +8620,9 @@ ${sidebarReviewContext}`
         <Ribbon
           onCommand={handleCommand}
           documentStyle={documentStyle}
+          scaffoldActive={scaffoldActive}
+          evidencePanelOpen={evidencePanelOpen}
+          assignmentTitle={scaffoldTitle}
           onToggleTaskpane={() => {
             setAssistantTrigger('manual');
             setSidebarOpen((v) => {
@@ -8623,6 +8683,45 @@ ${sidebarReviewContext}`
               onOpenHelp={openHelpTopic}
             />
           </div>
+        )}
+
+        {appMode === 'assignment-scaffold' && (
+          <div className="min-w-0 flex-1 flex">
+            <AssignmentScaffoldStudio
+              onExit={exitStudioMode}
+              onOpenDocument={(payload) => {
+                // השלד נטען לעורך; פאנל הראיות נפתח אוטומטית כי החנות סומנה כפעילה.
+                setAppMode('word');
+                setShowStartScreen(false);
+                setEvidencePanelOpen(true);
+                applyImportedDocument(payload);
+              }}
+              onOpenHelp={openHelpTopic}
+            />
+          </div>
+        )}
+
+        {/* פאנל הראיות מתנהג בדיוק כמו חלונית ה-AI: aside מעוגן בדסקטופ, מסך מלא
+            עם רקע מוחשך בנייד. שניהם order-last, כך שכששניהם פתוחים הם יושבים זה
+            לצד זה לפי סדר ה-DOM (AI ואז ראיות). */}
+        {isWordMode && !showStartScreen && scaffoldActive && evidencePanelOpen && isMobileViewport && (
+          <button
+            type="button"
+            aria-label="סגור פאנל ראיות"
+            className="fixed inset-0 z-20 bg-slate-950/35 backdrop-blur-[1px]"
+            onClick={() => setEvidencePanelOpen(false)}
+          />
+        )}
+
+        {isWordMode && !showStartScreen && scaffoldActive && evidencePanelOpen && (
+          <aside
+            className={`${isMobileViewport
+              ? 'fixed inset-0 z-30 border-none bg-[#F8FAFC]'
+              : 'order-last h-full min-h-0 shrink-0 border-r border-slate-300 bg-[#F8FAFC] z-20'} transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden`}
+            style={isMobileViewport ? undefined : { width: 'min(360px, 28vw)', minWidth: 288, maxWidth: '30vw' }}
+          >
+            <EvidencePanel editor={editor} onClose={() => setEvidencePanelOpen(false)} />
+          </aside>
         )}
 
         {isPresentationMode && pptxDraft && (
@@ -9547,6 +9646,7 @@ ${sidebarReviewContext}`
                 onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
                 onUploadDocDraft={handleUploadDocDraft}
                 onOpenSpssProject={() => enterStudioMode('spss-project')}
+                onOpenAssignmentScaffold={() => enterStudioMode('assignment-scaffold')}
                 onOpenProjectHub={(project) => {
                   if (!project?.id) return;
                   setProjectHubProjectId(project.id);

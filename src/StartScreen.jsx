@@ -448,7 +448,7 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {} }) {
   const [prompt, setPrompt] = useState('');
   // seed שהגיע מ-Project Hub ("צור מסמך לשלב"): נשמר כדי לשייך את המסמך שנוצר לשלב.
   const [pendingProjectSeed, setPendingProjectSeed] = useState(null);
@@ -1715,6 +1715,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     title="עבודת סיום סטטיסטית: נתונים → קוד → פלט → פרק ממצאים"
                   >
                     📈 עבודת SPSS
+                  </button>
+                )}
+                {onOpenAssignmentScaffold && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenAssignmentScaffold()}
+                    className="rounded-xl px-5 py-2 text-sm font-bold text-white/80 transition hover:bg-white/15"
+                    title="הנחיות המטלה + החומרים שלך → שלד עם ראיות. עובד מקומית, בלי מפתח API"
+                  >
+                    🧭 שלד מטלה
                   </button>
                 )}
               </div>

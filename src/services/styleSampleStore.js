@@ -285,7 +285,9 @@ function splitLongParagraph(paragraph) {
 // חיתוך טקסט ל-chunks בסדר גודל פסקה (40-200 מילים).
 // split על שורה כפולה; פסקה קצרה (<40) נמזגת בחמדנות עם הבאה; <25 מילים נזרק;
 // >200 מילים — מפוצל למשפטים (splitLongParagraph), לא נחתך.
-function chunkText(text) {
+// מיוצא: materialChunkStore משתמש באותו חיתוך לחומרי עזר אקדמיים. הכיול לעברית
+// (מיזוג פסקאות קצרות, פיצול PDF-פסקה-ענקית) זהה — שכפול היה יוצר drift.
+export function chunkText(text) {
   const clean = String(text || '')
     .replace(/\r\n/g, '\n')
     .replace(/[\t ]+/g, ' ');
@@ -334,7 +336,7 @@ function deriveMetricsLite(chunkText) {
 }
 
 // top ~8 מונחי תוכן — מילים ≥3 תווים, פחות stopwords, לפי תדירות.
-function extractTerms(chunkText) {
+export function extractTerms(chunkText) {
   const words = (String(chunkText || '').match(WORD_RE) || [])
     .map((w) => w.replace(/^["'׳״-]+|["'׳״-]+$/g, '').toLowerCase())
     .filter((w) => w.length >= 3 && !STYLE_SAMPLE_STOP_WORDS.has(w));
