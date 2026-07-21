@@ -429,6 +429,14 @@ function splitByImperatives(text) {
     });
 }
 
+// כותרות של בלוקי הנחיה כלליים. הן מסמנות את **סוף רשימת הסעיפים** — כל מה
+// שאחריהן הוא כללי הגשה, לא תוכן לכתיבה.
+const GENERAL_BLOCK_PHRASE = '(?:הנחיות\\s+(?:כלליות|לתוכן|לציטוט|הגשה|להגשה|טכניות|נוספות)|כללי\\s+(?:הגשה|ציטוט|האזכור)|אופן\\s+ההגשה|מבנה\\s+העבודה\\s+והגשתה|דגשים\\s+להגשה|ביבליוגרפיה|רשימת\\s+מקורות|בהצלחה)';
+const GENERAL_BLOCK_HEADING = new RegExp(`^\\s*${GENERAL_BLOCK_PHRASE}\\s*:?\\s*$`);
+// חילוץ מ-PDF מדביק כותרת לסוף המשפט שלפניה ("...בניתוח יישומי.) הנחיות לתוכן
+// העבודה"), ולכן בדיקת שורה-שלמה בלבד מחמיצה. גרסה זו חותכת גם באמצע שורה.
+const GENERAL_BLOCK_INLINE = new RegExp(GENERAL_BLOCK_PHRASE);
+
 /**
  * מפרק את גוף ההנחיות לסעיפים גולמיים (marker/title/body), בלי פרשנות.
  * @returns {Array<{marker:string, title:string, body:string, kind:string}>}
@@ -464,7 +472,22 @@ function splitIntoSections(text) {
   return filtered.map((start, i) => {
     const from = start.lineIndex + 1;
     const to = i + 1 < filtered.length ? filtered[i + 1].lineIndex : lines.length;
-    const rest = lines.slice(from, to).join('\n').trim();
+    // ⚠️ הסעיף האחרון נמשך עד סוף המסמך, ולכן בלע את כל בלוקי ההנחיות הכלליות
+    // שבאים אחריו (ציטוט, הגשה, היקף, הצהרת AI). התוצאה: "סעיף" שההנחיה שלו
+    // כוללת "אין לחרוג ממכסת המילים" — כלומר כלל הגשה שהוצג כתוכן לכתיבה.
+    const bodyLines = lines.slice(from, to);
+    const stopAt = bodyLines.findIndex((l) => GENERAL_BLOCK_HEADING.test(l.trim()));
+    const kept = stopAt >= 0 ? bodyLines.slice(0, stopAt) : bodyLines.slice();
+    // הכותרת עלולה להיות מודבקת לסוף שורה — חותכים בתוכה.
+    const inlineIdx = kept.findIndex((l) => GENERAL_BLOCK_INLINE.test(l));
+    if (inlineIdx >= 0) {
+      const line = kept[inlineIdx];
+      const cut = line.search(GENERAL_BLOCK_INLINE);
+      kept.length = inlineIdx;
+      const head = line.slice(0, cut).trim();
+      if (head) kept.push(head);
+    }
+    const rest = kept.join('\n').trim();
     const { title, lead } = splitTitleAndLead(start.title);
     const body = [lead, rest].filter(Boolean).join('\n').trim();
     // rawTitle שומר את המכסה והמשקל שהוסרו מהכותרת לתצוגה — חילוץ המטא-דאטה

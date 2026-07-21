@@ -33,7 +33,37 @@ export function normalizeHeadingKey(text) {
  * @param {{includeQuotaHints?:boolean}} opts
  * @returns {string}
  */
-export function buildScaffoldHtml(spec, { includeQuotaHints = true } = {}) {
+// תתי-הדרישות של הסעיף כפי שהמרצה ניסח אותן ("א. הציגו... ב. פרטו...").
+// המפריד הוא סימון הפריט עצמו, כי בטקסט שחולץ מ-PDF הם לרוב על שורות נפרדות
+// אבל לפעמים רצופים.
+// ⚠️ ה-lookahead `(?![\d])` הכרחי: בלעדיו "ווב 2.0" נחתך באמצע, כי "2." נראה
+// כמו סימון פריט. אותה מלכודת בדיוק כמו בזיהוי הסעיפים עצמם.
+const SUB_ITEM_SPLIT = /\n(?=\s*(?:[א-ת]['׳]?\s*[.)]|[•\-–—*]|\d+\s*[.)])\s*(?![\d]))/;
+const SUB_ITEM_MARK = /^\s*(?:[א-ת]['׳]?\s*[.)]|[•\-–—*]|\d+\s*[.)])\s*/;
+const MAX_SUB_ITEMS = 8;
+const MIN_SUB_ITEM_WORDS = 3;
+
+/**
+ * מפרק את הנחיית הסעיף לתתי-דרישות. מחזיר [] כשאין חלוקה ברורה.
+ */
+function splitSubRequirements(instructions) {
+  const raw = String(instructions || '').trim();
+  if (!raw) return [];
+  const parts = raw.split(SUB_ITEM_SPLIT)
+    .map((p) => p.replace(SUB_ITEM_MARK, '').replace(/\s+/g, ' ').trim())
+    .filter((p) => p && p.split(/\s+/).length >= MIN_SUB_ITEM_WORDS);
+  // פחות משניים אינו חלוקה — זו פשוט ההנחיה.
+  return parts.length >= 2 ? parts.slice(0, MAX_SUB_ITEMS) : [];
+}
+
+/**
+ * בונה HTML התחלתי מה-spec.
+ *
+ * @param {object} spec
+ * @param {{includeQuotaHints?:boolean, includeInstructions?:boolean}} opts
+ * @returns {string}
+ */
+export function buildScaffoldHtml(spec, { includeQuotaHints = true, includeInstructions = true } = {}) {
   const sections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
   if (!sections.length) return '<p></p>';
 
@@ -43,6 +73,21 @@ export function buildScaffoldHtml(spec, { includeQuotaHints = true } = {}) {
 
   sections.forEach((section) => {
     parts.push(`<h2>${escapeHtml(section.title || `סעיף ${section.order}`)}</h2>`);
+
+    // ⚠️ ההנחיה של הסעיף חייבת להגיע למסמך. היא ישבה ב-spec ובפאנל בלבד, וכך
+    // המשתמש קיבל כותרת חשופה ומכסת מילים — בלי חמש תתי-הדרישות שהמרצה כתב
+    // ("מי השחקנים", "מהו סלע המחלוקת"...). זה מה שהפך שלד *נכון* לשלד חסר תועלת:
+    // צריך היה לחזור להנחיות המקוריות כדי לדעת מה בכלל לכתוב.
+    if (includeInstructions) {
+      const subs = splitSubRequirements(section.instructions);
+      if (subs.length) {
+        parts.push(`<ul>${subs.map((s) => `<li><em>${escapeHtml(s)}</em></li>`).join('')}</ul>`);
+      } else {
+        const oneLine = String(section.instructions || '').replace(/\s+/g, ' ').trim();
+        if (oneLine) parts.push(`<p><em>${escapeHtml(oneLine)}</em></p>`);
+      }
+    }
+
     if (includeQuotaHints && section.wordQuota) {
       // רמז המכסה הוא פסקה רגילה ולא placeholder: TipTap לא שומר nodes לא-מוכרים,
       // והמשתמש ממילא מוחק אותה כשהוא מתחיל לכתוב. הסימון החזותי הוא בפאנל.

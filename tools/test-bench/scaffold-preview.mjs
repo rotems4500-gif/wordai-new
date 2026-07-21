@@ -66,6 +66,8 @@ const html = buildScaffoldHtml(spec);
 console.log(html
   .replace(/<h1>(.*?)<\/h1>/g, (_, t) => `\n${'━'.repeat(60)}\n${t}\n${'━'.repeat(60)}`)
   .replace(/<h2>(.*?)<\/h2>/g, (_, t) => `\n■ ${t}`)
+  .replace(/<ul>/g, '').replace(/<\/ul>/g, '')
+  .replace(/<li><em>(.*?)<\/em><\/li>/g, (_, t) => `   • ${t}`)
   .replace(/<p><em>(.*?)<\/em><\/p>/g, (_, t) => `   ${t}`)
   .replace(/<p><\/p>/g, '   ·')
   .replace(/<[^>]+>/g, ''));
