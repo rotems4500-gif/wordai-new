@@ -130,6 +130,27 @@ export function extractWordQuota(text) {
   return null;
 }
 
+// ניסוחים שמצהירים במפורש על היקף *העבודה כולה*, להבדיל ממכסה של סעיף.
+// נמדד ב-e2e: בלי זה, "היקף כולל: 700 מילים" בראש המסמך לא נתפס (יש "כולל:"
+// בין "היקף" למספר), והסורק המשיך וקלט את "עד 250 מילים" של הסעיף האחרון —
+// כלומר ההיקף הכולל של העבודה נקבע לפי סעיף בודד, ומשם התפזרו מכסות שגויות.
+const GLOBAL_QUOTA_CUES = /(?:היקף\s+(?:כולל|העבודה|המטלה|כללי)|אורך\s+(?:העבודה|המטלה)|סה["׳']?כ|בסך\s+הכול|היקף\s+כולל)/;
+
+/**
+ * מכסת המילים של העבודה כולה. מעדיפה שורה שמצהירה על היקף גלובלי; רק אם אין
+ * כזו נופלת לסריקת המסמך כולו (ואז "עד 250 מילים" של סעיף אכן ייתפס — אבל
+ * במסמך בלי הצהרה גלובלית זו באמת ההערכה הטובה ביותר שיש).
+ */
+function extractGlobalWordQuota(text) {
+  const lines = String(text || '').split('\n');
+  for (const line of lines) {
+    if (!GLOBAL_QUOTA_CUES.test(line)) continue;
+    const hit = extractWordQuota(line);
+    if (hit) return { ...hit, scope: 'global' };
+  }
+  return extractWordQuota(text);
+}
+
 // ---------- דרישות גלובליות ----------
 
 function extractSourceRequirement(text) {
@@ -333,7 +354,7 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
     };
   }
 
-  const globalQuota = extractWordQuota(src);
+  const globalQuota = extractGlobalWordQuota(src);
   const sourceRequirement = extractSourceRequirement(src);
   const citationStyle = extractCitationStyle(src);
   const dueDate = extractDueDate(src);

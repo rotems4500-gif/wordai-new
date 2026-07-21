@@ -87,11 +87,16 @@ export function buildGapQuery(section, { spec = null, maxTerms = 8 } = {}) {
   const specTopic = cleanToken(spec?.title || '');
   const topicTerms = specTopic.split(/\s+/).map(cleanToken).filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t));
 
+  // סדר = סדר עדיפות, כי maxTerms חותך. ההנחיה קודמת לנושא המטלה: נמדד ב-e2e
+  // שסעיף "יישום עכשווי" עם הנחיה "...הרלוונטיות לרשתות חברתיות" איבד דווקא את
+  // "רשתות חברתיות" — המונח היחיד שמבחין את הסעיף — כי מילות נושא-המטלה הכלליות
+  // תפסו את התקציב. התוצאה הייתה מקור גנרי על פסיכולוגיה שלא עבר את סף הרלוונטיות.
   const seen = new Set();
   const terms = [];
-  [...titleTerms, ...keywords, ...topicTerms, ...fromInstruction].forEach((term) => {
+  [...titleTerms, ...keywords, ...fromInstruction, ...topicTerms].forEach((term) => {
     const key = dedupeKey(term);
-    if (!term || !key || seen.has(key)) return;
+    // אסימון שמכיל ספרה הוא כמעט תמיד מכסת מילים או מספר סעיף — רעש בשאילתה.
+    if (!term || !key || /\d/.test(term) || seen.has(key)) return;
     seen.add(key);
     terms.push(term);
   });

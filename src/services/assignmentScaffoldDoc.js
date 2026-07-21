@@ -57,8 +57,23 @@ export function buildScaffoldHtml(spec, { includeQuotaHints = true } = {}) {
 
 // גוף סעיף כפרוזה → פסקאות. המודל מפריד פסקאות בשורה ריקה, אבל לא תמיד —
 // שורה בודדת ארוכה היא עדיין פסקה אחת תקינה.
-function prosaToParagraphs(text) {
+//
+// ⚠️ המודל התבקש פרוזה, אבל לפעמים מחזיר בכל זאת <p>…</p> (נצפה ב-e2e). בלי
+// הניקוי הזה ה-escape הופך אותן ל-&lt;p&gt; והמשתמש רואה תגיות כטקסט במסמך.
+// מסירים את התגיות ומתייחסים ל-</p> ול-<br> כגבול פסקה, כדי לא לאבד את החלוקה.
+function stripModelHtml(text) {
   return String(text || '')
+    .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+
+function prosaToParagraphs(text) {
+  return stripModelHtml(text)
     .split(/\n{2,}/)
     .map((p) => p.replace(/\n/g, ' ').trim())
     .filter(Boolean)
