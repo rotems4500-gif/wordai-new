@@ -18,6 +18,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/assignment-ai-harness.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'gap'
     ? 'tools/test-bench/gap-source-harness.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'whole'
+    ? 'tools/test-bench/whole-work-harness.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -26,7 +28,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
-    : process.env.WORDAI_VERIFY_ENTRY === 'gap' ? 'out-gap' : 'out-sf';
+    : process.env.WORDAI_VERIFY_ENTRY === 'gap' ? 'out-gap'
+      : process.env.WORDAI_VERIFY_ENTRY === 'whole' ? 'out-whole' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -41,6 +44,7 @@ export default defineConfig({
     evmatch: path.join(PROJECT, 'src/services/evidenceMatchService.js'),
     prepsvc: path.join(PROJECT, 'src/services/assignmentPrepService.js'),
     pagetext: path.join(PROJECT, 'src/services/pageTextFetch.js'),
+    scaffolddoc: path.join(PROJECT, 'src/services/assignmentScaffoldDoc.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     // Personal Style Engine services (LAB style-engine endpoints).
     styleprofile: path.join(PROJECT, 'src/services/styleProfileService.js'),

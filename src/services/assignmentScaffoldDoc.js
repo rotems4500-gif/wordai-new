@@ -55,6 +55,72 @@ export function buildScaffoldHtml(spec, { includeQuotaHints = true } = {}) {
   return parts.join('\n');
 }
 
+// גוף סעיף כפרוזה → פסקאות. המודל מפריד פסקאות בשורה ריקה, אבל לא תמיד —
+// שורה בודדת ארוכה היא עדיין פסקה אחת תקינה.
+function prosaToParagraphs(text) {
+  return String(text || '')
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\n/g, ' ').trim())
+    .filter(Boolean)
+    .map((p) => `<p>${escapeHtml(p)}</p>`)
+    .join('\n');
+}
+
+/**
+ * מרכיב את פלט draftWholeWork למסמך: כותרת, סעיפים כתובים, סעיפים חסומים עם
+ * סימון, וביבליוגרפיה. TipTap מסנן nodes לא-מוכרים (div/blockquote) — ולכן רק
+ * h1/h2/p/hr/em/a.
+ *
+ * @param {object} spec
+ * @param {{sections?:Array, blocked?:Array, bibliography?:Array}} draft פלט draftWholeWork
+ * @returns {string} HTML
+ */
+export function buildWholeWorkHtml(spec, draft = {}) {
+  const parts = [];
+  const title = String(spec?.title || '').trim();
+  if (title) parts.push(`<h1>${escapeHtml(title)}</h1>`);
+
+  // סדר הסעיפים נקבע ע"י ה-spec ולא ע"י סדר החזרה של המודל — כך סעיף חסום
+  // נשאר במקומו הנכון בעבודה במקום להידחק לסוף.
+  const written = new Map((draft.sections || []).map((s) => [s.id, s]));
+  const blockedIds = new Set((draft.blocked || []).map((b) => b.id));
+  const specSections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
+
+  specSections.forEach((section) => {
+    parts.push(`<h2>${escapeHtml(section.title || '')}</h2>`);
+    const hit = written.get(section.id);
+    if (hit) {
+      parts.push(prosaToParagraphs(hit.text));
+    } else if (blockedIds.has(section.id)) {
+      parts.push(`<p><em>[דרוש מקור — הסעיף לא נכתב כי לא נמצא לו חומר תומך]</em></p>`);
+    } else {
+      parts.push('<p></p>');
+    }
+  });
+
+  // סעיפים שהמודל ניסח בכותרת שלא זוהתה — לא נזרקים, נספחים בסוף עם סימון.
+  (draft.sections || []).filter((s) => !specSections.some((x) => x.id === s.id)).forEach((s) => {
+    parts.push(`<h2>${escapeHtml(s.title || 'סעיף נוסף')}</h2>`);
+    parts.push(prosaToParagraphs(s.text));
+  });
+
+  const bib = Array.isArray(draft.bibliography) ? draft.bibliography : [];
+  if (bib.length) {
+    parts.push('<hr>');
+    parts.push('<h2>ביבליוגרפיה</h2>');
+    bib.forEach((entry) => {
+      const link = entry.url
+        ? ` <a href="${escapeHtml(entry.url)}">${escapeHtml(entry.url)}</a>`
+        : '';
+      // מקור שנשמר כתקציר בלבד מסומן גם ברשימה — המשתמש צריך לדעת לפני הגשה.
+      const mark = entry.weak ? ' <em>(תקציר בלבד — לא נקרא הטקסט המלא)</em>' : '';
+      parts.push(`<p>${escapeHtml(entry.title)}.${link}${mark}</p>`);
+    });
+  }
+
+  return parts.join('\n');
+}
+
 /**
  * מוצא את הסעיף שהסמן נמצא בו — הכותרת הקרובה ביותר שקודמת למיקום הסמן.
  *

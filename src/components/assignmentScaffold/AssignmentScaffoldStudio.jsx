@@ -23,7 +23,9 @@ import {
   PREP_STATE,
   WORK_KIND_LABELS,
 } from '../../services/assignmentPrepService';
-import { buildScaffoldHtml } from '../../services/assignmentScaffoldDoc';
+import { buildScaffoldHtml, buildWholeWorkHtml } from '../../services/assignmentScaffoldDoc';
+import { draftWholeWork } from '../../services/assignmentAiService';
+import { hasUsableAiProvider } from '../../services/aiService';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
 
 const revealClass = (mounted, extra = '') => (
@@ -190,6 +192,56 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     });
   }, [spec, evidenceResult, onOpenDocument]);
 
+  // כתיבת העבודה כולה ב**קריאה אחת** ופתיחתה בעורך. לא אחת לסעיף: זה יקר פי N,
+  // וכל סעיף נכתב עיוור לשאר — מכאן חזרות ואפס מעברים. ראה assignmentAiService.
+  const handleDraftWholeWork = React.useCallback(async () => {
+    if (!spec) return;
+    if (!hasUsableAiProvider()) {
+      setNotice({ tone: 'err', text: 'אין ספק AI מוגדר. אפשר לפתוח בעורך ולכתוב מהראיות ידנית.' });
+      return;
+    }
+    setBusy('כותב את העבודה בקריאה אחת…');
+    setNotice(null);
+    try {
+      const scaffold = {
+        active: true,
+        title: spec.title,
+        spec,
+        evidence: evidenceResult?.bySection || {},
+      };
+      const draft = await draftWholeWork(spec, { scaffold });
+      if (!draft.ok) {
+        setNotice({ tone: 'err', text: draft.reason });
+        return;
+      }
+      // שומרים את השלד לפני הפתיחה — פאנל הראיות בעורך קורא ממנו.
+      saveScaffold({
+        spec,
+        evidence: evidenceResult?.bySection || {},
+        gaps: evidenceResult?.gaps || [],
+        mode: evidenceResult?.mode || 'none',
+        title: spec.title,
+      });
+      onOpenDocument?.({
+        ok: true,
+        html: buildWholeWorkHtml(spec, draft),
+        title: spec.title || 'מטלה',
+        source: 'assignment-scaffold-draft',
+      });
+      const blockedNote = draft.blocked.length
+        ? ` ${draft.blocked.length} סעיפים נותרו חסומים וסומנו במסמך.`
+        : '';
+      setNotice({
+        tone: 'ok',
+        text: `נכתבו ${draft.sections.length} סעיפים מ-${draft.usedEvidence} ראיות, בקריאה אחת.${blockedNote}`,
+      });
+    } catch (err) {
+      setNotice({ tone: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }, [spec, evidenceResult, onOpenDocument]);
+
   // ---------- עריכת סעיפים ----------
 
   const updateSection = (id, patch) => {
@@ -231,6 +283,12 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const ledger = React.useMemo(() => (
     spec ? buildPrepLedger({ spec, evidence: evidenceResult?.bySection || {} }) : null
   ), [spec, evidenceResult]);
+
+  // בלי ראיות ולו לסעיף אחד אין מה לכתוב — draftWholeWork יסרב ממילא, עדיף
+  // להשבית את הכפתור מאשר לתת למשתמש ללחוץ ולקבל שגיאה.
+  const hasEvidence = React.useMemo(() => (
+    Object.values(evidenceResult?.bySection || {}).some((r) => (r?.evidence || []).length > 0)
+  ), [evidenceResult]);
 
   const totalPlanned = React.useMemo(() => (
     (spec?.sections || []).reduce((sum, s) => sum + (s.enabled === false ? 0 : (Number(s.wordQuota) || 0)), 0)
@@ -559,10 +617,23 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     type="button"
                     onClick={handleOpenInEditor}
                     disabled={Boolean(busy)}
-                    className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 py-2 text-sm font-bold shadow-lg transition disabled:opacity-40"
+                    className="rounded-xl border border-white/20 px-4 py-2 text-sm font-bold transition hover:bg-white/10 disabled:opacity-40"
                   >
-                    פתח בעורך ←
+                    פתח שלד בעורך ←
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleDraftWholeWork}
+                    disabled={Boolean(busy) || !hasEvidence}
+                    title={!hasEvidence ? 'מצא ראיות קודם — בלי מקורות אין מה לכתוב' : ''}
+                    className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 py-2 text-sm font-bold shadow-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    ✍️ כתוב את כל העבודה ←
+                  </button>
+                </div>
+                <div className="text-[10px] leading-relaxed text-white/50">
+                  הכתיבה היא <b>קריאת API אחת</b> לכל העבודה — כל סעיף מקבל את הראיות שלו,
+                  והמעברים ביניהם נכתבים באותה קריאה. הביבליוגרפיה נבנית מהמקורות עצמם ולא ע"י המודל.
                 </div>
               </>
             )}

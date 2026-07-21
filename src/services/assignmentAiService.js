@@ -127,9 +127,192 @@ export async function draftOpenerForSection(section) {
   }
 }
 
-// הערה: השלמה באצווה ("השלם את כל מה שסומן NEEDS_AI בלחיצה") נשארה בחוץ בכוונה.
-// היא הרחבה ישירה של draftSectionFromEvidence, אבל אי אפשר לאמת אותה בלי ספק חי,
-// ואצווה לא-מאומתת ששורפת קריאה לכל סעיף היא בדיוק סוג הדבר שעדיף לא לשלוח.
+// ---------- כתיבת העבודה כולה בקריאה אחת ----------
+//
+// למה קריאה אחת ולא אחת לסעיף: סעיף-סעיף עולה N קריאות, וגרוע מזה — כל קריאה
+// עיוורת למה שנכתב בסעיפים האחרים. מכאן חזרות, סתירות, ואפס מעברים. קריאה אחת
+// עם כל בלוקי הראיות נותנת למודל את התמונה המלאה, ומאפשרת לו לכתוב מעברים.
+//
+// מה המודל *לא* מייצר: ביבליוגרפיה. היא נבנית כאן דטרמיניסטית מהפרובננס של
+// הראיות שבאמת שימשו. מודל שמייצר רשימת מקורות ממציא פרטים ביבליוגרפיים גם
+// כשהתוכן עצמו מעוגן — זה היה וקטור ההזיה הקלאסי.
+
+// תקציבים: עבודה עם 8 סעיפים × 5 ראיות × קטע מלא מפוצצת את חלון ההקשר.
+const WHOLE_WORK_EVIDENCE_PER_SECTION = 4;
+const WHOLE_WORK_WORDS_PER_EVIDENCE = 110;
+
+// סמן שהמודל לא יפיק במקרה. כותרות markdown (## ) נדחו — המודל משתמש בהן גם
+// בתוך גוף הטקסט, והפרסור התבלבל.
+const SECTION_MARK = '@@סעיף:';
+const SECTION_MARK_RE = /^@@סעיף:\s*(.+)$/;
+
+const WHOLE_WORK_SYSTEM = `אתה עוזר כתיבה אקדמית בעברית. אתה כותב עבודה שלמה בפעם אחת.
+חוקים מוחלטים:
+1. מותר לך להסתמך אך ורק על הקטעים הממוספרים שסופקו. אין להוסיף עובדה, שם חוקר, שנה או ממצא שאינו מופיע בהם.
+2. המספור של הקטעים הוא רציף לאורך כל העבודה. כל טענה מהותית חייבת להסתיים בהפניה בסוגריים למקור שממנו היא באה, למשל (כהן, עמ' 14).
+3. אם הקטעים של סעיף אינם מספיקים — כתוב את מה שהם מאפשרים וסיים אותו סעיף בשורה נפרדת: [דרוש מקור נוסף: <מה חסר>]. אל תרפד עד המכסה.
+4. **אל תכתוב רשימת מקורות/ביבליוגרפיה.** היא נבנית אוטומטית ואינה באחריותך.
+5. כתוב מעבר קצר בין סעיף לסעיף — משפט שקושר את מה שנאמר למה שבא. המעבר הוא ניסוחי בלבד ואינו טוען טענה חדשה.
+6. פורמט הפלט, בדיוק: לפני כל סעיף שורה בפני עצמה "${SECTION_MARK} <כותרת הסעיף בדיוק כפי שנמסרה>", ואחריה גוף הסעיף בפרוזה רציפה. בלי כותרות משנה ובלי רשימות.`;
+
+/** בלוק ראיות עם מספור *גלובלי* — כדי שהפניה אחת תעבוד לאורך כל העבודה. */
+function formatEvidenceNumbered(evidence, startIndex) {
+  return (evidence || []).map((item, i) => (
+    `[${startIndex + i}] ${formatProvenance(item)}\n"${truncateWords(item.text, WHOLE_WORK_WORDS_PER_EVIDENCE)}"`
+  )).join('\n\n');
+}
+
+/**
+ * ביבליוגרפיה מהפרובננס של הראיות ששימשו בפועל. דטרמיניסטי לגמרי — המודל לא
+ * נוגע בזה. dedupe לפי materialId, כי כמה קטעים מגיעים מאותו מאמר.
+ *
+ * @param {Array<object>} usedEvidence
+ * @returns {Array<{title:string, url:string, weak:boolean}>}
+ */
+export function buildBibliography(usedEvidence = []) {
+  const byMaterial = new Map();
+  (Array.isArray(usedEvidence) ? usedEvidence : []).forEach((item) => {
+    if (!isPlainObject(item)) return;
+    const key = item.materialId || item.sourceTitle;
+    if (!key || byMaterial.has(key)) return;
+    byMaterial.set(key, {
+      title: String(item.sourceTitle || '').trim() || 'מקור ללא כותרת',
+      url: String(item.sourceUrl || '').trim(),
+      // מקור שנשמר כתקציר בלבד — המשתמש צריך לדעת שלא נקרא הטקסט המלא.
+      weak: item.strength === 'abstract',
+    });
+  });
+  return [...byMaterial.values()].sort((a, b) => a.title.localeCompare(b.title, 'he'));
+}
+
+/**
+ * כותבת את כל העבודה בקריאת מודל **אחת**.
+ *
+ * סעיפים בלי ראיות לא נשלחים למודל כלל (כלל הברזל של הקובץ) — הם חוזרים
+ * בתוצאה כ-blocked, וה-UI שותל במקומם סימון "דרוש מקור".
+ *
+ * @param {object} spec
+ * @param {{scaffold?:object|null, sectionIds?:string[]|null}} opts
+ * @returns {Promise<{ok:boolean, reason?:string, sections?:Array<{id,title,text}>,
+ *                    blocked?:Array<{id,title}>, bibliography?:Array<object>,
+ *                    usedEvidence?:number, raw?:string}>}
+ */
+export async function draftWholeWork(spec, { scaffold = null, sectionIds = null } = {}) {
+  if (!isPlainObject(spec)) return { ok: false, reason: 'אין spec של מטלה.' };
+  if (!hasUsableAiProvider()) return { ok: false, reason: 'אין ספק AI מוגדר.' };
+
+  const blob = scaffold || readScaffold();
+  const all = (Array.isArray(spec.sections) ? spec.sections : [])
+    .filter((s) => s?.enabled !== false)
+    .filter((s) => !sectionIds || sectionIds.includes(s.id));
+  if (!all.length) return { ok: false, reason: 'אין סעיפים לכתיבה.' };
+
+  // חלוקה: מי נכתב ומי חסום. הפרדה מפורשת ולא "נשלח בכל זאת ונקווה".
+  const writable = [];
+  const blocked = [];
+  all.forEach((section) => {
+    const found = (blob?.evidence?.[section.id]?.evidence || []).slice(0, WHOLE_WORK_EVIDENCE_PER_SECTION);
+    if (found.length) writable.push({ section, evidence: found });
+    else blocked.push({ id: section.id, title: section.title });
+  });
+
+  if (!writable.length) {
+    return { ok: false, reason: 'לאף סעיף אין ראיות. חפש מקורות לפני הכתיבה.', blocked };
+  }
+
+  // מספור גלובלי רציף על פני כל הסעיפים — הפניה [7] מזוהה חד-משמעית.
+  const usedEvidence = [];
+  const sectionBlocks = writable.map(({ section, evidence }) => {
+    const start = usedEvidence.length + 1;
+    usedEvidence.push(...evidence);
+    return [
+      `${SECTION_MARK} ${section.title}`,
+      `אופי הסעיף: ${INTENT_LABELS[section.intent] || section.intent}`,
+      section.instructions ? `הנחיות: ${truncateWords(section.instructions, 60)}` : '',
+      section.wordQuota ? `היקף: כ-${section.wordQuota} מילים.` : '',
+      'הקטעים המותרים לסעיף הזה:',
+      formatEvidenceNumbered(evidence, start),
+    ].filter(Boolean).join('\n');
+  });
+
+  const prompt = [
+    `כתוב את העבודה "${spec.title || 'עבודה אקדמית'}" במלואה.`,
+    spec.totalWords ? `היקף כולל מבוקש: כ-${spec.totalWords} מילים.` : '',
+    spec.citationStyle ? `סגנון ציטוט: ${spec.citationStyle}.` : '',
+    `מספר הסעיפים לכתיבה: ${writable.length}. כתוב את כולם, בסדר הזה, כל אחד עם השורה "${SECTION_MARK} <כותרת>" לפניו.`,
+    blocked.length
+      ? `שים לב: ${blocked.length} סעיפים נוספים בעבודה חסרי מקורות ולכן אינם נכתבים כאן. אל תתייחס אליהם ואל תכתוב אותם.`
+      : '',
+    '',
+    sectionBlocks.join('\n\n---\n\n'),
+  ].filter(Boolean).join('\n');
+
+  let raw;
+  try {
+    raw = await runModel(prompt, '', WHOLE_WORK_SYSTEM, `עבודה שלמה: ${spec.title || ''}`);
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err), blocked };
+  }
+
+  const clean = String(raw || '').trim();
+  if (!clean) return { ok: false, reason: 'המודל החזיר תשובה ריקה.', blocked };
+
+  const parsed = parseWholeWorkOutput(clean, writable.map((w) => w.section));
+  if (!parsed.length) {
+    // המודל התעלם מהסמנים. מחזירים את הטקסט הגולמי כדי שלא ללכת לאיבוד — עדיף
+    // שהמשתמש יראה טיוטה בסעיף אחד מאשר "נכשל" אחרי קריאה ששולמה.
+    return {
+      ok: true,
+      sections: [{ id: writable[0].section.id, title: writable[0].section.title, text: clean, unparsed: true }],
+      blocked,
+      bibliography: buildBibliography(usedEvidence),
+      usedEvidence: usedEvidence.length,
+      raw: clean,
+    };
+  }
+
+  return {
+    ok: true,
+    sections: parsed,
+    blocked,
+    bibliography: buildBibliography(usedEvidence),
+    usedEvidence: usedEvidence.length,
+    raw: clean,
+  };
+}
+
+/**
+ * מפרק את הפלט לפי סמני הסעיפים. ההתאמה לכותרות המקוריות היא נורמליזציה של
+ * טקסט — המודל משנה ניקוד/רווחים/מירכאות גם כשביקשנו "בדיוק כפי שנמסרה".
+ */
+export function parseWholeWorkOutput(text, sections = []) {
+  const lines = String(text || '').split('\n');
+  const norm = (s) => String(s || '').replace(/["'״׳“”]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const byTitle = new Map(sections.map((s) => [norm(s.title), s]));
+
+  const out = [];
+  let current = null;
+  let buffer = [];
+
+  const flush = () => {
+    if (!current) return;
+    const body = buffer.join('\n').trim();
+    if (body) out.push({ id: current.id, title: current.title, text: body });
+    buffer = [];
+  };
+
+  lines.forEach((line) => {
+    const hit = line.trim().match(SECTION_MARK_RE);
+    if (!hit) { if (current) buffer.push(line); return; }
+    flush();
+    const title = hit[1].trim();
+    // כותרת שלא זוהתה עדיין נשמרת — עדיף סעיף עם כותרת שהמודל ניסח מאשר לזרוק טקסט.
+    current = byTitle.get(norm(title)) || { id: `unmatched_${out.length}`, title };
+  });
+  flush();
+
+  return out;
+}
 
 // ---------- הקשר לחלונית ה-AI ----------
 
