@@ -24,6 +24,8 @@ import {
 import { formatProvenance } from '../../services/evidenceMatchService';
 import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpenerService';
 import { INTENT_LABELS } from '../../services/assignmentSpecService';
+import { draftSectionFromEvidence } from '../../services/assignmentAiService';
+import { hasUsableAiProvider } from '../../services/aiService';
 
 export default function EvidencePanel({ editor, onClose }) {
   const [scaffold, setScaffold] = React.useState(() => readScaffold());
@@ -85,6 +87,34 @@ export default function EvidencePanel({ editor, onClose }) {
   const insertOpener = (text) => {
     if (!editor) return;
     insertReplacingQuotaHint(editor, `${text} `);
+  };
+
+  // שלב 2: טיוטה מעוגנת. נגישה רק כשיש ראיות *וגם* ספק מוגדר — סעיף בלי ראיות
+  // לא נכתב בכלל, וזה מכוון (ראה assignmentAiService).
+  const [drafting, setDrafting] = React.useState(false);
+  const [draftError, setDraftError] = React.useState(null);
+  const aiAvailable = React.useMemo(() => hasUsableAiProvider(), [scaffold]);
+
+  const draftSection = async () => {
+    if (!section || !editor || drafting) return;
+    setDrafting(true);
+    setDraftError(null);
+    try {
+      const result = await draftSectionFromEvidence(section, { evidence, scaffold });
+      if (!result.ok) {
+        setDraftError(result.reason || 'הכתיבה נכשלה.');
+        return;
+      }
+      const html = String(result.text)
+        .split(/\n{2,}/)
+        .map((p) => `<p>${p.replace(/\n/g, ' ').trim()}</p>`)
+        .join('');
+      insertReplacingQuotaHint(editor, html);
+    } catch (err) {
+      setDraftError(String(err?.message || err));
+    } finally {
+      setDrafting(false);
+    }
   };
 
   if (!scaffold?.active) return null;
@@ -169,12 +199,36 @@ export default function EvidencePanel({ editor, onClose }) {
               </div>
             )}
 
+            {evidence.length > 0 && aiAvailable && (
+              <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3">
+                <button
+                  type="button"
+                  onClick={draftSection}
+                  disabled={drafting}
+                  className="w-full rounded-lg bg-gradient-to-l from-cyan-600 to-blue-700 px-3 py-2 text-xs font-bold text-white shadow-sm transition disabled:opacity-50"
+                >
+                  {drafting ? '✍️ כותב מהראיות…' : `✍️ כתוב טיוטה מ-${evidence.length} הראיות`}
+                </button>
+                <div className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
+                  המודל יקבל אך ורק את הקטעים שלמעלה, ויתבקש להפנות אליהם. מה שלא נתמך בהם — יסומן כדרוש מקור.
+                </div>
+                {draftError && (
+                  <div className="mt-1.5 rounded-lg bg-rose-50 px-2 py-1 text-[11px] text-rose-700">{draftError}</div>
+                )}
+              </div>
+            )}
+
             {evidence.length === 0 ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 <div className="font-bold">אין חומר תומך לסעיף הזה.</div>
                 <div className="mt-1 leading-relaxed">
                   לא נמצא בחומרים שהעלית קטע רלוונטי. שקול להעלות מקור נוסף, או לצמצם את הסעיף.
                 </div>
+                {aiAvailable && (
+                  <div className="mt-1.5 border-t border-amber-200 pt-1.5 text-[11px]">
+                    כתיבה בלי מקורות לא תוצע כאן — היא הייתה המצאה.
+                  </div>
+                )}
               </div>
             ) : (
               <ul className="space-y-2">

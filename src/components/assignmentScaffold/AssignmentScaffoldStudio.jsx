@@ -17,6 +17,12 @@ import {
 } from '../../services/materialChunkStore';
 import { ensureMaterialsEmbedded, findEvidenceForSpec } from '../../services/evidenceMatchService';
 import { saveScaffold } from '../../services/assignmentScaffoldStore';
+import {
+  buildPrepLedger,
+  summarizeLedger,
+  PREP_STATE,
+  WORK_KIND_LABELS,
+} from '../../services/assignmentPrepService';
 import { buildScaffoldHtml } from '../../services/assignmentScaffoldDoc';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
 
@@ -219,6 +225,12 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       };
     });
   };
+
+  // פנקס ההכנה — נבנה מקומית מה-spec ומהראיות, בלי שום קריאת מודל. מציג למשתמש
+  // מה כבר מוכן, מה יעלה לו קריאת AI, ומה חסום עד שיוסיף מקור.
+  const ledger = React.useMemo(() => (
+    spec ? buildPrepLedger({ spec, evidence: evidenceResult?.bySection || {} }) : null
+  ), [spec, evidenceResult]);
 
   const totalPlanned = React.useMemo(() => (
     (spec?.sections || []).reduce((sum, s) => sum + (s.enabled === false ? 0 : (Number(s.wordQuota) || 0)), 0)
@@ -475,6 +487,63 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     + הוסף סעיף
                   </button>
                 </section>
+
+                {ledger && (
+                  <section className="rounded-2xl border border-white/15 bg-white/[0.05] p-4 backdrop-blur-md">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <h2 className="text-sm font-bold">4. מה מוכן — ומה עוד דורש AI</h2>
+                      <span className="text-[11px] text-white/60">{summarizeLedger(ledger)}</span>
+                    </div>
+
+                    {/* פס יחסים: מקומי / דורש AI / חסום */}
+                    <div className="mb-3 flex h-2 overflow-hidden rounded-full bg-white/10">
+                      {[
+                        { key: PREP_STATE.LOCAL, cls: 'bg-emerald-400' },
+                        { key: PREP_STATE.NEEDS_AI, cls: 'bg-sky-400' },
+                        { key: PREP_STATE.BLOCKED, cls: 'bg-amber-400' },
+                      ].map(({ key, cls }) => {
+                        const n = ledger.totals[key] || 0;
+                        if (!n) return null;
+                        return <div key={key} className={cls} style={{ width: `${(n / ledger.totals.all) * 100}%` }} />;
+                      })}
+                    </div>
+
+                    <ul className="space-y-1.5">
+                      {ledger.sections.map((section) => {
+                        const rows = ledger.bySection[section.id] || [];
+                        return (
+                          <li key={section.id} className="rounded-xl bg-slate-950/30 p-2.5">
+                            <div className="mb-1 text-xs font-bold text-white/90">{section.title}</div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {rows.map((row) => {
+                                const tone = row.state === PREP_STATE.LOCAL
+                                  ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                                  : row.state === PREP_STATE.NEEDS_AI
+                                    ? 'border-sky-400/30 bg-sky-400/10 text-sky-200'
+                                    : 'border-amber-400/30 bg-amber-400/10 text-amber-200';
+                                const icon = row.state === PREP_STATE.LOCAL ? '✓' : row.state === PREP_STATE.NEEDS_AI ? '✦' : '⚠';
+                                return (
+                                  <span
+                                    key={row.id}
+                                    title={row.detail || row.reason || ''}
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] ${tone}`}
+                                  >
+                                    {icon} {WORK_KIND_LABELS[row.kind] || row.kind}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+
+                    <div className="mt-2.5 text-[10px] leading-relaxed text-white/50">
+                      ✓ הופק מקומית · ✦ אפשר להשלים ב-AI מתוך הפאנל בעורך · ⚠ חסום עד שתוסיף מקור —
+                      כתיבה שם תהיה המצאה, ולכן לא תוצע.
+                    </div>
+                  </section>
+                )}
 
                 <div className="flex flex-wrap gap-2">
                   <button

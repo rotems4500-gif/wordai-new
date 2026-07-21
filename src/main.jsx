@@ -40,6 +40,8 @@ import ProjectHubStudio from './components/projectHub/ProjectHubStudio';
 import AssignmentScaffoldStudio from './components/assignmentScaffold/AssignmentScaffoldStudio';
 import EvidencePanel from './components/assignmentScaffold/EvidencePanel';
 import { readScaffold, ensureScaffoldReady, SCAFFOLD_UPDATED_EVENT } from './services/assignmentScaffoldStore';
+import { findSectionAtCursor } from './services/assignmentScaffoldDoc';
+import { buildScaffoldContextBlock } from './services/assignmentAiService';
 import { assignDocumentToProject, linkDocToMilestone } from './services/projectService';
 import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
@@ -8938,7 +8940,16 @@ ${sidebarReviewContext}`
                 assignmentBrief={assignmentBrief}
                 onToggleCompact={() => setSidebarCompact((prev) => !prev)}
                 reason={assistantTrigger}
-                documentContext={() => buildSidebarDocumentSnapshot(editor)}
+                documentContext={() => {
+                  // כשיש מטלה פעילה, כל שיחה בחלונית יורשת את הסעיף שהסמן בו,
+                  // המכסה שלו והמקורות המותרים — אחרת "תרחיב לי כאן" חסר הקשר.
+                  const snapshot = buildSidebarDocumentSnapshot(editor);
+                  if (!scaffoldActive) return snapshot;
+                  const spec = readScaffold()?.spec;
+                  const hit = spec ? findSectionAtCursor(editor, spec) : null;
+                  const block = buildScaffoldContextBlock({ sectionId: hit?.sectionId || null });
+                  return block ? `${snapshot}\n\n${block}` : snapshot;
+                }}
                 selectedText={selectedText}
                 currentBlockText={currentBlockText}
                 editTarget={editTarget}

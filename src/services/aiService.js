@@ -3051,6 +3051,19 @@ const getResolvedActiveProviderId = (cfg = null) => {
   return KNOWN_PROVIDER_IDS.find((providerId) => isProviderAllowedForUse(providerId, safeCfg)) || '';
 };
 
+/**
+ * האם קיים ספק AI שמיש (מפתח מוגדר ותקין). נדרש למסלולים שעובדים גם *בלי* AI
+ * ורוצים להציג את שלב ה-AI רק כשהוא באמת זמין — במקום להציע כפתור שייכשל.
+ * @returns {boolean}
+ */
+export const hasUsableAiProvider = () => {
+  try {
+    return Boolean(getResolvedActiveProviderId());
+  } catch {
+    return false;
+  }
+};
+
 const getSelectedProviderIds = (cfg = null, forceSingle = false) => {
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const resolvedActiveProviderId = getResolvedActiveProviderId(safeCfg);
