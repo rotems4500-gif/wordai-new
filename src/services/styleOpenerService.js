@@ -77,6 +77,9 @@ const OPENER_CUES = [
   { intent: 'comparison', re: /^(?:בהשוואה|לעומת|בניגוד|בעוד ש)/ },
   { intent: 'findings',   re: /^(?:הממצאים|התוצאות|מן הנתונים|הנתונים מראים)/ },
   { intent: 'analysis',   re: /^(?:ניתוח|בחינה של|בחינת|עיון ב)/ },
+  // שני האינטנטים שהיו חסרים מול 9 ה-INTENT_LABELS הקנוניים של הפרסר.
+  { intent: 'argument',   re: /^(?:ניתן לטעון|אני סבור|אני סבורה|לטענתי|לעמדתי|טענה מרכזית|הטיעון המרכזי|יש הגורסים)/ },
+  { intent: 'exposition', re: /^(?:המושג|המונח|ההגדרה|תופעת|הסוגיה של|מדובר ב)/ },
 ];
 
 function classifyOpener(opener, paragraph) {
@@ -148,7 +151,38 @@ function trimToPhrasing(words, docFreq) {
 const PARA_MIN_FOR_COUNT = 8;
 const PARA_MIN_FOR_OFFER = 18;
 
-function buildIndex() {
+/**
+ * ההכרעה על פסקה בודדת, במקום אחד.
+ *
+ * מוצא מ-buildIndex כדי שכלי התיוג (collectOpenerCandidates) יעבור באותו מסלול
+ * בדיוק. הרנס שמשחזר את הלוגיקה בנפרד מודד את עצמו, לא את המוצר — קרה כאן כבר.
+ *
+ * @returns {{opener:string|null, docs:number, intent:string|null, reject:string|null}}
+ */
+function decideOpener(paragraph, docFreq) {
+  const no = (reject) => ({ opener: null, docs: 0, intent: null, reject });
+
+  // בלוק בלי סימן פיסוק סוגר אינו פסקה אלא כותרת/עמוד שער. נמדד: "המכללה
+  // האקדמית הדסה החוג לפוליטיקה ותקשורת במסגרת הקורס" הוצע כפתיחה לסעיף.
+  if (!/[.!?…]/.test(paragraph)) return no('ללא-פיסוק');
+  const candidate = openerCandidate(paragraph);
+  if (!candidate) return no('קצר-מדי');
+  // השער והסכין הם אותה מדידה: trimToPhrasing מחזיר null כשאפילו הרצף המינימלי
+  // אינו חוזר, ואחרת מחזיר את החלק שכן.
+  const trimmed = trimToPhrasing(candidate, docFreq);
+  if (!trimmed) return no('לא-חוזר');
+  const opener = trimmed.text;
+  if (BANNED_OPENERS.test(opener)) return no('גנרי');
+  if (isContentBearing(opener, paragraph)) return no('נושא-תוכן');
+  return {
+    opener,
+    docs: trimmed.docs,
+    intent: classifyOpener(opener, paragraph),
+    reject: null,
+  };
+}
+
+function prepareCorpus() {
   const chunks = getChunks();
   const allParagraphs = [];
   chunks.forEach((chunk) => {
@@ -165,11 +199,6 @@ function buildIndex() {
   });
   const paragraphs = allParagraphs.filter((p) => countWords(p.text) >= PARA_MIN_FOR_OFFER);
 
-  const byIntent = {};
-  if (paragraphs.length < MIN_PARAGRAPHS_TO_TRY) {
-    return { byIntent, paragraphs: paragraphs.length, total: 0, sparse: true };
-  }
-
   // מדד ה"הרגל" = בכמה **מסמכים נפרדים** מופיע הרצף הפותח. נספר לכל אורך רצף
   // ולא רק לביגרם, כי אותה ספירה משמשת גם כשער (האם זה הרגל בכלל) וגם כסכין
   // (איפה הניסוח נגמר) — ראה trimToPhrasing.
@@ -183,29 +212,28 @@ function buildIndex() {
     }
   });
   const docFreq = (key) => (prefixDocs.get(key)?.size || 0);
+  return { allParagraphs, paragraphs, docFreq };
+}
+
+function buildIndex() {
+  const { paragraphs, docFreq } = prepareCorpus();
+
+  const byIntent = {};
+  if (paragraphs.length < MIN_PARAGRAPHS_TO_TRY) {
+    return { byIntent, paragraphs: paragraphs.length, total: 0, sparse: true };
+  }
 
   const seen = new Set();
   paragraphs.forEach(({ text: p }) => {
-    // בלוק בלי סימן פיסוק סוגר אינו פסקה אלא כותרת/עמוד שער. נמדד: "המכללה
-    // האקדמית הדסה החוג לפוליטיקה ותקשורת במסגרת הקורס" הוצע כפתיחה לסעיף.
-    if (!/[.!?…]/.test(p)) return;
-    const candidate = openerCandidate(p);
-    if (!candidate) return;
-    // השער והסכין הם אותה מדידה: trimToPhrasing מחזיר null כשאפילו הרצף המינימלי
-    // אינו חוזר, ואחרת מחזיר את החלק שכן.
-    const trimmed = trimToPhrasing(candidate, docFreq);
-    if (!trimmed) return;
-    const opener = trimmed.text;
-    if (BANNED_OPENERS.test(opener)) return;
-    if (isContentBearing(opener, p)) return;
+    const { opener, docs, intent, reject } = decideOpener(p, docFreq);
+    if (reject) return;
 
     const key = opener.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
 
-    const intent = classifyOpener(opener, p);
     if (!byIntent[intent]) byIntent[intent] = [];
-    byIntent[intent].push({ text: opener, weight: trimmed.docs });
+    byIntent[intent].push({ text: opener, weight: docs });
   });
 
   let total = 0;
@@ -217,6 +245,201 @@ function buildIndex() {
   });
 
   return { byIntent, paragraphs: paragraphs.length, total, sparse: total < MIN_OPENERS_FOR_READY };
+}
+
+/**
+ * כל המועמדים לפתיח, כולל אלה שנפסלו וסיבת הפסילה. לתיוג ולמדידה בלבד.
+ *
+ * מחזיר גם את הנפסלים בכוונה: בלעדיהם אפשר למדוד רק כמה מהנשמרים טובים (דיוק),
+ * ולא כמה טובים נזרקו (החזר). רוב הכיוונון כאן היה על הנשמרים בלבד, וזה בדיוק
+ * מה שהסתיר את העובדה שהמנוע מפספס פתיחים אמיתיים.
+ *
+ * `rawCandidate` הוא הרצף לפני הגזירה — כך אפשר לשפוט את החיתוך עצמו, לא רק
+ * את התוצאה.
+ *
+ * @returns {Array<{docId:string, rawCandidate:string, opener:string|null,
+ *   reject:string|null, docs:number, intent:string|null, paragraph:string}>}
+ */
+export function collectOpenerCandidates() {
+  const { paragraphs, docFreq } = prepareCorpus();
+  const rows = [];
+  paragraphs.forEach(({ text: p, docId }) => {
+    const words = openerCandidate(p);
+    if (!words) return;   // אפילו לא מועמד — אין מה לתייג
+    const { opener, docs, intent, reject } = decideOpener(p, docFreq);
+    rows.push({
+      docId,
+      rawCandidate: words.join(' '),
+      opener,
+      reject,
+      docs,
+      // גם לנפסלים יש כוונה — הפרופיל האישי (openerProfileService) כורה מהם
+      // מילות סלוט, ו"לא-חוזר" בלי intent היה מוחק את רוב חומר הגלם.
+      intent: intent || classifyOpener(words.join(' '), p),
+      paragraph: p.slice(0, 300),
+    });
+  });
+  return rows;
+}
+
+// ── הרכבה מדקדוק גלובלי ────────────────────────────────────────────────────
+// openerGrammar.data.js הוא מודול סטטי מיוצר (tools/opener-grammar-build). נטען
+// lazy כמו synonymsLexicon — משתמש שלא נזקק לפתיחים לא משלם את ה-KB.
+let grammarData = null;
+let grammarPromise = null;
+
+/** טוען את הדקדוק הגלובלי. חד-פעמי, אפס רשת. @returns {Promise<object|null>} */
+export async function ensureGrammarReady() {
+  if (grammarData) return grammarData;
+  if (!grammarPromise) {
+    grammarPromise = import('./openerGrammar.data.js')
+      .then((m) => { grammarData = m.OPENER_GRAMMAR; return grammarData; })
+      .catch(() => { grammarPromise = null; return null; });
+  }
+  return grammarPromise;
+}
+
+// RNG זרוע: אותו sectionId → אותם פתיחים (יציבות בין רינדורים); refresh מחליף
+// seed → וריאציה חדשה. djb2 + mulberry32 — בלי Math.random כדי שה-LAB יהיה דטרמיניסטי.
+function djb2(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i += 1) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const featureMatch = (a = 'x', b = 'x') => a === 'x' || b === 'x' || a === b;
+
+/**
+ * בחירת מילה לסלוט: משקל גלובלי (register) × דחיפה אישית.
+ * הנוסחה מהתוכנית: score = globalBase * (1 + λ·personalBoost);
+ * λ עולה עם גודל הקורפוס האישי — משתמש חדש מקבל גלובלי טהור, ותיק מקבל את
+ * המילים שלו, אבל הגלובלי לעולם לא נכבה (מגוון).
+ */
+function pickSlotWord(rng, list, { profile, intent, slot } = {}) {
+  if (!list || !list.length) return null;
+  const personal = profile?.slots?.[intent]?.[slot] || null;
+  const lambda = profile ? Math.min(0.8, (profile.distinctDocs || 0) / 10) : 0;
+  const weights = list.map((e) => {
+    const base = (e.reg ?? 1) >= 2 ? 2 : 1;
+    const count = personal ? (personal[e.w] || 0) : 0;
+    const boost = Math.min(2, count / 2);
+    return base * (1 + lambda * boost);
+  });
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = rng() * total;
+  for (let i = 0; i < list.length; i += 1) {
+    r -= weights[i];
+    if (r <= 0) return list[i];
+  }
+  return list[list.length - 1];
+}
+
+/**
+ * מרכיב פתיחים מילה-מילה מהדקדוק הגלובלי, בהתאם דקדוקי מובטח.
+ *
+ * שתי משפחות תבניות בלבד — זה כל הטריק שמאפשר עברית תקינה בלי מודל:
+ *   1. אימפרסונלית: stance + שם-פועל — אף מילה לא מוטה לפי נושא.
+ *   2. נושא: פעלי fin שמורים מוטים מראש עם {g,n}, והמנוע רק *מסנן* לצורה
+ *      התואמת את הנושא שנבחר. אין ייצור מורפולוגי — רק בחירה מתוך צורות נכונות.
+ * ה-reference מוצלב עם `tails` של הפועל — "תעסוק" תקבל רק "ב", "תבחן" רק "את".
+ *
+ * @param {string} intent אחד מ-9 האינטנטים הקנוניים
+ * @param {{count?:number, seedKey?:string, profile?:object}} opts
+ * @returns {Array<{text:string, source:'composed', intent:string, pattern:string, slots:object}>}
+ */
+export function composeOpeners(intent, { count = 3, seedKey = '', profile = null } = {}) {
+  const g = grammarData;
+  const def = g?.intents?.[intent];
+  if (!def) return [];
+  const rng = mulberry32(djb2(`${seedKey}|${intent}`));
+  const out = [];
+  const sigs = [];
+
+  for (let attempt = 0; attempt < count * 6 && out.length < count; attempt += 1) {
+    const pattern = def.patterns[Math.floor(rng() * def.patterns.length)];
+    const chosen = {};
+    const parts = [];
+    let ok = true;
+    let verb = null;
+
+    for (const token of pattern) {
+      if (token === 'connector?') {
+        if (rng() < 0.45) continue;   // קישור הוא תיבול, לא חובה
+        const pool = (g.shared.connector || []).filter((c) => !c.intents || c.intents.includes(intent));
+        const e = pickSlotWord(rng, pool, { profile, intent, slot: 'connector' });
+        if (e) { chosen.connector = e.w; parts.push(e.w); }
+      } else if (token === 'stance') {
+        const e = pickSlotWord(rng, g.shared.stance, { profile, intent, slot: 'stance' });
+        if (!e) { ok = false; break; }
+        chosen.stance = e.w; parts.push(e.w);
+      } else if (token === 'subjectNP') {
+        const e = pickSlotWord(rng, def.slots.subjectNP, { profile, intent, slot: 'subjectNP' });
+        if (!e) { ok = false; break; }
+        chosen.subjectNP = e.w; chosen._g = e.g; chosen._n = e.n; parts.push(e.w);
+      } else if (token === 'framingVerb.inf') {
+        const e = pickSlotWord(rng, def.slots.framingVerb?.inf, { profile, intent, slot: 'framingVerb' });
+        if (!e) { ok = false; break; }
+        verb = e; chosen.framingVerb = e.w; parts.push(e.w);
+      } else if (token === 'framingVerb.fin') {
+        const pool = (def.slots.framingVerb?.fin || []).filter((e) => (
+          featureMatch(e.g, chosen._g) && featureMatch(e.n, chosen._n)
+        ));
+        const e = pickSlotWord(rng, pool, { profile, intent, slot: 'framingVerb' });
+        if (!e) { ok = false; break; }
+        verb = e; chosen.framingVerb = e.w; parts.push(e.w);
+      } else if (token === 'reference') {
+        // ההצלבה עם tails היא מה ששומר על משלימים תקינים. פועל בלי tails
+        // מקבל את כל המאגר של האינטנט.
+        let pool = def.slots.reference || [];
+        if (verb?.tails) {
+          const allowed = new Set(verb.tails);
+          pool = pool.filter((e) => allowed.has(e.w));
+        }
+        const e = pickSlotWord(rng, pool, { profile, intent, slot: 'reference' });
+        if (!e) { ok = false; break; }
+        chosen.reference = e.w;
+        if (e.w) parts.push(e.w);
+        chosen._clitic = Boolean(e.clitic);
+      }
+    }
+    if (!ok || !parts.length) continue;
+
+    // שומר הכפילות: נושא ופועל מאותו שורש מייצרים "נקודת הדמיון הבולטת בולטת"
+    // או "ניתוח הדברים מנתח". זיהוי שורש אמיתי דורש מורפולוגיה; היוריסטיקה
+    // מספיקה — רצף 3 אותיות משותף בין הפועל לנושא פוסל את הווריאנט.
+    if (chosen.subjectNP && chosen.framingVerb) {
+      const stem = chosen.framingVerb.replace(/^[מלהנתי]/, '');
+      const overlap = stem.length >= 3 && [...Array(stem.length - 2)].some((_, k) => (
+        chosen.subjectNP.includes(stem.slice(k, k + 3))
+      ));
+      if (overlap) continue;
+    }
+
+    let text = parts.join(' ');
+    // הקליטיקה ("ב", "כ", "ל", "ש") נדבקת למילה הבאה — שהמשתמש יכתוב. לכן
+    // שלוש הנקודות נצמדות אליה בלי רווח; אחרי מילה עצמאית יש רווח.
+    text += chosen._clitic ? '…' : ' …';
+
+    if (BANNED_OPENERS.test(text)) continue;
+    // ייחודיות: שני וריאנטים שחולקים יותר משתי מילות סלוט הם אותו פתיח בתחפושת.
+    const sig = ['connector', 'stance', 'subjectNP', 'framingVerb', 'reference']
+      .map((k) => chosen[k] || '').filter(Boolean);
+    const dup = sigs.some((prev) => sig.filter((w) => prev.includes(w)).length > 2);
+    if (dup) continue;
+    sigs.push(sig);
+
+    const { _g, _n, _clitic, ...slots } = chosen;
+    out.push({ text, source: 'composed', intent, pattern: pattern.join('+'), slots });
+  }
+  return out;
 }
 
 function getIndex() {
@@ -231,6 +454,9 @@ function getIndex() {
 /** מוודא שחנות הדגימות נטענה לפני בנייה. @returns {Promise<object>} */
 export async function ensureOpenersReady() {
   try { await ensureSampleStoreReady(); } catch {}
+  // הדקדוק הגלובלי נטען כאן כדי ש-getOpenersForIntent (סינכרונית) תוכל להשלים
+  // בפתיחים מורכבים בלי להפוך לאסינכרונית אצל כל הקוראים הקיימים.
+  try { await ensureGrammarReady(); } catch {}
   return getIndex();
 }
 
@@ -242,9 +468,15 @@ export async function ensureOpenersReady() {
  * @param {{limit?:number}} opts
  * @returns {Array<{text:string, weight:number, fromIntent:string}>}
  */
-export function getOpenersForIntent(intent, { limit = 3 } = {}) {
+export function getOpenersForIntent(intent, { limit = 3, seedKey = '', profile = null } = {}) {
   const index = getIndex();
-  if (index.sparse) return [];
+
+  // קורפוס דל: פעם זה היה `return []` — משתמש חדש קיבל מסך ריק. עכשיו הדקדוק
+  // הגלובלי ממלא, מסומן `general` כדי שה-UI יאמר "כללי" ולא יתחזה לקול אישי.
+  if (index.sparse) {
+    return composeOpeners(intent, { count: limit, seedKey, profile })
+      .map((o) => ({ ...o, composed: true, general: true, weight: 0, fromIntent: intent }));
+  }
 
   const FALLBACK = {
     analysis: ['argument', 'findings', 'exposition'],
@@ -280,7 +512,17 @@ export function getOpenersForIntent(intent, { limit = 3 } = {}) {
     if (out.length >= fallbackCap) break;
     push(index.byIntent[alt], alt, fallbackCap);
   }
-  return out.map((o) => (o.fromIntent === intent ? o : { ...o, borrowed: true }));
+  const marked = out.map((o) => (o.fromIntent === intent ? o : { ...o, borrowed: true }));
+
+  // השלמה בהרכבה: הממוקשים (הקול האמיתי) תמיד קודמים, המורכבים ממלאים עד
+  // ה-limit. `composed` מסומן — ה-UI מציג "מנוסח עבורך", לא ציטוט מהקורפוס.
+  if (marked.length < limit) {
+    const composed = composeOpeners(intent, { count: limit - marked.length, seedKey, profile })
+      .filter((c) => !marked.some((o) => o.text === c.text))
+      .map((o) => ({ ...o, composed: true, weight: 0, fromIntent: intent }));
+    marked.push(...composed);
+  }
+  return marked;
 }
 
 /** מצב האינדקס לתצוגה ב-UI. */

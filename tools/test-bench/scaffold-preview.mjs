@@ -40,6 +40,8 @@ let netCalls = 0;
 const { parseAssignmentSpec, INTENT_LABELS } = await import('specsvc');
 const { buildScaffoldHtml } = await import('scaffolddoc');
 const openers = await import('openersvc');
+const samples = await import('stylesamples');
+const profileSvc = await import('../../src/services/openerProfileService.js');
 
 const CORPUS = process.env.WORDAI_CORPUS_OUT
   || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/5dfe23d5-acbf-4f96-9551-9997128f4b6f/scratchpad/real-corpus';
@@ -81,23 +83,38 @@ console.log(`הגשה      : ${spec.dueDate ?? '—'}`);
 console.log(`ודאות     : ${spec.confidence}`);
 if (spec.warnings?.length) spec.warnings.forEach((w) => console.log(`⚠ ${w}`));
 
-// ---- 3. משפטי הפתיחה ----
+// ---- 3. משפטי הפתיחה — הקורפוס האמיתי + דקדוק גלובלי + פרופיל אישי ----
 console.log(`\n${'═'.repeat(76)}\n▓▓▓ משפטי פתיחה לכל סעיף ▓▓▓\n`);
-await openers.ensureOpenersReady().catch(() => {});
-const stats = openers.getOpenerStatus?.() || null;
-console.log(`מצב הקורפוס האישי: ${stats ? JSON.stringify(stats) : '(אין getOpenerStatus)'}\n`);
 
-for (const s of spec.sections) {
-  const list = openers.getOpenersForIntent(s.intent, { limit: 3 }) || [];
-  console.log(`■ ${s.title}  [${INTENT_LABELS[s.intent] || s.intent}]`);
-  if (!list.length) {
-    console.log('   (אין פתיח — הקורפוס האישי ריק בסביבה הזו)');
-  } else {
-    list.forEach((o) => console.log(`   › ${typeof o === 'string' ? o : JSON.stringify(o)}`));
+// טעינת העבודות האמיתיות — אותו קלט שהמשתמש היה מעלה ב"הסגנון שלי".
+await samples.ensureSampleStoreReady();
+try {
+  const finals = path.join(CORPUS, 'finals');
+  const ffiles = (await readdir(finals)).filter((f) => f.endsWith('.txt')).sort();
+  const seen = new Set();
+  for (const f of ffiles) {
+    const raw = await readFile(path.join(finals, f), 'utf8');
+    const title = raw.split('\n', 1)[0].replace(/^#\s*/, '');
+    const body = raw.split('\n').slice(2).join('\n').trim();
+    const fp = body.replace(/\s+/g, '').slice(0, 400);
+    if (!body || seen.has(fp)) continue;
+    seen.add(fp);
+    samples.addDocumentSamples({ title, text: body, source: 'real-finals' });
   }
+} catch {}
+
+await openers.ensureOpenersReady().catch(() => {});
+const profile = await profileSvc.ensureOpenerProfile().catch(() => null);
+const stats = openers.getOpenerStatus?.() || null;
+const pstat = profileSvc.getOpenerProfileStatus();
+console.log(`קורפוס אישי: ${stats?.paragraphs ?? 0} פסקאות · ${stats?.openers ?? 0} פתיחים ממוקשים · פרופיל: ${pstat.personalWords} מילות סלוט (λ=${pstat.blendLambda.toFixed(2)})\n`);
+
+const TAG = (o) => (o.composed ? (o.general ? ' [כללי]' : ' [מנוסח עבורך]') : (o.borrowed ? ' [מושאל]' : ' [מהקורפוס שלך]'));
+for (const s of spec.sections) {
+  const list = openers.getOpenersForIntent(s.intent, { limit: 3, seedKey: s.id, profile }) || [];
+  console.log(`■ ${s.title}  [${INTENT_LABELS[s.intent] || s.intent}]`);
+  list.forEach((o) => console.log(`   › ${o.composed ? o.text : `${o.text}…`}${TAG(o)}`));
 }
 
 console.log(`\n${'═'.repeat(76)}`);
-console.log(`קריאות רשת: ${netCalls} ${netCalls === 0 ? '✓ הכול מקומי' : ''}`);
-console.log('\nמשפטי הפתיחה נגזרים מהקורפוס האישי ולכן ריקים כאן.');
-console.log('הבדיקה האמיתית: דפדפן, חשבון מחובר, פרופיל סגנון טעון.');
+console.log(`קריאות רשת: ${netCalls} ${netCalls === 0 ? '✓ הכול מקומי — אפס API' : '✗'}`);

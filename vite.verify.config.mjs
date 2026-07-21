@@ -34,6 +34,12 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/scaffold-preview.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'openers'
     ? 'tools/test-bench/openers-real-corpus.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'labelset'
+    ? 'tools/test-bench/openers-labelset.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'compose'
+    ? 'tools/test-bench/openers-compose.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'oprofile'
+    ? 'tools/test-bench/opener-profile.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -50,7 +56,10 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
               : process.env.WORDAI_VERIFY_ENTRY === 'devkey' ? 'out-devkey'
                 : process.env.WORDAI_VERIFY_ENTRY === 'realinstr' ? 'out-realinstr'
                   : process.env.WORDAI_VERIFY_ENTRY === 'preview' ? 'out-preview'
-                    : process.env.WORDAI_VERIFY_ENTRY === 'openers' ? 'out-openers' : 'out-sf';
+                    : process.env.WORDAI_VERIFY_ENTRY === 'openers' ? 'out-openers'
+                      : process.env.WORDAI_VERIFY_ENTRY === 'labelset' ? 'out-labelset'
+                        : process.env.WORDAI_VERIFY_ENTRY === 'compose' ? 'out-compose'
+                          : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

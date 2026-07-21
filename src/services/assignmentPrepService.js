@@ -18,6 +18,7 @@
 
 import { INTENT_LABELS } from './assignmentSpecService';
 import { getOpenersForIntent, getOpenerStatus } from './styleOpenerService';
+import { getOpenerProfile } from './openerProfileService';
 
 export const PREP_STATE = {
   LOCAL: 'local',       // הופק מקומית, לא צריך כלום
@@ -99,15 +100,24 @@ export function buildPrepLedger(scaffold, { hasWrittenProse = null } = {}) {
       });
     }
 
-    // 3. פתיח — מקומי אם יש לו הרגל כתיבה מתאים בקורפוס.
-    const openers = getOpenersForIntent(section.intent, { limit: 1 });
+    // 3. פתיח — ממוקש מהקורפוס כשיש הרגל, ואם אין — מורכב מהדקדוק הגלובלי
+    //    (openerGrammar). מאז מנוע ההרכבה הענף הריק כמעט בלתי-אפשרי, אבל נשמר
+    //    כרשת ביטחון (דקדוק שלא נטען עדיין).
+    const openers = getOpenersForIntent(section.intent, {
+      limit: 1,
+      seedKey: section.id,
+      profile: getOpenerProfile(),
+    });
     if (openers.length) {
+      const o = openers[0];
       sectionItems.push({
         id: `${section.id}:opener`,
         sectionId: section.id,
         kind: WORK_KINDS.OPENER,
         state: PREP_STATE.LOCAL,
-        detail: `"${openers[0].text}…"`,
+        detail: o.composed
+          ? `"${o.text}" ${o.general ? '(כללי)' : '(מנוסח עבורך)'}`
+          : `"${o.text}…"`,
       });
     } else {
       sectionItems.push({

@@ -24,6 +24,7 @@ import {
 } from '../../services/assignmentScaffoldDoc';
 import { formatProvenance } from '../../services/evidenceMatchService';
 import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpenerService';
+import { ensureOpenerProfile, getOpenerProfile, recordOpenerFeedback } from '../../services/openerProfileService';
 import { INTENT_LABELS } from '../../services/assignmentSpecService';
 import { draftSectionFromEvidence } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
@@ -78,9 +79,13 @@ export default function EvidencePanel({ editor, onClose }) {
   // פתיחים בקול של המשתמש, לפי הכוונה הרטורית של הסעיף. נבנים מהקורפוס האישי
   // ולכן זמינים רק אחרי שהוא העלה מספיק טקסט משלו.
   const [openersReady, setOpenersReady] = React.useState(false);
+  // seed הרענון: לחיצה על ↻ מרכיבה וריאציות חדשות מהדקדוק (ומדווחת "לא זה"
+  // על הקודמות — כך הפרופיל האישי לומד גם מדחייה, לא רק מאימוץ).
+  const [openerSeed, setOpenerSeed] = React.useState(0);
   React.useEffect(() => {
     let alive = true;
-    ensureOpenersReady().then(() => { if (alive) setOpenersReady(true); }).catch(() => {});
+    Promise.all([ensureOpenersReady(), ensureOpenerProfile()])
+      .then(() => { if (alive) setOpenersReady(true); }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -90,8 +95,28 @@ export default function EvidencePanel({ editor, onClose }) {
   const pct = quota ? Math.min(100, Math.round((wordsWritten / quota) * 100)) : 0;
 
   const openers = React.useMemo(() => (
-    openersReady && section ? getOpenersForIntent(section.intent, { limit: 3 }) : []
-  ), [openersReady, section]);
+    openersReady && section
+      ? getOpenersForIntent(section.intent, {
+        limit: 3,
+        seedKey: `${section.id}#${openerSeed}`,
+        profile: getOpenerProfile(),
+      })
+      : []
+  ), [openersReady, section, openerSeed]);
+
+  const refreshOpeners = () => {
+    openers.filter((o) => o.composed).forEach((o) => {
+      recordOpenerFeedback({ intent: section.intent, slots: o.slots, accepted: false });
+    });
+    setOpenerSeed((s) => s + 1);
+  };
+
+  // "עוד כמו זה": חיזוק מילות הסלוט של הווריאנט האהוב לפני ההרכבה מחדש —
+  // המשקל האישי שעלה גורם ל-pickSlotWord להעדיף אותן בסבב הבא.
+  const moreLikeThis = (o) => {
+    recordOpenerFeedback({ intent: section.intent, slots: o.slots, accepted: true });
+    setOpenerSeed((s) => s + 1);
+  };
 
   const insertQuote = (item) => {
     if (!editor) return;
@@ -99,9 +124,15 @@ export default function EvidencePanel({ editor, onClose }) {
   };
 
   // פתיח נשתל כטקסט להמשך הקלדה, לא כפסקה סגורה — הסמן נשאר בסוף המשפט.
-  const insertOpener = (text) => {
+  // פתיח מורכב מוזן בלי שלוש הנקודות (המשתמש ממשיך לכתוב), והוספתו היא
+  // אימוץ מפורש — המשוב מחזק את מילות הסלוט שנבחרו.
+  const insertOpener = (o) => {
     if (!editor) return;
+    const text = o.composed ? o.text.replace(/\s*…$/, '') : o.text;
     insertReplacingQuotaHint(editor, `${text} `);
+    if (o.composed) {
+      recordOpenerFeedback({ intent: section.intent, slots: o.slots, accepted: true });
+    }
   };
 
   // שלב 2: טיוטה מעוגנת. נגישה רק כשיש ראיות *וגם* ספק מוגדר — סעיף בלי ראיות
@@ -235,20 +266,49 @@ export default function EvidencePanel({ editor, onClose }) {
 
             {openers.length > 0 && (
               <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3">
-                <div className="text-[11px] font-bold text-indigo-900">
-                  פתיחים בקול שלך · {INTENT_LABELS[section.intent] || section.intent}
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-bold text-indigo-900">
+                    {openers.every((o) => o.general)
+                      ? `פתיחים כלליים · ${INTENT_LABELS[section.intent] || section.intent}`
+                      : `פתיחים בקול שלך · ${INTENT_LABELS[section.intent] || section.intent}`}
+                  </div>
+                  {openers.some((o) => o.composed) && (
+                    <button
+                      type="button"
+                      onClick={refreshOpeners}
+                      title="הצע ניסוחים אחרים"
+                      className="rounded-md px-1.5 py-0.5 text-[11px] text-indigo-500 transition hover:bg-indigo-100"
+                    >
+                      ↻
+                    </button>
+                  )}
                 </div>
                 <ul className="mt-1.5 space-y-1">
                   {openers.map((o) => (
-                    <li key={o.text}>
+                    <li key={o.text} className="flex items-stretch gap-1">
+                      {o.composed && (
+                        <button
+                          type="button"
+                          onClick={() => moreLikeThis(o)}
+                          title="עוד כמו זה"
+                          className="rounded-lg border border-indigo-200/70 bg-white px-1.5 text-[11px] text-indigo-400 transition hover:border-indigo-400 hover:text-indigo-600"
+                        >
+                          ♥
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => insertOpener(o.text)}
+                        onClick={() => insertOpener(o)}
                         title="הוסף במיקום הסמן"
                         className="w-full rounded-lg border border-indigo-200/70 bg-white px-2.5 py-1.5 text-right text-[11px] leading-relaxed text-slate-700 transition hover:border-indigo-400 hover:bg-indigo-50"
                       >
-                        {o.text}…
-                        {o.fromIntent !== section.intent && (
+                        {o.composed ? o.text : `${o.text}…`}
+                        {o.composed && (
+                          <span className="mr-1 text-[10px] text-indigo-400">
+                            {o.general ? '(כללי)' : '(מנוסח עבורך)'}
+                          </span>
+                        )}
+                        {!o.composed && o.fromIntent !== section.intent && (
                           <span className="mr-1 text-[10px] text-slate-400">
                             (מ{INTENT_LABELS[o.fromIntent] || o.fromIntent})
                           </span>
