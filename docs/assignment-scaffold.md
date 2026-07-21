@@ -61,21 +61,25 @@ embeddings מקומיים.
 | [evidenceMatchService.js](../src/services/evidenceMatchService.js) | שיוך סעיף→ראיות דרך `selectChunks` הקיים, עם סף רלוונטיות וזיהוי פערים. |
 | [styleOpenerService.js](../src/services/styleOpenerService.js) | כריית פתיחי פסקה מהקורפוס האישי, מסווגים לפי intent. |
 | [assignmentPrepService.js](../src/services/assignmentPrepService.js) | פנקס ההכנה. אפס תלות ב-aiService — מחושב גם בלי ספק. |
+| [gapSourceService.js](../src/services/gapSourceService.js) | **סגירת פער**: סעיף חסום → שאילתה דטרמיניסטית → `sourceRetrieval` → משיכת עמוד → נכנס לאותו אינדקס. נפילה לתקציר מסומן `strength:'abstract'`. |
+| [pageTextFetch.js](../src/services/pageTextFetch.js) | משיכת טקסט עמוד דו-מסלולית: דסקטופ Rust / ווב `/api/fetch-page-text`. משותף עם `chatSourceCheck`. |
+| [assignmentReviewService.js](../src/services/assignmentReviewService.js) | `reviewDraft` — סקירה דטרמיניסטית **באפס קריאות**. `applyFinishingPasses` — סגנון/אנטי-גלאי, רק לפי בחירה. |
 
 ### שירותים — שלב 2 (AI) ומצב
 
 | קובץ | תפקיד |
 |---|---|
-| [assignmentAiService.js](../src/services/assignmentAiService.js) | `draftSectionFromEvidence` (טיוטה מעוגנת), `buildScaffoldContextBlock` (הקשר לחלונית ה-AI). |
+| [assignmentAiService.js](../src/services/assignmentAiService.js) | `draftSectionFromEvidence` (סעיף בודד), **`draftWholeWork`** (כל העבודה בקריאה אחת, מספור ראיות גלובלי), `buildBibliography` (דטרמיניסטי — המודל לא נוגע), `buildScaffoldContextBlock`. |
 | [assignmentScaffoldStore.js](../src/services/assignmentScaffoldStore.js) | השלד הפעיל (spec + evidence). IndexedDB, שורד רענון. שלד אחד בכל רגע. |
-| [assignmentScaffoldDoc.js](../src/services/assignmentScaffoldDoc.js) | spec→HTML, `findSectionAtCursor`, `countSectionWords`, `insertReplacingQuotaHint`. |
+| [assignmentScaffoldDoc.js](../src/services/assignmentScaffoldDoc.js) | spec→HTML, **`buildWholeWorkHtml`** (סעיפים+חסומים+ביבליוגרפיה, בסדר ה-spec), `findSectionAtCursor`, `countSectionWords`, `insertReplacingQuotaHint`. |
 
 ### ממשק
 
 | קובץ | תפקיד |
 |---|---|
 | [AssignmentScaffoldStudio.jsx](../src/components/assignmentScaffold/AssignmentScaffoldStudio.jsx) | מסך מלא: הנחיות → שלד נערך → חומרים → ראיות → פנקס → פתיחה בעורך. |
-| [EvidencePanel.jsx](../src/components/assignmentScaffold/EvidencePanel.jsx) | חלונית צד מעוגנת, עוקבת אחרי הכותרת שמעל הסמן. |
+| [EvidencePanel.jsx](../src/components/assignmentScaffold/EvidencePanel.jsx) | חלונית צד מעוגנת, עוקבת אחרי הכותרת שמעל הסמן. כולל **"חפש מקורות לסעיף הזה"** על סעיף חסום. |
+| [WorkReviewDialog.jsx](../src/components/assignmentScaffold/WorkReviewDialog.jsx) | סבב התיקונים: ליקויים + בחירת ליטוש + **מחיר בקריאות לפני הלחיצה**. |
 
 ### חיווט
 
@@ -99,11 +103,39 @@ embeddings מקומיים.
 ההתפלגויות **חופפות** — חיובי שגוי מזדמן הוא בלתי נמנע, לא באג. לכן ה-score מוצג
 בפאנל. הניחוש המקורי (0.74) היה מתחת ל-p10 של הלא-רלוונטיים, כלומר קיבל כמעט הכול.
 
-**עלות כתיבה** — נמדד ב-LAB: **קריאה אחת לסעיף שלם** (148 מילים, שתי פסקאות).
+**עלות כתיבה** — נמדד ב-LAB: קריאה אחת לסעיף בודד; **קריאה אחת לעבודה שלמה** ב-`draftWholeWork`.
+
+**מכסת מילים = כמות מקורות** (`tools/test-bench/quota-probe.mjs`) — אותה מכסה, אותו פרומפט:
+
+```
+1 קטע ראיות  →  98 מילים
+4 קטעי ראיות → 217 מילים
+```
+
+המודל **לא כותב קצר** — הוא מסרב לרפד מעבר למה שהמקורות מאפשרים, וזה בדיוק חוק 3
+שנתנו לו. לכן `reviewDraft` מתריע *"אין מספיק מקורות למכסה"* ולא *"הסעיף קצר"*:
+הניסוח השני שולח את המשתמש לבקש הרחבה, והוא מקבל ריפוד.
+
+**עלות הזרימה המלאה** (`e2e-assignment.mjs`, 3 סעיפים, אחד מהם חסום):
+**2 קריאות מודל** — אחת לחיפוש המקור החסר, אחת לכתיבת כל העבודה.
 
 ---
 
 ## גוצ'אס — כל אחד מהם עלה זמן
+
+**שלושה שנתפסו רק בריצת הקצה-לקצה** — כל שלב עבר את ההרנס שלו, והם ישבו בתפרים:
+
+- **מכסת ההיקף הכולל נלקחה מסעיף.** `"היקף כולל: 700 מילים"` לא מתאים ל-regex
+  (הוא מצפה למספר צמוד ל"היקף"), הסריקה המשיכה ותפסה `"עד 250 מילים"` של הסעיף
+  האחרון. ההיקף של כל העבודה נקבע לפי סעיף בודד, ומשם התפזרו מכסות שגויות.
+  התיקון: `extractGlobalWordQuota` מעדיף שורה עם ניסוח גלובלי מפורש.
+- **שאילתת הפער איבדה את נושא הסעיף.** מכסת המילים (`250`) נכנסה לשאילתה בעוד
+  `"רשתות חברתיות"` — המונח היחיד שמבחין את הסעיף — נדחק מעבר ל-`maxTerms` ע"י
+  מילים כלליות מנושא המטלה. התוצאה: מקור גנרי שנפל בסף הרלוונטיות, והסעיף נשאר
+  חסום. התיקון: מונחי ההנחיה קודמים לנושא המטלה, ואסימון עם ספרה נזרק.
+- **המודל מחזיר `<p>` למרות שהתבקש פרוזה** — התגיות עברו escape והוצגו כטקסט
+  `&lt;p&gt;` במסמך. `stripModelHtml` מנקה לפני ההרכבה.
+
 
 - **`\b` לא עובד בעברית.** אות עברית אינה `\w`, ולכן `/\bנתח\b/` לעולם לא מתאים.
   זה השתיק את כל זיהוי ה-intent בשקט. תת-מחרוזת לעברית, `\b` רק ללטינית.
@@ -133,6 +165,14 @@ embeddings מקומיים.
 ---
 
 ## איך בודקים
+
+**`node tools/test-bench/run-e2e-assignment.mjs` — הבדיקה שסוגרת את הלולאה.**
+מריצה את כל השרשרת מול ספקים אמיתיים ובודקת 30 טענות. כל שלב יש לו הרנס משלו,
+אבל רק זו תופסת את התפרים. שלושת הבאגים שהיא מצאה בריצה הראשונה מתועדים בגוצ'אס.
+
+הרנסים ממוקדים: `run-gap-harness` (סגירת פער), `run-whole-work-harness` (קריאה אחת),
+`run-review-unit` (סקירה, 0 רשת), `run-quota-probe` (ניסוי המכסה).
+
 
 **מול ספק אמיתי (מפתחות DPAPI של האפליקציה):**
 
