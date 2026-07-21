@@ -36,14 +36,38 @@ async function extractDocx(buf) {
 // זהה ל-itemsToLines ב-src/services/materialExtractBrowser.js. חייב להישאר מיושר:
 // אם ההרנס מחלץ אחרת מהאפליקציה, הכיול נעשה על טקסט שהמשתמש לעולם לא יראה.
 const LINE_Y_TOLERANCE = 2.5;
+
+const needsSpace = (prev, cur) => {
+  if (!prev || !cur) return false;
+  const prevStr = String(prev.str ?? '');
+  const curStr = String(cur.str ?? '');
+  if (!prevStr || !curStr) return false;
+  if (/\s$/.test(prevStr) || /^\s/.test(curStr)) return false;
+  const px = prev.transform?.[4];
+  const cx = cur.transform?.[4];
+  if (typeof px !== 'number' || typeof cx !== 'number') return false;
+  const pw = Number(prev.width) || 0;
+  const cw = Number(cur.width) || 0;
+  const gap = Math.max(px - (cx + cw), cx - (px + pw));
+  if (gap <= 0) return false;
+  const avgChar = (pw / Math.max(1, prevStr.length) + cw / Math.max(1, curStr.length)) / 2;
+  return gap >= Math.max(0.8, avgChar * 0.28);
+};
+
 const itemsToLines = (items = []) => {
   const lines = [];
   let current = null;
   items.forEach((item) => {
     const str = String(item?.str ?? '');
     const y = Array.isArray(item?.transform) ? item.transform[5] : null;
-    if (current && y !== null && Math.abs(current.y - y) <= LINE_Y_TOLERANCE) current.parts.push(str);
-    else { if (current) lines.push(current); current = { y, parts: [str] }; }
+    if (current && y !== null && Math.abs(current.y - y) <= LINE_Y_TOLERANCE) {
+      if (needsSpace(current.lastItem, item)) current.parts.push(' ');
+      current.parts.push(str);
+      if (str) current.lastItem = item;
+    } else {
+      if (current) lines.push(current);
+      current = { y, parts: [str], lastItem: str ? item : null };
+    }
     if (item?.hasEOL) { lines.push(current); current = null; }
   });
   if (current) lines.push(current);
@@ -64,8 +88,10 @@ allowfont: false,
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    // סימון עמוד נשמר — הפרובננס של הראיות משתמש בו.
-    pages.push(`[עמוד ${i}]\n${itemsToLines(content.items)}`);
+    // ⚠️ בלי סימוני "[עמוד N]": האפליקציה לא מייצרת אותם (materialExtractBrowser
+    // מחבר עמודים ב-\n\n בלבד). הרנס שמוסיף טקסט משלו מכייל על קלט שהמשתמש
+    // לעולם לא יראה — וזה בדיוק מה שקרה: הסימון נבחר ככותרת המטלה.
+    pages.push(itemsToLines(content.items));
   }
   return pages.join('\n\n');
 }

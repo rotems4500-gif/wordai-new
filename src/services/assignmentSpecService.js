@@ -158,14 +158,75 @@ function extractGlobalWordQuota(text) {
 
 // ---------- דרישות גלובליות ----------
 
+// שמות הפריט הביבליוגרפי כפי שמרצים כותבים בפועל. "פריטי מקור" ו"כתבות" נוספו
+// אחרי שנמדדו במטלות אמיתיות — בלעדיהם דרישות מפורשות פשוט לא נראו.
+const SOURCE_NOUN = '(?:מקורות|מקור|מאמרים|מאמר|פריטי\\s*מקור|פריטים\\s*ביבליוגרפיים|הפניות|כתבות|references|sources|articles)';
+// תארים שמפרידים בין המספר לשם הפריט: "שלושה מאמרים **אקדמיים** לפחות".
+const SOURCE_ADJ = '(?:\\s*(?:אקדמיים|אקדמי|שפיטים|שפיט|עדכניים|רלוונטיים|מגוונים|נוספים|שונים))*';
+
+/**
+ * דרישת מספר המקורות. נמדד על מטלות אמיתיות: הניסוח מגיע בשלושה סדרים שונים,
+ * והתמיכה רק בסדר אחד החמיצה יותר ממחצית מהמקרים שכן צוינו.
+ */
 function extractSourceRequirement(text) {
-  const re = /(?:לפחות|מינימום|לכל הפחות|לא פחות מ-?)\s*([\dא-ת]+)\s*(?:מקורות|מאמרים|פריטים ביבליוגרפיים|הפניות|references|sources)/i;
-  const m = clean(text).match(re);
-  if (m) return { count: parseCount(m[1]), kind: 'min' };
-  const loose = clean(text).match(/([\dא-ת]+)\s*(?:מקורות|מאמרים|פריטים ביבליוגרפיים)\s*(?:אקדמיים|שפיטים|עדכניים)?/i);
+  const src = clean(text);
+
+  // 1. "לפחות שלושה פריטי מקור" / "לפחות 5 מקורות"
+  const before = src.match(new RegExp(
+    `(?:לפחות|מינימום|לכל הפחות|לא פחות מ-?)\\s*([\\dא-ת]+)\\s*${SOURCE_NOUN}`, 'i'));
+  if (before) {
+    const n = parseCount(before[1]);
+    if (n) return { count: n, kind: 'min' };
+  }
+
+  // 2. "שבעה מאמרים לפחות" / "מאמרים אקדמיים (שלושה לפחות)" — המספר לפני שם
+  //    הפריט או אחריו, ו"לפחות" סוגר את הביטוי.
+  const after = src.match(new RegExp(
+    `([\\dא-ת]+)\\s*${SOURCE_NOUN}${SOURCE_ADJ}\\s*[)]?\\s*לפחות`, 'i'))
+    || src.match(new RegExp(`${SOURCE_NOUN}${SOURCE_ADJ}\\s*[(]?\\s*([\\dא-ת]+)\\s*לפחות`, 'i'));
+  if (after) {
+    const n = parseCount(after[1]);
+    if (n) return { count: n, kind: 'min' };
+  }
+
+  // 3. "לפחות מאמר אקדמי אחד" — הכמת בסוף. מוגבל ל"אחד/אחת" כי רק שם הסדר הזה
+  //    חד-משמעי; "לפחות מאמרים שלושה" אינו עברית תקנית ולא נצפה.
+  const trailing = src.match(new RegExp(
+    `(?:לפחות|מינימום)\\s*${SOURCE_NOUN}${SOURCE_ADJ}\\s*(אחד|אחת)`, 'i'));
+  if (trailing) return { count: 1, kind: 'min' };
+
+  // 4. בלי "לפחות" — אמירה כמותית רכה.
+  const loose = src.match(new RegExp(`([\\dא-ת]+)\\s*${SOURCE_NOUN}${SOURCE_ADJ}`, 'i'));
   if (loose) {
     const n = parseCount(loose[1]);
     if (n) return { count: n, kind: 'about' };
+  }
+  return null;
+}
+
+/**
+ * משקל הסעיף בציון: "(400 מילים, 20 נקודות)" או "...סיפור המאבק. 20%".
+ *
+ * למה זה חשוב: זו האמירה המפורשת של המרצה על חשיבות יחסית של הסעיף, והיא
+ * הבסיס הנכון לחלוקת מכסות — טוב בהרבה מאורך ההנחיה, שהוא פרוקסי מקרי (סעיף
+ * מנוסח בקצרה יכול להיות הכבד ביותר). נמדד: מטלות אמיתיות נוקבות במשקל
+ * לכל סעיף הרבה יותר מאשר במכסת מילים לכל סעיף.
+ *
+ * @returns {number|null} משקל יחסי (נקודות או אחוזים — הסולם לא משנה, רק היחס)
+ */
+function extractSectionWeight(text) {
+  const src = clean(text);
+  // ⚠️ בלי `\b` — הגוצ'ה החוזרת: אות עברית אינה `\w`, ואחרי "נקודות" לרוב בא ")",
+  // גם הוא לא-מילה. כלומר `\b` **לעולם** לא מתקיים שם, וכל המשקלים נעלמו בשקט.
+  const points = src.match(/(\d{1,3})\s*(?:נקודות|נק['׳])/);
+  if (points) {
+    const n = Number(points[1]);
+    if (n > 0 && n <= 100) return n;
+  }
+  const percent = src.match(/(\d{1,3})\s*(?:%|אחוז(?:ים)?)/);
+  if (percent) {
+    const n = Number(percent[1]);
+    if (n > 0 && n <= 100) return n;
   }
   return null;
 }
@@ -192,6 +253,9 @@ function extractAssignmentTitle(text) {
       const s = sentence.trim().replace(/[.:]\s*$/, '');
       if (!s) continue;
       if (/^(היקף|הגשה|תאריך|מועד|יש להגיש|פורמט|סגנון|נדרש)/.test(s)) continue;
+      // כותרת עמוד ("עמוד 2", "[עמוד 1]") אינה שם המטלה. מופיעה בקבצים סרוקים
+      // וב-PDF-ים עם כותרות ריצה.
+      if (/^\[?\s*(?:עמוד|page)\s*\d+\s*\]?$/i.test(s)) continue;
       if (/\d+\s*(מילים|עמודים|מקורות)/.test(s)) continue;
       const words = countWords(s);
       if (words < 2 || words > 15) continue;
@@ -263,6 +327,27 @@ function matchSectionStart(line) {
   return null;
 }
 
+/**
+ * שומר על רצף ממוספר **עולה אחד** בלבד.
+ *
+ * מטלות אמיתיות מכילות יותר מרשימה ממוספרת אחת: אחרי "1..4" של הסעיפים מגיעה
+ * "1..3" של דרישות המקורות או של כללי ההגשה. בלי הכלל הזה הן נספרות כסעיפים
+ * נוספים, מקבלות מכסת מילים משלהן, ובסוף נכתב "סעיף" שהוא בעצם הוראת הגשה.
+ * נמדד על מטלה אמיתית שייצרה 7 סעיפים במקום 4.
+ *
+ * איפוס המונה (5 → 1) מסמן רשימה חדשה, ולכן חותכים שם.
+ */
+function keepAscendingNumericRun(starts) {
+  if (starts.length < 2) return starts;
+  const top = (marker) => Number(String(marker).split('.')[0]) || 0;
+  const kept = [starts[0]];
+  for (let i = 1; i < starts.length; i += 1) {
+    if (top(starts[i].marker) > top(kept[kept.length - 1].marker)) kept.push(starts[i]);
+    else break;
+  }
+  return kept;
+}
+
 // שומר-סף לאותיות עבריות: "ו." הוא ו' חיבור לפחות באותה תדירות שהוא סעיף ו'.
 // מקבלים רצף אותיות רק אם הוא מתחיל ב-א/ב ועולה לפי HEB_ORDINALS ברובו.
 function hebrewRunLooksReal(markers) {
@@ -277,8 +362,12 @@ function hebrewRunLooksReal(markers) {
 
 // "1. מבוא - הציגו את הנושא. עד 300 מילים." → כותרת "מבוא" + הנחיה נפרדת.
 // בלי זה הכותרת בולעת את כל השורה, וגם המכסה שכתובה בה לא נספרת כהנחיה של הסעיף.
+// סוגריים שמכילים רק מטא-דאטה של המטלה ("(400 מילים, 20 נקודות)") — הערך כבר
+// חולץ ל-wordQuota/weight, ובכותרת הוא רק רעש שגם נכנס לכותרת במסמך שנוצר.
+const TITLE_META_PAREN_RE = /\s*[（(]\s*[^)）]*?(?:מילים|מלים|נקודות|נק['׳]|%|אחוז)[^)）]*[)）]/g;
+
 function splitTitleAndLead(rawTitle) {
-  const s = String(rawTitle || '').trim();
+  const s = String(rawTitle || '').replace(TITLE_META_PAREN_RE, '').trim();
   if (!s) return { title: '', lead: '' };
 
   const sep = s.match(/^(.{2,60}?)\s*[-–—:]\s+(.+)$/);
@@ -368,7 +457,9 @@ function splitIntoSections(text) {
   // מטלות אמיתיות בנויות "1. סעיף" ומתחתיו "א. ב. ג." — האותיות הן תתי-דרישות
   // של הסעיף, לא סעיפים אחים. בלי הסינון הזה מטלה עם 3 סעיפים ו-15 תת-סעיפים
   // הופכת ל-18 סעיפים, כל אחד עם מכסת מילים משלו. זה היה מקור מרכזי ל"שלד גנרי".
-  else if (kinds.has('numeric')) filtered = filtered.filter((s) => s.kind === 'numeric');
+  else if (kinds.has('numeric')) {
+    filtered = keepAscendingNumericRun(filtered.filter((s) => s.kind === 'numeric'));
+  }
 
   return filtered.map((start, i) => {
     const from = start.lineIndex + 1;
@@ -376,7 +467,9 @@ function splitIntoSections(text) {
     const rest = lines.slice(from, to).join('\n').trim();
     const { title, lead } = splitTitleAndLead(start.title);
     const body = [lead, rest].filter(Boolean).join('\n').trim();
-    return { marker: start.marker, title, body, kind: start.kind };
+    // rawTitle שומר את המכסה והמשקל שהוסרו מהכותרת לתצוגה — חילוץ המטא-דאטה
+    // חייב לרוץ עליו, אחרת הוא מחפש ערך שכבר נמחק.
+    return { marker: start.marker, title, rawTitle: start.title, body, kind: start.kind };
   });
 }
 
@@ -394,7 +487,13 @@ function distributeQuotas(sections, totalWords) {
   const remaining = Math.max(0, totalWords - used);
   if (!remaining) return sections;
 
-  const weights = rest.map((s) => Math.max(1, countWords(`${s.title} ${s.instructions}`)));
+  // עדיפות למשקל שהמרצה נקב בו במפורש (נקודות/אחוזים). אורך ההנחיה הוא נפילה
+  // בלבד — הוא פרוקסי מקרי, וסעיף מנוסח בקצרה יכול להיות הכבד ביותר במטלה.
+  // מערבבים רק כשלכל הסעיפים חסרי-המכסה יש משקל; אחרת היחס בין השניים חסר משמעות.
+  const allWeighted = rest.every((s) => Number(s.weight) > 0);
+  const weights = allWeighted
+    ? rest.map((s) => Number(s.weight))
+    : rest.map((s) => Math.max(1, countWords(`${s.title} ${s.instructions}`)));
   const weightSum = weights.reduce((a, b) => a + b, 0);
   rest.forEach((section, i) => {
     section.wordQuota = Math.max(80, Math.round((remaining * weights[i]) / weightSum / 10) * 10);
@@ -440,7 +539,9 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
 
   const sections = rawSections.map((raw, i) => {
     const combined = `${raw.title}\n${raw.body}`;
-    const localQuota = extractWordQuota(raw.body);
+    // המכסה נמצאת בפועל **בכותרת** ולא בגוף: "1. תיאור המשבר (400 מילים, 20 נקודות)".
+    // חיפוש בגוף בלבד החמיץ אותה בכל המטלות שנמדדו, וכל הסעיפים קיבלו מכסה נגזרת.
+    const localQuota = extractWordQuota(raw.rawTitle || raw.title) || extractWordQuota(raw.body);
     // מכסה מקומית נלקחת רק אם היא לא אותה מחרוזת כמו המכסה הגלובלית — אחרת
     // ההיקף הכולל של העבודה היה נדבק לסעיף הראשון שבמקרה מכיל אותו.
     const isEcho = localQuota && globalQuota && localQuota.source === globalQuota.source;
@@ -453,6 +554,7 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
       intent: detectIntent(combined),
       wordQuota: !isEcho && localQuota ? localQuota.words : null,
       quotaSource: !isEcho && localQuota ? 'explicit' : null,
+      weight: extractSectionWeight(`${raw.rawTitle || raw.title}\n${raw.body}`),
       keywords: extractTerms(combined).slice(0, 6),
       requiresSources: /מקור|מאמר|ציטוט|הפניה|ביבליוגרפ|source|cite/i.test(combined),
       enabled: true,

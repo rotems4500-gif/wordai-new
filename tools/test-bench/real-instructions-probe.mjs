@@ -45,11 +45,20 @@ const ONLY = process.env.WORDAI_PROBE_ONLY || '';
 const files = (await readdir(DIR)).filter((f) => f.endsWith('.txt')).sort();
 const rows = [];
 
+// ⚠️ התיקייה מכילה את אותה מטלה כמה פעמים ("(1)", "(2)"…). בלי dedupe הסטטיסטיקה
+// משוקללת לטובת מטלות שבמקרה הועתקו — 30 קבצים הם 19 מטלות ייחודיות בלבד.
+const seenBodies = new Set();
+let duplicates = 0;
+
 for (const file of files) {
   const raw = await readFile(path.join(DIR, file), 'utf8');
   const firstLine = raw.split('\n', 1)[0].replace(/^#\s*/, '');
   const body = raw.split('\n').slice(2).join('\n');
   if (ONLY && !file.includes(ONLY) && !firstLine.includes(ONLY)) continue;
+
+  const fingerprint = body.replace(/\s+/g, '');
+  if (seenBodies.has(fingerprint)) { duplicates += 1; continue; }
+  seenBodies.add(fingerprint);
 
   const spec = parseAssignmentSpec(body);
   rows.push({ file, source: firstLine, spec, chars: body.length });
@@ -68,7 +77,7 @@ for (const { file, source, spec, chars } of rows) {
   console.log(`סעיפים (${spec.sections.length}):`);
   spec.sections.forEach((s, i) => {
     console.log(`  ${i + 1}. [${INTENT_LABELS[s.intent] || s.intent}] ${String(s.title).slice(0, 66)}`);
-    console.log(`     מכסה ${s.wordQuota || '—'}${s.quotaSource ? ` (${s.quotaSource})` : ''} · הנחיה: ${String(s.instructions || '').replace(/\s+/g, ' ').slice(0, 90)}`);
+    console.log(`     מכסה ${s.wordQuota || '—'}${s.quotaSource ? ` (${s.quotaSource})` : ''} · משקל ${s.weight ?? '—'} · הנחיה: ${String(s.instructions || '').replace(/\s+/g, ' ').slice(0, 80)}`);
   });
   if (spec.warnings?.length) console.log(`⚠  ${spec.warnings.join(' · ')}`);
 }
@@ -97,6 +106,8 @@ line('בלי דרישת מקורות', noSources);
 line('כל המכסות נגזרו (אף אחת לא זוהתה)', derivedOnly);
 line('כל הסעיפים באותה כוונה', allExposition);
 line('כותרת סעיף ארוכה מ-80 תווים', longTitles);
+const withWeights = rows.filter((r) => r.spec.sections.some((s) => s.weight));
+line('זוהו משקלי סעיפים (נקודות/%)', withWeights);
 
 console.log('\nהחשודים המיידיים:');
 [...noSections, ...oneSection].slice(0, 10).forEach((r) => console.log(`  · ${r.source.slice(0, 70)} → ${r.spec.sections.length} סעיפים`));

@@ -81,6 +81,40 @@ const extractXlsx = async (uint8) => {
  */
 const LINE_Y_TOLERANCE = 2.5;
 
+/**
+ * האם צריך רווח בין שני פריטים סמוכים באותה שורה.
+ *
+ * ⚠️ בלי זה מקבלים "בשיטתAPA", "לפחות5מקורות", "לשבעהמאמריםלפחות" — pdfjs מפצל
+ * לפי run של גופן, לא לפי מילה, והרווחים הם מרווח גיאומטרי ולא תווים. חיבור נאיבי
+ * מדביק מילים ושובר כל regex שמחפש מונח או מספר. נמדד על מטלות אמיתיות.
+ *
+ * עברית היא RTL — הפריט הבא נמצא **שמאלה**, ולכן הפער מחושב הפוך. בודקים את שני
+ * הכיוונים ולוקחים את החיובי, כדי שאותו קוד יעבוד גם על מסמך אנגלי.
+ */
+const needsSpace = (prev, cur) => {
+  if (!prev || !cur) return false;
+  const prevStr = String(prev.str ?? '');
+  const curStr = String(cur.str ?? '');
+  if (!prevStr || !curStr) return false;
+  // כבר יש רווח באחד הצדדים — לא מוסיפים עוד.
+  if (/\s$/.test(prevStr) || /^\s/.test(curStr)) return false;
+
+  const px = prev.transform?.[4];
+  const cx = cur.transform?.[4];
+  if (typeof px !== 'number' || typeof cx !== 'number') return false;
+  const pw = Number(prev.width) || 0;
+  const cw = Number(cur.width) || 0;
+
+  const gapRtl = px - (cx + cw);   // הפריט הבא משמאל (עברית)
+  const gapLtr = cx - (px + pw);   // הפריט הבא מימין (אנגלית)
+  const gap = Math.max(gapRtl, gapLtr);
+  if (gap <= 0) return false;
+
+  // סף יחסי לרוחב תו ממוצע — גופן קטן צריך סף קטן יותר.
+  const avgChar = (pw / Math.max(1, prevStr.length) + cw / Math.max(1, curStr.length)) / 2;
+  return gap >= Math.max(0.8, avgChar * 0.28);
+};
+
 const itemsToLines = (items = []) => {
   const lines = [];
   let current = null;
@@ -91,10 +125,12 @@ const itemsToLines = (items = []) => {
     const y = Array.isArray(item?.transform) ? item.transform[5] : null;
 
     if (current && y !== null && Math.abs(current.y - y) <= LINE_Y_TOLERANCE) {
+      if (needsSpace(current.lastItem, item)) current.parts.push(' ');
       current.parts.push(str);
+      if (str) current.lastItem = item;
     } else {
       if (current) lines.push(current);
-      current = { y, parts: [str] };
+      current = { y, parts: [str], lastItem: str ? item : null };
     }
     if (item?.hasEOL) { lines.push(current); current = null; }
   });
