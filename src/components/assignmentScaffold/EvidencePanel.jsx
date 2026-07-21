@@ -105,10 +105,13 @@ export default function EvidencePanel({ editor, onClose }) {
         setDraftError(result.reason || 'הכתיבה נכשלה.');
         return;
       }
-      const html = String(result.text)
-        .split(/\n{2,}/)
-        .map((p) => `<p>${p.replace(/\n/g, ' ').trim()}</p>`)
-        .join('');
+      // המודל עשוי להחזיר HTML מוכן (<p>…</p>) או טקסט גולמי — נצפו שניהם ב-LAB.
+      // עטיפה עיוורת יוצרת <p><p>…</p></p>, ולכן עוטפים רק כשזה לא כבר HTML.
+      const raw = String(result.text).trim();
+      const alreadyHtml = /^\s*<(p|h[1-6]|ul|ol|blockquote)\b/i.test(raw);
+      const html = alreadyHtml
+        ? raw
+        : raw.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, ' ').trim()}</p>`).join('');
       insertReplacingQuotaHint(editor, html);
     } catch (err) {
       setDraftError(String(err?.message || err));

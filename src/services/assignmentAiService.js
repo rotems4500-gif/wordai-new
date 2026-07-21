@@ -19,11 +19,22 @@ const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArr
 
 // קריאה יחידה ונקייה: בלי workflow אוטומטי ובלי ריבוי מודלים. מנוע הסגנון האישי
 // נשאר *דלוק* בכוונה — הפואנטה היא טיוטה בקול של המשתמש.
+//
+// ⚠️ forceSuppressResearchRouting חובה כאן. בלעדיו הפרומפט ("סעיף אקדמי", "מקורות",
+// "APA") מזוהה כבקשת מחקר, והקריאה נחטפת לצינור אחזור המקורות — במקום טיוטה חוזרת
+// רשימת קישורים מהאינטרנט. נתפס ב-LAB; ראה tools/test-bench/assignment-ai-harness.mjs.
+// זה גם עניין של נכונות ולא רק של פורמט: כל הרעיון הוא שהטיוטה תבוא *מהחומרים של
+// המשתמש בלבד*, ולא ממקורות שנשלפו מהרשת.
 const runModel = (prompt, context = '', system = '', label = 'Assignment') => chatWithActiveProvider(
   String(prompt || ''),
   String(context || ''),
   String(system || ''),
-  { skipAutomation: true, skipMultiModel: true, agentLabel: label },
+  {
+    skipAutomation: true,
+    skipMultiModel: true,
+    forceSuppressResearchRouting: true,
+    agentLabel: label,
+  },
 );
 
 /** בלוק הראיות כפי שהוא מוזרק למודל — ממוספר, כדי שיוכל להפנות למספר. */
@@ -135,11 +146,13 @@ function truncateWords(text, maxWords) {
  * buildProjectContextBlock. בלעדיו המשתמש שואל "תרחיב לי כאן" והמודל לא יודע
  * באיזה סעיף הוא נמצא, מה המכסה, ואילו מקורות מותרים.
  *
- * @param {{sectionId?:string|null}} opts
+ * @param {{sectionId?:string|null, scaffold?:object|null}} opts
+ *        scaffold — הזרקה במקום קריאה מהחנות. נדרש ל-harness ב-Node (אין IndexedDB),
+ *        ובאפליקציה נשאר null כדי לקרוא תמיד את המצב החי.
  * @returns {string} '' כשאין מטלה פעילה
  */
-export function buildScaffoldContextBlock({ sectionId = null } = {}) {
-  const blob = readScaffold();
+export function buildScaffoldContextBlock({ sectionId = null, scaffold = null } = {}) {
+  const blob = scaffold || readScaffold();
   if (!blob?.active || !blob.spec) return '';
 
   const spec = blob.spec;
