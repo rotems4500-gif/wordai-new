@@ -50,10 +50,15 @@ const SECTION_PATTERNS = [
   { kind: 'named',   re: /^\s*(שאלה|חלק|פרק|סעיף|נספח|part|section|question)\s+([0-9]+|[א-ת]['׳]?)\s*[:.)\-–—]?\s*(.*)$/i },
   // Markdown
   { kind: 'heading', re: /^\s*(#{1,4})\s+(.+?)\s*$/ },
-  // "1." / "2)" / "1.3."
-  { kind: 'numeric', re: /^\s*(\d+(?:\.\d+)*)\s*[.)]\s+(.+)$/ },
-  // "א." / "ב)" / "ג׳."
-  { kind: 'hebrew',  re: /^\s*([א-ת])['׳]?\s*[.)]\s+(.+)$/ },
+  // "1." / "2)" / "1.3." / גם **בלי רווח** אחרי הנקודה.
+  //
+  // ⚠️ הרווח היה חובה (`\s+`), וזה הכשיל את רוב ההנחיות האמיתיות: חילוץ טקסט
+  // מ-PDF מדביק את המספר לכותרת ("1.תיאור המשבר"). נמדד על 30 קבצי מרצים.
+  // ה-lookahead דורש שאחרי הסימן יבוא תו שאינו ספרה, כדי לא לבלוע תאריכים
+  // ("1.6.2026") ומספרים עשרוניים.
+  { kind: 'numeric', re: /^\s*(\d+(?:\.\d+)*)\s*[.)]\s*(?=[^\d\s])(.+)$/ },
+  // "א." / "ב)" / "ג׳." — גם כאן בלי רווח חובה.
+  { kind: 'hebrew',  re: /^\s*([א-ת])['׳]?\s*[.)]\s*(?=[^\d\s])(.+)$/ },
 ];
 
 // ---------- עזרים ----------
@@ -217,6 +222,26 @@ function extractStructureFlags(text) {
   };
 }
 
+// ---------- איכות הטקסט שנקלט ----------
+
+// PDF-ים עבריים מסוימים משתמשים בקידוד גופן שאין לו מיפוי ל-Unicode, ואז חילוץ
+// הטקסט מחזיר תווים לטיניים-מורחבים במקום אותיות (נצפה: "ð" במקום "נ") ומילים
+// בסדר הפוך. נדיר (2 מתוך 38 קבצים אמיתיים) אבל הרסני: השלד ייבנה בשקט מג'יבריש.
+const GARBLED_CHARS_RE = /[ðþýÿ¨©«»]/g;
+const GARBLED_RATIO = 0.005;
+
+/**
+ * האם הטקסט שחולץ נראה משובש. מיועד להתריע, לא לחסום.
+ * @returns {{garbled:boolean, ratio:number}}
+ */
+export function assessInstructionText(text) {
+  const src = String(text || '');
+  const hebrew = (src.match(/[֐-׿]/g) || []).length;
+  const junk = (src.match(GARBLED_CHARS_RE) || []).length;
+  const ratio = hebrew ? junk / hebrew : 0;
+  return { garbled: hebrew > 40 && ratio > GARBLED_RATIO, ratio };
+}
+
 // ---------- זיהוי סעיפים ----------
 
 function matchSectionStart(line) {
@@ -268,6 +293,53 @@ function splitTitleAndLead(rawTitle) {
   return { title: s, lead: '' };
 }
 
+// פעלי ציווי שפותחים דרישה במטלה עברית. חלק גדול מהמרצים לא ממספרים בכלל —
+// כל פסקה פותחת ב"הציגו/נתחו/בחרו" והיא-היא הסעיף. נמדד: זה הפורמט של חלק
+// ניכר מההנחיות שהחזירו אפס סעיפים אחרי שתוקן המספור.
+//
+// בלי `\b` — אות עברית אינה `\w` ולכן `\b` לא עובד כאן (הגוצ'ה החוזרת בפרויקט).
+const IMPERATIVE_CUES = [
+  'הציגו', 'תארו', 'תיארו', 'נתחו', 'בחרו', 'כתבו', 'הסבירו', 'השוו', 'דונו',
+  'פרטו', 'ציינו', 'בדקו', 'זהו', 'סכמו', 'התייחסו', 'נמקו', 'הוכיחו', 'ענו',
+  'אספו', 'מצאו', 'שלבו', 'הדגימו', 'העריכו', 'בססו', 'סווגו', 'חוו', 'הצביעו',
+  'אפיינו', 'הגדירו', 'בחנו', 'הביאו', 'ערכו', 'גבשו', 'נסחו',
+];
+// גם ניסוח לא-ציווי שמסמן דרישה: "עליכם להציג", "יש לכלול", "נדרשים להתייחס".
+const OBLIGATION_RE = /^(?:עליכם|עליכן|עליכם\/ן|יש\s+ל|נדרש(?:ים|ות)?\s+ל|באחריותכם)/;
+
+const startsWithImperative = (line) => {
+  const s = String(line || '').replace(/^[•\-–—*\s]+/, '').trim();
+  if (!s) return false;
+  if (OBLIGATION_RE.test(s)) return true;
+  const firstWord = s.split(/[\s,.:;]/, 1)[0].replace(/[^֐-׿]/g, '');
+  return IMPERATIVE_CUES.includes(firstWord);
+};
+
+// מינימום מילים כדי שפסקה תיחשב דרישה. "קראו היטב." הוא הוראת תפעול, לא סעיף.
+const IMPERATIVE_MIN_WORDS = 8;
+
+/**
+ * נפילה אחרונה: סעיפים לפי פסקאות שפותחות בפועל ציווי.
+ *
+ * למה זה חשוב יותר ממה שזה נשמע: בלי זה, מטלה בלי מספור נופלת ל-
+ * defaultSectionTemplate — תבנית מומצאת שלא קשורה למטלה. עדיף לגזור סעיפים
+ * *מהטקסט האמיתי* גם אם ייכנס רעש, כי המשתמש עורך את השלד ממילא. תבנית גנרית
+ * היא בדיוק מה שגורם למוצר להרגיש שלא קרא את המטלה.
+ */
+function splitByImperatives(text) {
+  const blocks = clean(text)
+    .split(/\n\s*\n|\n(?=[•\-–—*]\s)/)
+    .map((b) => b.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  return blocks
+    .filter((b) => startsWithImperative(b) && countWords(b) >= IMPERATIVE_MIN_WORDS)
+    .map((b) => {
+      const { title, lead } = splitTitleAndLead(b);
+      return { marker: '', title, body: lead || b, kind: 'imperative' };
+    });
+}
+
 /**
  * מפרק את גוף ההנחיות לסעיפים גולמיים (marker/title/body), בלי פרשנות.
  * @returns {Array<{marker:string, title:string, body:string, kind:string}>}
@@ -281,7 +353,7 @@ function splitIntoSections(text) {
     const hit = matchSectionStart(trimmed);
     if (hit) starts.push({ ...hit, lineIndex: i });
   });
-  if (!starts.length) return [];
+  if (!starts.length) return splitByImperatives(text);
 
   // סינון רצף אותיות עבריות מפוקפק.
   const hebrewMarkers = starts.filter((s) => s.kind === 'hebrew').map((s) => s.marker);
@@ -293,6 +365,10 @@ function splitIntoSections(text) {
   const kinds = new Set(filtered.map((s) => s.kind));
   if (kinds.has('named')) filtered = filtered.filter((s) => s.kind === 'named');
   else if (kinds.has('heading')) filtered = filtered.filter((s) => s.kind === 'heading');
+  // מטלות אמיתיות בנויות "1. סעיף" ומתחתיו "א. ב. ג." — האותיות הן תתי-דרישות
+  // של הסעיף, לא סעיפים אחים. בלי הסינון הזה מטלה עם 3 סעיפים ו-15 תת-סעיפים
+  // הופכת ל-18 סעיפים, כל אחד עם מכסת מילים משלו. זה היה מקור מרכזי ל"שלד גנרי".
+  else if (kinds.has('numeric')) filtered = filtered.filter((s) => s.kind === 'numeric');
 
   return filtered.map((start, i) => {
     const from = start.lineIndex + 1;
@@ -382,6 +458,12 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
       enabled: true,
     };
   });
+
+  // אזהרת שיבוש ראשונה ברשימה: אם הטקסט לא נקרא כראוי, כל שאר הממצאים חשודים.
+  const quality = assessInstructionText(src);
+  if (quality.garbled) {
+    warnings.push('הטקסט שחולץ מהקובץ נראה משובש (בעיית קידוד גופן ב-PDF). העלה גרסת Word של ההנחיות או הדבק את הטקסט ידנית — אחרת השלד ייבנה ממילים שגויות.');
+  }
 
   if (!sections.length) {
     warnings.push('לא זוהו סעיפים ממוספרים בהנחיות — אפשר להוסיף סעיפים ידנית או להתחיל מתבנית.');

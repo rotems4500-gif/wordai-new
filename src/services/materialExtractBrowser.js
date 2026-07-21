@@ -69,6 +69,43 @@ const extractXlsx = async (uint8) => {
   return lines.join('\n');
 };
 
+/**
+ * מרכיב שורות מתוך items של pdfjs לפי הקואורדינטה האנכית.
+ *
+ * ⚠️ הגרסה הקודמת עשתה `items.join(' ')` — כלומר **עמוד שלם הפך לשורה אחת**.
+ * נמדד על 30 קבצי הנחיות אמיתיים: 87% מהם ייצרו אפס סעיפים, כי מפריד הסעיפים
+ * מזהה מספור בתחילת שורה (`1.`, `2.`) ולא היו שורות בכלל. זה גם פגע בפרובננס
+ * של הראיות — `sectionHint` נשען על זיהוי כותרות, שגם הן נעלמו.
+ *
+ * item.transform[5] הוא ה-Y. פריטים באותו גובה (בתוך סבולת) שייכים לאותה שורה.
+ */
+const LINE_Y_TOLERANCE = 2.5;
+
+const itemsToLines = (items = []) => {
+  const lines = [];
+  let current = null;
+
+  items.forEach((item) => {
+    const str = String(item?.str ?? '');
+    // pdfjs מסמן שבירת שורה מפורשת; מכבדים אותה גם כשה-Y לא זז.
+    const y = Array.isArray(item?.transform) ? item.transform[5] : null;
+
+    if (current && y !== null && Math.abs(current.y - y) <= LINE_Y_TOLERANCE) {
+      current.parts.push(str);
+    } else {
+      if (current) lines.push(current);
+      current = { y, parts: [str] };
+    }
+    if (item?.hasEOL) { lines.push(current); current = null; }
+  });
+  if (current) lines.push(current);
+
+  return lines
+    .map((line) => line.parts.join('').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+};
+
 const extractPdf = async (uint8, maxLength) => {
   const pdfjs = await import('pdfjs-dist');
   const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
@@ -81,13 +118,13 @@ const extractPdf = async (uint8, maxLength) => {
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items.map((it) => (it.str || '')).join(' ');
+    const pageText = itemsToLines(content.items);
     parts.push(pageText);
     total += pageText.length;
     if (maxLength > 0 && total > maxLength) break;
   }
   try { await doc.destroy(); } catch { /* no-op */ }
-  return parts.join('\n');
+  return parts.join('\n\n');
 };
 
 // ‎tesseract.js מוריד את ה-core(wasm) ואת נתוני השפה מ-CDN בזמן ריצה. אם הרשת איטית/חסומה

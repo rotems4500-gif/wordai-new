@@ -28,6 +28,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/e2e-assignment.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'devkey'
     ? 'tools/test-bench/device-key-unit.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'realinstr'
+    ? 'tools/test-bench/real-instructions-probe.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -41,7 +43,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
         : process.env.WORDAI_VERIFY_ENTRY === 'quota' ? 'out-quota'
           : process.env.WORDAI_VERIFY_ENTRY === 'review' ? 'out-review'
             : process.env.WORDAI_VERIFY_ENTRY === 'e2e' ? 'out-e2e'
-              : process.env.WORDAI_VERIFY_ENTRY === 'devkey' ? 'out-devkey' : 'out-sf';
+              : process.env.WORDAI_VERIFY_ENTRY === 'devkey' ? 'out-devkey'
+                : process.env.WORDAI_VERIFY_ENTRY === 'realinstr' ? 'out-realinstr' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
