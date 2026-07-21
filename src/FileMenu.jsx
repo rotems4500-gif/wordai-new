@@ -30,7 +30,9 @@ import {
   unlockWithRecoveryCode as unlockCryptoRecovery,
   changePassphrase as changeCryptoPassphrase,
   rotateRecoveryCode as rotateCryptoRecovery,
+  getSessionDek as getCryptoSessionDek,
 } from './services/cloudCryptoSession';
+import { saveDeviceKey as saveCloudDeviceKey, clearDeviceKey as clearCloudDeviceKey, hasDeviceKey as hasCloudDeviceKey } from './services/cloudDeviceKey';
 import { APP_VERSION_LABEL } from './appVersion';
 import { getTheme, setTheme as setAppTheme, onThemeChange } from './theme';
 import { DECK_THEMES } from './presentation/deckThemes';
@@ -4021,7 +4023,7 @@ function CoverTemplateSettings({ profile, setProfile }) {
 
   const previewHtml = useMemo(
     () => fillCoverTemplateTokens(String(profile.coverTemplateHtml || ''), profile),
-    [profile.coverTemplateHtml, profile.currentCourses, profile.lecturerNames, profile.lecturerName, profile.displayName, profile.studentId, profile.institutionName]
+    [profile.coverTemplateHtml, profile.currentCourses, profile.lecturerNames, profile.lecturerName, profile.displayName, profile.studentId, profile.institutionName, profile.assignmentType, profile.submissionDate]
   );
 
   const btn = (active) => ({ padding: '5px 9px', borderRadius: 6, border: `1px solid ${active ? '#1D4ED8' : '#C8C6C4'}`, background: active ? '#DBEAFE' : 'white', color: active ? '#1D4ED8' : '#323130', cursor: 'pointer', fontSize: 12 });
@@ -4062,6 +4064,19 @@ function CoverTemplateSettings({ profile, setProfile }) {
         {savedAt ? <button type="button" onClick={handleClear} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', cursor: 'pointer', fontSize: 12 }}>מחק תבנית</button> : null}
         {savedAt ? <span style={{ fontSize: 10, color: '#059669' }}>✓ נשמרה</span> : <span style={{ fontSize: 10, color: 'var(--s-muted)' }}>לא נשמרה עדיין</span>}
       </div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10, cursor: String(profile.coverTemplateHtml || '').trim() ? 'pointer' : 'not-allowed', opacity: String(profile.coverTemplateHtml || '').trim() ? 1 : 0.5 }}>
+        <input
+          type="checkbox"
+          checked={Boolean(profile.coverTemplateAutoInsert)}
+          disabled={!String(profile.coverTemplateHtml || '').trim()}
+          onChange={(e) => setProfile((prev) => ({ ...prev, coverTemplateAutoInsert: e.target.checked }))}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ fontSize: 12, color: 'var(--s-text-strong)', lineHeight: 1.6 }}>
+          הוסף את עמוד השער הזה אוטומטית לכל מסמך חדש
+          <span style={{ display: 'block', fontSize: 10.5, color: 'var(--s-muted)' }}>חל על מסמך ריק, תבנית ומסמך שנוצר ב-AI. השדות הידועים (קורס, מרצה, סוג מטלה, תאריך, כותרת) יתמלאו לבד.</span>
+        </span>
+      </label>
       {String(profile.coverTemplateHtml || '').trim() ? (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11, color: 'var(--s-muted)', marginBottom: 6 }}>תצוגה מקדימה (עם הערכים הידועים כרגע):</div>
@@ -7234,6 +7249,7 @@ function SecuritySettings() {
   const [unlocked, setUnlocked] = useState(isCryptoUnlocked());
   const [busy, setBusy] = useState(false);
   const [revealedRecovery, setRevealedRecovery] = useState(null);
+  const [deviceRemembered, setDeviceRemembered] = useState(false);
 
   // טפסים
   const [setupPass, setSetupPass] = useState('');
@@ -7271,6 +7287,32 @@ function SecuritySettings() {
     window.addEventListener('wordai-cloud-crypto-locked', onLocked);
     return () => window.removeEventListener('wordai-cloud-crypto-locked', onLocked);
   }, []);
+
+  // מצב "זכור במכשיר הזה" עבור החשבון הנוכחי.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.uid) { setDeviceRemembered(false); return undefined; }
+    hasCloudDeviceKey(user.uid).then((has) => { if (!cancelled) setDeviceRemembered(has); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user, unlocked]);
+
+  const rememberThisDevice = async () => {
+    setBusy(true);
+    try {
+      const ok = await saveCloudDeviceKey(user.uid, getCryptoSessionDek());
+      setDeviceRemembered(ok);
+      showToast(ok ? 'המכשיר הזה ייפתח אוטומטית מעכשיו.' : 'שמירת המפתח במכשיר נכשלה.', ok ? 'success' : 'error');
+    } finally { setBusy(false); }
+  };
+
+  const forgetThisDevice = async () => {
+    setBusy(true);
+    try {
+      await clearCloudDeviceKey(user.uid);
+      setDeviceRemembered(false);
+      showToast('המכשיר נשכח — בפתיחה הבאה תידרש הסיסמה.', 'info');
+    } finally { setBusy(false); }
+  };
 
   const validatePair = (a, b) => {
     if (a.length < MIN_PASSPHRASE_LEN) { showToast(`הסיסמה חייבת באורך ${MIN_PASSPHRASE_LEN} תווים לפחות.`, 'error'); return false; }
@@ -7373,6 +7415,8 @@ function SecuritySettings() {
       await deleteCloudCryptoMeta(user);
       setCloudCryptoEnabled(false);
       lockCryptoSession();
+      try { await clearCloudDeviceKey(user.uid); } catch { /* ignore */ }
+      setDeviceRemembered(false);
       setBundle(null); setUnlocked(false);
       await triggerCloudSync(user, { immediate: true, force: true }); // העלאת גלוי במקום המוצפן
       showToast('הצפנת ענן הושבתה.', 'info');
@@ -7533,6 +7577,23 @@ function SecuritySettings() {
         <p className="text-[13px] text-slate-500 leading-relaxed mt-2 dark:text-[#8ba3bd]">
           מפתחות ה-API מוצפנים לפני שהם עולים לענן. הסנכרון בין מכשירים פעיל.
         </p>
+      </div>
+
+      <div className={card}>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[14px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">💻 מכשיר זה</span>
+          <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${deviceRemembered ? 'text-emerald-700 bg-emerald-100 dark:bg-emerald-400/15 dark:text-emerald-200' : 'text-slate-500 bg-slate-100 dark:bg-white/10 dark:text-[#8ba3bd]'}`}>
+            {deviceRemembered ? 'נפתח אוטומטית' : 'דורש סיסמה'}
+          </span>
+        </div>
+        <p className="text-[12px] text-slate-500 mb-3 leading-relaxed dark:text-[#8ba3bd]">
+          {deviceRemembered
+            ? 'המפתח שמור מקומית (מוגן ע״י מערכת ההפעלה/הדפדפן) — האפליקציה נפתחת בלי לבקש סיסמה, גם אחרי עדכון גרסה. במכשיר חדש עדיין תידרש הסיסמה.'
+            : 'הפעלת זכירה תשמור את המפתח במכשיר הזה כדי שלא תתבקש סיסמה בכל פתיחה.'}
+        </p>
+        <button type="button" onClick={deviceRemembered ? forgetThisDevice : rememberThisDevice} disabled={busy || !unlocked} className={ghostBtn}>
+          {deviceRemembered ? 'שכח מכשיר זה' : 'זכור במכשיר הזה'}
+        </button>
       </div>
 
       <div className={card}>

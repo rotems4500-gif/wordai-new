@@ -244,6 +244,25 @@ function cloudProfileHasData(cloudProfile = null) {
 
 // משיכה מהענן והחלה מקומית. force=true עוקף את שער ה-timestamp (לכפתור ידני
 // ולמכשיר חדש). מחזיר תוצאה מפורטת ל-UI.
+/**
+ * מביא את providerConfig המוצפן מהענן **בלי להחיל שום דבר**.
+ *
+ * קיים בשביל אימות מפתח: "זכור במכשיר הזה" צריך לבדוק שהמפתח השמור מפענח
+ * ciphertext אמיתי לפני שהוא מאמץ אותו כ-session. pullFromCloud לא מתאים לזה
+ * כי הוא גם מפענח *וגם מחיל* — כלומר מחייב session פתוח מראש.
+ *
+ * @returns {Promise<object|null>}
+ */
+export async function fetchEncryptedProviderConfig(user) {
+  if (!user) return null;
+  try {
+    const cloudSettings = await fetchSettingsFromCloud(user);
+    return normalizeCloudProfile(cloudSettings)?.providerConfig || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pullFromCloud(user, { force = false } = {}) {
   if (!user) return { ok: false, error: "לא מחובר לחשבון." };
   try {

@@ -26,6 +26,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/review-unit.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'e2e'
     ? 'tools/test-bench/e2e-assignment.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'devkey'
+    ? 'tools/test-bench/device-key-unit.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -38,7 +40,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
       : process.env.WORDAI_VERIFY_ENTRY === 'whole' ? 'out-whole'
         : process.env.WORDAI_VERIFY_ENTRY === 'quota' ? 'out-quota'
           : process.env.WORDAI_VERIFY_ENTRY === 'review' ? 'out-review'
-            : process.env.WORDAI_VERIFY_ENTRY === 'e2e' ? 'out-e2e' : 'out-sf';
+            : process.env.WORDAI_VERIFY_ENTRY === 'e2e' ? 'out-e2e'
+              : process.env.WORDAI_VERIFY_ENTRY === 'devkey' ? 'out-devkey' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -56,6 +59,8 @@ export default defineConfig({
     scaffolddoc: path.join(PROJECT, 'src/services/assignmentScaffoldDoc.js'),
     review: path.join(PROJECT, 'src/services/assignmentReviewService.js'),
     specsvc: path.join(PROJECT, 'src/services/assignmentSpecService.js'),
+    cryptosession: path.join(PROJECT, 'src/services/cloudCryptoSession.js'),
+    cloudcrypto: path.join(PROJECT, 'src/services/cloudCrypto.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
     // Personal Style Engine services (LAB style-engine endpoints).
     styleprofile: path.join(PROJECT, 'src/services/styleProfileService.js'),
