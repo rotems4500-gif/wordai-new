@@ -40,6 +40,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/openers-compose.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'oprofile'
     ? 'tools/test-bench/opener-profile.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'speccov'
+    ? 'tools/test-bench/spec-coverage.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -59,7 +61,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                     : process.env.WORDAI_VERIFY_ENTRY === 'openers' ? 'out-openers'
                       : process.env.WORDAI_VERIFY_ENTRY === 'labelset' ? 'out-labelset'
                         : process.env.WORDAI_VERIFY_ENTRY === 'compose' ? 'out-compose'
-                          : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile' : 'out-sf';
+                          : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile'
+                            : process.env.WORDAI_VERIFY_ENTRY === 'speccov' ? 'out-speccov' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

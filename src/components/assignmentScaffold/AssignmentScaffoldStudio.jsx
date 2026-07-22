@@ -95,8 +95,16 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const handleParse = React.useCallback(() => {
     const parsed = parseAssignmentSpec(instructions);
     if (!parsed.sections.length) {
-      parsed.sections = defaultSectionTemplate(parsed.totalWords || 1500);
-      setNotice({ tone: 'warn', text: 'לא זוהו סעיפים בהנחיות — נטענה תבנית ברירת מחדל. ערוך אותה לפי המטלה.' });
+      // התבנית נגזרת מטקסט ההנחיות עצמו (אילו תפקידים הוזכרו בו), ולא מרשימה
+      // קבועה — אחרת כל מטלה שלא פורקה מקבלת בדיוק את אותם ארבעה סעיפים.
+      parsed.sections = defaultSectionTemplate(parsed.totalWords || 1500, instructions);
+      const notAssignment = parsed.warnings.some((w) => w.includes('לא נראה כמו הנחיות מטלה'));
+      setNotice({
+        tone: 'warn',
+        text: notAssignment
+          ? 'הקובץ לא נראה כמו הנחיות מטלה — ודא שהעלית את הקובץ הנכון. בינתיים נטען שלד בסיסי.'
+          : 'לא זוהו סעיפים בהנחיות — נבנה שלד לפי מה שההנחיות מזכירות. ערוך אותו לפי המטלה.',
+      });
     } else {
       setNotice({ tone: 'ok', text: `זוהו ${parsed.sections.length} סעיפים. בדוק ותקן לפני שממשיכים.` });
     }

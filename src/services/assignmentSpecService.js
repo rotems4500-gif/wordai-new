@@ -253,6 +253,10 @@ function extractAssignmentTitle(text) {
       const s = sentence.trim().replace(/[.:]\s*$/, '');
       if (!s) continue;
       if (/^(היקף|הגשה|תאריך|מועד|יש להגיש|פורמט|סגנון|נדרש)/.test(s)) continue;
+      // שורות עמוד השער (שם הסטודנט, מרצה, קורס, ת.ז.) קודמות לעיתים לשם המטלה
+      // בקובץ ההנחיות עצמו. נמדד: "שם מלא של הסטודנט/ית כולל ת.ז." הפך לכותרת
+      // המסמך של הצהרת הכוונות.
+      if (META_LABEL_RE.test(s)) continue;
       // כותרת עמוד ("עמוד 2", "[עמוד 1]") אינה שם המטלה. מופיעה בקבצים סרוקים
       // וב-PDF-ים עם כותרות ריצה.
       if (/^\[?\s*(?:עמוד|page)\s*\d+\s*\]?$/i.test(s)) continue;
@@ -406,6 +410,8 @@ const startsWithImperative = (line) => {
 
 // מינימום מילים כדי שפסקה תיחשב דרישה. "קראו היטב." הוא הוראת תפעול, לא סעיף.
 const IMPERATIVE_MIN_WORDS = 8;
+// מתחת לזה אין מספיק טקסט כדי שזו תהיה מטלה (עמוד שער לדוגמה = ~35 מילים).
+const NOT_ASSIGNMENT_MIN_WORDS = 60;
 
 /**
  * נפילה אחרונה: סעיפים לפי פסקאות שפותחות בפועל ציווי.
@@ -429,6 +435,96 @@ function splitByImperatives(text) {
     });
 }
 
+/**
+ * שאלות כסעיפים: "מה יטען יעקב בפני בית המשפט?"
+ *
+ * מטלות משפט ומקרי-בוחן מנוסחות כרשימת שאלות בלי מספור ובלי פועל ציווי, ולכן
+ * נפלו בין הכיסאות: לא ממוספר, לא ציווי → אפס סעיפים → תבנית גנרית. נמדד על
+ * מטלת דיני תקשורת אמיתית (2 שאלות + דרישת הצגה) שהחזירה 0.
+ *
+ * רק שאלה שדורשת תשובה מנומקת נספרת — "?" בסוף שורה + אורך סביר. שאלה
+ * רטורית קצרה בתוך תיאור המקרה ("האם זה סביר?") נפסלת באורך.
+ */
+const QUESTION_MIN_WORDS = 4;
+const QUESTION_MAX_WORDS = 40;
+
+function splitByQuestions(text) {
+  const lines = clean(text).split('\n').map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  lines.forEach((line) => {
+    if (!/[?？]\s*$/.test(line)) return;
+    const words = countWords(line);
+    if (words < QUESTION_MIN_WORDS || words > QUESTION_MAX_WORDS) return;
+    // שאלה שהיא ציטוט מתוך תיאור המקרה, לא דרישה מהסטודנט.
+    if (/^["'״]/.test(line)) return;
+    out.push({ marker: '', title: line.replace(/\s*[?？]\s*$/, ''), body: line, kind: 'question' });
+  });
+  return out;
+}
+
+/**
+ * בלוקים מתויגי-תווית: "שאלת המחקר: ...", "שיטת המחקר (מדגם, ניתוח) – ...".
+ *
+ * הפורמט הנפוץ במטלות הצהרת-כוונות והצעת-מחקר: תווית קצרה, מקף או נקודתיים,
+ * ואז ההסבר. אין מספור, אין ציווי, ולכן נפלו לתבנית. נמדד: "הצהרת כוונות"
+ * האמיתית מכילה ארבעה בלוקים כאלה (נושא / שאלת מחקר / שיטה / רשימת פריטים)
+ * והחזירה 0 סעיפים.
+ *
+ * השומרים: התווית קצרה (עד 6 מילים) ואינה מסתיימת בפיסוק-סוף, הגוף מהותי,
+ * ולפחות שני בלוקים כאלה — בלוק בודד הוא בדרך כלל שורת מטא ("מרצה: ...").
+ */
+const LABEL_BLOCK_RE = /^([^.!?:–—-]{3,60}?)\s*[:–—-]\s+(.{20,})$/;
+const LABEL_MAX_WORDS = 6;
+const LABEL_MIN_BLOCKS = 2;
+// שורות מטא של עמוד שער — תווית + ערך, אבל לא סעיף לכתיבה.
+const META_LABEL_RE = /^(?:שם|מרצה|מתרגל|מגיש|קורס|מספר|סמסטר|תאריך|מועד|היקף|משקל|כתובת|מייל|טלפון|ת\.?ז|שנה|חוג|מחלקה|מכללה|אוניברסיט)/;
+
+function splitByLabeledBlocks(text) {
+  const blocks = clean(text)
+    .split(/\n\s*\n|\n(?=[•\-–—*]\s)/)
+    .map((b) => b.replace(/^[•\-–—*\s]+/, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const hits = [];
+  blocks.forEach((b) => {
+    const m = b.match(LABEL_BLOCK_RE);
+    if (m) {
+      const label = m[1].trim();
+      // הסוגריים הם הבהרה של התווית ולא חלק ממנה — "שיטת המחקר (אוכלוסייה,
+      // מדגם, ניתוח)" היא תווית בת שתי מילים עם פירוט, לא תווית בת שבע.
+      const bare = label.replace(/\([^)]*\)/g, ' ').trim();
+      if (countWords(bare) <= LABEL_MAX_WORDS && !META_LABEL_RE.test(bare)
+        && countWords(m[2]) >= IMPERATIVE_MIN_WORDS) {
+        hits.push({ marker: '', title: bare || label, body: m[2].trim(), kind: 'labeled' });
+        return;
+      }
+    }
+    // בלוק שמסתיים בנקודתיים הוא "כאן מתחיל מה שצריך לכתוב" — התווית והדרישה
+    // הן אותה שורה ("רשימת פריטים אקדמיים ... תוך הסבר והצדקה לבחירתם:").
+    if (/:\s*$/.test(b) && countWords(b) >= IMPERATIVE_MIN_WORDS && !META_LABEL_RE.test(b)) {
+      const stripped = b.replace(/:\s*$/, '').trim();
+      const { title } = splitTitleAndLead(stripped);
+      hits.push({ marker: '', title, body: stripped, kind: 'labeled' });
+    }
+  });
+  return hits.length >= LABEL_MIN_BLOCKS ? hits : [];
+}
+
+/**
+ * סולם הנפילות, מהמפורש לרמז. כל שלב שמחזיר משהו עוצר את הסולם.
+ *
+ * הכלל שמנחה את כולם: עדיף סעיפים שנגזרו **מהטקסט של המרצה** גם אם ייכנס
+ * רעש — המשתמש עורך את השלד ממילא. תבנית קבועה היא בדיוק מה שגורם למוצר
+ * להרגיש שלא קרא את המטלה.
+ */
+function splitByHeuristics(text) {
+  const imperatives = splitByImperatives(text);
+  if (imperatives.length) return imperatives;
+  const questions = splitByQuestions(text);
+  if (questions.length) return questions;
+  return splitByLabeledBlocks(text);
+}
+
 // כותרות של בלוקי הנחיה כלליים. הן מסמנות את **סוף רשימת הסעיפים** — כל מה
 // שאחריהן הוא כללי הגשה, לא תוכן לכתיבה.
 const GENERAL_BLOCK_PHRASE = '(?:הנחיות\\s+(?:כלליות|לתוכן|לציטוט|הגשה|להגשה|טכניות|נוספות)|כללי\\s+(?:הגשה|ציטוט|האזכור)|אופן\\s+ההגשה|מבנה\\s+העבודה\\s+והגשתה|דגשים\\s+להגשה|ביבליוגרפיה|רשימת\\s+מקורות|בהצלחה)';
@@ -450,7 +546,7 @@ function splitIntoSections(text) {
     const hit = matchSectionStart(trimmed);
     if (hit) starts.push({ ...hit, lineIndex: i });
   });
-  if (!starts.length) return splitByImperatives(text);
+  if (!starts.length) return splitByHeuristics(text);
 
   // סינון רצף אותיות עבריות מפוקפק.
   const hebrewMarkers = starts.filter((s) => s.kind === 'hebrew').map((s) => s.marker);
@@ -591,7 +687,16 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
   }
 
   if (!sections.length) {
-    warnings.push('לא זוהו סעיפים ממוספרים בהנחיות — אפשר להוסיף סעיפים ידנית או להתחיל מתבנית.');
+    // הבחנה בין "מטלה שלא הצלחנו לפרק" ל"זה בכלל לא מטלה". נמדד: עמוד שער
+    // לדוגמה ורשימת ראשי פרקים ללמידה נכנסו לשלד וקיבלו סעיפים מומצאים. אין
+    // בהם היקף, אין דרישות, ואין פועל דרישה אחד — אין מה לבנות מהם.
+    const looksLikeAssignment = Boolean(globalQuota) || Boolean(sourceRequirement)
+      || Boolean(dueDate) || startsWithImperative(src) || /עליכם|יש\s+ל|נדרש|הגישו|מטלה|עבודה\s+מסכמת/.test(src);
+    if (!looksLikeAssignment || countWords(src) < NOT_ASSIGNMENT_MIN_WORDS) {
+      warnings.push('הקובץ לא נראה כמו הנחיות מטלה (אין היקף, דרישות או מועד הגשה) — ודא שהעלית את הקובץ הנכון.');
+    } else {
+      warnings.push('לא זוהו סעיפים ממוספרים בהנחיות — אפשר להוסיף סעיפים ידנית או להתחיל מתבנית.');
+    }
   }
   if (!globalQuota) warnings.push('לא זוהה היקף מילים.');
   if (!sourceRequirement) warnings.push('לא זוהתה דרישת מספר מקורות.');
@@ -623,14 +728,62 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
   };
 }
 
-/** תבנית ברירת מחדל כשלא זוהו סעיפים — המשתמש עורך במקום להתחיל מאפס. */
-export function defaultSectionTemplate(totalWords = 1500) {
-  const plan = [
-    { title: 'מבוא', intent: 'intro', share: 0.12 },
-    { title: 'רקע תיאורטי', intent: 'review', share: 0.28 },
-    { title: 'דיון וניתוח', intent: 'analysis', share: 0.42 },
-    { title: 'סיכום ומסקנות', intent: 'conclusion', share: 0.18 },
-  ];
+// סדר קנוני של סעיפים בעבודה אקדמית + כמה משקל לתת לכל תפקיד. משמש רק את
+// התבנית — סעיפים שזוהו בפועל שומרים על סדר המרצה.
+const TEMPLATE_PLAN = {
+  intro: { title: 'מבוא', share: 0.12, order: 1 },
+  review: { title: 'רקע תיאורטי', share: 0.24, order: 2 },
+  method: { title: 'שיטה', share: 0.16, order: 3 },
+  exposition: { title: 'הצגת הנושא', share: 0.18, order: 4 },
+  findings: { title: 'ממצאים', share: 0.22, order: 5 },
+  comparison: { title: 'השוואה', share: 0.22, order: 6 },
+  analysis: { title: 'דיון וניתוח', share: 0.28, order: 7 },
+  argument: { title: 'טיעון ועמדה', share: 0.24, order: 8 },
+  conclusion: { title: 'סיכום ומסקנות', share: 0.16, order: 9 },
+};
+// שלד מינימלי כשאפילו רמז לתפקיד לא נמצא בטקסט.
+const TEMPLATE_LAST_RESORT = ['intro', 'analysis', 'conclusion'];
+
+/**
+ * תבנית כשלא זוהו סעיפים — **נגזרת מהטקסט**, לא קבועה.
+ *
+ * הבעיה שזה פותר: התבנית הייתה ארבעה סעיפים קשיחים (מבוא/רקע/דיון/סיכום) שהוצגו
+ * לכל מטלה שלא פורקה, בלי קשר למה שהמרצה ביקש. מטלת השוואה, מטלת שיטות מחקר
+ * ומטלה משפטית קיבלו את אותו שלד בדיוק — וזה גרם למוצר להרגיש שלא קרא את המטלה.
+ *
+ * עכשיו: סורקים את ההנחיות באותם INTENT_RULES של הפרסר, ובונים סעיף לכל תפקיד
+ * שהמרצה באמת הזכיר, בסדר אקדמי קנוני. מטלה שמדברת על מדגם וממצאים תקבל שיטה
+ * וממצאים; מטלה שמבקשת להשוות תקבל סעיף השוואה. רק כשאין שום רמז — שלד מינימלי.
+ *
+ * @param {number} totalWords היקף כולל לחלוקה
+ * @param {string} instructions טקסט ההנחיות; בלעדיו חוזרים לשלד המינימלי
+ */
+export function defaultSectionTemplate(totalWords = 1500, instructions = '') {
+  const src = clean(instructions);
+  let intents = src
+    ? INTENT_RULES.filter((rule) => rule.re.test(src)).map((rule) => rule.intent)
+    : [];
+  // מבוא וסיכום כמעט תמיד נדרשים גם כשלא נאמרו במפורש — הם מסגרת, לא תוכן.
+  if (intents.length) {
+    if (!intents.includes('intro')) intents.unshift('intro');
+    if (!intents.includes('conclusion')) intents.push('conclusion');
+  }
+  // יותר מדי תפקידים = הטקסט נגע בהכול; מצמצמים לחמישה כדי לא להציף בשלד ענק.
+  if (intents.length > 5) {
+    const keep = new Set(['intro', 'conclusion']);
+    const middle = intents.filter((i) => !keep.has(i)).slice(0, 3);
+    intents = ['intro', ...middle, 'conclusion'];
+  }
+  if (!intents.length) intents = [...TEMPLATE_LAST_RESORT];
+
+  const plan = [...new Set(intents)]
+    .map((intent) => ({ intent, ...TEMPLATE_PLAN[intent] }))
+    .filter((p) => p.title)
+    .sort((a, b) => a.order - b.order);
+
+  // נרמול המנות כך שיסתכמו בהיקף המבוקש, יהיה אשר יהיה הרכב התפקידים.
+  const totalShare = plan.reduce((sum, p) => sum + p.share, 0) || 1;
+
   return plan.map((p, i) => ({
     id: `sec_${i + 1}`,
     order: i + 1,
@@ -638,7 +791,7 @@ export function defaultSectionTemplate(totalWords = 1500) {
     title: p.title,
     instructions: '',
     intent: p.intent,
-    wordQuota: Math.round((totalWords * p.share) / 10) * 10,
+    wordQuota: Math.round((totalWords * (p.share / totalShare)) / 10) * 10,
     quotaSource: 'template',
     keywords: [],
     requiresSources: p.intent !== 'intro',
