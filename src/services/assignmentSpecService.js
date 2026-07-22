@@ -408,6 +408,83 @@ const startsWithImperative = (line) => {
   return IMPERATIVE_CUES.includes(firstWord);
 };
 
+// ---------- כותרת ראש-פרק ----------
+
+// ציווי → שם פעולה. זה כל מה שצריך כדי להפוך הנחיה לכותרת: המרצה כותב
+// "תארו את המאבק", ראש הפרק במסמך הוא "תיאור המאבק".
+const IMPERATIVE_TO_NOUN = {
+  תארו: 'תיאור', תיארו: 'תיאור', נתחו: 'ניתוח', הציגו: 'הצגת', הסבירו: 'הסבר',
+  השוו: 'השוואת', דונו: 'דיון ב', פרטו: 'פירוט', ציינו: 'ציון', בדקו: 'בדיקת',
+  זהו: 'זיהוי', סכמו: 'סיכום', התייחסו: 'התייחסות ל', נמקו: 'נימוק',
+  הוכיחו: 'הוכחת', ענו: 'מענה ל', אספו: 'איסוף', מצאו: 'איתור', שלבו: 'שילוב',
+  הדגימו: 'הדגמת', העריכו: 'הערכת', בססו: 'ביסוס', סווגו: 'סיווג',
+  חוו: 'חוות דעת', הצביעו: 'הצבעה על', אפיינו: 'אפיון', הגדירו: 'הגדרת',
+  בחנו: 'בחינת', הביאו: 'הבאת', ערכו: 'עריכת', גבשו: 'גיבוש', נסחו: 'ניסוח',
+  בחרו: 'בחירת', כתבו: 'כתיבת', הציעו: 'הצעת', ספרו: 'תיאור',
+};
+// מילות חיבור שאחריהן מתחילה הרשימה ולא הנושא — שם חותכים.
+const HEADING_CUT_RE = /\s*[,;]|\s+(?:וכן|וגם|תוך|כולל|בהתאם|לפי|על פי|באמצעות|כפי ש|ואת|ואילו)\s/;
+const HEADING_MAX_WORDS = 7;
+
+/**
+ * כותרת ראש-פרק מתוך נוסח ההנחיה.
+ *
+ * הבעיה: כותרות הסעיפים היו טקסט ההנחיה עצמו, חתוך בשלוש נקודות — "תארו את
+ * העובדות המרכזיות התאריכים החשובים ואת…". זו לא כותרת של פרק בעבודה, זו
+ * שאלה במבחן. המסמך של המשתמש צריך להיראות כמו עבודה, לא כמו דף ההנחיות.
+ *
+ * שני מהלכים דטרמיניסטיים: (1) הפועל בציווי הופך לשם פעולה; (2) הנושא נחתך
+ * בפסיק/מילת חיבור ראשונה — שם נגמר הנושא ומתחילה ההתפרטות. ההנחיה המלאה
+ * נשמרת בגוף הסעיף, כך שכלום לא אובד.
+ *
+ * @param {string} rawTitle נוסח ההנחיה
+ * @param {string} fallbackIntent כוונת הסעיף, לכותרת גנרית כשאין מה לגזור
+ * @returns {string}
+ */
+export function toSectionHeading(rawTitle, fallbackIntent = '') {
+  let s = String(rawTitle || '')
+    .replace(/…$/, '')
+    .replace(/^[•\-–—*\s]+/, '')   // תבליט שנשאר מחילוץ ה-PDF
+    // מטא של המרצה אינה חלק מהכותרת: "(400 מילים)", "20%", "15 נק'". סוגריים
+    // מטופלים ב-TITLE_META_PAREN_RE; הצורה החשופה ("...תקשורתית 400") נדבקה
+    // לכותרת בכל סעיפי המטלה המרכזית ולכן מנוקה גם היא.
+    .replace(TITLE_META_PAREN_RE, ' ')
+    .replace(/\s*\d+\s*(?:%|אחוז(?:ים)?|נק['׳]|נקודות|מילים|מלים)\b/g, ' ')
+    .replace(/\s*[-–—]\s*$/, '')
+    .replace(/\s+\d+\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return INTENT_LABELS[fallbackIntent] || '';
+  // שאלה היא כבר כותרת קריאה ("מה יטען יעקב בפני בית המשפט") — לא נוגעים.
+  if (/^(?:מה|מי|מדוע|כיצד|האם|למה|איך|באיזו|באילו)\s/.test(s)) {
+    return s.replace(/\s*[?？]\s*$/, '');
+  }
+
+  const first = s.split(' ')[0].replace(/[^֐-׿]/g, '');
+  const noun = IMPERATIVE_TO_NOUN[first];
+  if (noun) {
+    // "תארו את העובדות" → "תיאור העובדות"; המילית "את"/"על" נבלעת בשם הפעולה.
+    let rest = s.slice(s.indexOf(' ') + 1).trim();
+    rest = rest.replace(/^(?:את|על|ב|ל)\s+/, '');
+    s = `${noun}${noun.endsWith('ב') || noun.endsWith('ל') ? '' : ' '}${rest}`.trim();
+  }
+
+  const cut = s.split(HEADING_CUT_RE)[0].trim();
+  if (cut && countWords(cut) >= 2) s = cut;
+
+  const words = s.match(WORD_RE) || [];
+  if (words.length > HEADING_MAX_WORDS) s = words.slice(0, HEADING_MAX_WORDS).join(' ');
+  // כותרת שנגמרת במילת חיבור נראית קטועה.
+  s = s.replace(/\s+(?:של|את|ואת|עם|ועם|על|ועל|ל|ב|מ|ה|ו|וכן|וגם|ואילו|אל|כי|אשר|תוך|לפי)$/, '').trim();
+  // פועל שני שנשאר תלוי בסוף ("...סקירת הספרות והציגו") — הדרישה השנייה נחתכה
+  // באמצע, ומה שנשאר הוא זנב ולא כותרת.
+  const tail = (s.match(WORD_RE) || []).at(-1) || '';
+  if (IMPERATIVE_TO_NOUN[tail.replace(/^ו/, '')] || IMPERATIVE_TO_NOUN[tail]) {
+    s = s.replace(/\s+\S+$/, '').trim();
+  }
+  return s || INTENT_LABELS[fallbackIntent] || '';
+}
+
 // מינימום מילים כדי שפסקה תיחשב דרישה. "קראו היטב." הוא הוראת תפעול, לא סעיף.
 const IMPERATIVE_MIN_WORDS = 8;
 // מתחת לזה אין מספיק טקסט כדי שזו תהיה מטלה (עמוד שער לדוגמה = ~35 מילים).
@@ -421,6 +498,11 @@ const NOT_ASSIGNMENT_MIN_WORDS = 60;
  * *מהטקסט האמיתי* גם אם ייכנס רעש, כי המשתמש עורך את השלד ממילא. תבנית גנרית
  * היא בדיוק מה שגורם למוצר להרגיש שלא קרא את המטלה.
  */
+// דרישה תפעולית מנוסחת בדיוק כמו דרישת תוכן ("יש להגיש את העבודה בפורמט WORD"),
+// ולכן עברה את מסנן הציווי והפכה לסעיף עם מכסת מילים משלו. נמדד על מטלת שיטות
+// המחקר: שניים משלושת ה"סעיפים" היו כללי הגשה.
+const SUBMISSION_RULE_RE = /(?:להגיש|הגשה|פורמט|גופן|רווח כפול|word|pdf|אתר הקורס|מודל|קובץ|עמוד שער|כריכה|תעודת זהות|שם מלא|הצהרת|להצהיר|בינה מלאכותית|מספר עמודים|מיילים|בזוגות|באיחור|ציון|ייבדק|תיבדק)/i;
+
 function splitByImperatives(text) {
   const blocks = clean(text)
     .split(/\n\s*\n|\n(?=[•\-–—*]\s)/)
@@ -429,9 +511,11 @@ function splitByImperatives(text) {
 
   return blocks
     .filter((b) => startsWithImperative(b) && countWords(b) >= IMPERATIVE_MIN_WORDS)
+    .filter((b) => !SUBMISSION_RULE_RE.test(b))
     .map((b) => {
       const { title, lead } = splitTitleAndLead(b);
-      return { marker: '', title, body: lead || b, kind: 'imperative' };
+      // rawTitle = הבלוק המלא עם הפיסוק. גזירת כותרת ראש-הפרק זקוקה לפסיקים.
+      return { marker: '', title, rawTitle: b, body: lead || b, kind: 'imperative' };
     });
 }
 
@@ -504,7 +588,7 @@ function splitByLabeledBlocks(text) {
     if (/:\s*$/.test(b) && countWords(b) >= IMPERATIVE_MIN_WORDS && !META_LABEL_RE.test(b)) {
       const stripped = b.replace(/:\s*$/, '').trim();
       const { title } = splitTitleAndLead(stripped);
-      hits.push({ marker: '', title, body: stripped, kind: 'labeled' });
+      hits.push({ marker: '', title, rawTitle: stripped, body: stripped, kind: 'labeled' });
     }
   });
   return hits.length >= LABEL_MIN_BLOCKS ? hits : [];
@@ -664,13 +748,22 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
     // מכסה מקומית נלקחת רק אם היא לא אותה מחרוזת כמו המכסה הגלובלית — אחרת
     // ההיקף הכולל של העבודה היה נדבק לסעיף הראשון שבמקרה מכיל אותו.
     const isEcho = localQuota && globalQuota && localQuota.source === globalQuota.source;
+    const intent = detectIntent(combined);
+    // הכותרת במסמך היא ראש פרק, לא נוסח ההנחיה. ההנחיה המלאה נשמרת ב-instructions
+    // ומוצגת מתחת לכותרת, כך שכלום לא אובד — אבל המסמך נראה כמו עבודה ולא כמו
+    // דף השאלות של המרצה.
+    // הגזירה רצה על הנוסח **המלא** ולא על raw.title: splitTitleAndLead כבר חתך
+    // אותו ב-7 מילים דרך WORD_RE, וזה מוחק את הפסיקים — בלעדיהם אין איפה לחתוך
+    // את הרשימה, והכותרת יצאה "תיאור העובדות המרכזיות התאריכים החשובים ואת".
+    const heading = toSectionHeading(raw.rawTitle || raw.title, intent);
     return {
       id: `sec_${i + 1}`,
       order: i + 1,
       marker: raw.marker,
-      title: raw.title || `סעיף ${i + 1}`,
+      title: heading || raw.title || `סעיף ${i + 1}`,
+      rawTitle: raw.title || '',
       instructions: raw.body,
-      intent: detectIntent(combined),
+      intent,
       wordQuota: !isEcho && localQuota ? localQuota.words : null,
       quotaSource: !isEcho && localQuota ? 'explicit' : null,
       weight: extractSectionWeight(`${raw.rawTitle || raw.title}\n${raw.body}`),

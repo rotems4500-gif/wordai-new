@@ -24,6 +24,8 @@ import {
   WORK_KIND_LABELS,
 } from '../../services/assignmentPrepService';
 import { buildScaffoldHtml, buildWholeWorkHtml } from '../../services/assignmentScaffoldDoc';
+import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpenerService';
+import { ensureOpenerProfile, getOpenerProfile } from '../../services/openerProfileService';
 import { draftWholeWork } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
 import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
@@ -80,6 +82,12 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     window.addEventListener(MATERIAL_CHUNKS_UPDATED_EVENT, refreshMaterials);
     return () => window.removeEventListener(MATERIAL_CHUNKS_UPDATED_EVENT, refreshMaterials);
   }, [refreshMaterials]);
+
+  // מנוע הפתיחים נטען מראש כדי שבניית המסמך (סינכרונית) תמצא אותו מוכן —
+  // אחרת הסעיף הראשון נפתח בלי משפט פתיחה בפעם הראשונה בלבד.
+  React.useEffect(() => {
+    Promise.all([ensureOpenersReady(), ensureOpenerProfile()]).catch(() => {});
+  }, []);
 
   // Escape יוצא מהסטודיו — אותה קונבנציה כמו ProjectHubStudio.
   React.useEffect(() => {
@@ -197,9 +205,32 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       mode: evidenceResult?.mode || 'none',
       title: spec.title,
     });
+    // משפט פתיחה לכל סעיף, בקול של המשתמש. אפס API: ממוקש מהקורפוס האישי, ואם
+    // אין — מורכב מדקדוק הפתיחים. seedKey לפי הסעיף כדי ששני סעיפים מאותה כוונה
+    // לא יקבלו את אותו משפט.
+    const openers = {};
+    try {
+      const profile = getOpenerProfile();
+      const used = new Set();
+      (spec.sections || []).filter((s) => s?.enabled !== false).forEach((s) => {
+        // ⚠️ רק פתיחים **מורכבים** נכנסים אוטומטית למסמך. פתיח ממוקש הוא משפט
+        // אמיתי מעבודה קודמת, ולכן עלול לגרור איתו תוכן: נמדד — "יחסי דת ומדינה
+        // הפכו לסלע מחלוקת" הוזרק למטלה על מאבקים סביבתיים. מורכב הוא פיגום
+        // נטול נושא מעצם בנייתו. הממוקשים נשארים כהצעה בפאנל, שם המשתמש בוחר
+        // אותם במודע.
+        //
+        // ⚠️ ובלי דה-דופליקציה כל הפרקים נפתחים באותו משפט — גרוע מדף ריק.
+        const list = getOpenersForIntent(s.intent, { limit: 5, seedKey: s.id, profile });
+        const pick = list.find((o) => o.composed && !used.has(o.text));
+        if (!pick) return;
+        used.add(pick.text);
+        openers[s.id] = pick.text.replace(/\s*…$/, '');
+      });
+    } catch {}
+
     onOpenDocument?.({
       ok: true,
-      html: buildScaffoldHtml(spec),
+      html: buildScaffoldHtml(spec, { openers }),
       title: spec.title || 'מטלה',
       source: 'assignment-scaffold',
     });

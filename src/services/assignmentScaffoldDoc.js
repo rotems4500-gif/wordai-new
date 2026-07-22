@@ -63,7 +63,13 @@ function splitSubRequirements(instructions) {
  * @param {{includeQuotaHints?:boolean, includeInstructions?:boolean}} opts
  * @returns {string}
  */
-export function buildScaffoldHtml(spec, { includeQuotaHints = true, includeInstructions = true } = {}) {
+export function buildScaffoldHtml(spec, {
+  includeQuotaHints = true,
+  includeInstructions = true,
+  // מפה sectionId → משפט פתיחה בקול המשתמש (styleOpenerService). מוזרק כפסקה
+  // רגילה שאפשר להמשיך ממנה. מגיע מבחוץ כדי שהמודול יישאר LEAF.
+  openers = null,
+} = {}) {
   const sections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
   if (!sections.length) return '<p></p>';
 
@@ -71,8 +77,12 @@ export function buildScaffoldHtml(spec, { includeQuotaHints = true, includeInstr
   const title = String(spec?.title || '').trim();
   if (title) parts.push(`<h1>${escapeHtml(title)}</h1>`);
 
-  sections.forEach((section) => {
-    parts.push(`<h2>${escapeHtml(section.title || `סעיף ${section.order}`)}</h2>`);
+  sections.forEach((section, i) => {
+    // מספור רץ בכותרת. המרצה ממספר את השאלות, אבל במסמך המוגש הפרקים ממוספרים
+    // ברצף — וסעיף בלי מספר נראה כמו פסקה תלושה. normalizeHeadingKey כבר מסיר
+    // קידומת מספור, ולכן זיהוי הסעיף לפי הסמן ממשיך לעבוד.
+    const heading = section.title || `סעיף ${section.order}`;
+    parts.push(`<h2>${escapeHtml(`${i + 1}. ${heading}`)}</h2>`);
 
     // ⚠️ ההנחיה של הסעיף חייבת להגיע למסמך. היא ישבה ב-spec ובפאנל בלבד, וכך
     // המשתמש קיבל כותרת חשופה ומכסת מילים — בלי חמש תתי-הדרישות שהמרצה כתב
@@ -87,6 +97,11 @@ export function buildScaffoldHtml(spec, { includeQuotaHints = true, includeInstr
         if (oneLine) parts.push(`<p><em>${escapeHtml(oneLine)}</em></p>`);
       }
     }
+
+    // משפט הפתיחה — הדבר היחיד במסמך שהוא *טקסט לכתיבה* ולא הנחיה. הוא בקול
+    // של המשתמש (ממוקש מהקורפוס) או מורכב מהדקדוק, ותפקידו לשבור את הדף הריק.
+    const opener = openers ? String(openers[section.id] || '').trim() : '';
+    if (opener) parts.push(`<p>${escapeHtml(opener)}</p>`);
 
     if (includeQuotaHints && section.wordQuota) {
       // רמז המכסה הוא פסקה רגילה ולא placeholder: TipTap לא שומר nodes לא-מוכרים,

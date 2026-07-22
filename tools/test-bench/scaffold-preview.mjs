@@ -48,6 +48,26 @@ const CORPUS = process.env.WORDAI_CORPUS_OUT
 const DIR = path.join(CORPUS, 'instructions');
 const PICK = process.env.WORDAI_PREVIEW_PICK || 'דצנמ';
 
+// טעינת הקורפוס האישי לפני בניית המסמך — הפתיחים נבנים ממנו, וב-Studio הוא
+// כבר טעון (ensureOpenersReady רץ ב-mount).
+await samples.ensureSampleStoreReady();
+try {
+  const finals = path.join(CORPUS, 'finals');
+  const ffiles = (await readdir(finals)).filter((f) => f.endsWith('.txt')).sort();
+  const seenDocs = new Set();
+  for (const f of ffiles) {
+    const raw = await readFile(path.join(finals, f), 'utf8');
+    const t = raw.split('\n', 1)[0].replace(/^#\s*/, '');
+    const b = raw.split('\n').slice(2).join('\n').trim();
+    const fp = b.replace(/\s+/g, '').slice(0, 400);
+    if (!b || seenDocs.has(fp)) continue;
+    seenDocs.add(fp);
+    samples.addDocumentSamples({ title: t, text: b, source: 'real-finals' });
+  }
+} catch {}
+await openers.ensureOpenersReady().catch(() => {});
+const openerProfile = await profileSvc.ensureOpenerProfile().catch(() => null);
+
 const files = (await readdir(DIR)).filter((f) => f.endsWith('.txt')).sort();
 let chosen = null;
 for (const file of files) {
@@ -63,7 +83,18 @@ const spec = parseAssignmentSpec(chosen.body);
 
 // ---- 1. מה שהמשתמש יראה בעורך ----
 console.log('\n▓▓▓ המסמך שנפתח בעורך ▓▓▓\n');
-const html = buildScaffoldHtml(spec);
+// אותו מסלול כמו ב-Studio: פתיח לכל סעיף, מוזרק לתוך המסמך.
+const openersMap = {};
+const usedOpeners = new Set();
+spec.sections.filter((s) => s?.enabled !== false).forEach((s) => {
+  // רק מורכבים — ממוקש עלול לגרור תוכן מעבודה אחרת. ראה AssignmentScaffoldStudio.
+  const list = openers.getOpenersForIntent(s.intent, { limit: 5, seedKey: s.id, profile: openerProfile });
+  const pick = list.find((o) => o.composed && !usedOpeners.has(o.text));
+  if (!pick) return;
+  usedOpeners.add(pick.text);
+  openersMap[s.id] = pick.text.replace(/\s*…$/, '');
+});
+const html = buildScaffoldHtml(spec, { openers: openersMap });
 // רינדור גס של ה-HTML לטקסט, כדי לראות את המסמך כמו שהוא ייראה.
 console.log(html
   .replace(/<h1>(.*?)<\/h1>/g, (_, t) => `\n${'━'.repeat(60)}\n${t}\n${'━'.repeat(60)}`)
@@ -86,25 +117,7 @@ if (spec.warnings?.length) spec.warnings.forEach((w) => console.log(`⚠ ${w}`))
 // ---- 3. משפטי הפתיחה — הקורפוס האמיתי + דקדוק גלובלי + פרופיל אישי ----
 console.log(`\n${'═'.repeat(76)}\n▓▓▓ משפטי פתיחה לכל סעיף ▓▓▓\n`);
 
-// טעינת העבודות האמיתיות — אותו קלט שהמשתמש היה מעלה ב"הסגנון שלי".
-await samples.ensureSampleStoreReady();
-try {
-  const finals = path.join(CORPUS, 'finals');
-  const ffiles = (await readdir(finals)).filter((f) => f.endsWith('.txt')).sort();
-  const seen = new Set();
-  for (const f of ffiles) {
-    const raw = await readFile(path.join(finals, f), 'utf8');
-    const title = raw.split('\n', 1)[0].replace(/^#\s*/, '');
-    const body = raw.split('\n').slice(2).join('\n').trim();
-    const fp = body.replace(/\s+/g, '').slice(0, 400);
-    if (!body || seen.has(fp)) continue;
-    seen.add(fp);
-    samples.addDocumentSamples({ title, text: body, source: 'real-finals' });
-  }
-} catch {}
-
-await openers.ensureOpenersReady().catch(() => {});
-const profile = await profileSvc.ensureOpenerProfile().catch(() => null);
+const profile = openerProfile;   // נטען למעלה, לפני בניית המסמך
 const stats = openers.getOpenerStatus?.() || null;
 const pstat = profileSvc.getOpenerProfileStatus();
 console.log(`קורפוס אישי: ${stats?.paragraphs ?? 0} פסקאות · ${stats?.openers ?? 0} פתיחים ממוקשים · פרופיל: ${pstat.personalWords} מילות סלוט (λ=${pstat.blendLambda.toFixed(2)})\n`);
