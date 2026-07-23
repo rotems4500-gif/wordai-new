@@ -302,6 +302,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     try {
       const profile = getOpenerProfile();
       const used = new Set(); // דה-דופליקציה של הגדם — בלעדיה כל הפרקים נפתחים אותו דבר
+      const bySection = evidenceResult?.bySection || {};
+      // A3: גוף הראיות של היחידה — הפתיח מבטיח מונחי-חובה רק אם הם באמת בחומר.
+      const evText = (id) => (bySection[id]?.evidence || []).map((e) => e.text).join(' ');
       (spec.sections || []).filter((s) => s?.enabled !== false).forEach((s) => {
         const subs = Array.isArray(s.subSections) ? s.subSections : [];
         if (subs.length) {
@@ -314,6 +317,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
               framework: s.title,
               mustMention: sub.mustMention?.length ? sub.mustMention : s.mustMention,
               usedTexts: used,
+              evidenceText: evText(sub.id),
             });
             if (text) openers[sub.id] = text;
           });
@@ -326,6 +330,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
           topic: s.title,
           mustMention: s.mustMention,
           usedTexts: used,
+          evidenceText: evText(s.id),
         });
         if (text) openers[s.id] = text;
       });
@@ -378,6 +383,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
           ? s.subSections.map((sub) => ({ ...sub, intent: sub.intent || s.intent, parent: s }))
           : [{ ...s, parent: null }];
         units.forEach((u) => {
+          const ev = bySection[u.id]?.evidence || [];
           const openerText = composeSectionOpener({
             intent: u.intent,
             seedKey: u.id,
@@ -386,9 +392,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
             framework: u.parent?.title,
             mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || s.mustMention),
             usedTexts: used,
+            evidenceText: ev.map((e) => e.text).join(' '),
           });
           if (openerText) openers[u.id] = openerText;
-          const ev = bySection[u.id]?.evidence || [];
           // 3 וריאנטים לכל סעיף; הדטקטור המקומי בוחר את הכי-אנושי (לולאת האיכות).
           const r = composeSectionProseBest(
             { ...u, keywords: u.keywords?.length ? u.keywords : s.keywords },

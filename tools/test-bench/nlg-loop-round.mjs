@@ -134,9 +134,31 @@ async function ocrPdf(filePath) {
   return cleanOcrText(raw);
 }
 
+// pptx → טקסט: זהה ל-extractPptx של materialExtractBrowser (jszip + <a:t>).
+// מצגות ההרצאה (נושא XX) הן טקסט דיגיטלי נקי — עוקפות את בעיית ה-OCR הדו-טורי
+// שהרעילה את מיל/המרקסיזם ב-round-2. (round-3, מסלול B של המבקר.)
+async function extractPptxText(filePath) {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(fs.readFileSync(filePath));
+  const slideNum = (p) => Number((p.match(/slide(\d+)\.xml$/i) || [])[1] || 0);
+  const slidePaths = Object.keys(zip.files)
+    .filter((p) => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
+    .sort((a, b) => slideNum(a) - slideNum(b));
+  const parts = [];
+  for (const p of slidePaths) {
+    const xml = await zip.files[p].async('string');
+    const texts = (xml.match(/<a:t>([\s\S]*?)<\/a:t>/gi) || [])
+      .map((t) => t.replace(/<[^>]+>/g, '').trim())
+      .filter(Boolean);
+    if (texts.length) parts.push(texts.join(' '));
+  }
+  return { text: parts.join('\n'), pages: 0, scanned: false };
+}
+
 async function extractFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.pdf') return extractPdfText(filePath);
+  if (ext === '.pptx') return extractPptxText(filePath);
   if (ext === '.docx') {
     const r = await mammoth.extractRawText({ buffer: fs.readFileSync(filePath) });
     return { text: r.value || '', pages: 0, scanned: false };
@@ -168,6 +190,15 @@ const COURSE_FILES = [
   'The Constitution of the Netherlands 2018.pdf',
   'נח הררי – קפיטליזם.pdf',
   'קולקה - המבנה החוקתי של ארהב.pdf',
+  // מצגות ההרצאה של הקורס — טקסט דיגיטלי נקי, תואמות אחד-לאחד לסעיפי המטלה.
+  // round-3 (מסלול B): המקור הנקי למיל ולמרקסיזם, במקום ה-OCR המשובש.
+  'נושא 14 - על החירות בדמוקרטיה - מיל.pptx',
+  'נושא 14 - המהפכה התעשייתית וקפיטליזם.pptx',
+  'נושא 12 - לוק וזכות המרד נגד השלטון.pptx',
+  'נושא 13 - ההצהרות האמריקניות והזכויות הטבעיות.pptx',
+  'נושא 15 - מלחמת העולם השניה ומשטר זכויות האדם.pptx',
+  'נושא 10 - המהפכה המהוללת 31.3.2024.pptx',
+  'נושא 11 - מגילת הזכויות ועיקרון עליונות הפרלמנט.pptx',
 ];
 
 async function ingestCourse() {
@@ -384,6 +415,30 @@ function unitList(section) {
   return [{ ...section, parent: null }];
 }
 
+// C (round-3): דרגרדציה מבוקרת. סעיף חסום לא מציג רק "[חסום]" אלא שלד ישר:
+// פתיח כן (בלי הבטחות-שווא — evidenceText=''), הפניה למקורות הקרובים ביותר עם
+// z, ו-"מה חסר כדי לכתוב". זה ה-fallback הכן — לא המצאה, אבל גם לא דף ריק.
+function blockedSkeleton(u, res, openerText, note) {
+  const near = (res?.diag?.top || []).slice(0, 3);
+  const nearTxt = near.length
+    ? near.map((t) => `${t.src} (z${t.z})`).join(' · ')
+    : 'אין מועמדים קרובים בקורפוס';
+  const framework = u.parent?.title || u.title || 'הנושא';
+  const missing = res?.gap
+    ? `דרוש מקור נקי וממוקד על ${framework} — לא נמצא חומר מעל סף הרלוונטיות.`
+    : `דרוש מקור קריא על ${framework} — המקורות הקרובים משובשי-OCR או מתחת לסף.`;
+  const headTxt = u.parent ? u.title.split(' — ').slice(-1)[0] : u.title;
+  const head = u.parent ? `<h3>${escapeHtml(headTxt)}</h3>` : '';
+  const openHtml = openerText ? `<p>${escapeHtml(openerText)}</p>` : '';
+  const html = `${head}${openHtml}`
+    + `<p><em>מקורות קרובים (מתחת לסף): ${escapeHtml(nearTxt)}</em></p>`
+    + `<p><strong>[חסום — ${escapeHtml(note)}] מה חסר כדי לכתוב: ${escapeHtml(missing)}</strong></p>`;
+  const txt = `### ${u.title}\n${openerText ? `${openerText}\n` : ''}`
+    + `מקורות קרובים (מתחת לסף): ${nearTxt}\n`
+    + `[חסום — ${note}] מה חסר: ${missing}\n`;
+  return { html, txt };
+}
+
 let totWords = 0;
 let totBlocked = 0;
 let totAnchored = 0;
@@ -403,6 +458,7 @@ for (const section of sections) {
       topic: u.title, framework: u.parent?.title,
       mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || section.mustMention),
       usedTexts: usedOpeners,
+      evidenceText: evidence.map((e) => e.text).join(' '),
     });
 
     const secMetric = {
@@ -422,9 +478,9 @@ for (const section of sections) {
       secMetric.status = 'blocked';
       secMetric.note = res?.gap ? 'אין ראיות בסף הרלוונטיות (gap)' : 'אין ראיות';
       totBlocked += 1;
-      const head = u.parent ? `<h3>${escapeHtml(u.title.split(' — ').slice(-1)[0])}</h3>` : '';
-      htmlParts.push(`${head}<p><em>[סעיף חסום — ${escapeHtml(secMetric.note)}. לא נכתבת טיוטה: אין המצאה.]</em></p>`);
-      txtParts.push(`### ${u.title}\n[חסום — ${secMetric.note}]\n`);
+      const sk = blockedSkeleton(u, res, openerText, secMetric.note);
+      htmlParts.push(sk.html);
+      txtParts.push(sk.txt);
       metrics.sections.push(secMetric);
       continue;
     }
@@ -441,9 +497,9 @@ for (const section of sections) {
       secMetric.note = 'ראיות חלשות מדי (מתחת ל-zFloor) — לא נכתבה טיוטה';
       secMetric.filteredWeak = evidence.length;
       totBlocked += 1;
-      const head = u.parent ? `<h3>${escapeHtml(u.title.split(' — ').slice(-1)[0])}</h3>` : '';
-      htmlParts.push(`${head}<p><em>[סעיף חסום — ${escapeHtml(secMetric.note)}.]</em></p>`);
-      txtParts.push(`### ${u.title}\n[חסום — ${secMetric.note}]\n`);
+      const sk = blockedSkeleton(u, res, openerText, secMetric.note);
+      htmlParts.push(sk.html);
+      txtParts.push(sk.txt);
       metrics.sections.push(secMetric);
       continue;
     }

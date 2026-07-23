@@ -609,6 +609,11 @@ export function composeSectionOpener({
   framework = '',
   mustMention = [],
   usedTexts = null,
+  // A3 (round-3): גוף הראיות של הסעיף. הפתיח הבטיח "ישולבו בדיון המושגים X ו-Y"
+  // גם כשאין ל-X/Y זכר בחומר — הבטחת-שווא שהמרצה פוסל. כשמסופק (מחרוזת, כולל ''),
+  // המונחים מסוננים לאלה שמופיעים בפועל (includes + הסרת תחילית ה/ו/ב/ל/כ/מ/ש);
+  // גוף ריק ⇒ אפס הבטחות (סעיף חסום). null (לא סופק) ⇒ התנהגות ישנה, בלי סינון.
+  evidenceText = null,
 } = {}) {
   const cls = classifyTopic(topic);
   if (cls.kind === 'none') return '';
@@ -644,7 +649,21 @@ export function composeSectionOpener({
     first = frame;
   }
 
-  const must = (Array.isArray(mustMention) ? mustMention : []).filter(Boolean);
+  let must = (Array.isArray(mustMention) ? mustMention : []).filter(Boolean);
+  // סינון-כנות: מבטיחים רק מונחי-חובה שקיימים בגוף הראיות. null ⇒ לא סופק ⇒
+  // דילוג (התנהגות ישנה). '' ⇒ סעיף חסום ⇒ כל המונחים מסוננים החוצה.
+  if (must.length && evidenceText != null) {
+    const bodyLc = String(evidenceText).toLowerCase();
+    const present = (term) => {
+      const words = String(term).toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+      if (!words.length) return false;
+      return words.every((w) => {
+        const bare = w.replace(/^[הובלכמש](?=[א-ת]{3,})/, '');
+        return bodyLc.includes(w) || bodyLc.includes(bare);
+      });
+    };
+    must = must.filter(present);
+  }
   let second;
   if (must.length) {
     second = `בהתאם לדרישת המטלה, ישולבו בדיון המושגים ${must.map((m) => `"${m}"`).join(' ו-')}.`;

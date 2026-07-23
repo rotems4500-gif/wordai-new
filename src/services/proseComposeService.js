@@ -58,12 +58,37 @@ function cleanEvidenceSentence(s) {
 const HE_FUNCTION_WORDS_RE = /(?:^|\s)(?:של|את|כי|על|אשר|היא|הוא|הם|בין|כאשר|לפי|וגם|אבל|כדי|בשל|לכן|כלומר|וכן)(?:\s|$)/;
 const EN_FUNCTION_WORDS_RE = /(?:^|\s)(?:the|of|and|in|to|that|is|are|was|as|for|with|by|from)(?:\s|$)/i;
 
+// הסגר-ג'יבריש ברמת המשפט (round-3): קטע מהמניפסט שאינו garbled ברמת ה-chunk
+// עדיין נושא משפטים משובשי-OCR בודדים — גרשיים/מרכאה באמצע מילה ('בית"המלאכה'),
+// כוכבית באמצע מילה ('יום*יום'), וספרות דבוקות לאותיות. הבוסט הלקסיקלי מכשיר
+// בדיוק את אלה (garbage-in), ולכן הסינון חייב לרוץ *לפני* הבחירה. round-2 העביר
+// 2/3 ממשפטי sec_3 המשובשים ל-prose. תלוי-עברית — טקסט אנגלי/עברי נקי לא נפגע.
+function ocrCorruptScore(s) {
+  const tokens = String(s || '').split(/\s+/).filter(Boolean);
+  let hard = 0; // סמן-שיבוש מובהק — פסילה כבר על אחד
+  let soft = 0; // סמן חלש יותר — נשקל ביחס/במצטבר
+  for (const t of tokens) {
+    // מרכאה/גרשיים בין שתי אותיות עבריות בתוך טוקן ארוך: כמעט-ודאי שני מילים
+    // שנדבקו ב-OCR ('בית"המלאכה'=9). ר"ת לגיטימי קצר (צה"ל=4, ארה"ב=5) מתחת ל-6
+    // ולא נפסל. סמן מובהק — אחד מספיק (round-2 העביר משפט עם בדיוק אחד).
+    if (/[א-ת]["״׳“”][א-ת]/.test(t) && t.replace(/["'״׳“”]/g, '').length >= 6) { hard += 1; continue; }
+    if (/[א-ת][*][א-ת]/.test(t)) { hard += 1; continue; }   // יום*יום, גילדות*נגרים
+    if (/\d[א-ת]|[א-ת]\d/.test(t)) { hard += 1; continue; }  // ספרה דבוקה לאות עברית
+    if (/[A-Za-z]\d|\d[A-Za-z]/.test(t)) { soft += 1; }      // ספרה-לטינית: רך (COVID19)
+  }
+  return { hard, soft, total: tokens.length };
+}
+
 /** "זה בכלל משפט?" — מסנן רצפי כותרות/תוכן-עניינים ממצגות ו-PDF שבורים. */
 function looksLikeProse(s) {
   const words = countWords(s);
   // רצף ארוך בלי פיסוק סופי = ריצת כותרות ("תחנות יסוד... חבר פרלמנט (1865-68)...")
   if (words > 15 && !/[.!?׃]$/.test(s)) return false;
   if (s.includes('…')) return false;                       // נחתך כבר במקור
+  // שיבושי-OCR: סמן מובהק אחד (hard) מספיק לפסילה; אחרת ≥2 מצטבר או >12%.
+  const oc = ocrCorruptScore(s);
+  if (oc.hard >= 1) return false;
+  if (oc.soft >= 2 || (oc.total > 0 && oc.soft / oc.total > 0.12)) return false;
   const fnRe = hebrewRatio(s) >= 0.5 ? HE_FUNCTION_WORDS_RE : EN_FUNCTION_WORDS_RE;
   if (!fnRe.test(s)) return false;                         // אין מילות תפקוד — רשימת שמות
   // צפיפות סוגריים/מספרים גבוהה = שורת ביבליוגרפיה או ציר-זמן, לא טענה
@@ -109,10 +134,14 @@ function authorFromSource(sourceTitle) {
   const out = [];
   for (const w of words) {
     if (/\d/.test(w)) { out.push(w); break; }  // השנה נשארת: "כהן ולוי 2019"
+    // מפריד בכותרת ("מארקס ואנגלס – המניפסט") — עוצר לפניו כדי לא לגרור מקף תלוי
+    // לתוך הציטוט ("(מארקס ואנגלס –)"). round-2 flag.
+    if (/^[–—-]+$/.test(w)) break;
     out.push(w);
     if (out.length >= 3) break;
   }
-  return out.join(' ').trim() || 'המקור';
+  // ניקוי פיסוק-מפריד תלוי בקצה, ליתר ביטחון.
+  return out.join(' ').replace(/[\s–—:,;.\-]+$/, '').trim() || 'המקור';
 }
 
 function citeFromEvidence(item) {
@@ -224,6 +253,10 @@ export function composeSectionProse(section, evidence, opts = {}) {
   if (cmds.has('tone_concede') && !plan.cycle.includes('concede')) plan.cycle.push('concede');
   if (cmds.has('tone_contrast') && !plan.cycle.includes('contrast')) plan.cycle.push('contrast');
   if (cmds.has('tone_no_wrap')) plan.close = plan.close.filter((m) => m !== 'wrap');
+  // A3 (round-3): claim ממחזר את משפט הראיה הראשון — עם ראיה בודדת זה כפילות
+  // ריקה של אותו משפט. פותחים ישר ב-evidence כשאין ≥2 ראיות. wrap מטופל בעת
+  // המהלך (דורש ≥2 מקורות שונים) כדי לא לסגור פסקה חד-מקורית ב"תמונה עקבית".
+  if (workList.length < 2) plan.lead = plan.lead.map((m) => (m === 'claim' ? 'evidence' : m));
   const terms = [
     ...(Array.isArray(section?.mustMention) ? section.mustMention : []),
     ...(Array.isArray(section?.keywords) ? section.keywords : []),
@@ -276,9 +309,10 @@ export function composeSectionProse(section, evidence, opts = {}) {
           .map((id) => workList.find((e) => evId(e) === id))
           .filter(Boolean)
           .map((e) => authorFromSource(e.sourceTitle)))].slice(0, 3);
-        const clause = names.length > 1
-          ? `המקורות שנסקרו (${names.join('; ')}) מצביעים יחד על תמונה עקבית בסוגיה זו`
-          : `הדברים שהובאו מתוך ${names[0] || 'החומר'} מרכזים את עיקר הידוע בסוגיה זו`;
+        // A3 (round-3): סוגר רק כשיש ≥2 מקורות שונים לסכם ("מצביעים יחד"). מקור
+        // בודד ⇒ אין מה לסכם, ו"מרכזים את עיקר הידוע" היה ריפוד חלול — מדלגים.
+        if (names.length < 2) return false;
+        const clause = `המקורות שנסקרו (${names.join('; ')}) מצביעים יחד על תמונה עקבית בסוגיה זו`;
         return emit(composeMoveSentence('wrap', { clause },
           { seedKey: sk, profile, avoid: avoidFrames }), null);
       }
@@ -365,7 +399,34 @@ export function composeSectionProse(section, evidence, opts = {}) {
     }
   }
   if (current.length) paragraphs.push(current.join(' '));
-  const html = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join('')
+
+  // A4 (round-3): ציטוט כהערת-שוליים ולא בסוגריים inline. המטלה דורשת הערות
+  // שוליים. ה-HTML בלבד — draft.txt שומר את הציטוט הקריא בתוך sentence.text.
+  // התאמה על מחרוזת-הציטוט המדויקת שאנחנו הפקנו (citeFromEvidence), לא regex
+  // גנרי של סוגריים — כדי לא לגעת בסוגריים לגיטימיים בטקסט. סימון <sup>[N]</sup>
+  // מתדרדר בחן ל-"[N]" אם TipTap מסנן sup. עמוד חסר ⇒ "עמ' [חסר]".
+  let bodyHtml = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join('');
+  const footnotes = [];
+  const citeToNum = new Map();
+  for (const id of usedEvidenceIds) {
+    const ev = workList.find((e) => evId(e) === id);
+    if (!ev) continue;
+    const citeStr = escapeHtml(citeFromEvidence(ev));
+    if (!bodyHtml.includes(citeStr)) continue;
+    let num = citeToNum.get(citeStr);
+    if (!num) {
+      const page = ev.pageHint ? `, עמ' ${ev.pageHint}` : `, עמ' [חסר]`;
+      footnotes.push(`${authorFromSource(ev.sourceTitle)}${page} — ${ev.sourceTitle}`);
+      num = footnotes.length;
+      citeToNum.set(citeStr, num);
+    }
+    bodyHtml = bodyHtml.split(citeStr).join(`<sup>[${num}]</sup>`);
+  }
+  const notesHtml = footnotes.length
+    ? `<hr /><p><strong>הערות שוליים</strong></p>${footnotes.map((n, i) => `<p><em>[${i + 1}] ${escapeHtml(n)}</em></p>`).join('')}`
+    : '';
+  const html = bodyHtml
+    + notesHtml
     + notes.map((n) => `<p><em>${escapeHtml(n)}</em></p>`).join('');
 
   return { sentences, html, wordCount, notes, usedEvidenceIds, usedSentenceKeys: addedSentences };
