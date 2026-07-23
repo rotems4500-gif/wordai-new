@@ -643,7 +643,7 @@ for (const c of proseCases) {
   const r = composeSectionProse(c.section, evidence, { quotaWords: 250, seedKey: c.id });
   const bad = [];
   if (!r || !r.sentences?.length) {
-    bad.push('לא נוצרה פרוזה');
+    bad.push(`לא נוצרה פרוזה (z: ${evidence.map((e) => Number(e.z).toFixed(1)).join(', ')})`);
   } else {
     const evidenceIds = new Set(evidence.map((e) => e.id));
     const seen = new Set();

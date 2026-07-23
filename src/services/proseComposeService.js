@@ -53,6 +53,25 @@ function cleanEvidenceSentence(s) {
  * בחירת משפט-הליבה מ-chunk ראיה: המשפט שהכי שווה לדווח.
  * ניקוד: אורך בטווח + נוכחות מונחי חובה/מילות מפתח + עברית נקייה (רעש OCR נפסל).
  */
+// מילות תפקוד — פרוזה אמיתית מכילה אותן; רצף כותרות-שקפים לא. לפי שפת המשפט:
+// חומרי קורס הם לא פעם באנגלית (השאילתה עברית, הראיה אנגלית — מסלול נתמך).
+const HE_FUNCTION_WORDS_RE = /(?:^|\s)(?:של|את|כי|על|אשר|היא|הוא|הם|בין|כאשר|לפי|וגם|אבל|כדי|בשל|לכן|כלומר|וכן)(?:\s|$)/;
+const EN_FUNCTION_WORDS_RE = /(?:^|\s)(?:the|of|and|in|to|that|is|are|was|as|for|with|by|from)(?:\s|$)/i;
+
+/** "זה בכלל משפט?" — מסנן רצפי כותרות/תוכן-עניינים ממצגות ו-PDF שבורים. */
+function looksLikeProse(s) {
+  const words = countWords(s);
+  // רצף ארוך בלי פיסוק סופי = ריצת כותרות ("תחנות יסוד... חבר פרלמנט (1865-68)...")
+  if (words > 15 && !/[.!?׃]$/.test(s)) return false;
+  if (s.includes('…')) return false;                       // נחתך כבר במקור
+  const fnRe = hebrewRatio(s) >= 0.5 ? HE_FUNCTION_WORDS_RE : EN_FUNCTION_WORDS_RE;
+  if (!fnRe.test(s)) return false;                         // אין מילות תפקוד — רשימת שמות
+  // צפיפות סוגריים/מספרים גבוהה = שורת ביבליוגרפיה או ציר-זמן, לא טענה
+  const numParen = (s.match(/[()0-9]/g) || []).length;
+  if (numParen / Math.max(s.length, 1) > 0.12) return false;
+  return true;
+}
+
 function pickCoreSentence(chunkText, { terms = [], used = new Set() } = {}) {
   const sentences = splitSentences(chunkText).map(cleanEvidenceSentence).filter(Boolean);
   const norm = (s) => String(s).replace(/[.!?׃…]+$/, '').trim();
@@ -62,6 +81,7 @@ function pickCoreSentence(chunkText, { terms = [], used = new Set() } = {}) {
     if (used.has(norm(s))) continue;
     const words = countWords(s);
     if (words < MIN_CLAUSE_WORDS) continue;
+    if (!looksLikeProse(s)) continue;
     let score = 0;
     if (words <= MAX_CLAUSE_WORDS) score += 2; else score -= (words - MAX_CLAUSE_WORDS) / 10;
     score += hebrewRatio(s) * 2;
@@ -156,18 +176,34 @@ export function composeSectionProse(section, evidence, opts = {}) {
     profile = null,
     avgSentenceWords = AVG_WORDS_PER_SENTENCE,
     commands = null,   // מזהי PROSE_COMMANDS — חוקים דטרמיניסטיים, לא שפה חופשית
+    // Set משותף בין כל סעיפי העבודה: בלי זה אותו משפט ראיה חוזר בסעיפים א-ד
+    // (נמדד בעבודה אמיתית). הקורא (Studio) מעביר Set אחד לכל הריצה.
+    sharedUsedSentences = null,
   } = opts;
   const cmds = new Set(Array.isArray(commands) ? commands : commands instanceof Set ? [...commands] : []);
 
-  // פקודות ראיות: "רק חזקות" מסנן לפי z; אם הסינון מרוקן — נשארים עם המקור
-  // (עדיף טיוטה מראיות בינוניות מאשר סעיף ריק בהפתעה).
-  let workList = list;
+  // סינון ראיות חלשות — ברירת מחדל, לא רק בפקודה. ראיה "(אולי)" טובה כהפניה
+  // בשלד, אבל **לא** כבסיס למשפט תוכן: נמדד בעבודה אמיתית — כתבה על סרט בוליוודי
+  // (שנקלטה כי מונח-חובה הופיע בה) נכתבה לתוך ניתוח של מיל בכל הסעיפים.
+  //
+  // הסף תלוי-שפה: שאילתה עברית מול מקור אנגלי מדכאת קוסינוס באופן טבעי (נמדד
+  // בהרנס: ראיות אנגליות לגיטימיות ב-z 3.7-4.1), ולכן מקור לטיני מקבל סף מקל.
+  // מקור עברי ב-z 4.0 הוא בדיוק פרופיל הזבל הבוליוודי — נשאר על 4.5.
+  // ראיה בלי z (fallback לקסיקלי / mock) עוברת — אין לנו במה לשפוט אותה.
+  const zFloor = (e) => (hebrewRatio(e.text) >= 0.5 ? 4.5 : 3.6);
+  let workList = list.filter((e) => (typeof e.z === 'number' ? e.z >= zFloor(e) : true));
+  if (!workList.length) return null;   // רק ראיות חלשות — עדיף שלד כן מטיוטה מזויפת
   if (cmds.has('ev_strong_only')) {
-    const strong = list.filter((e) => (typeof e.z === 'number' ? e.z >= 4.5 : false));
+    const strong = workList.filter((e) => (typeof e.z === 'number' ? e.z >= 6 : false));
     if (strong.length) workList = strong;
   }
 
   const intent = section?.intent || 'exposition';
+  // נושא ארוך הוא בעצם פסוקית ("קבוצת המיעוט ביקשה להפגין בבירת המדינה") —
+  // שתילתו במסגרת NP ("בכל הנוגע ל<נושא>") מייצרת עברית שבורה. נמדד בעבודה
+  // אמיתית. מסגרות @topic מקבלות רק צירוף שמני קצר; אחרת הן לא ישימות והמנוע
+  // בוחר מסגרת פסוקית במקומן.
+  const topicForFrames = countWords(section?.title) <= 6 ? String(section?.title || '').trim() : '';
   const basePlan = MOVE_PLANS[intent] || MOVE_PLANS.exposition;
   // תוכנית מהלכים בת-שינוי לפי פקודות.
   const plan = {
@@ -190,7 +226,11 @@ export function composeSectionProse(section, evidence, opts = {}) {
 
   const lenFactor = cmds.has('len_brief') ? 0.5 : cmds.has('len_short') ? 0.7 : cmds.has('len_expand') ? 1.3 : 1;
   const targetWords = Math.round((quotaWords > 0 ? quotaWords : Math.min(220, workList.length * 45)) * lenFactor);
-  const usedSentences = new Set();
+  const usedSentences = sharedUsedSentences instanceof Set ? sharedUsedSentences : new Set();
+  // מה שנוסף בריצה הזו בלבד — מאפשר ל-composeSectionProseBest להריץ וריאנטים על
+  // עותקים ולמזג ל-Set המשותף רק את משפטי הווריאנט הזוכה.
+  const addedSentences = [];
+  const markUsed = (s) => { usedSentences.add(s); addedSentences.push(s); };
   const avoidFrames = new Set();
   const sentences = [];
   const notes = [];
@@ -218,9 +258,9 @@ export function composeSectionProse(section, evidence, opts = {}) {
         const ev = workList[0];
         const clause = pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!clause) return false;
-        usedSentences.add(clause);
+        markUsed(clause);
         if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
-        return emit(composeMoveSentence('claim', { clause, topic: section?.title || '' },
+        return emit(composeMoveSentence('claim', { clause, topic: topicForFrames },
           { seedKey: sk, profile, avoid: avoidFrames }), ev.id);
       }
       case 'wrapOpen':
@@ -245,13 +285,13 @@ export function composeSectionProse(section, evidence, opts = {}) {
         if (!ev) return false;
         const clause = pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!clause) return false;
-        usedSentences.add(clause);
+        markUsed(clause);
         if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
         const content = {
           clause,
           author: authorFromSource(ev.sourceTitle),
           cite: citeFromEvidence(ev),
-          topic: section?.title || '',
+          topic: topicForFrames,
         };
         // explain בלי ראיה משלו היה מדווח-כפול; כשיש ראיה — הוא פשוט מסגור
         // רך יותר לאותה ראיה ("הדבר מלמד כי..."), עדיין עם מראה מקום.
@@ -272,7 +312,7 @@ export function composeSectionProse(section, evidence, opts = {}) {
           evidenceIdx -= 1;
           return doMove('evidence');
         }
-        usedSentences.add(quoteSentence);
+        markUsed(quoteSentence);
         if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
         return emit(composeMoveSentence('quoteIntro', {
           quote: quoteSentence,
@@ -281,7 +321,7 @@ export function composeSectionProse(section, evidence, opts = {}) {
         }, { seedKey: sk, profile, avoid: avoidFrames }), ev.id);
       }
       case 'transition':
-        return emit(composeMoveSentence('transition', { topic: section?.title || '' },
+        return emit(composeMoveSentence('transition', { topic: topicForFrames },
           { seedKey: sk, profile, avoid: avoidFrames }), null);
       default:
         return false;
@@ -323,7 +363,7 @@ export function composeSectionProse(section, evidence, opts = {}) {
   const html = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join('')
     + notes.map((n) => `<p><em>${escapeHtml(n)}</em></p>`).join('');
 
-  return { sentences, html, wordCount, notes, usedEvidenceIds };
+  return { sentences, html, wordCount, notes, usedEvidenceIds, usedSentenceKeys: addedSentences };
 }
 
 /**
@@ -340,12 +380,21 @@ export function composeSectionProse(section, evidence, opts = {}) {
  */
 export function composeSectionProseBest(section, evidence, opts = {}, { scoreFn = null, variants = 3 } = {}) {
   const baseSeed = opts.seedKey || section?.id || 'section';
+  // הדה-דופ החוצה-סעיפים (sharedUsedSentences) לא מוזן ישירות לווריאנטים: וריאנט
+  // ראשון היה "צורך" את המשפטים והשאר היו נבנים מהשאריות. כל וריאנט רץ על עותק,
+  // ורק משפטי הזוכה נרשמים ל-Set המשותף.
+  const shared = opts.sharedUsedSentences instanceof Set ? opts.sharedUsedSentences : null;
   let best = null;
   let bestScore = Infinity;
   for (let v = 0; v < Math.max(1, variants); v += 1) {
-    const r = composeSectionProse(section, evidence, { ...opts, seedKey: `${baseSeed}#${v}` });
+    const variantOpts = {
+      ...opts,
+      seedKey: `${baseSeed}#${v}`,
+      sharedUsedSentences: shared ? new Set(shared) : null,
+    };
+    const r = composeSectionProse(section, evidence, variantOpts);
     if (!r) continue;
-    if (!scoreFn) return r;   // בלי מנקד — הווריאנט הראשון התקין
+    if (!scoreFn) { best = r; break; }   // בלי מנקד — הווריאנט הראשון התקין
     let score = 50;
     try {
       const plain = r.sentences.map((s) => s.text).join(' ');
@@ -353,6 +402,9 @@ export function composeSectionProseBest(section, evidence, opts = {}, { scoreFn 
       score = Number(scored?.score ?? scored ?? 50);
     } catch { /* ניקוד נכשל — ניקוד ניטרלי */ }
     if (score < bestScore) { bestScore = score; best = { ...r, authenticityScore: score }; }
+  }
+  if (best && shared && Array.isArray(best.usedSentenceKeys)) {
+    best.usedSentenceKeys.forEach((s) => shared.add(s));
   }
   return best;
 }

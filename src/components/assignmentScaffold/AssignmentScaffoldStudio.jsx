@@ -365,6 +365,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       const used = new Set();
       const bySection = evidenceResult?.bySection || {};
       const frameProfile = getFrameProfile();
+      // Set אחד לכל העבודה — אותו משפט ראיה לא יופיע בשני סעיפים (נמדד: בלעדיו
+      // אותה פסקה בוליוודית חזרה בסעיפים א-ד).
+      const workUsedSentences = new Set();
       const commands = [...proseCommands];
       const variants = proseCommands.has('st_pick5') ? 5 : 3;
       // "נסח מחדש" נצרך חד-פעמית: המונה נכנס ל-seed ומאופס אחרי היצירה.
@@ -390,7 +393,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
           const r = composeSectionProseBest(
             { ...u, keywords: u.keywords?.length ? u.keywords : s.keywords },
             ev,
-            { quotaWords: u.wordQuota || 0, seedKey: `${u.id}${seedSuffix}`, profile: frameProfile, commands },
+            { quotaWords: u.wordQuota || 0, seedKey: `${u.id}${seedSuffix}`, profile: frameProfile, commands, sharedUsedSentences: workUsedSentences },
             { scoreFn: scoreTextAuthenticity, variants },
           );
           if (r?.html) { prose[u.id] = r.html; written += 1; }

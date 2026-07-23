@@ -199,9 +199,20 @@ export function pureTokenRatio(text) {
   return pure / tokens.length;
 }
 
-// ‎tesseract.js מוריד את ה-core(wasm) ואת נתוני השפה מ-CDN בזמן ריצה. אם הרשת איטית/חסומה
-// (או offline) הקריאה עלולה להיתקע ללא קצה — לכן עוטפים כל שלב בזמן-קצוב וכושלים בחן.
+// ‎tesseract.js מוגש **מאירוח עצמי** (public/ocr, ראה scripts/copy-tesseract.mjs):
+// ברירת המחדל שלו — CDN של jsDelivr — נחסמת ע"י ה-CSP של האתר (worker-src),
+// וכל PDF סרוק נפל ב"שגיאת חילוץ". נמדד באתר החי (SecurityError על construct Worker).
+// אירוח עצמי גם עובד offline בדסקטופ. עדיין עוטפים בזמן-קצוב — רשת איטית בטעינה ראשונה.
 const OCR_TIMEOUT_MS = 90000;
+
+const ocrWorkerOptions = () => {
+  const base = typeof document !== 'undefined' ? document.baseURI : '/';
+  return {
+    workerPath: new URL('ocr/worker.min.js', base).href,
+    corePath: new URL('ocr/', base).href,
+    langPath: new URL('ocr/lang', base).href,
+  };
+};
 
 const withTimeout = (promise, ms, timeoutMessage) => {
   let timer;
@@ -214,7 +225,7 @@ const withTimeout = (promise, ms, timeoutMessage) => {
 const extractImageOcr = async (uint8) => {
   const { createWorker } = await import('tesseract.js');
   const worker = await withTimeout(
-    createWorker('heb+eng'),
+    createWorker('heb+eng', 1, ocrWorkerOptions()),
     OCR_TIMEOUT_MS,
     'אתחול מנוע ה-OCR נכשל (ייתכן חיבור איטי או חסום). נסה שוב או חלץ את הטקסט ידנית.',
   );
@@ -247,7 +258,7 @@ const extractPdfOcr = async (uint8, maxLength, onProgress) => {
   const doc = await pdfjs.getDocument({ data: uint8.slice() }).promise;
   const pages = Math.min(doc.numPages, OCR_MAX_PAGES);
   const worker = await withTimeout(
-    createWorker('heb+eng'),
+    createWorker('heb+eng', 1, ocrWorkerOptions()),
     OCR_TIMEOUT_MS,
     'אתחול מנוע ה-OCR נכשל (ייתכן חיבור איטי או חסום).',
   );
@@ -374,6 +385,9 @@ export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 
     }
     return { ok: true, text: clampText(text, maxLength) };
   } catch (err) {
-    return { ok: false, error: err?.message || 'שגיאת חילוץ' };
+    // שקיפות: "שגיאת חילוץ" עירומה הסתירה SecurityError של CSP במשך שבוע.
+    // שם השגיאה תמיד נשמר גם כשה-message ריק.
+    const detail = [err?.name, err?.message].filter(Boolean).join(': ');
+    return { ok: false, error: detail || String(err) || 'שגיאת חילוץ' };
   }
 };

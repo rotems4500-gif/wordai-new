@@ -6,6 +6,7 @@ import os from 'os';
 import https from 'https';
 import { execFile } from 'child_process';
 import { copyOrtWasm } from './scripts/copy-ort-wasm.mjs';
+import { copyTesseract } from './scripts/copy-tesseract.mjs';
 
 const STYLE_FILE = path.resolve(process.cwd(), 'my_personal_style.json');
 const MAX_BODY_BYTES = 65536; // 64 KB hard cap for POST /api/style
@@ -99,6 +100,10 @@ function ortWasmPlugin() {
       const res = copyOrtWasm(process.cwd());
       if (!res.ok) console.warn(`[ort] ${res.error} — האינדקס הסמנטי לא יעבוד.`);
       else if (res.copied) console.log(`[ort] ${res.copied} קבצי WASM הועתקו ל-public/ort`);
+      // tesseract באירוח עצמי — ה-CSP חוסם את ה-CDN שלו (ראה scripts/copy-tesseract.mjs)
+      const ocr = copyTesseract(process.cwd());
+      if (!ocr.ok) console.warn(`[ocr] ${ocr.error} — OCR בדפדפן לא יעבוד.`);
+      else if (ocr.copied) console.log(`[ocr] ${ocr.copied} קבצי tesseract הועתקו ל-public/ocr`);
     },
   };
 }

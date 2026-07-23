@@ -129,7 +129,12 @@ export function composeMoveSentence(move, content = {}, opts = {}) {
       if (!value) return null;
       if (key === 'quote' && !/^["״]/.test(value)) value = `"${value}"`;
       if (pendingCliticJoin && parts.length) {
-        parts[parts.length - 1] = parts[parts.length - 1] + value;
+        // ל/ב/כ + ה' הידיעה: ה-ה' נבלעת ("ל"+"המהפכה" → "למהפכה", לא "להמהפכה").
+        const clitic = parts[parts.length - 1];
+        if (/[לבכ]$/.test(clitic) && value.startsWith('ה') && value.length > 2) {
+          value = value.slice(1);
+        }
+        parts[parts.length - 1] = clitic + value;
       } else {
         parts.push(value);
       }
