@@ -536,3 +536,130 @@ export function getOpenerStatus() {
     intents: Object.keys(index.byIntent),
   };
 }
+
+// ---------- פתיח סעיף מלא (משפט–שניים, מעוגן בנושא) ----------
+//
+// המשוב שהוליד את זה: גדם של שלוש מילים ("מן הראוי לנתח את") לא שווה הרבה, אבל
+// השלמה עיוורת של גדם בכותרת שברה עברית ("מגבה את קבוצת המיעוט דורשת...").
+// לכן קודם מסווגים את הנושא, ולכל סוג תבנית שבטוחה דקדוקית:
+//   np       — צירוף שמני ("המהפכה התעשייתית ועקרונות המרקסיזם") → גדם "…את" מהדקדוק.
+//   question — "מהם החידושים..." → מסגרת שאלה, בלי הטיה תלוית-מין.
+//   clause   — כותרת-משפט של תיאור מקרה → מסגרת מקרה+מסגרת-העל, בלי שיבוץ הנושא.
+
+const ROADMAP_BY_INTENT = {
+  argument: [
+    'תחילה יוצגו העקרונות הרלוונטיים, ולאחר מכן ייבחן יישומם על המקרה הנדון.',
+    'הדיון ייפתח בהצגת המסגרת העיונית, וממנה תיגזר ההכרעה המנומקת.',
+    'המסקנה תיגזר מהחלת העקרונות על נסיבותיו הקונקרטיות של המקרה.',
+    'הניתוח יבחין בין השאלה העקרונית לבין הנסיבות הפרטיקולריות של המקרה.',
+  ],
+  analysis: [
+    'הדיון יתקדם מן הרקע הרעיוני אל בחינת הטענה לגופה.',
+    'תחילה יובהר ההקשר, ולאחריו ינותחו הגורמים המרכזיים.',
+  ],
+  compare: ['ההשוואה תיערך לאורך צירים משותפים, ותסתיים בהערכת ההבדלים המהותיים.'],
+  description: ['התיאור יתקדם מן הכלל אל הפרט, תוך הפניה לחומרי הקורס.'],
+};
+
+// מסגרות למקרה (clause): לא משבצות את הכותרת — רק את מסגרת-העל, שהיא צירוף שמני.
+const CASE_FRAMES = [
+  (fw) => `המקרה הנדון בסעיף זה ייבחן לאור ${fw}.`,
+  (fw) => `ניתוח המקרה שלפנינו ייערך על פי ${fw}.`,
+  (fw) => `ההכרעה בסעיף זה תנומק מתוך ${fw}.`,
+  (fw) => `הדיון במקרה זה יתבסס על ${fw}.`,
+];
+
+const QUESTION_WORDS = /^(?:מה|מהם|מהן|מהי|מהו|מדוע|כיצד|האם|מי|איך|למה|באיזו|באילו)\s/;
+// שם-פעולה שפותח כותרת ("הסבר מהם...", "ניתוח של...") — נחתך כדי לחשוף שאלה/נושא.
+const VERBAL_NOUN_PREFIX = /^(?:הסבר|ניתוח|תיאור|הצגת|בחינת|דיון ב|השוואת|פירוט|נימוק|סיכום)\s+/;
+
+function classifyTopic(topic) {
+  let t = String(topic || '').replace(/\s+/g, ' ').trim();
+  if (!t) return { kind: 'none', text: '' };
+  const stripped = t.replace(VERBAL_NOUN_PREFIX, '');
+  if (QUESTION_WORDS.test(stripped)) return { kind: 'question', text: stripped.replace(/[?？]\s*$/, '') };
+  if (QUESTION_WORDS.test(t)) return { kind: 'question', text: t.replace(/[?？]\s*$/, '') };
+  // כותרת-משפט: ארוכה, או מכילה פועל עבר/הווה טיפוסי אחרי הנושא. היוריסטיקה:
+  // מעל 6 מילים או מכילה "דורשת/ביקשה/ביצעה/מונעת/עתרה" וכד' — clause.
+  const words = t.split(' ');
+  const CLAUSE_VERB = /(?:דורשת|דורשים|ביקשה|ביצעה|מונעת|עתרה|מסרבת|טוענת|דורש|ביקש|ביצע|מונע|עתר|מסרב|טוען)/;
+  // תואר-פועל פותח ("בינתיים קבוצה אחרת...") מסגיר משפט-מקרה גם בלי פועל גלוי —
+  // הפועל נחתך יחד עם סוף הכותרת.
+  const ADVERB_OPEN = /^(?:בינתיים|כאשר|לאחר|בעוד|במקביל|בנוסף|כמו כן|מנגד)\s/;
+  if (words.length > 6 || CLAUSE_VERB.test(t) || ADVERB_OPEN.test(t)) return { kind: 'clause', text: t };
+  return { kind: 'np', text: t };
+}
+
+const stripTrailingEllipsis = (s) => String(s || '').replace(/\s*…\s*$/, '');
+
+/**
+ * פתיח מלא לסעיף: משפט פותח מעוגן בנושא + משפט מתווה-דרך (מהמושגים שהמרצה דרש,
+ * אם ישנם). בטוח דקדוקית לכל סוג כותרת. אפס API.
+ *
+ * @param {{intent?:string, seedKey?:string, profile?:object|null, topic?:string,
+ *          framework?:string, mustMention?:string[], usedTexts?:Set<string>}} args
+ *        framework — מסגרת-העל לניסוח פתיחי מקרה (כותרת סעיף-האב), צירוף שמני.
+ * @returns {string} '' כשאין מה להרכיב
+ */
+export function composeSectionOpener({
+  intent = 'analysis',
+  seedKey = '',
+  profile = null,
+  topic = '',
+  framework = '',
+  mustMention = [],
+  usedTexts = null,
+} = {}) {
+  const cls = classifyTopic(topic);
+  if (cls.kind === 'none') return '';
+
+  let first = '';
+  if (cls.kind === 'np') {
+    // גדם מהדקדוק (בקול המשתמש כשיש פרופיל) — רק גדמים שנגמרים ב"את …", שבטוחים
+    // מול צירוף שמני. אחרת תבנית ניטרלית בלי הטיה תלוית-מין.
+    const candidates = composeOpeners(intent, { count: 6, seedKey, profile })
+      .filter((c) => /את\s*…$/.test(c.text));
+    let stem = null;
+    for (const c of candidates) {
+      if (usedTexts && usedTexts.has(c.text)) continue;
+      stem = c; break;
+    }
+    if (stem) {
+      if (usedTexts) usedTexts.add(stem.text);
+      first = `${stripTrailingEllipsis(stem.text)} ${cls.text}.`;
+    } else {
+      first = `הדיון בחלק זה יעסוק ב${cls.text}.`;
+    }
+  } else if (cls.kind === 'question') {
+    first = `חלק זה נדרש לשאלה ${cls.text}.`;
+  } else {
+    // clause — תיאור מקרה. הנושא לא משובץ; המסגרת כן.
+    const fw = String(framework || '').replace(/\s+/g, ' ').trim() || 'העקרונות שנלמדו בקורס';
+    const idx = Math.abs(djb2(`${seedKey}|case`)) % CASE_FRAMES.length;
+    let frame = CASE_FRAMES[idx](fw);
+    if (usedTexts && usedTexts.has(frame)) {
+      frame = CASE_FRAMES[(idx + 1) % CASE_FRAMES.length](fw);
+    }
+    if (usedTexts) usedTexts.add(frame);
+    first = frame;
+  }
+
+  const must = (Array.isArray(mustMention) ? mustMention : []).filter(Boolean);
+  let second;
+  if (must.length) {
+    second = `בהתאם לדרישת המטלה, ישולבו בדיון המושגים ${must.map((m) => `"${m}"`).join(' ו-')}.`;
+  } else {
+    // בחירה מודעת-שימוש: ארבעה תתי-סעיפים לא יקבלו אותו משפט מתווה.
+    const pool = ROADMAP_BY_INTENT[intent] || ROADMAP_BY_INTENT.analysis;
+    const start = Math.abs(djb2(`${seedKey}|roadmap`)) % pool.length;
+    second = pool[start];
+    if (usedTexts) {
+      for (let i = 0; i < pool.length; i += 1) {
+        const cand = pool[(start + i) % pool.length];
+        if (!usedTexts.has(cand)) { second = cand; break; }
+      }
+      usedTexts.add(second);
+    }
+  }
+  return `${first} ${second}`;
+}

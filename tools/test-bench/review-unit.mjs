@@ -34,6 +34,7 @@ let netCalls = 0;
 }
 
 const { reviewDraft, SEVERITY, FINISHING_PASSES, estimatePassCalls } = await import('review');
+const { collectScaffoldBibliographyEntries, mergeBibliographyEntries, formatBibliographyEntry } = await import('localbib');
 
 let pass = 0;
 let fail = 0;
@@ -131,6 +132,34 @@ check('none → 0', estimatePassCalls(FINISHING_PASSES.NONE) === '0');
 check('style → 1', estimatePassCalls(FINISHING_PASSES.STYLE) === '1');
 check('humanize → 0–4', estimatePassCalls(FINISHING_PASSES.HUMANIZE) === '0–4');
 check('both → 1 + 0–4', estimatePassCalls(FINISHING_PASSES.BOTH) === '1 + 0–4');
+
+console.log('\n===== local bibliography =====');
+const scaffoldBibliography = collectScaffoldBibliographyEntries({
+  active: true,
+  evidence: {
+    intro: { evidence: [
+      { materialId: 'm1', sourceTitle: 'כהן 2021 — למידה עצמאית', sourceUrl: 'https://example.org/a' },
+      { materialId: 'm2', sourceTitle: 'משוב מקוון (Levi 2020)', sourceUrl: 'https://example.org/b' },
+    ] },
+    discussion: { evidence: [
+      { materialId: 'm1', sourceTitle: 'כהן 2021 — למידה עצמאית', sourceUrl: 'https://example.org/a' },
+      { materialId: 'm3', sourceTitle: 'קובץ הנחיות פנימי' },
+    ] },
+  },
+});
+check('מקור שמופיע בשני סעיפים מאוחד', scaffoldBibliography.length === 3, `קיבלתי ${scaffoldBibliography.length}`);
+check('מחבר ושנה מחולצים רק כשהם מופיעים', scaffoldBibliography.some((s) => s.author === 'כהן' && s.year === '2021' && s.title === 'למידה עצמאית'));
+check('פורמט האחזור כותרת (מחבר שנה) מפוענח', scaffoldBibliography.some((s) => s.author === 'Levi' && s.year === '2020' && s.title === 'משוב מקוון'));
+const unknownSource = scaffoldBibliography.find((s) => s.materialId === 'm3');
+check('לא מומצאים פרטים חסרים', unknownSource?.author === '' && unknownSource?.year === '');
+check('מקור ללא שנה מסומן ללא תאריך', formatBibliographyEntry(unknownSource, 'APA').includes('(ללא תאריך)'));
+const mergedBibliography = mergeBibliographyEntries(
+  [{ author: 'רות', year: '2019', title: 'מקור ידני' }],
+  scaffoldBibliography,
+  [scaffoldBibliography[0]],
+);
+check('מקורות ידניים ומקומיים מתאחדים ללא כפילות', mergedBibliography.length === 4, `קיבלתי ${mergedBibliography.length}`);
+check('בניית הביבליוגרפיה אינה קוראת לרשת', netCalls === 0, `בוצעו ${netCalls}`);
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} ${pass} עברו, ${fail} נכשלו · קריאות רשת: ${netCalls}`);
 if (fail) process.exitCode = 1;

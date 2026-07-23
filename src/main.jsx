@@ -40,6 +40,7 @@ import ProjectHubStudio from './components/projectHub/ProjectHubStudio';
 import AssignmentScaffoldStudio from './components/assignmentScaffold/AssignmentScaffoldStudio';
 import EvidencePanel from './components/assignmentScaffold/EvidencePanel';
 import { readScaffold, ensureScaffoldReady, SCAFFOLD_UPDATED_EVENT } from './services/assignmentScaffoldStore';
+import { collectScaffoldBibliographyEntries, mergeBibliographyEntries, formatBibliographyEntry } from './services/localBibliographyService';
 import { findSectionAtCursor } from './services/assignmentScaffoldDoc';
 import { buildScaffoldContextBlock } from './services/assignmentAiService';
 import { assignDocumentToProject, linkDocToMilestone } from './services/projectService';
@@ -8391,15 +8392,21 @@ ${sidebarReviewContext}`
       case 'insertBibliography': {
         let srcs2 = [];
         try { srcs2 = JSON.parse(localStorage.getItem('bib-sources') || '[]'); } catch { srcs2 = []; }
+        const scaffoldSources = collectScaffoldBibliographyEntries(readScaffold());
+        srcs2 = mergeBibliographyEntries(srcs2, scaffoldSources);
         const style = localStorage.getItem('citation-style') || 'APA';
-        if (!srcs2.length) { showToast('אין מקורות לביבליוגרפיה. הוסף ציטוטים תחילה.', { tone: 'warning' }); break; }
-        const bibItems = srcs2.map(s => {
-          const a = escHtml(s.author), y = escHtml(String(s.year)), t = escHtml(s.title);
-          if (style === 'APA') return `<li>${a} (${y}). <em>${t}</em>.</li>`;
-          if (style === 'MLA') return `<li>${a}. "<em>${t}</em>." ${y}.</li>`;
-          return `<li>${a}, "${t}" (${y}).</li>`;
-        }).join('');
+        if (!srcs2.length) { showToast('אין מקורות לביבליוגרפיה. הוסף ציטוטים או בנה שלד עם ראיות תחילה.', { tone: 'warning' }); break; }
+        if (scaffoldSources.length) {
+          localStorage.setItem('bib-sources', JSON.stringify(srcs2));
+          syncPersistedAppSettings();
+        }
+        const bibItems = srcs2
+          .map((source) => `<li>${escHtml(formatBibliographyEntry(source, style))}</li>`)
+          .join('');
         editor.chain().focus().insertContent(`<div style="margin-top:24px"><h2 style="font-size:16px;font-weight:bold;border-bottom:1px solid #ccc;padding-bottom:4px">ביבליוגרפיה</h2><ol style="padding-right:20px;line-height:2">${bibItems}</ol></div>`).run();
+        if (scaffoldSources.length) {
+          showToast(`הביבליוגרפיה נבנתה מקומית מ-${srcs2.length} מקורות, כולל ${scaffoldSources.length} מקורות משלד המטלה.`);
+        }
         break;
       }
 
@@ -10036,6 +10043,7 @@ if (rootElement) {
   appRoot.render(
     <ErrorBoundary><App /></ErrorBoundary>
   );
+  window.__wordflowAppMounted = true;
 }
 
 export default App;

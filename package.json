@@ -80,6 +80,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.2",
     "@tailwindcss/postcss": "^4.2.2",
     "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/cli": "^2.11.3",

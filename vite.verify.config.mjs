@@ -42,6 +42,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/opener-profile.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'speccov'
     ? 'tools/test-bench/spec-coverage.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e'
+    ? 'tools/test-bench/scaffold-e2e.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -62,7 +64,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                       : process.env.WORDAI_VERIFY_ENTRY === 'labelset' ? 'out-labelset'
                         : process.env.WORDAI_VERIFY_ENTRY === 'compose' ? 'out-compose'
                           : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile'
-                            : process.env.WORDAI_VERIFY_ENTRY === 'speccov' ? 'out-speccov' : 'out-sf';
+                            : process.env.WORDAI_VERIFY_ENTRY === 'speccov' ? 'out-speccov'
+                              : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e' ? 'out-scaffolde2e' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -79,6 +82,7 @@ export default defineConfig({
     pagetext: path.join(PROJECT, 'src/services/pageTextFetch.js'),
     scaffolddoc: path.join(PROJECT, 'src/services/assignmentScaffoldDoc.js'),
     review: path.join(PROJECT, 'src/services/assignmentReviewService.js'),
+    localbib: path.join(PROJECT, 'src/services/localBibliographyService.js'),
     specsvc: path.join(PROJECT, 'src/services/assignmentSpecService.js'),
     cryptosession: path.join(PROJECT, 'src/services/cloudCryptoSession.js'),
     openersvc: path.join(PROJECT, 'src/services/styleOpenerService.js'),
@@ -97,7 +101,9 @@ export default defineConfig({
     // stream.Readable.from. Node's real Readable.from() feeds it directly.
     'sav-reader-core': path.join(PROJECT, 'node_modules', 'sav-reader', 'dist', 'SavReader.js'),
   } },
-  ssr: { noExternal: true },
+  // חבילות node-native/כבדות נשארות external — נטענות מ-node_modules בזמן ריצה.
+  // בלעדיהן ה-bundle של transformers גורר את onnxruntime-node (בינארי .node).
+  ssr: { noExternal: true, external: ['@huggingface/transformers', 'pdfjs-dist', 'mammoth', 'tesseract.js', '@napi-rs/canvas'] },
   build: {
     ssr: true, target: 'node18', minify: false,
     outDir: path.join(SCRATCH, OUT_DIR), emptyOutDir: true,

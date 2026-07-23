@@ -139,7 +139,9 @@ export function extractWordQuota(text) {
 // נמדד ב-e2e: בלי זה, "היקף כולל: 700 מילים" בראש המסמך לא נתפס (יש "כולל:"
 // בין "היקף" למספר), והסורק המשיך וקלט את "עד 250 מילים" של הסעיף האחרון —
 // כלומר ההיקף הכולל של העבודה נקבע לפי סעיף בודד, ומשם התפזרו מכסות שגויות.
-const GLOBAL_QUOTA_CUES = /(?:היקף\s+(?:כולל|העבודה|המטלה|כללי)|אורך\s+(?:העבודה|המטלה)|סה["׳']?כ|בסך\s+הכול|היקף\s+כולל)/;
+// "(כ-1600 מילים לשני הסעיפים)" הוא הצהרה גלובלית לכל דבר — הוא פשוט לא משתמש
+// במילה "היקף". בלי הזנב הזה הוא נקרא כגישוש ונדרס בסכום הסעיפים.
+const GLOBAL_QUOTA_CUES = /(?:היקף\s+(?:כולל|העבודה|המטלה|כללי)|אורך\s+(?:העבודה|המטלה)|סה["׳']?כ|בסך\s+הכול|היקף\s+כולל|ל(?:כל|שני|שלושת|ארבעת)\s+ה(?:סעיפים|שאלות|חלקים))/;
 
 /**
  * מכסת המילים של העבודה כולה. מעדיפה שורה שמצהירה על היקף גלובלי; רק אם אין
@@ -238,6 +240,10 @@ function extractCitationStyle(text) {
   if (/שיקגו|chicago/i.test(src)) return 'Chicago';
   if (/הרווארד|harvard/i.test(src)) return 'Harvard';
   if (/ונקובר|vancouver/i.test(src)) return 'Vancouver';
+  // הרבה מרצים בעברית לא נוקבים בשם סגנון אלא בשיטה: "יש להפנות בהערות שוליים
+  // ולציין את מספר העמוד". זו דרישת ציטוט לכל דבר, וכשהיא לא מזוהה גם ה-confidence
+  // יורד וגם הפאנל לא מציג מה נדרש.
+  if (/הער(?:ות|ת)\s+שוליים|footnote/i.test(src)) return 'הערות שוליים';
   return null;
 }
 
@@ -422,8 +428,32 @@ const IMPERATIVE_TO_NOUN = {
   בחנו: 'בחינת', הביאו: 'הבאת', ערכו: 'עריכת', גבשו: 'גיבוש', נסחו: 'ניסוח',
   בחרו: 'בחירת', כתבו: 'כתיבת', הציעו: 'הצעת', ספרו: 'תיאור',
 };
+
+// ⚠️ הצורה המכלילת-מגדר בנקודה — "נתח.י", "הסבר.י", "נמק.י" — היא היום ניסוח
+// סטנדרטי במטלות אקדמיות בעברית, והמפה למעלה הכירה רק צורת רבים. נמדד על מטלה
+// אמיתית: אף אחד מ-6 הפעלים בה לא זוהה, ולכן כל הכותרות יצאו חיתוך של ההנחיה.
+const DOTTED_IMPERATIVE_TO_NOUN = {
+  'נתח': 'ניתוח', 'הסבר': 'הסבר', 'תאר': 'תיאור', 'הצג': 'הצגת', 'נמק': 'נימוק',
+  'השווה': 'השוואת', 'דון': 'דיון ב', 'פרט': 'פירוט', 'ציין': 'ציון', 'בדוק': 'בדיקת',
+  'זהה': 'זיהוי', 'סכם': 'סיכום', 'התייחס': 'התייחסות ל', 'הוכח': 'הוכחת',
+  'ענה': 'מענה ל', 'מצא': 'איתור', 'שלב': 'שילוב', 'הדגם': 'הדגמת', 'הערך': 'הערכת',
+  'בסס': 'ביסוס', 'אפיין': 'אפיון', 'הגדר': 'הגדרת', 'בחן': 'בחינת', 'ערוך': 'עריכת',
+  'נסח': 'ניסוח', 'בחר': 'בחירת', 'כתוב': 'כתיבת', 'הצע': 'הצעת', 'הראה': 'הצגת',
+};
+
+// "נתח.י" / "נתח. י" / "נתח/י" → הגזע "נתח". מחזיר null כשאין התאמה.
+// ⚠️ בלי `\b`: אות עברית אינה `\w`, ולכן `\b` אחרי "י" *לעולם* לא מתקיים —
+// הגוצ'ה החוזרת של הפרויקט. הסיומת נסגרת בלוקאהד על אות עברית.
+const DOTTED_IMPERATIVE_RE = /([א-ת]{2,})\s*[.\/]\s*[יו](?![א-ת])/;
+
+function dottedImperativeNoun(word = '') {
+  const stem = String(word || '').replace(/\s*[.\/]\s*[יו]$/, '').replace(/^ו/, '');
+  return DOTTED_IMPERATIVE_TO_NOUN[stem] || DOTTED_IMPERATIVE_TO_NOUN[String(word || '')] || null;
+}
 // מילות חיבור שאחריהן מתחילה הרשימה ולא הנושא — שם חותכים.
-const HEADING_CUT_RE = /\s*[,;]|\s+(?:וכן|וגם|תוך|כולל|בהתאם|לפי|על פי|באמצעות|כפי ש|ואת|ואילו)\s/;
+// "לגבי/בנוגע/ביחס" פותחות הרחבה של הנושא, לא את הנושא. בלעדיהן הכותרת נחתכת
+// בתקרת שבע המילים באמצע הפסוקית ("...מיל לגבי היחסים").
+const HEADING_CUT_RE = /\s*[,;]|\s+(?:וכן|וגם|תוך|כולל|בהתאם|לפי|על פי|באמצעות|כפי ש|ואת|ואילו|לגבי|בנוגע ל|בנוגע|ביחס ל|בנושא|אודות|אשר)\s/;
 const HEADING_MAX_WORDS = 7;
 
 /**
@@ -460,6 +490,18 @@ export function toSectionHeading(rawTitle, fallbackIntent = '') {
     return s.replace(/\s*[?？]\s*$/, '');
   }
 
+  // צורה מכלילת-מגדר: "נתח.י את הסעיפים" → "ניתוח הסעיפים".
+  const dotted = s.match(new RegExp(`^${DOTTED_IMPERATIVE_RE.source}`));
+  if (dotted) {
+    const dnoun = dottedImperativeNoun(dotted[1]);
+    if (dnoun) {
+      let rest = s.slice(dotted[0].length).trim().replace(/^(?:את|על|ב|ל)\s+/, '');
+      // "הסבר.י ונמק.י את X" — הפועל השני מיותר בכותרת.
+      rest = rest.replace(new RegExp(`^ו?${DOTTED_IMPERATIVE_RE.source}\\s*`), '').replace(/^(?:את|על|ב|ל)\s+/, '');
+      s = `${dnoun}${dnoun.endsWith('ב') || dnoun.endsWith('ל') ? '' : ' '}${rest}`.trim();
+    }
+  }
+
   const first = s.split(' ')[0].replace(/[^֐-׿]/g, '');
   const noun = IMPERATIVE_TO_NOUN[first];
   if (noun) {
@@ -469,11 +511,20 @@ export function toSectionHeading(rawTitle, fallbackIntent = '') {
     s = `${noun}${noun.endsWith('ב') || noun.endsWith('ל') ? '' : ' '}${rest}`.trim();
   }
 
+  // כותרת לא חוצה סוף משפט. בלי זה תת-סעיף שנפתח בשתי משפטים קצרים קיבל כותרת
+  // שמאחה אותם ("...להפגין בבירת המדינה המשטרה"). נקודה שאחריה י'/ו' היא חלק
+  // מפועל מכליל ("נתח.י") ולא סוף משפט.
+  const sentence = s.split(/[.?!](?!\s*[יו](?![א-ת]))/)[0].trim();
+  if (sentence && countWords(sentence) >= 2) s = sentence;
+
   const cut = s.split(HEADING_CUT_RE)[0].trim();
   if (cut && countWords(cut) >= 2) s = cut;
 
   const words = s.match(WORD_RE) || [];
   if (words.length > HEADING_MAX_WORDS) s = words.slice(0, HEADING_MAX_WORDS).join(' ');
+  // "למדנו על X ועל Y" — ה"ועל" באמצע כותרת הוא שריד תחבירי של הפתיח שנחתך:
+  // "המהפכה התעשייתית ועל עקרונות המרקסיזם" → "המהפכה התעשייתית ועקרונות המרקסיזם".
+  s = s.replace(/\s+ועל\s+/g, ' ו').trim();
   // כותרת שנגמרת במילת חיבור נראית קטועה.
   s = s.replace(/\s+(?:של|את|ואת|עם|ועם|על|ועל|ל|ב|מ|ה|ו|וכן|וגם|ואילו|אל|כי|אשר|תוך|לפי)$/, '').trim();
   // פועל שני שנשאר תלוי בסוף ("...סקירת הספרות והציגו") — הדרישה השנייה נחתכה
@@ -483,6 +534,108 @@ export function toSectionHeading(rawTitle, fallbackIntent = '') {
     s = s.replace(/\s+\S+$/, '').trim();
   }
   return s || INTENT_LABELS[fallbackIntent] || '';
+}
+
+// "בקורס למדנו על הגותו של ג'ון סטיוארט מיל..." — הפתיח הזה מצהיר על *נושא*
+// הסעיף, וזו הכותרת הטבעית שלו. בלי הכלל הזה הכותרת הייתה שבע המילים הראשונות
+// של ההנחיה ("בקורס למדנו על הגותו של ג'ון סטיוארט") — מחצית ממנה היא הפתיח.
+const TOPIC_PREAMBLE_RE = /^\s*(?:בקורס\s+למדנו|למדנו\s+בקורס|למדנו)\s+(?:על|אודות)\s+(.+)$/;
+// היכן נגמר הנושא ומתחילה המשימה.
+const TOPIC_END_RE = /[.?!]|\s+(?:להלן|על\s+בסיס|בהתבסס|יש\s+ל|נא\s+ל)\s/;
+
+// הכותרת של הסעיף. מנסה לפי הסדר: נושא מוצהר בפתיח → פסוקית המשימה הראשונה
+// (כולל הצורה המכלילת "נתח.י") → הנוסח הגולמי.
+function deriveSectionHeading(rawTitle, body, intent) {
+  const full = `${String(rawTitle || '')} ${String(body || '')}`.replace(/\s+/g, ' ').trim();
+
+  const topic = full.match(TOPIC_PREAMBLE_RE);
+  if (topic) {
+    const cut = topic[1].split(TOPIC_END_RE)[0].trim();
+    const head = toSectionHeading(cut, intent);
+    if (head && countWords(head) >= 2) return head;
+  }
+
+  // פסוקית המשימה: מהפועל המכליל הראשון ועד סוף המשפט.
+  // ⚠️ `[^.?!]*` לבדו נעצר בנקודה של הפועל *הבא* ("הסבר.י ונתח.י" → "הסבר.י ונתח"),
+  // ולכן נקודה שאחריה י'/ו' אינה נחשבת סוף משפט.
+  const task = full.match(new RegExp(`${DOTTED_IMPERATIVE_RE.source}(?:[^.?!]|\\.(?=\\s*[יו](?![א-ת])))*`));
+  if (task) {
+    const head = toSectionHeading(task[0].trim(), intent);
+    if (head && countWords(head) >= 2) return head;
+  }
+
+  return toSectionHeading(rawTitle || '', intent);
+}
+
+// דרישות "חובה להזכיר" — המרצה מסמן אותן במפורש בסוגריים מרובעים:
+// [חובה להזכיר את מושגי "הבלימה ההופכית" ו-"מאזני הצדק"]. אלה הפריטים
+// היחידים במטלה שאפשר *לאמת* אוטומטית בטקסט שנכתב, ולכן הם החומר הכי שימושי
+// לשלד — וקודם הם לא חולצו כלל ונבלעו בתוך גוש ההנחיה.
+const MUST_MENTION_CUE = /(?:חובה|יש)\s+(?:להזכיר|לכלול|להתייחס\s+ל|לדון\s+ב)\s*(?:את\s*)?(?:מושגי[םי]?\s*|המושגים\s*|המונחים\s*)?/g;
+const QUOTED_TERM_RE = /["“”״'׳]([^"“”״'׳]{2,60}?)["“”״'׳]/g;
+
+function extractMustMention(text) {
+  // ⚠️ נרמול שורות *לפני* הסריקה: ב-PDF הדרישה נשברת באמצע —
+  // `[חובה להזכיר את מושגי "הבלימה\nההופכית" ו-"מאזני הצדק"]` — ולכן סריקה
+  // שנעצרת ב-\n רואה מרכאה פותחת בלי סוגרת ולא מוצאת כלום.
+  const src = String(text || '').replace(/\s+/g, ' ');
+  const out = [];
+  let m = MUST_MENTION_CUE.exec(src);
+  while (m) {
+    // הסריקה נעצרת בסוגר המרובע — אחרת נאספים מרכאות מכל שאר המטלה.
+    const tail = src.slice(m.index + m[0].length).split(/]/)[0].slice(0, 200);
+    let q = QUOTED_TERM_RE.exec(tail);
+    while (q) {
+      const term = q[1].trim();
+      if (term && !out.includes(term)) out.push(term);
+      q = QUOTED_TERM_RE.exec(tail);
+    }
+    QUOTED_TERM_RE.lastIndex = 0;
+    m = MUST_MENTION_CUE.exec(src);
+  }
+  MUST_MENTION_CUE.lastIndex = 0;
+  return out;
+}
+
+// ---------- תתי-סעיפים ----------
+
+// "א. ... ב. ... ג. ... ד. ..." בתוך סעיף. אלה יחידות *נפרדות* לציון ולמכסה
+// ("100 מילים לכל סעיף משנה"), ולא רשימת תבליטים. בלי הפירוק הזה ארבע תשובות
+// של 100 מילים כל אחת מוצגות כגוש הנחיה אחד, ובמסמך אין להן כותרת או מכסה.
+const SUB_SECTION_SPLIT = /\n(?=\s*[א-ת]['׳]?\s*[.)]\s+)/;
+const SUB_SECTION_MARK = /^\s*([א-ת])['׳]?\s*[.)]\s+/;
+const SUB_MIN_WORDS = 8;
+
+// "100 מילים לכל סעיף משנה" / "כל סעיף בנפרד, 100 מילים"
+const PER_SUB_QUOTA_RE = /(\d{2,4})\s*(?:מילים|מלים)\s*(?:לכל|בכל)\s*(?:סעיף|תת[- ]?סעיף|פריט)|(?:כל\s+סעיף\s+בנפרד\s*,?\s*)(\d{2,4})\s*(?:מילים|מלים)/;
+
+function extractPerSubQuota(text) {
+  const m = String(text || '').match(PER_SUB_QUOTA_RE);
+  if (!m) return null;
+  const n = Number(m[1] || m[2]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * מפרק גוף סעיף לתתי-סעיפים ממוספרים באותיות. מחזיר [] כשאין רצף אמיתי.
+ */
+function splitSubSections(body) {
+  const raw = String(body || '');
+  if (!raw.trim()) return [];
+  const parts = raw.split(SUB_SECTION_SPLIT);
+  const subs = [];
+  const markers = [];
+  for (const part of parts) {
+    const m = part.match(SUB_SECTION_MARK);
+    if (!m) continue;
+    const text = part.replace(SUB_SECTION_MARK, '').replace(/\s+/g, ' ').trim();
+    if (countWords(text) < SUB_MIN_WORDS) continue;
+    markers.push(m[1]);
+    subs.push({ marker: m[1], text });
+  }
+  // אותה בדיקה כמו לסעיפים ראשיים: "ו." הוא ו' חיבור לפחות באותה תדירות.
+  if (subs.length < 2 || !hebrewRunLooksReal(markers)) return [];
+  return subs;
 }
 
 // מינימום מילים כדי שפסקה תיחשב דרישה. "קראו היטב." הוא הוראת תפעול, לא סעיף.
@@ -720,6 +873,20 @@ function distributeQuotas(sections, totalWords) {
  *   confidence:number, parsedAt:number
  * }}
  */
+// היקף העבודה כסכום המכסות שהמרצה כתב במפורש. null כשאף סעיף לא הצהיר מכסה —
+// אז אין מה לסכום ונופלים לגישוש הגלובלי.
+// ⚠️ רק כש**כל** הסעיפים הצהירו מכסה. סכום חלקי הוא מספר חסר משמעות: נמדד על
+// מטלה שבה סעיף אחד מתוך שלושה נשא "(כ-400 מילים)" — הסכום יצא 400 ודרס היקף
+// מוצהר של 1600.
+function sumExplicitQuotas(sections) {
+  const list = (sections || []).filter((s) => s?.enabled !== false);
+  if (!list.length) return null;
+  const explicit = list.filter((s) => s.quotaSource === 'explicit' || s.quotaSource === 'sub-sum');
+  if (explicit.length !== list.length) return null;
+  const sum = explicit.reduce((acc, s) => acc + (Number(s.wordQuota) || 0), 0);
+  return sum > 0 ? sum : null;
+}
+
 export function parseAssignmentSpec(text, { title = '' } = {}) {
   const src = clean(text);
   const warnings = [];
@@ -755,7 +922,25 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
     // הגזירה רצה על הנוסח **המלא** ולא על raw.title: splitTitleAndLead כבר חתך
     // אותו ב-7 מילים דרך WORD_RE, וזה מוחק את הפסיקים — בלעדיהם אין איפה לחתוך
     // את הרשימה, והכותרת יצאה "תיאור העובדות המרכזיות התאריכים החשובים ואת".
-    const heading = toSectionHeading(raw.rawTitle || raw.title, intent);
+    const heading = deriveSectionHeading(raw.rawTitle || raw.title, raw.body, intent);
+
+    // תתי-סעיפים: כל אחד יחידת ציון ומכסה בפני עצמה.
+    const perSubQuota = extractPerSubQuota(combined);
+    const rawSubs = splitSubSections(raw.body);
+    const subSections = rawSubs.map((sub, j) => ({
+      id: `sec_${i + 1}_${j + 1}`,
+      marker: sub.marker,
+      order: j + 1,
+      title: deriveSectionHeading(sub.text, '', intent) || `סעיף ${sub.marker}`,
+      instructions: sub.text,
+      wordQuota: extractWordQuota(sub.text)?.words || perSubQuota || null,
+      mustMention: extractMustMention(sub.text),
+    }));
+    // כשיש תתי-סעיפים עם מכסה משלהם, מכסת האב היא הסכום — לא ה-"100 מילים"
+    // שנתפס מ"100 מילים לכל סעיף משנה", שהוא מכסה של תת-סעיף בודד.
+    const subTotal = subSections.reduce((sum, s) => sum + (s.wordQuota || 0), 0);
+    const ownQuota = !isEcho && localQuota ? localQuota.words : null;
+
     return {
       id: `sec_${i + 1}`,
       order: i + 1,
@@ -764,8 +949,10 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
       rawTitle: raw.title || '',
       instructions: raw.body,
       intent,
-      wordQuota: !isEcho && localQuota ? localQuota.words : null,
-      quotaSource: !isEcho && localQuota ? 'explicit' : null,
+      subSections,
+      mustMention: extractMustMention(combined),
+      wordQuota: subTotal || ownQuota,
+      quotaSource: subTotal ? 'sub-sum' : (ownQuota ? 'explicit' : null),
       weight: extractSectionWeight(`${raw.rawTitle || raw.title}\n${raw.body}`),
       keywords: extractTerms(combined).slice(0, 6),
       requiresSources: /מקור|מאמר|ציטוט|הפניה|ביבליוגרפ|source|cite/i.test(combined),
@@ -810,7 +997,14 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
     title: title || extractAssignmentTitle(src) || 'מטלה',
     dueDate,
     citationStyle,
-    totalWords: globalQuota?.words || null,
+    // ⚠️ הצהרה גלובלית מפורשת ("היקף העבודה: 1600 מילים") גוברת תמיד. סכום
+    // הסעיפים מחליף רק *גישוש* — extractGlobalWordQuota בלי שורת cue מחזיר את
+    // המספר הראשון שנראה כמו מכסה, וזו לרוב מכסה של סעיף בודד (נמדד: מטלה עם
+    // "100 מילים לכל סעיף משנה" קיבלה totalWords=100 במקום 1050).
+    // בלי התנאי הזה הסכום דרס היקף מוצהר נכון ב-4 מטלות בסוויטה.
+    totalWords: globalQuota?.scope === 'global'
+      ? globalQuota.words
+      : (sumExplicitQuotas(sections) || globalQuota?.words || null),
     quotaKind: globalQuota?.kind || null,
     sourceRequirement,
     structure,

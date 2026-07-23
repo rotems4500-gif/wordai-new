@@ -22,6 +22,7 @@ import { getOpenerProfile } from './openerProfileService';
 
 export const PREP_STATE = {
   LOCAL: 'local',       // הופק מקומית, לא צריך כלום
+  LOCAL_DRAFT: 'local-draft', // ניתן לכתוב טיוטה מקומית מהראיות (proseComposeService) — AI אופציונלי לשיפור
   NEEDS_AI: 'needs-ai', // אפשר להשלים בקריאת מודל
   BLOCKED: 'blocked',   // שום מודל לא יפתור — חסר קלט (בדרך כלל מקור)
 };
@@ -131,8 +132,10 @@ export function buildPrepLedger(scaffold, { hasWrittenProse = null } = {}) {
       });
     }
 
-    // 4. גוף הסעיף — הכשל המקומי הכן. סטטיסטיקה לא מייצרת פרוזה אקדמית קוהרנטית,
-    //    ולהעמיד פנים אחרת זו בדיוק ההבטחה שהמסלול הזה לא נותן.
+    // 4. גוף הסעיף — כשיש ראיות, קיים מסלול מקומי מלא: proseComposeService מרכיב
+    //    טיוטה מעוגנת (משפטי תוכן מהראיות + מסגור רטורי מ-sentenceGrammar), בלי
+    //    מודל. AI נשאר כמסלול שיפור אופציונלי. בלי ראיות — חסום כמו תמיד:
+    //    כתיבה בלי עיגון היא המצאה.
     if (written) {
       sectionItems.push({
         id: `${section.id}:prose`,
@@ -146,9 +149,9 @@ export function buildPrepLedger(scaffold, { hasWrittenProse = null } = {}) {
         id: `${section.id}:prose`,
         sectionId: section.id,
         kind: WORK_KINDS.PROSE,
-        state: evidence.length ? PREP_STATE.NEEDS_AI : PREP_STATE.BLOCKED,
+        state: evidence.length ? PREP_STATE.LOCAL_DRAFT : PREP_STATE.BLOCKED,
         reason: evidence.length
-          ? 'ניסוח פרוזה דורש מודל — אבל הוא ייכתב מהראיות של הסעיף בלבד'
+          ? 'טיוטה מקומית זמינה — מורכבת מהראיות של הסעיף בלבד (AI אופציונלי לליטוש)'
           : 'אין ראיות לעגן בהן טיוטה — כתיבה כאן תהיה המצאה',
         remedy: evidence.length ? null : 'הוסף מקור לסעיף ואז אפשר יהיה לכתוב טיוטה מעוגנת',
         groundedBy: evidence.length,
@@ -162,7 +165,7 @@ export function buildPrepLedger(scaffold, { hasWrittenProse = null } = {}) {
   const totals = items.reduce((acc, item) => {
     acc[item.state] = (acc[item.state] || 0) + 1;
     return acc;
-  }, { [PREP_STATE.LOCAL]: 0, [PREP_STATE.NEEDS_AI]: 0, [PREP_STATE.BLOCKED]: 0 });
+  }, { [PREP_STATE.LOCAL]: 0, [PREP_STATE.LOCAL_DRAFT]: 0, [PREP_STATE.NEEDS_AI]: 0, [PREP_STATE.BLOCKED]: 0 });
   totals.all = items.length;
 
   return { items, bySection, totals, sections };
@@ -186,6 +189,7 @@ export function summarizeLedger(ledger) {
   const t = ledger?.totals;
   if (!t?.all) return 'אין עדיין שלד.';
   const parts = [`${t[PREP_STATE.LOCAL]} מוכנים מקומית`];
+  if (t[PREP_STATE.LOCAL_DRAFT]) parts.push(`${t[PREP_STATE.LOCAL_DRAFT]} עם טיוטה מקומית זמינה`);
   if (t[PREP_STATE.NEEDS_AI]) parts.push(`${t[PREP_STATE.NEEDS_AI]} דורשים AI`);
   if (t[PREP_STATE.BLOCKED]) parts.push(`${t[PREP_STATE.BLOCKED]} חסומים`);
   return `${parts.join(' · ')} (מתוך ${t.all})`;

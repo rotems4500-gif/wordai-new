@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Assistant:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; }
+  .nicebar::-webkit-scrollbar { width: 8px; }
+  .nicebar::-webkit-scrollbar-thumb { background: rgba(45,212,191,.22); border-radius: 999px; }
+  .nicebar::-webkit-scrollbar-track { background: transparent; }
+  @keyframes glowDot { 0%,100% { opacity:.5; } 50% { opacity:1; } }
+  @keyframes typeDot { 0%,60%,100% { transform:translateY(0); opacity:.4; } 30% { transform:translateY(-3px); opacity:1; } }
+</style>
+</helmet>
+
+<div dir="rtl" style="--A:{{ accent }}; --bg:{{ bg }}; --shell:{{ shell }}; --panel:{{ panel }}; --txt:{{ txt }}; --strong:{{ strong }}; --txt2:{{ txt2 }}; --txt3:{{ txt3 }}; --muted:{{ muted }}; --muted2:{{ muted2 }}; --line:{{ line }}; --line2:{{ line2 }}; --line3:{{ line3 }}; --surf:{{ surf }}; --surf2:{{ surf2 }}; --inset:{{ inset }}; --quote:{{ quote }}; --docbar:{{ docbar }}; --ok:{{ ok }}; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:30px; background:var(--bg,#070f1d); font-family:'Assistant','Heebo',sans-serif;">
+  <div data-screen-label="Chat panel — בועות" style="width:1060px; height:800px; border-radius:14px; overflow:hidden; box-shadow:0 20px 60px rgba(2,8,20,.4); background:var(--shell, radial-gradient(125% 120% at 82% -8%, #14304a 0%, #0d1b2e 46%, #0a1422 100%)); color:var(--txt,#eaf2fb); display:flex;">
+
+    <!-- DOCUMENT (right) -->
+    <div style="flex:1; min-width:0; display:flex; flex-direction:column;">
+      <div style="height:46px; flex:none; display:flex; align-items:center; gap:13px; padding:0 18px; background:var(--docbar,rgba(255,255,255,.03)); border-bottom:1px solid var(--line,rgba(255,255,255,.06));">
+        <span style="font-size:13px; font-weight:700; color:var(--txt3,#cfe0ef);">חופש החוזים וגבולותיו.docx</span>
+        <span style="font-size:11px; color:var(--ok,#7fd4c4); display:flex; align-items:center; gap:5px;"><span style="width:6px; height:6px; border-radius:50%; background:var(--ok,#7fd4c4);"></span>נשמר</span>
+        <span style="margin-inline-start:auto; display:flex; gap:7px; color:var(--muted,#8ba3bd); font-size:12px;">
+          <span style="width:27px; height:27px; border-radius:7px; background:var(--surf,rgba(255,255,255,.05)); display:grid; place-items:center; font-weight:800;">B</span>
+          <span style="width:27px; height:27px; border-radius:7px; background:var(--surf,rgba(255,255,255,.05)); display:grid; place-items:center; font-style:italic;">I</span>
+          <span style="width:27px; height:27px; border-radius:7px; background:var(--surf,rgba(255,255,255,.05)); display:grid; place-items:center;">¶</span>
+        </span>
+      </div>
+      <div style="flex:1; overflow:hidden; padding:26px 22px; display:flex; justify-content:center;">
+        <div style="width:100%; max-width:470px; background:#f7f8fa; color:#33404f; border-radius:6px; box-shadow:0 18px 50px rgba(0,0,0,.42); padding:38px 42px; font-size:13.5px; line-height:1.95;">
+          <div style="text-align:center; font-size:18px; font-weight:800; margin-bottom:18px; color:#11161f;">חופש החוזים וגבולותיו במשפט הישראלי</div>
+          <p style="margin:0 0 13px; padding:2px 5px; border-radius:4px; background:color-mix(in srgb, var(--A,#2dd4bf) 24%, transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--A,#2dd4bf) 45%, transparent); color:#1b2530;">חופש החוזים הוא עקרון יסוד בדיני החוזים, ומכוחו רשאים הצדדים לעצב את תוכן ההתקשרות כרצונם. ואולם, חופש זה אינו מוחלט.</p>
+          <p style="margin:0 0 13px;">במהלך השנים פיתחה הפסיקה שורת דוקטרינות שנועדו לאזן בין חופש ההתקשרות לבין הגנה על צדדים חלשים ועל אינטרס הציבור.</p>
+          <p style="margin:0;">תום הלב, תקנת הציבור והחוזה האחיד הם שלושה אדנים מרכזיים שבאמצעותם מצמצם הדין את היקפו של עקרון החופש.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL (left) -->
+    <div style="width:420px; flex:none; display:flex; flex-direction:column; background:var(--panel,rgba(5,12,25,.62)); border-inline-start:1px solid var(--line2,rgba(255,255,255,.08));">
+      <!-- header -->
+      <div style="flex:none; padding:15px 17px 13px; border-bottom:1px solid var(--line,rgba(255,255,255,.07));">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+          <div style="width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg, var(--A,#2dd4bf), color-mix(in srgb, var(--A,#2dd4bf), #1c7fb0 55%)); display:grid; place-items:center; box-shadow:0 6px 16px color-mix(in srgb, var(--A,#2dd4bf) 30%, transparent);"><div style="width:11px; height:11px; border-radius:50%; background:#06231f;"></div></div>
+          <div style="flex:1; min-width:0; line-height:1.15;"><div style="font-size:15px; font-weight:800; color:var(--strong,#f1f6fb);">עוזר הכתיבה</div><div style="font-size:11px; color:var(--muted,#8ba3bd);">Claude Sonnet 4 · מחובר</div></div>
+          <button onClick="{{ toggleTheme }}" title="החלפת מצב תצוגה" style="appearance:none; border:0; cursor:pointer; font-size:15px; line-height:1; padding:6px; border-radius:8px; background:var(--surf,rgba(255,255,255,.05)); color:var(--muted2,#7e96b0);" style-hover="color:var(--A,#2dd4bf);">{{ themeIcon }}</button>
+          <span style="font-size:16px; color:var(--muted2,#7e96b0); cursor:pointer;">⋯</span>
+        </div>
+        <div style="display:flex; gap:4px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); border-radius:11px; padding:3px;">
+          <button style="flex:1; appearance:none; border:0; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:800; padding:7px; border-radius:8px; background:var(--A,#2dd4bf); color:#06231f; box-shadow:0 2px 7px color-mix(in srgb, var(--A,#2dd4bf) 35%, transparent);">💬 צ'אט</button>
+          <button style="flex:1; appearance:none; border:0; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:700; padding:7px; border-radius:8px; background:transparent; color:var(--muted,#8ba3bd);" style-hover="color:var(--txt3,#cfe0ef);">🧩 מצב תהליך מובנה</button>
+        </div>
+      </div>
+
+      <!-- messages -->
+      <div class="nicebar" style="flex:1; min-height:0; overflow:auto; padding:17px 16px; display:flex; flex-direction:column; gap:13px;">
+        <!-- user -->
+        <div style="align-self:flex-start; max-width:88%; background:color-mix(in srgb, var(--A,#2dd4bf) 16%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 28%, transparent); border-radius:15px 15px 15px 5px; padding:11px 14px; font-size:13.5px; line-height:1.65; color:var(--txt,#eaf2fb);">תוכל לחדד את פסקת הפתיחה? היא מרגישה לי כללית מדי.</div>
+        <!-- ai -->
+        <div style="align-self:flex-end; max-width:92%; display:flex; flex-direction:column; gap:9px;">
+          <div style="background:var(--surf2,rgba(255,255,255,.055)); border:1px solid var(--line2,rgba(255,255,255,.1)); border-radius:15px 15px 5px 15px; padding:12px 14px; font-size:13.5px; line-height:1.7; color:var(--txt2,#dce8f4);">
+            הנה פתיחה חדה יותר שמעמידה את הטיעון כבר במשפט הראשון:
+            <div style="margin-top:9px; padding:11px 13px; border-radius:11px; background:var(--inset,rgba(0,0,0,.22)); border-inline-start:3px solid var(--A,#2dd4bf); font-size:13px; line-height:1.75; color:var(--quote,#eef4fb);">חופש החוזים הוא עקרון־על בדיני החוזים, אך אינו חסין: הדין מציב לו גבול מקום שבו ההתקשרות פוגעת בתקנת הציבור או בצד חלש.</div>
+            <div style="margin-top:8px; font-size:11.5px; color:var(--muted,#8ba3bd);">קוצר ב־30% ושומר על הטענה המרכזית.</div>
+          </div>
+          <div style="display:flex; gap:7px;">
+            <button style="appearance:none; border:0; cursor:pointer; font-family:inherit; font-size:12px; font-weight:800; color:#06231f; background:var(--A,#2dd4bf); padding:7px 13px; border-radius:9px; display:flex; align-items:center; gap:5px;" style-hover="transform:translateY(-1px);">↪ החלף בנבחר</button>
+            <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 11%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 30%, transparent); padding:7px 13px; border-radius:9px;" style-hover="background:color-mix(in srgb, var(--A,#2dd4bf) 18%, transparent);">＋ הוסף למסמך</button>
+            <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:13px; color:var(--muted,#8ba3bd); background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); padding:7px 11px; border-radius:9px;" style-hover="color:var(--txt3,#cfe0ef);">⧉</button>
+          </div>
+        </div>
+        <!-- user -->
+        <div style="align-self:flex-start; max-width:88%; background:color-mix(in srgb, var(--A,#2dd4bf) 16%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 28%, transparent); border-radius:15px 15px 15px 5px; padding:11px 14px; font-size:13.5px; line-height:1.65; color:var(--txt,#eaf2fb);">מצוין. עכשיו תקצר את הפסקה השנייה בלי לפגוע בטיעון.</div>
+        <!-- ai streaming -->
+        <div style="align-self:flex-end; max-width:92%; display:flex; flex-direction:column; gap:9px;">
+          <div style="background:var(--surf2,rgba(255,255,255,.055)); border:1px solid var(--line2,rgba(255,255,255,.1)); border-radius:15px 15px 5px 15px; padding:12px 14px; font-size:13.5px; line-height:1.7; color:var(--txt2,#dce8f4);">
+            <sc-if value="{{ streaming }}" hint-placeholder-val="{{ true }}">
+              <div style="display:inline-flex; align-items:center; gap:7px; margin-bottom:8px; font-size:11px; font-weight:800; color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent); padding:3px 9px; border-radius:999px;"><span style="width:6px; height:6px; border-radius:50%; background:var(--A,#2dd4bf); animation:glowDot 1.3s ease-in-out infinite;"></span>מזרים תשובה…</div>
+            </sc-if>
+            מקצר את הפסקה השנייה — שומר על שלד הטיעון ומסיר חזרות: לאורך השנים פיתחה הפסיקה דוקטרינות לאיזון בין חופש ההתקשרות<sc-if value="{{ done }}" hint-placeholder-val="{{ false }}"> לבין הגנה על צד חלש ועל אינטרס הציבור.</sc-if>
+          </div>
+          <sc-if value="{{ done }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; gap:7px;">
+              <button style="appearance:none; border:0; cursor:pointer; font-family:inherit; font-size:12px; font-weight:800; color:#06231f; background:var(--A,#2dd4bf); padding:7px 13px; border-radius:9px;" style-hover="transform:translateY(-1px);">↪ החלף בנבחר</button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 11%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 30%, transparent); padding:7px 13px; border-radius:9px;">＋ הוסף למסמך</button>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <!-- footer -->
+      <div style="flex:none; padding:11px 14px 14px; border-top:1px solid var(--line,rgba(255,255,255,.07));">
+        <sc-if value="{{ showContext }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex; align-items:center; gap:8px; background:color-mix(in srgb, var(--A,#2dd4bf) 11%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 28%, transparent); border-radius:10px; padding:7px 10px; margin-bottom:9px;">
+            <span style="font-size:12px; color:var(--A,#2dd4bf);">✦</span>
+            <span style="flex:1; min-width:0; font-size:11.5px; color:var(--txt3,#cfe0ef); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">טקסט נבחר: ”חופש החוזים הוא עקרון יסוד…“</span>
+            <span style="font-size:13px; color:var(--muted,#8ba3bd); cursor:pointer;">×</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ moreOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:9px; padding:11px; border-radius:14px; background:var(--surf,rgba(255,255,255,.04)); border:1px solid var(--line2,rgba(255,255,255,.1));">
+            <div style="font-size:10.5px; font-weight:800; color:var(--muted2,#7e96b0); letter-spacing:.03em; margin:0 2px 8px;">כל הפעולות</div>
+            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:7px;">
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">🧹</span><span style="font-size:10.5px; font-weight:700;">קלישאות</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">🌿</span><span style="font-size:10.5px; font-weight:700;">עברית</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">🎼</span><span style="font-size:10.5px; font-weight:700;">איזון קצב</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">🌐</span><span style="font-size:10.5px; font-weight:700;">תרגם</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">✂️</span><span style="font-size:10.5px; font-weight:700;">קצר</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">🔖</span><span style="font-size:10.5px; font-weight:700;">מקורות</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">💬</span><span style="font-size:10.5px; font-weight:700;">הסבר</span></button>
+              <button style="appearance:none; cursor:pointer; font-family:inherit; display:flex; flex-direction:column; align-items:center; gap:4px; padding:9px 4px; border-radius:11px; background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.1)); color:var(--txt3,#cfe0ef);" style-hover="border-color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 12%, transparent);"><span style="font-size:16px;">📊</span><span style="font-size:10.5px; font-weight:700;">נתונים</span></button>
+            </div>
+          </div>
+        </sc-if>
+        <div style="display:flex; gap:6px; padding-bottom:9px;">
+          <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--txt3,#cfe0ef); background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.11)); padding:6px 12px; border-radius:999px; white-space:nowrap;" style-hover="border-color:var(--A,#2dd4bf);">✨ תקן</button>
+          <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--txt3,#cfe0ef); background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.11)); padding:6px 12px; border-radius:999px; white-space:nowrap;" style-hover="border-color:var(--A,#2dd4bf);">📝 סכם</button>
+          <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--txt3,#cfe0ef); background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.11)); padding:6px 12px; border-radius:999px; white-space:nowrap;" style-hover="border-color:var(--A,#2dd4bf);">📖 הרחב</button>
+          <button style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:700; color:var(--txt3,#cfe0ef); background:var(--surf,rgba(255,255,255,.05)); border:1px solid var(--line2,rgba(255,255,255,.11)); padding:6px 12px; border-radius:999px; white-space:nowrap;" style-hover="border-color:var(--A,#2dd4bf);">🎯 חידוד טיעון</button>
+          <button onClick="{{ toggleMore }}" style="appearance:none; cursor:pointer; font-family:inherit; font-size:12px; font-weight:800; color:var(--A,#2dd4bf); background:color-mix(in srgb, var(--A,#2dd4bf) 11%, transparent); border:1px solid color-mix(in srgb, var(--A,#2dd4bf) 30%, transparent); padding:6px 13px; border-radius:999px; white-space:nowrap;" style-hover="background:color-mix(in srgb, var(--A,#2dd4bf) 18%, transparent);">⊕ עוד</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:9px;">
+          <button style="flex:none; width:40px; height:44px; appearance:none; cursor:pointer; font-size:16px; color:var(--muted,#8ba3bd); background:var(--surf,rgba(255,255,255,.05)); border:1.5px solid var(--line3,rgba(255,255,255,.12)); border-radius:13px;" style-hover="color:var(--A,#2dd4bf); border-color:color-mix(in srgb, var(--A,#2dd4bf) 40%, transparent);">📎</button>
+          <input value="" placeholder="כתוב הודעה או בחר פעולה…" style="flex:1; min-width:0; height:44px; font-family:inherit; font-size:13.5px; color:var(--txt,#eaf2fb); background:var(--surf2,rgba(255,255,255,.06)); border:1.5px solid var(--line3,rgba(255,255,255,.13)); border-radius:13px; padding:0 15px; outline:none;" style-focus="border-color:var(--A,#2dd4bf); box-shadow:0 0 0 3px color-mix(in srgb, var(--A,#2dd4bf) 20%, transparent);">
+          <button style="flex:none; width:44px; height:44px; appearance:none; border:0; cursor:pointer; font-size:18px; font-weight:800; color:#06231f; background:linear-gradient(135deg, var(--A,#2dd4bf), color-mix(in srgb, var(--A,#2dd4bf), #1c7fb0 55%)); border-radius:13px; box-shadow:0 8px 20px color-mix(in srgb, var(--A,#2dd4bf) 32%, transparent);" style-hover="transform:translateY(-1px);">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1060,&quot;height&quot;:820},&quot;accentColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2dd4bf&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#2dd4bf&quot;,&quot;#22d3ee&quot;,&quot;#38bdf8&quot;,&quot;#34d399&quot;],&quot;section&quot;:&quot;מראה&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;dark&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;מראה&quot;},&quot;liveStreaming&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;התנהגות&quot;},&quot;showContext&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;התנהגות&quot;}}">
+class Component extends DCLogic {
+  state = { moreOpen: false, theme: this.props.theme || 'dark' };
+  renderVals() {
+    const live = this.props.liveStreaming ?? true;
+    const dark = {
+      bg:'#070f1d',
+      shell:'radial-gradient(125% 120% at 82% -8%, #14304a 0%, #0d1b2e 46%, #0a1422 100%)',
+      panel:'rgba(5,12,25,.62)', txt:'#eaf2fb', strong:'#f1f6fb', txt2:'#dce8f4', txt3:'#cfe0ef',
+      muted:'#8ba3bd', muted2:'#7e96b0',
+      line:'rgba(255,255,255,.07)', line2:'rgba(255,255,255,.1)', line3:'rgba(255,255,255,.13)',
+      surf:'rgba(255,255,255,.05)', surf2:'rgba(255,255,255,.055)',
+      inset:'rgba(0,0,0,.22)', quote:'#eef4fb', docbar:'rgba(255,255,255,.03)', ok:'#7fd4c4',
+    };
+    const lightT = {
+      bg:'#d6dde6',
+      shell:'radial-gradient(125% 120% at 82% -8%, #ffffff 0%, #f0f3f8 55%, #e6ecf3 100%)',
+      panel:'rgba(255,255,255,.66)', txt:'#1d2a3a', strong:'#101a27', txt2:'#27384b', txt3:'#3a4c60',
+      muted:'#647688', muted2:'#78899a',
+      line:'rgba(15,30,50,.1)', line2:'rgba(15,30,50,.13)', line3:'rgba(15,30,50,.16)',
+      surf:'rgba(15,30,50,.045)', surf2:'#ffffff',
+      inset:'rgba(15,30,50,.05)', quote:'#1b2530', docbar:'rgba(255,255,255,.55)', ok:'#138a68',
+    };
+    const t = this.state.theme === 'light' ? lightT : dark;
+    return {
+      accent: this.props.accentColor || '#2dd4bf',
+      streaming: live,
+      done: !live,
+      showContext: this.props.showContext ?? true,
+      moreOpen: this.state.moreOpen,
+      toggleMore: () => this.setState(s => ({ moreOpen: !s.moreOpen })),
+      theme: this.state.theme,
+      themeIcon: this.state.theme === 'light' ? '☀️' : '🌙',
+      toggleTheme: () => this.setState(s => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
+      ...t,
+    };
+  }
+}
+</script>
+</body>
+</html>

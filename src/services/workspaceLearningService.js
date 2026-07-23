@@ -39,6 +39,10 @@ const HISTORY_STYLE_SAMPLE_MAX_LENGTH = 3600;
 const GOLDEN_EXAMPLE_MAX_LENGTH = 2600;
 const MATERIAL_EXTRACTION_AUDIT_LIMIT = 180000;
 const BROWSER_MATERIAL_STORAGE_LIMIT = 60;
+const BROWSER_MATERIALS_DB_NAME = 'wordflow-browser-materials';
+const BROWSER_MATERIALS_DB_STORE = 'materials';
+let browserMaterialsDbPromise = null;
+let browserMaterialsMigrationPromise = null;
 // תקרות הוגדלו כדי שטיוטה רב-עמודית תיכנס שלמה ל-context ולא תיחתך באמצע (head-tail gap).
 // ~48k תווים ≈ 12k טוקנים — בטוח לספקים מודרניים (Gemini/Claude/GPT). טיוטה גדולה מזה עדיין נחתכת.
 const FEEDBACK_CONTEXT_TOTAL_LIMIT = 48000;
@@ -787,14 +791,20 @@ export async function loadProjectMaterials() {
   const localList = Array.isArray(localPayload) ? localPayload : [];
   const browserList = Array.isArray(browserPayload) ? browserPayload : [];
   const hiddenKeys = getHiddenMaterialKeys();
-  const mergedList = [...bundledList, ...localList, ...browserList].filter(Boolean);
+  // Prefer user-uploaded/local entries over bundled copies. Uploaded entries
+  // contain extracted text, while the bundled index often contains metadata
+  // only. De-duplicate by file name (not the random browser id), otherwise the
+  // same deployed file is parsed twice and large batches can exhaust the tab.
+  const mergedList = [...localList, ...browserList, ...bundledList].filter(Boolean);
   const seen = new Set();
 
   return mergedList
     .filter((item) => {
-      const key = String(item.id || item.file || item.title || '');
+      const fileIdentity = String(item.file || '').trim().replace(/\\/g, '/').toLocaleLowerCase();
+      const fallbackIdentity = String(item.id || item.title || '').trim().toLocaleLowerCase();
+      const key = fileIdentity ? `file:${fileIdentity}` : `item:${fallbackIdentity}`;
       if (isMaterialHidden(item, hiddenKeys)) return false;
-      if (!key || seen.has(key)) return false;
+      if ((!fileIdentity && !fallbackIdentity) || seen.has(key)) return false;
       seen.add(key);
       return true;
     })
@@ -5222,7 +5232,7 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-function getBrowserUploadedMaterials() {
+function getLegacyBrowserUploadedMaterials() {
   try {
     const parsed = JSON.parse(localStorage.getItem(BROWSER_MATERIALS_KEY) || '[]');
     return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
@@ -5231,42 +5241,128 @@ function getBrowserUploadedMaterials() {
   }
 }
 
-function saveBrowserUploadedMaterialEntry(entry = {}) {
-  const existing = getBrowserUploadedMaterials();
+function openBrowserMaterialsDb() {
+  if (browserMaterialsDbPromise) return browserMaterialsDbPromise;
+  browserMaterialsDbPromise = new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      reject(new Error('indexeddb-unavailable'));
+      return;
+    }
+    const request = window.indexedDB.open(BROWSER_MATERIALS_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(BROWSER_MATERIALS_DB_STORE)) {
+        db.createObjectStore(BROWSER_MATERIALS_DB_STORE, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('indexeddb-open-failed'));
+    request.onblocked = () => reject(new Error('indexeddb-open-blocked'));
+  }).catch((error) => {
+    browserMaterialsDbPromise = null;
+    throw error;
+  });
+  return browserMaterialsDbPromise;
+}
+
+function waitForBrowserMaterialsTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('indexeddb-transaction-failed'));
+    transaction.onabort = () => reject(transaction.error || new Error('indexeddb-transaction-aborted'));
+  });
+}
+
+async function replaceBrowserMaterialsInDb(entries = []) {
+  const db = await openBrowserMaterialsDb();
+  const transaction = db.transaction(BROWSER_MATERIALS_DB_STORE, 'readwrite');
+  const done = waitForBrowserMaterialsTransaction(transaction);
+  const store = transaction.objectStore(BROWSER_MATERIALS_DB_STORE);
+  store.clear();
+  entries.filter((item) => item?.id).forEach((item) => store.put(item));
+  await done;
+}
+
+async function migrateLegacyBrowserMaterials() {
+  if (browserMaterialsMigrationPromise) return browserMaterialsMigrationPromise;
+  browserMaterialsMigrationPromise = (async () => {
+    const legacyEntries = getLegacyBrowserUploadedMaterials();
+    if (!legacyEntries.length) return;
+    const db = await openBrowserMaterialsDb();
+    const readTransaction = db.transaction(BROWSER_MATERIALS_DB_STORE, 'readonly');
+    const readRequest = readTransaction.objectStore(BROWSER_MATERIALS_DB_STORE).getAll();
+    const storedEntries = await new Promise((resolve, reject) => {
+      readRequest.onsuccess = () => resolve(Array.isArray(readRequest.result) ? readRequest.result : []);
+      readRequest.onerror = () => reject(readRequest.error || new Error('indexeddb-read-failed'));
+    });
+    const byId = new Map(storedEntries.filter((item) => item?.id).map((item) => [item.id, item]));
+    legacyEntries.filter((item) => item?.id).forEach((item) => byId.set(item.id, item));
+    await replaceBrowserMaterialsInDb(Array.from(byId.values()).slice(-BROWSER_MATERIAL_STORAGE_LIMIT));
+    localStorage.removeItem(BROWSER_MATERIALS_KEY);
+  })().catch((error) => {
+    browserMaterialsMigrationPromise = null;
+    throw error;
+  });
+  return browserMaterialsMigrationPromise;
+}
+
+async function getBrowserUploadedMaterials() {
+  try {
+    await migrateLegacyBrowserMaterials();
+    const db = await openBrowserMaterialsDb();
+    const transaction = db.transaction(BROWSER_MATERIALS_DB_STORE, 'readonly');
+    const request = transaction.objectStore(BROWSER_MATERIALS_DB_STORE).getAll();
+    const entries = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+      request.onerror = () => reject(request.error || new Error('indexeddb-read-failed'));
+    });
+    return entries.filter(Boolean).sort((a, b) => String(a?.uploadedAt || '').localeCompare(String(b?.uploadedAt || '')));
+  } catch {
+    return getLegacyBrowserUploadedMaterials();
+  }
+}
+
+async function saveBrowserUploadedMaterialEntry(entry = {}) {
+  const existing = await getBrowserUploadedMaterials();
   let next = [
     ...existing.filter((item) => item?.id !== entry.id && item?.file !== entry.file),
     entry,
   ].slice(-BROWSER_MATERIAL_STORAGE_LIMIT);
 
-  // localStorage מוגבל (~5MB) והתוכן המלא של חומרים עלול לחרוג. אם הכתיבה נכשלת:
-  // קודם מפנים את החומר הישן ביותר וחוזרים; אם נשאר רק החומר הנוכחי והוא עדיין גדול מדי —
-  // שומרים אותו בלי התוכן המלא (תצוגה מקדימה בלבד), כדי שההעלאה לא תיכשל לגמרי.
-  while (next.length) {
-    try {
-      localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
-      return;
-    } catch (err) {
-      if (next.length > 1) {
+  try {
+    await replaceBrowserMaterialsInDb(next);
+    localStorage.removeItem(BROWSER_MATERIALS_KEY);
+    return;
+  } catch {
+    // Very old/private browsers may disable IndexedDB. Keep a bounded preview
+    // fallback in localStorage instead of serializing every full document.
+    next = next.map((item) => ({ ...item, contentText: '' }));
+    while (next.length) {
+      try {
+        localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+        return;
+      } catch {
         next = next.slice(1);
-        continue;
       }
-      const trimmed = { ...next[0], contentText: '' };
-      try { localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify([trimmed])); } catch { /* no-op */ }
-      return;
     }
   }
 }
 
-function removeBrowserUploadedMaterialEntry(material = {}) {
+async function removeBrowserUploadedMaterialEntry(material = {}) {
   const cleanId = String(material?.id || '').trim();
   const cleanFile = String(material?.file || '').trim();
-  const existing = getBrowserUploadedMaterials();
+  const existing = await getBrowserUploadedMaterials();
   const next = existing.filter((item) => {
     if (cleanId && String(item?.id || '').trim() === cleanId) return false;
     if (cleanFile && String(item?.file || '').trim() === cleanFile) return false;
     return true;
   });
-  localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+  try {
+    await replaceBrowserMaterialsInDb(next);
+    localStorage.removeItem(BROWSER_MATERIALS_KEY);
+  } catch {
+    localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next.map((item) => ({ ...item, contentText: '' }))));
+  }
   syncPersistedAppSettings();
   return next;
 }
@@ -5340,11 +5436,9 @@ export async function saveHelperMaterial(file, options = {}) {
   if (!file) throw new Error('לא נבחר קובץ');
   const meta = getMaterialUploadMeta(options.uploadKind || options.id || 'general');
   const previewMeta = await extractHelperMaterialPreview(file, MATERIAL_PREVIEW_MAX_LENGTH);
-  const arrayBuffer = await file.arrayBuffer();
   const payload = {
     name: file.name,
     title: file.name,
-    dataBase64: arrayBufferToBase64(arrayBuffer),
     uploadKind: meta.id,
     label: meta.label,
     category: meta.category,
@@ -5365,11 +5459,18 @@ export async function saveHelperMaterial(file, options = {}) {
   };
 
   if (window.desktopApp?.saveLocalMaterial) {
-    return window.desktopApp.saveLocalMaterial(payload);
+    // The Tauri bridge persists the original file and therefore needs Base64.
+    // Do this only on desktop: creating another full-size binary string in the
+    // browser can exhaust the tab's memory during a multi-file upload.
+    const arrayBuffer = await file.arrayBuffer();
+    return window.desktopApp.saveLocalMaterial({
+      ...payload,
+      dataBase64: arrayBufferToBase64(arrayBuffer),
+    });
   }
 
   const browserEntry = buildUploadedMaterialEntry(payload);
-  saveBrowserUploadedMaterialEntry(browserEntry);
+  await saveBrowserUploadedMaterialEntry(browserEntry);
   return { ok: true, file: browserEntry.file, entry: browserEntry };
 }
 
@@ -5388,7 +5489,7 @@ export async function removeHelperMaterial(material = {}) {
   }
 
   if (source === 'materials-browser') {
-    removeBrowserUploadedMaterialEntry(material);
+    await removeBrowserUploadedMaterialEntry(material);
     return { ok: true, file };
   }
 

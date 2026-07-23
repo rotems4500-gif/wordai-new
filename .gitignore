@@ -68,3 +68,7 @@ src-tauri/gen/schemas/
 tools/test-bench/keys.local.json
 # test-bench LAB results — personal style comparisons etc. (never commit)
 tools/test-bench/lab-results/
+
+# onnxruntime-web WASM — נגזר מ-node_modules ע"י scripts/copy-ort-wasm.mjs
+public/ort/
+tools/test-bench/.scaffolde2e-scratch/

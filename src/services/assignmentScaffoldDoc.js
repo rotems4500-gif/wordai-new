@@ -63,15 +63,57 @@ function splitSubRequirements(instructions) {
  * @param {{includeQuotaHints?:boolean, includeInstructions?:boolean}} opts
  * @returns {string}
  */
+// שורת "מקורות מהחומרים שלך" ליחידה (סעיף/תת-סעיף). מקבץ לפי מקור ומאחד עמודים:
+// "קולקה — המבנה החוקתי (עמ' 12, 15) · מיל — על החירות (עמ' 3)".
+// זו *הפניה לעבודה*, לא ציטוט: היא אומרת לכותב איפה בחומרים שלו נמצא הבסיס לכל
+// שאלה — הדרישה המרכזית של המסלול.
+// מתחת ל-z הזה ההפניה מסומנת "(אולי)" — התאמה סמנטית גבולית ששווה בדיקה, לא
+// קביעה. נמדד: התאמות ודאיות (הכרזת זכויות האדם לסעיף עליה) יושבות ב-z 4.5–7,
+// והרעש הגבולי ב-3.4–3.7.
+const CONFIDENT_Z = 4.5;
+
+function buildSourcesLine(found) {
+  const evidence = Array.isArray(found?.evidence) ? found.evidence : [];
+  if (!evidence.length) return null;
+  const bySource = new Map();
+  for (const e of evidence) {
+    const key = String(e.sourceTitle || 'מקור').trim();
+    const s = bySource.get(key) || { pages: new Set(), maxZ: -Infinity, weak: true };
+    if (e.pageHint) s.pages.add(e.pageHint);
+    const z = Number(e.z);
+    if (Number.isFinite(z)) s.maxZ = Math.max(s.maxZ, z);
+    if (e.strength !== 'weak') s.weak = false;
+    bySource.set(key, s);
+  }
+  const refs = [...bySource.entries()].map(([src, s]) => {
+    const pages = [...s.pages].sort((a, b) => a - b);
+    const base = pages.length ? `${src} (עמ' ${pages.join(', ')})` : src;
+    const unsure = s.weak || (Number.isFinite(s.maxZ) && s.maxZ < CONFIDENT_Z);
+    return unsure ? `${base} (אולי)` : base;
+  });
+  return `📚 מקורות מהחומרים שלך: ${refs.join(' · ')}`;
+}
+
 export function buildScaffoldHtml(spec, {
   includeQuotaHints = true,
   includeInstructions = true,
   // מפה sectionId → משפט פתיחה בקול המשתמש (styleOpenerService). מוזרק כפסקה
   // רגילה שאפשר להמשיך ממנה. מגיע מבחוץ כדי שהמודול יישאר LEAF.
   openers = null,
+  // מפה unitId → תוצאת findEvidenceForSection (סעיפים וגם תתי-סעיפים).
+  // מרונדרת כשורת הפניה מתחת לכל יחידה. מגיעה מבחוץ — המודול נשאר LEAF.
+  evidence = null,
+  // מפה unitId → HTML גוף שנכתב מקומית (proseComposeService). כשקיים — נכנס
+  // אחרי הפתיח במקום רמז המכסה. מגיע מבחוץ — המודול נשאר LEAF.
+  prose = null,
 } = {}) {
   const sections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
   if (!sections.length) return '<p></p>';
+
+  const sourcesFor = (unitId) => {
+    const line = evidence ? buildSourcesLine(evidence[unitId]) : null;
+    return line ? `<p><em>${escapeHtml(line)}</em></p>` : '';
+  };
 
   const parts = [];
   const title = String(spec?.title || '').trim();
@@ -88,20 +130,84 @@ export function buildScaffoldHtml(spec, {
     // המשתמש קיבל כותרת חשופה ומכסת מילים — בלי חמש תתי-הדרישות שהמרצה כתב
     // ("מי השחקנים", "מהו סלע המחלוקת"...). זה מה שהפך שלד *נכון* לשלד חסר תועלת:
     // צריך היה לחזור להנחיות המקוריות כדי לדעת מה בכלל לכתוב.
+    const subSections = Array.isArray(section.subSections) ? section.subSections : [];
+
     if (includeInstructions) {
-      const subs = splitSubRequirements(section.instructions);
-      if (subs.length) {
-        parts.push(`<ul>${subs.map((s) => `<li><em>${escapeHtml(s)}</em></li>`).join('')}</ul>`);
+      if (subSections.length) {
+        // הטקסט שלפני "א." הוא רקע משותף (תיאור מקרה, נתוני פתיחה) — לא דרישה.
+        // בלי ההפרדה הוא נראה כמו עוד תת-סעיף שצריך לענות עליו.
+        const preamble = String(section.instructions || '')
+          .split(/\n\s*[א-ת]['׳]?\s*[.)]\s+/)[0]
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (preamble) parts.push(`<p><em>${escapeHtml(preamble)}</em></p>`);
       } else {
-        const oneLine = String(section.instructions || '').replace(/\s+/g, ' ').trim();
-        if (oneLine) parts.push(`<p><em>${escapeHtml(oneLine)}</em></p>`);
+        const subs = splitSubRequirements(section.instructions);
+        if (subs.length) {
+          parts.push(`<ul>${subs.map((s) => `<li><em>${escapeHtml(s)}</em></li>`).join('')}</ul>`);
+        } else {
+          const oneLine = String(section.instructions || '').replace(/\s+/g, ' ').trim();
+          if (oneLine) parts.push(`<p><em>${escapeHtml(oneLine)}</em></p>`);
+        }
       }
     }
+
+    // מונחי חובה — הדרישה היחידה במטלה שאפשר לאמת מול הטקסט שנכתב, ולכן היא
+    // נכנסת למסמך כשורה בולטת ולא נקברת בתוך ההנחיה.
+    const must = Array.isArray(section.mustMention) ? section.mustMention : [];
+    if (must.length) {
+      parts.push(`<p><strong>${escapeHtml(`חובה להזכיר: ${must.join(' · ')}`)}</strong></p>`);
+    }
+
+    // תתי-סעיפים: כל אחד ראש-פרק משלו עם מכסה משלו. קודם הם היו שורות בתוך
+    // גוש ההנחיה, ולכן ארבע תשובות נפרדות נראו כמו פסקה אחת.
+    if (subSections.length) {
+      // כשכל תתי-הסעיפים מפנים לאותם מקורות — שורה אחת ברמת השאלה במקום אותה
+      // שורה ארבע פעמים. המשוב: "חזרתי". שורות שונות נשארות פר-תת-סעיף.
+      const subSourceLines = subSections.map((sub) => sourcesFor(sub.id));
+      const allSame = subSourceLines.length > 1
+        && subSourceLines[0]
+        && subSourceLines.every((l) => l === subSourceLines[0]);
+      if (allSame) parts.push(subSourceLines[0].replace('מקורות מהחומרים שלך', 'מקורות לכל סעיפי השאלה'));
+
+      subSections.forEach((sub) => {
+        parts.push(`<h3>${escapeHtml(`${sub.marker}. ${sub.title}`)}</h3>`);
+        if (includeInstructions && sub.instructions) {
+          parts.push(`<p><em>${escapeHtml(String(sub.instructions).replace(/\s+/g, ' ').trim())}</em></p>`);
+        }
+        if (Array.isArray(sub.mustMention) && sub.mustMention.length) {
+          parts.push(`<p><strong>${escapeHtml(`חובה להזכיר: ${sub.mustMention.join(' · ')}`)}</strong></p>`);
+        }
+        const subSources = sourcesFor(sub.id);
+        if (subSources && !allSame) parts.push(subSources);
+        const subOpener = openers ? String(openers[sub.id] || '').trim() : '';
+        if (subOpener) parts.push(`<p>${escapeHtml(subOpener)}</p>`);
+        const subProse = prose ? String(prose[sub.id] || '').trim() : '';
+        if (subProse) {
+          // ה-HTML כבר escaped ע"י proseComposeService — נכנס כמו גוף מהמודל.
+          parts.push(subProse);
+        } else {
+          parts.push(includeQuotaHints && sub.wordQuota
+            ? `<p><em>[${escapeHtml(String(sub.wordQuota))} מילים בערך]</em></p>`
+            : '<p></p>');
+        }
+      });
+      return; // המכסה והפתיח של האב כבר חולקו לתתי-הסעיפים.
+    }
+
+    const secSources = sourcesFor(section.id);
+    if (secSources) parts.push(secSources);
 
     // משפט הפתיחה — הדבר היחיד במסמך שהוא *טקסט לכתיבה* ולא הנחיה. הוא בקול
     // של המשתמש (ממוקש מהקורפוס) או מורכב מהדקדוק, ותפקידו לשבור את הדף הריק.
     const opener = openers ? String(openers[section.id] || '').trim() : '';
     if (opener) parts.push(`<p>${escapeHtml(opener)}</p>`);
+
+    const secProse = prose ? String(prose[section.id] || '').trim() : '';
+    if (secProse) {
+      parts.push(secProse);
+      return;
+    }
 
     if (includeQuotaHints && section.wordQuota) {
       // רמז המכסה הוא פסקה רגילה ולא placeholder: TipTap לא שומר nodes לא-מוכרים,

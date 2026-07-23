@@ -27,8 +27,10 @@ export const MATERIAL_CHUNKS_SCHEMA_VERSION = 1;
 export const MATERIAL_CHUNKS_UPDATED_EVENT = 'wordai-material-chunks-updated';
 
 // תקרות. גבוהות מהסגנון: ספרייה של 20-30 מאמרים אקדמיים מגיעה בקלות ל-5000 chunks.
-const DEFAULT_MAX_CHUNKS = 6000;
-const DEFAULT_MAX_CHARS = 12000000;
+// 6000 היה נמוך מדי: העלאה אחת של ~32 מאמרים מייצרת ~30k chunks, כלומר 80% מהחומר
+// שהמשתמש העלה פונה בשקט מיד אחרי שנכנס.
+const DEFAULT_MAX_CHUNKS = 30000;
+const DEFAULT_MAX_CHARS = 24000000;
 
 const WORD_RE = /[֐-׿יִ-ﭏA-Za-z0-9'"׳״-]+/g;
 const countWords = (str = '') => (String(str || '').match(WORD_RE) || []).length;
@@ -99,6 +101,8 @@ let cache = null;
 let hydratePromise = null;
 let pendingWrite = Promise.resolve();
 let lastWriteError = null;
+let writeQueued = false;
+let dirty = false;
 
 /** טוען את החנות מ-IndexedDB. בטוח לקרוא פעמים רבות. @returns {Promise<object>} */
 export function ensureMaterialStoreReady() {
@@ -138,10 +142,19 @@ function emitUpdated() {
 
 // כתיבה. שגיאות נחשפות ב-lastWriteError במקום להיבלע — הבליעה היא בדיוק מה שהסתיר
 // את בעיית הקיבולת של חנות הסגנון עד יולי 2026.
+//
+// הכתיבות *מסודרות בתור*, לא נורות במקביל: כל idbSet הוא structured-clone סינכרוני
+// של כל ה-blob (עשרות MB אחרי העלאה גדולה). ירי של 30 כאלה בזה אחר זה בלי להמתין
+// החזיק 30 עותקי סריאליזציה בזיכרון בו-זמנית. כאן: לכל היותר אחת רצה ואחת בתור,
+// והממתינה תמיד כותבת את ה-cache העדכני ביותר.
 function persist() {
-  const snapshot = cache;
-  if (typeof window === 'undefined' || !snapshot) return Promise.resolve();
-  pendingWrite = (async () => {
+  if (typeof window === 'undefined' || !cache) return Promise.resolve();
+  if (writeQueued) return pendingWrite;
+  writeQueued = true;
+  pendingWrite = pendingWrite.then(async () => {
+    writeQueued = false;
+    const snapshot = cache;
+    if (!snapshot) return;
     if (isIdbAvailable()) {
       try {
         await idbSet(MATERIAL_CHUNKS_STORAGE_KEY, snapshot);
@@ -155,7 +168,8 @@ function persist() {
     if (!isIdbAvailable()) {
       lastWriteError = 'IndexedDB לא זמין — אינדקס חומרי העזר לא נשמר.';
     }
-  })();
+    // catch על החוליה: בלי זה דחייה אחת מרעילה את השרשרת ו*כל* כתיבה עתידית נכשלת.
+  }).catch((err) => { lastWriteError = `write: ${String(err?.message || err)}`; });
   return pendingWrite;
 }
 
@@ -175,7 +189,7 @@ export function readMaterialStore() {
   return getCache();
 }
 
-function writeBlob(blob) {
+function writeBlob(blob, { defer = false } = {}) {
   if (typeof window === 'undefined') return;
   cache = {
     schemaVersion: MATERIAL_CHUNKS_SCHEMA_VERSION,
@@ -184,8 +198,23 @@ function writeBlob(blob) {
     chunks: Array.isArray(blob?.chunks) ? blob.chunks : [],
     caps: normalizeCaps(blob?.caps),
   };
+  if (defer) { dirty = true; return; }
+  dirty = false;
   persist();
   emitUpdated();
+}
+
+/**
+ * מסיים ingest שנעשה עם defer:true — כתיבה אחת ואירוע אחד לכל האצווה.
+ * בלי זה, העלאה של 32 קבצים = 32 כתיבות מלאות + 32 render-ים של כל המסך.
+ * @returns {Promise<void>}
+ */
+export function commitMaterialStore() {
+  if (!dirty) return Promise.resolve(pendingWrite);
+  dirty = false;
+  const p = persist();
+  emitUpdated();
+  return p;
 }
 
 if (typeof window !== 'undefined') {
@@ -263,23 +292,31 @@ function sectionForChunk(fullText, chunkBody, charStart) {
 
 // ---------- caps ----------
 
+// פינוי הישן-קודם. הגרסה הקודמת סרקה את כל הרשימה מחדש לכל chunk שפונה (ומחשבת
+// מחדש את סך התווים בכל סיבוב) — O(n²). בהעלאה של 32 מאמרים זה אלפי פינויים על
+// רשימה של עשרות אלפים, כלומר מאות מיליוני איטרציות שתוקעות את הטאב עד קריסה.
+// כאן: מיון גילים אחד, ואז מעבר יחיד.
 function enforceCaps(chunks, caps) {
-  const list = [...chunks];
-  const totalChars = (arr) => arr.reduce((sum, c) => sum + String(c.text || '').length, 0);
-  const evictOldest = () => {
-    let oldestIdx = -1;
-    let oldestAt = Infinity;
-    list.forEach((c, i) => {
-      const at = Number(c.addedAt) || 0;
-      if (at < oldestAt) { oldestAt = at; oldestIdx = i; }
-    });
-    if (oldestIdx === -1) return false;
-    list.splice(oldestIdx, 1);
-    return true;
-  };
-  while (list.length > caps.maxChunks) { if (!evictOldest()) break; }
-  while (totalChars(list) > caps.maxChars) { if (!evictOldest()) break; }
-  return list;
+  const list = chunks;
+  const lenOf = (c) => String(c.text || '').length;
+  let total = 0;
+  for (const c of list) total += lenOf(c);
+  if (list.length <= caps.maxChunks && total <= caps.maxChars) return [...list];
+
+  const order = list.map((c, i) => [Number(c.addedAt) || 0, i]);
+  order.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+
+  const drop = new Set();
+  let count = list.length;
+  for (let p = 0; p < order.length; p += 1) {
+    if (count <= caps.maxChunks && total <= caps.maxChars) break;
+    const idx = order[p][1];
+    drop.add(idx);
+    total -= lenOf(list[idx]);
+    count -= 1;
+  }
+  if (!drop.size) return [...list];
+  return list.filter((_, i) => !drop.has(i));
 }
 
 // ---------- getters ----------
@@ -326,7 +363,9 @@ export function hasMaterialText(text) {
  *
  * @param {{title?:string, text:string, source?:string, projectId?:string|null,
  *          kind?:string, materialKey?:string|null, sourceUrl?:string|null,
- *          strength?:('full'|'abstract')}} args
+ *          strength?:('full'|'abstract'), defer?:boolean}} args
+ *        defer=true — צובר בזיכרון בלי לכתוב ל-IDB ובלי לשדר אירוע. חובה לקרוא
+ *        commitMaterialStore() בסוף האצווה.
  * @returns {{materialId:(string|null), added:number, skipped:boolean}}
  */
 export function addMaterialDocument({
@@ -338,6 +377,7 @@ export function addMaterialDocument({
   materialKey = null,
   sourceUrl = null,
   strength = 'full',
+  defer = false,
 } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return { materialId: null, added: 0, skipped: false };
@@ -404,7 +444,7 @@ export function addMaterialDocument({
   const liveIds = new Set(merged.map((c) => c.materialId));
   const materials = [...blob.materials, material].filter((m) => liveIds.has(m.id));
 
-  writeBlob({ ...blob, materials, chunks: merged });
+  writeBlob({ ...blob, materials, chunks: merged }, { defer });
   return { materialId, added: newChunks.length, skipped: false };
 }
 

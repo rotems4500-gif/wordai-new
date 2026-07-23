@@ -115,7 +115,9 @@ const needsSpace = (prev, cur) => {
   return gap >= Math.max(0.8, avgChar * 0.28);
 };
 
-const itemsToLines = (items = []) => {
+// exported — ה-harness (tools/test-bench/scaffold-e2e) מריץ את אותה הרכבת שורות
+// על pdfjs-legacy ב-Node, כדי שהמדידה תהיה על הקוד האמיתי ולא על העתק.
+export const itemsToLines = (items = []) => {
   const lines = [];
   let current = null;
 
@@ -142,10 +144,22 @@ const itemsToLines = (items = []) => {
     .join('\n');
 };
 
+// טעינת pdfjs פעם אחת (גם מסלול הטקסט וגם מסלול ה-OCR צריכים אותה).
+let pdfjsPromise = null;
+const loadPdfjs = () => {
+  if (!pdfjsPromise) {
+    pdfjsPromise = (async () => {
+      const pdfjs = await import('pdfjs-dist');
+      const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+      return pdfjs;
+    })();
+  }
+  return pdfjsPromise;
+};
+
 const extractPdf = async (uint8, maxLength) => {
-  const pdfjs = await import('pdfjs-dist');
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+  const pdfjs = await loadPdfjs();
   // עותק — pdfjs משנה את ה-buffer
   const data = uint8.slice();
   const doc = await pdfjs.getDocument({ data }).promise;
@@ -159,9 +173,31 @@ const extractPdf = async (uint8, maxLength) => {
     total += pageText.length;
     if (maxLength > 0 && total > maxLength) break;
   }
+  const pages = doc.numPages;
   try { await doc.destroy(); } catch { /* no-op */ }
-  return parts.join('\n\n');
+  const text = parts.join('\n\n');
+  // PDF סרוק (תמונות בלבד) מחזיר מחרוזת ריקה ו-ok:true, ואז הקובץ "נקלט" בשקט עם
+  // אפס קטעים. נמדד על שלושה מקורות אמיתיים (פוקויאמה ×2, קולקה 125 עמ') שנספרו
+  // כ"דולגו" בלי סיבה. מסמנים במפורש כדי שהמשתמש יידע שצריך OCR/גרסה טקסטואלית.
+  const perPage = pages > 0 ? text.replace(/\s/g, '').length / pages : 0;
+  const scanned = pages > 0 && perPage < 30;
+  // ⚠️ garbled — קידוד גופן שבור: יש "שכבת טקסט" אבל היא ג'יבריש (")Ntur: nttxnt").
+  // נמדד על קורפוס קורס אמיתי: 8 מתוך 15 מקורות עבריים היו כאלה, עברו את מבחן
+  // הסרוק, והורעלו לתוך האינדקס הסמנטי — האחזור קרס כולו בגללם. מנותבים ל-OCR
+  // בדיוק כמו סרוקים.
+  const garbled = !scanned && pureTokenRatio(text) < GARBLE_FLOOR;
+  return { text, pages, scanned: scanned || garbled, garbled };
 };
+
+// יחס הטוקנים ה"טהורים": עברית נקייה / לטינית נקייה / מספר (בתוספת פיסוק סופי).
+// קבצים תקינים נמדדו 0.71–0.95; שבורי-קידוד 0.12–0.25. הסף באמצע הרווח.
+const GARBLE_FLOOR = 0.5;
+export function pureTokenRatio(text) {
+  const tokens = (String(text || '').match(/\S+/g) || []).slice(0, 2000);
+  if (tokens.length < 40) return 1; // קצר מדי לשפוט — מבחן הסרוק יטפל
+  const pure = tokens.filter((x) => /^[֐-׿]{2,}[.,;:!?'"׳״)]?$|^[A-Za-z]{2,}[.,;:!?'")]?$|^\d+([.,]\d+)?$/.test(x)).length;
+  return pure / tokens.length;
+}
 
 // ‎tesseract.js מוריד את ה-core(wasm) ואת נתוני השפה מ-CDN בזמן ריצה. אם הרשת איטית/חסומה
 // (או offline) הקריאה עלולה להיתקע ללא קצה — לכן עוטפים כל שלב בזמן-קצוב וכושלים בחן.
@@ -195,6 +231,80 @@ const extractImageOcr = async (uint8) => {
   }
 };
 
+// OCR על PDF סרוק: כל עמוד מרונדר ל-canvas ועובר זיהוי.
+//
+// ⚠️ worker אחד לכל הקובץ. אתחול tesseract עולה שניות (הורדת core+heb.traineddata),
+// ולכן worker לעמוד היה הופך מסמך של 35 עמודים לדקות של אתחולים בלבד.
+//
+// scale 2.0: ברזולוציה הטבעית (1.0) הזיהוי בעברית מתפרק. 2.0 הוא הפשרה בין דיוק
+// לזיכרון — עמוד A4 יוצא ~1700×2400, שזה ~16MB ל-canvas אחד. משחררים אותו מיד.
+const OCR_PAGE_SCALE = 2.0;
+const OCR_MAX_PAGES = 60; // תקרה: מעבר לזה זמן ההמתנה כבר לא סביר בדפדפן.
+
+const extractPdfOcr = async (uint8, maxLength, onProgress) => {
+  const pdfjs = await loadPdfjs();
+  const { createWorker } = await import('tesseract.js');
+  const doc = await pdfjs.getDocument({ data: uint8.slice() }).promise;
+  const pages = Math.min(doc.numPages, OCR_MAX_PAGES);
+  const worker = await withTimeout(
+    createWorker('heb+eng'),
+    OCR_TIMEOUT_MS,
+    'אתחול מנוע ה-OCR נכשל (ייתכן חיבור איטי או חסום).',
+  );
+  const parts = [];
+  let total = 0;
+  try {
+    for (let i = 1; i <= pages; i += 1) {
+      if (typeof onProgress === 'function') { try { onProgress({ page: i, pages }); } catch { /* no-op */ } }
+      const page = await doc.getPage(i);
+      const viewport = page.getViewport({ scale: OCR_PAGE_SCALE });
+      const w = Math.ceil(viewport.width);
+      const h = Math.ceil(viewport.height);
+      const canvas = typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(w, h)
+        : Object.assign(document.createElement('canvas'), { width: w, height: h });
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      // ⚠️ intent:'print' — לא בגלל הדפסה. pdf.js מריץ את הרינדור הרגיל דרך
+      // requestAnimationFrame (`useRequestAnimationFrame: !intentPrint`), ו-rAF לא
+      // נורה בטאב מוסתר. נמדד: טאב ברקע ⇒ 0 ticks ⇒ ה-render לא נפתר לעולם וכל
+      // ה-OCR נתקע בעמוד הראשון. 'print' מבטל את הלולאה הזו. אותה מלכודת כמו ב-
+      // PresentationStudio.
+      await page.render({ canvasContext: ctx, viewport, intent: 'print' }).promise;
+      try {
+        const { data } = await withTimeout(
+          worker.recognize(canvas),
+          OCR_TIMEOUT_MS,
+          `זיהוי עמוד ${i} ארך יותר מדי והופסק.`,
+        );
+        const pageText = String(data?.text || '').trim();
+        if (pageText) { parts.push(pageText); total += pageText.length; }
+      } finally {
+        // שחרור מיידי — בלי זה 35 canvasים של 16MB נשארים חיים עד ה-GC.
+        canvas.width = 0; canvas.height = 0;
+        page.cleanup();
+      }
+      if (maxLength > 0 && total > maxLength) break;
+      // נשימה ל-UI בין עמודים.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  } finally {
+    try { await worker.terminate(); } catch { /* no-op */ }
+    try { await doc.destroy(); } catch { /* no-op */ }
+  }
+  return { text: cleanOcrText(parts.join('\n\n')), pages: doc.numPages, ocrPages: pages };
+};
+
+// סינון פסקאות-זבל מפלט OCR: עמודי איורים/טבלאות/טורים מעורבבים מייצרים פסקאות
+// ג'יבריש שמוטמעות לאזור וקטורי מוזר ו"מתאימות" לשאילתות זרות. נמדד: שאילתת
+// אסטרונומיה (בקרה שלילית) קיבלה z=4.95 מקטע כזה אצל אדם סמית. הסף מקל מהגלאי
+// הקובץ-שלם (0.55) — עברית אחרי OCR מכילה רעש לגיטימי.
+export function cleanOcrText(text) {
+  return String(text || '')
+    .split(/\n{2,}/)
+    .filter((para) => pureTokenRatio(para) >= 0.55)
+    .join('\n\n');
+}
+
 const extractPptx = async (uint8) => {
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(uint8);
@@ -214,8 +324,14 @@ const extractPptx = async (uint8) => {
   return chunks.join('\n');
 };
 
-// uint8: Uint8Array. מחזיר { ok, text } או { ok:false, error }.
-export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 12000) => {
+/**
+ * uint8: Uint8Array. מחזיר { ok, text } או { ok:false, error }.
+ * @param {{ocr?:boolean, onOcrProgress?:function}} opts
+ *        ocr=true — מפעיל OCR על PDF סרוק (איטי: ~2-4 שניות לעמוד). בלעדיו קובץ
+ *        סרוק מוחזר כשגיאה מפורשת, כדי שלא ייבלע בשקט כמו קודם.
+ */
+export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 12000, opts = {}) => {
+  const { ocr = false, onOcrProgress = null } = opts || {};
   const ext = getExtension(fileName);
   try {
     let text = '';
@@ -228,7 +344,29 @@ export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 
     } else if (TEXT_EXTENSIONS.has(ext)) {
       text = decodeText(uint8);
     } else if (ext === 'pdf') {
-      text = await extractPdf(uint8, maxLength);
+      const res = await extractPdf(uint8, maxLength);
+      if (res.scanned && !ocr) {
+        return {
+          ok: false,
+          scanned: true,
+          pages: res.pages,
+          error: `ה-PDF סרוק (${res.pages} עמודים ללא שכבת טקסט) — אין ממה לחלץ. צריך גרסה טקסטואלית או OCR.`,
+        };
+      }
+      if (res.scanned) {
+        const ocrRes = await extractPdfOcr(uint8, maxLength, onOcrProgress);
+        if (!String(ocrRes.text || '').trim()) {
+          return { ok: false, scanned: true, pages: res.pages, error: `OCR על ${ocrRes.ocrPages} עמודים לא זיהה טקסט.` };
+        }
+        return {
+          ok: true,
+          viaOcr: true,
+          pages: res.pages,
+          ocrPages: ocrRes.ocrPages,
+          text: clampText(ocrRes.text, maxLength),
+        };
+      }
+      text = res.text;
     } else if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext)) {
       text = await extractImageOcr(uint8);
     } else {

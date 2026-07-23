@@ -137,6 +137,15 @@ embeddings מקומיים.
   `&lt;p&gt;` במסמך. `stripModelHtml` מנקה לפני ההרכבה.
 
 
+- **PDF "עם טקסט" יכול להיות ג'יבריש מוחלט.** קידוד ToUnicode שבור מוציא
+  `)Ntur: nttxnt ETNn` — עובר את מבחן הסרוק (יש המון תווים) ומרעיל את האינדקס
+  הסמנטי. נמדד: 8 מתוך 15 מקורות קורס עבריים. הגלאי: `pureTokenRatio < 0.5`
+  (תקינים 0.71–0.95, שבורים 0.12–0.25) → ניתוב ל-OCR כמו סרוק.
+- **קוסינוס אבסולוטי של e5 חסר משמעות.** הכל נדחס ל-0.75–0.90; קטע "ממוצע"
+  (hub) מנצח כל שאילתה. הניקוד: ניכוי צנטרואיד + סף רובסטי median+MAD (ראה
+  evidenceMatchService, כיול v2).
+- **`intent:'print'` בכל `page.render` של pdfjs.** ברירת המחדל תלויה ב-rAF —
+  שלא נורה בטאב מוסתר (OCR נתקע לנצח) ולא קיים ב-Node (קריסה). נשך ארבע פעמים.
 - **`\b` לא עובד בעברית.** אות עברית אינה `\w`, ולכן `/\bנתח\b/` לעולם לא מתאים.
   זה השתיק את כל זיהוי ה-intent בשקט. תת-מחרוזת לעברית, `\b` רק ללטינית.
 - **`chatWithActiveProvider` חוטף קריאות אקדמיות לצינור אחזור המקורות.**
@@ -165,6 +174,12 @@ embeddings מקומיים.
 ---
 
 ## איך בודקים
+
+**`node tools/test-bench/run-scaffold-e2e.mjs` — ה-eval של צינור השלד המקומי (0 API).**
+מריץ קליטה→הטמעה→אחזור→מסמך על קורפוס הקורס האמיתי, עם מקרי תשובה-ידועה + בקרות
+שליליות (סעיפים שאסור למצוא להם ראיות). OCR ב-Node (cache ב-`.scaffolde2e-scratch/`),
+הטמעה ~22ms/קטע. exit 0 = כל המקרים עוברים. הוא זה שגילה ש-8/15 מקורות עברית הם
+ג'יבריש קידוד (ראה גוצ'אס) ושהאחזור לפניו עמד על 2/7.
 
 **`node tools/test-bench/run-e2e-assignment.mjs` — הבדיקה שסוגרת את הלולאה.**
 מריצה את כל השרשרת מול ספקים אמיתיים ובודקת 30 טענות. כל שלב יש לו הרנס משלו,
@@ -221,3 +236,38 @@ node --import "data:text/javascript,import{register}from'node:module';..." test.
 **מגבלה ידועה:** העיגון מחזיק היטב על מספרים וציטוטים, אבל **מסגור הקשרי קל מחליק
 פנימה** לפעמים (הרצה אחת הוסיפה "מטלת שיפוט חזותית פשוטה" בלי הפניה, כשהראיות לא
 תיארו זאת). לא למכור את זה כ"אפס הזיות".
+
+---
+
+## מנוע הכתיבה המקומי (NLG) — יולי 2026
+
+הרחבה: **גוף הסעיף כבר לא NEEDS_AI תמיד.** כשיש ראיות, הפנקס מסמן `LOCAL_DRAFT`
+וכפתור "📝 טיוטה מקומית (ללא AI)" בסטודיו כותב את כל העבודה מקומית.
+
+**הצנרת (NLG קלאסי):**
+1. **תכנון** — `MOVE_PLANS` ב-[proseComposeService.js](../src/services/proseComposeService.js):
+   רצף מהלכים רטוריים לכל intent (claim→evidence→explain→contrast→wrap), מודע-מכסה.
+2. **מימוש משפט** — [sentenceComposeService.js](../src/services/sentenceComposeService.js)
+   על [sentenceGrammar.data.js](../src/services/sentenceGrammar.data.js) (seed ידני v1):
+   מסגרות פסוקיות/אימפרסונליות **בטוחות-מגדר** — אף מילת מסגרת לא צריכה הסכמה עם התוכן.
+3. **תוכן** — `pickCoreSentence`: משפט-הליבה מכל chunk ראיה (ניקוד: מונחי חובה,
+   אורך, יחס עברית). כל משפט תוכן נושא `evidenceId`. משפטי מטא — על הראיות שהוצגו בלבד.
+4. **איכות** — `composeSectionProseBest`: 3 וריאנטים, הדטקטור המקומי
+   (`scoreTextAuthenticity`, מוזרק — LEAF) בוחר את הכי-אנושי.
+
+**שכבות הידע (נבנות ב-Flash אופליין, דפוס synonyms-build):**
+- `tools/lexicon-build` → [hebrewLexicon.data.js](../src/services/hebrewLexicon.data.js):
+  לקסיקון מתויג (POS/מין/מספר/משלב/שורש/בניין/ריבוי/נסמך), יעד 20k לממות.
+  גישה: [hebrewLexemeService.js](../src/services/hebrewLexemeService.js) (כולל הזנת
+  `mergeExternalWordlist` של hebrewLexiconService).
+- [hebrewMorphRules.js](../src/services/hebrewMorphRules.js): נטייה גנרטיבית שורש+בניין,
+  כתיב מלא. Tier 1 שלמים+ל"א; Tier 2 ל"ה/פ"נ/ע"ו-ע"י/פ"י/שורקות-התפעל; Tier 3 → null.
+- `tools/morph-build` → `morphRules.data.js`: שופט-Flash מאשר כל (שורש,בניין);
+  [hebrewMorphService.js](../src/services/hebrewMorphService.js) `conjugateSafe` מחזיר
+  צורה **רק** לזוג מאושר — אף צורה מנוחשת לא מודפסת.
+
+**אימות:** תרחיש 4 ב-scaffold-e2e — עיגון ≥40% חפיפת מילות-תוכן מול ה-chunk,
+אי-כפילות, כנות מכסה ([דרוש מקור נוסף]). `validate.mjs` בכל כלי בנייה (שער 90-98%).
+
+**גבולות כנים:** משפטי התוכן קרובים למקור בכוונה (פרפרזה-קלה, לא כתיבה חופשית);
+סעיף בלי ראיות נשאר חסום; המחולל לא ממציא עובדות — זה הפיצ'ר.

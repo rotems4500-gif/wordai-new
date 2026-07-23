@@ -4221,6 +4221,12 @@ function PersonalStyleSettings({ profile, setProfile }) {
           ...problematicUploads.map(({ item, info }) => `- ${item.title}: ${info.message}`),
         ].filter((line) => line !== '').join('\n'), { tone: 'warning', duration: 8000 });
       }
+    } catch (error) {
+      // React event-handler rejections are not caught by ErrorBoundary. Keep a
+      // failed style refresh or storage write inside the upload UI instead of
+      // letting the global crash overlay replace the entire application.
+      console.error('Material upload pipeline failed:', error);
+      showToast(`העלאת החומרים נעצרה: ${error?.message || 'שגיאה לא ידועה'}`, { tone: 'error', duration: 10000 });
     } finally {
       setUploading(false);
       event.target.value = '';

@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import https from 'https';
 import { execFile } from 'child_process';
+import { copyOrtWasm } from './scripts/copy-ort-wasm.mjs';
 
 const STYLE_FILE = path.resolve(process.cwd(), 'my_personal_style.json');
 const MAX_BODY_BYTES = 65536; // 64 KB hard cap for POST /api/style
@@ -86,6 +87,19 @@ function pastWorksPlugin() {
         }
       });
     }
+  };
+}
+
+// Vite plugin: מבטיח ש-public/ort/ מכיל את קבצי ה-WASM של onnxruntime-web.
+// רץ גם ב-dev וגם ב-build (buildStart), כי styleEmbeddingService מצביע לשם.
+function ortWasmPlugin() {
+  return {
+    name: 'ort-wasm',
+    buildStart() {
+      const res = copyOrtWasm(process.cwd());
+      if (!res.ok) console.warn(`[ort] ${res.error} — האינדקס הסמנטי לא יעבוד.`);
+      else if (res.copied) console.log(`[ort] ${res.copied} קבצי WASM הועתקו ל-public/ort`);
+    },
   };
 }
 
@@ -305,7 +319,7 @@ function styleBankPlugin() {
 
 export default async () => defineConfig({
   base: './',
-  plugins: [react(), pastWorksPlugin(), styleBankPlugin()],
+  plugins: [react(), ortWasmPlugin(), pastWorksPlugin(), styleBankPlugin()],
   resolve: {
     // Force a single React instance. Without this, dev (optimizer + react-refresh)
     // can wire some modules to a second React copy → "Invalid hook call" /
@@ -341,6 +355,22 @@ export default async () => defineConfig({
   server: {
     port: 3001,
     strictPort: true,
+    // Keep the dev watcher focused on frontend sources. The repository also
+    // contains Tauri/Rust build output and temporary extraction artifacts;
+    // watching those directories creates thousands of unnecessary Windows
+    // file handles and can make Vite startup appear to hang.
+    watch: {
+      ignored: [
+        '**/.git/**',
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/src-tauri/target/**',
+        '**/.firebase/**',
+        '**/release-*/**',
+        '**/temp-*/**',
+        '**/screenshot/**',
+      ],
+    },
     // VITE_NO_HTTPS=1 משבית HTTPS לצורך בדיקה אוטומטית בדפדפן (cert עצמי נדחה ע"י preview). לא משפיע על dev רגיל.
     https: process.env.VITE_NO_HTTPS ? false : await getHttpsOptions(),
     proxy: {

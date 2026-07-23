@@ -44,6 +44,43 @@ export function resetEmbeddingState() {
   unavailableReason = null;
 }
 
+// הרצת ה-WASM של onnxruntime מקבצים שאנחנו מארחים, לא מ-CDN.
+//
+// ⚠️ ברירת המחדל של transformers.js היא
+//   https://cdn.jsdelivr.net/npm/onnxruntime-web@<version>/dist/…
+// כאשר <version> היא גרסת ה-*dev* ש-@huggingface/transformers מצמיד
+// (1.26.0-dev.…). הכתובת הזו נכשלה בפועל, ה-factory חזר undefined, ו-ORT נפל עם
+//   "no available backend found. ERR: [wasm] TypeError: Cannot read properties of
+//    undefined (reading 'default')"
+// ואז כל האינדוקס הסמנטי מת בשקט ונופל למצב מילולי. הקבצים מועתקים ל-public/ort
+// ע"י scripts/copy-ort-wasm.mjs (plugin ב-vite.config), כך שזה עובד גם אופליין
+// בדסקטופ.
+function configureOnnxRuntime(env) {
+  // ב-Node אין להתערב: transformers.node טוען backend מקומי, ו-wasmPaths יחסי
+  // רק מייצר "fetch failed" רועש לפני ה-fallback.
+  if (typeof document === 'undefined') return;
+  const wasm = env?.backends?.onnx?.wasm;
+  if (!wasm) return;
+  try {
+    const base = (typeof document !== 'undefined' && document.baseURI)
+      ? new URL('ort/', document.baseURI).href
+      : '/ort/';
+    // ה-build הרגיל ולא asyncify: נמדד 900ms לקטע מול 1262ms ב-asyncify (‎-30%).
+    // transformers בוחר asyncify כברירת מחדל לכל מה שאינו Safari; אנחנו לא צריכים
+    // את stack-switching, רק את ההסקה.
+    const name = 'ort-wasm-simd-threaded';
+    wasm.wasmPaths = { mjs: `${base}${name}.mjs`, wasm: `${base}${name}.wasm` };
+    // אין COOP/COEP ב-Firebase hosting → אין SharedArrayBuffer → threads לא זמינים.
+    // הצהרה מפורשת עדיפה על גישוש שנכשל בשקט.
+    wasm.numThreads = 1;
+    // proxy=true → ORT רץ ב-Web Worker. ברירת המחדל של transformers היא false,
+    // וההסקה חוסמת את ה-thread הראשי לחלוטין: נמדד 0 ticks של setInterval לאורך
+    // 20 שניות של הטמעה, כלומר הדפדפן מכריז "הדף אינו מגיב". עם proxy נמדדו
+    // 741/1010 ticks — ה-UI ממשיך לזוז.
+    wasm.proxy = true;
+  } catch {}
+}
+
 // טוען (פעם אחת) את ה-feature-extraction pipeline. מחזיר null בכל כשל + מסמן reason.
 async function getExtractor() {
   if (unavailableReason) return null;
@@ -58,6 +95,7 @@ async function getExtractor() {
       // הגדרות סביבה: מותר להוריד מה-hub (מודל נשמר cache בדפדפן/דיסק אחרי פעם ראשונה).
       if (mod.env) {
         try { mod.env.allowRemoteModels = true; } catch {}
+        configureOnnxRuntime(mod.env);
       }
       const extractor = await pipeline('feature-extraction', STYLE_EMBEDDING_MODEL_ID, {
         dtype: STYLE_EMBEDDING_DTYPE,
@@ -143,6 +181,27 @@ export function cosineSim(a, b) {
 
 // ---------- embedTexts ----------
 
+// נשימה ל-UI בין אצוות.
+//
+// ⚠️ **בלי requestAnimationFrame.** rAF לא נורה בטאב מוסתר, ואינדוקס של קורפוס
+// אמיתי נמשך דקות — כלומר כל מעבר לטאב אחר הקפיא את ההטמעה לנצח, בלי שגיאה:
+// הפס נתקע על "2/2", אפס וקטורים נשמרו, ושום הודעה לא הופיעה. אותה מלכודת
+// בדיוק שתפסה את רינדור ה-PDF ב-materialExtractBrowser.
+//
+// MessageChannel ולא setTimeout: הוא macrotask אמיתי (מאפשר render וקלט) ואינו
+// כפוף לחניקת ה-1000ms שדפדפנים מחילים על טיימרים בטאב רקע.
+function yieldToUi() {
+  return new Promise((resolve) => {
+    if (typeof MessageChannel === 'function') {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => { ch.port1.close(); resolve(); };
+      ch.port2.postMessage(0);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 /**
  * מחשב embeddings ל-batch טקסטים. מקומי, WASM, בלי API.
  * @param {string[]} texts
@@ -173,6 +232,11 @@ export async function embedTexts(texts, { kind = 'passage', onProgress = null } 
       if (typeof onProgress === 'function') {
         try { onProgress({ done: Math.min(i + EMBED_BATCH, list.length), total: list.length }); } catch {}
       }
+      // מסירת השליטה ל-event loop בין אצוות. ה-inference עצמו סינכרוני ב-WASM על
+      // ה-thread הראשי; בלי הנשימה הזו קורפוס של אלפי chunks נועל את הטאב לדקות
+      // והדפדפן הורג אותו ב-"הדף אינו מגיב".
+      // eslint-disable-next-line no-await-in-loop
+      await yieldToUi();
     }
   } catch (err) {
     unavailableReason = String(err?.message || err || 'embedding inference failed');

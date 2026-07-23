@@ -64,6 +64,7 @@ npm run desktop:build # tauri build — installer NSIS + exe -> src-tauri/target
 סוכנים: `fix`, `reviewFix`, `humanize`, `summary`, `academic`, `organize`, `textToTable` (inline) · `sources`, `holeFill`, `lecturer`, `continue`, `draft`, `chef` (chat).
 
 ### `src/services/` — שירותים נוספים
+- [localBibliographyService.js](src/services/localBibliographyService.js) — איסוף, איחוד ועיצוב מקומי של מקורות משלד המטלה עבור לחצן הביבליוגרפיה; אינו קורא לרשת ואינו ממציא מטא-דאטה חסר.
 - [articleSourceValidation.js](src/services/articleSourceValidation.js) — אימות מקורות אמיתיים (anti-hallucination), נורמליזציה של URL/טקסט, ניתוח query.
 - [browserRetrievalService.js](src/services/browserRetrievalService.js) — אחזור snapshot של עמוד דרך ה-Electron (desktop only).
 - [copyleaksService.js](src/services/copyleaksService.js) — בדיקת מקוריות / AI-content.

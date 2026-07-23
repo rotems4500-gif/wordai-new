@@ -47,6 +47,26 @@ import { selectChunks, scoreChunkRelevance, tokenizeForRetrieval } from './style
 // ⚠️ קורפוס הכיול קטן. להריץ מחדש על ספרייה אמיתית לפני שינוי הערכים.
 const MIN_COSINE_FLOOR = 0.795;
 const RELATIVE_BAND = 0.05;
+
+// ---------- כיול v2 (יולי 2026, קורפוס אמיתי של 584 קטעים) ----------
+// הקוסינוס האבסולוטי של e5 חסר משמעות: נמדד שסעיף-בקרה על תזונה קיבל 0.852 מול
+// המניפסט הקומוניסטי, בעוד התאמות אמת קיבלו 0.81. שתי פתולוגיות:
+//  1. hubness — קטע "ממוצע" (חוק יסוד הממשלה) קרוב לצנטרואיד הקורפוס ולכן קרוב
+//     לכל שאילתה; ניצח כמעט בכל eval, כולל בבקרות השליליות.
+//  2. דחיסה — כל הציונים ב-0.75–0.90, סף קבוע יושב בתוך הרעש.
+// התיקון: adjusted = cos(q,c) − HUB_BETA·cos(centroid,c), ואז סף יחסי רובסטי:
+// קטע נשמר רק אם ה-adjusted שלו חורג מהתפלגות הקורפוס (median + Z_KEEP·MAD).
+const HUB_BETA = 1.0;
+// נמדד על קורפוס נקי (944 קטעים אחרי OCR+ניקוי): התאמות אמת יושבות ב-3.35–7.0,
+// אבל רעש OCR הגיע עד z=4.63 (שאילתת אסטרונומיה ↔ קטע "צלחות חרס" של אדם סמית) —
+// סף לבדו לא מפריד. המבחין: לקטע אמיתי יש כמעט תמיד גם *עוגן לקסיקלי* (מונח
+// מהשאילתה מופיע בטקסט), ולרעש סמנטי אין. לכן: z ≥ Z_KEEP וגם עוגן, או z ≥ Z_STRONG
+// (סמנטיקה מוחצת — נחוץ להתאמה חוצת-שפה, שאילתה בעברית ↔ מקור באנגלית).
+const Z_KEEP = 3.4;
+const Z_STRONG = 6.0;
+const Z_WEAK = 3.0;   // רף שכבת ה"ראיה חלשה" — רק עם מונח-חובה מילולי בטקסט
+const MAD_SCALE = 1.4826; // MAD → אומדן σ תחת נורמליות
+const MAX_PER_SOURCE = 2; // גיוון: לא יותר מ-2 קטעים מאותו מקור ב-top-k
 // במסלול הגיבוי (בלי embeddings) הציון הוא TF-IDF מנורמל — סקאלה אחרת לגמרי.
 const MIN_LEXICAL_SHARE = 0.18;
 
@@ -66,6 +86,33 @@ export function buildSectionQuery(section) {
     String(section.instructions || '').slice(0, 600),
   ];
   return parts.filter(Boolean).join('\n').trim();
+}
+
+/**
+ * גשושי השאילתה של הסעיף. הנחיה אקדמית ארוכה מדללת את ההטמעה: "מהם החידושים...
+ * הבלימה ההופכית... 400 מילים... הערות שוליים" — הווקטור יוצא ממוצע של הכל
+ * ולא דומה לשום קטע. לכן בנוסף לשאילתה המלאה נשלח גשוש ממוקד (כותרת+מונחים),
+ * וה-z הסופי של קטע הוא המקסימום בין הגשושים.
+ * @returns {string[]} 1–2 שאילתות
+ */
+export function buildSectionProbes(section) {
+  const full = buildSectionQuery(section);
+  if (!full) return [];
+  const probes = [full];
+  const focused = [
+    section.title,
+    Array.isArray(section.keywords) ? section.keywords.join(' ') : '',
+  ].filter(Boolean).join(' ').trim();
+  // הגשוש הממוקד נשלח רק אם הוא באמת שונה (הנחיה ארוכה) ויש בו תוכן.
+  if (focused && focused.length >= 10 && full.length > focused.length + 80) {
+    probes.push(focused);
+  }
+  // מונחי החובה של המרצה הם הגשוש החד ביותר: "חובה להזכיר את מושגי X ו-Y" מצביע
+  // בדיוק על הקטעים במקור שדנים ב-X/Y. נמדד: השאילתה המלאה של סעיף "החידושים
+  // האמריקניים" נעצרה ב-z=3.35 על קולקה; המושגים לבדם ממוקדים בהרבה.
+  const must = Array.isArray(section.mustMention) ? section.mustMention.filter(Boolean) : [];
+  if (must.length) probes.push(must.join(' '));
+  return probes;
 }
 
 /**
@@ -140,49 +187,171 @@ export async function findEvidenceForSection(section, {
   if (!query || !corpus.length) return base;
 
   const vectors = vectorMap || buildVectorMap();
-  const queryVector = vectors.size ? await embedText(query, { kind: 'query' }) : null;
-  const useVectors = Boolean(queryVector) && vectors.size > 0;
+  const probes = buildSectionProbes(section);
+  let probeVectors = [];
+  if (vectors.size && probes.length) {
+    const embedded = await embedTexts(probes, { kind: 'query' });
+    probeVectors = (embedded || []).filter(Boolean);
+  }
+  const useVectors = probeVectors.length > 0 && vectors.size > 0;
 
-  // מבקשים יותר מ-k כדי שיישאר מרווח אחרי הסינון בסף.
-  const candidates = await selectChunks(query, {
-    k: Math.min(corpus.length, Math.max(k * 3, 12)),
-    chunks: corpus,
-    queryVector: useVectors ? queryVector : null,
-    vectorById: useVectors ? vectors : null,
-  });
-  if (!candidates.length) return base;
-
-  // selectChunks מחזיר chunks בלי ציונים, ולכן מדרגים כאן שוב — גם כדי לחשוף
-  // score למשתמש וגם כי הסף חייב לפעול על ציון גולמי, לא על דירוג יחסי.
   let scored;
+  let partial = false;
+  let diag = null;
+
   if (useVectors) {
-    scored = candidates.map((chunk) => {
-      const vec = vectors.get(chunk.id);
-      return { chunk, score: vec ? cosineSim(queryVector, vec) : 0, scale: 'cosine' };
+    // ניקוד v2 — על *כל* הקורפוס, לא רק על מועמדי selectChunks: הסטטיסטיקה
+    // (median/MAD) חייבת את ההתפלגות המלאה, וגם המועמדים עצמם היו מוטי-hub.
+    const embedded = corpus.filter((c) => vectors.has(c.id));
+    partial = embedded.length < corpus.length;
+
+    // צנטרואיד הקורפוס — ממוצע וקטורי היחידה, מנורמל.
+    const dim = probeVectors[0].length;
+    const centroid = new Float32Array(dim);
+    for (const c of embedded) {
+      const v = vectors.get(c.id);
+      for (let i = 0; i < dim; i += 1) centroid[i] += v[i];
+    }
+    let norm = 0;
+    for (let i = 0; i < dim; i += 1) norm += centroid[i] * centroid[i];
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < dim; i += 1) centroid[i] /= norm;
+
+    // לכל גשוש: adjusted + z בתוך ההתפלגות שלו; לקטע נשמר המקסימום בין הגשושים.
+    const best = new Map(); // chunkId → {z, cos}
+    for (const qv of probeVectors) {
+      const rows = embedded.map((chunk) => {
+        const v = vectors.get(chunk.id);
+        const cos = cosineSim(qv, v);
+        return { id: chunk.id, cos, adjusted: cos - HUB_BETA * cosineSim(centroid, v) };
+      });
+      const adj = rows.map((r) => r.adjusted).sort((a, b) => a - b);
+      const median = adj[Math.floor(adj.length / 2)] || 0;
+      const absDev = adj.map((x) => Math.abs(x - median)).sort((a, b) => a - b);
+      const mad = (absDev[Math.floor(absDev.length / 2)] || 1e-6) * MAD_SCALE;
+      for (const r of rows) {
+        const z = (r.adjusted - median) / mad;
+        const cur = best.get(r.id);
+        if (!cur || z > cur.z) best.set(r.id, { z, cos: r.cos });
+      }
+      if (!diag) diag = { median: +median.toFixed(4), mad: +mad.toFixed(4), corpus: embedded.length, probes: probeVectors.length };
+    }
+
+    scored = embedded.map((chunk) => {
+      const b = best.get(chunk.id);
+      return {
+        chunk,
+        score: b.cos,   // מוצג למשתמש — סקאלת קוסינוס מוכרת
+        z: b.z,         // ההחלטה מתקבלת על זה
+        scale: 'cosine',
+      };
     });
+
+    // אינדקס חלקי: קטעים בלי וקטור מדורגים לקסיקלית ונכנסים רק אם עברו את
+    // אותו רף יחסי (z שאול מהציון הלקסיקלי המנורמל — שמרני בכוונה).
+    if (partial) {
+      const missing = corpus.filter((c) => !vectors.has(c.id));
+      const terms = new Set(tokenizeForRetrieval(query));
+      const raw = missing.map((chunk) => scoreChunkRelevance(chunk, terms));
+      const max = Math.max(...raw, 0);
+      missing.forEach((chunk, i) => {
+        const share = max > 0 ? raw[i] / max : 0;
+        if (share >= MIN_LEXICAL_SHARE) {
+          scored.push({ chunk, score: share, z: share >= 0.6 ? Z_KEEP : 0, scale: 'lexical-scaled' });
+        }
+      });
+    }
+
+    scored.sort((a, b) => b.z - a.z);
+    // diag.top — שלושת המועמדים העליונים לפני הסף. חיוני לאבחון gap: רואים מה
+    // כמעט עבר ובאיזה מרחק, בלי להוריד את הסף.
+    if (diag) {
+      diag.top = scored.slice(0, 3).map((s) => ({
+        src: String(s.chunk.sourceTitle || '').slice(0, 28),
+        z: +s.z.toFixed(2),
+        head: String(s.chunk.text || '').slice(0, 50),
+      }));
+    }
   } else {
+    const candidates = await selectChunks(query, {
+      k: Math.min(corpus.length, Math.max(k * 3, 12)),
+      chunks: corpus,
+    });
+    if (!candidates.length) return base;
     const terms = new Set(tokenizeForRetrieval(query));
     const raw = candidates.map((chunk) => scoreChunkRelevance(chunk, terms));
     const max = Math.max(...raw, 0);
     scored = candidates.map((chunk, i) => ({
       chunk,
       score: max > 0 ? raw[i] / max : 0,
+      z: null,
       scale: 'lexical',
     }));
+    scored.sort((a, b) => b.score - a.score);
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  const best = scored[0]?.score || 0;
-  const floor = useVectors
-    ? Math.max(minCosine, best - RELATIVE_BAND)
-    : Math.max(MIN_LEXICAL_SHARE, best - 0.35);
+  // הסף: סמנטי — חריגה סטטיסטית (z) + עוגן לקסיקלי; לקסיקלי — יחסי לטוב ביותר.
+  let kept;
+  if (useVectors) {
+    // עוגן: מונח תוכן מהשאילתה (≥4 תווים) מופיע בטקסט הקטע. includes ולא \b —
+    // תחיליות עברית ("לכבידה"/"כבידה"), ו-\b ממילא לא עובד בעברית. לכל מונח נבדק
+    // גם וריאנט בלי תחילית (ה/ו/ב/ל/כ/מ/ש) — "הבלימה" בשאילתה מול "בלימה" בטקסט.
+    // סף 4 תווים: מונחי 3 תווים ("מבנה" אחרי חיתוך? לא—) קצרים מדי והם שעיגנו
+    // רעש ("מבנה", "מערכת") לקטעים זרים.
+    const anchorTerms = new Set();
+    for (const t of tokenizeForRetrieval(query)) {
+      const s = String(t);
+      if (s.length >= 4) anchorTerms.add(s);
+      if (s.length >= 5 && /^[הובלכמש]/.test(s)) anchorTerms.add(s.slice(1));
+    }
+    const anchors = [...anchorTerms];
+    // ⚠️ lowercase על הטקסט: ה-tokenizer מוריד לאותיות קטנות ("Nye"→"nye"), ובלי
+    // הנמכה מקבילה של הטקסט שם לועזי בשאילתה לעולם לא יעגן מקור באנגלית.
+    const hasAnchor = (chunk) => {
+      const text = String(chunk.text || '').toLowerCase();
+      return anchors.some((t) => text.includes(t));
+    };
+    kept = scored.filter((s) => s.z >= Z_STRONG
+      || (s.z >= Z_KEEP && (s.scale === 'lexical-scaled' || hasAnchor(s.chunk))));
 
-  const kept = scored.filter((s) => s.score >= floor).slice(0, k);
+    // שכבת "ראיה חלשה": כשאין אף ראיה מלאה אבל מונח-חובה של המרצה מופיע
+    // *מילולית* בקטע עם z גבולי — עדיף להראות אותו מסומן כחלש מאשר לשתוק.
+    // נמדד: תקציר קולקה (14 עמ' מספר של 125) נותן z=3.33 — נכון אך מתחת לסף,
+    // ו"בלימה" כן מופיעה בו. הרף המילולי של mustMention הוא המבחין: בקרה שלילית
+    // בלי מונחי-חובה לעולם לא תגיע לכאן.
+    if (!kept.length) {
+      const must = Array.isArray(section?.mustMention) ? section.mustMention.filter(Boolean) : [];
+      if (must.length) {
+        const mustVariants = must.flatMap((m) => String(m).split(/\s+/))
+          .filter((w) => w.length >= 4)
+          .flatMap((w) => (w.length >= 5 && /^[הובלכמש]/.test(w) ? [w, w.slice(1)] : [w]));
+        kept = scored
+          .filter((s) => s.z >= Z_WEAK && mustVariants.some((w) => String(s.chunk.text || '').includes(w)))
+          .slice(0, 2)
+          .map((s) => ({ ...s, weak: true }));
+      }
+    }
+  } else {
+    const best = scored[0]?.score || 0;
+    const floor = Math.max(MIN_LEXICAL_SHARE, best - 0.35);
+    kept = scored.filter((s) => s.score >= floor);
+  }
+
+  // גיוון מקורות: kept ממויין יורד, סופרים כמה כבר נלקחו מכל מקור.
+  const perSource = new Map();
+  kept = kept.filter((s) => {
+    const key = s.chunk.materialId;
+    const n = perSource.get(key) || 0;
+    if (n >= MAX_PER_SOURCE) return false;
+    perSource.set(key, n + 1);
+    return true;
+  }).slice(0, k);
 
   return {
     sectionId: section?.id || null,
-    mode: useVectors ? 'semantic' : 'lexical',
+    mode: useVectors ? (partial ? 'hybrid' : 'semantic') : 'lexical',
     gap: kept.length === 0,
+    diag,
     evidence: kept.map((s) => ({
       chunkId: s.chunk.id,
       materialId: s.chunk.materialId,
@@ -190,9 +359,10 @@ export async function findEvidenceForSection(section, {
       pageHint: s.chunk.pageHint,
       sectionHint: s.chunk.sectionHint,
       sourceUrl: s.chunk.sourceUrl || null,
-      strength: s.chunk.strength || 'full',
+      strength: s.weak ? 'weak' : (s.chunk.strength || 'full'),
       text: s.chunk.text,
       score: Number(s.score.toFixed(3)),
+      z: s.z === null ? null : Number(s.z.toFixed(2)),
       scale: s.scale,
     })),
   };
@@ -212,11 +382,30 @@ export async function findEvidenceForSpec(spec, opts = {}) {
   const gaps = [];
   let mode = 'none';
 
+  // היחידות: סעיפים וגם תתי-סעיפים ("א. ... ב. ...") — לכל שאלה ההפניות שלה.
+  // ⚠️ תת-סעיף יורש את *המסגרת* של האב, לא רק את ה-intent: הטקסט שלו הוא תיאור
+  // מקרה ("צייד לווייתנים"), והמקור הנכון הוא המסגרת האנליטית של האב ("עקרונות
+  // מיל"). נמדד: בלי הירושה, שאלות מיל קיבלו הפניות למארקס — התאמה לסיפור
+  // במקום לתיאוריה שאיתה עונים עליו.
+  const units = [];
   for (const section of sections) {
+    units.push(section);
+    for (const sub of (Array.isArray(section.subSections) ? section.subSections : [])) {
+      units.push({
+        ...sub,
+        intent: sub.intent || section.intent,
+        title: [section.title, sub.title].filter(Boolean).join(' — '),
+        keywords: Array.isArray(section.keywords) ? section.keywords : [],
+        mustMention: (sub.mustMention?.length ? sub.mustMention : section.mustMention) || [],
+      });
+    }
+  }
+
+  for (const unit of units) {
     // סדרתי בכוונה: embedText טוען מודל WASM יחיד, ובקשות מקבילות רק מתחרות עליו.
-    const result = await findEvidenceForSection(section, { ...opts, vectorMap });
-    bySection[section.id] = result;
-    if (result.gap) gaps.push(section.id);
+    const result = await findEvidenceForSection(unit, { ...opts, vectorMap });
+    bySection[unit.id] = result;
+    if (result.gap) gaps.push(unit.id);
     if (result.mode !== 'none') mode = result.mode;
   }
 

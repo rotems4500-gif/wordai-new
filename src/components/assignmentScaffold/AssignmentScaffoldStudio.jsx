@@ -10,6 +10,8 @@ import React from 'react';
 import { parseAssignmentSpec, defaultSectionTemplate, INTENT_LABELS } from '../../services/assignmentSpecService';
 import {
   addMaterialDocument,
+  clearMaterialStore,
+  commitMaterialStore,
   getMaterials,
   getMaterialStoreStats,
   removeMaterial,
@@ -24,11 +26,14 @@ import {
   WORK_KIND_LABELS,
 } from '../../services/assignmentPrepService';
 import { buildScaffoldHtml, buildWholeWorkHtml } from '../../services/assignmentScaffoldDoc';
-import { ensureOpenersReady, getOpenersForIntent } from '../../services/styleOpenerService';
+import { ensureOpenersReady, composeSectionOpener } from '../../services/styleOpenerService';
 import { ensureOpenerProfile, getOpenerProfile } from '../../services/openerProfileService';
 import { draftWholeWork } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
 import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
+import { composeSectionProseBest, ensureProseReady, PROSE_COMMANDS } from '../../services/proseComposeService';
+import { ensureFrameProfile, getFrameProfile } from '../../services/styleFrameProfileService';
+import { scoreTextAuthenticity } from '../../services/styleAuthenticityService';
 import WorkReviewDialog from './WorkReviewDialog';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
 
@@ -43,10 +48,14 @@ const INTENT_OPTIONS = Object.entries(INTENT_LABELS);
 // חילוץ טקסט מקובץ שהופל למסך. maxLength גבוה — מאמר שלם, לא תצוגה מקדימה.
 // ⚠️ extractMaterialTextFromBytes מחזיר {ok, text, error} ולא מחרוזת. בלי הפירוק
 // הזה מקבלים "[object Object]" — מילה אחת שנזרקת בחיתוך, וה-ingest "מצליח" עם 0 קטעים.
-async function readFileText(file, maxLength = 400000) {
+async function readFileText(file, maxLength = 400000, opts = {}) {
   const buffer = await file.arrayBuffer();
-  const result = await extractMaterialTextFromBytes(file.name, new Uint8Array(buffer), maxLength);
-  if (!result?.ok) throw new Error(result?.error || 'שגיאת חילוץ');
+  const result = await extractMaterialTextFromBytes(file.name, new Uint8Array(buffer), maxLength, opts);
+  if (!result?.ok) {
+    const err = new Error(result?.error || 'שגיאת חילוץ');
+    err.scanned = Boolean(result?.scanned);
+    throw err;
+  }
   return String(result.text || '');
 }
 
@@ -60,6 +69,26 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const [notice, setNotice] = React.useState(null);
   const [evidenceResult, setEvidenceResult] = React.useState(null);
   const [dropActive, setDropActive] = React.useState(false);
+  // פקודות הטיוטה המקומית: בחירה מרשימה סגורה (PROSE_COMMANDS) — לא שפה חופשית.
+  const [proseCommands, setProseCommands] = React.useState(() => new Set());
+  // "נסח מחדש" = seed חדש; המונה נכנס ל-seedKey כך שכל לחיצה מגרילה מסגרות אחרות.
+  const [regenCounter, setRegenCounter] = React.useState(0);
+
+  const toggleProseCommand = React.useCallback((cmd) => {
+    setProseCommands((prev) => {
+      const next = new Set(prev);
+      if (next.has(cmd.id)) {
+        next.delete(cmd.id);
+      } else {
+        // קטגוריית single (למשל אורך): בחירה חדשה מנקה את האחיות.
+        if (cmd.single) {
+          PROSE_COMMANDS.filter((c) => c.single === cmd.single).forEach((c) => next.delete(c.id));
+        }
+        next.add(cmd.id);
+      }
+      return next;
+    });
+  }, []);
   // הטיוטה ממתינה לאישור: נכתבה, נסקרה, וטרם נכנסה לעורך.
   const [pendingDraft, setPendingDraft] = React.useState(null);
   const [review, setReview] = React.useState(null);
@@ -139,19 +168,55 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     if (!list.length) return;
     let added = 0;
     let skipped = 0;
+    // קבצים שנכשלו נאספים עם הסיבה. קודם הם נבלעו ב-skipped יחד עם כפולים, ולכן
+    // PDF סרוק — קובץ שהמשתמש סומך עליו — נעלם בלי שום סימן.
+    const failures = [];
+    // PDFים סרוקים נאספים לסבב שני. OCR עולה שניות לעמוד, ואין סיבה שקובץ סרוק
+    // אחד יעכב את 30 הקבצים הטקסטואליים שאחריו.
+    const scannedQueue = [];
+
+    const ingest = (file, text) => {
+      if (!String(text || '').trim()) { failures.push(`${file.name}: לא נמצא טקסט`); return; }
+      // defer: כתיבה אחת ל-IDB בסוף האצווה במקום כתיבה מלאה (עשרות MB) לכל קובץ.
+      const result = addMaterialDocument({
+        title: file.name.replace(/\.[^.]+$/, ''), text, source: 'scaffold-upload', defer: true,
+      });
+      if (result.skipped) skipped += 1;
+      else added += result.added;
+    };
+
     for (let i = 0; i < list.length; i += 1) {
       const file = list[i];
       setBusy(`מאנדקס ${i + 1}/${list.length}: ${file.name}`);
       try {
-        const text = await readFileText(file);
-        if (!String(text || '').trim()) { skipped += 1; continue; }
-        const result = addMaterialDocument({ title: file.name.replace(/\.[^.]+$/, ''), text, source: 'scaffold-upload' });
-        if (result.skipped) skipped += 1;
-        else added += result.added;
-      } catch {
-        skipped += 1;
+        ingest(file, await readFileText(file));
+      } catch (err) {
+        if (err?.scanned) scannedQueue.push(file);
+        else failures.push(`${file.name}: ${String(err?.message || err)}`);
       }
+      // נשימה ל-UI בין קבצים — חילוץ + chunking הם סינכרוניים וארוכים.
+      await new Promise((r) => setTimeout(r, 0));
     }
+
+    let ocrDone = 0;
+    for (let i = 0; i < scannedQueue.length; i += 1) {
+      const file = scannedQueue[i];
+      try {
+        const text = await readFileText(file, 400000, {
+          ocr: true,
+          onOcrProgress: ({ page, pages }) => setBusy(
+            `סורק טקסט (OCR) ${i + 1}/${scannedQueue.length}: ${file.name} — עמוד ${page}/${pages}`,
+          ),
+        });
+        ingest(file, text);
+        ocrDone += 1;
+      } catch (err) {
+        failures.push(`${file.name}: ${String(err?.message || err)}`);
+      }
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
+    await commitMaterialStore();
     refreshMaterials();
 
     // ההטמעה היא החלק האיטי (טעינת מודל WASM בפעם הראשונה) — מדווחת בנפרד.
@@ -159,22 +224,42 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     // ספרייה גדולה דורשת כמה סבבים. עוצרים כשאין שארית או כשהשכבה לא זמינה.
     setBusy('מחשב אינדקס סמנטי מקומי…');
     let embedResult = { embedded: 0, remaining: 0, unavailable: null };
-    for (let pass = 0; pass < 25; pass += 1) {
+    // תקרת הסבבים נגזרת מגודל הקורפוס בפועל, לא ממספר קבוע: 25 סבבים × 400 עצרו
+    // על 10,000 קטעים והשאירו ספרייה גדולה מאונדקסת חלקית בשקט.
+    const toEmbed = getMaterialStoreStats().chunks - getMaterialStoreStats().embedded;
+    const maxPasses = Math.max(25, Math.ceil(toEmbed / 400) + 5);
+    let indexed = 0;
+    for (let pass = 0; pass < maxPasses; pass += 1) {
       embedResult = await ensureMaterialsEmbedded({
-        onProgress: ({ done, total }) => setBusy(`מחשב אינדקס סמנטי מקומי… ${done}/${total}`),
+        onProgress: ({ done, total }) => setBusy(
+          `מחשב אינדקס סמנטי מקומי… ${Math.min(indexed + done, toEmbed || total)}/${toEmbed || total}`,
+        ),
       });
+      indexed += embedResult.embedded || 0;
       if (embedResult.unavailable || !embedResult.remaining) break;
     }
     refreshMaterials();
     setBusy('');
 
+    // added=0 עם skipped>0 אינו כישלון — זה dedupe מול חומר שכבר מאונדקס.
+    // בלי האבחנה הזו ההודעה נקראת כאילו שום דבר לא נקלט.
+    const gist = added
+      ? `נוספו ${added} קטעים`
+      : (skipped ? `${skipped} קבצים כבר היו באינדקס` : 'לא נוספו קטעים');
+    const ocrNote = ocrDone ? ` ${ocrDone} PDF סרוקים נקראו ב-OCR.` : '';
+    const failNote = failures.length
+      ? ` ${failures.length} קבצים לא נקלטו: ${failures.slice(0, 3).join(' · ')}${failures.length > 3 ? ` (ועוד ${failures.length - 3})` : ''}.`
+      : '';
     if (embedResult.unavailable) {
       setNotice({
         tone: 'warn',
-        text: `נוספו ${added} קטעים. האינדקס הסמנטי לא זמין (${embedResult.unavailable}) — ההתאמה תרוץ במצב מילולי, פחות מדויק.`,
+        text: `${gist}. האינדקס הסמנטי לא זמין (${embedResult.unavailable}) — ההתאמה תרוץ במצב מילולי, פחות מדויק.${ocrNote}${failNote}`,
       });
     } else {
-      setNotice({ tone: 'ok', text: `נוספו ${added} קטעים מאונדקסים${skipped ? `, ${skipped} דולגו (כפולים או ריקים)` : ''}.` });
+      setNotice({
+        tone: failures.length ? 'warn' : 'ok',
+        text: `${gist} מאונדקסים${skipped ? `, ${skipped} כפולים דולגו` : ''}.${ocrNote}${failNote}`,
+      });
     }
   }, [refreshMaterials]);
 
@@ -184,10 +269,13 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     try {
       const result = await findEvidenceForSpec(spec, { k: 5 });
       setEvidenceResult(result);
-      const supported = spec.sections.length - result.gaps.length;
+      // gaps כולל עכשיו גם תתי-סעיפים — סופרים סעיפים ראשיים בנפרד להודעה.
+      const sectionIds = new Set(spec.sections.filter((s) => s.enabled !== false).map((s) => s.id));
+      const sectionGaps = (result.gaps || []).filter((id) => sectionIds.has(id));
+      const supported = sectionIds.size - sectionGaps.length;
       setNotice({
-        tone: result.gaps.length ? 'warn' : 'ok',
-        text: `נמצאו ראיות ל-${supported} מתוך ${spec.sections.length} סעיפים${result.gaps.length ? `. ${result.gaps.length} סעיפים ללא חומר תומך — שקול להעלות מקור נוסף.` : '.'}`,
+        tone: sectionGaps.length ? 'warn' : 'ok',
+        text: `נמצאו ראיות ל-${supported} מתוך ${sectionIds.size} סעיפים${sectionGaps.length ? `. ${sectionGaps.length} סעיפים ללא חומר תומך — שקול להעלות מקור נוסף.` : '.'}`,
       });
     } catch (err) {
       setNotice({ tone: 'err', text: `החיפוש נכשל: ${String(err?.message || err)}` });
@@ -205,36 +293,128 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       mode: evidenceResult?.mode || 'none',
       title: spec.title,
     });
-    // משפט פתיחה לכל סעיף, בקול של המשתמש. אפס API: ממוקש מהקורפוס האישי, ואם
-    // אין — מורכב מדקדוק הפתיחים. seedKey לפי הסעיף כדי ששני סעיפים מאותה כוונה
-    // לא יקבלו את אותו משפט.
+    // פתיח מלא (משפט–שניים) לכל סעיף ותת-סעיף: גדם מהדקדוק (בקול המשתמש כשיש
+    // פרופיל) שהושלם בנושא הסעיף + משפט מתווה — מהמושגים שהמרצה דרש אם ישנם.
+    // המשוב שהוליד את זה: גדם של שלוש מילים ("מן הראוי לנתח את") לא שווה הרבה.
+    // עדיין אפס API, והממוקשים מהקורפוס נשארים הצעה בפאנל בלבד (פתיח ממוקש
+    // גורר תוכן ממטלה אחרת — נמדד).
     const openers = {};
     try {
       const profile = getOpenerProfile();
-      const used = new Set();
+      const used = new Set(); // דה-דופליקציה של הגדם — בלעדיה כל הפרקים נפתחים אותו דבר
       (spec.sections || []).filter((s) => s?.enabled !== false).forEach((s) => {
-        // ⚠️ רק פתיחים **מורכבים** נכנסים אוטומטית למסמך. פתיח ממוקש הוא משפט
-        // אמיתי מעבודה קודמת, ולכן עלול לגרור איתו תוכן: נמדד — "יחסי דת ומדינה
-        // הפכו לסלע מחלוקת" הוזרק למטלה על מאבקים סביבתיים. מורכב הוא פיגום
-        // נטול נושא מעצם בנייתו. הממוקשים נשארים כהצעה בפאנל, שם המשתמש בוחר
-        // אותם במודע.
-        //
-        // ⚠️ ובלי דה-דופליקציה כל הפרקים נפתחים באותו משפט — גרוע מדף ריק.
-        const list = getOpenersForIntent(s.intent, { limit: 5, seedKey: s.id, profile });
-        const pick = list.find((o) => o.composed && !used.has(o.text));
-        if (!pick) return;
-        used.add(pick.text);
-        openers[s.id] = pick.text.replace(/\s*…$/, '');
+        const subs = Array.isArray(s.subSections) ? s.subSections : [];
+        if (subs.length) {
+          subs.forEach((sub) => {
+            const text = composeSectionOpener({
+              intent: s.intent,
+              seedKey: sub.id,
+              profile,
+              topic: sub.title,
+              framework: s.title,
+              mustMention: sub.mustMention?.length ? sub.mustMention : s.mustMention,
+              usedTexts: used,
+            });
+            if (text) openers[sub.id] = text;
+          });
+          return;
+        }
+        const text = composeSectionOpener({
+          intent: s.intent,
+          seedKey: s.id,
+          profile,
+          topic: s.title,
+          mustMention: s.mustMention,
+          usedTexts: used,
+        });
+        if (text) openers[s.id] = text;
       });
     } catch {}
 
     onOpenDocument?.({
       ok: true,
-      html: buildScaffoldHtml(spec, { openers }),
+      // evidence → שורת "מקורות מהחומרים שלך" מתחת לכל סעיף ותת-סעיף במסמך.
+      html: buildScaffoldHtml(spec, { openers, evidence: evidenceResult?.bySection || null }),
       title: spec.title || 'מטלה',
       source: 'assignment-scaffold',
     });
   }, [spec, evidenceResult, onOpenDocument]);
+
+  // טיוטה מקומית מלאה — אפס API: פתיחים מהדקדוק + גוף מכל סעיף שיש לו ראיות
+  // (proseComposeService: משפטי תוכן מעוגני-chunk + מסגור רטורי). סעיף בלי
+  // ראיות נשאר עם רמז מכסה — לא ממציאים.
+  const handleLocalDraft = React.useCallback(async () => {
+    if (!spec) return;
+    setBusy('מרכיב טיוטה מקומית מהראיות…');
+    setNotice(null);
+    try {
+      await ensureProseReady();
+      // פרופיל המסגרות: נכרה מהקורפוס האישי (אילו מסגרות רטוריות המשתמש באמת
+      // כותב) + משוב. מוזן למשקלי בחירת ה-frame — הטיוטה נוטה לקול שלו.
+      try { await ensureFrameProfile(); } catch {}
+      saveScaffold({
+        spec,
+        evidence: evidenceResult?.bySection || {},
+        gaps: evidenceResult?.gaps || [],
+        mode: evidenceResult?.mode || 'none',
+        title: spec.title,
+      });
+      const profile = getOpenerProfile();
+      const openers = {};
+      const prose = {};
+      const used = new Set();
+      const bySection = evidenceResult?.bySection || {};
+      const frameProfile = getFrameProfile();
+      const commands = [...proseCommands];
+      const variants = proseCommands.has('st_pick5') ? 5 : 3;
+      // "נסח מחדש" נצרך חד-פעמית: המונה נכנס ל-seed ומאופס אחרי היצירה.
+      const seedSuffix = regenCounter ? `~${regenCounter}` : '';
+      let written = 0;
+      (spec.sections || []).filter((s) => s?.enabled !== false).forEach((s) => {
+        const units = (Array.isArray(s.subSections) && s.subSections.length)
+          ? s.subSections.map((sub) => ({ ...sub, intent: sub.intent || s.intent, parent: s }))
+          : [{ ...s, parent: null }];
+        units.forEach((u) => {
+          const openerText = composeSectionOpener({
+            intent: u.intent,
+            seedKey: u.id,
+            profile,
+            topic: u.title,
+            framework: u.parent?.title,
+            mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || s.mustMention),
+            usedTexts: used,
+          });
+          if (openerText) openers[u.id] = openerText;
+          const ev = bySection[u.id]?.evidence || [];
+          // 3 וריאנטים לכל סעיף; הדטקטור המקומי בוחר את הכי-אנושי (לולאת האיכות).
+          const r = composeSectionProseBest(
+            { ...u, keywords: u.keywords?.length ? u.keywords : s.keywords },
+            ev,
+            { quotaWords: u.wordQuota || 0, seedKey: `${u.id}${seedSuffix}`, profile: frameProfile, commands },
+            { scoreFn: scoreTextAuthenticity, variants },
+          );
+          if (r?.html) { prose[u.id] = r.html; written += 1; }
+        });
+      });
+      if (!written) {
+        setNotice({ tone: 'warn', text: 'אין סעיף עם ראיות — הרץ "מצא ראיות" קודם, או הוסף חומרים.' });
+        return;
+      }
+      onOpenDocument?.({
+        ok: true,
+        html: buildScaffoldHtml(spec, { openers, prose, evidence: evidenceResult?.bySection || null }),
+        title: spec.title || 'מטלה',
+        source: 'assignment-scaffold-local-draft',
+      });
+      setNotice({ tone: 'ok', text: `נכתבה טיוטה מקומית ל-${written} סעיפים — כולה מהחומרים שלך, בלי AI.` });
+      // "נסח מחדש" מגריל seed חדש בכל לחיצה — הקידום כאן מבטיח שהלחיצה הבאה שונה.
+      if (proseCommands.has('st_reshuffle')) setRegenCounter((c) => c + 1);
+    } catch (err) {
+      setNotice({ tone: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }, [spec, evidenceResult, onOpenDocument, proseCommands, regenCounter]);
 
   // כתיבת העבודה כולה ב**קריאה אחת** ופתיחתה בעורך. לא אחת לסעיף: זה יקר פי N,
   // וכל סעיף נכתב עיוור לשאר — מכאן חזרות ואפס מעברים. ראה assignmentAiService.
@@ -420,10 +600,13 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
 
       {/* Body */}
       <div className="mx-auto w-full max-w-7xl flex-1 overflow-y-auto px-5 py-6">
+        {/* ⚠️ sticky: הבאנר יושב בראש גוף שנגלל, וכפתור העלאת החומרים נמצא הרבה
+            מתחתיו. משתמש שגלל אל אזור ההעלאה איבד את החיווי מהמסך לגמרי ודיווח
+            ש"אין שום חיווי בזמן ההעלאה" — בזמן שהאינדוקס רץ בסדר גמור. */}
         {(busy || notice) && (
-          <div className={revealClass(mounted, 'mb-4 space-y-2')}>
+          <div className={revealClass(mounted, 'sticky top-0 z-20 mb-4 space-y-2')}>
             {busy && (
-              <div className="rounded-xl border border-sky-400/30 bg-sky-400/10 px-4 py-2.5 text-sm text-sky-100">
+              <div className="rounded-xl border border-sky-400/30 bg-sky-950/90 px-4 py-2.5 text-sm text-sky-100 shadow-lg backdrop-blur-md">
                 <span className="inline-block animate-pulse">⏳</span> {busy}
               </div>
             )}
@@ -483,7 +666,28 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                 handleMaterialFiles(e.dataTransfer?.files);
               }}
             >
-              <h2 className="mb-2 text-sm font-bold">2. חומרי עזר</h2>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-bold">2. חומרי עזר</h2>
+                {stats.chunks > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // שיקום מאינדקס פגום (למשל קבצים שנקלטו לפני זיהוי ה-garbled):
+                      // מנקה הכל ומעלים מחדש. בלי זה אין למשתמש שום דרך להיפטר
+                      // מקטעים מורעלים חוץ מהסרה קובץ-קובץ.
+                      if (window.confirm('לנקות את כל אינדקס החומרים? תצטרך להעלות את הקבצים מחדש.')) {
+                        clearMaterialStore();
+                        refreshMaterials();
+                        setEvidenceResult(null);
+                        setNotice({ tone: 'ok', text: 'האינדקס נוקה. העלה את החומרים מחדש.' });
+                      }
+                    }}
+                    className="rounded-lg border border-white/15 px-2 py-0.5 text-[11px] text-white/60 transition hover:border-rose-400/40 hover:text-rose-200"
+                  >
+                    נקה אינדקס
+                  </button>
+                )}
+              </div>
               <div className="rounded-xl border border-dashed border-white/25 p-4 text-center text-xs text-white/60">
                 גרור לכאן מאמרים (PDF, DOCX, TXT) — או
                 <button
@@ -503,9 +707,21 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                 />
               </div>
 
-              <div className="mt-3 text-[11px] text-white/50">
-                {stats.materials} מקורות · {stats.chunks} קטעים · {stats.embedded} מאונדקסים סמנטית
-              </div>
+              {/* חיווי גם *בתוך* כרטיס החומרים — כאן העין נמצאת אחרי בחירת קבצים,
+                  ולא בראש העמוד. OCR על ספרייה סרוקה נמשך עשרות דקות, ובלי חיווי
+                  צמוד זה נראה כאילו כלום לא קרה. */}
+              {busy ? (
+                <div className="mt-3 rounded-lg border border-sky-400/30 bg-sky-400/10 px-2.5 py-2 text-[11px] text-sky-100">
+                  <span className="inline-block animate-pulse">⏳</span> {busy}
+                  <div className="mt-1 text-sky-200/70">
+                    אפשר לעבור לטאב אחר — העבודה ממשיכה. אל תסגור את החלון.
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3 text-[11px] text-white/50">
+                  {stats.materials} מקורות · {stats.chunks} קטעים · {stats.embedded} מאונדקסים סמנטית
+                </div>
+              )}
 
               {materials.length > 0 && (
                 <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto">
@@ -639,6 +855,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     <div className="mb-3 flex h-2 overflow-hidden rounded-full bg-white/10">
                       {[
                         { key: PREP_STATE.LOCAL, cls: 'bg-emerald-400' },
+                        { key: PREP_STATE.LOCAL_DRAFT, cls: 'bg-violet-400' },
                         { key: PREP_STATE.NEEDS_AI, cls: 'bg-sky-400' },
                         { key: PREP_STATE.BLOCKED, cls: 'bg-amber-400' },
                       ].map(({ key, cls }) => {
@@ -658,10 +875,14 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                               {rows.map((row) => {
                                 const tone = row.state === PREP_STATE.LOCAL
                                   ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
-                                  : row.state === PREP_STATE.NEEDS_AI
-                                    ? 'border-sky-400/30 bg-sky-400/10 text-sky-200'
-                                    : 'border-amber-400/30 bg-amber-400/10 text-amber-200';
-                                const icon = row.state === PREP_STATE.LOCAL ? '✓' : row.state === PREP_STATE.NEEDS_AI ? '✦' : '⚠';
+                                  : row.state === PREP_STATE.LOCAL_DRAFT
+                                    ? 'border-violet-400/30 bg-violet-400/10 text-violet-200'
+                                    : row.state === PREP_STATE.NEEDS_AI
+                                      ? 'border-sky-400/30 bg-sky-400/10 text-sky-200'
+                                      : 'border-amber-400/30 bg-amber-400/10 text-amber-200';
+                                const icon = row.state === PREP_STATE.LOCAL ? '✓'
+                                  : row.state === PREP_STATE.LOCAL_DRAFT ? '📝'
+                                    : row.state === PREP_STATE.NEEDS_AI ? '✦' : '⚠';
                                 return (
                                   <span
                                     key={row.id}
@@ -679,9 +900,52 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     </ul>
 
                     <div className="mt-2.5 text-[10px] leading-relaxed text-white/50">
-                      ✓ הופק מקומית · ✦ אפשר להשלים ב-AI מתוך הפאנל בעורך · ⚠ חסום עד שתוסיף מקור —
-                      כתיבה שם תהיה המצאה, ולכן לא תוצע.
+                      ✓ הופק מקומית · 📝 טיוטה מקומית זמינה מהראיות (בלי AI) · ✦ אפשר להשלים ב-AI מתוך
+                      הפאנל בעורך · ⚠ חסום עד שתוסיף מקור — כתיבה שם תהיה המצאה, ולכן לא תוצע.
                     </div>
+                  </section>
+                )}
+
+                {hasEvidence && (
+                  <section className="rounded-2xl border border-white/15 bg-white/[0.05] p-4 backdrop-blur-md">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <h2 className="text-sm font-bold">🎛 התאמות לטיוטה המקומית</h2>
+                      {proseCommands.size > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setProseCommands(new Set())}
+                          className="text-[11px] text-white/50 underline-offset-2 hover:underline"
+                        >
+                          נקה בחירות
+                        </button>
+                      )}
+                    </div>
+                    <p className="mb-3 text-[11px] leading-relaxed text-white/50">
+                      אלה לא בקשות למודל — כל פקודה היא חוק קבוע במנוע המקומי. בחר, ואז "טיוטה מקומית".
+                    </p>
+                    {[...new Set(PROSE_COMMANDS.map((c) => c.cat))].map((cat) => (
+                      <div key={cat} className="mb-2.5 last:mb-0">
+                        <div className="mb-1 text-[11px] font-bold text-white/60">{cat}</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {PROSE_COMMANDS.filter((c) => c.cat === cat).map((cmd) => {
+                            const on = proseCommands.has(cmd.id);
+                            return (
+                              <button
+                                key={cmd.id}
+                                type="button"
+                                onClick={() => toggleProseCommand(cmd)}
+                                title={cmd.desc}
+                                className={`rounded-full border px-2.5 py-1 text-[11px] transition ${on
+                                  ? 'border-violet-400/60 bg-violet-400/20 text-violet-100'
+                                  : 'border-white/15 bg-white/[0.04] text-white/70 hover:bg-white/10'}`}
+                              >
+                                {on ? '✓ ' : ''}{cmd.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </section>
                 )}
 
@@ -702,6 +966,15 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     className="rounded-xl border border-white/20 px-4 py-2 text-sm font-bold transition hover:bg-white/10 disabled:opacity-40"
                   >
                     פתח שלד בעורך ←
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLocalDraft}
+                    disabled={Boolean(busy) || !hasEvidence}
+                    title={!hasEvidence ? 'מצא ראיות קודם — הטיוטה נבנית מהן בלבד' : 'טיוטה מהראיות בלבד — עובד גם בלי מפתח API'}
+                    className="rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-5 py-2 text-sm font-bold shadow-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    📝 טיוטה מקומית (ללא AI) ←
                   </button>
                   <button
                     type="button"
