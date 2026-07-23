@@ -65,6 +65,10 @@ const HUB_BETA = 1.0;
 const Z_KEEP = 3.4;
 const Z_STRONG = 6.0;
 const Z_WEAK = 3.0;   // רף שכבת ה"ראיה חלשה" — רק עם מונח-חובה מילולי בטקסט
+// בוסט z לקטע שמכיל מונח-מסגרת/חובה דוקטרינרי מילולית (hybrid dense+lexical).
+// 1.2: מרים near-miss עברי (z≈3.4–4.5) מעל zFloor=4.5 של proseComposeService,
+// בלי להזיז את הסף עצמו. מוחל רק על z≥Z_KEEP עם עוגן מבחין — ראה doctrineAnchorTerms.
+const LEX_BOOST = 1.2;
 const MAD_SCALE = 1.4826; // MAD → אומדן σ תחת נורמליות
 const MAX_PER_SOURCE = 2; // גיוון: לא יותר מ-2 קטעים מאותו מקור ב-top-k
 // במסלול הגיבוי (בלי embeddings) הציון הוא TF-IDF מנורמל — סקאלה אחרת לגמרי.
@@ -112,7 +116,54 @@ export function buildSectionProbes(section) {
   // האמריקניים" נעצרה ב-z=3.35 על קולקה; המושגים לבדם ממוקדים בהרבה.
   const must = Array.isArray(section.mustMention) ? section.mustMention.filter(Boolean) : [];
   if (must.length) probes.push(must.join(' '));
+  // גשוש המסגרת (framework) — התיקון של round-1. תת-סעיף יורש את המסגרת האנליטית
+  // של האב: הכותרת שלו היא עובדות-המקרה ("קבוצת המיעוט דורשת... צייד לווייתנים"),
+  // אך המקור הנכון הוא המסגרת שאיתה עונים ("הגותו של ג'ון סטיוארט מיל"). הטמעת
+  // 600 תווי עובדות-מקרה מוחצת את זו של המסגרת, ולכן תת-סעיפי מיל אחזרו את מארקס
+  // (nlg-loop round-1: sec_1_1..4 כולם החזירו מניפסט/סמית). גשוש חד ונפרד למסגרת
+  // + מונחי החובה נותן לקטעי המקור הדוקטרינרי z גבוה (z=max על-פני הגשושים), בלי
+  // להיתלות בעובדות-המקרה. פועל רק כשיש framework — כלומר במסלול ה-spec, לא
+  // בבקרות השליליות השטוחות של ה-e2e.
+  const framework = String(section.framework || '').trim();
+  if (framework) probes.push(must.length ? `${framework} ${must.join(' ')}` : framework);
   return probes;
+}
+
+/**
+ * מונחי-עוגן דוקטרינריים לבוסט הלקסיקלי-היברידי: שם ההוגה/framework (טוקנים ≥5
+ * תווים — "מיל" בן 3 קצר מדי ומעגן רעש כמו "מילים") + ביטויי mustMention השלמים.
+ * אלה מונחים *מבחינים* (שמות עצם פרטיים, מושגי-מפתח של המרצה) ולא מילות-שאילתה
+ * נפוצות — ולכן בטוחים לבוסט: בקרה שלילית לעולם אינה נושאת אותם בקורפוס.
+ */
+// גזע עברי גס לעיגון סיבולת-מורפולוגיה: מסיר תחילית אחת (הובלכמש) וסיומת נטייה
+// נפוצה (ים/ות/ית/יים/יות/ה/י), ומחזיר את השורש אם נותרו ≥4 תווים. נחוץ כי
+// "התעשייתית" (מהכותרת) ל-includes לעולם לא יתאים ל"התעשייתיים"/"התעשייה" שבטקסט —
+// אבל הגזע "תעשיי" כן. הגזע חייב להישאר מבחין (≥4) כדי לא לעגן רעש.
+function coarseStem(token) {
+  let s = String(token || '');
+  if (s.length >= 6 && /^[הובלכמש]/.test(s)) s = s.slice(1);
+  s = s.replace(/(?:יים|יות|ים|ות|ית|יה)$/, '').replace(/[הי]$/, '');
+  return s.length >= 4 ? s : null;
+}
+
+function doctrineAnchorTerms(section) {
+  const out = new Set();
+  const fw = String(section?.framework || '').trim();
+  if (fw) {
+    for (const t of tokenizeForRetrieval(fw)) {
+      const s = String(t);
+      if (s.length < 5) continue; // "מיל" בן 3 מעגן "מילים"/"מיליון" — קצר מדי
+      out.add(s);
+      const stem = coarseStem(s);
+      if (stem) out.add(stem);
+    }
+  }
+  const must = Array.isArray(section?.mustMention) ? section.mustMention.filter(Boolean) : [];
+  for (const m of must) {
+    const s = String(m).trim().toLowerCase();
+    if (s.length >= 4) out.add(s);
+  }
+  return [...out];
 }
 
 /**
@@ -202,8 +253,12 @@ export async function findEvidenceForSection(section, {
   if (useVectors) {
     // ניקוד v2 — על *כל* הקורפוס, לא רק על מועמדי selectChunks: הסטטיסטיקה
     // (median/MAD) חייבת את ההתפלגות המלאה, וגם המועמדים עצמם היו מוטי-hub.
-    const embedded = corpus.filter((c) => vectors.has(c.id));
-    partial = embedded.length < corpus.length;
+    // ⚠️ קטעי OCR משובשים (garbled) מוחרגים מכאן: הם הזינו את ה-median/MAD ברעש
+    // ומחצו את ה-z של ההתאמות האמיתיות (round-1). ניקוי הקורפוס מעלה את z של
+    // המקור הנכון בלי לגעת ב-zFloor — עיקרון הכנות נשמר.
+    const usableCorpus = corpus.filter((c) => !c.garbled);
+    const embedded = usableCorpus.filter((c) => vectors.has(c.id));
+    partial = embedded.length < usableCorpus.length;
 
     // צנטרואיד הקורפוס — ממוצע וקטורי היחידה, מנורמל.
     const dim = probeVectors[0].length;
@@ -237,12 +292,26 @@ export async function findEvidenceForSection(section, {
       if (!diag) diag = { median: +median.toFixed(4), mad: +mad.toFixed(4), corpus: embedded.length, probes: probeVectors.length };
     }
 
+    // בוסט לקסיקלי-היברידי: קטע שמכיל מונח-מסגרת/חובה דוקטרינרי *מילולית* הוא
+    // ראיה חזקה גם כשה-z הסמנטי גבולי — אות ה-BM25 שחסר ל-e5 בעברית. הבוסט מוחל
+    // רק על near-miss (z≥Z_KEEP) עם עוגן דוקטרינרי מבחין, ולכן מרים התאמת-אמת מעל
+    // ה-zFloor בלי לגעת בסף ובלי להחיות רעש. בקרות שליליות חסרות framework/
+    // mustMention בקורפוס ⇒ anchors ריק ⇒ אפס בוסט.
+    const boostTerms = doctrineAnchorTerms(section);
+    const boostFor = (chunk, z) => {
+      if (!boostTerms.length || z < Z_KEEP) return 0;
+      const text = String(chunk.text || '').toLowerCase();
+      return boostTerms.some((t) => text.includes(t)) ? LEX_BOOST : 0;
+    };
+
     scored = embedded.map((chunk) => {
       const b = best.get(chunk.id);
+      const boost = boostFor(chunk, b.z);
       return {
         chunk,
-        score: b.cos,   // מוצג למשתמש — סקאלת קוסינוס מוכרת
-        z: b.z,         // ההחלטה מתקבלת על זה
+        score: b.cos,       // מוצג למשתמש — סקאלת קוסינוס מוכרת
+        z: b.z + boost,     // ההחלטה מתקבלת על זה (כולל האות הלקסיקלי)
+        boosted: boost > 0,
         scale: 'cosine',
       };
     });
@@ -250,7 +319,7 @@ export async function findEvidenceForSection(section, {
     // אינדקס חלקי: קטעים בלי וקטור מדורגים לקסיקלית ונכנסים רק אם עברו את
     // אותו רף יחסי (z שאול מהציון הלקסיקלי המנורמל — שמרני בכוונה).
     if (partial) {
-      const missing = corpus.filter((c) => !vectors.has(c.id));
+      const missing = usableCorpus.filter((c) => !vectors.has(c.id));
       const terms = new Set(tokenizeForRetrieval(query));
       const raw = missing.map((chunk) => scoreChunkRelevance(chunk, terms));
       const max = Math.max(...raw, 0);
@@ -389,12 +458,19 @@ export async function findEvidenceForSpec(spec, opts = {}) {
   // במקום לתיאוריה שאיתה עונים עליו.
   const units = [];
   for (const section of sections) {
-    units.push(section);
+    // סעיף ראשי: המסגרת שלו היא כותרתו הדוקטרינרית ("עקרונות המרקסיזם") — עובדות
+    // המקרה יושבות ב-instructions ולא בכותרת, ולכן הכותרת היא עוגן נקי. מזין את
+    // גשוש-המסגרת ואת הבוסט הלקסיקלי גם לסעיפים בלי תת-סעיפים (sec_2/sec_3).
+    units.push(section.framework ? section : { ...section, framework: section.title || '' });
     for (const sub of (Array.isArray(section.subSections) ? section.subSections : [])) {
       units.push({
         ...sub,
         intent: sub.intent || section.intent,
         title: [section.title, sub.title].filter(Boolean).join(' — '),
+        // המסגרת האנליטית שהתת-סעיף נשען עליה = כותרת האב ("הגותו של מיל").
+        // מזינה את גשוש-המסגרת ואת העוגן הלקסיקלי ב-buildSectionProbes/
+        // doctrineAnchorTerms — התיקון המרכזי של round-1.
+        framework: section.title || '',
         keywords: Array.isArray(section.keywords) ? section.keywords : [],
         mustMention: (sub.mustMention?.length ? sub.mustMention : section.mustMention) || [],
       });

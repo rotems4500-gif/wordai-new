@@ -51,7 +51,7 @@ const CORPUS_DIR = process.env.WORDAI_SCAFFOLD_CORPUS
 const SCRATCH = process.env.WORDAI_VERIFY_SCRATCH || '.';
 const NLG_DIR = process.env.WORDAI_NLG_OUT
   || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/d6d315a5-2b5d-475f-8fbf-41dd6f7dff16/scratchpad/nlg-loop';
-const ROUND_DIR = path.join(NLG_DIR, 'round-1');
+const ROUND_DIR = path.join(NLG_DIR, process.env.WORDAI_NLG_ROUND || 'round-2');
 const ASSIGNMENT_PATH = process.env.WORDAI_NLG_ASSIGNMENT || path.join(NLG_DIR, 'assignment.txt');
 
 // ---------- חילוץ (זהה ל-scaffold-e2e) ----------
@@ -295,6 +295,42 @@ const fStatus = getFrameProfileStatus();
 console.log(`פרופיל פתיחים: ${oStatus.distinctDocs} מסמכים · ${oStatus.personalWords} מילות-סלוט · λ=${Number(oStatus.blendLambda).toFixed(2)}`);
 console.log(`פרופיל מסגרות: ${fStatus.minedFrames} מסגרות · ${fStatus.distinctDocs} מסמכים`);
 
+// ---------- אבחון (WORDAI_NLG_DIAG=1) ----------
+if (process.env.WORDAI_NLG_DIAG === '1') {
+  const { readMaterialStore } = await import('../../src/services/materialChunkStore.js');
+  const { embedText, base64ToInt8, dequantizeVector, cosineSim } =
+    await import('../../src/services/styleEmbeddingService.js');
+  const blob = readMaterialStore();
+  const bySrc = new Map();
+  for (const c of blob.chunks) {
+    const s = bySrc.get(c.sourceTitle) || { total: 0, garbled: 0, vec: 0 };
+    s.total += 1; if (c.garbled) s.garbled += 1; if (c.vec) s.vec += 1;
+    bySrc.set(c.sourceTitle, s);
+  }
+  console.log('\n=== DIAG: chunks per source (garbled/total) ===');
+  for (const [src, s] of [...bySrc.entries()].sort((a, b) => b[1].garbled - a[1].garbled)) {
+    console.log(`  ${s.garbled}/${s.total} garbled · ${src.slice(0, 45)}`);
+  }
+  const chunks = blob.chunks.filter((c) => c.vec && !c.garbled);
+  const vecs = new Map(chunks.map((c) => [c.id, dequantizeVector(base64ToInt8(c.vec))]));
+  const dim = 384;
+  const centroid = new Float32Array(dim);
+  for (const c of chunks) { const v = vecs.get(c.id); for (let i = 0; i < dim; i += 1) centroid[i] += v[i]; }
+  let nn = 0; for (let i = 0; i < dim; i += 1) nn += centroid[i] ** 2;
+  nn = Math.sqrt(nn) || 1; for (let i = 0; i < dim; i += 1) centroid[i] /= nn;
+  for (const q of ['הגותו של גון סטיוארט מיל חופש הביטוי עריצות הרוב חירות הפרט', 'המהפכה התעשייתית ועקרונות המרקסיזם']) {
+    const qv = await embedText(q, { kind: 'query' });
+    const rows = chunks.map((c) => { const v = vecs.get(c.id); const cos = cosineSim(qv, v); return { c, adj: cos - cosineSim(centroid, v) }; });
+    const adj = rows.map((r) => r.adj).sort((a, b) => a - b);
+    const med = adj[Math.floor(adj.length / 2)];
+    const mad = (adj.map((x) => Math.abs(x - med)).sort((a, b) => a - b)[Math.floor(adj.length / 2)] || 1e-6) * 1.4826;
+    const bySrc2 = new Map();
+    for (const r of rows) { const z = (r.adj - med) / mad; const cur = bySrc2.get(r.c.sourceTitle); if (!cur || z > cur.z) bySrc2.set(r.c.sourceTitle, { z, head: r.c.text.slice(0, 45) }); }
+    console.log(`\n=== DIAG probe: "${q.slice(0, 40)}" ===`);
+    [...bySrc2.entries()].sort((a, b) => b[1].z - a[1].z).slice(0, 8).forEach(([src, s]) => console.log(`  z${s.z.toFixed(2)}  ${src.slice(0, 40)} · ${s.head}`));
+  }
+}
+
 // ---------- המטלה ----------
 const assignmentText = fs.readFileSync(ASSIGNMENT_PATH, 'utf8');
 const spec = parseAssignmentSpec(assignmentText);
@@ -309,7 +345,7 @@ const workUsedSentences = new Set();
 const htmlParts = [`<h1>${escapeHtml(spec.title || 'מטלה')}</h1>`];
 const txtParts = [`# ${spec.title || 'מטלה'}\n`];
 const metrics = {
-  round: 1,
+  round: Number(process.env.WORDAI_NLG_ROUND_NUM || 2),
   generatedAt: new Date().toISOString(),
   assignment: { title: spec.title, totalWords: spec.totalWords, citationStyle: spec.citationStyle, sectionCount: sections.length },
   corpus: getMaterialStoreStats(),

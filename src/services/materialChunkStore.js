@@ -35,6 +35,25 @@ const DEFAULT_MAX_CHARS = 24000000;
 const WORD_RE = /[֐-׿יִ-ﭏA-Za-z0-9'"׳״-]+/g;
 const countWords = (str = '') => (String(str || '').match(WORD_RE) || []).length;
 
+// יחס הטוקנים ה"טהורים" בקטע — עברית נקייה / לטינית נקייה / מספר. קטע OCR משובש
+// (טורים מעורבבים בסריקה דו-טורית, עמוד איור) מלא בשברי-תווים לטיניים
+// ("‎TR‏", "MINN]", "‎fe") שאינם מילים. נמדד: קטעים תקינים 0.6–0.95, משובשים
+// 0.1–0.35. קטע כזה מדלל את התפלגות הדמיון באחזור ומרסק את ה-z של ההתאמות
+// האמיתיות — נמדד ב-nlg-loop round-1: כל ה-z נמחצו לטווח 3.2–4.2 וה-zFloor חסם
+// הכול. מסמנים את הקטע (garbled) כדי שהאחזור הסמנטי יחריגו — *לא* מוחקים אותו,
+// כדי לא לשבור ids/וקטורים ב-cache ולשמור נפילה לקסיקלית. תואם ל-pureTokenRatio
+// שברמת-המסמך מפעיל OCR (scaffold-e2e / nlg-loop).
+const PURE_TOKEN_RE = /^[֐-׿]{2,}[.,;:!?'"׳״)]?$|^[A-Za-z]{2,}[.,;:!?'")]?$|^\d+([.,]\d+)?$/;
+const GARBLE_MIN_TOKENS = 40; // קצר מדי משיפוט אמין — לא מסמנים
+const CHUNK_GARBLE_FLOOR = 0.5;
+function isChunkGarbled(text) {
+  const tokens = String(text || '').match(/\S+/g) || [];
+  if (tokens.length < GARBLE_MIN_TOKENS) return false;
+  let pure = 0;
+  for (const t of tokens) if (PURE_TOKEN_RE.test(t)) pure += 1;
+  return pure / tokens.length < CHUNK_GARBLE_FLOOR;
+}
+
 // כותרת סעיף בתוך מאמר: שורה קצרה בלי נקודה בסוף, או ממוספרת, או Markdown.
 const SECTION_LINE_RE = /^(?:#{1,4}\s+.+|(?:\d+(?:\.\d+)*|[א-ת])[.)]\s+\S.{0,80}|[^\n.!?]{3,80})$/;
 
@@ -417,6 +436,9 @@ export function addMaterialDocument({
       sectionHint: sectionForChunk(raw, piece, charStart),
       sourceUrl: safeSourceUrl,
       strength: safeStrength,
+      // OCR משובש (טורים מעורבבים / עמוד איור) — מוחרג מהאחזור הסמנטי. שדה
+      // אופציונלי: קטעים ישנים בלי השדה נחשבים תקינים (backward-compatible).
+      garbled: isChunkGarbled(piece),
       addedAt,
       vec: null,      // base64 int8 — ממולא ע"י putMaterialVectors
       vecSig: null,   // חתימת המודל, כדי לפסול וקטורים ממודל ישן
