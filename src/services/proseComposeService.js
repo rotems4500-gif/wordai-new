@@ -182,6 +182,11 @@ export function composeSectionProse(section, evidence, opts = {}) {
   } = opts;
   const cmds = new Set(Array.isArray(commands) ? commands : commands instanceof Set ? [...commands] : []);
 
+  // מזהה ראיה: findEvidenceForSection מחזיר chunk תחת `chunkId` (לא `id`), ולכן
+  // בלי הנפילה הזו כל evidenceId היה null — עיגון-המשפט-לראיה (עקרון הכנות) לא
+  // נרשם, ו-wrap תמיד ייחס למקור הראשון בלבד. נמדד ב-nlg-loop-round.
+  const evId = (e) => (e && (e.chunkId ?? e.id)) || null;
+
   // סינון ראיות חלשות — ברירת מחדל, לא רק בפקודה. ראיה "(אולי)" טובה כהפניה
   // בשלד, אבל **לא** כבסיס למשפט תוכן: נמדד בעבודה אמיתית — כתבה על סרט בוליוודי
   // (שנקלטה כי מונח-חובה הופיע בה) נכתבה לתוך ניתוח של מיל בכל הסעיפים.
@@ -259,16 +264,16 @@ export function composeSectionProse(section, evidence, opts = {}) {
         const clause = pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!clause) return false;
         markUsed(clause);
-        if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
+        const eid = evId(ev); if (eid && !usedEvidenceIds.includes(eid)) usedEvidenceIds.push(eid);
         return emit(composeMoveSentence('claim', { clause, topic: topicForFrames },
-          { seedKey: sk, profile, avoid: avoidFrames }), ev.id);
+          { seedKey: sk, profile, avoid: avoidFrames }), evId(ev));
       }
       case 'wrapOpen':
       case 'wrap': {
         // משפט מטא — על הראיות שהוצגו, לא על העולם. נוצר רק אם הוצג משהו.
         if (!usedEvidenceIds.length) return false;
         const names = [...new Set(usedEvidenceIds
-          .map((id) => workList.find((e) => e.id === id))
+          .map((id) => workList.find((e) => evId(e) === id))
           .filter(Boolean)
           .map((e) => authorFromSource(e.sourceTitle)))].slice(0, 3);
         const clause = names.length > 1
@@ -286,7 +291,7 @@ export function composeSectionProse(section, evidence, opts = {}) {
         const clause = pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!clause) return false;
         markUsed(clause);
-        if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
+        const eid = evId(ev); if (eid && !usedEvidenceIds.includes(eid)) usedEvidenceIds.push(eid);
         const content = {
           clause,
           author: authorFromSource(ev.sourceTitle),
@@ -301,7 +306,7 @@ export function composeSectionProse(section, evidence, opts = {}) {
         if (r && (move === 'contrast' || move === 'concede') && !r.text.includes('(')) {
           r.text = r.text.replace(/\.$/, ` ${citeFromEvidence(ev)}.`);
         }
-        return emit(r, ev.id);
+        return emit(r, evId(ev));
       }
       case 'quote': {
         const ev = nextEvidence();
@@ -313,12 +318,12 @@ export function composeSectionProse(section, evidence, opts = {}) {
           return doMove('evidence');
         }
         markUsed(quoteSentence);
-        if (!usedEvidenceIds.includes(ev.id)) usedEvidenceIds.push(ev.id);
+        const eid = evId(ev); if (eid && !usedEvidenceIds.includes(eid)) usedEvidenceIds.push(eid);
         return emit(composeMoveSentence('quoteIntro', {
           quote: quoteSentence,
           author: authorFromSource(ev.sourceTitle),
           cite: citeFromEvidence(ev),
-        }, { seedKey: sk, profile, avoid: avoidFrames }), ev.id);
+        }, { seedKey: sk, profile, avoid: avoidFrames }), evId(ev));
       }
       case 'transition':
         return emit(composeMoveSentence('transition', { topic: topicForFrames },

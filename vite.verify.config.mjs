@@ -44,6 +44,8 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
     ? 'tools/test-bench/spec-coverage.mjs'
   : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e'
     ? 'tools/test-bench/scaffold-e2e.mjs'
+  : process.env.WORDAI_VERIFY_ENTRY === 'nlgloop'
+    ? 'tools/test-bench/nlg-loop-round.mjs'
     : process.env.WORDAI_VERIFY_ENTRY === 'lab'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
@@ -65,7 +67,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                         : process.env.WORDAI_VERIFY_ENTRY === 'compose' ? 'out-compose'
                           : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile'
                             : process.env.WORDAI_VERIFY_ENTRY === 'speccov' ? 'out-speccov'
-                              : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e' ? 'out-scaffolde2e' : 'out-sf';
+                              : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e' ? 'out-scaffolde2e'
+                                : process.env.WORDAI_VERIFY_ENTRY === 'nlgloop' ? 'out-nlgloop' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

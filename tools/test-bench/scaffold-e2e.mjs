@@ -645,7 +645,9 @@ for (const c of proseCases) {
   if (!r || !r.sentences?.length) {
     bad.push(`לא נוצרה פרוזה (z: ${evidence.map((e) => Number(e.z).toFixed(1)).join(', ')})`);
   } else {
-    const evidenceIds = new Set(evidence.map((e) => e.id));
+    // הראיה מ-findEvidenceForSection נושאת chunkId (לא id); המנוע מעגן לפי chunkId.
+    const evId = (e) => e.chunkId ?? e.id;
+    const evidenceIds = new Set(evidence.map(evId));
     const seen = new Set();
     for (const s of r.sentences) {
       if (/undefined|\[object/.test(s.text)) { bad.push('undefined'); break; }
@@ -653,7 +655,7 @@ for (const c of proseCases) {
       seen.add(s.text);
       if (s.evidenceId) {
         if (!evidenceIds.has(s.evidenceId)) { bad.push('chunk-id זר'); break; }
-        const chunk = evidence.find((e) => e.id === s.evidenceId);
+        const chunk = evidence.find((e) => evId(e) === s.evidenceId);
         const overlap = groundingOverlap(s.text, chunk.text);
         if (overlap < 0.4) { bad.push(`עיגון חלש (${(overlap * 100).toFixed(0)}%): "${s.text.slice(0, 50)}…"`); break; }
       }
