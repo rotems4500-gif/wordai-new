@@ -75,3 +75,4 @@ tools/test-bench/.scaffolde2e-scratch/
 
 # tesseract self-hosted — נגזר מ-node_modules ע"י scripts/copy-tesseract.mjs
 public/ocr/
+tools/test-bench/nlg-bench/.bench-out/

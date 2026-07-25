@@ -673,12 +673,15 @@ export function composeSectionOpener({
     const start = Math.abs(djb2(`${seedKey}|roadmap`)) % pool.length;
     second = pool[start];
     if (usedTexts) {
+      // מאגר מוצה (יותר יחידות מנוסחי-מתווה) ⇒ בלי משפט שני, לא שכפול.
+      let found = null;
       for (let i = 0; i < pool.length; i += 1) {
         const cand = pool[(start + i) % pool.length];
-        if (!usedTexts.has(cand)) { second = cand; break; }
+        if (!usedTexts.has(cand)) { found = cand; break; }
       }
-      usedTexts.add(second);
+      second = found || '';
+      if (second) usedTexts.add(second);
     }
   }
-  return `${first} ${second}`;
+  return second ? `${first} ${second}` : first;
 }
