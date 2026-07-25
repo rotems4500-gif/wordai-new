@@ -446,6 +446,9 @@ function blockedSkeleton(u, res, openerText, note) {
   return { html, txt };
 }
 
+// דאמפ ראיות: מאפשר להריץ מודל API על *אותן ראיות בדיוק* (nlg-bench/compare-api).
+const evidenceDump = {};
+
 let totWords = 0;
 let totBlocked = 0;
 let totAnchored = 0;
@@ -460,6 +463,12 @@ for (const section of sections) {
     // האמת הוא chunkId — ממפים כך שהעיגון (evidenceId) יהיה אמיתי.
     const evidence = (res?.evidence || []).map((e) => ({ ...e, id: e.chunkId ?? e.id }));
     const quota = u.wordQuota || 0;
+    evidenceDump[u.id] = {
+      title: u.title, intent: u.intent, quota,
+      mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || section.mustMention || []),
+      gap: Boolean(res?.gap),
+      evidence: evidence.map((e) => ({ id: e.id, sourceTitle: e.sourceTitle, z: e.z, text: e.text })),
+    };
     const openerText = composeSectionOpener({
       intent: u.intent, seedKey: u.id, profile: openerProfile,
       topic: u.title, framework: u.parent?.title,
@@ -568,6 +577,9 @@ metrics.totals = {
 fs.writeFileSync(path.join(ROUND_DIR, 'draft.html'), `<!doctype html><meta charset="utf-8"><body dir="rtl">${htmlParts.join('\n')}</body>`, 'utf8');
 fs.writeFileSync(path.join(ROUND_DIR, 'draft.txt'), txtParts.join('\n'), 'utf8');
 fs.writeFileSync(path.join(ROUND_DIR, 'metrics.json'), JSON.stringify(metrics, null, 2), 'utf8');
+fs.writeFileSync(path.join(ROUND_DIR, 'evidence.json'), JSON.stringify({
+  assignmentTitle: spec.title, citationStyle: spec.citationStyle, units: evidenceDump,
+}, null, 2), 'utf8');
 
 console.log('\n═══ סיכום הסבב ═══');
 for (const s of metrics.sections) {

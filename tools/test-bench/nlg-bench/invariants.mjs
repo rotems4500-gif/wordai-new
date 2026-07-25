@@ -18,13 +18,18 @@ export function groundingOverlap(sentence, chunkText) {
   return hit / words.length;
 }
 
-// סמני ג'יבריש OCR מובהקים — אותם סמנים שהמנוע עצמו פוסל; אם אחד הגיע לתוצר,
-// השער דלף.
-const GARBLE_MARKERS = [
-  /[א-ת]"[א-ת]{2,}/,          // גרשיים באמצע מילה ארוכה (בית"המלאכה) — לא ר"ת תקני בן 2
-  /\d[א-ת]{2,}|[א-ת]{2,}\d/,  // ספרות דבוקות למילה עברית
-  /[א-ת]\*[א-ת]/,             // כוכבית באמצע מילה
-];
+// סמני ג'יבריש OCR מובהקים — *אותו חוק* כמו ocrCorruptScore ב-proseComposeService:
+// ברמת טוקן, וגרשיים נפסלים רק במילה ארוכה (≥6 אחרי הסרתם). בלי תנאי האורך
+// הבדיקה פוסלת עברית תקינה — 'ל"בעיה', 'ש"גם' (תחילית + פתיחת ציטוט).
+export function garbleHit(sentence) {
+  for (const t of String(sentence || '').split(/\s+/).filter(Boolean)) {
+    const q = t.search(/["״׳“”]/);
+    if (q >= 2 && /[א-ת]["״׳“”][א-ת]/.test(t) && t.replace(/["'״׳“”]/g, '').length >= 6) return t;
+    if (/[א-ת][*][א-ת]/.test(t)) return t;
+    if (/\d[א-ת]|[א-ת]\d/.test(t)) return t;
+  }
+  return null;
+}
 
 /**
  * מריץ את כל האינווריאנטות על תוצר ריצה אחת.
@@ -42,10 +47,8 @@ export function checkInvariants(run) {
   {
     const hits = [];
     for (const line of text.split('\n')) {
-      for (const re of GARBLE_MARKERS) {
-        const m = line.match(re);
-        if (m) { hits.push(m[0]); break; }
-      }
+      const h = garbleHit(line);
+      if (h) hits.push(h);
     }
     out.push({ id: 'no-garble', pass: !hits.length, detail: hits.slice(0, 3).join(' · ') || 'נקי' });
   }
