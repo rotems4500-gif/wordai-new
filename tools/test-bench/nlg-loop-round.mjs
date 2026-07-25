@@ -209,9 +209,16 @@ async function ingestCourse() {
     const p = path.join(CORPUS_DIR, name);
     if (!fs.existsSync(p)) { console.log(`  ⚠ חסר: ${name}`); continue; }
     let { text, scanned, garbled } = await extractFile(p);
-    if (scanned || garbled) { text = await ocrPdf(p); ocrCount += 1; }
+    let viaOcr = false;
+    if (scanned || garbled) { text = await ocrPdf(p); ocrCount += 1; viaOcr = true; }
     if (!String(text || '').trim()) continue;
-    addMaterialDocument({ title: name.replace(/\.[^.]+$/, ''), text, source: 'nlg-loop', defer: true });
+    // round-4: cleanDigital=!viaOcr → רצפת-רלוונטיות מקלה ב-proseComposeService.
+    // sourceKind='slides' למצגות (pptx) → מוגבל שם למהלך ציטוט בלבד (תבליטים).
+    addMaterialDocument({
+      title: name.replace(/\.[^.]+$/, ''), text, source: 'nlg-loop', defer: true,
+      cleanDigital: !viaOcr,
+      sourceKind: path.extname(name).toLowerCase() === '.pptx' ? 'slides' : null,
+    });
     loaded.push(name);
   }
   await commitMaterialStore();

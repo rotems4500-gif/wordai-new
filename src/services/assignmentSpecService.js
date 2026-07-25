@@ -567,6 +567,43 @@ function deriveSectionHeading(rawTitle, body, intent) {
   return toSectionHeading(rawTitle || '', intent);
 }
 
+// ---------- עוגן דוקטרינרי (round-4) ----------
+//
+// round-3 critique: תת-סעיפי מיל (הסעיף "1. הגותו של ג'ון סטיוארט מיל") הפיקו
+// כותרת "ניתוח הסעיפים הבאים" — כותרת-הוראה גנרית, לא נושא. הסיבה: deriveSectionHeading
+// גוזר את פסוקית-המשימה ("נתח.י את הסעיפים הבאים ... לפי העקרונות של מיל"), ו-
+// HEADING_CUT_RE חותך במילת החיבור "לפי" *לפני* שמגיעים לעוגן ("העקרונות של מיל").
+// אותה כותרת גנרית משמשת גם כ-framework שיורש כל תת-סעיף (evidenceMatchService),
+// ולכן הבאג כפול: גם כותרת גרועה במסמך, גם גשוש-אחזור עיוור לתת-סעיפי מיל.
+//
+// התיקון: כשהכותרת/framework הנגזרים יוצאים גנריים, גוזרים עוגן ישירות מהטקסט
+// הגולמי (כותרת+גוף) עם regex דטרמיניסטי על ניסוחי-הצהרה מוכרים של מרצים:
+// "העקרונות של X" / "הגותו של X" / "על פי X" / "מספרו של X". זו לא NER — רק
+// הניסוחים המפורשים האלה; כשאין התאמה נופלים בחזרה לכותרת הגנרית (לא ריק).
+const DOCTRINE_ANCHOR_RE = /(?:העקרונות של|הגותו של|על פי|מספרו של)\s+([^.,;()[\]\n]{2,40}?)(?=[.,;()[\]\n]|\s+(?:אשר|לגבי|אודות|בנוגע|ביחס|ש)\s|$)/;
+
+/**
+ * גוזר עוגן דוקטרינרי מפורש מטקסט ("העקרונות של ג'ון סטיוארט מיל" וכו').
+ * @returns {string|null} הביטוי המלא ("הגותו של X"), או null אם לא נמצא ניסוח מתאים.
+ */
+export function extractDoctrineAnchor(text) {
+  const src = String(text || '').replace(/\s+/g, ' ');
+  const m = src.match(DOCTRINE_ANCHOR_RE);
+  if (!m) return null;
+  const phrase = m[0].trim();
+  const words = countWords(phrase);
+  return words >= 2 && words <= 7 ? phrase : null;
+}
+
+// כותרת-הוראה גנרית: מתייחסת ל*מבנה* המטלה ("הסעיפים הבאים"/"השאלות הבאות"),
+// לא לתוכן שלה, או קצרה מדי לאחר הניקוי כדי לשאת נושא (פחות משתי מילים).
+export function isGenericInstructionHeading(heading) {
+  const s = String(heading || '').trim();
+  if (!s) return true;
+  if (/הסעיפים הבאים|השאלות הבאות/.test(s)) return true;
+  return countWords(s) < 2;
+}
+
 // דרישות "חובה להזכיר" — המרצה מסמן אותן במפורש בסוגריים מרובעים:
 // [חובה להזכיר את מושגי "הבלימה ההופכית" ו-"מאזני הצדק"]. אלה הפריטים
 // היחידים במטלה שאפשר *לאמת* אוטומטית בטקסט שנכתב, ולכן הם החומר הכי שימושי
@@ -922,20 +959,38 @@ export function parseAssignmentSpec(text, { title = '' } = {}) {
     // הגזירה רצה על הנוסח **המלא** ולא על raw.title: splitTitleAndLead כבר חתך
     // אותו ב-7 מילים דרך WORD_RE, וזה מוחק את הפסיקים — בלעדיהם אין איפה לחתוך
     // את הרשימה, והכותרת יצאה "תיאור העובדות המרכזיות התאריכים החשובים ואת".
-    const heading = deriveSectionHeading(raw.rawTitle || raw.title, raw.body, intent);
+    let heading = deriveSectionHeading(raw.rawTitle || raw.title, raw.body, intent);
+    // round-4: כותרת-הוראה גנרית ("ניתוח הסעיפים הבאים") היא בעצם ה-framework
+    // שיורש כל תת-סעיף (evidenceMatchService.findEvidenceForSpec) — עוגן ריק
+    // מזין גשוש-אחזור עיוור. נופלים לעוגן דוקטרינרי מהטקסט הגולמי (כותרת+גוף);
+    // אם גם הוא לא נמצא, נשארת הכותרת הגנרית (לא ריק — עדיף עריכה ידנית מריק).
+    if (isGenericInstructionHeading(heading)) {
+      const anchor = extractDoctrineAnchor(`${raw.rawTitle || raw.title || ''}\n${raw.body || ''}`);
+      if (anchor) heading = anchor;
+    }
 
     // תתי-סעיפים: כל אחד יחידת ציון ומכסה בפני עצמה.
     const perSubQuota = extractPerSubQuota(combined);
     const rawSubs = splitSubSections(raw.body);
-    const subSections = rawSubs.map((sub, j) => ({
-      id: `sec_${i + 1}_${j + 1}`,
-      marker: sub.marker,
-      order: j + 1,
-      title: deriveSectionHeading(sub.text, '', intent) || `סעיף ${sub.marker}`,
-      instructions: sub.text,
-      wordQuota: extractWordQuota(sub.text)?.words || perSubQuota || null,
-      mustMention: extractMustMention(sub.text),
-    }));
+    const subSections = rawSubs.map((sub, j) => {
+      let subHeading = deriveSectionHeading(sub.text, '', intent) || `סעיף ${sub.marker}`;
+      // הגנה כפולה: כותרת תת-סעיף גם היא נגזרת ממשפט-פתיחה, ובעקרון יכולה לצאת
+      // גנרית באותה צורה. כשאין עוגן משלה, נשארת כפי שהיא (המשפט הראשון עדיף
+      // על עוד נפילה לכותרת-האב, שהיא בדיוק הבאג שדווח).
+      if (isGenericInstructionHeading(subHeading)) {
+        const anchor = extractDoctrineAnchor(sub.text);
+        if (anchor) subHeading = anchor;
+      }
+      return {
+        id: `sec_${i + 1}_${j + 1}`,
+        marker: sub.marker,
+        order: j + 1,
+        title: subHeading,
+        instructions: sub.text,
+        wordQuota: extractWordQuota(sub.text)?.words || perSubQuota || null,
+        mustMention: extractMustMention(sub.text),
+      };
+    });
     // כשיש תתי-סעיפים עם מכסה משלהם, מכסת האב היא הסכום — לא ה-"100 מילים"
     // שנתפס מ"100 מילים לכל סעיף משנה", שהוא מכסה של תת-סעיף בודד.
     const subTotal = subSections.reduce((sum, s) => sum + (s.wordQuota || 0), 0);

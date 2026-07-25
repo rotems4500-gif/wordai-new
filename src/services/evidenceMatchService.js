@@ -31,6 +31,7 @@ import {
   isEmbeddingUnavailable,
 } from './styleEmbeddingService';
 import { selectChunks, scoreChunkRelevance, tokenizeForRetrieval } from './styleRetrievalService';
+import { extractDoctrineAnchor, isGenericInstructionHeading } from './assignmentSpecService';
 
 // e5 מייצר דמיון "דחוס" — קטעים לא קשורים יושבים סביב 0.77 ולא סביב 0. לכן סף
 // מוחלט לבדו פוסל הכל או מקבל הכל. משלבים: רצפה מוחלטת + חלון יחסי מתחת לטוב ביותר.
@@ -433,6 +434,11 @@ export async function findEvidenceForSection(section, {
       score: Number(s.score.toFixed(3)),
       z: s.z === null ? null : Number(s.z.toFixed(2)),
       scale: s.scale,
+      // round-4: מקור דיגיטלי-נקי (לא עבר OCR) מקבל רצפה מקלה ב-proseComposeService;
+      // מקור-שקפים מוגבל שם למהלך ציטוט בלבד. שני השדות אופציונליים — chunk ישן
+      // בלעדיהם מתנהג כמו קודם (לא נקי, לא שקפים).
+      cleanDigital: Boolean(s.chunk.cleanDigital),
+      sourceKind: s.chunk.sourceKind || null,
     })),
   };
 }
@@ -458,19 +464,30 @@ export async function findEvidenceForSpec(spec, opts = {}) {
   // במקום לתיאוריה שאיתה עונים עליו.
   const units = [];
   for (const section of sections) {
+    // round-4: הגנה כפולה מעבר לתיקון ב-assignmentSpecService (שם הכותרת
+    // עצמה כבר לא אמורה לצאת גנרית). אם בכל זאת section.title הוא כותרת-הוראה
+    // גנרית ("ניתוח הסעיפים הבאים" — כותרת חסרת-תוכן, לא נושא), גוזרים עוגן
+    // דוקטרינרי ישירות מ-instructions ("לפי העקרונות של מיל אשר למדנו בקורס")
+    // באותו regex — כך שהגשוש/הבוסט לא ניזונים מכותרת ריקה. נמדד: sec_1 (מיל)
+    // ב-round-2/3 קיבל framework="ניתוח הסעיפים הבאים" בלי עוגן לקסיקלי מבחין.
+    const ownTitle = String(section.title || '').trim();
+    const ownFramework = isGenericInstructionHeading(ownTitle)
+      ? (extractDoctrineAnchor(section.instructions) || ownTitle)
+      : ownTitle;
     // סעיף ראשי: המסגרת שלו היא כותרתו הדוקטרינרית ("עקרונות המרקסיזם") — עובדות
     // המקרה יושבות ב-instructions ולא בכותרת, ולכן הכותרת היא עוגן נקי. מזין את
     // גשוש-המסגרת ואת הבוסט הלקסיקלי גם לסעיפים בלי תת-סעיפים (sec_2/sec_3).
-    units.push(section.framework ? section : { ...section, framework: section.title || '' });
+    units.push(section.framework ? section : { ...section, framework: ownFramework });
     for (const sub of (Array.isArray(section.subSections) ? section.subSections : [])) {
       units.push({
         ...sub,
         intent: sub.intent || section.intent,
         title: [section.title, sub.title].filter(Boolean).join(' — '),
-        // המסגרת האנליטית שהתת-סעיף נשען עליה = כותרת האב ("הגותו של מיל").
+        // המסגרת האנליטית שהתת-סעיף נשען עליה = כותרת האב ("הגותו של מיל"), או
+        // העוגן הדוקטרינרי מתוך הנחיית האב כשהכותרת עצמה גנרית (round-4, ראו למעלה).
         // מזינה את גשוש-המסגרת ואת העוגן הלקסיקלי ב-buildSectionProbes/
         // doctrineAnchorTerms — התיקון המרכזי של round-1.
-        framework: section.title || '',
+        framework: ownFramework,
         keywords: Array.isArray(section.keywords) ? section.keywords : [],
         mustMention: (sub.mustMention?.length ? sub.mustMention : section.mustMention) || [],
       });

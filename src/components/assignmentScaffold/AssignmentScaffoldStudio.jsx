@@ -48,6 +48,9 @@ const INTENT_OPTIONS = Object.entries(INTENT_LABELS);
 // חילוץ טקסט מקובץ שהופל למסך. maxLength גבוה — מאמר שלם, לא תצוגה מקדימה.
 // ⚠️ extractMaterialTextFromBytes מחזיר {ok, text, error} ולא מחרוזת. בלי הפירוק
 // הזה מקבלים "[object Object]" — מילה אחת שנזרקת בחיתוך, וה-ingest "מצליח" עם 0 קטעים.
+//
+// round-4: מחזיר גם viaOcr — משמש את ה-ingest לתייג cleanDigital (ר' materialChunkStore
+// / proseComposeService): קובץ שלא עבר OCR/שיקום-קידוד מקבל רצפת-רלוונטיות מקלה.
 async function readFileText(file, maxLength = 400000, opts = {}) {
   const buffer = await file.arrayBuffer();
   const result = await extractMaterialTextFromBytes(file.name, new Uint8Array(buffer), maxLength, opts);
@@ -56,7 +59,7 @@ async function readFileText(file, maxLength = 400000, opts = {}) {
     err.scanned = Boolean(result?.scanned);
     throw err;
   }
-  return String(result.text || '');
+  return { text: String(result.text || ''), viaOcr: Boolean(result?.viaOcr) };
 }
 
 export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpenHelp }) {
@@ -153,7 +156,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     if (!file) return;
     setBusy('קורא את קובץ ההנחיות…');
     try {
-      const text = await readFileText(file, 60000);
+      const { text } = await readFileText(file, 60000);
       setInstructions(String(text || ''));
       setNotice({ tone: 'ok', text: `נטען "${file.name}". לחץ "פרק הנחיות".` });
     } catch (err) {
@@ -175,11 +178,16 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     // אחד יעכב את 30 הקבצים הטקסטואליים שאחריו.
     const scannedQueue = [];
 
-    const ingest = (file, text) => {
+    // round-4: viaOcr → cleanDigital=false (רצפת-רלוונטיות רגילה); קובץ .pptx
+    // מסומן sourceKind='slides' — proseComposeService מגביל את השימוש בו לציטוט.
+    const ingest = (file, text, viaOcr = false) => {
       if (!String(text || '').trim()) { failures.push(`${file.name}: לא נמצא טקסט`); return; }
+      const isSlides = /\.pptx$/i.test(file.name);
       // defer: כתיבה אחת ל-IDB בסוף האצווה במקום כתיבה מלאה (עשרות MB) לכל קובץ.
       const result = addMaterialDocument({
         title: file.name.replace(/\.[^.]+$/, ''), text, source: 'scaffold-upload', defer: true,
+        cleanDigital: !viaOcr,
+        sourceKind: isSlides ? 'slides' : null,
       });
       if (result.skipped) skipped += 1;
       else added += result.added;
@@ -189,7 +197,8 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       const file = list[i];
       setBusy(`מאנדקס ${i + 1}/${list.length}: ${file.name}`);
       try {
-        ingest(file, await readFileText(file));
+        const r = await readFileText(file);
+        ingest(file, r.text, r.viaOcr);
       } catch (err) {
         if (err?.scanned) scannedQueue.push(file);
         else failures.push(`${file.name}: ${String(err?.message || err)}`);
@@ -202,13 +211,13 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     for (let i = 0; i < scannedQueue.length; i += 1) {
       const file = scannedQueue[i];
       try {
-        const text = await readFileText(file, 400000, {
+        const r = await readFileText(file, 400000, {
           ocr: true,
           onOcrProgress: ({ page, pages }) => setBusy(
             `סורק טקסט (OCR) ${i + 1}/${scannedQueue.length}: ${file.name} — עמוד ${page}/${pages}`,
           ),
         });
-        ingest(file, text);
+        ingest(file, r.text, true); // תמיד עבר OCR בענף הזה, גם אם הדגל לא חזר
         ocrDone += 1;
       } catch (err) {
         failures.push(`${file.name}: ${String(err?.message || err)}`);

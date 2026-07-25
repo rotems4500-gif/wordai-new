@@ -125,6 +125,34 @@ function pickCoreSentence(chunkText, { terms = [], used = new Set() } = {}) {
   return clause.replace(/[.!?׃]+$/, '');
 }
 
+// round-4: תבליט-מצגת (sourceKind='slides') הוא לרוב צירוף-נושא בלי פועל מוטה —
+// looksLikeProse פוסל אותו בצדק *כפסוקית מדווחת* (הוא לא), אבל כציטוט ישיר קצר
+// הוא ראיה לגיטימית ושמישה. לכן ציטוט ממקור-שקפים עובר מסלול נפרד: בלי
+// looksLikeProse, אבל עדיין עם סינון-הג'יבריש (ocrCorruptScore) ואורך מינימלי
+// לציטוט משמעותי (ברירת מחדל 6 מילים) — לא כל שבר-תבליט ראוי לציטוט.
+function pickQuoteFragment(chunkText, { terms = [], used = new Set(), minWords = 6 } = {}) {
+  const sentences = splitSentences(chunkText).map(cleanEvidenceSentence).filter(Boolean);
+  const norm = (s) => String(s).replace(/[.!?׃…]+$/, '').trim();
+  let best = null;
+  let bestScore = -Infinity;
+  for (const s of sentences) {
+    if (used.has(norm(s))) continue;
+    const words = countWords(s);
+    if (words < minWords) continue;
+    const oc = ocrCorruptScore(s);
+    if (oc.hard >= 1) continue;
+    if (oc.soft >= 2 || (oc.total > 0 && oc.soft / oc.total > 0.12)) continue;
+    let score = hebrewRatio(s) * 2;
+    for (const t of terms) if (t && s.includes(t)) score += 3;
+    if (words <= QUOTE_MAX_WORDS) score += 2; else score -= (words - QUOTE_MAX_WORDS) / 10;
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  if (!best) return null;
+  const w = best.split(/\s+/);
+  const clause = w.length > QUOTE_MAX_WORDS ? `${w.slice(0, QUOTE_MAX_WORDS).join(' ')}…` : best;
+  return clause.replace(/[.!?׃]+$/, '');
+}
+
 /** "@author" מכותרת מקור: 4 מילים ראשונות, בלי סיומות קובץ. */
 function authorFromSource(sourceTitle) {
   const words = String(sourceTitle || '')
@@ -224,7 +252,16 @@ export function composeSectionProse(section, evidence, opts = {}) {
   // בהרנס: ראיות אנגליות לגיטימיות ב-z 3.7-4.1), ולכן מקור לטיני מקבל סף מקל.
   // מקור עברי ב-z 4.0 הוא בדיוק פרופיל הזבל הבוליוודי — נשאר על 4.5.
   // ראיה בלי z (fallback לקסיקלי / mock) עוברת — אין לנו במה לשפוט אותה.
-  const zFloor = (e) => (hebrewRatio(e.text) >= 0.5 ? 4.5 : 3.6);
+  //
+  // round-4: 4.5 כויל נגד קורפוס OCR-מזוהם, אבל אותו הדין מוחל גם על מקור עברי
+  // דיגיטלי-נקי (pptx/docx שלא עבר OCR) — נמדד: מצגת מיל on-topic ב-z3.15-3.53
+  // נפסלה למרות שאין בה סיכון garbage-in. מקור שסומן cleanDigital (ר' addMaterialDocument)
+  // מקבל רצפה מקלה יותר: 3.8 — עדיין מעל Z_KEEP=3.4 של evidenceMatchService,
+  // כלומר לא מרפים את הסינון הסמנטי עצמו, רק את הענישה הייעודית-ל-OCR.
+  const zFloor = (e) => {
+    if (hebrewRatio(e.text) < 0.5) return 3.6;
+    return e.cleanDigital ? 3.8 : 4.5;
+  };
   let workList = list.filter((e) => (typeof e.z === 'number' ? e.z >= zFloor(e) : true));
   if (!workList.length) return null;   // רק ראיות חלשות — עדיף שלד כן מטיוטה מזויפת
   if (cmds.has('ev_strong_only')) {
@@ -253,6 +290,13 @@ export function composeSectionProse(section, evidence, opts = {}) {
   if (cmds.has('tone_concede') && !plan.cycle.includes('concede')) plan.cycle.push('concede');
   if (cmds.has('tone_contrast') && !plan.cycle.includes('contrast')) plan.cycle.push('contrast');
   if (cmds.has('tone_no_wrap')) plan.close = plan.close.filter((m) => m !== 'wrap');
+  // round-4: ראיית-שקפים משתתפת רק במהלך quote (ר' nextEvidence/nextQuoteEvidence
+  // למעלה) — אבל MOVE_PLANS של רוב האינטנטים (analysis/argument) לא כוללים quote
+  // כברירת מחדל, ולכן בלי זה הראיה פשוט לא הייתה נגישה אף פעם. מוסיפים quote
+  // למחזור רק כשיש בפועל ראיית-שקפים בסעיף — לא משנה התנהגות בסעיפים בלעדיה.
+  if (workList.some((e) => e.sourceKind === 'slides') && !plan.cycle.includes('quote')) {
+    plan.cycle.push('quote');
+  }
   // A3 (round-3): claim ממחזר את משפט הראיה הראשון — עם ראיה בודדת זה כפילות
   // ריקה של אותו משפט. פותחים ישר ב-evidence כשאין ≥2 ראיות. wrap מטופל בעת
   // המהלך (דורש ≥2 מקורות שונים) כדי לא לסגור פסקה חד-מקורית ב"תמונה עקבית".
@@ -277,7 +321,21 @@ export function composeSectionProse(section, evidence, opts = {}) {
   let wordCount = 0;
   let step = 0;
 
-  const nextEvidence = () => (evidenceIdx < workList.length ? workList[evidenceIdx++] : null);
+  // round-4: ראיית-שקפים (sourceKind='slides') מותרת רק במהלך quote — תבליט
+  // אינו פסוקית מדווחת. nextEvidence (המשמש claim/evidence/explain/contrast/
+  // concede) מדלג עליה ושומר אותה בתור נפרד לציטוט, בלי לאבד אותה ובלי לספור
+  // אותה פעמיים. quote מרוקן קודם את התור הזה, ורק אז פונה לתור הרגיל.
+  const slideQueue = [];
+  const nextEvidence = () => {
+    while (evidenceIdx < workList.length) {
+      const ev = workList[evidenceIdx];
+      evidenceIdx += 1;
+      if (ev.sourceKind === 'slides') { slideQueue.push(ev); continue; }
+      return ev;
+    }
+    return null;
+  };
+  const nextQuoteEvidence = () => (slideQueue.length ? slideQueue.shift() : nextEvidence());
 
   const emit = (result, evidenceId) => {
     if (!result) return false;
@@ -293,7 +351,10 @@ export function composeSectionProse(section, evidence, opts = {}) {
     switch (move) {
       case 'claim': {
         // פסוקית פתיחה מעוגנת: הליבה של הראיה החזקה ביותר, מדווחת כטענת הפרק.
-        const ev = workList[0];
+        // round-4: לא ראיית-שקפים — תבליט אינו פסוקית-דיווח (וגם היה נכשל
+        // ב-looksLikeProse בשקט). הטענה הפותחת חייבת פרוזה אמיתית.
+        const ev = workList.find((e) => e.sourceKind !== 'slides');
+        if (!ev) return false;
         const clause = pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!clause) return false;
         markUsed(clause);
@@ -343,10 +404,16 @@ export function composeSectionProse(section, evidence, opts = {}) {
         return emit(r, evId(ev));
       }
       case 'quote': {
-        const ev = nextEvidence();
+        // round-4: תור-השקפים קודם (evidence שאסור לה להשתתף כפרוזה מדווחת,
+        // אבל כן כציטוט ישיר) — ורק אחריו התור הרגיל.
+        const ev = nextQuoteEvidence();
         if (!ev) return false;
-        const quoteSentence = pickCoreSentence(ev.text, { terms, used: usedSentences });
+        const isSlide = ev.sourceKind === 'slides';
+        const quoteSentence = isSlide
+          ? pickQuoteFragment(ev.text, { terms, used: usedSentences })
+          : pickCoreSentence(ev.text, { terms, used: usedSentences });
         if (!quoteSentence || countWords(quoteSentence) > QUOTE_MAX_WORDS) {
+          if (isSlide) return false; // תבליט לא-ציר — אין מסלול-נפילה כפרוזה, פשוט מדולג
           // ארוך מדי לציטוט ישיר — נדווח כראיה רגילה במקום.
           evidenceIdx -= 1;
           return doMove('evidence');

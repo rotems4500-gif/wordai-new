@@ -382,7 +382,12 @@ export function hasMaterialText(text) {
  *
  * @param {{title?:string, text:string, source?:string, projectId?:string|null,
  *          kind?:string, materialKey?:string|null, sourceUrl?:string|null,
- *          strength?:('full'|'abstract'), defer?:boolean}} args
+ *          strength?:('full'|'abstract'), defer?:boolean, cleanDigital?:boolean,
+ *          sourceKind?:string|null}} args
+ *        cleanDigital — הקורא (UI/harness) יודע אם המסמך עבר OCR/שוקם מקידוד
+ *        שבור; true רק כשלא. proseComposeService משתמש בזה לרצפת-רלוונטיות
+ *        מקלה (round-4) — לא מחושב כאן כי אין למודול הזה גישה לפרטי החילוץ.
+ *        sourceKind — למשל 'slides' (pptx): מגביל את השימוש בראיה למהלך ציטוט.
  *        defer=true — צובר בזיכרון בלי לכתוב ל-IDB ובלי לשדר אירוע. חובה לקרוא
  *        commitMaterialStore() בסוף האצווה.
  * @returns {{materialId:(string|null), added:number, skipped:boolean}}
@@ -397,6 +402,8 @@ export function addMaterialDocument({
   sourceUrl = null,
   strength = 'full',
   defer = false,
+  cleanDigital = false,
+  sourceKind = null,
 } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return { materialId: null, added: 0, skipped: false };
@@ -439,6 +446,11 @@ export function addMaterialDocument({
       // OCR משובש (טורים מעורבבים / עמוד איור) — מוחרג מהאחזור הסמנטי. שדה
       // אופציונלי: קטעים ישנים בלי השדה נחשבים תקינים (backward-compatible).
       garbled: isChunkGarbled(piece),
+      // round-4: מקור שלא עבר OCR/שיקום-קידוד — מקבל רצפת-רלוונטיות מקלה
+      // ב-proseComposeService. sourceKind='slides' מגביל שימוש למהלך ציטוט בלבד
+      // (תבליטי מצגת אינם פרוזה מדווחת). שני השדות אופציונליים, ברירת מחדל שמרנית.
+      cleanDigital: Boolean(cleanDigital),
+      sourceKind: sourceKind || null,
       addedAt,
       vec: null,      // base64 int8 — ממולא ע"י putMaterialVectors
       vecSig: null,   // חתימת המודל, כדי לפסול וקטורים ממודל ישן
