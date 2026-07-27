@@ -55,7 +55,7 @@ const ensureToastHost = () => {
 /**
  * הצגת toast חולף (מחליף window.alert לרוב המקרים).
  * @param {string} message
- * @param {{tone?: 'info'|'success'|'warning'|'error', duration?: number}} [opts]
+ * @param {{tone?: 'info'|'success'|'warning'|'error', duration?: number, actionLabel?: string, onAction?: () => void, onDismiss?: () => void}} [opts]
  */
 export const showToast = (message, opts = {}) => {
   const host = ensureToastHost();
@@ -97,12 +97,43 @@ export const showToast = (message, opts = {}) => {
   host.appendChild(toast);
 
   let removed = false;
+  let acted = false;
   const remove = () => {
     if (removed) return;
     removed = true;
     toast.style.animation = 'wf-feedback-out 0.18s ease both';
     setTimeout(() => toast.remove(), 180);
+    if (!acted && typeof opts.onDismiss === 'function') {
+      try { opts.onDismiss(); } catch {}
+    }
   };
+
+  // כפתור פעולה אופציונלי (למשל "התקן עכשיו" בהודעת עדכון) — לחיצה עליו אינה "התעלמות".
+  if (opts.actionLabel && typeof opts.onAction === 'function') {
+    const actionEl = document.createElement('button');
+    actionEl.type = 'button';
+    actionEl.textContent = String(opts.actionLabel);
+    Object.assign(actionEl.style, {
+      flexShrink: '0',
+      alignSelf: 'center',
+      border: '1px solid rgba(255,255,255,0.55)',
+      background: 'rgba(255,255,255,0.14)',
+      color: 'white',
+      borderRadius: '999px',
+      padding: '5px 12px',
+      fontSize: '12px',
+      fontWeight: '700',
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+    });
+    actionEl.addEventListener('click', (event) => {
+      event.stopPropagation();
+      acted = true;
+      remove();
+      try { opts.onAction(); } catch {}
+    });
+    toast.appendChild(actionEl);
+  }
 
   toast.addEventListener('click', remove);
   const timer = setTimeout(remove, duration);

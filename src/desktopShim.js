@@ -371,7 +371,13 @@ export function installDesktopShim() {
     checkForAppUpdates,
     installAppUpdate,
 
-    onAppUpdateStatus: () => () => {},
+    // אירועי התקדמות הורדה מ-updater.rs (event: app-update-status)
+    onAppUpdateStatus: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      let unlisten = () => {};
+      listen('app-update-status', (event) => callback(event.payload)).then((fn) => { unlisten = fn; });
+      return () => unlisten();
+    },
     onOpenExternalDocument: (callback) => {
       // single-instance: פתיחת קובץ כשהאפליקציה כבר רצה → אירוע מ-Rust
       let unlisten = () => {};

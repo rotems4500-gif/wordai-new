@@ -64,6 +64,7 @@ import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEd
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
+import { startAutoUpdateChecks } from './services/appUpdateService';
 import { Modal, Button, Input, TextArea } from './components/ui';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
 import { cloudSignInWithGooglePopup, cloudSignOut, ensureCloudUserProfile, isCloudAvailable, onCloudAuthChange, saveCloudDocument, handleCloudRedirectResult } from './firebase/services';
@@ -3643,6 +3644,9 @@ function App() {
       window.removeEventListener('appinstalled', handleInstalled);
     };
   }, [requestPwaInstall]);
+
+  // בדיקת עדכון אוטומטית (דסקטופ בלבד) — באתר זה no-op.
+  React.useEffect(() => startAutoUpdateChecks(), []);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return undefined;

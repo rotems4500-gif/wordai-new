@@ -5,6 +5,7 @@ import ProjectsPanel from './components/ProjectsPanel';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import ProjectBrainstormPanel from './components/ProjectBrainstormPanel';
 import StyleEngineControls, { getStyleCreativityTemperature, getStyleDepth } from './components/StyleEngineControls';
+import DesktopDownloadCard from './components/DesktopDownloadCard';
 import { showToast, showConfirm } from './services/uiFeedback';
 import {
   listProjects,
@@ -2287,6 +2288,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               </button>
             )}
           </div>
+        </div>
+
+        {/* הורדת אפליקציית המחשב — מוצג רק בדפדפן (בתוך הדסקטופ הרכיב מחזיר null) */}
+        <div className="mt-6">
+          <DesktopDownloadCard variant="glass" />
         </div>
         </main>
 

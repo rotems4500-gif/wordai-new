@@ -6,6 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import ProfileOnboarding from './ProfileOnboarding';
 import StyleProfilePanel from './components/StyleProfilePanel';
+import DesktopDownloadCard from './components/DesktopDownloadCard';
 import { getSampleStoreStats } from './services/styleSampleStore';
 import { normalizeDelimitedList } from './delimitedListInput';
 import { useDelimitedListInput } from './useDelimitedListInput';
@@ -3524,6 +3525,8 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
         </div>
       </div>
 
+      <DesktopDownloadCard />
+
       <InstallAppSettingsCard />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
@@ -5985,6 +5988,7 @@ function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
   };
 
   const getStatusMeta = (state) => {
+    if (state === 'available') return { color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE', title: 'יש גרסה חדשה' };
     if (state === 'downloaded') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'העדכון מוכן להתקנה' };
     if (state === 'downloading' || state === 'checking') return { color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE', title: 'העדכון בבדיקה/הורדה' };
     if (state === 'up-to-date') return { color: '#166534', bg: '#F0FDF4', border: '#BBF7D0', title: 'האפליקציה מעודכנת' };
@@ -6010,6 +6014,12 @@ function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
           {updateInfo.availableVersion && <span>גרסה זמינה: {updateInfo.availableVersion}</span>}
           {(updateInfo.status === 'downloading' || updateInfo.status === 'checking') && <span>התקדמות: {Math.round(Number(updateInfo.percent || 0))}%</span>}
         </div>
+
+        {updateInfo.status === 'downloading' && (
+          <div style={{ marginTop: 10, height: 6, borderRadius: 999, background: '#DBEAFE', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.max(2, Math.min(100, Number(updateInfo.percent || 0)))}%`, background: '#2563EB', borderRadius: 999, transition: 'width 0.2s linear' }} />
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -6021,13 +6031,13 @@ function UpdateSettings({ checkToken = 0, onCheckTokenConsumed = () => {} }) {
           {busy ? 'בודק…' : 'בדוק אם יש עדכון'}
         </button>
 
-        {updateInfo.status === 'downloaded' && (
+        {(updateInfo.status === 'available' || updateInfo.status === 'downloaded') && (
           <button
             onClick={installNow}
             disabled={busy}
-            style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #16A34A', background: '#16A34A', color: 'white', cursor: busy ? 'default' : 'pointer', fontWeight: 700 }}
+            style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #16A34A', background: busy ? 'var(--s-border)' : '#16A34A', color: 'white', cursor: busy ? 'default' : 'pointer', fontWeight: 700 }}
           >
-            התקן עכשיו
+            {busy ? 'מוריד ומתקין…' : 'הורד והתקן עכשיו'}
           </button>
         )}
 
