@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 // window shim: materialChunkStore דורש window כדי להשתמש ב-cache הפנימי שלו;
 // בלי IDB הוא נופל לזיכרון בלבד — בדיוק מה שה-harness צריך.
@@ -24,15 +25,20 @@ import { itemsToLines, cleanOcrText } from '../../src/services/materialExtractBr
 import { parseAssignmentSpec } from '../../src/services/assignmentSpecService.js';
 import {
   addMaterialDocument, commitMaterialStore, clearMaterialStore, getMaterialStoreStats,
-  readMaterialStore, putMaterialVectors,
+  readMaterialStore, putMaterialVectors, measureProseContinuity,
 } from '../../src/services/materialChunkStore.js';
-import { STYLE_EMBEDDING_SIGNATURE } from '../../src/services/styleEmbeddingService.js';
+import {
+  ensureRetrievalBackend, getRetrievalSignature, getRetrievalBackend,
+} from '../../src/services/retrievalEmbeddingService.js';
 import { ensureMaterialsEmbedded, findEvidenceForSection, findEvidenceForSpec } from '../../src/services/evidenceMatchService.js';
 import { buildScaffoldHtml } from '../../src/services/assignmentScaffoldDoc.js';
 import { ensureOpenersReady, composeSectionOpener } from '../../src/services/styleOpenerService.js';
 
+// ⚠️ הייתה כאן נפילה לנתיב מוחלט של מכונת הפיתוח הישנה, כולל שם משתמש. בפועל זה
+// הפך את *כל* הקורפוס ל"חסר" ברגע שהריפו נפתח במקום אחר, והרגרסיה נכשלה בלי
+// שום קשר לקוד. הנפילה נגזרת מ-homedir כדי שתהיה נכונה בכל פרופיל.
 const CORPUS_DIR = process.env.WORDAI_SCAFFOLD_CORPUS
-  || 'C:/Users/rotem/OneDrive/שולחן העבודה/314999533';
+  || path.join(os.homedir(), 'OneDrive', 'שולחן העבודה', '314999533');
 
 // ---------- חילוץ ----------
 
@@ -175,6 +181,10 @@ async function ingestFiles(paths) {
   let ocrCount = 0;
   for (const p of paths) {
     let { text, scanned, garbled } = await extractFile(p);
+    if (process.env.WORDAI_SLIDE_DIAG === '1') {
+      const m = measureProseContinuity(text);
+      console.log(`  [רציפות] נק'/100=${m.per100.toFixed(1).padStart(5)} · שורות/100=${m.linesPer100.toFixed(1).padStart(5)} · מילים/שורה=${m.wordsPerLine.toFixed(1).padStart(5)} · סגורות=${m.closedRatio.toFixed(2)} · ${String(m.words).padStart(6)} מילים · ${path.basename(p).slice(0, 34)}`);
+    }
     if (scanned || garbled) {
       text = await ocrPdf(p);
       ocrCount += 1;
@@ -189,7 +199,7 @@ async function ingestFiles(paths) {
   }
   await commitMaterialStore();
   const stats = getMaterialStoreStats();
-  console.log(`קורפוס: ${stats.materials} מקורות · ${stats.chunks} קטעים · ${ocrCount} עברו OCR`);
+  console.log(`קורפוס: ${stats.materials} מקורות · ${stats.chunks} קטעים · ${ocrCount} עברו OCR · ${stats.furnitureRemoved || 0} שורות ריהוט-דף הוסרו`);
   return stats;
 }
 
@@ -352,15 +362,24 @@ function printEval(rows, label) {
 // ---------- main ----------
 
 const t0 = Date.now();
-await buildCorpus();
+const corpusStats = await buildCorpus();
 
 // cache וקטורים: ids נגזרים מ-hash התוכן, ולכן וקטור שחושב פעם תקף לעד.
 // בלעדיו כל איטרציית כיול עולה ~100 שניות הטמעה מחדש.
-const CACHE_PATH = path.join(process.env.WORDAI_VERIFY_SCRATCH || '.', 'vec-cache.json');
+// מנוע האחזור נבחר לפני ההטמעה; חתימתו קובעת גם את שם ה-cache (קובץ לכל מנוע,
+// כדי שהחלפה לא תדרוס ותאלץ הטמעה מחדש בכל כיוון).
+await ensureRetrievalBackend();
+const EMBED_SIG = getRetrievalSignature();
+console.log(`מנוע אחזור: ${getRetrievalBackend()} · חתימה ${EMBED_SIG}`);
+
+const CACHE_PATH = path.join(
+  process.env.WORDAI_VERIFY_SCRATCH || '.',
+  `vec-cache-${EMBED_SIG.replace(/[^\w.-]/g, '_')}.json`,
+);
 if (fs.existsSync(CACHE_PATH)) {
   try {
     const cache = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
-    if (cache.signature === STYLE_EMBEDDING_SIGNATURE) {
+    if (cache.signature === EMBED_SIG) {
       const restored = putMaterialVectors(
         Object.entries(cache.vectors).map(([chunkId, vec]) => ({ chunkId, vec })),
         cache.signature,
@@ -383,19 +402,22 @@ console.log(`הוטמעו ${embedded} קטעים ב-${Math.round((Date.now() - t
 {
   const blob = readMaterialStore();
   const vecs = {};
-  for (const c of blob.chunks) if (c.vec && c.vecSig === STYLE_EMBEDDING_SIGNATURE) vecs[c.id] = c.vec;
+  for (const c of blob.chunks) if (c.vec && c.vecSig === EMBED_SIG) vecs[c.id] = c.vec;
   fs.mkdirSync(path.dirname(CACHE_PATH), { recursive: true });
-  fs.writeFileSync(CACHE_PATH, JSON.stringify({ signature: STYLE_EMBEDDING_SIGNATURE, vectors: vecs }), 'utf8');
+  fs.writeFileSync(CACHE_PATH, JSON.stringify({ signature: EMBED_SIG, vectors: vecs }), 'utf8');
 }
 
 // ---------- אבחון עומק (WORDAI_E2E_DIAG=1) ----------
 if (process.env.WORDAI_E2E_DIAG === '1') {
-  const { embedText, base64ToInt8, dequantizeVector, cosineSim: cosSim } =
+  const { base64ToInt8, dequantizeVector, cosineSim: cosSim } =
     await import('../../src/services/styleEmbeddingService.js');
+  const { embedForRetrieval } = await import('../../src/services/retrievalEmbeddingService.js');
+  const embedText = async (t) => (await embedForRetrieval([t], { kind: 'query' }))?.[0] || null;
   const blob = readMaterialStore();
   const chunks = blob.chunks.filter((c) => c.vec);
   const vecs = new Map(chunks.map((c) => [c.id, dequantizeVector(base64ToInt8(c.vec))]));
-  const dim = 384;
+  // נגזר מהווקטור, לא קבוע קשיח: e5=384, bge-m3=1024.
+  const dim = vecs.size ? (vecs.values().next().value?.length || 0) : 0;
   const centroid = new Float32Array(dim);
   for (const c of chunks) { const v = vecs.get(c.id); for (let i = 0; i < dim; i += 1) centroid[i] += v[i]; }
   let n = 0; for (let i = 0; i < dim; i += 1) n += centroid[i] ** 2;
@@ -426,8 +448,17 @@ if (process.env.WORDAI_E2E_DIAG === '1') {
   }
 }
 
-const rows = await runEval();
-const evalRes = printEval(rows, 'אחזור ראיות');
+// קורפוס תרחיש 1 (קורס הפילוסופיה) אינו בהכרח קיים בכל מכונה — ה-PDF-ים אינם
+// בריפו. בלעדיו כל המקרים חוזרים gap, וזה נראה כמו נסיגה באחזור בעוד שזו רק
+// היעדרות קבצים. מדלגים במפורש במקום להכשיל את ה-exit code.
+const corpus1Loaded = (corpusStats?.chunks || 0) > 0;
+let evalRes = { ok: 0, requiredOk: 0, required: 0 };
+if (!corpus1Loaded) {
+  console.log('\n═══ eval: אחזור ראיות ═══\n⏭  דילוג — קורפוס הקורס אינו זמין במכונה זו (WORDAI_SCAFFOLD_CORPUS)');
+} else {
+  const rows = await runEval();
+  evalRes = printEval(rows, 'אחזור ראיות');
+}
 
 // ---------- שלד מהמטלה האמיתית ----------
 if (fs.existsSync(ASSIGNMENT_PATH)) {
@@ -634,6 +665,9 @@ function groundingOverlap(sentence, chunkText) {
 
 let proseOk = 0;
 let proseTotal = 0;
+// הפרוזה שנוצרה נשמרת לקובץ כדי ש-style-eval.mjs יוכל לנקד אותה מול פרופיל
+// הסגנון של המשתמש. שני ההרנסים נשארים עצמאיים — אחד מייצר, השני שופט.
+const generatedProse = [];
 const proseCases = DIPLO_CASES.filter((c) => !c.expectGap);
 for (const c of proseCases) {
   const res = await findEvidenceForSection(c.section, { k: 4 });
@@ -663,10 +697,72 @@ for (const c of proseCases) {
     // כנות מכסה: 250 מילים מ-4 ראיות כמעט תמיד לא ישיג — חייבת הערה או ≥60%.
     if (!bad.length && r.wordCount < 150 && !r.notes.length) bad.push('מכסה חסרה בלי הערת [דרוש מקור נוסף]');
   }
+  if (r?.sentences?.length) generatedProse.push(r.sentences.map((s) => s.text).join(' '));
   if (bad.length) console.log(`✗ ${c.id}: ${bad.join(' · ')}`);
   else { proseOk += 1; console.log(`✓ ${c.id}: ${r.sentences.length} משפטים, ${r.wordCount} מילים${r.notes.length ? ' + הערת מכסה' : ''}`); }
 }
 console.log(`─── ${proseOk}/${proseTotal} סעיפי פרוזה מעוגנים תקינים`);
+
+// ---------- תרחיש 5: פרוזה **עברית** — מקור עברי, שאילתה עברית ----------
+// ⚠️ תרחישים 2-4 כולם חוצי-שפה (מקור אנגלי), ולכן מאז שמקור זר הוגבל לציטוט
+// בלבד הם אינם בודקים את מסלול הפרוזה המדווחת כלל. זהו המסלול המרכזי של המוצר
+// והוא היה ללא כיסוי. כאן נמדדות שתי התכונות שכרטיס הסגנון סימן: צפיפות "כי"
+// ושיעור השעבוד — שתיהן קיימות רק בעברית.
+console.log('\n═══ תרחיש 5: פרוזה עברית (מקור עברי) ═══');
+const HEB_DIR = path.join(CORPUS_DIR, 'סיכומים ותקצירים');
+const HEB_FILES = [
+  'מבוא למינהל ציבורי - שעור 6 - הפרדיגמה הבירוקרטית .pdf',
+  'מבוא למינהל ציבורי - שעור 7 - המינהל הציבורי החדש-רפורמות .pdf',
+  'מבוא למינהל ציבורי - שעור 8 - דמותו של המנהל הציבורי הישראלי.pdf',
+  'מבוא למינהל ציבורי - שעור 9 - רפורמות במנהל הציבורי בישראל.pdf',
+  'מבוא למינהל ציבורי - שעור 10  - ריכוז ביזור.pdf',
+];
+const hebPaths = HEB_FILES.map((n) => path.join(HEB_DIR, n))
+  .filter((p) => fs.existsSync(p) || (console.log(`  ⚠ חסר: ${path.basename(p)}`), false));
+
+let hebProse = '';
+if (hebPaths.length >= 2) {
+  await ingestFiles(hebPaths);
+  for (let pass = 0; pass < 200; pass += 1) {
+    const r = await ensureMaterialsEmbedded({});
+    if (r.unavailable || !r.remaining) break;
+  }
+  const hebSection = {
+    id: 'he1', title: 'הפרדיגמה הבירוקרטית והמינהל הציבורי החדש', intent: 'analysis',
+    instructions: 'הסבר.י את המעבר מהפרדיגמה הבירוקרטית אל המינהל הציבורי החדש (NPM) ואת הרפורמות שנגזרו ממנו.',
+    keywords: ['בירוקרטיה', 'מינהל ציבורי חדש', 'רפורמה', 'ביזור'],
+  };
+  const hebRes = await findEvidenceForSection(hebSection, { k: 5 });
+  const hebEv = hebRes.evidence || [];
+  console.log(`  ראיות: ${hebEv.length}${hebEv.length ? ` · z ${hebEv.map((e) => Number(e.z).toFixed(1)).join(', ')}` : ''}`);
+  if (hebRes.diag) console.log(`  diag: ${JSON.stringify(hebRes.diag)}`);
+  const hr = hebEv.length ? composeSectionProse(hebSection, hebEv, { quotaWords: 250, seedKey: 'he1' }) : null;
+  if (!hr?.sentences?.length) {
+    console.log('  ✗ לא נוצרה פרוזה עברית');
+  } else {
+    hebProse = hr.sentences.map((s) => s.text).join(' ');
+    const kiSents = hr.sentences.filter((s) => /(?:^|\s)כי(?:\s|$)/.test(s.text)).length;
+    const toks = (hebProse.match(/\S+/g) || []).length;
+    const sub = (hebProse.match(/\bאשר\b|\bכאשר\b|\bמכיוון\b|\bמפני\b|\bבעוד\b|\bלמרות\b|ש[א-ת]{2,}/g) || []).length;
+    console.log(`  ✓ ${hr.sentences.length} משפטים, ${hr.wordCount} מילים`);
+    console.log(`  צפיפות "כי": ${kiSents}/${hr.sentences.length} משפטים (${Math.round((kiSents / hr.sentences.length) * 100)}%)`);
+    console.log(`  שיעור שעבוד: ${(sub / Math.max(toks, 1)).toFixed(3)}  (המשתמש: 0.14)`);
+  }
+}
+
+{
+  const hePath = path.join(process.env.WORDAI_VERIFY_SCRATCH || '.', 'generated-prose-he.txt');
+  try { fs.writeFileSync(hePath, hebProse, 'utf8'); } catch {}
+}
+
+{
+  const outPath = path.join(process.env.WORDAI_VERIFY_SCRATCH || '.', 'generated-prose.txt');
+  try {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, generatedProse.join('\n\n'), 'utf8');
+    console.log(`פרוזה שנוצרה נשמרה: ${outPath}`);
+  } catch {}
+}
 
 // tesseract worker מחזיק את התהליך חי — חובה לסגור.
 if (ocrWorkerPromise) { try { await (await ocrWorkerPromise).terminate(); } catch {} }

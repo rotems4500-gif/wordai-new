@@ -118,7 +118,57 @@ export function checkInvariants(run) {
     out.push({ id: 'no-cross-dup', pass: !dups.length, detail: dups[0] || 'תקין' });
   }
 
-  // 6. אין undefined/שברי-תבנית בתוצר
+  // ---------- 6-8: תשובה מול פיגום ----------
+  //
+  // ⚠️ שלוש האינווריאנטות האלה נוספו אחרי ביקורת שהצביעה על כשל שאף שער קיים לא
+  // תפס: הפלט עבר עיגון 100%, אפס ג'יבריש, אפס כפילות — **ונראה כמו רצף פתיחים
+  // ולא כמו תשובה**. נמדד על מטלה אמיתית בדיני תקשורת:
+  //     פיגום 15-28% · מועתק 54-81% · ישויות מהשאלה 2 מתוך 7
+  // כלומר כחמישית מילוי, כשני שלישים העתקה מילה-במילה, ואפס ניתוח מקורי —
+  // ובשלושה מחמישה סעיפים התשובה לא הזכירה כלל את האדם שהשאלה עוסקת בו.
+  //
+  // הספים כאן הם **שערי רגרסיה**, מכוילים מעט מתחת למצב שנמדד: הם מגנים מפני
+  // הידרדרות ואינם מתיימרים לתאר הצלחה. היעד האמיתי רשום ליד כל אחד, ויתהדק
+  // כששכבת הניסוח תיכנס.
+  {
+    const scored = units.filter((u) => u.status !== 'blocked' && typeof u.scaffoldWordShare === 'number');
+    const bad = scored.filter((u) => u.scaffoldWordShare > 0.35);   // יעד: ≤0.15
+    out.push({
+      id: 'scaffold-budget',
+      pass: !bad.length,
+      detail: scored.length
+        ? `פיגום ממוצע ${Math.round((scored.reduce((a, u) => a + u.scaffoldWordShare, 0) / scored.length) * 100)}%${bad.length ? ` | חורגים: ${bad.map((u) => u.id).join(',')}` : ''}`
+        : 'לא נמדד',
+    });
+  }
+  {
+    const scored = units.filter((u) => u.status !== 'blocked' && typeof u.copiedWordShare === 'number');
+    const bad = scored.filter((u) => u.copiedWordShare > 0.85);     // יעד: ≤0.40
+    out.push({
+      id: 'copy-budget',
+      pass: !bad.length,
+      detail: scored.length
+        ? `מועתק ממוצע ${Math.round((scored.reduce((a, u) => a + u.copiedWordShare, 0) / scored.length) * 100)}%${bad.length ? ` | חורגים: ${bad.map((u) => u.id).join(',')}` : ''}`
+        : 'לא נמדד',
+    });
+  }
+  {
+    // "caseEntities" מגיע כמחרוזת "hits/total". סעיף בלי ישויות בשאלה אינו נספר.
+    let hits = 0; let total = 0;
+    for (const u of units) {
+      if (u.status === 'blocked' || typeof u.caseEntities !== 'string') continue;
+      const [h, t] = u.caseEntities.split('/').map((n) => Number(n) || 0);
+      hits += h; total += t;
+    }
+    const ratio = total ? hits / total : null;
+    out.push({
+      id: 'answers-the-question',
+      pass: ratio === null || ratio >= 0.25,                        // יעד: ≥0.80
+      detail: ratio === null ? 'אין ישויות בשאלות' : `${hits}/${total} ישויות מהשאלה מוזכרות בתשובה (${Math.round(ratio * 100)}%)`,
+    });
+  }
+
+  // 9. אין undefined/שברי-תבנית בתוצר
   {
     const bad = /undefined|\[object |NaN מילים/.test(text);
     out.push({ id: 'no-template-leak', pass: !bad, detail: bad ? 'נמצא שבר תבנית' : 'תקין' });

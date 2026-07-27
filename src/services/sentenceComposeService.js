@@ -87,12 +87,27 @@ export function composeMoveSentence(move, content = {}, opts = {}) {
   if (!grammar) return null;
   const def = grammar.moves?.[move];
   if (!def?.frames?.length) return null;
-  const { seedKey = '', profile = null, avoid = null, useConnector = false } = opts;
+  const {
+    seedKey = '', profile = null, avoid = null, useConnector = false,
+    preferSlot = null, avoidSlot = null,
+  } = opts;
+  // מסגרות שנכרו מהכתיבה של המשתמש עצמו (profile.minedFrames[move]) מצטרפות
+  // למאגר. ⚠️ בלי זה הפרופיל יכול רק **לשקלל מחדש** את המסגרות הקבועות — כלומר
+  // המנוע לעולם לא ידבר בניסוח של המשתמש אלא רק יעדיף ניסוחים שלי שבמקרה
+  // דומים לו. נמדד: מתוך 50 מסגרות, 5 בלבד הופיעו ב-57 העבודות של המשתמש.
+  const mined = Array.isArray(profile?.minedFrames?.[move]) ? profile.minedFrames[move] : [];
+  const allFrames = mined.length ? [...def.frames, ...mined] : def.frames;
   const rng = mulberry32(djb2(`${seedKey}|${move}`));
 
   // מסגרות ישימות: יש בתוכן את כל ה-placeholders שהמסגרת דורשת.
-  const usable = def.frames.filter((f) => {
+  // avoidSlot: פסילת כל מסגרת שמשתמשת בחריץ נתון. ⚠️ נדרש כי `preferSlot=null`
+  // רק **מפסיק להעדיף** — המסגרת נשארת בבריכה ועדיין נבחרת. נמדד: פסוקית
+  // אנפורית קיבלה מסגרת צד («במקרה של יקיר, זאת עמדה ש…») גם כשההעדפה כובתה,
+  // כי הכיבוי אינו פסילה.
+  const avoidTok = avoidSlot ? `@${avoidSlot}` : null;
+  const usable = allFrames.filter((f) => {
     if (avoid && avoid.has(f.id)) return false;
+    if (avoidTok && f.t.includes(avoidTok)) return false;
     if (f.needsAgreement && (!content.g || !content.n)) return false;
     return f.t.every((tok) => {
       if (typeof tok !== 'string' || !tok.startsWith('@')) return true;
@@ -100,15 +115,21 @@ export function composeMoveSentence(move, content = {}, opts = {}) {
       return Boolean(content[key]);
     });
   });
-  const pool = usable.length ? usable : def.frames.filter((f) => !avoid || !avoid.has(f.id));
+  const pool = usable.length ? usable : allFrames.filter((f) => !avoid || !avoid.has(f.id));
   if (!pool.length) return null;
 
   const personal = profile?.slots?.[move]?.frame || null;
   const lambda = profile ? Math.min(0.8, (profile.distinctDocs || 0) / 10) : 0;
+  // preferSlot: מטה את הבחירה למסגרות שבאמת משתמשות בחריץ נתון. נדרש כשהחריץ
+  // נושא **מידע שחייב להיאמר** ולא רק קישוט — למשל שם הצד שבשאלה: לספק אותו
+  // בלי להעדיף אותו שקול לא לספק אותו, כי רוב המסגרות מתעלמות ממנו.
+  // ×5 ולא בחירה קשיחה — כדי שהגיוון בין סעיפים יישמר.
+  const slotTok = preferSlot ? `@${preferSlot}` : null;
   const frame = weightedPick(rng, pool, (f) => {
     const base = (f.reg ?? 2) >= 2 ? 2 : 1;
     const count = personal ? (personal[f.id] || 0) : 0;
-    return base * (1 + lambda * Math.min(2, count / 2));
+    const slotBoost = slotTok && f.t.includes(slotTok) ? 5 : 1;
+    return base * slotBoost * (1 + lambda * Math.min(2, count / 2));
   });
   if (!frame) return null;
 

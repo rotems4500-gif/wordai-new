@@ -20,18 +20,38 @@ import {
   getMaterialVectorsBase64,
 } from './materialChunkStore';
 import {
-  STYLE_EMBEDDING_SIGNATURE,
-  embedTexts,
-  embedText,
   quantizeVector,
   dequantizeVector,
   int8ToBase64,
   base64ToInt8,
   cosineSim,
-  isEmbeddingUnavailable,
 } from './styleEmbeddingService';
+// מנוע ה-embeddings של האחזור נבחר בזמן ריצה (e5-WASM או bge-m3 דרך Ollama).
+// החתימה כבר אינה קבוע — היא נגזרת מהמנוע הפעיל, ולכן חייבים ensure לפני שקוראים
+// לה. ראה retrievalEmbeddingService להסבר על הקפאת החתימה.
+import {
+  ensureRetrievalBackend,
+  getRetrievalSignature,
+  embedForRetrieval,
+  isRetrievalEmbeddingUnavailable,
+} from './retrievalEmbeddingService';
 import { selectChunks, scoreChunkRelevance, tokenizeForRetrieval } from './styleRetrievalService';
-import { extractDoctrineAnchor, isGenericInstructionHeading } from './assignmentSpecService';
+import { extractDoctrineAnchor, extractDoctrineScope, isGenericInstructionHeading } from './assignmentSpecService';
+
+/**
+ * כמה ראיות לאחזר לכל סעיף. **ערך אחד לכל הקוראים.**
+ *
+ * ⚠️ עד 27.7 היו שלושה ערכים שונים: האפליקציה שלחה 5, ההרנס 6, וברירת המחדל
+ * בשירות 5 — כלומר הבנצ' מדד תצורה שאינה זו שנשלחת למשתמש. אותה משפחת תקלה
+ * שכבר הפילה את מדידת שכבת הניסוח ביולי, בקנה מידה קטן יותר.
+ *
+ * 10 נמדד (27.7, מסלול הכללים) מול 6 על אותה מטלה:
+ *   מילים 852→1042 · ישויות מהשאלה 44%→56% · פיגום גרוע 35%→29% ·
+ *   דטקטור 76→75 · עיגון נשאר 100%.
+ * במסלול הכללים כל ראיה מניבה **משפט אחד בדיוק**, ולכן k הוא התקרה הישירה על
+ * נפח הסעיף — וזו הסיבה שהערך שכויל כשהניסוח הפיק שני משפטים לראיה נמוך מדי כאן.
+ */
+export const DEFAULT_EVIDENCE_K = 10;
 
 // e5 מייצר דמיון "דחוס" — קטעים לא קשורים יושבים סביב 0.77 ולא סביב 0. לכן סף
 // מוחלט לבדו פוסל הכל או מקבל הכל. משלבים: רצפה מוחלטת + חלון יחסי מתחת לטוב ביותר.
@@ -71,7 +91,9 @@ const Z_WEAK = 3.0;   // רף שכבת ה"ראיה חלשה" — רק עם מו�
 // בלי להזיז את הסף עצמו. מוחל רק על z≥Z_KEEP עם עוגן מבחין — ראה doctrineAnchorTerms.
 const LEX_BOOST = 1.2;
 const MAD_SCALE = 1.4826; // MAD → אומדן σ תחת נורמליות
-const MAX_PER_SOURCE = 2; // גיוון: לא יותר מ-2 קטעים מאותו מקור ב-top-k
+const MAX_PER_SOURCE = 2; // גיוון: לא יותר מ-2 קטעים מאותו מקור במעבר הראשון
+// תקרת המילוי-החוזר כשהגיוון לא הספיק (ר' ההסבר ליד takeWithCap למטה).
+const MAX_PER_SOURCE_BACKFILL = 4;
 // במסלול הגיבוי (בלי embeddings) הציון הוא TF-IDF מנורמל — סקאלה אחרת לגמרי.
 const MIN_LEXICAL_SHARE = 0.18;
 
@@ -176,19 +198,21 @@ function doctrineAnchorTerms(section) {
  */
 export async function ensureMaterialsEmbedded({ limit = EMBED_BATCH_LIMIT, onProgress = null } = {}) {
   await ensureMaterialStoreReady();
+  await ensureRetrievalBackend();
+  const signature = getRetrievalSignature();
 
-  const unavailable = isEmbeddingUnavailable();
+  const unavailable = isRetrievalEmbeddingUnavailable();
   if (unavailable) return { embedded: 0, remaining: 0, unavailable };
 
-  const pending = getUnembeddedMaterialChunks(STYLE_EMBEDDING_SIGNATURE, { limit });
+  const pending = getUnembeddedMaterialChunks(signature, { limit });
   if (!pending.length) {
     return { embedded: 0, remaining: 0, unavailable: null };
   }
 
-  const vectors = await embedTexts(pending.map((c) => c.text), { kind: 'passage', onProgress });
-  // null = השכבה נפלה (WASM/רשת). לא זורקים — המסלול הלקסיקלי עדיין עובד.
+  const vectors = await embedForRetrieval(pending.map((c) => c.text), { kind: 'passage', onProgress });
+  // null = השכבה נפלה (WASM/Ollama/רשת). לא זורקים — המסלול הלקסיקלי עדיין עובד.
   if (!vectors) {
-    return { embedded: 0, remaining: pending.length, unavailable: isEmbeddingUnavailable() || 'embed-failed' };
+    return { embedded: 0, remaining: pending.length, unavailable: isRetrievalEmbeddingUnavailable() || 'embed-failed' };
   }
 
   const entries = [];
@@ -196,15 +220,15 @@ export async function ensureMaterialsEmbedded({ limit = EMBED_BATCH_LIMIT, onPro
     if (!vec) return;
     entries.push({ chunkId: pending[i].id, vec: int8ToBase64(quantizeVector(vec)) });
   });
-  const saved = putMaterialVectors(entries, STYLE_EMBEDDING_SIGNATURE);
+  const saved = putMaterialVectors(entries, signature);
 
-  const remaining = getUnembeddedMaterialChunks(STYLE_EMBEDDING_SIGNATURE, { limit: 1 }).length;
+  const remaining = getUnembeddedMaterialChunks(signature, { limit: 1 }).length;
   return { embedded: saved, remaining, unavailable: null };
 }
 
 // מפת chunkId → Float32Array. selectChunks מצפה ל-Map של וקטורים מפוענחים.
 function buildVectorMap() {
-  const base64Map = getMaterialVectorsBase64(STYLE_EMBEDDING_SIGNATURE);
+  const base64Map = getMaterialVectorsBase64(getRetrievalSignature());
   const map = new Map();
   for (const [chunkId, b64] of Object.entries(base64Map)) {
     try {
@@ -225,13 +249,15 @@ function buildVectorMap() {
  * @returns {Promise<{sectionId:string, evidence:Array<object>, gap:boolean, mode:string}>}
  */
 export async function findEvidenceForSection(section, {
-  k = 5,
+  k = DEFAULT_EVIDENCE_K,
   materialIds = null,
   projectId = null,
   vectorMap = null,
   minCosine = MIN_COSINE_FLOOR,
+  domainVector = null,
 } = {}) {
   await ensureMaterialStoreReady();
+  await ensureRetrievalBackend();
 
   const query = buildSectionQuery(section);
   const corpus = getMaterialChunks({ materialIds, projectId });
@@ -242,7 +268,7 @@ export async function findEvidenceForSection(section, {
   const probes = buildSectionProbes(section);
   let probeVectors = [];
   if (vectors.size && probes.length) {
-    const embedded = await embedTexts(probes, { kind: 'query' });
+    const embedded = await embedForRetrieval(probes, { kind: 'query' });
     probeVectors = (embedded || []).filter(Boolean);
   }
   const useVectors = probeVectors.length > 0 && vectors.size > 0;
@@ -250,6 +276,9 @@ export async function findEvidenceForSection(section, {
   let scored;
   let partial = false;
   let diag = null;
+  let corpusSize = 0;   // כמה קטעים מוטמעים השתתפו בדירוג — קובע אם הקורפוס "ממוקד"
+  // מוגדרת כאן ולא בתוך ענף ה-vectors: היא נצרכת גם בבניית הפלט שמחוצה לו.
+  let matchedAnchors = () => [];
 
   if (useVectors) {
     // ניקוד v2 — על *כל* הקורפוס, לא רק על מועמדי selectChunks: הסטטיסטיקה
@@ -260,6 +289,7 @@ export async function findEvidenceForSection(section, {
     const usableCorpus = corpus.filter((c) => !c.garbled);
     const embedded = usableCorpus.filter((c) => vectors.has(c.id));
     partial = embedded.length < usableCorpus.length;
+    corpusSize = embedded.length;
 
     // צנטרואיד הקורפוס — ממוצע וקטורי היחידה, מנורמל.
     const dim = probeVectors[0].length;
@@ -368,8 +398,19 @@ export async function findEvidenceForSection(section, {
     // גם וריאנט בלי תחילית (ה/ו/ב/ל/כ/מ/ש) — "הבלימה" בשאילתה מול "בלימה" בטקסט.
     // סף 4 תווים: מונחי 3 תווים ("מבנה" אחרי חיתוך? לא—) קצרים מדי והם שעיגנו
     // רעש ("מבנה", "מערכת") לקטעים זרים.
+    // ⚠️ העוגנים נבנים מ-query **וגם מהמסגרת** (framework/mustMention). בגרסה
+    // קודמת הם נגזרו מ-buildSectionQuery בלבד — כותרת+מילות מפתח+הנחיה — בעוד
+    // העוגן הדוקטרינרי נכנס ל-framework, שמזין רק את הגשושים הסמנטיים.
+    // התוצאה נמדדה על מטלת קייס אמיתית: מילון העוגנים הורכב משמות הדמויות
+    // ("דניאל", "יקיר", "טענות"), וקטע על חופש הביטוי לא מכיל אף אחד מהם —
+    // ולכן נדחה למרות שהוא בדיוק המקור הנכון.
+    const anchorSource = [
+      query,
+      String(section?.framework || ''),
+      ...(Array.isArray(section?.mustMention) ? section.mustMention : []),
+    ].filter(Boolean).join(' ');
     const anchorTerms = new Set();
-    for (const t of tokenizeForRetrieval(query)) {
+    for (const t of tokenizeForRetrieval(anchorSource)) {
       const s = String(t);
       if (s.length >= 4) anchorTerms.add(s);
       if (s.length >= 5 && /^[הובלכמש]/.test(s)) anchorTerms.add(s.slice(1));
@@ -381,8 +422,149 @@ export async function findEvidenceForSection(section, {
       const text = String(chunk.text || '').toLowerCase();
       return anchors.some((t) => text.includes(t));
     };
-    kept = scored.filter((s) => s.z >= Z_STRONG
-      || (s.z >= Z_KEEP && (s.scale === 'lexical-scaled' || hasAnchor(s.chunk))));
+
+    // ---------- מגבלה ידועה: שם דמות כעוגן ----------
+    //
+    // נמדד ומתועד: השאלה על "יצחק" אחזרה **תרגיל פיזיקה** מקובץ הנחיות-הגשה
+    // (z=3.46, המקור הראשון בסעיף) רק משום שהשם "יצחק" מופיע בשני המסמכים.
+    // בלי שכבת ניסוח זה מייצר טקסט מגושם שקורא תופס; **עם** שכבת ניסוח זה מייצר
+    // טיעון משפטי רהוט שקיבל עיגון 69% — הציון הגבוה בריצה — כי הוא נאמן למקור
+    // השגוי. שער העיגון אינו יכול לתפוס זאת מהגדרתו.
+    //
+    // שלושה תיקונים נוסו ונפסלו במדידה:
+    //   1. עוגני-דוקטרינה מ-framework      → framework מכיל את הכותרת ולכן גם
+    //                                        את שם הדמות. ללא שינוי.
+    //   2. הפרדת doctrineTerms + טוקנים    → 5/6 סעיפים, אך "תקשורת"/"אחריות"
+    //                                        (מילים גנריות במחלקה לתקשורת)
+    //                                        המשיכו להכשיר את אותו קובץ.
+    //   3. התאמת ביטוי מלא                 → הפיזיקה נפסלה, אבל **1/6 סעיפים,
+    //                                        29 מילים** — סיכום שיעור אינו מכיל
+    //                                        "חופש הביטוי" כלשונו.
+    //   4. סינון לפי תדירות-מסמכים         → **רגרסיה בבנצ'**: אחזור 4/5 ופרוזה
+    //                                        2/2 במקום 5/5 ו-3/3.
+    //
+    // הוחזר למצב הידוע-כתקין (5/6 · 5/5 · 3/3). doctrineAnchors נשאר בשימוש
+    // בשכבת הנפילה בלבד, שם הוא כן מועיל ואינו פוגע.
+    //
+    // ⚠️ לפני שמחברים שכבת ניסוח לייצור — חייבים לפתור את זה. הכיוון הסביר אינו
+    // עוד ניסוי בעוגנים אלא **שער רלוונטיות-מקור נפרד**: לבדוק שהקטע עוסק בתחום
+    // של המטלה, לא רק שהוא חולק איתה מילה.
+    const doctrineAnchors = (() => {
+      const set = new Set();
+      const src = [
+        String(section?.doctrineTerms || ''),
+        ...(Array.isArray(section?.mustMention) ? section.mustMention : []),
+        ...(Array.isArray(section?.keywords) ? section.keywords : []),
+      ].filter(Boolean).join(' ');
+      for (const t of tokenizeForRetrieval(src)) {
+        const s = String(t);
+        if (s.length >= 4) set.add(s);
+        if (s.length >= 5 && /^[הובלכמש]/.test(s)) set.add(s.slice(1));
+      }
+      return [...set];
+    })();
+
+    matchedAnchors = (chunk) => {
+      const text = String(chunk.text || '');
+      return doctrineAnchors.filter((t) => text.includes(t));
+    };
+
+    // ---------- שער רלוונטיות-תחום ----------
+    // ⚠️ ההגנה שחסרה כשמוסיפים שכבת ניסוח. כל התיקונים הקודמים ניסו לחדד את
+    // העוגן הלקסיקלי *של השאלה*, ולכן נגררו לעובדות המקרה. כאן נשאלת שאלה אחרת
+    // לגמרי, בלתי תלויה בשאלה הספציפית: **האם הקטע בכלל עוסק בתחום של המטלה?**
+    //
+    // המדד: קרבה סמנטית של הקטע לדוקטרינה המוצהרת בפתיח ("חופש הביטוי, פרטיות,
+    // לשון הרע…"). הסף יחסי — חציון הקורפוס — ולכן מסנן רק קטעים **מתחת לממוצע**
+    // הרלוונטיות לתחום. תרגיל פיזיקה בקורפוס של דיני תקשורת נופל שם בבירור,
+    // וסיכום שיעור רלוונטי אינו נפגע.
+    //
+    // כשאין דוקטרינה מוצהרת (בקרות שטוחות ב-e2e) — השער כבוי לחלוטין.
+    let domainOk = () => true;
+    if (domainVector && scored.length) {
+      const sims = new Map();
+      for (const s of scored) {
+        const v = vectors.get(s.chunk.id);
+        if (v) sims.set(s.chunk.id, cosineSim(domainVector, v));
+      }
+      // ⚠️ הסף הוא **רבעון תחתון ולא חציון**. חציון פוסל מחצית מהמועמדים בהגדרה,
+      // גם כשכל הקורפוס על-הנושא — וזה בדיוק תרחיש השימוש (חומרי קורס אחד).
+      // נמדד: סעיף 6 קיבל ראיה אחת בלבד ונעצר על 42 מילים מתוך 180. מה שהשער
+      // נועד לתפוס (תרגיל פיזיקה בקורפוס דיני תקשורת) יושב הרחק מתחת ל-p25,
+      // ולכן ההרפיה אינה מחזירה אותו.
+      const sorted = [...sims.values()].sort((a, b) => a - b);
+      const cut = sorted[Math.floor(sorted.length * 0.25)] || 0;
+      domainOk = (chunk) => (sims.get(chunk.id) ?? 1) >= cut;
+      if (diag) diag.domainCut = +cut.toFixed(4);
+    }
+
+    // ⚠️ המסלול הרגיל נשאר על hasAnchor (עוגני השאילתה). שלושה ניסיונות להחמיר
+    // אותו לעוגני-דוקטרינה נמדדו ונפסלו — ר' הבלוק "מגבלה ידועה" למעלה.
+    kept = scored.filter((s) => domainOk(s.chunk) && (s.z >= Z_STRONG
+      || (s.z >= Z_KEEP && (s.scale === 'lexical-scaled' || hasAnchor(s.chunk)))));
+
+    // ---------- שכבת נפילה: קורפוס ממוקד ----------
+    // ⚠️ הסף היחסי (z) מודד חריגה מהתפלגות הקורפוס, ולכן הוא מניח בשקט שרוב
+    // הקורפוס **אינו** רלוונטי לשאילתה. ההנחה נכונה לספרייה מגוונת (עליה כויל:
+    // 584 ואז 944 קטעים) ומתהפכת בדיוק בתרחיש השימוש המרכזי — משתמש מעלה את
+    // חומרי הקורס שלו וכותב עליהם. אז *הכל* על-הנושא, החציון עולה, ואף קטע
+    // אינו חריג.
+    //
+    // נמדד: 5 סיכומי הרצאה במינהל ציבורי (32 קטעים), שאילתה על המעבר לניהול
+    // ציבורי חדש. הקטע המוביל היה "מנהל ציבורי חדש = NPM (New Public
+    // Management)" — התשובה המדויקת — ב-z=3.27 מול סף 3.4. אפס ראיות הוחזרו.
+    //
+    // הנפילה דורשת **עוגן לקסיקלי** מהשאילתה בטקסט, ולכן היא אינה מרפה את
+    // הסינון: בקרה שלילית לא נושאת את מונחי השאילתה ולעולם לא תגיע לכאן.
+    // מסומן weak — הצרכן יודע שזו ראיה מדורגת ולא ראיה שחצתה סף.
+    // ⚠️ הגרסה הראשונה הגבילה את הנפילה לקורפוס קטן (≤200 קטעים). זו הייתה טעות:
+    // הבעיה אינה **גודל** אלא **הומוגניות**. נמדד על המטלה האמיתית בדיני תקשורת —
+    // 564 קטעים, כולם חומרי אותו קורס — **כל ששת הסעיפים חזרו ריקים**, בדיוק
+    // כמו 32 הקטעים של מינהל ציבורי. גודל הקורפוס אינו מנבא כלום; מה שקובע הוא
+    // שכשהכל על-הנושא, אין חריגים.
+    //
+    // מה שמחליף את מגבלת הגודל כשומר-סף: **שני עוגנים מבחינים** במקום אחד.
+    // המסלול הרגיל מסתפק בעוגן אחד כי הוא ממילא דורש z≥3.4; כאן הסף נמוך, ולכן
+    // הדרישה הלקסיקלית מחמירה — כדי ששאילתה עברית זרה לא תיכנס על סמך מילה
+    // אחת שהופיעה במקרה.
+    // 1.6 ולא 2.0: נמדד שכל הראיות במטלה האמיתית מגיעות דרך השכבה הזו בטווח
+    // z 2.0–3.2, כלומר הסף עצמו הוא הכובל — סעיף שלם נעצר על ראיה אחת ועל 46
+    // מילים מתוך 180. שלוש שכבות הגנה נשארות מעליו: שער התחום, דרישת שני
+    // העוגנים כאן, ושער העיגון בשכבת הניסוח.
+    const FOCUSED_MIN_Z = Number(globalThis.__WORDAI_FOCUSED_MIN_Z || 1.6);
+    const FOCUSED_MIN_ANCHORS = 2;
+
+    // אותם עוגני דוקטרינה של המסלול הרגיל (ר' hasDoctrineAnchor למעלה) — כאן
+    // נספרים, כי שכבת הנפילה דורשת שניים ולא אחד.
+    const anchorCount = (chunk) => {
+      if (doctrineAnchors.length) return matchedAnchors(chunk).length;
+      const text = String(chunk.text || '').toLowerCase();
+      let n = 0;
+      for (const t of anchors) if (text.includes(t)) n += 1;
+      return n;
+    };
+    // ⚠️ זהו **תגבור**, לא רק נפילה. הגרסה הקודמת פעלה רק כש-kept ריק לגמרי,
+    // ולכן סעיף שקיבל בדיוק ראיה אחת דרך המסלול הרגיל לא תוגבר — וכשמשפטה
+    // היחיד כבר נוצל בסעיף אחר (sharedUsedSentences מונע כפילות חוצת-עבודה)
+    // הוא נחסם. נמדד: sec_5 ו-sec_6 נחסמו כך למרות שהיו להם ראיות.
+    //
+    // שתי דרגות, ושתיהן דורשות עוגן לקסיקלי — זו תכונת הבטיחות שנמדדה
+    // (בקרות שליליות אינן נושאות את מונחי השאילתה):
+    //   א. z נמוך אך תמיכה לקסיקלית חזקה (2 עוגנים)
+    //   ב. z בינוני עם עוגן אחד
+    const FOCUSED_MIN_Z_STRONG = 3.0;
+    const THIN_KEPT = 3;
+    if (kept.length < THIN_KEPT) {
+      const already = new Set(kept.map((s) => s.chunk.id));
+      const extra = scored.filter((s) => {
+        if (already.has(s.chunk.id)) return false;
+        if (!domainOk(s.chunk)) return false;   // שער התחום חל גם על התגבור
+        const n = anchorCount(s.chunk);
+        return (s.z >= FOCUSED_MIN_Z && n >= FOCUSED_MIN_ANCHORS)
+          || (s.z >= FOCUSED_MIN_Z_STRONG && n >= 1);
+      }).map((s) => ({ ...s, weak: true, focused: true }));
+      kept = [...kept, ...extra].slice(0, Math.max(6, k));
+    }
 
     // שכבת "ראיה חלשה": כשאין אף ראיה מלאה אבל מונח-חובה של המרצה מופיע
     // *מילולית* בקטע עם z גבולי — עדיף להראות אותו מסומן כחלש מאשר לשתוק.
@@ -407,15 +589,41 @@ export async function findEvidenceForSection(section, {
     kept = scored.filter((s) => s.score >= floor);
   }
 
-  // גיוון מקורות: kept ממויין יורד, סופרים כמה כבר נלקחו מכל מקור.
-  const perSource = new Map();
-  kept = kept.filter((s) => {
+  // גיוון מקורות — *העדפה*, לא הרעבה.
+  //
+  // מעבר ראשון: לכל היותר MAX_PER_SOURCE מכל מקור, כדי שסעיף לא ייבנה כולו על
+  // מאמר אחד כשיש חלופות. מעבר שני: אם אחרי הגיוון נשארו פחות מ-k ראיות, ממלאים
+  // מהשאריות עד תקרה גבוהה יותר.
+  //
+  // למה: נמדד שסעיפים שהתשובה שלהם יושבת במקור *אחד* (הטיפולוגיה של גונדל,
+  // עקרון ה-PMP של וולפספלד) קיבלו בדיוק 2 קטעים — ואז targetWords
+  // (=workList.length·45 ב-proseComposeService) נחתך ל-90 מילים והפרוזה יצאה
+  // עם הערת "דרוש מקור נוסף" למרות שבמקור יש עוד חומר תקף. הכלל שנועד לגוון
+  // הפך לתקרת תפוקה.
+  //
+  // ⚠️ אין כאן ריכוך של הסינון: הראיות שמתווספות כבר עברו את *אותו* שער z+עוגן.
+  // רק ההיוריסטיקה של הגיוון ויתרה, ולכן שום ראיה חלשה יותר לא נכנסת.
+  const takeWithCap = (items, cap, counts) => items.filter((s) => {
     const key = s.chunk.materialId;
-    const n = perSource.get(key) || 0;
-    if (n >= MAX_PER_SOURCE) return false;
-    perSource.set(key, n + 1);
+    const n = counts.get(key) || 0;
+    if (n >= cap) return false;
+    counts.set(key, n + 1);
     return true;
-  }).slice(0, k);
+  });
+
+  const perSource = new Map();
+  const diverse = takeWithCap(kept, MAX_PER_SOURCE, perSource);
+  if (diverse.length < k) {
+    const chosen = new Set(diverse.map((s) => s.chunk.id));
+    const backfill = takeWithCap(
+      kept.filter((s) => !chosen.has(s.chunk.id)),
+      MAX_PER_SOURCE_BACKFILL,
+      perSource,
+    );
+    kept = [...diverse, ...backfill].sort((a, b) => b.z - a.z).slice(0, k);
+  } else {
+    kept = diverse.slice(0, k);
+  }
 
   return {
     sectionId: section?.id || null,
@@ -430,6 +638,8 @@ export async function findEvidenceForSection(section, {
       sectionHint: s.chunk.sectionHint,
       sourceUrl: s.chunk.sourceUrl || null,
       strength: s.weak ? 'weak' : (s.chunk.strength || 'full'),
+      // אילו ביטויי דוקטרינה הכשירו את הקטע — לאבחון "למה נבחר המקור הזה".
+      anchors: useVectors ? matchedAnchors(s.chunk).slice(0, 4) : [],
       text: s.chunk.text,
       score: Number(s.score.toFixed(3)),
       z: s.z === null ? null : Number(s.z.toFixed(2)),
@@ -439,6 +649,10 @@ export async function findEvidenceForSection(section, {
       // בלעדיהם מתנהג כמו קודם (לא נקי, לא שקפים).
       cleanDigital: Boolean(s.chunk.cleanDigital),
       sourceKind: s.chunk.sourceKind || null,
+      // נבחרה בשכבת הנפילה של קורפוס ממוקד — כלומר עברה עוגן לקסיקלי ודירוג,
+      // ולא סף z. proseComposeService חייב לדעת זאת: הסף המוחלט שלו (zFloor)
+      // אינו בר-השגה בקורפוס ממוקד מעצם הגדרתו.
+      focused: Boolean(s.focused),
     })),
   };
 }
@@ -450,6 +664,7 @@ export async function findEvidenceForSection(section, {
  */
 export async function findEvidenceForSpec(spec, opts = {}) {
   await ensureMaterialStoreReady();
+  await ensureRetrievalBackend();
   const sections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
   const vectorMap = buildVectorMap();
 
@@ -462,6 +677,26 @@ export async function findEvidenceForSpec(spec, opts = {}) {
   // מקרה ("צייד לווייתנים"), והמקור הנכון הוא המסגרת האנליטית של האב ("עקרונות
   // מיל"). נמדד: בלי הירושה, שאלות מיל קיבלו הפניות למארקס — התאמה לסיפור
   // במקום לתיאוריה שאיתה עונים עליו.
+  // עוגן דוקטרינרי ברמת המסמך — נסרק מכל טקסט המטלה. במטלת קייס כותרת כל שאלה
+  // היא עובדות המקרה ("אילו טענות עשויה דליה להעלות"), והמסגרת האנליטית מוצהרת
+  // פעם אחת בפתיח ("סוגיות של חופש הביטוי, פרטיות, לשון הרע, אתיקה עיתונאית").
+  // בלי זה כל שאילתה מחפשת לפי שמות הדמויות ואינה פוגשת את הדוקטרינה.
+  // ⚠️ המקור הראשי הוא spec.doctrineScope, שנחלץ בפרסר מהטקסט **המלא**. הסריקה
+  // מהסעיפים היא רק נפילה: הפתיח יושב לפני השאלות ואינו נכלל בגוף אף סעיף, ולכן
+  // גרסה שסרקה רק את הסעיפים לא מצאה דבר ולא שינתה כלום בתוצאה.
+  const docScope = spec?.doctrineScope || extractDoctrineScope(
+    sections.map((s) => `${s?.title || ''} ${String(s?.instructions || '').slice(0, 800)}`).join('\n'),
+  );
+
+  // וקטור התחום — מוטמע **פעם אחת** לכל העבודה ומוזרם לכל הסעיפים. הוא מייצג
+  // את הדוקטרינה המוצהרת בפתיח, בלי עובדות המקרה ובלי השאלה הספציפית, ולכן
+  // הוא המדד היחיד כאן שאי אפשר להרעיל בשם של דמות. ר' "שער רלוונטיות-תחום".
+  let domainVector = null;
+  if (docScope) {
+    const dv = await embedForRetrieval([docScope], { kind: 'query' });
+    domainVector = (dv && dv[0]) || null;
+  }
+
   const units = [];
   for (const section of sections) {
     // round-4: הגנה כפולה מעבר לתיקון ב-assignmentSpecService (שם הכותרת
@@ -471,13 +706,24 @@ export async function findEvidenceForSpec(spec, opts = {}) {
     // באותו regex — כך שהגשוש/הבוסט לא ניזונים מכותרת ריקה. נמדד: sec_1 (מיל)
     // ב-round-2/3 קיבל framework="ניתוח הסעיפים הבאים" בלי עוגן לקסיקלי מבחין.
     const ownTitle = String(section.title || '').trim();
-    const ownFramework = isGenericInstructionHeading(ownTitle)
+    let ownFramework = isGenericInstructionHeading(ownTitle)
       ? (extractDoctrineAnchor(section.instructions) || ownTitle)
       : ownTitle;
+    // כותרת שהיא עובדות-מקרה אינה "גנרית" לפי isGenericInstructionHeading (יש בה
+    // תוכן), אבל היא מסגרת אנליטית גרועה. כשקיים עוגן ברמת המסמך, מצרפים אותו —
+    // הגשוש מקבל גם את המקרה וגם את הדוקטרינה, ו-z הוא המקסימום ביניהם.
+    if (docScope && ownFramework && !ownFramework.includes(docScope)) {
+      ownFramework = `${ownFramework} ${docScope}`;
+    } else if (docScope && !ownFramework) {
+      ownFramework = docScope;
+    }
     // סעיף ראשי: המסגרת שלו היא כותרתו הדוקטרינרית ("עקרונות המרקסיזם") — עובדות
     // המקרה יושבות ב-instructions ולא בכותרת, ולכן הכותרת היא עוגן נקי. מזין את
     // גשוש-המסגרת ואת הבוסט הלקסיקלי גם לסעיפים בלי תת-סעיפים (sec_2/sec_3).
-    units.push(section.framework ? section : { ...section, framework: ownFramework });
+    // doctrineTerms נשמר **בנפרד** מ-framework: framework מזין את גשוש-האחזור
+    // (ושם שילוב עובדות-המקרה מועיל), ואילו doctrineTerms מזין את **העוגן
+    // הלקסיקלי** — ושם עובדות המקרה הן רעל, כי שם דמות מכשיר מסמכים זרים.
+    units.push({ ...(section.framework ? section : { ...section, framework: ownFramework }), doctrineTerms: docScope || '' });
     for (const sub of (Array.isArray(section.subSections) ? section.subSections : [])) {
       units.push({
         ...sub,
@@ -488,6 +734,7 @@ export async function findEvidenceForSpec(spec, opts = {}) {
         // מזינה את גשוש-המסגרת ואת העוגן הלקסיקלי ב-buildSectionProbes/
         // doctrineAnchorTerms — התיקון המרכזי של round-1.
         framework: ownFramework,
+        doctrineTerms: docScope || '',
         keywords: Array.isArray(section.keywords) ? section.keywords : [],
         mustMention: (sub.mustMention?.length ? sub.mustMention : section.mustMention) || [],
       });
@@ -496,7 +743,7 @@ export async function findEvidenceForSpec(spec, opts = {}) {
 
   for (const unit of units) {
     // סדרתי בכוונה: embedText טוען מודל WASM יחיד, ובקשות מקבילות רק מתחרות עליו.
-    const result = await findEvidenceForSection(unit, { ...opts, vectorMap });
+    const result = await findEvidenceForSection(unit, { ...opts, vectorMap, domainVector });
     bySection[unit.id] = result;
     if (result.gap) gaps.push(unit.id);
     if (result.mode !== 'none') mode = result.mode;

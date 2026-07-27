@@ -54,6 +54,114 @@ function isChunkGarbled(text) {
   return pure / tokens.length < CHUNK_GARBLE_FLOOR;
 }
 
+// ---------- זיהוי מצגת ----------
+//
+// חומרי קורס טיפוסיים הם מצגות הרצאה שיוצאו ל-PDF. תבליט אינו פרוזה מדווחת:
+// הוא צירוף-נושא בלי פועל מוטה, ולעיתים כותרת שקף שנדבקה לגוף. proseComposeService
+// כבר יודע לטפל בזה (sourceKind='slides' ⇒ מהלך ציטוט בלבד, round-4) — אבל רק
+// כשמישהו מסמן זאת, ו-PDF של מצגת הגיע בלי סימון.
+//
+// ⚠️ הסימן המתבקש — שורות קצרות בלי נקודה — **אינו אמין**: חילוץ PDF שובר כל
+// פסקה לשורות ויזואליות, ולכן גם מאמר רציף נראה כך. הסימן שנבחר אינו תלוי
+// בשבירת שורות: **צפיפות נקודות-סיום ל-100 מילים**. טקסט רציף בנוי ממשפטים
+// (משפט ~20 מילים ⇒ ~5 נקודות ל-100 מילים); מצגת בנויה מתבליטים ללא סיומת.
+const SLIDE_MIN_WORDS = 120;        // קצר מדי לשיפוט אמין
+// ⚠️ המועמד הראשון — צפיפות נקודות-סיום — **נפסל במדידה**: 10 מאמרים נתנו
+// 5.14-12.34 נקודות ל-100 מילים ו-5 מצגות נתנו 1.83/5.85/10.00/7.22/2.23.
+// חפיפה מלאה; אחת המצגות דירגה גבוה מרוב המאמרים. הסף שנבחר להלן נקבע מהמדידה
+// של ארבעת המועמדים (ר' WORDAI_SLIDE_DIAG ב-scaffold-e2e).
+// נמדד על 15 מסמכים אמיתיים (10 מאמרים אקדמיים · 5 מצגות הרצאה):
+//   מאמרים  7.1 – 15.2 מילים לשורה
+//   מצגות   2.3 –  6.1
+// הפרדה נקייה. 6.5 יושב באמצע הפער ומשאיר מרווח לשני הכיוונים.
+//
+// ⚠️ המדד תלוי בשבירת השורות של המחלץ (itemsToLines), ולכן הסף תקף למחלץ הזה.
+// מחלץ שמאחד עמוד לשורה אחת יהרוס אותו. כיוון השגיאה נבחר בכוונה: מאמר שסווג
+// בטעות כמצגת מוגבל לציטוט ומאבד פרוזה — ולכן הסף נוטה לטובת "רציף".
+const SLIDE_WORDS_PER_LINE = 6.5;
+
+/**
+ * מדד הרציפות של מסמך: נקודות-סיום ל-100 מילים, וההכרעה הנגזרת ממנו.
+ * @returns {{per100:number, words:number, isSlides:boolean}}
+ */
+export function measureProseContinuity(text) {
+  const src = String(text || '');
+  const words = countWords(src);
+  const terminals = (src.match(/[.!?׃]/g) || []).length;
+  const per100 = words ? (terminals / words) * 100 : 0;
+
+  const lines = src.split('\n').map((l) => l.trim()).filter(Boolean);
+  const linesPer100 = words ? (lines.length / words) * 100 : 0;
+  const wordsPerLine = lines.length ? words / lines.length : 0;
+  const closedLines = lines.filter((l) => /[.!?׃:]$/.test(l)).length;
+  const closedRatio = lines.length ? closedLines / lines.length : 0;
+
+  return {
+    words, per100, linesPer100, wordsPerLine, closedRatio,
+    isSlides: words >= SLIDE_MIN_WORDS && wordsPerLine < SLIDE_WORDS_PER_LINE,
+  };
+}
+
+// ---------- ריהוט-דף חוזר (running headers / footers / חותמות מו"ל) ----------
+//
+// נמדד (יולי 2026) על קורפוס הדיפלומטיה: החיובי-השגוי הגבוה ביותר *בשני* מנועי
+// ההטמעה שנבדקו (e5 ו-bge-m3) לא היה תוכן בכלל אלא חותמת הורדה של Wiley —
+//   "…Downloaded from https://onlinelibrary.wiley.com/doi/… See the Terms and
+//    Conditions … for rules of use; OA articles are governed by…"
+// שמוזרקת מחדש **בכל עמוד**. במאמר של 12 עמודים היא נכנסה ל-35 מקטעים, קיבלה
+// z=5.85 מול שאילתת בקרה שלילית על מיל, ונדחתה רק בזכות העוגן הלקסיקלי.
+//
+// ⚠️ למה *לא* מסנן מילות-מפתח: נמדד שאותם סמנים בדיוק ("licence", "permission",
+// "Wiley") מופיעים כתוכן לגיטימי אצל ניי ("denying licenses to others", "Turkey's
+// permission for American troops") ובביבליוגרפיה של וולפספלד ("Hoboken, N.J.:
+// Wiley-Blackwell"). מסנן סמנים היה קורע חורים דווקא במקור המרכזי של הקורפוס.
+//
+// הסימן הנכון הוא **חזרתיות**: ריהוט דף חוזר מילה-במילה על פני עמודים, ומשפט
+// תוכן אמיתי לא. הנרמול מוחק ספרות כדי ש"…Diplomacy 234" ו"…Diplomacy 235"
+// (כותרת רצה + מספר עמוד) ייחשבו לאותה שורה.
+const FURNITURE_MIN_REPEATS = 3;   // שתי הופעות עדיין יכולות להיות צירוף מקרים
+const FURNITURE_MIN_CHARS = 25;    // שורה קצרה מדי חוזרת גם בתוכן ("טבלה 1")
+
+function furnitureKey(line) {
+  return String(line || '')
+    .toLowerCase()
+    .replace(/\d+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * מסיר שורות שחוזרות ≥3 פעמים במסמך (אחרי נרמול). שומר על מבנה השורות ועל
+ * מפרידי העמודים (\f) — מפת העמודים והפרובננס ממשיכים לעבוד.
+ *
+ * @param {string} text
+ * @returns {{text:string, removed:number}} removed = כמה שורות סוננו
+ */
+export function stripRepeatedFurniture(text) {
+  const src = String(text || '');
+  if (!src) return { text: src, removed: 0 };
+  const lines = src.split('\n');
+  if (lines.length < 6) return { text: src, removed: 0 };
+
+  const counts = new Map();
+  for (const line of lines) {
+    const key = furnitureKey(line);
+    if (key.length < FURNITURE_MIN_CHARS) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  let removed = 0;
+  const kept = lines.filter((line) => {
+    const key = furnitureKey(line);
+    if (key.length < FURNITURE_MIN_CHARS) return true;
+    if ((counts.get(key) || 0) < FURNITURE_MIN_REPEATS) return true;
+    removed += 1;
+    return false;
+  });
+  if (!removed) return { text: src, removed: 0 };
+  return { text: kept.join('\n'), removed };
+}
+
 // כותרת סעיף בתוך מאמר: שורה קצרה בלי נקודה בסוף, או ממוספרת, או Markdown.
 const SECTION_LINE_RE = /^(?:#{1,4}\s+.+|(?:\d+(?:\.\d+)*|[א-ת])[.)]\s+\S.{0,80}|[^\n.!?]{3,80})$/;
 
@@ -415,10 +523,17 @@ export function addMaterialDocument({
 
   const materialId = `mt_${hash8(docHash)}`;
   const sourceTitle = String(title || 'חומר עזר').trim();
-  const pieces = chunkText(raw);
+  // ריהוט-דף מוסר *לפני* החיתוך. ה-hash לדה-דופ נשאר על הטקסט המקורי, כך
+  // שהניקוי לא הופך מסמך שכבר מאונדקס ל"חדש".
+  const { text: body, removed: furnitureRemoved } = stripRepeatedFurniture(raw);
+  // זיהוי מצגת אוטומטי כשהקורא לא סימן במפורש. חומרי קורס טיפוסיים הם מצגות
+  // הרצאה שיוצאו ל-PDF, והן הגיעו עד כה בלי sourceKind — כלומר תבליטים שימשו
+  // כפרוזה מדווחת. סימון מפורש מהקורא (pptx) תמיד גובר.
+  const detectedKind = sourceKind || (measureProseContinuity(body).isSlides ? 'slides' : null);
+  const pieces = chunkText(body);
   if (!pieces.length) return { materialId: null, added: 0, skipped: false };
 
-  const pageMarks = buildPageMap(raw);
+  const pageMarks = buildPageMap(body);
   const addedAt = nowTs();
   const safeSourceUrl = String(sourceUrl || '').trim() || null;
   const safeStrength = strength === 'abstract' ? 'abstract' : 'full';
@@ -428,7 +543,7 @@ export function addMaterialDocument({
   let cursor = 0;
   const newChunks = pieces.map((piece, i) => {
     const probe = piece.slice(0, 60);
-    const found = raw.indexOf(probe, cursor);
+    const found = body.indexOf(probe, cursor);
     const charStart = found >= 0 ? found : cursor;
     cursor = charStart + Math.max(1, piece.length - 20);
     return {
@@ -440,7 +555,7 @@ export function addMaterialDocument({
       terms: extractTerms(piece),
       charStart,
       pageHint: pageAtOffset(pageMarks, charStart),
-      sectionHint: sectionForChunk(raw, piece, charStart),
+      sectionHint: sectionForChunk(body, piece, charStart),
       sourceUrl: safeSourceUrl,
       strength: safeStrength,
       // OCR משובש (טורים מעורבבים / עמוד איור) — מוחרג מהאחזור הסמנטי. שדה
@@ -450,7 +565,7 @@ export function addMaterialDocument({
       // ב-proseComposeService. sourceKind='slides' מגביל שימוש למהלך ציטוט בלבד
       // (תבליטי מצגת אינם פרוזה מדווחת). שני השדות אופציונליים, ברירת מחדל שמרנית.
       cleanDigital: Boolean(cleanDigital),
-      sourceKind: sourceKind || null,
+      sourceKind: detectedKind,
       addedAt,
       vec: null,      // base64 int8 — ממולא ע"י putMaterialVectors
       vecSig: null,   // חתימת המודל, כדי לפסול וקטורים ממודל ישן
@@ -461,7 +576,8 @@ export function addMaterialDocument({
     id: materialId,
     title: sourceTitle,
     hash: docHash,
-    wordCount: countWords(raw),
+    wordCount: countWords(body),
+    furnitureRemoved,
     chunkCount: newChunks.length,
     addedAt,
     source,
@@ -565,6 +681,7 @@ export function getMaterialStoreStats() {
     materials: blob.materials.length,
     chunks: blob.chunks.length,
     chars: blob.chunks.reduce((s, c) => s + String(c.text || '').length, 0),
+    furnitureRemoved: blob.materials.reduce((s, m) => s + (Number(m.furnitureRemoved) || 0), 0),
     embedded: blob.chunks.filter((c) => Boolean(c.vec)).length,
     signatureCounts,
     caps: blob.caps,

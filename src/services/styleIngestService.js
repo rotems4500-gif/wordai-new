@@ -35,6 +35,7 @@ import {
   GENRES,
 } from './styleProfileService';
 import { loadStyleReference, primeStyleReference } from './styleReferenceService';
+import { addStyleTargetDoc, removeStyleTargetDoc } from './styleTargetsStore';
 import {
   addDocumentSamples,
   removeDocument,
@@ -389,6 +390,10 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
           added += 1;
           evicted += Number(result.evicted) || 0;
           outcome = 'added';
+          // ⚠️ **כאן ולא במורד הזרם**: הפרופיל המבני נמדד מגבולות הפסקה, וה-chunking
+          // שזה עתה רץ מחק אותם. זו הנקודה האחרונה שבה הטקסט המלא קיים.
+          // כשל כאן לעולם אינו מפיל קליטת סגנון — הפרופיל הוא שיפור, לא תנאי.
+          try { await addStyleTargetDoc(text, { docId: result.docId }); } catch {}
         } else {
           // המסמך נרשם אך לא הניב אף chunk (טקסט קצר מדי לדגימה). מסירים אותו כדי
           // ש-docCount לא ינפח את הוודאות, וכדי שגרסה מתוקנת של אותו קובץ לא תיחסם
@@ -418,11 +423,15 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
  * @returns {{docId:(string|null), added:number, skipped:boolean}}
  */
 export function ingestText({ title, text, source = 'paste' } = {}) {
-  return addDocumentSamples({
+  const result = addDocumentSamples({
     title: String(title || '').trim() || 'טקסט שהודבק',
     text: String(text || ''),
     source: String(source || 'paste'),
   });
+  // fire-and-forget: החתימה הסינכרונית של הפונקציה נשמרת, והפרופיל אינו תנאי
+  // להצלחת הקליטה.
+  if (result?.docId) addStyleTargetDoc(String(text || ''), { docId: result.docId }).catch(() => {});
+  return result;
 }
 
 // ---------- recomputeMetricsFromStore ----------
@@ -1141,6 +1150,9 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
  */
 export function removeDocumentAndRecompute(docId) {
   removeDocument(docId);
+  // הפרופיל המבני מחזיק רשומה נפרדת לאותו docId — בלי ההסרה הזאת מסמך שנמחק
+  // היה ממשיך למשוך את היעדים אליו.
+  removeStyleTargetDoc(docId).catch(() => {});
   return recomputeMetricsFromStore();
 }
 

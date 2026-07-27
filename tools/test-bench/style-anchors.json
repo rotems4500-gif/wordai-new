@@ -1,0 +1,11 @@
+{
+  "distance": "cosine",
+  "selfDelta": 0.8852903228178551,
+  "otherDelta": 1.0640795195486557,
+  "auc": 0.9452835616930989,
+  "aucClassic": 0.7012550796562017,
+  "aucCosine": 0.9452835616930989,
+  "selfDocs": 23,
+  "controlDocs": 40,
+  "windowChars": 2200
+}

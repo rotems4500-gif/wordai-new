@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 // window shim: materialChunkStore/style* דורשים window ל-cache הפנימי; בלי IDB
 // הם נופלים לזיכרון בלבד — בדיוק מה שה-harness צריך.
@@ -37,20 +38,36 @@ import {
   addMaterialDocument, commitMaterialStore, clearMaterialStore, getMaterialStoreStats,
   readMaterialStore, putMaterialVectors,
 } from '../../src/services/materialChunkStore.js';
-import { STYLE_EMBEDDING_SIGNATURE } from '../../src/services/styleEmbeddingService.js';
+import {
+  ensureRetrievalBackend, getRetrievalSignature, getRetrievalBackend,
+} from '../../src/services/retrievalEmbeddingService.js';
 import { ensureMaterialsEmbedded, findEvidenceForSpec } from '../../src/services/evidenceMatchService.js';
 import { ensureOpenersReady, composeSectionOpener } from '../../src/services/styleOpenerService.js';
-import { addDocumentSamples, ensureSampleStoreReady, getSampleStoreStats } from '../../src/services/styleSampleStore.js';
+import { addDocumentSamples, ensureSampleStoreReady, getSampleStoreStats, getChunks } from '../../src/services/styleSampleStore.js';
 import { ensureOpenerProfile, getOpenerProfile, getOpenerProfileStatus } from '../../src/services/openerProfileService.js';
 import { ensureFrameProfile, getFrameProfile, getFrameProfileStatus } from '../../src/services/styleFrameProfileService.js';
 import { scoreTextAuthenticity } from '../../src/services/styleAuthenticityService.js';
 import { composeSectionProseBest, ensureProseReady } from '../../src/services/proseComposeService.js';
+import { deriveStyleTargets, describeStyleTargets } from '../../src/services/styleTargetsService.js';
+import { enabledCommaSlots } from '../../src/services/styleFitService.js';
 
+// ⚠️ נפילות מוחלטות של מכונת הפיתוח הישנה הוחלפו בנגזרות מ-homedir/הפרויקט —
+// נתיב עם שם משתמש קשיח שבר כל הרצה במכונה אחרת (ר' scaffold-e2e).
 const CORPUS_DIR = process.env.WORDAI_SCAFFOLD_CORPUS
-  || 'C:/Users/rotem/OneDrive/שולחן העבודה/314999533';
+  || path.join(os.homedir(), 'OneDrive', 'שולחן העבודה', '314999533');
 const SCRATCH = process.env.WORDAI_VERIFY_SCRATCH || '.';
-const NLG_DIR = process.env.WORDAI_NLG_OUT
-  || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/d6d315a5-2b5d-475f-8fbf-41dd6f7dff16/scratchpad/nlg-loop';
+// כיול סף שכבת התגבור מבחוץ — כדי להשוות ספים באותה ריצה בלי לערוך קוד.
+if (process.env.WORDAI_FOCUSED_MIN_Z) {
+  globalThis.__WORDAI_FOCUSED_MIN_Z = Number(process.env.WORDAI_FOCUSED_MIN_Z);
+}
+if (process.env.WORDAI_FRAME_REWRITES === '0') globalThis.__WORDAI_FRAME_REWRITES = 0;
+// ⚠️ בחירת ה-backend ב-'auto' מותנית ב-isDesktopApp(), ובהרנס (Node) אין window
+// ולכן היא נופלת ל-none — כלומר הניסוח היה נשמט בשקט וכל המדידה הייתה של מסלול
+// הכללים. WORDAI_REWRITE=1 מצהיר על הכוונה, ולכן הוא גם קובע את הדרגה במפורש.
+if (process.env.WORDAI_REWRITE === '1' && !process.env.WORDAI_REWRITE_BACKEND) {
+  process.env.WORDAI_REWRITE_BACKEND = 'ollama';
+}
+const NLG_DIR = process.env.WORDAI_NLG_OUT || path.join(SCRATCH, 'nlg-loop');
 const ROUND_DIR = path.join(NLG_DIR, process.env.WORDAI_NLG_ROUND || 'round-2');
 const ASSIGNMENT_PATH = process.env.WORDAI_NLG_ASSIGNMENT || path.join(NLG_DIR, 'assignment.txt');
 
@@ -201,12 +218,28 @@ const COURSE_FILES = [
   'נושא 11 - מגילת הזכויות ועיקרון עליונות הפרלמנט.pptx',
 ];
 
+// רשימת הקבצים: או הקבועה (COURSE_FILES), או **כל** מה שיש בתיקייה שהוצבעה
+// ב-WORDAI_NLG_COURSE_DIR. הרשימה הקבועה קושרת את ההרנס לקורס אחד; הצבעה על
+// תיקייה מאפשרת להריץ אותו על כל מטלה אמיתית — וזו הדרך שבה הבנצ' אמור לגדול.
+function courseFileNames() {
+  const dir = process.env.WORDAI_NLG_COURSE_DIR;
+  if (!dir) return { base: CORPUS_DIR, names: COURSE_FILES };
+  let names = [];
+  try {
+    names = fs.readdirSync(dir)
+      .filter((f) => /\.(pdf|docx|pptx)$/i.test(f) && !f.startsWith('~$'))
+      .sort();
+  } catch {}
+  return { base: dir, names };
+}
+
 async function ingestCourse() {
   clearMaterialStore();
   let ocrCount = 0;
   const loaded = [];
-  for (const name of COURSE_FILES) {
-    const p = path.join(CORPUS_DIR, name);
+  const { base: courseBase, names: courseNames } = courseFileNames();
+  for (const name of courseNames) {
+    const p = path.join(courseBase, name);
     if (!fs.existsSync(p)) { console.log(`  ⚠ חסר: ${name}`); continue; }
     let { text, scanned, garbled } = await extractFile(p);
     let viaOcr = false;
@@ -234,6 +267,12 @@ const PERSONAL_DIRS = [
   path.join(CORPUS_DIR, 'עבודות והגשות', 'טיוטות וגרסאות קודמות'),
 ];
 
+// ⚠️ הטקסטים הגולמיים נאספים כאן ולא נשלפים אחר כך מ-styleSampleStore, ובכוונה:
+// החנות שומרת chunks, והחיתוך מאבד את גבולות הפסקה — ו-styleTargetsService נשען
+// עליהם כדי להפריד פסקת פרוזה מכותרת ומשורת ביבליוגרפיה. נקודת הגזירה הנכונה
+// היא הקליטה, שבה הטקסט המלא עוד קיים; זו גם הנקודה שבה האפליקציה תגזור.
+const personalTexts = [];
+
 async function ingestPersonalCorpus() {
   await ensureSampleStoreReady();
   let docs = 0;
@@ -253,6 +292,7 @@ async function ingestPersonalCorpus() {
       if (seen.has(fp)) continue;
       seen.add(fp);
       addDocumentSamples({ title: f.replace(/\.[^.]+$/, ''), text, source: 'personal-finals' });
+      personalTexts.push(text);
       docs += 1;
     }
   }
@@ -285,13 +325,21 @@ fs.mkdirSync(ROUND_DIR, { recursive: true });
 
 await ingestCourse();
 
+// מנוע האחזור נבחר כאן, לפני ההטמעה — החתימה שלו קובעת גם את ה-cache וגם את
+// vecSig בחנות. WORDAI_EMBED_BACKEND=ollama מפעיל את bge-m3.
+await ensureRetrievalBackend();
+const EMBED_SIG = getRetrievalSignature();
+console.log(`מנוע אחזור: ${getRetrievalBackend()} · חתימה ${EMBED_SIG}`);
+
 // שחזור וקטורים מ-cache של scaffold-e2e (ids לפי hash תוכן — תקפים לעד).
+// ⚠️ קובץ נפרד לכל מנוע: cache יחיד היה נדרס בכל החלפת מנוע, כלומר כל השוואה
+// בין e5 ל-bge-m3 הייתה משלמת הטמעה מלאה מחדש בכל כיוון.
 const VEC_CACHE = process.env.WORDAI_VEC_CACHE
-  || path.join(path.dirname(OCR_CACHE_DIR), 'vec-cache.json');
+  || path.join(path.dirname(OCR_CACHE_DIR), `vec-cache-${EMBED_SIG.replace(/[^\w.-]/g, '_')}.json`);
 if (fs.existsSync(VEC_CACHE)) {
   try {
     const cache = JSON.parse(fs.readFileSync(VEC_CACHE, 'utf8'));
-    if (cache.signature === STYLE_EMBEDDING_SIGNATURE) {
+    if (cache.signature === EMBED_SIG) {
       const restored = putMaterialVectors(
         Object.entries(cache.vectors).map(([chunkId, vec]) => ({ chunkId, vec })),
         cache.signature,
@@ -315,10 +363,10 @@ console.log(`הוטמעו ${embedded} קטעים ב-${Math.round((Date.now() - t
 {
   const blob = readMaterialStore();
   const vecs = {};
-  for (const c of blob.chunks) if (c.vec && c.vecSig === STYLE_EMBEDDING_SIGNATURE) vecs[c.id] = c.vec;
+  for (const c of blob.chunks) if (c.vec && c.vecSig === EMBED_SIG) vecs[c.id] = c.vec;
   try {
     fs.mkdirSync(path.dirname(VEC_CACHE), { recursive: true });
-    fs.writeFileSync(VEC_CACHE, JSON.stringify({ signature: STYLE_EMBEDDING_SIGNATURE, vectors: vecs }), 'utf8');
+    fs.writeFileSync(VEC_CACHE, JSON.stringify({ signature: EMBED_SIG, vectors: vecs }), 'utf8');
   } catch {}
 }
 
@@ -333,11 +381,26 @@ const fStatus = getFrameProfileStatus();
 console.log(`פרופיל פתיחים: ${oStatus.distinctDocs} מסמכים · ${oStatus.personalWords} מילות-סלוט · λ=${Number(oStatus.blendLambda).toFixed(2)}`);
 console.log(`פרופיל מסגרות: ${fStatus.minedFrames} מסגרות · ${fStatus.distinctDocs} מסמכים`);
 
+// פרופיל היעדים המבניים. WORDAI_STYLE_FIT=0 מנטרל — כדי שאפשר יהיה למדוד A/B
+// על אותו סבב בדיוק ולא מול ריצה אחרת.
+const styleTargets = process.env.WORDAI_STYLE_FIT === '0'
+  ? null
+  : deriveStyleTargets(personalTexts);
+if (styleTargets) {
+  console.log(`פרופיל סגנון: ${describeStyleTargets(styleTargets)}`);
+  const on = enabledCommaSlots(styleTargets).map((s) => s.def.label).join(' · ');
+  console.log(`  משמורות פסיק פעילות: ${on || '(אין — הקורפוס לא הראה עקביות)'}`);
+} else {
+  console.log(`פרופיל סגנון: ${process.env.WORDAI_STYLE_FIT === '0' ? 'מנוטרל (WORDAI_STYLE_FIT=0)' : 'אין מספיק עבודות'}`);
+}
+
 // ---------- אבחון (WORDAI_NLG_DIAG=1) ----------
 if (process.env.WORDAI_NLG_DIAG === '1') {
   const { readMaterialStore } = await import('../../src/services/materialChunkStore.js');
-  const { embedText, base64ToInt8, dequantizeVector, cosineSim } =
+  const { base64ToInt8, dequantizeVector, cosineSim } =
     await import('../../src/services/styleEmbeddingService.js');
+  const { embedForRetrieval } = await import('../../src/services/retrievalEmbeddingService.js');
+  const embedText = async (t) => (await embedForRetrieval([t], { kind: 'query' }))?.[0] || null;
   const blob = readMaterialStore();
   const bySrc = new Map();
   for (const c of blob.chunks) {
@@ -351,7 +414,9 @@ if (process.env.WORDAI_NLG_DIAG === '1') {
   }
   const chunks = blob.chunks.filter((c) => c.vec && !c.garbled);
   const vecs = new Map(chunks.map((c) => [c.id, dequantizeVector(base64ToInt8(c.vec))]));
-  const dim = 384;
+  // הממד נגזר מהווקטור עצמו — e5 הוא 384 ו-bge-m3 הוא 1024. קבוע קשיח כאן היה
+  // מייצר צנטרואיד חתוך ואבחון שקרי ברגע שמחליפים מנוע.
+  const dim = vecs.size ? (vecs.values().next().value?.length || 0) : 0;
   const centroid = new Float32Array(dim);
   for (const c of chunks) { const v = vecs.get(c.id); for (let i = 0; i < dim; i += 1) centroid[i] += v[i]; }
   let nn = 0; for (let i = 0; i < dim; i += 1) nn += centroid[i] ** 2;
@@ -370,11 +435,59 @@ if (process.env.WORDAI_NLG_DIAG === '1') {
 }
 
 // ---------- המטלה ----------
-const assignmentText = fs.readFileSync(ASSIGNMENT_PATH, 'utf8');
+// המטלה מגיעה מהמרצה כ-PDF/DOCX, לא כ-txt. קריאה גולמית החזירה "%PDF-1.7"
+// ומתוכה 0 סעיפים — כישלון שקט. אותו מחלץ המשמש לחומרי הקורס משמש גם כאן.
+const assignmentText = /\.txt$/i.test(ASSIGNMENT_PATH)
+  ? fs.readFileSync(ASSIGNMENT_PATH, 'utf8')
+  : (await extractFile(ASSIGNMENT_PATH)).text;
 const spec = parseAssignmentSpec(assignmentText);
 console.log(`\nמטלה: "${spec.title}" · ${spec.sections.length} סעיפים · totalWords=${spec.totalWords} · ציטוט=${spec.citationStyle}`);
 
-const specEvidence = await findEvidenceForSpec(spec, { k: 4 });
+console.log(`עוגן דוקטרינרי מהפתיח: ${spec.doctrineScope ? `"${spec.doctrineScope}"` : '— לא נמצא —'}`);
+// ⚠️ k=6 — **נמדד ונבחר**, והפוך מהמסקנה הקודמת. המדידה הישנה (k=4 סגנון 44 מול
+// k=6 סגנון 31) נעשתה כשהמנוע כתב משפטים בני 32 מילים: ראיה נוספת האריכה עוד
+// משפטי-שרשרת, וזה מה שהרג את הסגנון. מרגע שאורך המשפט נאכף (~17 מילים, כמו
+// המשתמש) התלות התהפכה ונעלמה:
+//     k=4   845 מילים · סגנון 54/100
+//     k=6  1014 מילים · סגנון 53/100   ← +169 מילים בעלות נקודה אחת
+// המכסה של המטלה היא 1000 מילים, ולכן 6.
+// ⚠️ בלי env — יורש את DEFAULT_EVIDENCE_K של השירות, כלומר בדיוק מה שהאפליקציה
+// מריצה. ההרנס נהג לקבוע 6 בזמן שהאפליקציה שלחה 5, והבנצ' מדד תצורה אחרת.
+const specEvidence = await findEvidenceForSpec(spec,
+  process.env.WORDAI_EV_K ? { k: Number(process.env.WORDAI_EV_K) } : {});
+
+// ---------- דוגמאות סגנון ל-few-shot ----------
+// ⚠️ זו ההתאמה האישית **היחידה שניתנת למשלוח**: אי אפשר לאמן מודל על המכונה של
+// כל סטודנט, אבל אפשר להראות לו כמה משפטים שלו בזמן ההסקה. נבחרים משפטים
+// באורך בינוני מהעבודות הקודמות — לא קצרים מדי (כותרות) ולא ארוכים מדי.
+// מספר דוגמאות ה-few-shot ניתן לכיול מבחוץ. 0 = בקרה בלי התניית סגנון כלל —
+// הניסוי שמכריע אם ההתניה הזו בכלל עובדת, שכן עד כה היא נמדדה מול קובץ ישן.
+const STYLE_SHOT_COUNT = Number(process.env.WORDAI_STYLE_SHOTS ?? 5);
+const styleShots = (() => {
+  if (!STYLE_SHOT_COUNT) return null;
+  try {
+    const chunks = getChunks() || [];
+    const sents = [];
+    for (const c of chunks) {
+      for (const s of String(c?.text || '').split(/(?<=[.!?])\s+/)) {
+        const t = s.trim();
+        const words = (t.match(/\S+/g) || []).length;
+        const heb = (t.match(/[א-ת]/g) || []).length / Math.max(t.length, 1);
+        if (words >= 12 && words <= 28 && heb >= 0.7 && !/[()"']/.test(t)) sents.push(t);
+      }
+    }
+    // דטרמיניסטי: פריסה אחידה על פני הקורפוס במקום חמשת הראשונים ממסמך אחד.
+    const step = Math.max(1, Math.floor(sents.length / STYLE_SHOT_COUNT));
+    return sents.filter((_, i) => i % step === 0).slice(0, STYLE_SHOT_COUNT);
+  } catch { return null; }
+})();
+console.log(`דוגמאות סגנון ל-few-shot: ${styleShots?.length || 0}`);
+if (process.env.WORDAI_EV_DIAG === '1') {
+  for (const [id, res] of Object.entries(specEvidence.bySection || {})) {
+    const top = (res.diag?.top || []).map((t) => `z${t.z} ${String(t.src).slice(0, 22)}`).join(' | ');
+    console.log(`  [${id}] ראיות=${(res.evidence || []).length} gap=${res.gap} · top: ${top || '-'}`);
+  }
+}
 
 // יחידות עבודה: סעיף, ואם יש תתי-סעיפים — כל תת-סעיף (יורש intent/מסגרת מהאב).
 const sections = spec.sections.filter((s) => s?.enabled !== false);
@@ -382,6 +495,10 @@ const usedOpeners = new Set();
 const workUsedSentences = new Set();
 const htmlParts = [`<h1>${escapeHtml(spec.title || 'מטלה')}</h1>`];
 const txtParts = [`# ${spec.title || 'מטלה'}\n`];
+// ⚠️ הקלט של מדידת הסגנון: **רק** משפטי הגוף — בלי כותרות, בלי פותחי-מסגרת
+// ובלי הערות. עד כה הקובץ נוצר ידנית, ולכן כל ריצה נמדדה מול טיוטה ישנה
+// ודיווחה את אותו ציון בדיוק. נכתב עכשיו בכל סבב.
+const prosePartsForStyle = [];
 const metrics = {
   round: Number(process.env.WORDAI_NLG_ROUND_NUM || 2),
   generatedAt: new Date().toISOString(),
@@ -454,6 +571,9 @@ let totBlocked = 0;
 let totAnchored = 0;
 let totContent = 0;
 
+// מכסת קשירת-הצד יחסית למספר היחידות בעבודה כולה (ר' partyBudget).
+const totalUnits = sections.reduce((a, s) => a + unitList(s).length, 0);
+
 for (const section of sections) {
   htmlParts.push(`<h2>${escapeHtml(section.title || section.id)}</h2>`);
   txtParts.push(`\n## ${section.title || section.id}\n`);
@@ -501,12 +621,72 @@ for (const section of sections) {
       continue;
     }
 
+    // ---------- שכבת הניסוח (opt-in) ----------
+    // WORDAI_REWRITE=1 מפעיל. מנוסח מראש כי המחבר סינכרוני (ר' rewriteSectionEvidence).
+    //
+    // ⚠️ עובר דרך rewriteBackendService — **אותו תפר שה-Studio משתמש בו**. זה
+    // מכוון: בנצ' שמודד מסלול אחר מזה שנשלח למשתמש מודד את הדבר הלא נכון.
+    let rewrites = null;
+    if (process.env.WORDAI_REWRITE === '1' && evidence.length) {
+      try {
+        const { rewriteEvidenceForSection } = await import('../../src/services/rewriteBackendService.js');
+        const rr = await rewriteEvidenceForSection({
+          section: u, evidence, caseFacts: assignmentText.slice(0, 2500), styleExamples: styleShots,
+        });
+        rewrites = rr.byChunk;
+        console.log(`    [${u.id}] ניסוח: ${rr.ok} עברו · ${rr.failed} נדחו בשער`);
+      } catch (err) {
+        console.log(`    [${u.id}] ניסוח לא זמין: ${err.message}`);
+      }
+    }
+
     const r = composeSectionProseBest(
       { ...u, keywords: u.keywords || section.keywords },
       evidence,
-      { quotaWords: quota, seedKey: u.id, profile: frameProfile, sharedUsedSentences: workUsedSentences },
+      // WORDAI_NLG_SEED_SALT — מזיז את הגרלת המסגרות בלי לשנות שום לוגיקה.
+      // נועד למדוד את **פיזור ציון הסגנון בין הגרלות**, כלומר את רזולוציית
+      // המדידה האמיתית. בלי המספר הזה אי אפשר לדעת אילו הפרשים משמעותיים.
+      {
+        quotaWords: quota,
+        seedKey: `${u.id}${process.env.WORDAI_NLG_SEED_SALT || ''}`,
+        profile: frameProfile,
+        sharedUsedSentences: workUsedSentences,
+        rewrites,
+        styleTargets,
+        sectionCount: totalUnits,
+      },
       { scoreFn: scoreTextAuthenticity, variants: 3 },
     );
+
+    // ---------- מדד "תשובה מול פיגום" ----------
+    // ⚠️ הביקורת שהובילה למדד: הפלט נראה כמו רצף **פתיחים**, לא כמו תשובה.
+    // שלושה מספרים שמכמתים זאת:
+    //   scaffoldWordShare — שיעור המילים במשפטים בלי ראיה כלל (פתיח/סיכום/מעבר).
+    //   copiedWordShare   — שיעור המילים שמקורן מילה-במילה בטקסט הראיה.
+    //   caseEntityHits    — כמה מהישויות שבשאלה (שמות הדמויות) בכלל מוזכרות.
+    // תשובה אמיתית מיישמת דוקטרינה על המקרה; אם אף שם מהשאלה אינו מופיע בגוף
+    // התשובה, לא נענתה השאלה אלא הוצג רקע.
+    if (r?.sentences?.length) {
+      const wc = (s) => (String(s).match(/\S+/g) || []).length;
+      const noEv = r.sentences.filter((s) => !s.evidenceId);
+      const evTexts = (evidence || []).map((e) => String(e.text || ''));
+      let copied = 0; let total = 0;
+      for (const s of r.sentences) {
+        for (const w of String(s.text).match(/[א-ת]{4,}/g) || []) {
+          total += 1;
+          if (evTexts.some((t) => t.includes(w))) copied += 1;
+        }
+      }
+      // ישויות השאלה: מילים בנות ≥3 אותיות מכותרת הסעיף שאינן מילות תפקוד.
+      const STOP = new Set(['אילו', 'טענות', 'הגנה', 'עשוי', 'עשויה', 'עשויים', 'להעלות', 'משפטיות', 'נגד', 'ואת', 'של', 'את', 'על']);
+      const ents = [...new Set((String(u.title || '').match(/[א-ת]{3,}/g) || []).filter((w) => !STOP.has(w)))];
+      const body = r.sentences.map((s) => s.text).join(' ');
+      const hits = ents.filter((e) => body.includes(e));
+      secMetric.scaffoldWordShare = r.wordCount ? +(noEv.reduce((a, s) => a + wc(s.text), 0) / r.wordCount).toFixed(2) : 0;
+      secMetric.copiedWordShare = total ? +(copied / total).toFixed(2) : 0;
+      secMetric.caseEntities = `${hits.length}/${ents.length}`;
+      console.log(`    [${u.id}] פיגום ${Math.round(secMetric.scaffoldWordShare * 100)}% · מועתק ${Math.round(secMetric.copiedWordShare * 100)}% · ישויות מהשאלה ${secMetric.caseEntities}`);
+    }
 
     if (!r || !r.sentences?.length) {
       secMetric.status = 'blocked';
@@ -520,14 +700,33 @@ for (const section of sections) {
       continue;
     }
 
-    // עיגון: לכל משפט תוכן, מקסימום חפיפה מול כל אחת מהראיות של הסעיף.
+    // עיגון: לכל משפט תוכן, מקסימום חפיפה מול הראיות של הסעיף **ומול טקסט
+    // המטלה**.
+    //
+    // ⚠️ הרחבת הייחוס לטקסט המטלה אינה הרפיה. "אפס המצאות" פירושו שכל מילת תוכן
+    // מגיעה ממשהו שהמשתמש סיפק — והמטלה היא קלט של המשתמש בדיוק כמו חומרי
+    // הקריאה. משפט שמיישם כלל על עובדות המקרה **חייב** לשאת מילים מהמקרה, והן
+    // אינן בקטע המקור מעצם הגדרתן.
+    //
+    // נמדד: עם שכבת הניסוח העיגון "נפל" ל-40% בזמן שהישויות מהשאלה עלו מ-1/7
+    // ל-7/7 — כלומר בדיוק המשפטים שהתחילו לענות על השאלה נספרו כלא-מעוגנים,
+    // כי הזכירו את יקיר ואת דליה. זו הייתה אי-התאמה בין מדדים, לא נסיגה.
+    // מה שנשאר אסור ונאכף כרגיל: מילה שאינה בקטע **ולא** במטלה = המצאה.
+    // ⚠️ **איחוד** המקורות, לא מקסימום מול מקור בודד. הבדיקה הישנה דרשה 40%
+    // חפיפה מול ראיה אחת; משפט שמיישם כלל על עובדות המקרה שואב במכוון משניהם —
+    // ~30% מהקטע ו~30% מהמקרה — ולכן נכשל בכל אחד בנפרד למרות שכל מילה בו
+    // הגיעה מקלט של המשתמש. נמדד: עם מקסימום-בודד העיגון היה 90% ו-0 משפטים
+    // נדחו בשער הניסוח, כלומר הפער היה בין שתי הנוסחאות ולא באיכות הפלט.
+    //
+    // ההגדרה הנכונה של "אפס המצאות" היא איחוד: מילה שאינה באף אחד מהקלטים —
+    // המצאה. זה נאכף כאן במלואו.
+    const groundHay = [...evidence.map((e) => String(e.text || '')), assignmentText].join('\n');
     let anchored = 0;
     let content = 0;
     for (const s of r.sentences) {
       if (!s.evidenceId) continue; // משפט מטא/מעבר — לא נספר בעיגון
       content += 1;
-      const best = Math.max(...evidence.map((e) => overlapAgainst(s.text, e.text)));
-      if (best >= 0.4) anchored += 1;
+      if (overlapAgainst(s.text, groundHay) >= 0.4) anchored += 1;
     }
     totContent += content;
     totAnchored += anchored;
@@ -544,13 +743,36 @@ for (const section of sections) {
     secMetric.anchoredContentSentences = `${anchored}/${content}`;
     secMetric.detectorScore = Number.isFinite(r.authenticityScore) ? Math.round(r.authenticityScore) : null;
     secMetric.usedSources = usedSources;
+    // ⚠️ `note` היחידה שנשמרה עד 27.7 הייתה **notes[0]**, וזו כמעט תמיד הערת
+    // "הראיות נבחרו בדירוג יחסי" — בעוד שהערת המכסה נדחפת אחריה. האינווריאנטה
+    // `quota-honesty` קוראת את `notes`, שלא היה קיים במדדים כלל, ולכן היא **לא
+    // יכלה לעבור לעולם** בסעיף קצר: המנוע כתב «דרוש מקור נוסף — החומר מספיק
+    // לכ-77 מילים מתוך 180» לתוך הטיוטה, וההרנס לא העביר את זה הלאה.
+    // `note` נשמר לתצוגה; `notes` הוא מה שנבדק.
     secMetric.note = r.notes?.length ? r.notes[0] : null;
+    secMetric.notes = Array.isArray(r.notes) ? r.notes : [];
+    secMetric.fit = r.fitStats || null;
     totWords += r.wordCount;
 
     const head = u.parent ? `<h3>${escapeHtml(u.title.split(' — ').slice(-1)[0])}</h3>` : '';
     const openerHtml = openerText ? `<p>${escapeHtml(openerText)}</p>` : '';
     htmlParts.push(`${head}${openerHtml}${r.html}`);
     const plain = r.sentences.map((s) => s.text).join(' ');
+    // ⚠️ שומר את **חלוקת הפסקאות** של המחבר. גרסה שהדביקה סעיף שלם לשורה אחת
+    // גרמה למדד המבני לדווח 5 משפטים לפסקה — ארטיפקט של קובץ המדידה, לא הפלט.
+    // ⚠️ נחתך לפני <hr/> — רשימת הערות השוליים חוזרת על שם המקור עשרות פעמים
+    // מחוץ לסוגריים, ולכן היא הציפה את חתימת התווים ומחצה את גיוון אוצר המילים.
+    // היא אינה פרוזה של המחבר ואין לה מקום במדידת סגנון.
+    prosePartsForStyle.push(
+      String(r.html || '')
+        .split(/<hr\s*\/?>/i)[0]
+        .split(/<\/p>/i)
+        .map((p) => p.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>').replace(/\s+/g, ' ')
+          .trim())
+        .filter(Boolean)
+        .join('\n\n') || plain,
+    );
     txtParts.push(`### ${u.title}  (${r.wordCount}/${quota} מילים, עיגון ${secMetric.anchoredPct}%, דטקטור ${secMetric.detectorScore})`);
     if (openerText) txtParts.push(openerText);
     txtParts.push(plain);
@@ -576,6 +798,7 @@ metrics.totals = {
 
 fs.writeFileSync(path.join(ROUND_DIR, 'draft.html'), `<!doctype html><meta charset="utf-8"><body dir="rtl">${htmlParts.join('\n')}</body>`, 'utf8');
 fs.writeFileSync(path.join(ROUND_DIR, 'draft.txt'), txtParts.join('\n'), 'utf8');
+fs.writeFileSync(path.join(ROUND_DIR, 'prose-only.txt'), prosePartsForStyle.join('\n\n'), 'utf8');
 fs.writeFileSync(path.join(ROUND_DIR, 'metrics.json'), JSON.stringify(metrics, null, 2), 'utf8');
 fs.writeFileSync(path.join(ROUND_DIR, 'evidence.json'), JSON.stringify({
   assignmentTitle: spec.title, citationStyle: spec.citationStyle, units: evidenceDump,
@@ -584,7 +807,7 @@ fs.writeFileSync(path.join(ROUND_DIR, 'evidence.json'), JSON.stringify({
 console.log('\n═══ סיכום הסבב ═══');
 for (const s of metrics.sections) {
   const mark = s.status === 'local-draft' ? '✓' : '⛔';
-  console.log(`${mark} ${s.id} [${s.intent}] ${s.status} · ${s.wordCount}/${s.quota} מ' · עיגון ${s.anchoredPct}% (${s.anchoredContentSentences || '-'}) · דטקטור ${s.detectorScore ?? '-'} · ${(s.usedSources || []).length} מקורות${s.note ? ` · ${s.note.slice(0, 40)}` : ''}`);
+  console.log(`${mark} ${s.id} [${s.intent}] ${s.status} · ${s.wordCount}/${s.quota} מ' · עיגון ${s.anchoredPct}% (${s.anchoredContentSentences || '-'}) · דטקטור ${s.detectorScore ?? '-'} · ${(s.usedSources || []).length} מקורות${s.fit?.commas || s.fit?.split ? ` · התאמה +${s.fit.commas}פסיק/${s.fit.split}פיצול` : ''}${s.note ? ` · ${s.note.slice(0, 34)}` : ''}`);
 }
 console.log(`\n${metrics.totals.localDraft}/${metrics.totals.units} יחידות נכתבו · ${metrics.totals.blocked} חסומות · ${metrics.totals.totalWords} מילים · עיגון כולל ${metrics.totals.overallAnchoredPct}% · דטקטור ממוצע ${metrics.totals.avgDetectorScore}`);
 console.log(`פלט: ${ROUND_DIR}`);

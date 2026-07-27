@@ -95,18 +95,23 @@ node tools/test-bench/nlg-bench/compare-api.mjs    # מקומי מול API על 
 | [sentenceGrammar.data.js](src/services/sentenceGrammar.data.js) + [sentenceComposeService.js](src/services/sentenceComposeService.js) | 8 מהלכים רטוריים (טענה/ראיה/ציטוט/הסבר/ניגוד/הסתייגות/מעבר/סיכום), מסגרות בטוחות-מגדר |
 | [proseComposeService.js](src/services/proseComposeService.js) | **הליבה**: `MOVE_PLANS` לפי intent, `composeSectionProseBest` (וריאנטים + בחירה בדטקטור), `PROSE_COMMANDS` (12 פקודות ב-4 קטגוריות — אין שפה חופשית) |
 | [styleFrameProfileService.js](src/services/styleFrameProfileService.js) | כריית מסגרות מהעבודות הקודמות של המשתמש + משוב accept/reject |
+| [styleTargetsService.js](src/services/styleTargetsService.js) + [styleTargetsStore.js](src/services/styleTargetsStore.js) | **פרסונליזציה מבנית**: גוזר מהכתיבה של המשתמש יעדי אורך-משפט/פסיקים/פסקה + **משמורות פסיק נלמדות**, ושומר **רשומות מדידה ולא טקסטים** (מסתנכרן לענן בלי שהעבודות עוזבות את המכשיר) |
+| [styleFitService.js](src/services/styleFitService.js) | אכיפה דטרמיניסטית של היעדים על הפרוזה. **בלי מודל** — ולכן זו השכבה היחידה שרצה זהה באתר ובאפליקציה |
 
 **גוצ'אס של המנוע:**
 - **סף z תלוי-שפה**: מקור עברי 4.5 (3.8 אם `cleanDigital` — לא עבר OCR), מקור לטיני 3.6. חוצה-שפה מדכא קוסינוס; סף אחיד הורג את כל המקרים האנגליים.
 - מקורות `.pptx` שמישים **רק במהלך ציטוט** — תבליטי שקף אינם פרוזה.
 - `ocrCorruptScore`: גרשיים באמצע מילה = שיבוש OCR, **אבל** תחילית בת אות אחת + פתיחת ציטוט (`ו"מאזני`) היא עברית תקינה — נדרשות ≥2 אותיות לפני הגרשיים.
+- ⚠️ **לא כל תכונה של מדד הסגנון כשירה כיעד ייצור.** `@paraSents` הגולמי מודד את מחלץ ה-docx (בכל 23 מסמכי המשתמש `\n\n`==`\n`, ו"פסקה" כוללת כותרות וביבליוגרפיה) — 1.79 גולמי מול **2.54 בפסקאות פרוזה בלבד**; `@typeTokenRatio` תלוי-אורך; `@sentLenSd` נגזרת. שלושתן למדידה בלבד. ר' ההערה בראש `styleTargetsService`.
+- ⚠️ **קיצור המשפט לכיוון היעד מוריד את ציון הסגנון** (A/B: 40→38 בפיצול, 22.9→19.9 מילים). המדד הוא 1,000 תכונות n-גרם מול 6 מבניות, כלומר 99.4% בחירת מילים — ואכיפה מבנית לא מנצחת אותו. הפיצול נשאר בקוד מכובה, עם הטבלה.
+- ⚠️ `nlg-bench/run.mjs` **יורש** את `WORDAI_REWRITE` מהמעטפת ואינו קובע אותו. עד 27.7 זה לא נרשם בהיסטוריה, ומעטפת נקייה נתנה 87 מול 99 — **הבדל סביבה שנראה בדיוק כמו נסיגה**. מאז התצורה נרשמת ב-`bench-history` וההשוואה נעשית רק מול אותה תצורה.
 
 ### nlg-bench — הבדיקה הקבועה של המנוע
 `tools/test-bench/nlg-bench/` · הרצה: `npm run bench:nlg`. דו-שכבתי **בכוונה, נגד קיבוע לבנצ'**:
 1. **רגרסיה** — `run-scaffold-e2e.mjs` כמו שהוא. סרגל שלא זז.
 2. **יכולת** — `cases/` (מטלות אמיתיות) × **וריאציות מוגרלות-בזרע** (`variations.mjs`: ניסוח מוחלף, סדר שאלות מעורבל) → 6 אינווריאנטות (`invariants.mjs`: אפס-ג'יבריש, עיגון≥40%, כנות-חסימה, כנות-מכסה, אי-כפילות, אפס-דליפת-תבנית) → `capabilityScore`. נרשם ב-`bench-history.jsonl`; ירידה >3 נק' = exit 1.
 
-מטלה אמיתית חדשה ⇒ תיקיית `case` חדשה (assignment.txt + case.json). `compare-api.mjs` מריץ מודל API על **אותן ראיות בדיוק** ומודד באותם מדדים.
+מטלה אמיתית חדשה ⇒ תיקיית `case` חדשה (assignment.txt + case.json). ⚠️ **חובה `courseDir` ב-case.json** — בלעדיו ההרנס נופל לרשימת קבצים קשיחה וה-case סורק את הקורפוס של מישהו אחר. cases קיימים: `media-law-2026` (פעיל, ממוצע 97) · `mill-2026` (מדולג — הקורפוס אינו במכונה). `compare-api.mjs` מריץ מודל API על **אותן ראיות בדיוק** ומודד באותם מדדים.
 
 ### `src/firebase/`
 - [config.js](src/firebase/config.js) — Firebase config keys.
@@ -137,6 +142,7 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 ## תיעוד קיים ב-`docs/`
 - [docs/CODE-MAP.md](docs/CODE-MAP.md) — **תוכן עניינים מלא של הקוד** (קבצים, שורות, מפות סקשנים למונוליטים, מפת מערכת העזרה).
 - [docs/assignment-scaffold.md](docs/assignment-scaffold.md) — **שלד מטלה**: הארכיטקטורה הדו-שלבית, ספי הרלוונטיות שנמדדו, גוצ'אס (`\b` בעברית, חטיפת ניתוב), ואיך בודקים ב-LAB.
+- [docs/nlg-handoff.md](docs/nlg-handoff.md) — **המצב הנוכחי של המנוע המקומי**: המספרים המאומתים, שכבת הניסוח המקומית (gemma3:4b) וארבעת שעריה, תיקון מדידת הסגנון (⚠️ ציונים היסטוריים לפני התיקון חסרי ערך), מה נפסל במדידה, ואיך מריצים.
 - [tools/test-bench/nlg-bench/README.md](tools/test-bench/nlg-bench/README.md) — **הבדיקה הקבועה של המנוע המקומי**: העיצוב הדו-שכבתי, האינווריאנטות, הציון.
 - [docs/user-guide.md](docs/user-guide.md) — מדריך משתמש.
 - [docs/api-keys-guide.md](docs/api-keys-guide.md) — חיבור מפתחות LLM.
@@ -149,7 +155,11 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 - **קבצים ענקיים:** `main.jsx` (~8.7k) ו-`aiService.js` (~12k) הם monoliths. השתמש ב-Grep/offset, אל תקרא במלואם.
 - **עברית RTL בכל מקום** — prompts, UI, regex. ה-regex ב-main.jsx מטפלים בעברית+אנגלית (ordinals, structural cues, quote chars `" “ ” ״`).
 - **anti-hallucination הוא עיקרון מרכזי:** סוכני sources/holeFill אסור להם להמציא מקורות. ראה `articleSourceValidation.js`. במנוע המקומי זה נאכף מבנית: אין ראיה ⇒ הסעיף חסום, לא ממולא.
-- **חומרה מגבילה מודל מקומי:** מכונת הפיתוח (7.6GB RAM, בלי GPU) לא מריצה LLM עברי. התפר ל-Ollama קיים ב-aiService אבל לא מופעל.
+- **חומרה (מכונת פיתוח, נמדד 26.7.26):** 16GB RAM (5.9 פנוי) · i7-10750H (6c/12t) · GTX 1650, 4096MiB עם **~3.9GB פנויים** (התיעוד אמר 3.2 — היה פסימי), Turing sm_75. Ollama 0.32.1. מה נכנס: מודל 4B ב-Q4 כולו ב-VRAM (2.88GB); `bge-m3` תופס 664MB ורץ 100% GPU.
+  - ⚠️ **ההתאמה האוטומטית של אולמה טוענת 46% בלבד מ-gemma3:4b ל-GPU** ומשאירה 2.3GB VRAM ריקים. `num_gpu: 99` מפורש ⇒ 100% GPU, 6.0s→4.4s לקריאה. מיושם ב-`localRewriteService` עם דרדור למכונות קטנות. **תמיד לבדוק את יחס `size_vram/size` ב-`/api/ps` לפני שמסיקים שהמודל איטי.**
+  - מקביליות **לא עוזרת**: `OLLAMA_NUM_PARALLEL=4` + flash-attn + KV ב-q8_0 נתנו ×1.18 בלבד. 64% מזמן הקריאה הוא עיבוד פרומפט (170 tok/s prefill מול 41 tok/s יצירה) — ה-1650 רווי.
+  - **אימון (fine-tune) לא אפשרי כאן, והפוסל אינו החומרה** — קורפוס המשתמש הוא **24 מסמכים / 22,001 מילים**. LoRA על זה משנן ולא לומד סגנון, ובמוצר עם שער `copiedRatio` ואינטגרציית Copyleaks זה כשל אקדמי. (בנוסף: אין python אמיתי במכונה — רק ה-stub של חנות Windows — אין nvcc, ו-Turing בלי bf16/FA2.) ציר האימון הריאלי הוא מודל קטן מעל **תכונות קפואות** (`styleFingerprintService`, AUC 0.945), לא כוונון LLM. מספרים מלאים ב-[docs/nlg-handoff.md](docs/nlg-handoff.md).
+  - התפר ל-Ollama ב-aiService בנוי במלואו (chat/streaming/ניתוב `@ollama`) — חסר רק `ollama pull` של מודל שיחה.
 - **זבל בשורש הריפו:** הרבה `temp-*`, `release-*/`, `tmp-*.mjs`, `.exe`, `.pdf`. אלה ארטיפקטים/legacy — אל תתבסס עליהם.
 - Caveman mode פעיל ב-session (plugin). קוד/קומיטים/PR — תמיד בעברית/אנגלית רגילה.
 

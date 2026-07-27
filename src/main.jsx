@@ -7532,7 +7532,8 @@ ${sidebarReviewContext}`
         try {
           const { findEvidenceForSpec } = await import('./services/evidenceMatchService');
           const { saveScaffold } = await import('./services/assignmentScaffoldStore');
-          const result = await findEvidenceForSpec(current.spec, { k: 5 });
+          // בלי k מפורש — DEFAULT_EVIDENCE_K, אותו ערך שה-Studio וההרנס מריצים.
+          const result = await findEvidenceForSpec(current.spec, {});
           saveScaffold({
             spec: current.spec,
             evidence: result.bySection,

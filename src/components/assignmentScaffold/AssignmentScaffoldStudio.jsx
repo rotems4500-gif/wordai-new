@@ -32,7 +32,11 @@ import { draftWholeWork } from '../../services/assignmentAiService';
 import { hasUsableAiProvider } from '../../services/aiService';
 import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
 import { composeSectionProseBest, ensureProseReady, PROSE_COMMANDS } from '../../services/proseComposeService';
+import {
+  ensureRewriteBackend, rewriteEvidenceForSection, describeRewriteBackend, REWRITE_BACKEND,
+} from '../../services/rewriteBackendService';
 import { ensureFrameProfile, getFrameProfile } from '../../services/styleFrameProfileService';
+import { ensureStyleTargetsReady, getStyleTargets } from '../../services/styleTargetsStore';
 import { scoreTextAuthenticity } from '../../services/styleAuthenticityService';
 import WorkReviewDialog from './WorkReviewDialog';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
@@ -69,6 +73,10 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const [materials, setMaterials] = React.useState([]);
   const [stats, setStats] = React.useState({ chunks: 0, embedded: 0, materials: 0 });
   const [busy, setBusy] = React.useState('');
+  // מעבר הניסוח אורך דקות על עבודה שלמה. בלי ביטול זו נסיגת UX גם אם האיכות
+  // עולה — הדגל ב-ref ולא ב-state כי הלולאה קוראת אותו בלי לרנדר מחדש.
+  const [cancellable, setCancellable] = React.useState(false);
+  const cancelRef = React.useRef(false);
   const [notice, setNotice] = React.useState(null);
   const [evidenceResult, setEvidenceResult] = React.useState(null);
   const [dropActive, setDropActive] = React.useState(false);
@@ -276,7 +284,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     if (!spec) return;
     setBusy('מחפש ראיות בחומרים שלך…');
     try {
-      const result = await findEvidenceForSpec(spec, { k: 5 });
+      // ⚠️ בלי k מפורש — יורש את DEFAULT_EVIDENCE_K. הערך שהיה כאן (5) נבדל
+      // מזה של ההרנס (6), ולכן הבנצ' מדד תצורה אחרת מזו שהמשתמש קיבל.
+      const result = await findEvidenceForSpec(spec, {});
       setEvidenceResult(result);
       // gaps כולל עכשיו גם תתי-סעיפים — סופרים סעיפים ראשיים בנפרד להודעה.
       const sectionIds = new Set(spec.sections.filter((s) => s.enabled !== false).map((s) => s.id));
@@ -366,6 +376,10 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       // פרופיל המסגרות: נכרה מהקורפוס האישי (אילו מסגרות רטוריות המשתמש באמת
       // כותב) + משוב. מוזן למשקלי בחירת ה-frame — הטיוטה נוטה לקול שלו.
       try { await ensureFrameProfile(); } catch {}
+      // פרופיל היעדים המבניים. אין פרופיל ⇒ null ⇒ המנוע כותב בברירות המחדל,
+      // בדיוק כמו לפני שהשכבה נכתבה. ⚠️ זו השכבה היחידה שרצה **זהה באתר
+      // ובאפליקציה** — היא דטרמיניסטית ואינה נשענת על Ollama.
+      try { await ensureStyleTargetsReady(); } catch {}
       saveScaffold({
         spec,
         evidence: evidenceResult?.bySection || {},
@@ -387,32 +401,88 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       // "נסח מחדש" נצרך חד-פעמית: המונה נכנס ל-seed ומאופס אחרי היצירה.
       const seedSuffix = regenCounter ? `~${regenCounter}` : '';
       let written = 0;
+
+      // היחידות נפרסות לרשימה שטוחה **לפני** ההלחנה, כי שכבת הניסוח אסינכרונית
+      // וההלחנה סינכרונית — ר' המעבר המקדים מיד אחרי זה.
+      const unitList = [];
       (spec.sections || []).filter((s) => s?.enabled !== false).forEach((s) => {
         const units = (Array.isArray(s.subSections) && s.subSections.length)
           ? s.subSections.map((sub) => ({ ...sub, intent: sub.intent || s.intent, parent: s }))
           : [{ ...s, parent: null }];
-        units.forEach((u) => {
-          const ev = bySection[u.id]?.evidence || [];
-          const openerText = composeSectionOpener({
-            intent: u.intent,
-            seedKey: u.id,
-            profile,
-            topic: u.title,
-            framework: u.parent?.title,
-            mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || s.mustMention),
-            usedTexts: used,
-            evidenceText: ev.map((e) => e.text).join(' '),
-          });
-          if (openerText) openers[u.id] = openerText;
-          // 3 וריאנטים לכל סעיף; הדטקטור המקומי בוחר את הכי-אנושי (לולאת האיכות).
-          const r = composeSectionProseBest(
-            { ...u, keywords: u.keywords?.length ? u.keywords : s.keywords },
-            ev,
-            { quotaWords: u.wordQuota || 0, seedKey: `${u.id}${seedSuffix}`, profile: frameProfile, commands, sharedUsedSentences: workUsedSentences },
-            { scoreFn: scoreTextAuthenticity, variants },
-          );
-          if (r?.html) { prose[u.id] = r.html; written += 1; }
+        units.forEach((u) => unitList.push({ u, s }));
+      });
+
+      // ---------- מעבר מקדים: שכבת הניסוח ----------
+      // ⚠️ composeSectionProse סינכרוני, וכך כל שרשרת הקריאות אליו. הפיכתם
+      // לאסינכרוניים היא שינוי רחב בלי תמורה, ולכן — כפי ש-localRewriteService
+      // כבר מתעד — הקורא מבצע את העבודה האסינכרונית פעם אחת ומעביר מפה מוכנה.
+      //
+      // דרגת `none` (אין Ollama / אתר) מדלגת לגמרי, והקוד מתנהג כמו קודם.
+      const backendChoice = await ensureRewriteBackend();
+      const rewritesByUnit = {};
+      let rewrittenSentences = 0;
+      let cancelled = false;
+      if (backendChoice.backend !== REWRITE_BACKEND.NONE) {
+        const targets = unitList.filter(({ u }) => (bySection[u.id]?.evidence || []).length);
+        cancelRef.current = false;
+        setCancellable(true);
+        try {
+          for (let i = 0; i < targets.length; i += 1) {
+            if (cancelRef.current) { cancelled = true; break; }
+            const { u } = targets[i];
+            setBusy(`מנסח סעיף ${i + 1}/${targets.length} — ${describeRewriteBackend()}…`);
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const rr = await rewriteEvidenceForSection({
+                section: u,
+                evidence: bySection[u.id].evidence,
+                // עובדות המקרה = טקסט ההנחיות עצמו, כמו ב-nlg-loop-round. בלעדיו
+                // המודל מיישם דוקטרינה על ריק ונופל בשער הנושא.
+                caseFacts: String(instructions || '').slice(0, 2500),
+              });
+              if (rr?.ok) { rewritesByUnit[u.id] = rr.byChunk; rewrittenSentences += rr.ok; }
+            } catch {
+              // סעיף שנכשל נופל למסלול הכללים. לא מפיל את שאר העבודה.
+            }
+          }
+        } finally {
+          setCancellable(false);
+        }
+        setBusy('מרכיב טיוטה מהראיות…');
+      }
+
+      unitList.forEach(({ u, s }) => {
+        const ev = bySection[u.id]?.evidence || [];
+        const openerText = composeSectionOpener({
+          intent: u.intent,
+          seedKey: u.id,
+          profile,
+          topic: u.title,
+          framework: u.parent?.title,
+          mustMention: u.mustMention?.length ? u.mustMention : (u.parent?.mustMention || s.mustMention),
+          usedTexts: used,
+          evidenceText: ev.map((e) => e.text).join(' '),
         });
+        if (openerText) openers[u.id] = openerText;
+        // 3 וריאנטים לכל סעיף; הדטקטור המקומי בוחר את הכי-אנושי (לולאת האיכות).
+        const r = composeSectionProseBest(
+          { ...u, keywords: u.keywords?.length ? u.keywords : s.keywords },
+          ev,
+          {
+            quotaWords: u.wordQuota || 0,
+            seedKey: `${u.id}${seedSuffix}`,
+            profile: frameProfile,
+            commands,
+            sharedUsedSentences: workUsedSentences,
+            // ראיה שאינה במפה (נדחתה בשער הניסוח) נופלת למסלול הכללים כרגיל.
+            rewrites: rewritesByUnit[u.id] || null,
+            styleTargets: getStyleTargets(),
+            // מכסת קשירת-הצד יחסית לגודל העבודה (ר' partyBudget).
+            sectionCount: unitList.length,
+          },
+          { scoreFn: scoreTextAuthenticity, variants },
+        );
+        if (r?.html) { prose[u.id] = r.html; written += 1; }
       });
       if (!written) {
         setNotice({ tone: 'warn', text: 'אין סעיף עם ראיות — הרץ "מצא ראיות" קודם, או הוסף חומרים.' });
@@ -424,7 +494,12 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
         title: spec.title || 'מטלה',
         source: 'assignment-scaffold-local-draft',
       });
-      setNotice({ tone: 'ok', text: `נכתבה טיוטה מקומית ל-${written} סעיפים — כולה מהחומרים שלך, בלי AI.` });
+      // ⚠️ הדרגה נאמרת במפורש. משתמש שמקבל פלט חלש יותר צריך לדעת שזה מסלול
+      // הכללים ולא תקרת המוצר — אחרת הוא מסיק שזה מה שהמנוע יודע לעשות.
+      const tierNote = rewrittenSentences
+        ? ` · ${rewrittenSentences} משפטים נוסחו מקומית${cancelled ? ' (הניסוח בוטל באמצע)' : ''}`
+        : (backendChoice.backend === REWRITE_BACKEND.NONE ? ' · מסלול כללים' : '');
+      setNotice({ tone: 'ok', text: `נכתבה טיוטה מקומית ל-${written} סעיפים — כולה מהחומרים שלך, בלי AI.${tierNote}` });
       // "נסח מחדש" מגריל seed חדש בכל לחיצה — הקידום כאן מבטיח שהלחיצה הבאה שונה.
       if (proseCommands.has('st_reshuffle')) setRegenCounter((c) => c + 1);
     } catch (err) {
@@ -624,8 +699,17 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
         {(busy || notice) && (
           <div className={revealClass(mounted, 'sticky top-0 z-20 mb-4 space-y-2')}>
             {busy && (
-              <div className="rounded-xl border border-sky-400/30 bg-sky-950/90 px-4 py-2.5 text-sm text-sky-100 shadow-lg backdrop-blur-md">
-                <span className="inline-block animate-pulse">⏳</span> {busy}
+              <div className="flex items-center gap-3 rounded-xl border border-sky-400/30 bg-sky-950/90 px-4 py-2.5 text-sm text-sky-100 shadow-lg backdrop-blur-md">
+                <span className="flex-1"><span className="inline-block animate-pulse">⏳</span> {busy}</span>
+                {cancellable && (
+                  <button
+                    type="button"
+                    onClick={() => { cancelRef.current = true; setBusy('מסיים את הסעיף הנוכחי ועוצר…'); }}
+                    className="shrink-0 rounded-lg border border-sky-300/40 px-2.5 py-1 text-xs text-sky-100 transition hover:bg-sky-900/60"
+                  >
+                    עצור ניסוח
+                  </button>
+                )}
               </div>
             )}
             {notice && !busy && (

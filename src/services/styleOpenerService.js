@@ -562,11 +562,22 @@ const ROADMAP_BY_INTENT = {
 };
 
 // מסגרות למקרה (clause): לא משבצות את הכותרת — רק את מסגרת-העל, שהיא צירוף שמני.
+// ⚠️ הבריכה הורחבה מ-4 ל-8 (26.7.26). עבודה טיפוסית מכילה 6 סעיפים, ולכן עם
+// ארבע מסגרות בלבד ההתנגשות הייתה **מובטחת** לפי שובך היונים — וזה מה שהפיל את
+// אינווריאנטת no-cross-dup בבנצ' (var2: 99 → 93).
+//
+// כל מסגרת מסתיימת במילת יחס שאחריה בא צירוף שמני **בלי סמיכות** — `fw` מגיע
+// לרוב עם ה"א הידיעה ("העקרונות שנלמדו בקורס"), ומילת יחס שנצמדת אליו
+// ("בהתאם ל…") הייתה מייצרת "להעקרונות".
 const CASE_FRAMES = [
   (fw) => `המקרה הנדון בסעיף זה ייבחן לאור ${fw}.`,
   (fw) => `ניתוח המקרה שלפנינו ייערך על פי ${fw}.`,
   (fw) => `ההכרעה בסעיף זה תנומק מתוך ${fw}.`,
   (fw) => `הדיון במקרה זה יתבסס על ${fw}.`,
+  (fw) => `שאלות המקרה ייבחנו לפי ${fw}.`,
+  (fw) => `הטיעון בסעיף זה ייבנה על יסוד ${fw}.`,
+  (fw) => `המקרה שלפנינו יידון נוכח ${fw}.`,
+  (fw) => `הדיון בחלק זה ייערך תוך הסתמכות על ${fw}.`,
 ];
 
 const QUESTION_WORDS = /^(?:מה|מהם|מהן|מהי|מהו|מדוע|כיצד|האם|מי|איך|למה|באיזו|באילו)\s/;
@@ -640,12 +651,20 @@ export function composeSectionOpener({
   } else {
     // clause — תיאור מקרה. הנושא לא משובץ; המסגרת כן.
     const fw = String(framework || '').replace(/\s+/g, ' ').trim() || 'העקרונות שנלמדו בקורס';
-    const idx = Math.abs(djb2(`${seedKey}|case`)) % CASE_FRAMES.length;
-    let frame = CASE_FRAMES[idx](fw);
-    if (usedTexts && usedTexts.has(frame)) {
-      frame = CASE_FRAMES[(idx + 1) % CASE_FRAMES.length](fw);
+    const start = Math.abs(djb2(`${seedKey}|case`)) % CASE_FRAMES.length;
+    // ⚠️ סריקה על **כל** הבריכה — בדיוק כמו משפט המתווה למטה. הגרסה הקודמת
+    // ניסתה חלופה אחת בלבד (`idx + 1`) ואם גם היא הייתה תפוסה כתבה את המסגרת
+    // הכפולה כמו שהיא. עם 6 סעיפים זה קרה כמעט תמיד.
+    let frame = CASE_FRAMES[start](fw);
+    if (usedTexts) {
+      for (let i = 0; i < CASE_FRAMES.length; i += 1) {
+        const cand = CASE_FRAMES[(start + i) % CASE_FRAMES.length](fw);
+        if (!usedTexts.has(cand)) { frame = cand; break; }
+      }
+      // בריכה מוצה (יותר סעיפים ממסגרות) ⇒ נשארת המסגרת ההתחלתית. בניגוד למשפט
+      // המתווה אי אפשר להשמיט כאן — זהו המשפט הפותח של הסעיף.
+      usedTexts.add(frame);
     }
-    if (usedTexts) usedTexts.add(frame);
     first = frame;
   }
 

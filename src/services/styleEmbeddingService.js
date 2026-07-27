@@ -70,9 +70,29 @@ function configureOnnxRuntime(env) {
     // את stack-switching, רק את ההסקה.
     const name = 'ort-wasm-simd-threaded';
     wasm.wasmPaths = { mjs: `${base}${name}.mjs`, wasm: `${base}${name}.wasm` };
-    // אין COOP/COEP ב-Firebase hosting → אין SharedArrayBuffer → threads לא זמינים.
-    // הצהרה מפורשת עדיפה על גישוש שנכשל בשקט.
-    wasm.numThreads = 1;
+    // threads דורשים SharedArrayBuffer, שדורש בידוד חוצה-מקור.
+    //
+    // ⚠️ עד 26.7.26 זה היה `= 1` **גורף**, מהנימוק ש"אין COOP/COEP ב-Firebase
+    // hosting". הנימוק עצמו לא היה מדויק — ל-firebase.json יש בלוק `headers`
+    // ואפשר להגדיר אותן — אבל **באתר לא נגדיר אותן בכוונה**: הוא מתחבר עם
+    // signInWithPopup, ו-COOP: same-origin מנתק את window.opener ושובר את
+    // ההתחברות. same-origin-allow-popups משמר פופאפ אך אינו מעניק בידוד. XOR.
+    //
+    // בדסקטופ אין את ההתנגשות הזאת — firebase/services.js מנתב שם ל-OAuth
+    // לוקאלי (loopback) כי פופאפ ממילא לא עובד ב-WebView. לכן שם הכותרות בטוחות,
+    // והשורה הגורפת גרמה ל**דסקטופ להריץ ONNX על ליבה אחת מתוך 12 בלי סיבה**.
+    // נמדד: 564 קטעים ב-37s.
+    //
+    // האתר לא מפסיד הרבה: המסלול שלו ל-LLM הוא WebGPU, ש**אינו זקוק לבידוד**.
+    //
+    // הבדיקה היא `crossOriginIsolated` ולא `isDesktopApp()` — זו היכולת עצמה ולא
+    // ניחוש לפיה. הדסקטופ מדליק אותה דרך app.security.headers ב-tauri.conf.json;
+    // אם יום אחד יהיו כותרות גם ב-hosting, האתר יקבל את זה בלי שינוי קוד.
+    const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 1;
+    // תקרה של 4: ההאצה מתמטחת מעבר לזה, ו-proxy=true ממילא מוציא את ההסקה
+    // ל-Worker — אין טעם לרעוב את שאר המערכת.
+    wasm.numThreads = isolated ? Math.max(1, Math.min(4, cores)) : 1;
     // proxy=true → ORT רץ ב-Web Worker. ברירת המחדל של transformers היא false,
     // וההסקה חוסמת את ה-thread הראשי לחלוטין: נמדד 0 ticks של setInterval לאורך
     // 20 שניות של הטמעה, כלומר הדפדפן מכריז "הדף אינו מגיב". עם proxy נמדדו
