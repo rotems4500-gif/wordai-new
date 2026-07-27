@@ -87,16 +87,32 @@ export async function startUpdateInstall({ availableVersion = '' } = {}) {
 }
 
 async function checkOnce({ silent = true } = {}) {
-  if (!isDesktop()) return { ok: false, reason: 'web' };
+  if (!isDesktop()) {
+    if (!silent) showToast('בדיקת עדכונים זמינה רק באפליקציית שולחן העבודה.', { tone: 'info' });
+    return { ok: false, reason: 'web' };
+  }
   let result;
   try {
     result = await window.desktopApp.checkForAppUpdates();
-  } catch {
+  } catch (error) {
+    if (!silent) showToast(error?.message || 'בדיקת העדכונים נכשלה.', { tone: 'error', duration: 7000 });
     return { ok: false, reason: 'check-failed' };
   }
-  if (!result || result.status !== 'available') return result || { ok: false };
+
+  if (!result || result.status !== 'available') {
+    // בדיקה יזומה חייבת לענות משהו. בדיקה אוטומטית שותקת כשאין חדש.
+    if (!silent) {
+      if (result?.status === 'up-to-date') {
+        showToast(`האפליקציה מעודכנת${result.currentVersion ? ` (גרסה ${result.currentVersion})` : ''}.`, { tone: 'success' });
+      } else {
+        showToast(result?.message || 'לא הצלחתי לבדוק עדכונים כרגע.', { tone: 'warning', duration: 7000 });
+      }
+    }
+    return result || { ok: false };
+  }
 
   const version = String(result.availableVersion || '');
+  // השתקה חלה רק על הבדיקה האוטומטית. ביקש במפורש — מקבל תשובה.
   if (silent && isSnoozed(version)) return result;
 
   showToast(`גרסה ${version} של WordFlow AI זמינה.`, {
