@@ -113,7 +113,7 @@ node tools/test-bench/nlg-bench/compare-api.mjs    # מקומי מול API על 
 1. **רגרסיה** — `run-scaffold-e2e.mjs` כמו שהוא. סרגל שלא זז.
 2. **יכולת** — `cases/` (מטלות אמיתיות) × **וריאציות מוגרלות-בזרע** (`variations.mjs`: ניסוח מוחלף, סדר שאלות מעורבל) → 6 אינווריאנטות (`invariants.mjs`: אפס-ג'יבריש, עיגון≥40%, כנות-חסימה, כנות-מכסה, אי-כפילות, אפס-דליפת-תבנית) → `capabilityScore`. נרשם ב-`bench-history.jsonl`; ירידה >3 נק' = exit 1.
 
-מטלה אמיתית חדשה ⇒ תיקיית `case` חדשה (assignment.txt + case.json). ⚠️ **חובה `courseDir` ב-case.json** — בלעדיו ההרנס נופל לרשימת קבצים קשיחה וה-case סורק את הקורפוס של מישהו אחר. cases קיימים: `media-law-2026` (פעיל, ממוצע 97) · `mill-2026` (מדולג — הקורפוס אינו במכונה). `compare-api.mjs` מריץ מודל API על **אותן ראיות בדיוק** ומודד באותם מדדים.
+מטלה אמיתית חדשה ⇒ תיקיית `case` חדשה (assignment.txt + case.json). ⚠️ **חובה `courseSubdir` ב-case.json** — בלעדיו ההרנס נופל לרשימת קבצים קשיחה וה-case סורק את הקורפוס של מישהו אחר. ⚠️ **נתיבים יחסיים בלבד** (`corpusRel` יחסי לשולחן העבודה, `courseSubdir` יחסי לו): עד 27.7.26 היה שם נתיב מוחלט עם שם המשתמש, ובמעבר לשתי מכונות זה נתן בנצ' אדום שנראה כמו נסיגת קוד בזמן שהקורפוס פשוט ישב תחת בית אחר. עקיפה: `WORDAI_BENCH_CORPUS`. cases קיימים: `media-law-2026` (94) · `mill-2026` (89). `compare-api.mjs` מריץ מודל API על **אותן ראיות בדיוק** ומודד באותם מדדים.
 
 ### `src/firebase/`
 - [config.js](src/firebase/config.js) — Firebase config keys.

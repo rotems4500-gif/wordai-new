@@ -180,7 +180,18 @@ async function ingestFiles(paths) {
   clearMaterialStore();
   let ocrCount = 0;
   for (const p of paths) {
-    let { text, scanned, garbled } = await extractFile(p);
+    // ⚠️ OneDrive Files On-Demand: הקובץ קיים ל-existsSync אבל readFileSync זורק
+    // `UNKNOWN` (errno -4094) כי הוא placeholder בענן. בלי הדילוג הזה קובץ אחד
+    // מפיל את כל שכבת הרגרסיה עם stack של node:fs.
+    let extracted;
+    try {
+      extracted = await extractFile(p);
+    } catch (err) {
+      const cloud = err?.code === 'UNKNOWN' || err?.errno === -4094;
+      console.log(`  ⚠ ${cloud ? 'לא ירד מ-OneDrive' : 'שגיאת קריאה'}: ${path.basename(p)} (${err?.code || err?.message})`);
+      continue;
+    }
+    let { text, scanned, garbled } = extracted;
     if (process.env.WORDAI_SLIDE_DIAG === '1') {
       const m = measureProseContinuity(text);
       console.log(`  [רציפות] נק'/100=${m.per100.toFixed(1).padStart(5)} · שורות/100=${m.linesPer100.toFixed(1).padStart(5)} · מילים/שורה=${m.wordsPerLine.toFixed(1).padStart(5)} · סגורות=${m.closedRatio.toFixed(2)} · ${String(m.words).padStart(6)} מילים · ${path.basename(p).slice(0, 34)}`);

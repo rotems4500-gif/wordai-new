@@ -241,7 +241,19 @@ async function ingestCourse() {
   for (const name of courseNames) {
     const p = path.join(courseBase, name);
     if (!fs.existsSync(p)) { console.log(`  ⚠ חסר: ${name}`); continue; }
-    let { text, scanned, garbled } = await extractFile(p);
+    // ⚠️ קובץ ב-OneDrive במצב Files On-Demand **קיים** ל-existsSync ובכל זאת
+    // readFileSync עליו זורק `UNKNOWN` (errno -4094) — הוא placeholder בענן ולא
+    // ירד למכונה. בלי ה-catch הזה קובץ ענן אחד מפיל את כל הריצה עם stack של
+    // node:fs, וזה נקרא כשבירת קוד. דילוג רועש, כמו קובץ חסר.
+    let extracted;
+    try {
+      extracted = await extractFile(p);
+    } catch (err) {
+      const cloud = err?.code === 'UNKNOWN' || err?.errno === -4094;
+      console.log(`  ⚠ ${cloud ? 'לא ירד מ-OneDrive' : 'שגיאת קריאה'}: ${name} (${err?.code || err?.message})`);
+      continue;
+    }
+    let { text, scanned, garbled } = extracted;
     let viaOcr = false;
     if (scanned || garbled) { text = await ocrPdf(p); ocrCount += 1; viaOcr = true; }
     if (!String(text || '').trim()) continue;
