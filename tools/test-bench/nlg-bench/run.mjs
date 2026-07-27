@@ -218,6 +218,7 @@ let builtOnce = false;
 
 // ---------- שכבה 1: רגרסיה ----------
 let e2ePass = null;
+let e2eSkippedRequired = [];
 if (process.env.WORDAI_BENCH_SKIP_E2E !== '1') {
   console.log('\n═══ שכבה 1: רגרסיה (scaffold-e2e) ═══');
   // שורש הקורפוס מועבר גם לשכבה 1. קודם היא נשענה על הנפילה הפנימית שלה, ולכן
@@ -226,6 +227,12 @@ if (process.env.WORDAI_BENCH_SKIP_E2E !== '1') {
     process.env.WORDAI_SCAFFOLD_CORPUS ? {} : { WORDAI_SCAFFOLD_CORPUS: firstCorpusDir() });
   e2ePass = code === 0;
   console.log(e2ePass ? '✓ רגרסיה עברה' : '✗ רגרסיה נכשלה');
+  // קוד היציאה אינו מבחין בין "עבר הכול" ל"עבר מה שרץ". הפירוט בקובץ המצב.
+  try {
+    const statusPath = path.join(PROJECT, 'tools', 'test-bench', '.scaffolde2e-scratch', 'e2e-status.json');
+    const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+    e2eSkippedRequired = Array.isArray(status?.skippedRequired) ? status.skippedRequired : [];
+  } catch {}
 }
 
 // ---------- שכבה 2: יכולת ----------
@@ -336,5 +343,30 @@ for (const r of results) {
   }) + '\n', 'utf8');
 }
 
-console.log(exitCode === 0 ? '\n✓ bench ירוק' : '\n✗ bench אדום');
+// ---------- כיסוי: מה לא רץ ----------
+//
+// ⚠️ "ירוק" חייב להיות טענה על מה שנמדד, לא על מה שהודלג. שכבה 1 דילגה על
+// `neg-ai-labor` (בקרה שלילית מחייבת) והבנצ' עדיין הכריז ירוק — כי דילוג
+// מצטמצם ל-`requiredOk === required` שהוא 0===0.
+//
+// למה לא פשוט להכשיל: זה בדיוק הכשל שהקוד הזה כבר מזהיר מפניו במקום אחר —
+// "exit 1 שתמיד דולק זהה ל-exit 1 שכבוי". מכונה בלי קורפוס תהיה אדומה תמיד,
+// והשער ימות. לכן מצב שלישי: exit 0 (אין נסיגה), אבל **לא ירוק**.
+// WORDAI_BENCH_STRICT=1 הופך דילוג לכישלון — לשימוש ב-CI ולפני release.
+const STRICT = process.env.WORDAI_BENCH_STRICT === '1';
+const uncovered = [
+  ...e2eSkippedRequired.map((s) => `שכבה 1 · ${s.id} — ${s.reason}${s.covers ? ` (${s.covers})` : ''}`),
+  ...skipped.map((s) => `שכבה 2 · ${s.caseId} — ${s.reason}`),
+];
+
+if (uncovered.length) {
+  console.log(`\n⚠ כיסוי חלקי — ${uncovered.length} בדיקות מחייבות לא רצו בריצה הזו:`);
+  for (const u of uncovered) console.log(`   ⏭ ${u}`);
+  if (STRICT) { console.log('   WORDAI_BENCH_STRICT=1 ⇒ דילוג נחשב כישלון.'); exitCode = 1; }
+}
+
+if (exitCode !== 0) console.log('\n✗ bench אדום');
+else if (uncovered.length) console.log('\n⚠ bench חלקי — מה שרץ עבר, אבל לא הכול רץ');
+else console.log('\n✓ bench ירוק');
+
 process.exit(exitCode);

@@ -464,8 +464,17 @@ if (process.env.WORDAI_E2E_DIAG === '1') {
 // היעדרות קבצים. מדלגים במפורש במקום להכשיל את ה-exit code.
 const corpus1Loaded = (corpusStats?.chunks || 0) > 0;
 let evalRes = { ok: 0, requiredOk: 0, required: 0 };
+// ⚠️ דילוג נרשם, לא נבלע. בלי הרישום הזה `requiredOk === required` הופך ל-0===0,
+// כלומר תרחיש שלם שלא רץ נספר כ"עבר" — וזה בדיוק מה שקרה: `neg-ai-labor`,
+// בקרה שלילית מחייבת, דולגה בשקט והבנצ' דיווח ירוק.
+const skippedRequired = [];
 if (!corpus1Loaded) {
   console.log('\n═══ eval: אחזור ראיות ═══\n⏭  דילוג — קורפוס הקורס אינו זמין במכונה זו (WORDAI_SCAFFOLD_CORPUS)');
+  skippedRequired.push({
+    id: 'eval:אחזור-ראיות',
+    reason: 'קורפוס תרחיש 1 אינו זמין במכונה זו',
+    covers: 'כולל את הבקרה השלילית neg-ai-labor',
+  });
 } else {
   const rows = await runEval();
   evalRes = printEval(rows, 'אחזור ראיות');
@@ -781,4 +790,19 @@ const allPass = evalRes.requiredOk === evalRes.required
   && diploRes.requiredOk === diploRes.required
   && structOk === structTotal
   && proseOk === proseTotal;
+
+// מדווחים את הדילוגים ל-run.mjs. ה-stdio הוא inherit, כלומר אין ערוץ מלבד
+// קוד היציאה — ולהעמיס עליו מצב שלישי ישבור את החוזה "exit≠0 = רגרסיה".
+// לכן קובץ מצב לצד הפלט.
+if (skippedRequired.length) {
+  console.log(`\n⚠ ${skippedRequired.length} בדיקות מחייבות לא רצו:`);
+  for (const s of skippedRequired) console.log(`   ⏭ ${s.id} — ${s.reason}${s.covers ? ` (${s.covers})` : ''}`);
+  console.log('   הריצה הזו אינה מכסה אותן. "עבר" כאן אינו "נבדק".');
+}
+try {
+  const statusPath = path.join(process.env.WORDAI_VERIFY_SCRATCH || '.', 'e2e-status.json');
+  fs.mkdirSync(path.dirname(statusPath), { recursive: true });
+  fs.writeFileSync(statusPath, JSON.stringify({ allPass, skippedRequired }, null, 2), 'utf8');
+} catch {}
+
 process.exit(allPass ? 0 : 1);
