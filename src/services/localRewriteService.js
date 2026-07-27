@@ -267,6 +267,10 @@ const MOVES = {
 // החוקים הן פיגום שמודל קטן נשען עליו, לא רעש שמסתיר ממנו את ההנחיה.
 //
 // WORDAI_REWRITE_PROMPT=subjfirst משחזר את הסדר הישן; =compact את הגרסה שנפסלה.
+const LEAN_PROMPT = (() => {
+  try { return String(process?.env?.WORDAI_REWRITE_LEAN || '') === '1'; } catch { return false; }
+})();
+
 const SUBJ_LAST = (() => {
   try { return String(process?.env?.WORDAI_REWRITE_PROMPT || '') !== 'subjfirst'; } catch { return true; }
 })();
@@ -396,7 +400,18 @@ ${previous ? `\nכבר נכתב: "${previous}" — כתוב משהו אחר.\n` 
     ? `\n⚠️ המשפט חייב להזכיר בשמו את **${subjects.join(' / ')}** — זה מי שהשאלה שואלת עליו.\n`
     : '';
 
-  return `אתה עוזר כתיבה אקדמי. משימתך: ${MOVES[move] || MOVES.apply}.${styleBlock}${subjHere}${prevBlock}${openerBlock}${varietyBlock}
+  // ---------- WORDAI_REWRITE_LEAN — פרומפט של אילוץ אחד ----------
+  // ⚠️ למודל קטן. נמדד: 1.7B נותן 12/18 עם אילוץ הנושא לבדו ו-25% בסבב מלא,
+  // שבו הפרומפט נושא גם את המשפט הקודם וגם את הפתיחים האסורים. אבל שני אלה
+  // **כבר נאכפים כשערים על הפלט** (freshOpener, usedSentences) — ההנחיה בפרומפט
+  // מיותרת למי שאינו מסוגל לציית לה, ורק שוחקת את האילוץ שהוא כן מחזיק.
+  // ב-LEAN: ההנחיות יוצאות מהפרומפט, והגיוון בין ניסיונות מגיע מזרעים
+  // (generationPlan מוסיף וריאנטים) במקום מהוראות. דגימה-דחייה, לא ציות.
+  const lean = LEAN_PROMPT;
+  const prevBlockUsed = lean ? '' : prevBlock;
+  const openerBlockUsed = lean ? '' : openerBlock;
+
+  return `אתה עוזר כתיבה אקדמי. משימתך: ${MOVES[move] || MOVES.apply}.${styleBlock}${subjHere}${prevBlockUsed}${openerBlockUsed}${varietyBlock}
 
 חוקים מוחלטים:
 - אסור להוסיף עובדה, שם, חוק, סעיף או פסק דין שאינם מופיעים במקור או בעובדות המקרה.
