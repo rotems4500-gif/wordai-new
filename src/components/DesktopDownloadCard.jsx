@@ -71,6 +71,7 @@ const SKINS = {
 export default function DesktopDownloadCard({ compact = false, variant = 'panel' }) {
   const [release, setRelease] = useState(() => readCache());
   const [failed, setFailed] = useState(false);
+  const [showWarningHelp, setShowWarningHelp] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined' || window.desktopApp) return undefined;
@@ -147,6 +148,45 @@ export default function DesktopDownloadCard({ compact = false, variant = 'panel'
         <div style={{ marginTop: 10, fontSize: 11, color: skin.meta, lineHeight: 1.7 }}>
           המתקין הוא ל-Windows. במערכת אחרת אפשר להמשיך לעבוד כאן באתר, או להתקין את האתר כאפליקציה
           דרך תפריט הדפדפן (Install / הוסף למסך הבית).
+        </div>
+      )}
+
+      {/* אזהרת SmartScreen: מופיעה כי המתקין עדיין לא חתום בתעודת מפרסם.
+          בלי הסבר מראש חלק מהמשתמשים נוטשים בשלב הזה. */}
+      {windows && (
+        <div style={{ marginTop: 12, borderTop: `1px solid ${variant === 'glass' ? 'rgba(255,255,255,0.14)' : 'var(--s-border)'}`, paddingTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => setShowWarningHelp((prev) => !prev)}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontSize: 11.5,
+              fontWeight: 700,
+              color: skin.body,
+              fontFamily: 'inherit',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span>{showWarningHelp ? '▾' : '◂'}</span>
+            <span>Windows מציג אזהרה בהתקנה? זה צפוי — הנה מה לעשות</span>
+          </button>
+
+          {showWarningHelp && (
+            <div style={{ marginTop: 8, fontSize: 11.5, color: skin.meta, lineHeight: 1.85 }}>
+              במסך הכחול <strong style={{ color: skin.body }}>"Windows הגן על המחשב שלך"</strong> לוחצים על
+              {' '}<strong style={{ color: skin.body }}>"מידע נוסף"</strong>, ואז על
+              {' '}<strong style={{ color: skin.body }}>"הפעל בכל מקרה"</strong>. ההתקנה תמשיך כרגיל.
+              <br />
+              האזהרה אינה אומרת שנמצאה בעיה בקובץ. Windows מציג אותה לכל מתקין שעדיין לא נרכשה עבורו
+              תעודת חתימה מסחרית — כולל תוכנות חדשות לגמרי. הקובץ מגיע ישירות מעמוד ה-releases הרשמי
+              של הפרויקט ב-GitHub, ואפשר לראות שם את כל הגרסאות.
+            </div>
+          )}
         </div>
       )}
     </div>

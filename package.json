@@ -26,6 +26,7 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
+    "desktop:build:signed": "tauri build --config src-tauri/tauri.signing.conf.json",
     "desktop:release": "node scripts/make-latest-json.mjs",
     "dist:win": "tauri build"
   },
