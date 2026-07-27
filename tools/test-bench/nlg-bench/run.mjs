@@ -12,6 +12,7 @@
 // אותו case ⇒ exit 1 (רגרסיית יכולת).
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +46,50 @@ const run = (cmd, args, env = {}) => new Promise((resolve) => {
   p.on('error', () => resolve(1));
 });
 
+// ---------- פתרון נתיב הקורפוס ----------
+//
+// ⚠️ עד 27.7.26 `case.json` החזיק **נתיב מוחלט עם שם המשתמש בתוכו**
+// (`C:/Users/rotem_7jta/...`). ברגע שהפיתוח עבר לשתי מכונות זה נשבר: שני ה-cases
+// דולגו, שכבת הרגרסיה נפלה על "קבצים חסרים", והבנצ' דיווח אדום שנראה בדיוק כמו
+// נסיגת קוד — בזמן שהקורפוס ישב על הדיסק, תחת בית אחר.
+//
+// לכן `corpusRel` (יחסי ל-home) הוא הצורה הנכונה, ו-`corpusDir` המוחלט נשאר
+// נסבל לתאימות אחורה בלבד. סדר הכרעה: env > corpusRel על פני מועמדי שולחן-עבודה
+// > corpusDir מוחלט.
+const HOME = os.homedir();
+
+// שולחן העבודה משתנה בין מכונות: OneDrive מתרגם אותו לעברית או לא, ולפעמים אינו
+// מעורב כלל. הרשימה מנוסה לפי סדר.
+const DESKTOP_BASES = [
+  path.join(HOME, 'OneDrive', 'שולחן העבודה'),
+  path.join(HOME, 'OneDrive', 'Desktop'),
+  path.join(HOME, 'Desktop'),
+  HOME,
+];
+
+const isDir = (p) => { try { return !!p && fs.statSync(p).isDirectory(); } catch { return false; } };
+
+function resolveCorpusDir(cfg) {
+  if (process.env.WORDAI_BENCH_CORPUS) return process.env.WORDAI_BENCH_CORPUS;
+  if (process.env.WORDAI_SCAFFOLD_CORPUS) return process.env.WORDAI_SCAFFOLD_CORPUS;
+  if (cfg?.corpusRel) {
+    for (const base of DESKTOP_BASES) {
+      const cand = path.join(base, cfg.corpusRel);
+      if (isDir(cand)) return cand;
+    }
+  }
+  if (cfg?.corpusDir && isDir(cfg.corpusDir)) return cfg.corpusDir;
+  // אין התאמה: מחזירים את המועמד הראשון כדי שהודעת הדילוג תראה נתיב אמיתי.
+  return cfg?.corpusRel ? path.join(DESKTOP_BASES[0], cfg.corpusRel) : (cfg?.corpusDir || '');
+}
+
+// `courseSubdir` יחסי לשורש הקורפוס. `courseDir` המוחלט נתמך לתאימות אחורה.
+function resolveCourseDir(cfg, corpusDir) {
+  if (cfg?.courseSubdir) return path.join(corpusDir, cfg.courseSubdir);
+  if (cfg?.courseDir && isDir(cfg.courseDir)) return cfg.courseDir;
+  return cfg?.courseDir || '';
+}
+
 // שורש הקורפוס של ה-case הראשון — משמש כברירת מחדל לשכבת הרגרסיה, ששואבת
 // מאותה ספריית מקורות.
 function firstCorpusDir() {
@@ -54,7 +99,8 @@ function firstCorpusDir() {
       const cfgPath = path.join(casesDir, d, 'case.json');
       if (!fs.existsSync(cfgPath)) continue;
       const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      if (cfg.corpusDir) return cfg.corpusDir;
+      const dir = resolveCorpusDir(cfg);
+      if (isDir(dir)) return dir;
     }
   } catch {}
   return '';
@@ -76,17 +122,20 @@ function caseAvailable(cfg) {
       return fs.readdirSync(dir).filter((f) => /\.(pdf|docx|pptx)$/i.test(f) && !f.startsWith('~$')).length;
     } catch { return 0; }
   };
+  const corpusDir = resolveCorpusDir(cfg);
+  const courseDir = resolveCourseDir(cfg, corpusDir);
+  const hint = process.env.WORDAI_BENCH_CORPUS ? '' : ' — אפשר להצביע ידנית ב-WORDAI_BENCH_CORPUS';
   // courseDir ⇒ ההרנס סורק את התיקייה כולה.
-  if (cfg.courseDir) {
-    const n = countIn(cfg.courseDir);
-    return n > 0 ? { ok: true, detail: `${n} קבצים` } : { ok: false, detail: `courseDir ריק או חסר: ${cfg.courseDir}` };
+  if (courseDir) {
+    const n = countIn(courseDir);
+    return n > 0 ? { ok: true, detail: `${n} קבצים` } : { ok: false, detail: `courseDir ריק או חסר: ${courseDir}${hint}` };
   }
   // אחרת ההרנס משתמש ברשימה קשיחה. ה-case מצהיר קבצי-סימן כדי שנוכל לבדוק.
   if (Array.isArray(cfg.requiredFiles) && cfg.requiredFiles.length) {
-    const found = cfg.requiredFiles.filter((f) => fs.existsSync(path.join(cfg.corpusDir || '', f)));
+    const found = cfg.requiredFiles.filter((f) => fs.existsSync(path.join(corpusDir || '', f)));
     return found.length
       ? { ok: true, detail: `${found.length}/${cfg.requiredFiles.length} קבצי-סימן` }
-      : { ok: false, detail: `אף אחד מ-${cfg.requiredFiles.length} קבצי הסימן לא נמצא תחת ${cfg.corpusDir}` };
+      : { ok: false, detail: `אף אחד מ-${cfg.requiredFiles.length} קבצי הסימן לא נמצא תחת ${corpusDir}${hint}` };
   }
   return { ok: true, detail: 'לא הוצהר קורפוס לבדיקה' };
 }
@@ -127,8 +176,11 @@ async function runCase(caseDir, caseCfg, variantLabel, assignmentText) {
   const assignmentPath = path.join(roundDir, 'assignment.txt');
   fs.writeFileSync(assignmentPath, assignmentText, 'utf8');
 
+  const corpusDir = resolveCorpusDir(caseCfg);
+  const courseDir = resolveCourseDir(caseCfg, corpusDir);
+
   const code = await run('node', ['tools/test-bench/run-nlg-loop-round.mjs'], {
-    WORDAI_SCAFFOLD_CORPUS: caseCfg.corpusDir,
+    WORDAI_SCAFFOLD_CORPUS: corpusDir,
     WORDAI_NLG_OUT: OUT_ROOT,
     WORDAI_NLG_ROUND: roundId,
     WORDAI_NLG_ASSIGNMENT: assignmentPath,
@@ -138,7 +190,7 @@ async function runCase(caseDir, caseCfg, variantLabel, assignmentText) {
     // קבצים. זה מה שהסתיר את העובדה שקורפוס mill-2026 נעלם מהמכונה: הבנצ' דיווח
     // "0 קטעים" ולא "קורפוס לא נמצא". `courseDir` ב-case.json הוא הדרך שההרנס
     // כבר תוכנן לגדול בה (ר' ההערה מעל courseFileNames).
-    ...(caseCfg.courseDir ? { WORDAI_NLG_COURSE_DIR: caseCfg.courseDir } : {}),
+    ...(courseDir ? { WORDAI_NLG_COURSE_DIR: courseDir } : {}),
     // ה-bundle נבנה פעם אחת בתחילת הריצה; הסבבים הבאים מדלגים
     WORDAI_NLGLOOP_REBUILD: builtOnce ? '0' : (process.env.WORDAI_NLGLOOP_REBUILD ?? '1'),
   });
