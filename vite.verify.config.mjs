@@ -55,7 +55,9 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
       ? 'tools/test-bench/lab-entry.mjs'          // full LAB — bundles all real modules for the test-bench server
       : process.env.WORDAI_VERIFY_ENTRY === 'styletag'
         ? 'tools/test-bench/style-tag-route-unit.mjs'
-        : 'tools/test-bench/source-pipeline-harness.mjs';
+        : process.env.WORDAI_VERIFY_ENTRY === 'styleseed'
+          ? 'tools/test-bench/style-seed-determinism.mjs'
+          : 'tools/test-bench/source-pipeline-harness.mjs';
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
@@ -73,7 +75,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                           : process.env.WORDAI_VERIFY_ENTRY === 'oprofile' ? 'out-oprofile'
                             : process.env.WORDAI_VERIFY_ENTRY === 'speccov' ? 'out-speccov'
                               : process.env.WORDAI_VERIFY_ENTRY === 'scaffolde2e' ? 'out-scaffolde2e'
-                                : process.env.WORDAI_VERIFY_ENTRY === 'nlgloop' ? 'out-nlgloop' : 'out-sf';
+                                : process.env.WORDAI_VERIFY_ENTRY === 'nlgloop' ? 'out-nlgloop'
+                                  : process.env.WORDAI_VERIFY_ENTRY === 'styleseed' ? 'out-styleseed' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

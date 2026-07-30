@@ -5907,6 +5907,19 @@ const shouldIncludeAcademicProfileContext = ({ requestText = '', templateId = ''
     || countAcademicWeakSignals(requestText) >= 2;
 };
 
+// FNV-1a — seed דטרמיניסטי לרוטציית תבניות הסגנון: אותה בקשה ⇒ אותו seed ⇒ אותן
+// 5 תבניות נבחרות. מחליף את Date.now() שגרם לסגנון שונה בין שתי הרצות זהות
+// (ובין batches של אותה מצגת). ייצוא — משמש גם את שירותי המצגות/שכתוב.
+export const hashStyleSeed = (value = '') => {
+  const text = String(value || '');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % 9973;
+};
+
 const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   const omitStructuralHints = options.omitStructuralHints === true;
   // מנוע הסגנון האישי (Personal Style Engine): כשהפרופיל מכיל styleEngine מופעל,
@@ -5919,7 +5932,13 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   // options.styleChunkBlock (buildStyleEngineInjectionBlock עצמו טהור/סינכרוני).
   const styleChunkBlock = styleEngineActive ? String(options.styleChunkBlock || '') : '';
   const styleEngineBlock = styleEngineActive
-    ? buildStyleEngineInjectionBlock(styleEngine, { seed: options.styleEngineSeed || 0, chunkBlock: styleChunkBlock, genre: options.styleGenre || null })
+    ? buildStyleEngineInjectionBlock(styleEngine, {
+      seed: options.styleEngineSeed || 0,
+      chunkBlock: styleChunkBlock,
+      genre: options.styleGenre || null,
+      // הייצוא ל-AI חיצוני מבקש רוטציה רחבה יותר (פרומפט חד-פעמי); ברירת המחדל 5.
+      ...(Number.isFinite(options.styleEnginePatternCount) ? { patternCount: options.styleEnginePatternCount } : {}),
+    })
     : '';
   const labels = {
     school: 'בית ספר',
@@ -5974,8 +5993,11 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
     const voiceParts = [];
     // goldenExample: כשהמנוע פעיל ויש לו chunks אמיתיים (styleChunkBlock) — בלוק ה-chunks
     // הוא התחליף העדיף, אז משמיטים את הדוגמה הישנה כדי למנוע כפילות. בלי chunks עדיין מוזרקת.
-    if (normalizedGoldenExample && !(styleEngineBlock && styleChunkBlock)) {
-      voiceParts.push(`דוגמה אמיתית לכתיבה של המשתמש (חקה ממנה קצב, אורך משפטים, בחירת מילים, מעברים וטון — אל תעתיק תוכן או משפטים):\n"${normalizedGoldenExample.slice(0, 1600)}${normalizedGoldenExample.length > 1600 ? '…' : ''}"`);
+    if (normalizedGoldenExample) {
+      // כשיש בלוק chunks — הדוגמה נשארת אבל מקוצרת: הסרה מלאה גרמה לכך שתקלת store
+      // רגעית *החליפה* מקור-סגנון במקום להוסיף, והפלט נשמע אחרת בין שתי הרצות.
+      const goldenCap = (styleEngineBlock && styleChunkBlock) ? 800 : 1600;
+      voiceParts.push(`דוגמה אמיתית לכתיבה של המשתמש (חקה ממנה קצב, אורך משפטים, בחירת מילים, מעברים וטון — אל תעתיק תוכן או משפטים):\n"${normalizedGoldenExample.slice(0, goldenCap)}${normalizedGoldenExample.length > goldenCap ? '…' : ''}"`);
     }
     if (!styleEngineBlock && profile.preferredTrainingExamples?.length) {
       voiceParts.push(`דוגמאות ניסוח שסומנו כקרובות במיוחד לקול שלו: ${profile.preferredTrainingExamples.slice(0, 3).map((ex) => `"${String(ex).trim()}"`).join(' | ')}`);
@@ -6065,8 +6087,11 @@ const buildPersonalStyleInstructions = (profile = {}, options = {}) => {
   if (profile.signOffStyle) parts.push(`אם מתאים לסיים בחתימה או סגירה, העדף: ${String(profile.signOffStyle).trim()}`);
   if (profile.emojiPreference) parts.push(`שימוש באימוג'י: ${emojiLabels[profile.emojiPreference] || profile.emojiPreference}`);
   if (profile.listPreference) parts.push(`פורמט רשימות מועדף: ${listLabels[profile.listPreference] || profile.listPreference}`);
-  if (normalizedGoldenExample && !(styleEngineBlock && styleChunkBlock)) {
-    parts.push(`דוגמת כתיבה אישית לחיקוי מבוקר: ${normalizedGoldenExample.slice(0, 1400)}${normalizedGoldenExample.length > 1400 ? '...' : ''}`);
+  if (normalizedGoldenExample) {
+    // נשארת גם לצד בלוק ה-chunks (מקוצרת) — ראה ההערה במצב emphasizeVoice: הסרה מלאה
+    // הפכה תקלת store לשינוי סגנון בין הרצות.
+    const goldenCap = (styleEngineBlock && styleChunkBlock) ? 700 : 1400;
+    parts.push(`דוגמת כתיבה אישית לחיקוי מבוקר: ${normalizedGoldenExample.slice(0, goldenCap)}${normalizedGoldenExample.length > goldenCap ? '...' : ''}`);
     parts.push('בעת שימוש בדוגמת הכתיבה: חלץ ממנה קצב, רמת פירוט, מבני משפטים, מעברים וטון; אל תעתיק משפטים שלמים ואל תשמר טעויות, פרטים אישיים או עובדות שאינם רלוונטיים לבקשה הנוכחית.');
   }
   if (profile.protectedVocabulary?.length) parts.push(`אין לשנות את המונחים: ${profile.protectedVocabulary.join(', ')}`);
@@ -6120,7 +6145,10 @@ const retrieveStyleChunkBlock = async (requestText, options = {}) => {
     try {
       await ensureSampleStoreReady();
       candidateChunks = getChunks();
-    } catch { candidateChunks = null; }
+    } catch (storeError) {
+      candidateChunks = null;
+      console.warn('[style] טעינת מאגר דוגמאות הסגנון נכשלה — נפילה ל-TF-IDF/פרופיל בלבד', storeError);
+    }
     if (Array.isArray(candidateChunks) && candidateChunks.length) {
       try {
         await ensureEmbeddingStoreReady();
@@ -6162,7 +6190,13 @@ const retrieveStyleChunkBlock = async (requestText, options = {}) => {
       }
     }
     return block;
-  } catch {
+  } catch (chunkError) {
+    // נפילה שקטה כאן הייתה הופכת כל תקלה ל"סגנון לא עקבי" בלתי-ניתן-לאבחון —
+    // ההזרקה ממשיכה מהפרופיל בלבד, אבל משאירים עקבה.
+    console.warn('[style] אחזור דוגמאות הסגנון נכשל — ההזרקה ממשיכה מהפרופיל בלבד', chunkError);
+    try {
+      logAgentDebugEvent({ type: 'style-chunk-fallback', state: 'error', message: 'אחזור דוגמאות סגנון נכשל — fallback לפרופיל בלבד', errorMessage: chunkError?.message || '' });
+    } catch { /* דיווח בלבד */ }
     return '';
   }
 };
@@ -6213,7 +6247,8 @@ export const applyStyleJudgeToText = async (plainText, { runId = '', mode = 'aut
       }
     }
     return result;
-  } catch {
+  } catch (judgeError) {
+    console.warn('[style] שופט הסגנון נכשל — הטקסט הוחזר ללא ניקוד', judgeError);
     return fallback;
   }
 };
@@ -6231,7 +6266,8 @@ export const rewriteDocumentStyle = async (html, { runId = '', styleDepth = 'nor
     // מודעות ז'אנר: request-first, נפילה אחרונה לסיווג טקסט-הפלט (הנקי מ-HTML).
     const resolvedGenre = genre || (requestText ? classifyRequestGenre(requestText) : null) || classifyRequestGenre(String(original || '').replace(/<[^>]+>/g, ' '));
     return await rewriteDocumentHtmlTowardStyle(original, { styleEngine, invokeModel, target, maxPasses, genre: resolvedGenre });
-  } catch {
+  } catch (rewriteError) {
+    console.warn('[style] שכתוב-לכיוון-הסגנון נכשל — המסמך הוחזר ללא שינוי', rewriteError);
     return { html: original, skipped: true };
   }
 };
@@ -6257,7 +6293,8 @@ export const scoreStyleForDocument = async (plainText, { runId = '', mode = 'aut
       breakdown: scored.breakdown,
       penalties: scored.penalties,
     };
-  } catch {
+  } catch (scoreError) {
+    console.warn('[style] ניקוד סגנון המסמך נכשל — אין ציון ל-meta', scoreError);
     return null;
   }
 };
@@ -6267,7 +6304,8 @@ export const scoreStyleForDocument = async (plainText, { runId = '', mode = 'aut
 export const buildPersonalStyleVoiceBlock = (profile = null) => {
   try {
     return buildPersonalStyleInstructions(profile || getPersonalStyleProfile(), { emphasizeVoice: true });
-  } catch {
+  } catch (voiceError) {
+    console.warn('[style] בניית בלוק הקול האישי נכשלה — הוזרק ריק', voiceError);
     return '';
   }
 };
@@ -6385,7 +6423,45 @@ export const applyPortableProfilePackage = (input = {}) => {
   return { ok: true, applied };
 };
 
-export const buildPortablePrompt = (options = {}) => {
+// דגימות כתיבה אמיתיות לייצוא: gold קודם, אחר-כך הארוכות — לכל היותר אחת לכל מסמך
+// מקור (גיוון), כל דגימה נחתכת בגבול משפט. few-shot אמיתי הוא המנוף החזק ביותר
+// לספק חיצוני — חזק מכל תיאור מילולי של הסגנון.
+const selectPortableWritingSamples = async ({ maxSamples = 3, maxChars = 500 } = {}) => {
+  try {
+    await ensureSampleStoreReady();
+    const chunks = getChunks() || [];
+    if (!chunks.length) return [];
+    const usable = chunks
+      .map((c) => ({ ...c, text: String(c?.text || '').trim() }))
+      .filter((c) => c.text.length >= 150);
+    const ranked = [
+      ...usable.filter((c) => c.isGold).sort((a, b) => b.text.length - a.text.length),
+      ...usable.filter((c) => !c.isGold).sort((a, b) => b.text.length - a.text.length),
+    ];
+    const seenDocs = new Set();
+    const picked = [];
+    for (const chunk of ranked) {
+      const docKey = String(chunk.docId || chunk.title || chunk.source || '');
+      if (seenDocs.has(docKey)) continue;
+      seenDocs.add(docKey);
+      let sample = chunk.text;
+      if (sample.length > maxChars) {
+        const cut = sample.slice(0, maxChars);
+        const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'), cut.lastIndexOf('?'), cut.lastIndexOf('!'));
+        sample = lastStop > maxChars * 0.5 ? cut.slice(0, lastStop + 1) : `${cut}…`;
+      }
+      picked.push(sample);
+      if (picked.length >= maxSamples) break;
+    }
+    return picked;
+  } catch {
+    return [];
+  }
+};
+
+// async מאז שהייצוא כולל דגימות כתיבה אמיתיות מה-store (טעינה אסינכרונית).
+// הקורא היחיד: כרטיס ה-Portable Prompt ב-FileMenu.
+export const buildPortablePrompt = async (options = {}) => {
   const sharedInstructions = typeof options.sharedInstructions === 'string'
     ? String(options.sharedInstructions || '').trim()
     : getSharedAgentInstructions();
@@ -6397,13 +6473,36 @@ export const buildPortablePrompt = (options = {}) => {
     // מצב voice רזה לייצוא ל-AI חיצוני: מזקק את הקול האישי (דוגמת כתיבה + טון + אוצר מילים)
     // במקום ~40 שדות אקדמיים שמנפחים את הפרומפט ולא רלוונטיים לספק חיצוני.
     emphasizeVoice: options.emphasizeVoice === true,
+    // פרומפט חד-פעמי שיישמר אצל הספק — מרחיבים את רוטציית הדפוסים מ-5 ל-12.
+    styleEnginePatternCount: 12,
   });
+  const writingSamples = await selectPortableWritingSamples();
+  const samplesSection = writingSamples.length
+    ? [
+      `דוגמאות כתיבה אמיתיות של המשתמש (${writingSamples.length}). אלה המקור הסמכותי לקול שלו — למד מהן קצב, אורך משפטים, פיסוק, בחירת מילים, מעברים וטון. אל תעתיק מהן תוכן, משפטים או עובדות:`,
+      ...writingSamples.map((sample, i) => `--- דוגמה ${i + 1} ---\n${sample}`),
+      '--- סוף הדוגמאות ---',
+    ].join('\n\n')
+    : '';
+  const applicationRules = [
+    'איך ליישם את הסגנון (חובה בכל תוצר):',
+    '1. כתוב כאילו המשתמש עצמו כתב — עדיף "נכון לקול שלו" על פני "כתיבה נכונה" סטנדרטית.',
+    '2. קצב אנושי: ערבב אורכי משפטים. משפט קצר ליד ארוך. אסור רצף משפטים אחידים ומלוטשים.',
+    '3. אל תפתח שני משפטים סמוכים באותה מילה או מבנה, ואל תפתח בפתיחים שבלוניים ("בעולם של ימינו", "חשוב לציין").',
+    '4. מילות קישור: השתמש רק באלה שמופיעות בפרופיל או בדוגמאות. אל תוסיף "יתרה מכך", "זאת ועוד", "אשר על כן" וכדומה אם הן לא שם.',
+    '5. מבנה מאופק: מעט מקפים ארוכים, בלי נקודה-פסיק, בלי מרכאות-הדגשה, סוגריים רק כשבדוגמאות יש.',
+    '6. בלי קלישאות AI: "מגוון רחב", "אבן יסוד", "חלק בלתי נפרד", "ממלא תפקיד מרכזי", "כלי רב עוצמה".',
+    '7. הפרופיל והדוגמאות הם מקור לסגנון בלבד, לעולם לא לתוכן — כתוב על מה שמתבקש בשיחה.',
+    '8. אם המשתמש מבקש לשכתב טקסט שכבר תואם את הסגנון — החזר אותו כמעט ללא שינוי. אל תשכתב לשם שכתוב.',
+  ].join('\n');
   const sections = [
-    'אתה עוזר כתיבה כללי שנועד לעבוד היטב מול כל ספק AI.',
+    'אתה עוזר הכתיבה האישי של המשתמש. תפקידך: לכתוב, לשכתב ולערוך טקסטים כך שיישמעו בדיוק כמו שהמשתמש עצמו כותב — על בסיס הפרופיל והדוגמאות שלמטה. ההנחיות האלה תקפות לכל השיחה.',
     'ענה בעברית, ברור ומעשי, אלא אם המשתמש ביקש אחרת.',
     'אם המשתמש מבקש טקסט מוכן למסמך, החזר ישירות את התוכן בלי פתיחים ומטא מיותר.',
     sharedInstructions ? `הנחיות משותפות קבועות:\n${sharedInstructions}` : '',
     personalStylePrompt ? `פרופיל והעדפות סגנון של המשתמש:\n${personalStylePrompt}` : '',
+    samplesSection,
+    applicationRules,
     options.includePortablePackage === true ? `WORD_FLOW_PORTABLE_PROFILE_JSON:\n${JSON.stringify(buildPortableProfilePackage({ profile: options.profile, sharedInstructions }), null, 2)}` : '',
   ].filter(Boolean);
 
@@ -8596,9 +8695,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
   // כתיבה כללית: קול אישי מקסימלי (emphasizeVoice → בלוק סגנון רזה וממוקד-קול).
   const suppressPersonalStyleForScope = isGeneralKnowledgeScope;
   // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
-  const personalStyleRequestText = [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
+  // styleRequestTextOverride — הקורא (למשל פאס-המשך של מסמך) מספק את נושא המסמך האמיתי
+  // במקום פרומפט-boilerplate כמו "השלם את ה-HTML", כדי שאחזור הדוגמאות יהיה על הנושא.
+  const personalStyleRequestText = String(options.styleRequestTextOverride || '').trim()
+    || [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
   // E3 — ז'אנר מסווג פעם אחת מהבקשה, מוזרם גם לאחזור וגם לעוגני המדד (תת-פרופיל).
-  const styleGenre = classifyRequestGenre(personalStyleRequestText);
+  // styleGenreOverride — שלבי workflow מקבלים את הז'אנר שסווג בבקשה החיצונית ולא מסווגים
+  // מחדש מפרומפט-השלב (שמכיל פלט ביניים ומטה את הסיווג).
+  const styleGenre = String(options.styleGenreOverride || '').trim() || classifyRequestGenre(personalStyleRequestText);
   const styleChunkBlock = (options.suppressPersonalStyle === true || suppressPersonalStyleForScope)
     ? ''
     : await retrieveStyleChunkBlock(personalStyleRequestText, { ...options, styleGenre });
@@ -8610,7 +8714,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       requestText: personalStyleRequestText,
       templateId: String(options.templateId || '').trim(),
       isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
-      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : (Date.now() % 9973),
+      // seed דטרמיניסטי מהבקשה — אותה בקשה תמיד מגרילה את אותן תבניות סגנון.
+      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : hashStyleSeed(personalStyleRequestText),
       styleChunkBlock,
       styleGenre,
     });
@@ -9649,6 +9754,16 @@ ${isGeneralWritingScope
             // V3: כל סוכני ה-workflow חולקים את ה-scope של ה-run — session אחזור אחד,
             // נעילת מקורות אחת, ודחיית locks זרים. בלי זה כל סוכן רץ בעולם משלו.
             ...(requestRunScope ? { runScope: requestRunScope } : {}),
+            // עקביות סגנון בין שלבים: כל שלב יורש את פרמטרי הסגנון של הבקשה החיצונית —
+            // אותו seed (אותה רוטציית תבניות), אותו ז'אנר, ואחזור דוגמאות לפי הבקשה
+            // המקורית ולא לפי פרומפט-השלב (שמכיל פלט ביניים). בלי זה automation-on
+            // מקבל סגנון שונה מהותית מ-automation-off.
+            ...(Number.isFinite(options.styleEngineSeed) ? { styleEngineSeed: options.styleEngineSeed } : { styleEngineSeed: hashStyleSeed([cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n')) }),
+            styleGenreOverride: String(options.styleGenreOverride || '').trim() || classifyRequestGenre([cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n')),
+            styleRequestTextOverride: String(options.styleRequestTextOverride || '').trim() || [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n'),
+            ...(options.templateId ? { templateId: options.templateId } : {}),
+            ...(typeof options.isAcademicTask === 'boolean' ? { isAcademicTask: options.isAcademicTask } : {}),
+            ...(options.omitPersonalStyleStructureHints === true ? { omitPersonalStyleStructureHints: true } : {}),
             providerOverride: stageProvider,
             preferredProviders: stageProvider ? [stageProvider] : sourceAwareAutomationPreferredProviders,
             strictProviderOverride: true,
@@ -11790,9 +11905,14 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
 
   const omitPersonalStyleStructureHints = options.omitPersonalStyleStructureHints === true;
   // suppressPersonalStyle משמש לבדיקת השפעת הסגנון: מפיק פלט ללא הזרקת הפרופיל כדי להשוות מול פלט עם פרופיל.
-  const personalStyleRequestText = [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
+  // styleRequestTextOverride — הקורא (למשל פאס-המשך של מסמך) מספק את נושא המסמך האמיתי
+  // במקום פרומפט-boilerplate כמו "השלם את ה-HTML", כדי שאחזור הדוגמאות יהיה על הנושא.
+  const personalStyleRequestText = String(options.styleRequestTextOverride || '').trim()
+    || [cleanUserPrompt, options.structureConstraintText].filter(Boolean).join('\n');
   // E3 — ז'אנר מסווג פעם אחת מהבקשה, מוזרם גם לאחזור וגם לעוגני המדד (תת-פרופיל).
-  const styleGenre = classifyRequestGenre(personalStyleRequestText);
+  // styleGenreOverride — שלבי workflow מקבלים את הז'אנר שסווג בבקשה החיצונית ולא מסווגים
+  // מחדש מפרומפט-השלב (שמכיל פלט ביניים ומטה את הסיווג).
+  const styleGenre = String(options.styleGenreOverride || '').trim() || classifyRequestGenre(personalStyleRequestText);
   const styleChunkBlock = options.suppressPersonalStyle === true
     ? ''
     : await retrieveStyleChunkBlock(personalStyleRequestText, { ...options, styleGenre });
@@ -11803,7 +11923,8 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
       requestText: personalStyleRequestText,
       templateId: String(options.templateId || '').trim(),
       isAcademicTask: typeof options.isAcademicTask === 'boolean' ? options.isAcademicTask : undefined,
-      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : (Date.now() % 9973),
+      // seed דטרמיניסטי מהבקשה — אותה בקשה תמיד מגרילה את אותן תבניות סגנון.
+      styleEngineSeed: Number.isFinite(options.styleEngineSeed) ? options.styleEngineSeed : hashStyleSeed(personalStyleRequestText),
       styleChunkBlock,
       styleGenre,
     });

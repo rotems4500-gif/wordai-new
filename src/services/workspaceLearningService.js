@@ -11,6 +11,7 @@ import {
   validateWorkspaceV2RunContext,
   scoreStyleForDocument,
   rewriteDocumentStyle,
+  hashStyleSeed,
 } from './aiService';
 import { recordGenerationQuality } from './styleIngestService';
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
@@ -2792,16 +2793,21 @@ async function requestGeneratedHtmlResponseWithSingleContinuation({
         // (הבאג ההיסטורי: forceVerifiedSourceFollowOn:false בלי נעילה ⇒ המצאת מקורות באמצע מסמך.)
         forceVerifiedSourceFollowOn: false,
         ...(completion?.sourceLock ? { sourceLock: completion.sourceLock } : {}),
+        // אחזור דוגמאות סגנון לפי הבקשה המקורית, לא לפי פרומפט-ההמשך ("השלם רק את
+        // ה-HTML החסר…") — בלי זה גוף המסמך מסוגנן מ-chunks שאוחזרו על boilerplate.
+        styleRequestTextOverride: String(requestOptions.styleRequestTextOverride || userPrompt || '').trim(),
       };
       // Phase 6 — deep tier: jitter פר-קריאה על ההמשכים (call index = continuationAttempt+1).
-      // טמפרטורה = base+0.1 clamped 0.3-1.0; styleEngineSeed טרי ושונה לכל pass → רוטציית דפוסים
+      // טמפרטורה = base+0.1 clamped 0.3-1.0; styleEngineSeed שונה לכל pass → רוטציית דפוסים
       // בין הפתיחה לגוף (שבירת self-conditioning, §10 נק' 4). מוחל רק כשה-flag דלוק — נשאר ללא-שינוי לשאר.
+      // ה-seed דטרמיניסטי (hash הבקשה + offset פר-pass): גיוון בין הפאסים נשמר, אבל שתי
+      // הרצות זהות מקבלות את אותה סדרת seeds — בלי רעש Date.now() שאי-אפשר לשחזר.
       if (requestOptions.styleDeepJitter) {
         const callIndex = continuationAttempt + 1;
         if (Number.isFinite(requestOptions.styleDeepBaseTemp)) {
           continuationRequestOptions.temperature = Math.min(1.0, Math.max(0.3, requestOptions.styleDeepBaseTemp + 0.1));
         }
-        continuationRequestOptions.styleEngineSeed = callIndex * 1000 + (Date.now() % 1000);
+        continuationRequestOptions.styleEngineSeed = (hashStyleSeed(String(userPrompt || '')) + callIndex * 101) % 9973;
       }
       const continuationResponse = await chatWithActiveProvider(
         continuationPrompt,
@@ -4014,7 +4020,7 @@ function repairGeneratedHtmlForStructurePolicy(html = '', policy = null) {
 // לולאת האנשה "עד תוצאה מספקת" (התכנסות) על מסמך HTML שלם, משותפת ליצירה ולעדכון.
 // שומרת על מבנה ה-HTML ומזקקת מול הגלאי המקומי עד שאין שיפור. מחזירה HTML מואנש,
 // או את המקור אם הלולאה כבויה/נכשלה.
-async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '', requestOptions = {}, runId = '', agentLabel = '', requestLogContext = {}, onHumanizeProgress = null, operationLabel = 'האנשת המסמך' }) {
+async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '', requestOptions = {}, runId = '', agentLabel = '', requestLogContext = {}, onHumanizeProgress = null, onLoopResult = null, operationLabel = 'האנשת המסמך' }) {
   const loopOptions = humanizeLoop && humanizeLoop.enabled !== false ? humanizeLoop : null;
   if (!loopOptions || !String(html || '').trim()) return html;
   try {
@@ -4049,10 +4055,17 @@ async function applyDocumentHumanizeLoop({ html, humanizeLoop, materialsText = '
         state: 'success',
         runId,
         agentLabel,
-        message: `לולאת האנשה הושלמה: ${loopResult.passes} סבבים, ציון ${loopResult.score}${loopResult.converged ? ' (התכנסות)' : ''}`,
+        message: `לולאת האנשה הושלמה: ${loopResult.passes} סבבים, ציון ${loopResult.score}${loopResult.converged ? ' (התכנסות)' : ''}${loopResult.hitTarget ? '' : ' — היעד לא הושג'}`,
         outputChars: loopResult.text.length,
         ...requestLogContext,
       });
+      // חשיפת התוצאה לקורא (main.jsx): כישלון-יעד חייב להגיע למשתמש בזמן היצירה,
+      // לא בהעלאה-מחדש של הקובץ המיוצא.
+      if (typeof onLoopResult === 'function') {
+        try {
+          onLoopResult({ score: loopResult.score, hitTarget: !!loopResult.hitTarget, passes: loopResult.passes, target: Number(loopOptions.target) || 35 });
+        } catch { /* דיווח בלבד */ }
+      }
       return loopResult.text;
     }
   } catch (humanizeError) {
@@ -4264,8 +4277,9 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     // וההמשכים (הגוף) מקבלים base+0.1 clamped 0.3-1.0 + seed שונה → רוטציית דפוסים בין פתיחה לגוף.
     // ה-jitter של ההמשכים מיושם בתוך requestGeneratedHtmlResponseWithSingleContinuation.
     if (styleDepth === 'deep') {
-      // call index 0 (פתיחה): seed טרי; טמפרטורה נשארת base (לא נוגעים).
-      requestOptions.styleEngineSeed = Date.now() % 1000;
+      // call index 0 (פתיחה): seed דטרמיניסטי מהפרומפט (שחזור מלא של אותה בקשה);
+      // ההמשכים מקבלים offset פר-pass — גיוון בין פתיחה לגוף נשמר. טמפרטורה נשארת base.
+      requestOptions.styleEngineSeed = hashStyleSeed(prompt);
       // מרקרים שמורידים את ה-jitter של ההמשכים אל עוזר ההמשך.
       requestOptions.styleDeepJitter = true;
       requestOptions.styleDeepBaseTemp = Number.isFinite(temperature) ? temperature : null;
@@ -4377,6 +4391,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     });
 
     // לולאת האנשה "עד תוצאה מספקת" על המסמך השלם, אם המשתמש סימן זאת לפני היצירה.
+    let humanizeInfo = null;
     const humanizedResponse = await applyDocumentHumanizeLoop({
       html: validatedFinalResponse,
       humanizeLoop,
@@ -4386,6 +4401,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       agentLabel: documentRunLabel,
       requestLogContext,
       onHumanizeProgress,
+      onLoopResult: (info) => { humanizeInfo = info; },
       operationLabel: 'האנשת המסמך',
     });
 
@@ -4438,7 +4454,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     return returnMeta
-      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', title, styleScore, styleRewriteSuggested, styleRewriteApplied }
+      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', title, styleScore, styleRewriteSuggested, styleRewriteApplied, humanizeInfo }
       : humanizedResponse;
   } catch (error) {
     logAgentDebugEvent({
@@ -4559,7 +4575,7 @@ async function prepareFeedbackDrivenDocumentContext({
 
 // forceDirectMode=true כברירת מחדל: שכתוב לפי feedback הוא עריכה ממוקדת — רץ ישירות במודל יחיד
 // בלי workflow automation. בכוונה שונה מ-generateDocumentFromPrompt (false) שמאפשר ריבוי סוכנים ביצירה חדשה.
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null, sourceRoute = '', includeSources = null }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null, sourceRoute = '', includeSources = null, styleDepth = '', temperature = null }) {
   // sourceRoute — בחירת מסלול מקורות (בורר בסוף הבישול / מצב Direct): 'pipeline' | 'single-call' | 'none' | '' (auto).
   // מקביל ל-generateDocumentFromPrompt: 'none' → includeSources=false; המסלול קובע רק *איך*,
   // includeSources מפורש או ה-regex קובעים *אם*.
@@ -4702,6 +4718,9 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       isAcademicTask,
       additionalReviewRounds: normalizedAdditionalReviewRounds,
       maxContinuationPasses: Math.max(4, Math.min(6, 3 + normalizedAdditionalReviewRounds)),
+      ...(Number.isFinite(Number(temperature)) && temperature !== null ? { temperature: Number(temperature) } : {}),
+      // אחזור דוגמאות סגנון לפי נושא המסמך + המשוב — לא לפי הפרומפט הגנרי "שפר את המסמך".
+      styleRequestTextOverride: [originalPrompt, cleanFeedback].filter(Boolean).join('\n'),
     };
     // כמו ביצירת מסמך: אם המשוב/הבקשה דורשים מקורות — retrieve-then-write (grounding אמיתי),
     // כדי שלא יומצאו ציטוטים בעריכה. לא מפעילים כשיש נעילת-URL מדויקת.
@@ -4771,6 +4790,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     });
 
     // לולאת האנשה "עד תוצאה מספקת" גם על מסמך שעודכן מטיוטה, אם המשתמש סימן זאת.
+    let humanizeInfo = null;
     const humanizedRevision = await applyDocumentHumanizeLoop({
       html: validatedResponse,
       humanizeLoop,
@@ -4780,11 +4800,57 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       agentLabel: documentUpdateLabel,
       requestLogContext,
       onHumanizeProgress,
+      onLoopResult: (info) => { humanizeInfo = info; },
       operationLabel: 'האנשת העדכון',
     });
 
+    // שופט הסגנון גם למסלול ה-revise (המסלול של "יצירת מסמך לפי טיוטה") — עד עכשיו
+    // רק היצירה-מאפס קיבלה אותו. אותה לוגיקה קומפקטית: ניקוד → שכתוב לכיוון הסגנון
+    // כשהציון נמוך → רישום איכות. best-effort, לעולם לא שובר עדכון.
+    let styleScore = null;
+    let styleRewriteSuggested = false;
+    let styleRewriteApplied = false;
+    let styleFinalHtml = humanizedRevision;
+    if (returnMeta) {
+      const styleRequestText = originalPrompt || cleanFeedback;
+      try {
+        const plainDocText = stripHtmlTags(styleFinalHtml);
+        if (plainDocText && plainDocText.length >= 40) {
+          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto', requestText: styleRequestText });
+          if (styleResult && Number.isFinite(styleResult.score)) {
+            styleScore = styleResult;
+            styleRewriteSuggested = styleResult.score <= 70;
+          }
+        }
+      } catch {
+        // ניקוד סגנון הוא best-effort.
+      }
+
+      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && styleDepth !== 'fast') {
+        try {
+          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth, target: 75, requestText: styleRequestText });
+          if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
+            styleFinalHtml = rewriteResult.html;
+            styleRewriteApplied = true;
+            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto' });
+            if (rescored && Number.isFinite(rescored.score)) styleScore = rescored;
+          }
+        } catch {
+          // כשל שכתוב לעולם לא שובר עדכון.
+        }
+      }
+
+      if (styleScore && Number.isFinite(styleScore.score)) {
+        try {
+          recordGenerationQuality(styleScore.score, { genre: styleScore.genre });
+        } catch {
+          // רישום איכות לעולם לא שובר עדכון.
+        }
+      }
+    }
+
     return returnMeta
-      ? { html: humanizedRevision, usedFallback: false, runId, errorMessage: '' }
+      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', styleScore, styleRewriteSuggested, styleRewriteApplied, humanizeInfo }
       : humanizedRevision;
   } catch (error) {
     const revisionErrorMessage = error?.message || 'שגיאה לא ידועה';

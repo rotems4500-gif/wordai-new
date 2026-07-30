@@ -8,14 +8,20 @@
 // <w:t>, ואז מארזים את אותו zip בחזרה. כל מה שאינו טקסט נשאר זהה למקור.
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider, getFeatureProviderConfig } from './aiService';
+import { chatWithActiveProvider, getPersonalStyleProfile, hashStyleSeed } from './aiService';
+import { scoreStyleMatchLocal } from './styleJudgeService';
+import { normalizeStyleEngine } from './styleProfileService';
 
 // כמה פסקאות לשלוח ב-prompt אחד (איזון בין מספר קריאות לאורך פלט).
 const PARA_BATCH = 12;
-// תקרת תווים לפסקה בודדת שנשלחת למודל (הגנה מפני אאוטליירים).
+// תקרת תווים לפסקה בודדת שנשלחת למודל. פסקה ארוכה מזה מדולגת לגמרי —
+// חיתוך-קלט עם החלפת-פלט-מלאה איבד בעבר את זנב הפסקה בשקט.
 const MAX_PARA_CHARS = 2000;
-// אורך מינימלי (בתווים) כדי שפסקה תיחשב לשכתוב — מתעלמים מפסקאות זעירות.
-const MIN_RESTYLE_CHARS = 2;
+// אורך מינימלי (בתווים) כדי שפסקה תיחשב לשכתוב — פסקאות זעירות (כותרות
+// קצרות, פריטי רשימה בני מילה-שתיים) נושאות מבנה ולא קול, ושכתובן רק מזיק.
+const MIN_RESTYLE_CHARS = 40;
+// מאיזה אורך מפעילים את שער הניקוד המקומי (מתחת לזה הציון לא אמין).
+const SCORE_GATE_MIN_CHARS = 120;
 
 let paraIdCounter = 0;
 const nextParaId = () => { paraIdCounter += 1; return `d${paraIdCounter}`; };
@@ -126,14 +132,19 @@ const extractJson = (raw = '') => {
   catch { return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1')); }
 };
 
+// טקסט המקור לשכתוב: אם הפסקה כבר שוכתבה ע"י ה-AI — חוזרים לטקסט המקורי
+// מהייבוא (ריצה חוזרת לא מצטברת על פלט קודם); עריכה ידנית של המשתמש נשמרת.
+const restyleSourceOf = (para) => (para.restyledByAi ? para.original : para.text);
+
 const buildRestylePrompt = (batch, instructions) => {
   const block = batch.map(({ index, para }) => ({
     i: index,
-    t: para.text.length > MAX_PARA_CHARS ? para.text.slice(0, MAX_PARA_CHARS) : para.text,
+    t: restyleSourceOf(para),
   }));
   return `לפניך פסקאות טקסט גולמי ממסמך Word קיים. שכתב כל פסקה כך שתישמע בסגנון הכתיבה האישי של המשתמש (ראה פרופיל הסגנון שסופק לך), בלי לשנות את המשמעות, העובדות, המספרים או המונחים.
 
 חוקים נוקשים:
+- אם פסקה כבר נשמעת טבעית ובסגנון המשתמש, או שהיא כותרת/פריט קצר — החזר אותה ללא שינוי, אות באות.
 - שמור בדיוק על אותו מספר פסקאות ועל אותו סדר. אל תוסיף, תמזג או תמחק פסקאות.
 - פסקה קצרה (כותרת/פריט) נשארת קצרה. אל תנפח פסקה.
 - אל תוסיף מספור, תבליטים, גרשיים או markdown — רק הטקסט עצמו.
@@ -147,6 +158,25 @@ ${JSON.stringify({ paras: block }, null, 0)}
 {"paras":[{"i":<מספר>,"t":"..."}]}`;
 };
 
+// שער קבלה פר-פסקה (במודל של styleJudgeService.rewriteDocumentHtmlTowardStyle):
+// (1) רצועת אורך ~0.6×–1.6× מהמקור — פרפרזה שקיצצה/ניפחה נדחית.
+// (2) לפסקאות ארוכות מספיק — never-net-worse: הציון המקומי של החדש לא נופל
+//     ביותר מנקודה מהציון של הטקסט הנוכחי. כשל ניקוד ⇒ קבלה לפי אורך בלבד.
+const acceptRestyledPara = (source, current, next, styleEngine) => {
+  const srcLen = String(source || '').length;
+  const nextLen = String(next || '').length;
+  if (!nextLen) return false;
+  if (srcLen >= MIN_RESTYLE_CHARS && (nextLen < srcLen * 0.6 || nextLen > srcLen * 1.6)) return false;
+  if (styleEngine?.enabled && srcLen >= SCORE_GATE_MIN_CHARS) {
+    try {
+      const oldScore = scoreStyleMatchLocal(current, styleEngine)?.score;
+      const newScore = scoreStyleMatchLocal(next, styleEngine)?.score;
+      if (Number.isFinite(oldScore) && Number.isFinite(newScore) && newScore < oldScore - 1) return false;
+    } catch { /* ניקוד נכשל — שער האורך הספיק */ }
+  }
+  return true;
+};
+
 /**
  * restyleDocumentDraft — משכתב את פסקאות המסמך לסגנון המשתמש (in-place).
  * מעדכן את ה-DOM ואת שדות ה-text של הפסקאות. מחזיר {changed} מספר פסקאות ששונו.
@@ -155,21 +185,38 @@ ${JSON.stringify({ paras: block }, null, 0)}
  */
 export const restyleDocumentDraft = async (draft, opts = {}) => {
   const { instructions = '', paraIds = null, onProgress = () => {}, signal } = opts;
+  // בחירה מפורשת של פסקאות (כפתור "שכתב פסקה") עוקפת את פילטרי הכותרת/מינימום —
+  // המשתמש ביקש במפורש. תקרת MAX נשארת תמיד (באג חיתוך-ואובדן-זנב).
+  const explicitSelection = Array.isArray(paraIds) && paraIds.length > 0;
   const targets = draft.paras
     .map((para, index) => ({ para, index }))
     .filter(({ para }) => (paraIds ? paraIds.includes(para.id) : true))
-    .filter(({ para }) => para.text.trim().length >= MIN_RESTYLE_CHARS);
+    // כותרות נושאות מבנה ולא קול — לא נוגעים בהן בשכתוב-הכול.
+    .filter(({ para }) => explicitSelection || !para.titleish)
+    .filter(({ para }) => {
+      const len = restyleSourceOf(para).trim().length;
+      return (explicitSelection || len >= MIN_RESTYLE_CHARS) && len <= MAX_PARA_CHARS;
+    });
 
   if (!targets.length) return { changed: 0 };
 
-  const featureOverride = getFeatureProviderConfig('presentations')?.config || null;
+  // פרופיל המנוע לשער הקבלה (never-net-worse). כשל טעינה ⇒ שער אורך בלבד.
+  let styleEngine = null;
+  try { styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine); } catch { /* לא קריטי */ }
+
+  // seed סגנון אחד לכל המסמך — כל ה-batches חולקים את אותה רוטציית תבניות.
+  const docSeed = hashStyleSeed(String(draft?.fileName || '') + String(draft?.title || ''));
   const runChat = (prompt) =>
     chatWithActiveProvider(prompt, '', 'אתה עורך לשוני שמשכתב טקסט לסגנון הכתיבה של המשתמש. החזר אך ורק JSON תקין.', {
       skipAutomation: true,
       skipMultiModel: true,
       directChat: true,
       skipSkillSelection: true,
-      ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
+      styleEngineSeed: docSeed,
+      // שכתוב הוא משימת עריכה — טמפרטורת ברירת-מחדל (~1.0) היא מקור שונות מיותר.
+      temperature: 0.4,
+      // שכתוב ברמת פסקה לא צריך העדפות מבנה/עמוד-שער מהפרופיל.
+      omitPersonalStyleStructureHints: true,
       ...(signal ? { signal } : {}),
     });
 
@@ -188,7 +235,13 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
     const byIndex = new Map((Array.isArray(parsed.paras) ? parsed.paras : []).map((p) => [Number(p.i), p.t]));
     for (const { para, index } of batch) {
       const next = byIndex.has(index) ? String(byIndex.get(index) == null ? '' : byIndex.get(index)).trim() : '';
-      if (next && next !== para.text) { para.text = next; writePara(para); changed += 1; }
+      const source = restyleSourceOf(para);
+      if (next && next !== para.text && acceptRestyledPara(source, para.text, next, styleEngine)) {
+        para.text = next;
+        para.restyledByAi = true;
+        writePara(para);
+        changed += 1;
+      }
       done += 1;
     }
     onProgress(done, targets.length);
@@ -198,8 +251,10 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
 };
 
 // מחיל עריכה ידנית של פסקה בודדת (מהממשק) על ה-DOM.
+// עריכה ידנית מאפסת את סימון השכתוב — שכתוב הבא יוצא מהטקסט שהמשתמש קבע.
 export const setParaText = (para, text) => {
   para.text = String(text == null ? '' : text);
+  para.restyledByAi = false;
   writePara(para);
 };
 

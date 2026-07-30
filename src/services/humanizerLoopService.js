@@ -109,7 +109,7 @@ export async function runHumanizerLoop({
     return { text: start, score: null, passes: 0, hitTarget: false, trace: [] };
   }
 
-  const goal = clampNum(target, 0, 100, DEFAULT_HUMANIZER_LOOP.target);
+  let goal = clampNum(target, 0, 100, DEFAULT_HUMANIZER_LOOP.target);
   const hardLimit = convergence
     ? clampNum(safetyCap, 1, 16, DEFAULT_SAFETY_CAP)
     : clampNum(maxPasses, 0, 8, DEFAULT_HUMANIZER_LOOP.maxPasses);
@@ -118,6 +118,11 @@ export async function runHumanizerLoop({
 
   let best = start;
   let bestResult = safeScore(start, profile);
+  // היעד לעולם לא רפוי מסף-ההתרעה של הגלאי: בלי ההצמדה הזו לולאה יכולה "להצליח"
+  // ב-59 בעוד שסף ההתרעה (60 או מכויל) יסמן את אותו טקסט כגנרי בהעלאה הבאה.
+  if (bestResult.ok && Number.isFinite(bestResult.threshold)) {
+    goal = Math.max(10, Math.min(goal, bestResult.threshold - 15));
+  }
   let bestScore = bestResult.ok ? bestResult.score : 100;
   let noImprove = 0;
   const trace = [{ pass: 0, score: bestResult.ok ? bestResult.score : null }];

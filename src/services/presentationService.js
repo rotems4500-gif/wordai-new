@@ -3,7 +3,7 @@
 // מחזיר אובייקט deck מנורמל, לא HTML. זה הלב של "מצגת אמיתית".
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider, getFeatureProviderConfig } from './aiService';
+import { chatWithActiveProvider, getFeatureProviderConfig, hashStyleSeed } from './aiService';
 import { normalizeDeck, SLIDE_LAYOUT_IDS } from '../presentation/deckModel';
 import { DECK_THEMES } from '../presentation/deckThemes';
 
@@ -53,6 +53,7 @@ const SLIDE_CONTENT_RULES = (imageIntensity) => [
   '- שדה "image" רק בפריסות שתומכות בתמונה (cover, image-right, image-left, image-full, closing). ה-query באנגלית, קונקרטי ונקי.',
   `- ${imageRule(imageIntensity)}`,
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',
+  '- נסח את תוכן השקופיות בקול ובסגנון האישי של המשתמש (ראה פרופיל הסגנון שסופק), בתוך מגבלות האורך של הכללים לעיל.',
   '- שדה "kicker": בשקופיות תוכן (לא cover/section/image-full) תן תווית קצרה (2-4 מילים) שמזהה את הפרק/הנושא שהשקופית שייכת אליו, ואחידה לכל השקופיות באותו פרק.',
 ].join('\n');
 
@@ -186,6 +187,9 @@ export const generateDeck = async ({
   // override מפורש מנצח; אחרת — API ייעודי למצגות אם הוגדר בהגדרות.
   const featureOverride = providerConfigOverride || getFeatureProviderConfig('presentations')?.config || null;
 
+  // seed סגנון אחד לכל המצגת: בלי זה כל batch במסלול ה-chunked קיבל seed אקראי משלו —
+  // רוטציית תבניות סגנון שונה בין קבוצות שקופיות באותו deck.
+  const deckSeed = hashStyleSeed(cleanTopic || trimmedDoc.slice(0, 500));
   const runChat = (prompt) =>
     chatWithActiveProvider(prompt, '', 'אתה מעצב מצגות מקצועי. החזר אך ורק JSON תקין לפי הסכמה.', {
       skipAutomation: true,
@@ -193,6 +197,9 @@ export const generateDeck = async ({
       directChat: true,
       skipSkillSelection: true,
       omitPersonalStyleStructureHints: true,
+      styleEngineSeed: deckSeed,
+      // אחזור דוגמאות סגנון לפי הנושא — לא לפי פרומפט-הסכמה המלא (JSON+שלד).
+      ...(cleanTopic ? { styleRequestTextOverride: cleanTopic } : {}),
       ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
       ...(signal ? { signal } : {}),
     });

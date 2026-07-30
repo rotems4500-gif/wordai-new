@@ -1037,8 +1037,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
       const sampleText = normalized.text
         || String(normalized.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const res = scoreTextAuthenticity(sampleText);
-      if (res.ok && res.score >= res.threshold) {
-        showToast(`⚠️ הטיוטה נשמעת גנרית/מכונה (${res.score}/100). אפשר לבדוק לעומק עם "בדיקת סגנון".`, { tone: 'warning', duration: 6000 });
+      // מרווח +10 מעל הסף: הגבול עצמו רועש, וטיוטה שהאפליקציה עצמה האנישה יכולה
+      // לשבת עליו. מתריעים רק כשהציון מובהק, ובנוסח מיודע ולא מאשים.
+      if (res.ok && res.score >= res.threshold + 10) {
+        showToast(`ℹ️ ייתכן שהטיוטה נשמעת גנרית (${res.score}/100) — אפשר לבדוק לעומק עם "בדיקת סגנון".`, { tone: 'info', duration: 6000 });
       }
     } catch {}
     return normalized;

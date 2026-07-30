@@ -43,6 +43,9 @@ const round = (value, digits = 1) => {
 
 const stripToText = (input = '') => String(input || '')
   .replace(/<[^>]+>/g, ' ')
+  // פענוח ישויות HTML (סנכרון עם השירות): &quot; בלי פענוח נספר כנקודה-פסיק.
+  .replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
   .replace(/[\r\t]+/g, ' ')
   .replace(/ /g, ' ')
   .replace(/\s+\n/g, '\n')
@@ -102,11 +105,13 @@ export function extractAuthenticityFeatures(input = '') {
 
   const per100 = (n) => (wordCount ? round((n / wordCount) * 100, 2) : 0);
 
-  const emDashes = (text.match(/[–—]/g) || []).length;
-  const parenGlosses = (text.match(/\([^)]{1,40}\)/g) || []).length;
-  const quoteChars = (text.match(/["“”״]/g) || []).length;
+  // סנכרון עם השירות: מראי-מקום עם שנה מוחרגים; גרשיים בתוך מילה (ראשי-תיבות) אינם scare quotes.
+  const structText = text.replace(/\([^)]*\b(?:19|20)\d{2}[^)]*\)/g, ' ');
+  const emDashes = (structText.match(/[–—]/g) || []).length;
+  const parenGlosses = (structText.match(/\([^)]{1,40}\)/g) || []).length;
+  const quoteChars = (structText.replace(/(?<=[֐-׿])["״](?=[֐-׿])/g, '').match(/["“”״]/g) || []).length;
   const scareQuotes = Math.floor(quoteChars / 2);
-  const semicolons = (text.match(/;/g) || []).length;
+  const semicolons = (structText.match(/;/g) || []).length;
   const structuralEvents = emDashes + parenGlosses + scareQuotes + semicolons;
 
   const uniqueContent = new Set(contentWords);
@@ -153,9 +158,10 @@ export function computeSignals(features) {
   signals.uniformity = (features.sentenceLengthCV === null || features.sentenceCount < 3)
     ? null
     : clamp01((0.50 - features.sentenceLengthCV) / 0.40);
-  signals.formalConnector = Math.max(clamp01(features.formalConnectorDensity / 4), clamp01(features.formalConnectorCount / 8));
-  signals.cliche = Math.max(clamp01(features.clicheDensity / 1.5), clamp01(features.clicheCount / 4));
-  signals.structural = Math.max(clamp01(features.structuralDensity / 4.5), clamp01(features.structuralCount / 18));
+  // צפיפות בלבד (סנכרון עם השירות) — זרועות הספירה המוחלטת הוסרו (הטיית אורך).
+  signals.formalConnector = clamp01(features.formalConnectorDensity / 4);
+  signals.cliche = clamp01(features.clicheDensity / 1.5);
+  signals.structural = clamp01(features.structuralDensity / 4.5);
   signals.lowRichness = features.wordCount < 60
     ? null
     : clamp01((0.62 - features.typeTokenRatio) / 0.30);

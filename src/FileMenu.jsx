@@ -2016,8 +2016,9 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
     setPortablePromptDirty(true);
   }, [deferredSharedInstructions, deferredPersonalStyle]);
 
-  const buildPortablePromptDraft = () => {
-    const nextPrompt = buildPortablePrompt({
+  // async — הייצוא כולל עכשיו דגימות כתיבה אמיתיות מה-store (טעינה אסינכרונית).
+  const buildPortablePromptDraft = async () => {
+    const nextPrompt = await buildPortablePrompt({
       sharedInstructions: deferredSharedInstructions,
       profile: deferredPersonalStyle,
       // יעד: AI חיצוני בלבד — בלוק voice רזה, בלי dump JSON כבד שרלוונטי רק לייבוא חזרה לוורדפלו.
@@ -2122,8 +2123,8 @@ function PromptSettings({ sharedInstructions, setSharedInstructions, personalSty
           </div>
           <button
             type="button"
-            onClick={() => {
-              const text = portablePrompt && !portablePromptDirty ? portablePrompt : buildPortablePromptDraft();
+            onClick={async () => {
+              const text = portablePrompt && !portablePromptDirty ? portablePrompt : await buildPortablePromptDraft();
               copyText(text, 'הועתק ללוח ✓');
             }}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}

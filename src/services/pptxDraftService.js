@@ -8,7 +8,7 @@
 // טבלאות, גרפים) נשאר זהה למקור.
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider, getFeatureProviderConfig } from './aiService';
+import { chatWithActiveProvider, getFeatureProviderConfig, hashStyleSeed } from './aiService';
 
 // כמה שקופיות לשלוח ב-prompt אחד (איזון בין מספר קריאות לאורך פלט).
 const SLIDE_BATCH = 8;
@@ -171,6 +171,7 @@ const buildRestylePrompt = (batch, instructions) => {
   return `לפניך טקסט גולמי משקופיות במצגת קיימת. שכתב כל פסקה כך שתישמע בסגנון הכתיבה האישי של המשתמש (ראה פרופיל הסגנון שסופק לך), בלי לשנות את המשמעות, העובדות או המספרים.
 
 חוקים נוקשים:
+- אם פסקה כבר נשמעת טבעית ובסגנון המשתמש, או שהיא כותרת/נקודה קצרה — החזר אותה ללא שינוי, אות באות.
 - שמור בדיוק על אותו מספר פסקאות בכל שקופית ועל אותו סדר. אל תוסיף, תמזג או תמחק פסקאות.
 - פסקה קצרה (כותרת/נקודה) נשארת קצרה. אל תנפח טקסט של שקופית לפסקה.
 - אל תוסיף מספור, תבליטים, גרשיים או markdown — רק הטקסט עצמו.
@@ -199,12 +200,18 @@ export const restylePptxDraft = async (draft, opts = {}) => {
   if (!targetSlides.length) return { changed: 0 };
 
   const featureOverride = getFeatureProviderConfig('presentations')?.config || null;
+  // seed סגנון אחד לכל המצגת — כל ה-batches חולקים את אותה רוטציית תבניות.
+  const deckSeed = hashStyleSeed(String(draft?.fileName || '') + String(draft?.slides?.[0]?.paras?.[0]?.text || ''));
   const runChat = (prompt) =>
     chatWithActiveProvider(prompt, '', 'אתה עורך לשוני שמשכתב טקסט לסגנון הכתיבה של המשתמש. החזר אך ורק JSON תקין.', {
       skipAutomation: true,
       skipMultiModel: true,
       directChat: true,
       skipSkillSelection: true,
+      // שכתוב הוא משימת עריכה — טמפרטורה נמוכה מקטינה שונות מיותרת.
+      temperature: 0.4,
+      omitPersonalStyleStructureHints: true,
+      styleEngineSeed: deckSeed,
       ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
       ...(signal ? { signal } : {}),
     });

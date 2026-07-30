@@ -59,6 +59,10 @@ const round = (value, digits = 1) => {
 
 const stripToText = (input = '') => String(input || '')
   .replace(/<[^>]+>/g, ' ')
+  // פענוח ישויות HTML — בלעדיו כל &quot; נספר כנקודה-פסיק (התו ; שבסוף הישות)
+  // וניפח את structural פי כמה על טקסט שהגיע כ-HTML.
+  .replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
   .replace(/[\r\t]+/g, ' ')
   .replace(/ /g, ' ')
   .replace(/\s+\n/g, '\n')
@@ -123,11 +127,15 @@ export function extractAuthenticityFeatures(input = '') {
   const per100 = (n) => (wordCount ? round((n / wordCount) * 100, 2) : 0);
 
   // סימני מבנה אופייניים ל-AI (Gemini Hebrew): מקפי הסבר, סוגריים מבארים, מרכאות-מטבע, נקודה-פסיק.
-  const emDashes = (text.match(/[–—]/g) || []).length;
-  const parenGlosses = (text.match(/\([^)]{1,40}\)/g) || []).length;
-  const quoteChars = (text.match(/["“”״]/g) || []).length;
+  // שתי החרגות של כתיבה אקדמית אנושית (נמדדו על עבודות אמיתיות — בלעדיהן הסיגנל רווי ל-1.0):
+  // (1) מראה-מקום עם שנה (APA כמו "(כהן, 2020; לוי, 2019)") אינו ליטוש-מכונה — מוסר לפני הספירה.
+  // (2) גרשיים בתוך מילה הם ראשי-תיבות עבריים (ד"ר, ע"ר, תשפ"ו) ולא scare quotes.
+  const structText = text.replace(/\([^)]*\b(?:19|20)\d{2}[^)]*\)/g, ' ');
+  const emDashes = (structText.match(/[–—]/g) || []).length;
+  const parenGlosses = (structText.match(/\([^)]{1,40}\)/g) || []).length;
+  const quoteChars = (structText.replace(/(?<=[֐-׿])["״](?=[֐-׿])/g, '').match(/["“”״]/g) || []).length;
   const scareQuotes = Math.floor(quoteChars / 2);
-  const semicolons = (text.match(/;/g) || []).length;
+  const semicolons = (structText.match(/;/g) || []).length;
   const structuralEvents = emDashes + parenGlosses + scareQuotes + semicolons;
 
   // עושר אוצר מילים (Type-Token Ratio על מילות תוכן).
@@ -177,15 +185,18 @@ function computeSignals(features, profile) {
     ? null
     : clamp01((0.50 - features.sentenceLengthCV) / 0.40);
 
-  // ל-2/3/3b: max(צפיפות, ספירה מוחלטת) — כדי שמסמך ארוך עם הרבה מרקרים יידלק גם כשהצפיפות מדוללת (long-form).
-  // 2. מחברים פורמליים. צפיפות 4/100 = רוויה; או ספירה מוחלטת 8 = רוויה.
-  signals.formalConnector = Math.max(clamp01(features.formalConnectorDensity / 4), clamp01(features.formalConnectorCount / 8));
+  // ל-2/3/3b: צפיפות בלבד. זרועות הספירה-המוחלטת (8/4/18) הוסרו — הן הטו לפי אורך:
+  // כל מסמך אקדמי ארוך הגיע ל-8 מחברים ו-18 סימני מבנה והרוויה נעל את הציון על ~80
+  // בלי קשר לאנושיות (נמדד על עבודות אמיתיות: 80-86 לפני, 37-54 אחרי; זיהוי AI לא נפגע —
+  // שער הקורפוס ב-tools/detector-train/length-bias-check.mjs).
+  // 2. מחברים פורמליים. צפיפות 4/100 = רוויה.
+  signals.formalConnector = clamp01(features.formalConnectorDensity / 4);
 
-  // 3. קלישאות. צפיפות 1.5/100; או 4 מופעים מוחלטים.
-  signals.cliche = Math.max(clamp01(features.clicheDensity / 1.5), clamp01(features.clicheCount / 4));
+  // 3. קלישאות. צפיפות 1.5/100 = רוויה.
+  signals.cliche = clamp01(features.clicheDensity / 1.5);
 
-  // 3b. סימני מבנה (מקפים/סוגריים/מרכאות-מטבע/נקודה-פסיק). צפיפות 4.5/100; או 18 מופעים מוחלטים.
-  signals.structural = Math.max(clamp01(features.structuralDensity / 4.5), clamp01(features.structuralCount / 18));
+  // 3b. סימני מבנה (מקפים/סוגריים/מרכאות-מטבע/נקודה-פסיק). צפיפות 4.5/100 = רוויה.
+  signals.structural = clamp01(features.structuralDensity / 4.5);
 
   // 4. עושר אוצר מילים נמוך. אמין רק על טקסט סביר. TTR 0.62→0, 0.32→1.
   signals.lowRichness = features.wordCount < 60

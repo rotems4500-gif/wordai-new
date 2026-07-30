@@ -5916,6 +5916,7 @@ ${sidebarReviewContext}`
             includeSources,
             sourceRoute,
             ...(Number.isFinite(temperature) ? { temperature } : {}),
+            styleDepth,
             runId: generationRequest.runId,
             returnMeta: true,
           })
@@ -5951,6 +5952,10 @@ ${sidebarReviewContext}`
         });
       } catch {}
       triggerDocumentArrival(usedFallback ? 'warning' : 'success');
+      // כישלון-יעד של לולאת ההאנשה מדווח בזמן היצירה — לא מתגלה רק בהעלאה-מחדש של הקובץ.
+      if (result?.humanizeInfo && result.humanizeInfo.hitTarget === false && Number.isFinite(result.humanizeInfo.score)) {
+        showToast(`⚠️ ההאנשה לא הגיעה ליעד (ציון ${result.humanizeInfo.score}/100, יעד ${result.humanizeInfo.target}) — אפשר להריץ שוב מבדיקת סגנון.`, { tone: 'warning', duration: 7000 });
+      }
       const historyAfterSave = saveDocumentHistory({
         title: resolvedTitle,
         content: generatedWithCover,

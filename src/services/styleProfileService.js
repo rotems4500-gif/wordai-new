@@ -1218,7 +1218,7 @@ const shouldInjectMetricAnchor = (reference, key, userVal, genreName) => {
  *   reference — נכס-ייחוס האוכלוסייה (מקורא async), אחרת נלקח מהמטמון הסינכרוני.
  * @returns {string}
  */
-export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null, reference = null } = {}) {
+export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null, reference = null, patternCount = 5 } = {}) {
   if (!isPlainObject(styleEngine) || styleEngine.enabled === false) return '';
 
   // E3 — כשיש ז'אנר תואם עם תת-פרופיל מדדים → משתמשים ב-metrics/metricsSpread שלו
@@ -1306,8 +1306,9 @@ export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlo
     if (anchors.length) lines.push(...anchors);
   }
 
-  // 2. דפוסים ברוטציה.
-  const rotated = selectRotatedPatterns(patterns, { count: 5, seed });
+  // 2. דפוסים ברוטציה. patternCount ברירת-מחדל 5 (הזרקה שוטפת); הייצוא ל-AI חיצוני
+  // מבקש יותר — פרומפט חד-פעמי שנשמר אצל הספק, תקציב הטוקנים פחות לחוץ.
+  const rotated = selectRotatedPatterns(patterns, { count: patternCount, seed });
   if (rotated.length) {
     lines.push('דפוסים אישיים לשילוב טבעי (אל תדחוס את כולם):');
     rotated.forEach((p) => lines.push(`- ${p.label}`));
