@@ -11,6 +11,7 @@
 import { chatWithActiveProvider, getPersonalStyleProfile, hashStyleSeed } from './aiService';
 import { scoreStyleMatchLocal } from './styleJudgeService';
 import { normalizeStyleEngine } from './styleProfileService';
+import { scoreTextAuthenticity } from './styleAuthenticityService';
 
 // כמה פסקאות לשלוח ב-prompt אחד (איזון בין מספר קריאות לאורך פלט).
 const PARA_BATCH = 12;
@@ -136,15 +137,27 @@ const extractJson = (raw = '') => {
 // מהייבוא (ריצה חוזרת לא מצטברת על פלט קודם); עריכה ידנית של המשתמש נשמרת.
 const restyleSourceOf = (para) => (para.restyledByAi ? para.original : para.text);
 
+// דירוג "נשמע כמו AI" פר-פסקה: ההחלטה מה חייב שכתוב היא של הגלאי, לא של המודל.
+// בלי הסימון, ה-escape hatch ("אם כבר טוב — אל תיגע") גרם למודל להשאיר גם פסקאות
+// גנריות לחלוטין ללא שינוי. null = הפסקה קצרה מדי לניקוד אמין.
+const scoreParaAiness = (text) => {
+  try {
+    const res = scoreTextAuthenticity(String(text || ''));
+    return res?.ok ? { score: res.score, threshold: res.threshold } : null;
+  } catch { return null; }
+};
+
 const buildRestylePrompt = (batch, instructions) => {
-  const block = batch.map(({ index, para }) => ({
+  const block = batch.map(({ index, para, aiFlagged }) => ({
     i: index,
     t: restyleSourceOf(para),
+    ...(aiFlagged ? { ai: 1 } : {}),
   }));
   return `לפניך פסקאות טקסט גולמי ממסמך Word קיים. שכתב כל פסקה כך שתישמע בסגנון הכתיבה האישי של המשתמש (ראה פרופיל הסגנון שסופק לך), בלי לשנות את המשמעות, העובדות, המספרים או המונחים.
 
 חוקים נוקשים:
-- אם פסקה כבר נשמעת טבעית ובסגנון המשתמש, או שהיא כותרת/פריט קצר — החזר אותה ללא שינוי, אות באות.
+- פסקה עם "ai":1 זוהתה על-ידי גלאי אוטומטי כגנרית/מכונתית — חובה לשכתב אותה מקצה לקצה בקול המשתמש: גוון אורכי משפטים, הסר מחברים פורמליים שחוקים וקלישאות, פתח כל משפט אחרת. אסור להחזיר אותה ללא שינוי או עם תיקון קוסמטי בלבד.
+- פסקה בלי "ai":1 שכבר נשמעת טבעית ובסגנון המשתמש — החזר אותה ללא שינוי, אות באות.
 - שמור בדיוק על אותו מספר פסקאות ועל אותו סדר. אל תוסיף, תמזג או תמחק פסקאות.
 - פסקה קצרה (כותרת/פריט) נשארת קצרה. אל תנפח פסקה.
 - אל תוסיף מספור, תבליטים, גרשיים או markdown — רק הטקסט עצמו.
@@ -154,19 +167,28 @@ const buildRestylePrompt = (batch, instructions) => {
 קלט (JSON):
 ${JSON.stringify({ paras: block }, null, 0)}
 
-החזר JSON תקין בלבד באותו מבנה בדיוק, אותם מפתחות i, אותו מספר פסקאות:
+החזר JSON תקין בלבד באותו מבנה: לכל פסקה אותו מפתח i ושדה t עם הטקסט (בלי שדה ai בפלט), אותו מספר פסקאות:
 {"paras":[{"i":<מספר>,"t":"..."}]}`;
 };
 
 // שער קבלה פר-פסקה (במודל של styleJudgeService.rewriteDocumentHtmlTowardStyle):
 // (1) רצועת אורך ~0.6×–1.6× מהמקור — פרפרזה שקיצצה/ניפחה נדחית.
-// (2) לפסקאות ארוכות מספיק — never-net-worse: הציון המקומי של החדש לא נופל
-//     ביותר מנקודה מהציון של הטקסט הנוכחי. כשל ניקוד ⇒ קבלה לפי אורך בלבד.
-const acceptRestyledPara = (source, current, next, styleEngine) => {
+// (2) פסקה שסומנה כגנרית (aiFlagged) — המדד הרלוונטי הוא הגלאי: מקבלים אם ציון
+//     ה-AI לא עלה. רצפת הסגנון המבני *לא* חלה עליה — היא דחתה שכתובים לגיטימיים
+//     של פסקאות גנריות (המדד המבני מעדיף לפעמים את הניסוח המכונתי החלק).
+// (3) פסקה לא-מסומנת ארוכה מספיק — never-net-worse על ציון הסגנון המקומי.
+// כשל ניקוד בכל מקום ⇒ קבלה לפי רצועת האורך בלבד.
+const acceptRestyledPara = (source, current, next, styleEngine, aiFlagged = false) => {
   const srcLen = String(source || '').length;
   const nextLen = String(next || '').length;
   if (!nextLen) return false;
   if (srcLen >= MIN_RESTYLE_CHARS && (nextLen < srcLen * 0.6 || nextLen > srcLen * 1.6)) return false;
+  if (aiFlagged) {
+    const before = scoreParaAiness(current);
+    const after = scoreParaAiness(next);
+    if (before && after && after.score > before.score + 5) return false;
+    return true;
+  }
   if (styleEngine?.enabled && srcLen >= SCORE_GATE_MIN_CHARS) {
     try {
       const oldScore = scoreStyleMatchLocal(current, styleEngine)?.score;
@@ -200,6 +222,12 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
 
   if (!targets.length) return { changed: 0 };
 
+  // סימון פר-פסקה: הגלאי מחליט מה גנרי וחייב שכתוב — לא שיקול-הדעת של המודל.
+  targets.forEach((target) => {
+    const scored = scoreParaAiness(restyleSourceOf(target.para));
+    target.aiFlagged = Boolean(scored && scored.score >= scored.threshold);
+  });
+
   // פרופיל המנוע לשער הקבלה (never-net-worse). כשל טעינה ⇒ שער אורך בלבד.
   let styleEngine = null;
   try { styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine); } catch { /* לא קריטי */ }
@@ -226,25 +254,45 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
 
   let changed = 0;
   let done = 0;
-  for (const batch of batches) {
-    const prompt = buildRestylePrompt(batch, instructions);
+  const changedIndexes = new Set();
+  const runBatch = async (batch, extraInstructions, countProgress) => {
+    const prompt = buildRestylePrompt(batch, extraInstructions);
     let parsed;
     try { parsed = extractJson(await runChat(prompt)); }
-    catch { done += batch.length; onProgress(done, targets.length); continue; }
-
+    catch {
+      if (countProgress) { done += batch.length; onProgress(done, targets.length); }
+      return;
+    }
     const byIndex = new Map((Array.isArray(parsed.paras) ? parsed.paras : []).map((p) => [Number(p.i), p.t]));
-    for (const { para, index } of batch) {
+    for (const { para, index, aiFlagged } of batch) {
       const next = byIndex.has(index) ? String(byIndex.get(index) == null ? '' : byIndex.get(index)).trim() : '';
       const source = restyleSourceOf(para);
-      if (next && next !== para.text && acceptRestyledPara(source, para.text, next, styleEngine)) {
+      if (next && next !== para.text && acceptRestyledPara(source, para.text, next, styleEngine, aiFlagged)) {
         para.text = next;
         para.restyledByAi = true;
         writePara(para);
+        changedIndexes.add(index);
         changed += 1;
       }
-      done += 1;
+      if (countProgress) { done += 1; }
     }
-    onProgress(done, targets.length);
+    if (countProgress) onProgress(done, targets.length);
+  };
+
+  for (const batch of batches) {
+    await runBatch(batch, instructions, true);
+  }
+
+  // סבב-חוזר יחיד: פסקאות שהגלאי סימן כגנריות אבל המודל בכל זאת החזיר ללא שינוי.
+  // בלי זה "חובה לשכתב" נשארת בקשה — מודל שמתעלם ממנה משאיר פסקאות-AI במסמך בשקט.
+  const stubborn = targets.filter((t) => t.aiFlagged && !changedIndexes.has(t.index));
+  if (stubborn.length) {
+    const retryNote = [String(instructions || '').trim(),
+      'הפסקאות בקלט סומנו כולן כגנריות/מכונתיות וחזרו ללא שינוי בסבב הקודם. הפעם שכתוב מלא הוא חובה: החזר לכל פסקה ניסוח שונה מהותית מהקלט, באותה משמעות ובקול המשתמש.']
+      .filter(Boolean).join('\n');
+    for (let i = 0; i < stubborn.length; i += PARA_BATCH) {
+      await runBatch(stubborn.slice(i, i + PARA_BATCH), retryNote, false);
+    }
   }
 
   return { changed };
