@@ -536,11 +536,50 @@ export async function findEvidenceForSection(section, {
 
     // אותם עוגני דוקטרינה של המסלול הרגיל (ר' hasDoctrineAnchor למעלה) — כאן
     // נספרים, כי שכבת הנפילה דורשת שניים ולא אחד.
+    //
+    // ⚠️ נספרים **מושגים ולא טוקנים**. הרחבת התחיליות מייצרת שני מונחים לאותה
+    // מילה ("העבודה" + "עבודה"), ושניהם נמצאים באותו קטע — כך שקטע שנגע במושג
+    // אחד בלבד נראה כאילו עמד בדרישת "שני עוגנים מבחינים". זה מה שהכשיל את
+    // הבקרה השלילית neg-ai-labor: הררי/מרקס/סמית נכנסו על "עבודה" בלבד, בזמן
+    // שהמושג הראשי של השאלה (בינה מלאכותית) אינו בקורפוס כלל.
+    // ר' docs/bench-neg-ai-labor.md.
+    const conceptGroups = (() => {
+      const raw = doctrineAnchors.length
+        ? [
+          ...(Array.isArray(section?.keywords) ? section.keywords : []),
+          ...(Array.isArray(section?.mustMention) ? section.mustMention : []),
+          String(section?.doctrineTerms || ''),
+        ]
+        : [String(section?.framework || ''), ...(Array.isArray(section?.mustMention) ? section.mustMention : []), query];
+      const pool = doctrineAnchors.length ? doctrineAnchors : anchors;
+      const groups = [];
+      const claimed = new Set();
+      for (const g of raw.map((x) => String(x || '').trim()).filter(Boolean)) {
+        const terms = tokenizeForRetrieval(g).map(String)
+          .flatMap((t) => (t.length >= 5 && /^[הובלכמש]/.test(t) ? [t, t.slice(1)] : [t]))
+          .filter((t) => t.length >= 4 && pool.includes(t));
+        if (!terms.length) continue;
+        groups.push(terms);
+        terms.forEach((t) => claimed.add(t));
+      }
+      // מונחים שלא שויכו לאף קבוצה (הגיעו מהשאילתה החופשית) — כל אחד קבוצה בפני עצמה,
+      // אחרי איחוד וריאנטים של אותה מילה.
+      const leftovers = pool.filter((t) => !claimed.has(t)).sort((a, b) => a.length - b.length);
+      for (const t of leftovers) {
+        const host = groups.find((grp) => grp.some((x) => t.includes(x) || x.includes(t)));
+        if (host) host.push(t);
+        else groups.push([t]);
+      }
+      return groups;
+    })();
+
     const anchorCount = (chunk) => {
-      if (doctrineAnchors.length) return matchedAnchors(chunk).length;
-      const text = String(chunk.text || '').toLowerCase();
+      const text = String(chunk.text || '');
+      const lower = text.toLowerCase();
       let n = 0;
-      for (const t of anchors) if (text.includes(t)) n += 1;
+      for (const grp of conceptGroups) {
+        if (grp.some((t) => text.includes(t) || lower.includes(t))) n += 1;
+      }
       return n;
     };
     // ⚠️ זהו **תגבור**, לא רק נפילה. הגרסה הקודמת פעלה רק כש-kept ריק לגמרי,
@@ -554,7 +593,16 @@ export async function findEvidenceForSection(section, {
     //   ב. z בינוני עם עוגן אחד
     const FOCUSED_MIN_Z_STRONG = 3.0;
     const THIN_KEPT = 3;
-    if (kept.length < THIN_KEPT) {
+    kept = kept.map((s) => ({ ...s, via: 'normal' }));
+    // ---------- תנאי־מקדים לשכבת הנפילה: הקורפוס בכלל מכסה את השאלה? ----------
+    // הנפילה נועדה לקורפוס הומוגני שכולו על-הנושא. הסימן לכך שהקורפוס אכן עוסק
+    // בשאלה הוא **צירוף** מושגים: לפחות קטע אחד שנוגע בשני מושגים שונים מהשאלה.
+    // בקרה שלילית אמיתית (AI ושוק העבודה מול קורפוס תרבות המערב) לא מייצרת אף
+    // קטע כזה — כל ההתאמות נשענות על מושג גנרי יחיד ("עבודה"). ⚠️ נמדד: בסעיפים
+    // האמיתיים של הבנצ' תמיד קיים קטע דו-מושגי, ולכן התנאי אינו חוסם אותם.
+    const corpusCoversQuestion = scored.some((s) => domainOk(s.chunk) && anchorCount(s.chunk) >= FOCUSED_MIN_ANCHORS);
+    if (diag) diag.corpusCovers = corpusCoversQuestion;
+    if (kept.length < THIN_KEPT && corpusCoversQuestion) {
       const already = new Set(kept.map((s) => s.chunk.id));
       const extra = scored.filter((s) => {
         if (already.has(s.chunk.id)) return false;
@@ -562,7 +610,7 @@ export async function findEvidenceForSection(section, {
         const n = anchorCount(s.chunk);
         return (s.z >= FOCUSED_MIN_Z && n >= FOCUSED_MIN_ANCHORS)
           || (s.z >= FOCUSED_MIN_Z_STRONG && n >= 1);
-      }).map((s) => ({ ...s, weak: true, focused: true }));
+      }).map((s) => ({ ...s, weak: true, focused: true, via: 'focused' }));
       kept = [...kept, ...extra].slice(0, Math.max(6, k));
     }
 
@@ -580,7 +628,7 @@ export async function findEvidenceForSection(section, {
         kept = scored
           .filter((s) => s.z >= Z_WEAK && mustVariants.some((w) => String(s.chunk.text || '').includes(w)))
           .slice(0, 2)
-          .map((s) => ({ ...s, weak: true }));
+          .map((s) => ({ ...s, weak: true, via: 'must-weak' }));
       }
     }
   } else {
@@ -623,6 +671,14 @@ export async function findEvidenceForSection(section, {
     kept = [...diverse, ...backfill].sort((a, b) => b.z - a.z).slice(0, k);
   } else {
     kept = diverse.slice(0, k);
+  }
+
+  if (diag) {
+    // דרך הכניסה של כל ראיה (normal / focused / must-weak) והעוגנים שהכשירו אותה.
+    // בלי זה אי אפשר לאבחן כשל כמו neg-ai-labor: הראיות נראות סבירות עד שמתברר
+    // שכולן נכנסו דרך שכבת הנפילה ועל מושג יחיד.
+    diag.via = kept.map((s) => s.via || 'normal');
+    diag.anchors = kept.map((s) => matchedAnchors(s.chunk).slice(0, 6));
   }
 
   return {
