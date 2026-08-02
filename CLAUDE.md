@@ -129,6 +129,7 @@ Rust מינימלי בכוונה. כל הלוגיקה הספציפית (המרו
 - [src-tauri/src/updater.rs](src-tauri/src/updater.rs) — `check_for_update`/`install_update`.
 
 **הגשר**: [src/desktopShim.js](src/desktopShim.js) משחזר את `window.desktopApp` מעל הפקודות (invoke), נטען ראשון ב-main.jsx רק תחת `window.__TAURI_INTERNALS__`. כך כל הקוד הקיים שקורא `window.desktopApp.*` עובד ללא שינוי. המרות docx (mammoth/buildDocxBlob) וחילוץ טקסט ([src/services/materialExtractBrowser.js](src/services/materialExtractBrowser.js): docx/txt/xlsx/pptx/pdf/OCR) רצים ב-JS. `parseSpssSavData` לא ב-shim — יש fallback בדפדפן ([spssDataIngest.js](src/services/spssDataIngest.js)).
+⚠️ ה-HTML של mammoth עובר [normalizeImportedFootnotes](src/services/footnoteHtml.js) לפני שהוא מגיע לעורך (וגם בנקודת הייבוא המרכזית ב-main.jsx — הפונקציה idempotent). בלי זה הערות השוליים של Word מגיעות כ-`<sup><a href="#footnote-N">` + `<ol>` מנותק בסוף, ו-TipTap מוחק אותן. כל נתיב ייבוא HTML חדש חייב לעבור שם.
 
 ---
 

@@ -55,7 +55,9 @@
 - `components/ui/`: `Button` ~76, `Input` ~84, `Modal` ~134, `index.js`
 
 ### src/extensions/ — TipTap custom nodes/marks
-`AiSuggestionMark` 108, `CommentMark` 49, `CrossReferenceNode` 109, `FindHighlight` 46, `MathNode` 80, `PageBreak` 30, `PageNumberField` 61, `Pagination` 192, `TocNode` 61, `TrackChange` 224
+`AiSuggestionMark` 108, `CommentMark` 49, `CrossReferenceNode` 109, `FindHighlight` 46, `FootnoteNode` 163, `MathNode` 80, `PageBreak` 30, `PageNumberField` 61, `Pagination` 192, `TocNode` 61, `TrackChange` 224
+
+⚠️ **הערות שוליים**: `FootnoteNode` מחזיק את טקסט ההערה ב-attr והמספור מתעדכן ב-appendTransaction. ייבוא HTML חייב לעבור [footnoteHtml.js](../src/services/footnoteHtml.js) `normalizeImportedFootnotes` (90 שורות) — אחרת הערות Word (mammoth: `<sup><a href="#footnote-N">` + `<ol>` בסוף) נמחקות. הייצוא ל-DOCX בונה `footnotes.xml` אמיתי דרך `FootnoteReferenceRun`. הרנס: `tools/test-bench/footnote-verify.html` מול dev server.
 
 ### src/presentation/
 `SlideRenderer.jsx` 951, `deckModel.js` 260, `slideBackgrounds.jsx` 226, `deckThemes.js` 61, `PresentMode.jsx` 58
