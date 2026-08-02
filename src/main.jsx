@@ -59,6 +59,7 @@ import { AGENTS_CONFIG } from './agentConfig';
 import { isDesktopApp } from './platform';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
 import { downloadBrowserDocx, saveBlobInBrowser } from './services/browserDocxExport';
+import { normalizeImportedFootnotes } from './services/footnoteHtml';
 import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/documentLayout';
 import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEditor } from './services/stylesRegistry';
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
@@ -4250,6 +4251,31 @@ function App() {
     return () => window.removeEventListener('wordflow:edit-math', onEditMath);
   }, [editor, requestInputDialog]);
 
+  // עריכת הערת שוליים קיימת (קליק על הסימון או על השורה ברשימה שמתחת לעמוד).
+  // טקסט ריק = מחיקת ההערה, והמספור של השאר מתעדכן אוטומטית.
+  React.useEffect(() => {
+    const onEditFootnote = async (event) => {
+      if (!editor) return;
+      const { pos, text } = event.detail || {};
+      if (typeof pos !== 'number') return;
+      const result = await requestInputDialog({
+        title: 'עריכת הערת שוליים',
+        description: 'ריקון הטקסט ימחק את ההערה',
+        fields: [{ id: 'footnote', label: 'טקסט הערת שוליים', type: 'textarea', value: text || '' }],
+        confirmLabel: 'עדכן',
+      });
+      if (!result) return;
+      const nextText = String(result.footnote || '').trim();
+      if (!nextText) {
+        editor.chain().focus().removeFootnoteAt(pos).run();
+        return;
+      }
+      editor.chain().focus().updateFootnoteAt(pos, nextText).run();
+    };
+    window.addEventListener('wordflow:edit-footnote', onEditFootnote);
+    return () => window.removeEventListener('wordflow:edit-footnote', onEditFootnote);
+  }, [editor, requestInputDialog]);
+
   const closeInputDialog = React.useCallback((result = null) => {
     setInputDialog((prev) => {
       try {
@@ -6656,7 +6682,8 @@ ${sidebarReviewContext}`
       showToast(payload?.error || 'לא ניתן לפתוח את הקובץ שנבחר.', { tone: 'error' });
       return;
     }
-    const importedHtml = String(payload.html || '').trim() || '<p></p>';
+    // הערות שוליים מקבצים נכנסים (Word/HTML) → צומת footnote אמיתי, אחרת הן נמחקות בעורך
+    const importedHtml = normalizeImportedFootnotes(String(payload.html || '').trim()) || '<p></p>';
     const importedText = String(payload.text || '').trim()
       || importedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     if (importedHtml.length > MAX_IMPORTED_DOCUMENT_HTML_CHARS || importedText.length > MAX_IMPORTED_DOCUMENT_TEXT_CHARS) {
@@ -7628,17 +7655,9 @@ ${sidebarReviewContext}`
         });
         const footnoteText = String(result?.footnote || '').trim();
         if (!footnoteText) break;
-        const existingFootnotes = document.querySelectorAll('.footnote-ref').length;
-        const num = existingFootnotes + 1;
-        const safeFnText = escHtml(footnoteText);
-        editor.chain().focus().insertContent(
-          `<sup class="footnote-ref" id="fnref-${num}" style="color:#2B579A;cursor:pointer" title="${safeFnText}">[${num}]</sup>`
-        ).run();
-        // הוסף הערה בתחתית הדף
-        editor.chain().focus().insertContentAt(
-          editor.state.doc.content.size,
-          `<p><small id="fn-${num}"><sup>${num}</sup> ${safeFnText}</small></p>`
-        ).run();
+        // צומת אמיתי (FootnoteNode): הטקסט חי ב-attr, המספור מתעדכן לבד,
+        // וההערה יוצאת כהערת שוליים אמיתית ב-DOCX.
+        editor.chain().focus().insertFootnote(footnoteText).run();
         break;
       }
 

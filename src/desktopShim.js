@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { buildDocxBlob } from './services/browserDocxExport';
 import { extractMaterialTextFromBytes } from './services/materialExtractBrowser';
+import { normalizeImportedFootnotes } from './services/footnoteHtml';
 
 const PROVIDER_CONFIG_FILE = 'ai-provider-config.json';
 const APP_SETTINGS_FILE = 'app-settings.json';
@@ -79,7 +80,9 @@ const readDocumentFromPath = async (filePath) => {
       const bytes = base64ToUint8(r.data);
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const mammoth = await import('mammoth');
-      const html = (await mammoth.convertToHtml({ arrayBuffer })).value || '';
+      // הערות שוליים של Word מגיעות מ-mammoth כ-<sup><a> + <ol> בסוף; ממירים אותן
+      // לצומת הערת-שוליים אמיתי לפני שהמסמך נכנס לעורך, אחרת הן נמחקות.
+      const html = normalizeImportedFootnotes((await mammoth.convertToHtml({ arrayBuffer })).value || '');
       const text = (await mammoth.extractRawText({ arrayBuffer })).value || '';
       return { ok: true, canceled: false, filePath, title, html, text };
     }

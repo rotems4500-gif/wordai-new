@@ -35,6 +35,7 @@ import { TrackChange, DeletionMark } from "./extensions/TrackChange";
 import { PageNumberField } from "./extensions/PageNumberField";
 import { MathNode } from "./extensions/MathNode";
 import { CrossReferenceNode, HeadingRefId } from "./extensions/CrossReferenceNode";
+import { FootnoteNode, collectFootnotes, FOOTNOTE_EDIT_EVENT } from "./extensions/FootnoteNode";
 import { TocNode } from "./extensions/TocNode";
 import { Pagination } from "./extensions/Pagination";
 import { StyleAutocomplete } from "./extensions/StyleAutocomplete";
@@ -299,6 +300,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       MathNode,
       CrossReferenceNode,
       HeadingRefId,
+      FootnoteNode,
       TocNode,
       Pagination,
       // enabled כפונקציה — נקרא בכל טרנזקציה, כך שהמתג בהגדרות משפיע מיד.
@@ -1227,6 +1229,9 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
 
       <EditorContent editor={editor} className="w-full shrink-0" />
 
+      {/* eslint-disable-next-line no-use-before-define */}
+      <FootnotesStrip editor={editor} />
+
       {pageBox && pageGuides.length > 0 && (
         <div
           aria-hidden="true"
@@ -1329,6 +1334,48 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// רשימת הערות השוליים מתחת לעמוד: הטקסט עצמו חי ב-attr של הצומת, ופה רק מציגים
+// אותו (קליק פותח את אותו דיאלוג עריכה כמו קליק על הסימון בגוף הטקסט).
+function FootnotesStrip({ editor }) {
+  const [notes, setNotes] = useState([]);
+
+  useEffect(() => {
+    if (!editor) return undefined;
+    const refresh = () => setNotes(collectFootnotes(editor.state.doc));
+    refresh();
+    editor.on('update', refresh);
+    return () => { editor.off('update', refresh); };
+  }, [editor]);
+
+  if (!notes.length) return null;
+
+  return (
+    <div
+      dir="rtl"
+      className="w-full shrink-0 mx-auto mt-3 rounded-[3px] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.10)]"
+      style={{ width: '21cm', maxWidth: 'calc(100vw - 32px)', padding: '12px var(--wordai-page-padding, 2.54cm)' }}
+    >
+      <div className="text-[11px] font-semibold text-slate-500 mb-1.5">הערות שוליים</div>
+      <ol className="m-0 p-0 list-none space-y-1">
+        {notes.map((note) => (
+          <li key={`${note.pos}-${note.number}`} className="text-[12px] leading-5 text-slate-700">
+            <button
+              type="button"
+              className="text-right hover:underline"
+              title="לחץ לעריכת ההערה"
+              onClick={() => window.dispatchEvent(new CustomEvent(FOOTNOTE_EDIT_EVENT, {
+                detail: { pos: note.pos, text: note.text },
+              }))}
+            >
+              <sup className="text-[#2B579A] font-semibold">[{note.number}]</sup> {note.text}
+            </button>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

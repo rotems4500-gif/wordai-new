@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Document,
   Footer,
+  FootnoteReferenceRun,
   Header,
   HeadingLevel,
   ImageRun,
@@ -631,13 +632,19 @@ const collectInlineRunDescriptors = (node, inheritedStyle, typography, out = [])
     if (child.nodeType !== 1) continue;
     const tag = String(child.tagName || '').toUpperCase();
     if (tag === 'BR') { out.push({ break: true, style: inheritedStyle }); continue; }
+    // הערת שוליים: הטקסט יושב ב-attr ולא בגוף הפסקה — יוצא כהערת שוליים אמיתית של Word
+    if (tag === 'SUP' && child.getAttribute?.('data-type') === 'footnote') {
+      const noteText = decodeHtmlEntities(child.getAttribute('data-footnote-text') || '').trim();
+      if (noteText) out.push({ footnote: noteText, style: inheritedStyle });
+      continue;
+    }
     if (tag === 'IMG' || tag === 'SCRIPT' || tag === 'STYLE') continue;
     collectInlineRunDescriptors(child, extendInlineStyle(inheritedStyle, child, typography), typography, out);
   }
   return out;
 };
 
-const buildRunsFromDescriptors = (descriptors = [], typography = {}, baseOptions = {}) => {
+const buildRunsFromDescriptors = (descriptors = [], typography = {}, baseOptions = {}, footnoteTexts = null) => {
   const trimmed = [...descriptors];
   while (trimmed.length && trimmed[0].text && !trimmed[0].text.trim()) trimmed.shift();
   while (trimmed.length && trimmed[trimmed.length - 1].text && !trimmed[trimmed.length - 1].text.trim()) trimmed.pop();
@@ -649,6 +656,12 @@ const buildRunsFromDescriptors = (descriptors = [], typography = {}, baseOptions
   let pendingBreaks = 0;
   for (const descriptor of trimmed) {
     if (descriptor.break) { pendingBreaks += 1; continue; }
+    if (descriptor.footnote) {
+      if (!Array.isArray(footnoteTexts)) continue;
+      footnoteTexts.push(descriptor.footnote);
+      runs.push(new FootnoteReferenceRun(footnoteTexts.length));
+      continue;
+    }
     const text = String(descriptor.text || '');
     if (!text) continue;
     const style = descriptor.style || {};
@@ -702,7 +715,7 @@ const resolveDocxLineSpacing = (value = '', fallback = 360) => {
   return Math.round(numeric * 240);
 };
 
-const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = resolveDocxExportOptions({ html })) => {
+const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = resolveDocxExportOptions({ html }), footnoteTexts = null) => {
   const root = parseExportHtmlRoot(html);
   if (!root) return htmlToDocxParagraphsLegacy(html, fallbackText, typography);
 
@@ -731,7 +744,7 @@ const htmlToDocxParagraphs = async (html = '', fallbackText = '', typography = r
     const runs = buildRunsFromDescriptors(descriptors, typography, {
       ...runOptions,
       rightToLeft: blockFormat.bidirectional !== false,
-    });
+    }, footnoteTexts);
     if (!runs.length && !bullet && !numbering) return;
     children.push(new Paragraph({
       ...(heading ? { heading } : { style: 'Normal' }),
@@ -992,8 +1005,21 @@ export const buildDocxBlob = async ({ html = '', text = '', exportOptions = {} }
   const headingOneSize = Math.max(typography.fontSize + 10, 34);
   const headingTwoSize = Math.max(typography.fontSize + 4, 28);
   const headingThreeSize = Math.max(typography.fontSize + 2, 24);
-  const children = await htmlToDocxParagraphs(html, text, typography);
+  // הערות שוליים אמיתיות: הצומת בעורך תורם FootnoteReferenceRun, והטקסט נאסף לכאן
+  const footnoteTexts = [];
+  const children = await htmlToDocxParagraphs(html, text, typography, footnoteTexts);
+  const footnotes = footnoteTexts.reduce((acc, noteText, index) => {
+    acc[index + 1] = {
+      children: [new Paragraph({
+        alignment: typography.alignment || AlignmentType.RIGHT,
+        bidirectional: true,
+        children: [createDocxTextRun(noteText, { size: Math.max(typography.fontSize - 4, 16) }, typography)],
+      })],
+    };
+    return acc;
+  }, {});
   const doc = new Document({
+    ...(footnoteTexts.length ? { footnotes } : {}),
     // מספור אמיתי לרשימות ממוספרות (<ol>) — בלי זה כל פריט היה יוצא כתבליט.
     numbering: {
       config: [{

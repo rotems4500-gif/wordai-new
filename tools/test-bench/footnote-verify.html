@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head><meta charset="utf-8"><title>footnote verify</title></head>
+<body>
+<pre id="out">running…</pre>
+<script type="module">
+import { normalizeImportedFootnotes } from '/src/services/footnoteHtml.js';
+import { buildDocxBlob } from '/src/services/browserDocxExport.js';
+import JSZip from 'jszip';
+
+const log = [];
+window.addEventListener('error', (e) => { document.getElementById('out').textContent = log.join('\n') + '\nERROR: ' + e.message; });
+window.addEventListener('unhandledrejection', (e) => { document.getElementById('out').textContent = log.join('\n') + '\nREJECT: ' + (e.reason?.message || e.reason); });
+const push = (name, ok, extra = '') => { log.push(`${ok ? 'PASS' : 'FAIL'} ${name} ${extra}`); };
+
+// 1) mammoth-style docx import
+const mammothHtml = `<p>משפט ראשון<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup> וסוף.</p>`
+  + `<ol><li id="footnote-1"><p>ראו: כהן, 2020, עמ' 15. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
+const norm = normalizeImportedFootnotes(mammothHtml);
+push('mammoth→footnote node', /data-type="footnote"/.test(norm) && /כהן, 2020/.test(norm) && !/<ol/.test(norm), norm);
+
+// 2) legacy app format (title attr)
+const legacyHtml = `<p>טקסט<sup class="footnote-ref" id="fnref-1" title="הערה ישנה">[1]</sup></p><p><small id="fn-1"><sup>1</sup> הערה ישנה</small></p>`;
+const norm2 = normalizeImportedFootnotes(legacyHtml);
+push('legacy→footnote node', /data-footnote-text="הערה ישנה"/.test(norm2) && !/<small/.test(norm2), norm2);
+
+// 3) docx export → real Word footnotes
+const editorHtml = `<p>משפט עם הערה<sup data-type="footnote" data-footnote-text="שם, שנה, עמ' 12" data-footnote-number="1" class="footnote-ref">[1]</sup>.</p>`;
+const blob = await buildDocxBlob({ html: editorHtml, text: 'משפט עם הערה.' });
+const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+const hasFile = !!zip.file('word/footnotes.xml');
+const fx = hasFile ? await zip.file('word/footnotes.xml').async('string') : '';
+const dx = await zip.file('word/document.xml').async('string');
+const noteMatch = /<w:footnote [^>]*w:id="1"[\s\S]*?<\/w:footnote>/.exec(fx)?.[0] || '';
+push('docx footnotes.xml', hasFile && /שם, שנה/.test(noteMatch) && /12/.test(noteMatch), noteMatch.slice(0, 500));
+push('docx footnoteReference', /footnoteReference/.test(dx));
+push('no leftover sup text', !/\[1\]/.test(dx.replace(/<[^>]+>/g, '')));
+
+// 4) round-trip בעורך אמיתי: setContent → getHTML (זה מה שנשבר קודם)
+const { Editor } = await import('@tiptap/core');
+const StarterKit = (await import('@tiptap/starter-kit')).default;
+const { FootnoteNode } = await import('/src/extensions/FootnoteNode.js');
+const host = document.createElement('div');
+document.body.appendChild(host);
+const editor = new Editor({ element: host, extensions: [StarterKit, FootnoteNode], content: norm });
+const roundTrip = editor.getHTML();
+push('editor round-trip', /data-footnote-text="ראו: כהן, 2020, עמ&#39; 15\.|data-footnote-text="ראו: כהן, 2020, עמ' 15\./.test(roundTrip), roundTrip);
+
+// מספור אוטומטי: מוסיפים הערה בתחילת המסמך → הקיימת הופכת ל-[2]
+editor.commands.setTextSelection(1);
+editor.commands.insertFootnote('הערה חדשה ראשונה');
+await new Promise((r) => setTimeout(r, 30));
+const numbered = editor.getHTML();
+const numbers = [...numbered.matchAll(/data-footnote-number="(\d)"/g)].map((m) => m[1]).join(',');
+push('auto numbering', numbers === '1,2', `numbers=${numbers} :: ${numbered}`);
+
+document.getElementById('out').textContent = log.join('\n');
+console.log(log.join('\n'));
+</script>
+</body>
+</html>
