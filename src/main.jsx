@@ -32,6 +32,8 @@ import CloudUnlockGate from './CloudUnlockGate';
 import WelcomeGate from './WelcomeGate';
 import MagicWand from './MagicWand';
 import AuthenticityModal from './components/AuthenticityModal';
+import { buildDocCharMap } from './FindReplace';
+import { setAuthenticityHighlight, clearAuthenticityHighlight } from './extensions/AuthenticityHighlight';
 import StartScreen from './StartScreen';
 import HelpModal from './HelpModal';
 import SpssSyntaxStudio from './SpssSyntaxStudio';
@@ -4374,6 +4376,76 @@ function App() {
     setAuthenticitySource(normalizedSource);
     setAuthenticityOpen(true);
   }, [currentBlockText, editor, selectedText]);
+
+  // מיפוי משפטים חשודים (מ-analyzeSentencesAuthenticity, offsets מול editor.getText())
+  // למיקומי ProseMirror -> setAuthenticityHighlight. לא סומכים על ה-offsets הגולמיים כי
+  // buildDocCharMap בונה טקסט מקביל משלה (מפריד בלוקים \n בודד); מאתרים כל משפט מחדש
+  // בתוך הטקסט הזה (עמיד-רווחים: \s+ מכווץ לרווח בודד), עם fallback ל-60 התווים הראשונים.
+  const handleHighlightAuthenticitySentences = React.useCallback((flagged) => {
+    if (!editor || !Array.isArray(flagged) || !flagged.length) return;
+    const { text: mapText, positions } = buildDocCharMap(editor);
+
+    const collapsed = [];
+    const collapsedToOriginal = [];
+    let prevWasSpace = false;
+    for (let i = 0; i < mapText.length; i += 1) {
+      const ch = mapText[i];
+      if (/\s/.test(ch)) {
+        if (!prevWasSpace) {
+          collapsed.push(' ');
+          collapsedToOriginal.push(i);
+        }
+        prevWasSpace = true;
+      } else {
+        collapsed.push(ch);
+        collapsedToOriginal.push(i);
+        prevWasSpace = false;
+      }
+    }
+    const collapsedText = collapsed.join('');
+
+    const nearestPosition = (idx, dir) => {
+      let i = idx;
+      while (i >= 0 && i < positions.length) {
+        if (Number.isInteger(positions[i])) return positions[i];
+        i += dir;
+      }
+      return null;
+    };
+
+    const ranges = [];
+    flagged.forEach((sentence) => {
+      const needleFull = String(sentence.text || '').replace(/\s+/g, ' ').trim();
+      if (!needleFull) return;
+      const needleShort = needleFull.slice(0, 60);
+      let idx = collapsedText.indexOf(needleFull);
+      let matchLen = needleFull.length;
+      if (idx === -1) {
+        idx = collapsedText.indexOf(needleShort);
+        matchLen = needleShort.length;
+      }
+      if (idx === -1) return;
+      const startOrig = collapsedToOriginal[idx];
+      const endOrig = collapsedToOriginal[Math.min(idx + matchLen - 1, collapsedToOriginal.length - 1)];
+      const fromPos = nearestPosition(startOrig, 1);
+      const toPosChar = nearestPosition(endOrig, -1);
+      if (!Number.isInteger(fromPos) || !Number.isInteger(toPosChar)) return;
+      const toPos = toPosChar + 1;
+      if (toPos <= fromPos) return;
+      ranges.push({ from: fromPos, to: toPos, level: sentence.level });
+    });
+
+    if (!ranges.length) {
+      showToast('לא נמצאו מיקומים תואמים לסימון בעורך.', { tone: 'warning' });
+      return;
+    }
+    setAuthenticityHighlight(editor, ranges);
+    showToast(`${ranges.length} משפטים סומנו בעורך.`, { tone: 'info' });
+  }, [editor]);
+
+  const handleClearAuthenticityHighlight = React.useCallback(() => {
+    clearAuthenticityHighlight(editor);
+  }, [editor]);
 
   const openCopyleaksSettingsPanel = React.useCallback(() => {
     closeCopyleaksDetector();
@@ -9827,13 +9899,19 @@ ${sidebarReviewContext}`
 
         <AuthenticityModal
           open={authenticityOpen}
-          onClose={() => setAuthenticityOpen(false)}
+          onClose={() => {
+            setAuthenticityOpen(false);
+            handleClearAuthenticityHighlight();
+          }}
           sourceLabel={COPYLEAKS_SOURCE_LABELS[authenticitySource] || COPYLEAKS_SOURCE_LABELS.document}
           getText={() => {
             if (authenticitySource === 'selection') return String(selectedText || '');
             if (authenticitySource === 'currentBlock') return String(currentBlockText || '');
             return editor ? editor.getText() : '';
           }}
+          allowHighlight={authenticitySource === 'document'}
+          onHighlightSentences={handleHighlightAuthenticitySentences}
+          onClearHighlight={handleClearAuthenticityHighlight}
         />
 
         {isWordMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}

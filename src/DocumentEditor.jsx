@@ -30,6 +30,7 @@ import { tagStyleSample } from "./services/styleAuthenticityService";
 import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
 import { FindHighlight } from "./extensions/FindHighlight";
+import { AuthenticityHighlight } from "./extensions/AuthenticityHighlight";
 import { CommentMark } from "./extensions/CommentMark";
 import { TrackChange, DeletionMark } from "./extensions/TrackChange";
 import { PageNumberField } from "./extensions/PageNumberField";
@@ -293,6 +294,7 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
       AiSuggestionMark,
       PageBreak,
       FindHighlight,
+      AuthenticityHighlight,
       CommentMark,
       TrackChange,
       DeletionMark,

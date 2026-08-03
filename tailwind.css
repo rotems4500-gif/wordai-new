@@ -231,6 +231,10 @@
         .ProseMirror .comment-mark.comment-active { background: #FDE68A; }
         .ProseMirror .find-match { background: #FEF08A; border-radius: 2px; }
         .ProseMirror .find-match-active { background: #FB923C; color: #1f2937; box-shadow: 0 0 0 1px #EA580C; }
+        /* סימון משפטים "נשמעים כמו AI" (בדיקת סגנון → סמן בעורך) — קו גלי, RTL-safe (בלי left/right). */
+        .ProseMirror .authenticity-flag-high { text-decoration-line: underline; text-decoration-style: wavy; text-decoration-color: #C0392B; background: rgba(192,57,43,0.08); }
+        .ProseMirror .authenticity-flag-med { text-decoration-line: underline; text-decoration-style: wavy; text-decoration-color: #E67E22; background: rgba(230,126,34,0.08); }
+        .ProseMirror .authenticity-flag-low { text-decoration-line: underline; text-decoration-style: wavy; text-decoration-color: #D4A017; background: rgba(212,160,23,0.06); }
         /* ghost text של ההשלמה האוטומטית — תצוגה בלבד (Decoration.widget), לא במסמך. */
         .ProseMirror .wf-autocomplete-ghost {
             color: #9ca3af;

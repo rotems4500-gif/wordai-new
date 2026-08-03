@@ -94,6 +94,41 @@ const stripToText = (input = '') => String(input || '')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 
+// חתימת 3-גרמי-תווים מול טבלת ה-LLR (AI_NGRAM_TABLE) — פונקציה משותפת למחרוזת שלמה
+// (מסמך ב-extractAuthenticityFeatures) או קטע קצר (משפט ב-analyzeSentencesAuthenticity),
+// כדי לא לשכפל את חישוב ה-LLR פעמיים.
+const computeNgramLlr = (text) => {
+  const ngrams = charNgrams(text);
+  if (!ngrams.length) return { mean: null, topContrib: [] };
+  const contrib = new Map();
+  let sum = 0;
+  for (const g of ngrams) {
+    const llr = AI_NGRAM_TABLE.grams[g] || 0;
+    sum += llr;
+    if (llr) contrib.set(g, (contrib.get(g) || 0) + llr);
+  }
+  const mean = sum / ngrams.length;
+  const topContrib = [...contrib.entries()]
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 3)
+    .map(([gram, total]) => ({ gram, llr: round(total, 3) }));
+  return { mean, topContrib };
+};
+
+// סימני מבנה אופייניים ל-AI (Gemini Hebrew): מקפי הסבר, סוגריים מבארים, מרכאות-מטבע, נקודה-פסיק.
+// שתי החרגות של כתיבה אקדמית אנושית (נמדדו על עבודות אמיתיות — בלעדיהן הסיגנל רווי ל-1.0):
+// (1) מראה-מקום עם שנה (APA כמו "(כהן, 2020; לוי, 2019)") אינו ליטוש-מכונה — מוסר לפני הספירה.
+// (2) גרשיים בתוך מילה הם ראשי-תיבות עבריים (ד"ר, ע"ר, תשפ"ו) ולא scare quotes.
+const computeStructuralEvents = (text) => {
+  const structText = text.replace(/\([^)]*\b(?:19|20)\d{2}[^)]*\)/g, ' ');
+  const emDashes = (structText.match(/[–—]/g) || []).length;
+  const parenGlosses = (structText.match(/\([^)]{1,40}\)/g) || []).length;
+  const quoteChars = (structText.replace(/(?<=[֐-׿])["״](?=[֐-׿])/g, '').match(/["“”״]/g) || []).length;
+  const scareQuotes = Math.floor(quoteChars / 2);
+  const semicolons = (structText.match(/;/g) || []).length;
+  return { emDashes, parenGlosses, scareQuotes, semicolons, total: emDashes + parenGlosses + scareQuotes + semicolons };
+};
+
 const countOccurrences = (haystack, needles) => {
   const found = [];
   let total = 0;
@@ -151,17 +186,10 @@ export function extractAuthenticityFeatures(input = '') {
   // צפיפות ל-100 מילים.
   const per100 = (n) => (wordCount ? round((n / wordCount) * 100, 2) : 0);
 
-  // סימני מבנה אופייניים ל-AI (Gemini Hebrew): מקפי הסבר, סוגריים מבארים, מרכאות-מטבע, נקודה-פסיק.
-  // שתי החרגות של כתיבה אקדמית אנושית (נמדדו על עבודות אמיתיות — בלעדיהן הסיגנל רווי ל-1.0):
-  // (1) מראה-מקום עם שנה (APA כמו "(כהן, 2020; לוי, 2019)") אינו ליטוש-מכונה — מוסר לפני הספירה.
-  // (2) גרשיים בתוך מילה הם ראשי-תיבות עבריים (ד"ר, ע"ר, תשפ"ו) ולא scare quotes.
-  const structText = text.replace(/\([^)]*\b(?:19|20)\d{2}[^)]*\)/g, ' ');
-  const emDashes = (structText.match(/[–—]/g) || []).length;
-  const parenGlosses = (structText.match(/\([^)]{1,40}\)/g) || []).length;
-  const quoteChars = (structText.replace(/(?<=[֐-׿])["״](?=[֐-׿])/g, '').match(/["“”״]/g) || []).length;
-  const scareQuotes = Math.floor(quoteChars / 2);
-  const semicolons = (structText.match(/;/g) || []).length;
-  const structuralEvents = emDashes + parenGlosses + scareQuotes + semicolons;
+  // סימני מבנה אופייניים ל-AI (מקפי הסבר, סוגריים מבארים, מרכאות-מטבע, נקודה-פסיק) — ר' הערה ליד computeStructuralEvents.
+  const structural = computeStructuralEvents(text);
+  const { emDashes, parenGlosses, scareQuotes, semicolons } = structural;
+  const structuralEvents = structural.total;
 
   // עושר אוצר מילים (Type-Token Ratio על מילות תוכן).
   const uniqueContent = new Set(contentWords);
@@ -185,21 +213,9 @@ export function extractAuthenticityFeatures(input = '') {
   let ngramLlrMean = null;
   let ngramTopContrib = [];
   if (wordCount >= NGRAM_MIN_WORDS) {
-    const ngrams = charNgrams(text);
-    if (ngrams.length) {
-      const contrib = new Map();
-      let sum = 0;
-      for (const g of ngrams) {
-        const llr = AI_NGRAM_TABLE.grams[g] || 0;
-        sum += llr;
-        if (llr) contrib.set(g, (contrib.get(g) || 0) + llr);
-      }
-      ngramLlrMean = sum / ngrams.length;
-      ngramTopContrib = [...contrib.entries()]
-        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-        .slice(0, 3)
-        .map(([gram, total]) => ({ gram, llr: round(total, 3) }));
-    }
+    const { mean, topContrib } = computeNgramLlr(text);
+    ngramLlrMean = mean;
+    ngramTopContrib = topContrib;
   }
 
   return {
@@ -289,6 +305,85 @@ const SIGNAL_LABELS = {
   personalMismatch: 'לא תואם את הסגנון הנלמד שלך',
   ngramGeneric: 'תבנית סטטיסטית ברמת התו האופיינית לטקסט מחולל',
 };
+
+// ניתוח לפי משפט — לסימון ויזואלי בעורך (wavy underline), לא לניקוד המסמך הכולל.
+// עובד על ה-input הגולמי (לא stripToText!) כדי שה-offsets שמוחזרים יהיו תקפים מול
+// אותו טקסט שהמזמין העביר (בפועל: editor.getText(), טקסט רגיל בלי HTML).
+// לכל משפט (מינימום 6 מילים, אחרת מדלגים): ngram LLR + מחברים/קלישאות + מבנה, בלי
+// תלות בפרופיל אישי (אין מספיק הקשר במשפט בודד ל-personalMismatch/uniformity/openerRepeat).
+function analyzeOneSentence(sentText, start, end, words) {
+  const { mean: llrMean, topContrib } = computeNgramLlr(sentText);
+  const formalConnectors = countOccurrences(sentText, FORMAL_CONNECTORS);
+  const cliches = countOccurrences(sentText, CLICHE_PHRASES);
+  const structural = computeStructuralEvents(sentText);
+
+  const lowAnchor = AI_NGRAM_TABLE.meta.lowAnchor;
+  const highAnchor = AI_NGRAM_TABLE.meta.highAnchor;
+  const base = llrMean === null ? 0 : clamp01((llrMean - lowAnchor) / (highAnchor - lowAnchor));
+
+  const lexiconHitCount = formalConnectors.total + cliches.total;
+  const lexiconBoost = Math.min(0.3, lexiconHitCount * 0.15);
+  const structuralBoost = structural.total >= 2 ? 0.1 : 0;
+  const level = clamp01(base + lexiconBoost + structuralBoost);
+
+  const reasons = [];
+  if (llrMean !== null && base >= 0.5) {
+    const detail = topContrib.length ? topContrib.map((g) => `"${g.gram}"(${g.llr > 0 ? '+' : ''}${g.llr})`).join(', ') : '';
+    reasons.push({ key: 'ngramGeneric', label: SIGNAL_LABELS.ngramGeneric, detail });
+  }
+  if (formalConnectors.total > 0) {
+    reasons.push({ key: 'formalConnector', label: SIGNAL_LABELS.formalConnector, detail: formalConnectors.found.map((f) => `"${f.phrase}"×${f.count}`).join(', ') });
+  }
+  if (cliches.total > 0) {
+    reasons.push({ key: 'cliche', label: SIGNAL_LABELS.cliche, detail: cliches.found.map((f) => `"${f.phrase}"×${f.count}`).join(', ') });
+  }
+  if (structural.total >= 2) {
+    const d = structural;
+    reasons.push({
+      key: 'structural',
+      label: SIGNAL_LABELS.structural,
+      detail: [d.emDashes && `מקפים×${d.emDashes}`, d.parenGlosses && `סוגריים×${d.parenGlosses}`, d.scareQuotes && `מרכאות×${d.scareQuotes}`, d.semicolons && `נק'-פסיק×${d.semicolons}`].filter(Boolean).join(', '),
+    });
+  }
+
+  return { text: sentText, start, end, words, level: round(level, 3), reasons };
+}
+
+export function analyzeSentencesAuthenticity(text = '') {
+  const raw = String(text || '');
+  if (!raw.trim()) return { ok: false, sentences: [] };
+
+  const wordRe = /[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g;
+  const boundaryRe = /[.!?…]+[\s\n]+/g;
+  const punctRe = /^[.!?…]+/;
+
+  const sentences = [];
+  const tryPush = (start, end) => {
+    const chunk = raw.slice(start, end);
+    const leadTrim = chunk.length - chunk.trimStart().length;
+    const trailTrim = chunk.length - chunk.trimEnd().length;
+    const sStart = start + leadTrim;
+    const sEnd = end - trailTrim;
+    if (sEnd <= sStart) return;
+    const sentText = raw.slice(sStart, sEnd);
+    const words = (sentText.match(wordRe) || []).length;
+    if (words < 6) return;
+    sentences.push(analyzeOneSentence(sentText, sStart, sEnd, words));
+  };
+
+  let cursor = 0;
+  let match;
+  boundaryRe.lastIndex = 0;
+  while ((match = boundaryRe.exec(raw)) !== null) {
+    const punct = match[0].match(punctRe);
+    const sentenceEnd = match.index + (punct ? punct[0].length : match[0].length);
+    tryPush(cursor, sentenceEnd);
+    cursor = match.index + match[0].length;
+  }
+  tryPush(cursor, raw.length);
+
+  return { ok: true, sentences };
+}
 
 // ניקוד טקסט: score 0-100 + label + markers מוסברים.
 // opts: { profile?, calibration? } — אם לא נמסרו, נטענים מהפרופיל האישי.

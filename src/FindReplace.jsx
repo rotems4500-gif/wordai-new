@@ -7,7 +7,9 @@ import { setFindHighlight } from './extensions/FindHighlight';
 
 const isWordChar = (ch) => !!ch && /[\p{L}\p{N}_]/u.test(ch);
 
-const buildDocCharMap = (editor) => {
+// מיוצא כדי ש-main.jsx יוכל להשתמש בה גם למיפוי משפטי "בדיקת סגנון" -> מיקומי עורך
+// (AuthenticityModal), בלי לשכפל את לוגיקת ה-doc-walk.
+export const buildDocCharMap = (editor) => {
   const chars = [];
   const positions = [];
   const doc = editor?.state?.doc;

@@ -4,31 +4,64 @@ import {
   addAuthenticitySample,
   removeAuthenticitySample,
   getAuthenticityCalibration,
+  analyzeSentencesAuthenticity,
 } from '../services/styleAuthenticityService';
 
-// מודאל "בדיקת סגנון": תוצאה ברמת מסמך + UI כיול (תיוג דוגמאות me/ai).
+const truncateSentence = (text, max = 120) => {
+  const t = String(text || '').trim();
+  return t.length > max ? `${t.slice(0, max).trim()}…` : t;
+};
+
+// מודאל "בדיקת סגנון": תוצאה ברמת מסמך + UI כיול (תיוג דוגמאות me/ai) + סימון משפטים חשודים בעורך.
 // getText: פונקציה שמחזירה את הטקסט לבדיקה (כל המסמך).
-export default function AuthenticityModal({ open, onClose, getText, sourceLabel = '' }) {
+// allowHighlight: true רק כשהמקור הוא כל המסמך (offsets לא תקפים מול selection/currentBlock).
+// onHighlightSentences(flagged): מקבל את רשימת המשפטים החשודים ומטפל בסימון בעורך עצמו.
+// onClearHighlight(): ניקוי סימון מהעורך.
+export default function AuthenticityModal({ open, onClose, getText, sourceLabel = '', allowHighlight = false, onHighlightSentences, onClearHighlight }) {
   const [result, setResult] = useState(null);
+  const [sentenceResult, setSentenceResult] = useState(null);
   const [sampleText, setSampleText] = useState('');
   const [calibration, setCalibration] = useState(() => getAuthenticityCalibration());
   const [showCalibration, setShowCalibration] = useState(false);
   const [notice, setNotice] = useState('');
+  const [highlighted, setHighlighted] = useState(false);
 
   const runCheck = useCallback(() => {
     const text = typeof getText === 'function' ? String(getText() || '') : '';
     setResult(scoreTextAuthenticity(text));
-  }, [getText]);
+    setSentenceResult(analyzeSentencesAuthenticity(text));
+    setHighlighted(false);
+    onClearHighlight?.();
+  }, [getText, onClearHighlight]);
 
   useEffect(() => {
     if (open) {
       runCheck();
       setCalibration(getAuthenticityCalibration());
       setNotice('');
+    } else {
+      onClearHighlight?.();
+      setHighlighted(false);
     }
-  }, [open, runCheck]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   if (!open) return null;
+
+  const flaggedSentences = (sentenceResult?.sentences || [])
+    .filter((s) => s.level >= 0.5)
+    .sort((a, b) => b.level - a.level);
+
+  const handleHighlightClick = () => {
+    if (typeof onHighlightSentences !== 'function' || !flaggedSentences.length) return;
+    onHighlightSentences(flaggedSentences);
+    setHighlighted(true);
+  };
+
+  const handleClearHighlightClick = () => {
+    onClearHighlight?.();
+    setHighlighted(false);
+  };
 
   const humanCutoff = result?.ok ? Math.max(30, result.threshold - 20) : 40;
   const scoreColor = !result?.ok ? '#8A8886'
@@ -121,6 +154,52 @@ export default function AuthenticityModal({ open, onClose, getText, sourceLabel 
               <div style={{ fontSize: 11, color: '#8A8886', background: '#FAF9F8', padding: '8px 10px', borderRadius: 8, marginBottom: 12 }}>
                 ℹ️ אומדן רך, לא פסק-דין. טקסט אנושי מלוטש עלול להיתפס כגנרי ולהפך. כיול לפי דוגמאות שלך משפר דיוק.
               </div>
+
+              {/* משפטים חשודים — ברמת משפט, לסימון ויזואלי בעורך */}
+              {flaggedSentences.length > 0 && (
+                <div style={{ marginBottom: 12, borderTop: '1px solid #EDEBE9', paddingTop: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#323130' }}>
+                      משפטים חשודים ({flaggedSentences.length})
+                    </div>
+                    {allowHighlight && typeof onHighlightSentences === 'function' && (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          onClick={handleHighlightClick}
+                          style={{ padding: '5px 10px', background: '#106EBE', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                        >
+                          🖍️ סמן בעורך
+                        </button>
+                        {highlighted && (
+                          <button
+                            onClick={handleClearHighlightClick}
+                            style={{ padding: '5px 10px', background: 'white', color: '#605E5C', border: '1px solid #C8C6C4', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                          >
+                            נקה סימון
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                    {flaggedSentences.slice(0, 8).map((s, i) => (
+                      <div key={`${s.start}-${i}`} style={{ padding: '6px 8px', background: '#FAF9F8', borderRadius: 8, marginBottom: 6 }}>
+                        <div style={{ fontSize: 12, color: '#323130', marginBottom: 4 }}>{truncateSentence(s.text)}</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: s.level >= 0.75 ? '#C0392B' : '#B7791F' }}>
+                            {Math.round(s.level * 100)}%
+                          </span>
+                          {s.reasons.map((r) => (
+                            <span key={r.key} style={{ fontSize: 10, color: '#605E5C', background: '#EDEBE9', borderRadius: 10, padding: '1px 8px' }} title={r.detail || ''}>
+                              {r.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
