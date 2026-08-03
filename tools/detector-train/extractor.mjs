@@ -203,30 +203,35 @@ export function extractAuthenticityFeatures(input = '') {
   const typeTokenRatio = contentWords.length ? round(uniqueContent.size / contentWords.length, 3) : 0;
 
   const openerCounts = {};
-  let maxConsecutiveSameOpener = 0;
-  let consecutiveOpener = null;
-  let consecutiveRun = 0;
-  sentences.forEach((s) => {
+  const sentenceOpeners = sentences.map((s) => {
     const sw = s.match(/[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g) || [];
-    let opener = null;
-    if (sw.length) {
-      opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
-      if (opener.length >= 3) {
-        openerCounts[opener] = (openerCounts[opener] || 0) + 1;
-      } else {
-        opener = null;
-      }
-    }
-    if (opener && opener === consecutiveOpener) {
-      consecutiveRun += 1;
-    } else {
-      consecutiveOpener = opener;
-      consecutiveRun = opener ? 1 : 0;
-    }
-    if (consecutiveRun > maxConsecutiveSameOpener) maxConsecutiveSameOpener = consecutiveRun;
+    if (!sw.length) return null;
+    const opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
+    if (opener.length < 3) return null;
+    openerCounts[opener] = (openerCounts[opener] || 0) + 1;
+    return opener;
   });
+  // סימון משפטים שנמצאים בתוך רצף אנפורי (אותו פתיח ב-≥3 משפטים רצופים).
+  const inAnaphoraRun = new Array(sentences.length).fill(false);
+  let maxConsecutiveSameOpener = 0;
+  for (let i = 0; i < sentenceOpeners.length; ) {
+    if (!sentenceOpeners[i]) { i += 1; continue; }
+    let j = i;
+    while (j < sentenceOpeners.length && sentenceOpeners[j] === sentenceOpeners[i]) j += 1;
+    const runLen = j - i;
+    if (runLen > maxConsecutiveSameOpener) maxConsecutiveSameOpener = runLen;
+    if (runLen >= 3) for (let k = i; k < j; k += 1) inAnaphoraRun[k] = true;
+    i = j;
+  }
   const maxOpener = Object.values(openerCounts).reduce((a, b) => Math.max(a, b), 0);
   const openerRepetitionRate = sentences.length ? round(maxOpener / sentences.length, 3) : 0;
+
+  // CV-ליבה: אחידות אורך משפטים *מחוץ* לרצפים אנפוריים — ר' ההערה המקבילה בשירות.
+  const coreLengths = sentences
+    .map((s, idx) => (inAnaphoraRun[idx] ? null : (s.match(/[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g) || []).length))
+    .filter((n) => n !== null && n > 0);
+  const hasAnaphora = maxConsecutiveSameOpener >= 3;
+  const sentenceLengthCVCore = (hasAnaphora && coreLengths.length >= 3) ? cv(coreLengths) : null;
 
   // סנכרון עם השירות: band1030 — נתח המשפטים (≥3 מילים) שכולם ב-10-30 מילים.
   const qualifyingSentenceLengths = sentenceLengths.filter((n) => n >= 3);
@@ -280,6 +285,7 @@ export function extractAuthenticityFeatures(input = '') {
     typeTokenRatio,
     openerRepetitionRate,
     maxConsecutiveSameOpener,
+    sentenceLengthCVCore: sentenceLengthCVCore === null ? null : round(sentenceLengthCVCore, 3),
     band1030Frac: band1030Frac === null ? null : round(band1030Frac, 3),
     aiRegisterPerThousand,
     aiRegisterFound: aiRegisterMatches.found.slice(0, 6),
@@ -296,10 +302,12 @@ export function extractAuthenticityFeatures(input = '') {
 // computeSignals בלי profile (signal 6 personalMismatch = null) — לכיול הגלאי הכללי.
 export function computeSignals(features) {
   const signals = {};
-  // band1030 מרחיב את אחידות-האורך — ר' ההערה המקבילה ב-styleAuthenticityService.js.
-  const cvSignal = (features.sentenceLengthCV === null || features.sentenceCount < 3)
+  // band1030 מרחיב את אחידות-האורך; בטקסט אנפורי נמדד CV-ליבה — ר' ההערות
+  // המקבילות ב-styleAuthenticityService.js.
+  const effectiveCV = features.sentenceLengthCVCore ?? features.sentenceLengthCV;
+  const cvSignal = (effectiveCV === null || features.sentenceCount < 3)
     ? null
-    : clamp01((0.50 - features.sentenceLengthCV) / 0.40);
+    : clamp01((0.50 - effectiveCV) / 0.40);
   const bandSignal = features.band1030Frac === null
     ? null
     : clamp01((features.band1030Frac - 0.70) / 0.30);
