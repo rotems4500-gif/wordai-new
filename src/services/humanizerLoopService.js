@@ -37,6 +37,9 @@ const MARKER_REPAIR = {
   lowRichness: (d) => `אוצר המילים חוזר/דל${d ? ` (${d})` : ''} — גוון את הניסוח והמילים, אל תחזור על אותם ביטויים.`,
   openerRepeat: (d) => `פתיחי משפט חוזרים${d ? ` (${d})` : ''} — פתח כל משפט אחרת, בלי אותה מילה/מבנה פעמיים ברצף.`,
   personalMismatch: (d) => `הטקסט לא תואם את הקול האישי שנלמד${d ? ` (${d})` : ''} — קרב אותו לאוצר המילים ולקצב האישי.`,
+  // תבנית מפוזרת (רמת רצפי-אותיות) — אין תיקון נקודתי אפשרי, כי הבעיה אינה ביטוי
+  // ספציפי. ההנחיה: לנסח מחדש לגמרי, לא להחליף מילה-במילה.
+  ngramGeneric: () => 'התבנית הסטטיסטית של הטקסט (רצפי-אותיות) עדיין אופיינית ל-AI — זו לא בעיה של ביטוי בודד, אלא של הניסוח כולו. נסח מחדש לגמרי במילים ובמבנה משפט שונים לחלוטין, לא רק תיקון נקודתי.',
 };
 
 const buildRepairPrompt = (currentText, scoreResult, passNumber, htmlMode = false) => {
@@ -119,7 +122,9 @@ export async function runHumanizerLoop({
   let best = start;
   let bestResult = safeScore(start, profile);
   // היעד לעולם לא רפוי מסף-ההתרעה של הגלאי: בלי ההצמדה הזו לולאה יכולה "להצליח"
-  // ב-59 בעוד שסף ההתרעה (60 או מכויל) יסמן את אותו טקסט כגנרי בהעלאה הבאה.
+  // מתחת לסף ברירת-המחדל (DEFAULT_THRESHOLD=78 כרגע, או מכויל) בעוד שאותו טקסט
+  // עדיין יסומן כגנרי בהעלאה הבאה. DEFAULT_HUMANIZER_LOOP.target=35 נשאר תקף:
+  // גם ב-goal המקסימלי (threshold-15=63) הוא עדיין מתחתיו בהרבה.
   if (bestResult.ok && Number.isFinite(bestResult.threshold)) {
     goal = Math.max(10, Math.min(goal, bestResult.threshold - 15));
   }
@@ -152,7 +157,7 @@ export async function runHumanizerLoop({
     if (!candidate || plainLen(candidate) < startLen * 0.4) {
       trace.push({ pass, score: null, rejected: 'too-short-or-empty' });
       noImprove += 1;
-      if (convergence && noImprove >= noImproveLimit) break;
+      if (noImprove >= noImproveLimit) break;
       continue;
     }
 
@@ -167,8 +172,10 @@ export async function runHumanizerLoop({
       noImprove = 0;
     } else {
       noImprove += 1;
-      // במצב התכנסות עוצרים כשאין שיפור ברצף. במצב רגיל ממשיכים עד התקרה.
-      if (convergence && noImprove >= noImproveLimit) break;
+      // עצירת אין-שיפור בשני המצבים. מאז ngramGeneric יעד 35 לרוב אינו בר-השגה
+      // לטקסט AI (רצפת הסיגנל ~65 — עמידות מכוונת של הגלאי לשכתוב), ובלי העצירה
+      // הזו המצב הרגיל שורף את כל הסבבים על שכתובים שאינם משפרים דבר.
+      if (noImprove >= noImproveLimit) break;
     }
   }
 

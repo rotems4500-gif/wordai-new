@@ -7,6 +7,17 @@
 
 import { getPersonalStyleProfile, savePersonalStyleProfile } from './aiService';
 import { addGoldChunk } from './styleSampleStore';
+import { charNgrams } from './styleFingerprintService';
+import { AI_NGRAM_TABLE } from './styleAiMarkers.data';
+
+// מסמך קצר מדי לא נושא מספיק 3-גרמים לאומדן LLR יציב (אותו סף כמו lowRichness).
+const NGRAM_MIN_WORDS = 60;
+
+// סף החלטה ברירת-מחדל (כשאין כיול אישי). נבחר ב-frontier sweep (tools/detector-train,
+// אוגוסט 2026) לצד ngramGeneric=0.65: t=78 נותן human FPR=9.2% (מול 13.8% בבסיס,
+// לפני הוספת ngramGeneric) ו-stealth TPR=64% (מול 21.2% בבסיס). ר' ההערה ליד
+// DEFAULT_WEIGHTS.ngramGeneric למטה לפירוט מלא של ה-sweep.
+const DEFAULT_THRESHOLD = 78;
 
 // מילות קישור פורמליות שמודלים נוטים להעדיף בצפיפות גבוהה.
 const FORMAL_CONNECTORS = [
@@ -22,6 +33,10 @@ const FORMAL_CONNECTORS = [
   'ראשית,', 'שנית,', 'שלישית,', 'רביעית,', 'חמישית,', 'לבסוף,',
   'בראש ובראשונה', 'אם כן,', 'יש להדגיש', 'ראוי להדגיש', 'יש לזכור', 'יש להבין',
   'מן הראוי', 'הלכה למעשה', 'מטבע הדברים', 'בה בעת', 'באופן כללי',
+  // מרקרים ממריצת אימון על קורפוס AI מורחב (train.mjs + samples/ai-extended.txt, אוגוסט 2026):
+  // human=0/19 בשני הקורפוסים (מקורי ומורחב), lift 37-49 בקורפוס הקטן. "חשוב לציין כי"
+  // לא נוסף בכוונה — נבלע כבר ע"י "חשוב לציין" שקיים למעלה, וספירה כפולה הייתה מנפחת צפיפות.
+  'לציין כי', 'ראשית היא', 'שנית היא',
 ];
 
 // קלישאות שחוקות אופייניות לטקסט מחולל.
@@ -47,6 +62,16 @@ const DEFAULT_WEIGHTS = {
   lowRichness: 0.35,
   openerRepeat: 0.30,
   personalMismatch: 0.55,
+  // תקרת ההליך הרגיל (trainWeights: clamp(0.2, 0.65, 0.2+הפרדה), הפרדה נמדדה 0.91
+  // — ר' train.mjs). הטבלה מאומנת על תערובת אנושית משוקללת 50/50
+  // narrative(ויקיפדיה)/academic(314999533, מחברים אחרים, לא עבודות המשתמש).
+  // ⚠️ החלטת המוצר: cap=0.65 לבדו מפר את שער FPR@60 הישן (34.1% מול 13.8%) —
+  // הפתרון שנבחר הוא **לא** cap נמוך אלא הזזת סף ההחלטה (DEFAULT_THRESHOLD למעלה)
+  // מ-60 ל-78, שנבחרה ב-frontier sweep (t=76..79, cap=0.65): ב-t=78 human
+  // FPR=9.2% (עבודות אמיתיות, n=119, מתחת ל-13.8% המקורי) ו-stealth TPR=63.6%
+  // (מול 21.2% בבסיס) ו-normal-AI TPR=82.6%. פירוט מלא ה-sweep (t=60..85, כולל
+  // cap=0.08/0.2 לחלופה) נמצא בהיסטוריית ה-PR/שיחת הפיתוח — לא משוכפל כאן.
+  ngramGeneric: 0.65,
 };
 
 const MAX_CALIBRATION_SAMPLES = 40;
@@ -154,6 +179,29 @@ export function extractAuthenticityFeatures(input = '') {
   const maxOpener = Object.values(openerCounts).reduce((a, b) => Math.max(a, b), 0);
   const openerRepetitionRate = sentences.length ? round(maxOpener / sentences.length, 3) : 0;
 
+  // 3-גרמים של תווים מול טבלת ה-LLR (AI_NGRAM_TABLE): חתימה התפלגותית שנוכחת גם
+  // בטקסט AI "מנוקה" מקלישאות (stealth) — בשונה מהמרקרים המילוליים למעלה, שרשימה
+  // קשיחה של ביטויים אפשר לעקוף במודע. ראה tools/detector-train/build-ngram-table.mjs.
+  let ngramLlrMean = null;
+  let ngramTopContrib = [];
+  if (wordCount >= NGRAM_MIN_WORDS) {
+    const ngrams = charNgrams(text);
+    if (ngrams.length) {
+      const contrib = new Map();
+      let sum = 0;
+      for (const g of ngrams) {
+        const llr = AI_NGRAM_TABLE.grams[g] || 0;
+        sum += llr;
+        if (llr) contrib.set(g, (contrib.get(g) || 0) + llr);
+      }
+      ngramLlrMean = sum / ngrams.length;
+      ngramTopContrib = [...contrib.entries()]
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+        .slice(0, 3)
+        .map(([gram, total]) => ({ gram, llr: round(total, 3) }));
+    }
+  }
+
   return {
     wordCount,
     sentenceCount: sentences.length,
@@ -173,6 +221,8 @@ export function extractAuthenticityFeatures(input = '') {
     typeTokenRatio,
     openerRepetitionRate,
     topContentWords: Array.from(uniqueContent).slice(0, 40),
+    ngramLlrMean: ngramLlrMean === null ? null : round(ngramLlrMean, 4),
+    ngramTopContrib,
   };
 }
 
@@ -221,6 +271,11 @@ function computeSignals(features, profile) {
     signals.personalMismatch = null;
   }
 
+  // 7. חתימת 3-גרמים סטטיסטית מול טבלת ה-LLR (AI מול אנושי).
+  signals.ngramGeneric = features.ngramLlrMean === null
+    ? null
+    : clamp01((features.ngramLlrMean - AI_NGRAM_TABLE.meta.lowAnchor) / (AI_NGRAM_TABLE.meta.highAnchor - AI_NGRAM_TABLE.meta.lowAnchor));
+
   return signals;
 }
 
@@ -232,6 +287,7 @@ const SIGNAL_LABELS = {
   lowRichness: 'אוצר מילים חוזר/דל',
   openerRepeat: 'פתיחי משפט חוזרים',
   personalMismatch: 'לא תואם את הסגנון הנלמד שלך',
+  ngramGeneric: 'תבנית סטטיסטית ברמת התו האופיינית לטקסט מחולל',
 };
 
 // ניקוד טקסט: score 0-100 + label + markers מוסברים.
@@ -262,8 +318,8 @@ export function scoreTextAuthenticity(input = '', opts = {}) {
 
   const score = Math.round((1 - product) * 100);
 
-  // סף החלטה: מהכיול אם קיים, אחרת 60.
-  const threshold = (calibration && Number.isFinite(calibration.threshold)) ? calibration.threshold : 60;
+  // סף החלטה: מהכיול אם קיים, אחרת DEFAULT_THRESHOLD.
+  const threshold = (calibration && Number.isFinite(calibration.threshold)) ? calibration.threshold : DEFAULT_THRESHOLD;
   let label;
   if (score < Math.max(30, threshold - 20)) label = 'נשמע אנושי / בסגנונך';
   else if (score < threshold) label = 'מעורב';
@@ -289,6 +345,8 @@ export function scoreTextAuthenticity(input = '', opts = {}) {
         detail = `TTR=${features.typeTokenRatio}`;
       } else if (key === 'openerRepeat') {
         detail = `פתיח חוזר ב-${Math.round(features.openerRepetitionRate * 100)}% מהמשפטים`;
+      } else if (key === 'ngramGeneric' && features.ngramTopContrib?.length) {
+        detail = features.ngramTopContrib.map((g) => `"${g.gram}"(${g.llr > 0 ? '+' : ''}${g.llr})`).join(', ');
       }
       markers.push({ key, label: SIGNAL_LABELS[key], severity: round(signal, 2), detail });
     }

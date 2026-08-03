@@ -23,8 +23,13 @@ function loadSamples(name) {
   const path = join(HERE, 'samples', name);
   if (!existsSync(path)) return [];
   return readFileSync(path, 'utf8')
-    .split(/\n=+\n/)
+    // ⚠️ חייב \r? — קבצי הדגימות נשמרים CRLF ב-Windows. בלי זה כל הקובץ
+    // נבלע כבלוק אחד והאימון "מצליח" על 1 דגימה לכל מחלקה (acc=1 חסר משמעות).
+    .split(/\r?\n=+\r?\n/)
     .map((s) => s.trim())
+    // ai-extended.txt מתויג בכותרת בלוק "#genre=... mode=..." — לא חלק מהטקסט האנליטי,
+    // מוסרת לפני הניתוח (בדומה ל-loadTaggedBlocks ב-detector-eval.mjs).
+    .map((s) => s.replace(/^#genre=\S+\s+mode=\S+\s*\n/, '').trim())
     .filter((s) => s.length >= 25);
 }
 
@@ -109,7 +114,9 @@ function evaluate(ai, human, weights, threshold) {
 }
 
 // ---- run ----
-const ai = loadSamples('ai.txt');
+// ai-extended.txt (קורפוס AI מורחב, כולל ז'אנרים/mode=stealth) מצטרף למחלקת ה-AI —
+// אותה מחלקה, סתם יותר דגימות. אם הקובץ לא קיים (עדיין) — loadSamples מחזיר [].
+const ai = [...loadSamples('ai.txt'), ...loadSamples('ai-extended.txt')];
 const human = loadSamples('human.txt');
 console.log(`\n=== קורפוס: ${ai.length} דגימות AI · ${human.length} דגימות אנושי ===`);
 

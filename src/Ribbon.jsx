@@ -1041,6 +1041,19 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             <div id="panel-detector" className={`toolbar-panel ${activeTab === "detector" ? "active" : ""}`}>
               <div className="toolbar-group">
                 <div className="toolbar-group-items">
+                  <button className="r-btn r-btn-large" onClick={() => onCommand('openLocalDetector', { source: 'document' })}>
+                    <i className="ph-fill ph-magnifying-glass text-emerald-600"></i><span>בדיקת<br />סגנון</span>
+                  </button>
+                  <div className="btn-column">
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('openLocalDetector', { source: 'selection' })}><i className="ph-fill ph-selection text-blue-600"></i> טקסט מסומן</button>
+                    <button className="r-btn r-btn-medium" onClick={() => onCommand('openLocalDetector', { source: 'currentBlock' })}><i className="ph-fill ph-text-align-right text-slate-600"></i> פסקה פעילה</button>
+                  </div>
+                </div>
+                <div className="toolbar-group-label">גלאי פנימי (ללא API)</div>
+              </div>
+
+              <div className="toolbar-group">
+                <div className="toolbar-group-items">
                   <button className="r-btn r-btn-large" onClick={() => onCommand('openCopyleaksDetector', { source: 'selection' })}>
                     <i className="ph-fill ph-selection text-blue-600"></i><span>טקסט<br />מסומן</span>
                   </button>
@@ -1069,6 +1082,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
                 <div className="toolbar-group-items flex-col items-start gap-2" style={{ minWidth: '280px', maxWidth: '360px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: '#1E3A8A' }}>לפני שמריצים</div>
                   <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.7 }}>זה כלי בדיקה נפרד. הוא לא כותב טקסט ולא משנה את מנוע הכתיבה.</div>
+                  <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.7 }}>הגלאי הפנימי רץ מקומית, בלי מפתח API ובלי לשלוח טקסט החוצה. הוא אומדן רך, ואפשר לכייל אותו בדוגמאות שלך.</div>
                   <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.7 }}>Copyleaks מקבל קטעים באורך {COPYLEAKS_TEXT_MIN_CHARS}-{COPYLEAKS_TEXT_MAX_CHARS} תווים. אפשר להפעיל מצב הדגמה או פירוט נוסף מתוך ההגדרות.</div>
                 </div>
                 <div className="toolbar-group-label">מה חשוב לדעת</div>

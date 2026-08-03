@@ -3397,6 +3397,8 @@ function App() {
   const [docDraft, setDocDraft] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [authenticityOpen, setAuthenticityOpen] = React.useState(false);
+  // מקור הטקסט לגלאי הפנימי: selection / currentBlock / document
+  const [authenticitySource, setAuthenticitySource] = React.useState('document');
   const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
   ));
@@ -4348,6 +4350,29 @@ function App() {
       sourceLabel: COPYLEAKS_SOURCE_LABELS[normalizedSource],
       text: nextText,
     });
+  }, [currentBlockText, editor, selectedText]);
+
+  // גלאי פנימי (styleAuthenticityService) — אותם שלושה מקורות כמו Copyleaks, בלי API.
+  const openLocalAuthenticityDetector = React.useCallback((source = 'document') => {
+    const normalizedSource = COPYLEAKS_SOURCE_LABELS[source] ? source : 'document';
+    const nextText = normalizedSource === 'document'
+      ? String(editor?.getText?.() || '')
+      : normalizedSource === 'currentBlock'
+        ? String(currentBlockText || '')
+        : String(selectedText || '');
+
+    if (!nextText.trim()) {
+      const emptyMessage = normalizedSource === 'selection'
+        ? 'אין כרגע טקסט מסומן לבדיקה.'
+        : normalizedSource === 'currentBlock'
+          ? 'לא זוהתה פסקה פעילה לבדיקה.'
+          : 'המסמך ריק כרגע.';
+      showToast(emptyMessage, { tone: 'warning' });
+      return;
+    }
+
+    setAuthenticitySource(normalizedSource);
+    setAuthenticityOpen(true);
   }, [currentBlockText, editor, selectedText]);
 
   const openCopyleaksSettingsPanel = React.useCallback(() => {
@@ -7449,6 +7474,10 @@ ${sidebarReviewContext}`
         openCopyleaksDetector(typeof value === 'string' ? value : value?.source);
         break;
       }
+      case 'openLocalDetector': {
+        openLocalAuthenticityDetector(typeof value === 'string' ? value : value?.source);
+        break;
+      }
       case 'openCopyleaksSettings': {
         openCopyleaksSettingsPanel();
         break;
@@ -8682,7 +8711,7 @@ ${sidebarReviewContext}`
         onHome={openHomeSafely}
         onOpenDraftRecommendations={openDraftRecommendations}
         draftRecommendationsDisabled={!canOpenDraftRecommendations}
-        onCheckStyle={() => setAuthenticityOpen(true)}
+        onCheckStyle={() => { setAuthenticitySource('document'); setAuthenticityOpen(true); }}
         onToggleAssignmentBrief={() => {
           setAssignmentBriefOpen((prev) => !prev);
         }}
@@ -9799,7 +9828,12 @@ ${sidebarReviewContext}`
         <AuthenticityModal
           open={authenticityOpen}
           onClose={() => setAuthenticityOpen(false)}
-          getText={() => (editor ? editor.getText() : '')}
+          sourceLabel={COPYLEAKS_SOURCE_LABELS[authenticitySource] || COPYLEAKS_SOURCE_LABELS.document}
+          getText={() => {
+            if (authenticitySource === 'selection') return String(selectedText || '');
+            if (authenticitySource === 'currentBlock') return String(currentBlockText || '');
+            return editor ? editor.getText() : '';
+          }}
         />
 
         {isWordMode && isStartTransitionRunning && <StartScreenTransitionOverlay />}

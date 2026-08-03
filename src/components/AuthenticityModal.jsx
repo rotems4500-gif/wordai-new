@@ -8,7 +8,7 @@ import {
 
 // מודאל "בדיקת סגנון": תוצאה ברמת מסמך + UI כיול (תיוג דוגמאות me/ai).
 // getText: פונקציה שמחזירה את הטקסט לבדיקה (כל המסמך).
-export default function AuthenticityModal({ open, onClose, getText }) {
+export default function AuthenticityModal({ open, onClose, getText, sourceLabel = '' }) {
   const [result, setResult] = useState(null);
   const [sampleText, setSampleText] = useState('');
   const [calibration, setCalibration] = useState(() => getAuthenticityCalibration());
@@ -73,7 +73,10 @@ export default function AuthenticityModal({ open, onClose, getText }) {
       <div style={card} onClick={(e) => e.stopPropagation()}>
         {/* header */}
         <div style={{ background: 'linear-gradient(135deg,#2B579A,#106EBE)', padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
-          <div style={{ color: 'white', fontWeight: 700, fontSize: 15 }}>🔍 בדיקת סגנון</div>
+          <div style={{ color: 'white', fontWeight: 700, fontSize: 15 }}>
+            🔍 בדיקת סגנון
+            {sourceLabel ? <span style={{ fontWeight: 500, fontSize: 12, opacity: 0.85 }}> · {sourceLabel}</span> : null}
+          </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
 

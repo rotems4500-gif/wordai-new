@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractAuthenticityFeatures, computeSignals, scoreFromSignals, DEFAULT_WEIGHTS, clamp01 } from './extractor.mjs';
+import { extractAuthenticityFeatures, computeSignals, scoreFromSignals, DEFAULT_WEIGHTS, DEFAULT_THRESHOLD, clamp01 } from './extractor.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const loadBlocks = (file) => readFileSync(path.join(HERE, 'samples', file), 'utf8')
@@ -53,7 +53,11 @@ const scoreBoth = (rawText) => {
 
 const human = loadBlocks('human.txt');
 const ai = loadBlocks('ai.txt');
-const THRESHOLD = 60;
+// עקבי עם ברירת המחדל בייצור (DEFAULT_THRESHOLD, ר' extractor.mjs) — לא קבוע-60
+// עצמאי. אחרי מעבר ngramGeneric ל-0.65 + הזזת הסף ל-78 (frontier sweep, אוגוסט
+// 2026) זו נקודת ההפעלה שהכוונה המקורית של השער (אנושי-ארוך מתחת, AI-ארוך מעל)
+// צריכה להימדד מולה.
+const THRESHOLD = DEFAULT_THRESHOLD;
 
 const summarize = (label, texts) => {
   const rows = texts.map(scoreBoth);

@@ -1,6 +1,19 @@
 // extractor.mjs — מראה מדויקת (verbatim) של ליבת הפיצ'רים מ-src/services/styleAuthenticityService.js
 // משוכפל בכוונה כדי שה-harness ירוץ ב-Node טהור בלי לייבא את שכבת ה-browser של aiService.
 // אם משנים את הליבה באפליקציה — לעדכן גם כאן.
+//
+// AI_NGRAM_TABLE + charNgrams מיובאים ישירות מ-src (שני הקבצים leaf טהורים, בטוחים
+// ב-Node) — אין כאן עותק מקומי של הטבלה, ולכן אין סיכון דריפט על 4000 הגרמים עצמם.
+
+import { charNgrams } from '../../src/services/styleFingerprintService.js';
+import { AI_NGRAM_TABLE } from '../../src/services/styleAiMarkers.data.js';
+
+export const NGRAM_MIN_WORDS = 60;
+
+// סף החלטה ברירת-מחדל — ר' ההערה המקבילה ב-styleAuthenticityService.js
+// (frontier sweep, ngramGeneric=0.65 + t=78: human FPR=9.2% מול 13.8% בבסיס,
+// stealth TPR=63.6%).
+export const DEFAULT_THRESHOLD = 78;
 
 export const FORMAL_CONNECTORS = [
   'יתרה מכך', 'יתרה מזאת', 'זאת ועוד', 'כמו כן', 'בנוסף לכך', 'חשוב לציין', 'ראוי לציין',
@@ -12,6 +25,10 @@ export const FORMAL_CONNECTORS = [
   'ראשית,', 'שנית,', 'שלישית,', 'רביעית,', 'חמישית,', 'לבסוף,',
   'בראש ובראשונה', 'אם כן,', 'יש להדגיש', 'ראוי להדגיש', 'יש לזכור', 'יש להבין',
   'מן הראוי', 'הלכה למעשה', 'מטבע הדברים', 'בה בעת', 'באופן כללי',
+  // מרקרים ממריצת אימון על קורפוס AI מורחב (train.mjs + samples/ai-extended.txt, אוגוסט 2026):
+  // human=0/19 בשני הקורפוסים (מקורי ומורחב), lift 37-49 בקורפוס הקטן. "חשוב לציין כי"
+  // לא נוסף בכוונה — נבלע כבר ע"י "חשוב לציין" שקיים למעלה, וספירה כפולה הייתה מנפחת צפיפות.
+  'לציין כי', 'ראשית היא', 'שנית היא',
 ];
 
 export const CLICHE_PHRASES = [
@@ -33,6 +50,9 @@ export const DEFAULT_WEIGHTS = {
   lowRichness: 0.35,
   openerRepeat: 0.30,
   personalMismatch: 0.55,
+  // ר' ההערה המקבילה ב-styleAuthenticityService.js (תקרת ההליך הרגיל; ההחלטה
+  // בפועל היא הזזת DEFAULT_THRESHOLD ל-78, לא הורדת ה-cap).
+  ngramGeneric: 0.65,
 };
 
 const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
@@ -128,6 +148,27 @@ export function extractAuthenticityFeatures(input = '') {
   const maxOpener = Object.values(openerCounts).reduce((a, b) => Math.max(a, b), 0);
   const openerRepetitionRate = sentences.length ? round(maxOpener / sentences.length, 3) : 0;
 
+  // סנכרון עם השירות: 3-גרמים של תווים מול טבלת ה-LLR.
+  let ngramLlrMean = null;
+  let ngramTopContrib = [];
+  if (wordCount >= NGRAM_MIN_WORDS) {
+    const ngrams = charNgrams(text);
+    if (ngrams.length) {
+      const contrib = new Map();
+      let sum = 0;
+      for (const g of ngrams) {
+        const llr = AI_NGRAM_TABLE.grams[g] || 0;
+        sum += llr;
+        if (llr) contrib.set(g, (contrib.get(g) || 0) + llr);
+      }
+      ngramLlrMean = sum / ngrams.length;
+      ngramTopContrib = [...contrib.entries()]
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+        .slice(0, 3)
+        .map(([gram, total]) => ({ gram, llr: round(total, 3) }));
+    }
+  }
+
   return {
     wordCount,
     sentenceCount: sentences.length,
@@ -147,6 +188,8 @@ export function extractAuthenticityFeatures(input = '') {
     typeTokenRatio,
     openerRepetitionRate,
     topContentWords: Array.from(uniqueContent).slice(0, 60),
+    ngramLlrMean: ngramLlrMean === null ? null : round(ngramLlrMean, 4),
+    ngramTopContrib,
     _contentWords: contentWords,
     _sentences: sentences,
   };
@@ -169,6 +212,9 @@ export function computeSignals(features) {
     ? null
     : clamp01((features.openerRepetitionRate - 0.12) / 0.25);
   signals.personalMismatch = null;
+  signals.ngramGeneric = features.ngramLlrMean === null
+    ? null
+    : clamp01((features.ngramLlrMean - AI_NGRAM_TABLE.meta.lowAnchor) / (AI_NGRAM_TABLE.meta.highAnchor - AI_NGRAM_TABLE.meta.lowAnchor));
   return signals;
 }
 
