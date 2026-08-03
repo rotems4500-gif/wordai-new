@@ -394,8 +394,18 @@ export function scoreTextAuthenticity(input = '', opts = {}) {
   }
 
   const profile = opts.profile || getPersonalStyleProfile?.() || {};
-  const calibration = opts.calibration || profile?.authenticityCalibration || null;
-  const weights = (calibration && calibration.weights) ? calibration.weights : DEFAULT_WEIGHTS;
+  const rawCalibration = opts.calibration || profile?.authenticityCalibration || null;
+  // כיול שנשמר לפני הוספת ngramGeneric (אוגוסט 2026) הוא stale: המשקלים שלו
+  // חסרים את הסיגנל (cap 0 ⇒ הסיגנל החזק ביותר מת בשקט), והסף שלו כויל על סקאלת
+  // ציונים ישנה. במקרה כזה מתעלמים מהכיול (calibrated=false) עד שהמשתמש יתייג
+  // דוגמה נוספת — trainAuthenticityCalibration ירוץ אז מחדש ויכלול את הסיגנל.
+  const calibration = (rawCalibration?.weights && !('ngramGeneric' in rawCalibration.weights))
+    ? null
+    : rawCalibration;
+  // מיזוג מעל ברירת המחדל — סיגנל עתידי שיתווסף לא יימחק שוב ע"י כיול ישן.
+  const weights = (calibration && calibration.weights)
+    ? { ...DEFAULT_WEIGHTS, ...calibration.weights }
+    : DEFAULT_WEIGHTS;
 
   const signals = computeSignals(features, profile);
 
