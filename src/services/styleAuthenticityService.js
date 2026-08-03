@@ -58,7 +58,10 @@ const DEFAULT_WEIGHTS = {
   uniformity: 0.55,
   formalConnector: 0.55,
   cliche: 0.60,
-  structural: 0.55,
+  // הורד מ-0.55 ל-0.30 (מחקר הכללים, אוגוסט 2026): נמדד שסוגריים-מבארים ומרכאות-מטבע
+  // הם דווקא *יותר* אנושיים בעברית (lift 0.53-0.60 לטובת אנושי), ומקף-הסבר לבדו
+  // חלש מדי (lift 1.24) כדי לשאת cap גבוה. ה-cap הישן היה מרוקן אות ביטחון-שווא.
+  structural: 0.30,
   lowRichness: 0.35,
   openerRepeat: 0.30,
   personalMismatch: 0.55,
@@ -72,7 +75,24 @@ const DEFAULT_WEIGHTS = {
   // (מול 21.2% בבסיס) ו-normal-AI TPR=82.6%. פירוט מלא ה-sweep (t=60..85, כולל
   // cap=0.08/0.2 לחלופה) נמצא בהיסטוריית ה-PR/שיחת הפיתוח — לא משוכפל כאן.
   ngramGeneric: 0.65,
+  // תבנית-מסמך אופיינית ל-AI (כותרות עם נקודתיים, כותרת-שאלה, כותרות קצרות, מוסר-השכל
+  // בסיום, זוג "מצד אחד/מצד שני") — 0/5 עד 3/5 בכל עבודות המשתמש/ויקיפדיה שנבדקו,
+  // וטקסט AI ידוע-כחמקן הגיע ל-5/5. ר' extractAuthenticityFeatures/computeAiTemplateScore.
+  aiTemplate: 0.60,
+  // ניסוחי מסגור והמלצה "בטוחים" (AI_REGISTER_RE למעלה) לאלף מילים — טקסט AI ידוע-כחמקן
+  // מדד 40/1000, עבודות המשתמש p90=0.
+  aiRegister: 0.55,
 };
+
+// זוג "מצד אחד/מצד שני" — משמש גם לבונוס ב-formalConnector וגם לתבנית aiTemplate.
+const BALANCED_LEFT_RE = /(מצד אחד|מחד)/;
+const BALANCED_RIGHT_RE = /(מצד שני|מנגד|מאידך)/;
+
+// ניסוחי מסגור/המלצה "בטוחים" — לא כוללים ביטויים כמו "מתאפיין ב"/"בשנים האחרונות"
+// שיורים על כתיבה אקדמית אנושית תקינה (נמדד על עבודות המשתמש בפועל, אוגוסט 2026).
+const AI_REGISTER_RE = /(סוגיה מורכבת|שאלות עמוקות|מהווה (סוגיה|נושא|אתגר|מוקד)|נקודת מפתח|היבט (מרכזי|חשוב|מהותי|נוסף)|חשוב (כמובן )?(לזכור|לשמור|לבדוק|להבין)|ללא ספק|אין ספק|ההמלצה|מומלץ|מה ש(הופך|מאפשר|מוביל|גורם|יוצר)|מה הופך)/g;
+
+const WORD_RE = /[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g;
 
 const MAX_CALIBRATION_SAMPLES = 40;
 
@@ -82,7 +102,16 @@ const round = (value, digits = 1) => {
   return Math.round((Number(value) || 0) * factor) / factor;
 };
 
-const stripToText = (input = '') => String(input || '')
+// נורמליזציה (מחקר הכללים, אוגוסט 2026): NFKC מאחד צורות תאימות-Unicode בלי לפגוע
+// בניקוד עברי; הסרת תווי רוחב-אפס (U+200B/U+2060/U+FEFF — התקפה נפוצה על גלאי טקסט,
+// "מסתירים" תו בתוך מילה כדי לשבש טוקניזציה); וקיפול רווחים אקזוטיים (U+202F/U+2009,
+// בנוסף ל-NBSP U+00A0 שכבר מטופל למטה) לרווח רגיל.
+const normalizeInput = (input) => String(input || '')
+  .normalize('NFKC')
+  .replace(/[\u200B\u2060\uFEFF]/g, '')
+  .replace(/[\u202F\u2009\u00A0]/g, ' ');
+
+const stripToText = (input = '') => normalizeInput(input)
   .replace(/<[^>]+>/g, ' ')
   // פענוח ישויות HTML — בלעדיו כל &quot; נספר כנקודה-פסיק (התו ; שבסוף הישות)
   // וניפח את structural פי כמה על טקסט שהגיע כ-HTML.
@@ -90,7 +119,9 @@ const stripToText = (input = '') => String(input || '')
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
   .replace(/[\r\t]+/g, ' ')
   .replace(/ /g, ' ')
-  .replace(/\s+\n/g, '\n')
+  // [ \t]+ ולא \s+ — \s תופס גם \n, וכך "\n\n" קרס ל-"\n" וכל המסמך נראה
+  // כפסקה אחת (paragraphCount היה תמיד 1; נמצא במחקר הכללים, אוגוסט 2026).
+  .replace(/[ \t]+\n/g, '\n')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 
@@ -151,6 +182,45 @@ const countOccurrences = (haystack, needles) => {
   return { total, found };
 };
 
+// כמו countOccurrences, אבל ל-regex גלובלי (AI_REGISTER_RE) במקום רשימת ביטויים מדויקים.
+const countRegexOccurrences = (haystack, re) => {
+  const matches = haystack.match(re) || [];
+  const counts = new Map();
+  matches.forEach((m) => counts.set(m, (counts.get(m) || 0) + 1));
+  const found = [...counts.entries()].map(([phrase, count]) => ({ phrase, count })).sort((a, b) => b.count - a.count);
+  return { total: matches.length, found };
+};
+
+// תבנית-מסמך אופיינית ל-AI: כותרות עם נקודתיים ("צבע המים: המים..."), כותרת-שאלה
+// ("מה הופך אותו למיוחד?"), כותרות קצרות בין פסקאות, "מוסר השכל" בשתי המשפטים
+// האחרונים, וזוג מנוגד "מצד אחד/מצד שני". כל אחד נקודה אחת, 0..5.
+// נמדד (מחקר הכללים, אוגוסט 2026): 0% מהוויקיפדיה ומעבודות המשתמש מגיעים ל-4/5;
+// טקסט AI ידוע-כחמקן (נחל האסי) מדד 5/5.
+const computeAiTemplateScore = (text, sentences, paragraphCount) => {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  let colonBullets = 0;
+  let questionHeader = 0;
+  let headers = 0;
+  lines.forEach((line) => {
+    const wc = (line.match(WORD_RE) || []).length;
+    if (/^[^.!?:\n]{2,30}:\s+\S/.test(line) && wc >= 5 && wc <= 60) colonBullets += 1;
+    if (/\?$/.test(line) && wc <= 10) questionHeader += 1;
+    if (wc >= 1 && wc <= 6 && !/[.!?]$/.test(line)) headers += 1;
+  });
+  const lastSentences = sentences.slice(-2).join(' ');
+  const closingMoral = /(חשוב (כמובן )?(לזכור|לשמור|לבדוק)|ההמלצה|מומלץ|כדאי ל|לבאים אחרינו)/.test(lastSentences);
+  const balancedPair = BALANCED_LEFT_RE.test(text) && BALANCED_RIGHT_RE.test(text);
+
+  let score = 0;
+  const detail = [];
+  if (colonBullets >= 2) { score += 1; detail.push('כותרות עם נקודתיים'); }
+  if (questionHeader >= 1) { score += 1; detail.push('כותרת-שאלה'); }
+  if (headers >= 1 && paragraphCount >= 4) { score += 1; detail.push('כותרות קצרות'); }
+  if (closingMoral) { score += 1; detail.push('"מוסר השכל" בסיום'); }
+  if (balancedPair) { score += 1; detail.push('זוג "מצד אחד/מצד שני"'); }
+  return { score, detail, balancedPair };
+};
+
 // חילוץ וקטור פיצ'רים מטקסט. דטרמיניסטי, בלי תלות בפרופיל.
 export function extractAuthenticityFeatures(input = '') {
   const text = stripToText(input);
@@ -183,6 +253,13 @@ export function extractAuthenticityFeatures(input = '') {
   const formalConnectors = countOccurrences(text, FORMAL_CONNECTORS);
   const cliches = countOccurrences(text, CLICHE_PHRASES);
 
+  // תבנית-מסמך אופיינית ל-AI (ר' הערה ליד computeAiTemplateScore). מחושב כאן (לא רק
+  // בהמשך) כי הבונוס לזוג "מצד אחד/מצד שני" צריך להיכנס למונה formalConnector לפני
+  // חישוב הצפיפות למטה — FORMAL_CONNECTORS מכיל רק את הניסוח המדויק ("מצד אחד"/"מצד
+  // שני"), והבונוס תופס גם וריאציות (מחד/מנגד/מאידך) שהמילון מפספס.
+  const aiTemplateInfo = computeAiTemplateScore(text, sentences, paragraphs.length);
+  if (aiTemplateInfo.balancedPair) formalConnectors.total += 1;
+
   // צפיפות ל-100 מילים.
   const per100 = (n) => (wordCount ? round((n / wordCount) * 100, 2) : 0);
 
@@ -195,17 +272,49 @@ export function extractAuthenticityFeatures(input = '') {
   const uniqueContent = new Set(contentWords);
   const typeTokenRatio = contentWords.length ? round(uniqueContent.size / contentWords.length, 3) : 0;
 
-  // חזרתיות פתיחים: הפתיח הנפוץ ביותר חלקי מספר המשפטים.
+  // חזרתיות פתיחים: הפתיח הנפוץ ביותר חלקי מספר המשפטים. במקביל עוקבים אחרי הרצף
+  // הרצוף הארוך ביותר של אותו פתיח (anaphora) — ר' הערה ליד signals.openerRepeat:
+  // אנפורה היא מכשיר רטורי אנושי (מכתב יום הולדת: "תודה על... תודה על... תודה על...")
+  // שנמדד נפוץ *יותר* באנושי מאשר ב-AI, ואסור שיזהה כחזרתיות-מכונה.
   const openerCounts = {};
+  let maxConsecutiveSameOpener = 0;
+  let consecutiveOpener = null;
+  let consecutiveRun = 0;
   sentences.forEach((s) => {
     const sw = s.match(/[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g) || [];
+    let opener = null;
     if (sw.length) {
-      const opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
-      if (opener.length >= 3) openerCounts[opener] = (openerCounts[opener] || 0) + 1;
+      opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
+      if (opener.length >= 3) {
+        openerCounts[opener] = (openerCounts[opener] || 0) + 1;
+      } else {
+        opener = null;
+      }
     }
+    if (opener && opener === consecutiveOpener) {
+      consecutiveRun += 1;
+    } else {
+      consecutiveOpener = opener;
+      consecutiveRun = opener ? 1 : 0;
+    }
+    if (consecutiveRun > maxConsecutiveSameOpener) maxConsecutiveSameOpener = consecutiveRun;
   });
   const maxOpener = Object.values(openerCounts).reduce((a, b) => Math.max(a, b), 0);
   const openerRepetitionRate = sentences.length ? round(maxOpener / sentences.length, 3) : 0;
+
+  // התפלגות "פס-אורך" 10-30 מילים למשפט (band1030) — מרחיב את אחידות-האורך (uniformity):
+  // ב-AI 41.8% מהטקסטים כל משפטיהם ב-10-30 מילים, מול 2.4% באנושי (lift 17). דורש
+  // ≥5 משפטים "אמיתיים" (≥3 מילים) כדי לא להיתפס על טקסט קצר/מקוטע.
+  const qualifyingSentenceLengths = sentenceLengths.filter((n) => n >= 3);
+  let band1030Frac = null;
+  if (qualifyingSentenceLengths.length >= 5) {
+    const inBand = qualifyingSentenceLengths.filter((n) => n >= 10 && n <= 30).length;
+    band1030Frac = inBand / qualifyingSentenceLengths.length;
+  }
+
+  // ניסוחי מסגור/המלצה "בטוחים" (AI_REGISTER_RE) לאלף מילים.
+  const aiRegisterMatches = countRegexOccurrences(text, AI_REGISTER_RE);
+  const aiRegisterPerThousand = wordCount ? round((aiRegisterMatches.total / wordCount) * 1000, 2) : 0;
 
   // 3-גרמים של תווים מול טבלת ה-LLR (AI_NGRAM_TABLE): חתימה התפלגותית שנוכחת גם
   // בטקסט AI "מנוקה" מקלישאות (stealth) — בשונה מהמרקרים המילוליים למעלה, שרשימה
@@ -236,6 +345,12 @@ export function extractAuthenticityFeatures(input = '') {
     structuralDetail: { emDashes, parenGlosses, scareQuotes, semicolons },
     typeTokenRatio,
     openerRepetitionRate,
+    maxConsecutiveSameOpener,
+    band1030Frac: band1030Frac === null ? null : round(band1030Frac, 3),
+    aiRegisterPerThousand,
+    aiRegisterFound: aiRegisterMatches.found.slice(0, 6),
+    aiTemplateScore: aiTemplateInfo.score,
+    aiTemplateDetail: aiTemplateInfo.detail,
     topContentWords: Array.from(uniqueContent).slice(0, 40),
     ngramLlrMean: ngramLlrMean === null ? null : round(ngramLlrMean, 4),
     ngramTopContrib,
@@ -247,9 +362,18 @@ function computeSignals(features, profile) {
   const signals = {};
 
   // 1. אחידות אורך משפט (burstiness נמוך = מכונה). דורש לפחות 3 משפטים.
-  signals.uniformity = (features.sentenceLengthCV === null || features.sentenceCount < 3)
+  const cvSignal = (features.sentenceLengthCV === null || features.sentenceCount < 3)
     ? null
     : clamp01((0.50 - features.sentenceLengthCV) / 0.40);
+  // 1b. band1030: נתח המשפטים שכולם ב-10-30 מילים — AI נעול על "טווח בטוח" הרבה
+  // יותר מאנושי (41.8% מול 2.4%, lift 17). max ולא ממוצע עם ה-CV: כל אחד מהם לבד
+  // יכול לתפוס AI שהשני מפספס (CV נמוך גם על AI לא-נעול-בטווח, band גם על AI עם CV גבוה).
+  const bandSignal = features.band1030Frac === null
+    ? null
+    : clamp01((features.band1030Frac - 0.70) / 0.30);
+  signals.uniformity = (cvSignal === null && bandSignal === null)
+    ? null
+    : Math.max(cvSignal ?? 0, bandSignal ?? 0);
 
   // ל-2/3/3b: צפיפות בלבד. זרועות הספירה-המוחלטת (8/4/18) הוסרו — הן הטו לפי אורך:
   // כל מסמך אקדמי ארוך הגיע ל-8 מחברים ו-18 סימני מבנה והרוויה נעל את הציון על ~80
@@ -269,8 +393,10 @@ function computeSignals(features, profile) {
     ? null
     : clamp01((0.62 - features.typeTokenRatio) / 0.30);
 
-  // 5. חזרתיות פתיחים.
-  signals.openerRepeat = features.sentenceCount < 4
+  // 5. חזרתיות פתיחים. מוגן-אנפורה: אם אותו פתיח חוזר ב-≥3 משפטים *רצופים* — זה
+  // מכשיר רטורי אנושי (anaphora, "תודה על... תודה על..." במכתב) ולא חזרתיות-מכונה.
+  // נמדד שאנפורה נפוצה יותר באנושי מ-AI; בלי המגן הזה מכתב-יום-הולדת אמיתי דורג AI.
+  signals.openerRepeat = (features.sentenceCount < 4 || features.maxConsecutiveSameOpener >= 3)
     ? null
     : clamp01((features.openerRepetitionRate - 0.12) / 0.25);
 
@@ -292,6 +418,16 @@ function computeSignals(features, profile) {
     ? null
     : clamp01((features.ngramLlrMean - AI_NGRAM_TABLE.meta.lowAnchor) / (AI_NGRAM_TABLE.meta.highAnchor - AI_NGRAM_TABLE.meta.lowAnchor));
 
+  // 8. תבנית-מסמך אופיינית ל-AI (0..5, ר' computeAiTemplateScore). דורש ≥80 מילים.
+  signals.aiTemplate = features.wordCount < 80
+    ? null
+    : clamp01((features.aiTemplateScore - 2) / 3);
+
+  // 9. ניסוחי מסגור/המלצה "בטוחים" לאלף מילים. דורש ≥60 מילים.
+  signals.aiRegister = features.wordCount < 60
+    ? null
+    : clamp01(features.aiRegisterPerThousand / 6);
+
   return signals;
 }
 
@@ -304,6 +440,8 @@ const SIGNAL_LABELS = {
   openerRepeat: 'פתיחי משפט חוזרים',
   personalMismatch: 'לא תואם את הסגנון הנלמד שלך',
   ngramGeneric: 'תבנית סטטיסטית ברמת התו האופיינית לטקסט מחולל',
+  aiTemplate: 'תבנית מסמך אופיינית ל-AI (כותרות/כותרת-שאלה/מוסר-השכל/ניגוד מאוזן)',
+  aiRegister: 'ניסוחי מסגור והמלצה אופייניים ל-AI',
 };
 
 // ניתוח לפי משפט — לסימון ויזואלי בעורך (wavy underline), לא לניקוד המסמך הכולל.
@@ -316,12 +454,13 @@ function analyzeOneSentence(sentText, start, end, words) {
   const formalConnectors = countOccurrences(sentText, FORMAL_CONNECTORS);
   const cliches = countOccurrences(sentText, CLICHE_PHRASES);
   const structural = computeStructuralEvents(sentText);
+  const aiRegister = countRegexOccurrences(sentText, AI_REGISTER_RE);
 
   const lowAnchor = AI_NGRAM_TABLE.meta.lowAnchor;
   const highAnchor = AI_NGRAM_TABLE.meta.highAnchor;
   const base = llrMean === null ? 0 : clamp01((llrMean - lowAnchor) / (highAnchor - lowAnchor));
 
-  const lexiconHitCount = formalConnectors.total + cliches.total;
+  const lexiconHitCount = formalConnectors.total + cliches.total + aiRegister.total;
   const lexiconBoost = Math.min(0.3, lexiconHitCount * 0.15);
   const structuralBoost = structural.total >= 2 ? 0.1 : 0;
   const level = clamp01(base + lexiconBoost + structuralBoost);
@@ -336,6 +475,9 @@ function analyzeOneSentence(sentText, start, end, words) {
   }
   if (cliches.total > 0) {
     reasons.push({ key: 'cliche', label: SIGNAL_LABELS.cliche, detail: cliches.found.map((f) => `"${f.phrase}"×${f.count}`).join(', ') });
+  }
+  if (aiRegister.total > 0) {
+    reasons.push({ key: 'aiRegister', label: SIGNAL_LABELS.aiRegister, detail: aiRegister.found.map((f) => `"${f.phrase}"×${f.count}`).join(', ') });
   }
   if (structural.total >= 2) {
     const d = structural;
@@ -442,7 +584,7 @@ export function scoreTextAuthenticity(input = '', opts = {}) {
       } else if (key === 'cliche' && features.clichesFound.length) {
         detail = features.clichesFound.map((f) => `"${f.phrase}"×${f.count}`).join(', ');
       } else if (key === 'uniformity') {
-        detail = `CV=${features.sentenceLengthCV} (נמוך=אחיד)`;
+        detail = `CV=${features.sentenceLengthCV} (נמוך=אחיד), ${Math.round((features.band1030Frac ?? 0) * 100)}% מהמשפטים ב-10-30 מילים`;
       } else if (key === 'structural') {
         const d = features.structuralDetail || {};
         detail = [d.emDashes && `מקפים×${d.emDashes}`, d.parenGlosses && `סוגריים×${d.parenGlosses}`, d.scareQuotes && `מרכאות×${d.scareQuotes}`, d.semicolons && `נק'-פסיק×${d.semicolons}`].filter(Boolean).join(', ');
@@ -452,6 +594,10 @@ export function scoreTextAuthenticity(input = '', opts = {}) {
         detail = `פתיח חוזר ב-${Math.round(features.openerRepetitionRate * 100)}% מהמשפטים`;
       } else if (key === 'ngramGeneric' && features.ngramTopContrib?.length) {
         detail = features.ngramTopContrib.map((g) => `"${g.gram}"(${g.llr > 0 ? '+' : ''}${g.llr})`).join(', ');
+      } else if (key === 'aiTemplate' && features.aiTemplateDetail?.length) {
+        detail = features.aiTemplateDetail.join(', ');
+      } else if (key === 'aiRegister' && features.aiRegisterFound?.length) {
+        detail = features.aiRegisterFound.map((f) => `"${f.phrase}"×${f.count}`).join(', ');
       }
       markers.push({ key, label: SIGNAL_LABELS[key], severity: round(signal, 2), detail });
     }

@@ -46,14 +46,32 @@ export const DEFAULT_WEIGHTS = {
   uniformity: 0.55,
   formalConnector: 0.55,
   cliche: 0.60,
-  structural: 0.55,
+  // ר' ההערה המקבילה ב-styleAuthenticityService.js (סוגריים-מבארים/מרכאות-מטבע
+  // מדדו יותר אנושיים בעברית — הורד מ-0.55).
+  structural: 0.30,
   lowRichness: 0.35,
   openerRepeat: 0.30,
   personalMismatch: 0.55,
   // ר' ההערה המקבילה ב-styleAuthenticityService.js (תקרת ההליך הרגיל; ההחלטה
   // בפועל היא הזזת DEFAULT_THRESHOLD ל-78, לא הורדת ה-cap).
   ngramGeneric: 0.65,
+  aiTemplate: 0.60,
+  aiRegister: 0.55,
 };
+
+// זוג "מצד אחד/מצד שני" — משמש גם לבונוס ב-formalConnector וגם לתבנית aiTemplate.
+const BALANCED_LEFT_RE = /(מצד אחד|מחד)/;
+const BALANCED_RIGHT_RE = /(מצד שני|מנגד|מאידך)/;
+
+// ניסוחי מסגור/המלצה "בטוחים" — ר' ההערה המקבילה ב-styleAuthenticityService.js.
+export const AI_REGISTER_RE = /(סוגיה מורכבת|שאלות עמוקות|מהווה (סוגיה|נושא|אתגר|מוקד)|נקודת מפתח|היבט (מרכזי|חשוב|מהותי|נוסף)|חשוב (כמובן )?(לזכור|לשמור|לבדוק|להבין)|ללא ספק|אין ספק|ההמלצה|מומלץ|מה ש(הופך|מאפשר|מוביל|גורם|יוצר)|מה הופך)/g;
+
+const WORD_RE = /[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g;
+
+// תווי רוחב-אפס (U+200B/U+2060/U+FEFF) ורווחים אקזוטיים (U+202F/U+2009/U+00A0) —
+// ר' ההערה המקבילה ב-styleAuthenticityService.js.
+const NORMALIZE_ZW_RE = /[​⁠﻿]/g;
+const NORMALIZE_SPACE_RE = /[   ]/g;
 
 const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 const round = (value, digits = 1) => {
@@ -61,16 +79,59 @@ const round = (value, digits = 1) => {
   return Math.round((Number(value) || 0) * factor) / factor;
 };
 
-const stripToText = (input = '') => String(input || '')
+// נורמליזציה (סנכרון עם השירות): NFKC + הסרת תווי רוחב-אפס + קיפול רווחים אקזוטיים.
+const normalizeInput = (input) => String(input || '')
+  .normalize('NFKC')
+  .replace(NORMALIZE_ZW_RE, '')
+  .replace(NORMALIZE_SPACE_RE, ' ');
+
+const stripToText = (input = '') => normalizeInput(input)
   .replace(/<[^>]+>/g, ' ')
   // פענוח ישויות HTML (סנכרון עם השירות): &quot; בלי פענוח נספר כנקודה-פסיק.
   .replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
   .replace(/[\r\t]+/g, ' ')
-  .replace(/ /g, ' ')
-  .replace(/\s+\n/g, '\n')
+  .replace(/ /g, ' ')
+  // [ \t]+ ולא \s+ — \s תופס גם \n, וכך "\n\n" קרס ל-"\n" וכל המסמך נראה
+  // כפסקה אחת (paragraphCount היה תמיד 1; נמצא במחקר הכללים, אוגוסט 2026).
+  .replace(/[ \t]+\n/g, '\n')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
+
+// כמו countOccurrences, אבל ל-regex גלובלי (AI_REGISTER_RE) במקום רשימת ביטויים מדויקים.
+const countRegexOccurrences = (haystack, re) => {
+  const matches = haystack.match(re) || [];
+  const counts = new Map();
+  matches.forEach((m) => counts.set(m, (counts.get(m) || 0) + 1));
+  const found = [...counts.entries()].map(([phrase, count]) => ({ phrase, count })).sort((a, b) => b.count - a.count);
+  return { total: matches.length, found };
+};
+
+// תבנית-מסמך אופיינית ל-AI — ר' ההערה המקבילה ב-styleAuthenticityService.js.
+const computeAiTemplateScore = (text, sentences, paragraphCount) => {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  let colonBullets = 0;
+  let questionHeader = 0;
+  let headers = 0;
+  lines.forEach((line) => {
+    const wc = (line.match(WORD_RE) || []).length;
+    if (/^[^.!?:\n]{2,30}:\s+\S/.test(line) && wc >= 5 && wc <= 60) colonBullets += 1;
+    if (/\?$/.test(line) && wc <= 10) questionHeader += 1;
+    if (wc >= 1 && wc <= 6 && !/[.!?]$/.test(line)) headers += 1;
+  });
+  const lastSentences = sentences.slice(-2).join(' ');
+  const closingMoral = /(חשוב (כמובן )?(לזכור|לשמור|לבדוק)|ההמלצה|מומלץ|כדאי ל|לבאים אחרינו)/.test(lastSentences);
+  const balancedPair = BALANCED_LEFT_RE.test(text) && BALANCED_RIGHT_RE.test(text);
+
+  let score = 0;
+  const detail = [];
+  if (colonBullets >= 2) { score += 1; detail.push('כותרות עם נקודתיים'); }
+  if (questionHeader >= 1) { score += 1; detail.push('כותרת-שאלה'); }
+  if (headers >= 1 && paragraphCount >= 4) { score += 1; detail.push('כותרות קצרות'); }
+  if (closingMoral) { score += 1; detail.push('"מוסר השכל" בסיום'); }
+  if (balancedPair) { score += 1; detail.push('זוג "מצד אחד/מצד שני"'); }
+  return { score, detail, balancedPair };
+};
 
 const countOccurrences = (haystack, needles) => {
   const found = [];
@@ -123,6 +184,10 @@ export function extractAuthenticityFeatures(input = '') {
   const formalConnectors = countOccurrences(text, FORMAL_CONNECTORS);
   const cliches = countOccurrences(text, CLICHE_PHRASES);
 
+  // סנכרון עם השירות: בונוס לזוג "מצד אחד/מצד שני" (כולל וריאציות) לפני חישוב הצפיפות.
+  const aiTemplateInfo = computeAiTemplateScore(text, sentences, paragraphs.length);
+  if (aiTemplateInfo.balancedPair) formalConnectors.total += 1;
+
   const per100 = (n) => (wordCount ? round((n / wordCount) * 100, 2) : 0);
 
   // סנכרון עם השירות: מראי-מקום עם שנה מוחרגים; גרשיים בתוך מילה (ראשי-תיבות) אינם scare quotes.
@@ -138,15 +203,42 @@ export function extractAuthenticityFeatures(input = '') {
   const typeTokenRatio = contentWords.length ? round(uniqueContent.size / contentWords.length, 3) : 0;
 
   const openerCounts = {};
+  let maxConsecutiveSameOpener = 0;
+  let consecutiveOpener = null;
+  let consecutiveRun = 0;
   sentences.forEach((s) => {
     const sw = s.match(/[֐-׿A-Za-z][֐-׿A-Za-z'"׳״-]*/g) || [];
+    let opener = null;
     if (sw.length) {
-      const opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
-      if (opener.length >= 3) openerCounts[opener] = (openerCounts[opener] || 0) + 1;
+      opener = sw.slice(0, Math.min(2, sw.length)).join(' ').toLowerCase();
+      if (opener.length >= 3) {
+        openerCounts[opener] = (openerCounts[opener] || 0) + 1;
+      } else {
+        opener = null;
+      }
     }
+    if (opener && opener === consecutiveOpener) {
+      consecutiveRun += 1;
+    } else {
+      consecutiveOpener = opener;
+      consecutiveRun = opener ? 1 : 0;
+    }
+    if (consecutiveRun > maxConsecutiveSameOpener) maxConsecutiveSameOpener = consecutiveRun;
   });
   const maxOpener = Object.values(openerCounts).reduce((a, b) => Math.max(a, b), 0);
   const openerRepetitionRate = sentences.length ? round(maxOpener / sentences.length, 3) : 0;
+
+  // סנכרון עם השירות: band1030 — נתח המשפטים (≥3 מילים) שכולם ב-10-30 מילים.
+  const qualifyingSentenceLengths = sentenceLengths.filter((n) => n >= 3);
+  let band1030Frac = null;
+  if (qualifyingSentenceLengths.length >= 5) {
+    const inBand = qualifyingSentenceLengths.filter((n) => n >= 10 && n <= 30).length;
+    band1030Frac = inBand / qualifyingSentenceLengths.length;
+  }
+
+  // סנכרון עם השירות: ניסוחי מסגור/המלצה "בטוחים" לאלף מילים.
+  const aiRegisterMatches = countRegexOccurrences(text, AI_REGISTER_RE);
+  const aiRegisterPerThousand = wordCount ? round((aiRegisterMatches.total / wordCount) * 1000, 2) : 0;
 
   // סנכרון עם השירות: 3-גרמים של תווים מול טבלת ה-LLR.
   let ngramLlrMean = null;
@@ -187,6 +279,12 @@ export function extractAuthenticityFeatures(input = '') {
     structuralDetail: { emDashes, parenGlosses, scareQuotes, semicolons },
     typeTokenRatio,
     openerRepetitionRate,
+    maxConsecutiveSameOpener,
+    band1030Frac: band1030Frac === null ? null : round(band1030Frac, 3),
+    aiRegisterPerThousand,
+    aiRegisterFound: aiRegisterMatches.found.slice(0, 6),
+    aiTemplateScore: aiTemplateInfo.score,
+    aiTemplateDetail: aiTemplateInfo.detail,
     topContentWords: Array.from(uniqueContent).slice(0, 60),
     ngramLlrMean: ngramLlrMean === null ? null : round(ngramLlrMean, 4),
     ngramTopContrib,
@@ -198,9 +296,16 @@ export function extractAuthenticityFeatures(input = '') {
 // computeSignals בלי profile (signal 6 personalMismatch = null) — לכיול הגלאי הכללי.
 export function computeSignals(features) {
   const signals = {};
-  signals.uniformity = (features.sentenceLengthCV === null || features.sentenceCount < 3)
+  // band1030 מרחיב את אחידות-האורך — ר' ההערה המקבילה ב-styleAuthenticityService.js.
+  const cvSignal = (features.sentenceLengthCV === null || features.sentenceCount < 3)
     ? null
     : clamp01((0.50 - features.sentenceLengthCV) / 0.40);
+  const bandSignal = features.band1030Frac === null
+    ? null
+    : clamp01((features.band1030Frac - 0.70) / 0.30);
+  signals.uniformity = (cvSignal === null && bandSignal === null)
+    ? null
+    : Math.max(cvSignal ?? 0, bandSignal ?? 0);
   // צפיפות בלבד (סנכרון עם השירות) — זרועות הספירה המוחלטת הוסרו (הטיית אורך).
   signals.formalConnector = clamp01(features.formalConnectorDensity / 4);
   signals.cliche = clamp01(features.clicheDensity / 1.5);
@@ -208,13 +313,20 @@ export function computeSignals(features) {
   signals.lowRichness = features.wordCount < 60
     ? null
     : clamp01((0.62 - features.typeTokenRatio) / 0.30);
-  signals.openerRepeat = features.sentenceCount < 4
+  // מוגן-אנפורה (ר' ההערה המקבילה ב-styleAuthenticityService.js).
+  signals.openerRepeat = (features.sentenceCount < 4 || features.maxConsecutiveSameOpener >= 3)
     ? null
     : clamp01((features.openerRepetitionRate - 0.12) / 0.25);
   signals.personalMismatch = null;
   signals.ngramGeneric = features.ngramLlrMean === null
     ? null
     : clamp01((features.ngramLlrMean - AI_NGRAM_TABLE.meta.lowAnchor) / (AI_NGRAM_TABLE.meta.highAnchor - AI_NGRAM_TABLE.meta.lowAnchor));
+  signals.aiTemplate = features.wordCount < 80
+    ? null
+    : clamp01((features.aiTemplateScore - 2) / 3);
+  signals.aiRegister = features.wordCount < 60
+    ? null
+    : clamp01(features.aiRegisterPerThousand / 6);
   return signals;
 }
 
