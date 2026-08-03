@@ -45,7 +45,7 @@ import { readScaffold, ensureScaffoldReady, SCAFFOLD_UPDATED_EVENT } from './ser
 import { collectScaffoldBibliographyEntries, mergeBibliographyEntries, formatBibliographyEntry } from './services/localBibliographyService';
 import { findSectionAtCursor } from './services/assignmentScaffoldDoc';
 import { buildScaffoldContextBlock } from './services/assignmentAiService';
-import { assignDocumentToProject, linkDocToMilestone } from './services/projectService';
+import { assignDocumentToProject, linkDocToMilestone, loadProjectScopedMaterials } from './services/projectService';
 import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
 import DocumentDraftStudio from './DocumentDraftStudio';
@@ -5972,6 +5972,22 @@ ${sidebarReviewContext}`
     const generationLabel = shouldReviseBaseDraft
       ? String(revisionRequest?.title || baseDraftTitle || 'טיוטת בסיס').trim() || 'טיוטת בסיס'
       : buildGenerationLabel({ promptText: prompt, instructionsText: instructions, templateId });
+    // חומרי הפרויקט מצטרפים אוטומטית ליצירה שנפתחה מ-Project Hub — עד כה "צור מסמך לשלב"
+    // שלח בקשה בלי אף חומר, והמשתמש נדרש לסמן ידנית חומרים שכבר שייך לפרויקט.
+    let effectiveMaterials = selectedMaterials;
+    if (projectSeed?.projectId) {
+      try {
+        const projectMaterials = await loadProjectScopedMaterials(projectSeed.projectId);
+        const alreadySelected = new Set(selectedMaterials.map((item) => String(item?.id || '')));
+        const extras = (projectMaterials || []).filter((item) => item && !alreadySelected.has(String(item.id || '')));
+        if (extras.length) {
+          effectiveMaterials = [...selectedMaterials, ...extras];
+          showToast(`צורפו אוטומטית ${extras.length} חומרי פרויקט ליצירה`, { tone: 'info' });
+        }
+      } catch {
+        // חומרי פרויקט הם תוספת — כישלון בטעינה לא עוצר יצירה.
+      }
+    }
     setLastGenerationAction({
       ...resolvedAction,
       runId: generationRequest.runId,
@@ -5979,7 +5995,7 @@ ${sidebarReviewContext}`
         runId: generationRequest.runId,
         prompt: inspectorPrompt,
         instructions: inspectorInstructions,
-        selectedMaterials,
+        selectedMaterials: effectiveMaterials,
         templateId,
         baseDraft,
         selectedProviderId,
@@ -6029,7 +6045,7 @@ ${sidebarReviewContext}`
             originalPrompt: revisionRequest?.originalPrompt || baseDraftTitle || 'טיוטת בסיס',
             templateId,
             feedback: revisionRequest?.feedback || DEFAULT_BASE_DRAFT_REFINEMENT_REQUEST,
-            selectedMaterials,
+            selectedMaterials: effectiveMaterials,
             selectedModel,
             selectedProviderId,
             selectedProviderModel,
@@ -6043,7 +6059,7 @@ ${sidebarReviewContext}`
             runId: generationRequest.runId,
             returnMeta: true,
           })
-        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, includeSources, sourceRoute, ...(Number.isFinite(temperature) ? { temperature } : {}), styleDepth, runId: generationRequest.runId, returnMeta: true });
+        : await generateDocumentFromPrompt({ prompt, templateId, instructions, selectedMaterials: effectiveMaterials, selectedModel, selectedProviderId, selectedProviderModel, additionalReviewRounds, humanizeLoop, forceDirectMode, skipWorkflowAutomation, directModeReason, useWorkspaceV2, workspaceV2TemplateId, includeSources, sourceRoute, ...(Number.isFinite(temperature) ? { temperature } : {}), styleDepth, runId: generationRequest.runId, returnMeta: true });
       const resolvedTitle = shouldReviseBaseDraft
         ? String(generationLabel || baseDraftTitle || 'טיוטת בסיס').trim()
         : String(result?.title || generationLabel || 'מסמך חדש').trim();
