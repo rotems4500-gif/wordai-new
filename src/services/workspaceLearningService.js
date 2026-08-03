@@ -30,6 +30,12 @@ const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
 const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
+// בחירה אוטומטית של חומרי עזר מנקדת גם את **תוכן** החומר, לא רק את המטא-דאטה (כותרת/תווית/רמז).
+// AUTO_CONTEXT_CONTENT_SCORE_CHARS = כמה מהתוכן השמור נסרק לניקוד (הטקסט כבר קיים על החומר —
+// contentText/previewText — ולכן אין כאן שום I/O נוסף).
+const AUTO_CONTEXT_CONTENT_SCORE_CHARS = 20000;
+// משקל מרבי לניקוד התוכן, מול משקלי המטא-דאטה (כותרת 4 / תווית 3 / רמז 2 / תקציר 1).
+const AUTO_CONTEXT_CONTENT_WEIGHT = 10;
 const MATERIAL_PREVIEW_MAX_LENGTH = 5000; // טקסט קצר לתצוגת UI בלבד.
 // התוכן המלא של חומר עזר שמוזרם ל-AI (לא רק תצוגה מקדימה). 48k תווים ≈ 12k טוקנים —
 // תקרה בטוחה לספקים מודרניים (זהה ל-FEEDBACK_CONTEXT_TOTAL_LIMIT). מונע חיתוך מצגת/מסמך שלם.
@@ -1522,13 +1528,30 @@ function countContextTermOverlap(text = '', requestTermsSet = new Set()) {
   return extractContextMatchTerms(text).reduce((count, term) => count + (requestTermsSet.has(term) ? 1 : 0), 0);
 }
 
-function scoreAutoContextCandidate({ title = '', summary = '', label = '', learningHint = '' } = {}, requestTermsSet = new Set()) {
+// כמה מונחים **מובחנים** של הבקשה מופיעים בטקסט (ולא כמה פעמים הם מופיעים).
+function countContextTermCoverage(text = '', requestTermsSet = new Set()) {
+  if (!requestTermsSet.size) return 0;
+  const found = new Set();
+  extractContextMatchTerms(text).forEach((term) => {
+    if (requestTermsSet.has(term)) found.add(term);
+  });
+  return found.size;
+}
+
+function scoreAutoContextCandidate({ title = '', summary = '', label = '', learningHint = '', content = '' } = {}, requestTermsSet = new Set()) {
   if (!requestTermsSet.size) return 0;
   const titleOverlap = countContextTermOverlap(title, requestTermsSet);
   const labelOverlap = countContextTermOverlap(label, requestTermsSet);
   const hintOverlap = countContextTermOverlap(learningHint, requestTermsSet);
   const summaryOverlap = countContextTermOverlap(summary, requestTermsSet);
-  return (titleOverlap * 4) + (labelOverlap * 3) + (hintOverlap * 2) + summaryOverlap;
+  // ניקוד התוכן הוא **יחס כיסוי** של מונחי הבקשה, לא ספירת חפיפות גולמית:
+  // ניקוד גולמי גדל עם אורך הקובץ, ולכן PDF ענק ולא-רלוונטי (שמזכיר מילה אחת אלף פעמים)
+  // היה מנצח קובץ קצר ורלוונטי. יחס כיסוי אינו תלוי-אורך, ולכן משווה תפוחים לתפוחים.
+  const contentCoverage = content
+    ? countContextTermCoverage(content, requestTermsSet) / requestTermsSet.size
+    : 0;
+  return (titleOverlap * 4) + (labelOverlap * 3) + (hintOverlap * 2) + summaryOverlap
+    + (contentCoverage * AUTO_CONTEXT_CONTENT_WEIGHT);
 }
 
 function formatAutoContextEntry({ title = '', label = '', preview = '' } = {}) {
@@ -1538,55 +1561,83 @@ function formatAutoContextEntry({ title = '', label = '', preview = '' } = {}) {
   return `- ${cleanTitle} (${cleanLabel})${cleanPreview ? `\nתוכן עזר:\n${cleanPreview}` : ''}`;
 }
 
+// דירוג המועמדים לבחירה האוטומטית. פונקציה טהורה (בלי I/O ובלי גישה ל-window) כדי שאפשר
+// יהיה לבדוק אותה ב-Node — ר' tools/test-bench/materials-context-unit.mjs.
+// `materials` מגיע כבר עם השדה `content` (טקסט שמור), ו-`material` הוא החומר המקורי להמשך הטיפול.
+export function rankAutoContextCandidates({ history = [], materials = [], requestText = '', limit = AUTO_CONTEXT_SOURCE_LIMIT } = {}) {
+  const requestTerms = extractContextMatchTerms(requestText);
+  if (!requestTerms.length) return [];
+  const requestTermsSet = new Set(requestTerms);
+
+  const historyCandidates = (Array.isArray(history) ? history : []).map((item, index) => {
+    const score = scoreAutoContextCandidate({
+      title: item?.title,
+      summary: item?.summary,
+    }, requestTermsSet);
+
+    if (!score) return null;
+    return {
+      id: `history:${item?.id || index}`,
+      score,
+      rankHint: Number(new Date(item?.savedAt || 0)) || 0,
+      title: item?.title || 'מסמך שמור',
+      label: 'מסמך קודם',
+      preview: [item?.title || '', item?.summary || ''].filter(Boolean).join('\n'),
+    };
+  }).filter(Boolean);
+
+  const materialCandidates = (Array.isArray(materials) ? materials : []).map((item, index) => {
+    const score = scoreAutoContextCandidate({
+      title: item?.title,
+      label: item?.label,
+      learningHint: item?.learningHint,
+      content: item?.content,
+    }, requestTermsSet);
+
+    if (!score) return null;
+    return {
+      id: `material:${item?.id || index}`,
+      score,
+      rankHint: 0,
+      title: item?.title || item?.file || `material-${index + 1}`,
+      label: item?.label || 'כללי',
+      material: item?.material || item,
+    };
+  }).filter(Boolean);
+
+  const resolvedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : AUTO_CONTEXT_SOURCE_LIMIT;
+  return [...historyCandidates, ...materialCandidates]
+    .sort((left, right) => right.score - left.score || right.rankHint - left.rankHint || String(left.title || '').localeCompare(String(right.title || ''), 'he'))
+    .slice(0, resolvedLimit);
+}
+
 async function buildAutoSelectedMaterialsContext(requestText = '') {
   const requestTerms = extractContextMatchTerms(requestText);
   if (!requestTerms.length) return '';
 
   try {
-    const requestTermsSet = new Set(requestTerms);
     const [history, projectMaterials] = await Promise.all([
       Promise.resolve(getSavedDocsHistory()),
       loadProjectMaterials(),
     ]);
 
-    const historyCandidates = (Array.isArray(history) ? history : []).map((item, index) => {
-      const score = scoreAutoContextCandidate({
-        title: item?.title,
-        summary: item?.summary,
-      }, requestTermsSet);
+    const materialEntries = (Array.isArray(projectMaterials) ? projectMaterials : []).map((item, index) => ({
+      id: item?.id || item?.file || `material-${index + 1}`,
+      title: item?.title || item?.file || `material-${index + 1}`,
+      label: item?.label || '',
+      learningHint: item?.learningHint || '',
+      // הטקסט כבר שמור על החומר עצמו — ניקוד תוכן בלי אף קריאת קובץ נוספת.
+      // חומר בלי טקסט שמור מנוקד לפי מטא-דאטה בלבד, כמו קודם (אין נסיגה).
+      content: getStoredMaterialPreviewText(item, AUTO_CONTEXT_CONTENT_SCORE_CHARS),
+      material: item,
+    }));
 
-      if (!score) return null;
-      return {
-        id: `history:${item?.id || index}`,
-        score,
-        rankHint: Number(new Date(item?.savedAt || 0)) || 0,
-        title: item?.title || 'מסמך שמור',
-        label: 'מסמך קודם',
-        preview: [item?.title || '', item?.summary || ''].filter(Boolean).join('\n'),
-      };
-    }).filter(Boolean);
-
-    const materialCandidates = (Array.isArray(projectMaterials) ? projectMaterials : []).map((item, index) => {
-      const score = scoreAutoContextCandidate({
-        title: item?.title,
-        label: item?.label,
-        learningHint: item?.learningHint,
-      }, requestTermsSet);
-
-      if (!score) return null;
-      return {
-        id: `material:${item?.id || index}`,
-        score,
-        rankHint: 0,
-        title: item?.title || item?.file || `material-${index + 1}`,
-        label: item?.label || 'כללי',
-        material: item,
-      };
-    }).filter(Boolean);
-
-    const topCandidates = [...historyCandidates, ...materialCandidates]
-      .sort((left, right) => right.score - left.score || right.rankHint - left.rankHint || String(left.title || '').localeCompare(String(right.title || ''), 'he'))
-      .slice(0, AUTO_CONTEXT_SOURCE_LIMIT);
+    const topCandidates = rankAutoContextCandidates({
+      history: Array.isArray(history) ? history : [],
+      materials: materialEntries,
+      requestText,
+      limit: AUTO_CONTEXT_SOURCE_LIMIT,
+    });
 
     if (!topCandidates.length) return '';
 
@@ -4340,7 +4391,20 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     const userPrompt = userRequestSections.join('\n\n');
-    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\nאל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
+    // עד כה חומרי העזר הוצגו למודל כ"הכוונה בלבד", ולכן קובץ שהמשתמש צירף במפורש כמעט
+    // ולא השפיע על התוכן העובדתי. ההנחיה המחייבת נכנסת **רק כשיש חומרים בפועל** —
+    // בלי חומרים נשאר בדיוק המשפט הקודם (אל תחזיר את קובץ ההנחיות כפי שהוא).
+    const materialsDirective = materialsText
+      ? [
+          'חומרי העזר שצורפו לבקשה הם מקור תוכן מחייב, לא רקע כללי:',
+          '- בסס את התוכן העובדתי על החומרים שצורפו, כל עוד הם רלוונטיים לסעיף שאתה כותב.',
+          '- כשאתה נשען על חומר, שלב את הנתון או הטענה בגוף הטקסט וציין בסוגריים את שם החומר, למשל: (לפי «שם הקובץ»).',
+          '- אל תעתיק פסקאות שלמות ואל תדביק חומר כפי שהוא — נסח מחדש בקול של המסמך.',
+          '- כשחומר סותר את הוראות המשתמש המפורשות — ההוראות גוברות.',
+          '- כשאין בחומרים כיסוי לסעיף מסוים, כתוב אותו בלי להמציא נתונים ובלי לייחס לחומר.',
+        ].join('\n')
+      : 'אל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.';
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\n${materialsDirective}\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt,

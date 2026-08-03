@@ -418,3 +418,19 @@ live-generation (~7685), document-arrival/confetti, שורת סטטוס (~8670).
 58. **צבעי מותג קשיחים חוצי-קומפוננטות.** `#0066cc` (×2) ו-`#2B579A` (×9) ב-main.jsx, ועוד
     באותם hex ב-TopBar/Ribbon/MagicWand/SPSS. מחזק את #3/#23/#41 — צריך **design token אחד**
     (CSS var כמו `--word-blue` שכבר קיים חלקית) במקום hex מפוזר.
+
+---
+
+## חומרי עזר — chunking + אחזור סמנטי (גשר `saveHelperMaterial` → `materialChunkStore`)
+
+**הקשר:** הבחירה האוטומטית של חומרי עזר ליצירת מסמך
+([workspaceLearningService.js](../src/services/workspaceLearningService.js), `rankAutoContextCandidates`)
+מנקדת מעכשיו גם את **תוכן** החומר ולא רק את המטא-דאטה, ולכן הקבצים הנבחרים נכונים יותר.
+מה שנשלח מהם עדיין נשאר "ראש הקובץ" — הזרקת טקסט רציף, בלי אחזור לפי סעיף.
+
+**מה נדחה במכוון:** גשר בין `saveHelperMaterial` ל-[materialChunkStore](../src/services/materialChunkStore.js)
+(chunking + embedding כבר בהעלאה) ואחזור הקטעים הרלוונטיים דרך
+[evidenceMatchService](../src/services/evidenceMatchService.js) — כלומר אותו מנגנון RAG מקומי
+שמשמש את שלד המטלה, גם במסלול יצירת המסמך הרגיל.
+
+**סטטוס:** נדחה. הפאס הנוכחי מתקן **אילו קבצים נבחרים**, לא **מה נשלח מהם**.
