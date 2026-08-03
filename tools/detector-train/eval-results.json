@@ -1,5 +1,5 @@
 {
-  "ranAt": "2026-08-03T17:26:53.402Z",
+  "ranAt": "2026-08-03T19:45:17.223Z",
   "corpusCounts": {
     "userWorkDocs": 23,
     "humanDocuments": 42,
@@ -15,26 +15,26 @@
         "human": 50,
         "ai": 96
       },
-      "auc": 0.9490000000000001,
-      "operatingThreshold": 77,
-      "tprAtFpr5": 74,
-      "tprAtThreshold": 72.9,
-      "fprAtThreshold": 4,
-      "tprAtLegacy60": 96.9,
+      "auc": 0.932,
+      "operatingThreshold": 78,
+      "tprAtFpr5": 71.9,
+      "tprAtThreshold": 71.9,
+      "fprAtThreshold": 8,
+      "tprAtLegacy60": 97.9,
       "fprAtLegacy60": 42,
       "percentiles": {
         "human": {
           "p10": 24,
-          "p25": 31,
+          "p25": 38,
           "p50": 51,
-          "p75": 67,
-          "p90": 73
+          "p75": 69,
+          "p90": 75
         },
         "ai": {
           "p10": 71,
           "p25": 76,
           "p50": 82,
-          "p75": 87,
+          "p75": 88,
           "p90": 93
         }
       }
@@ -44,26 +44,26 @@
         "human": 138,
         "ai": 320
       },
-      "auc": 0.9390000000000001,
-      "operatingThreshold": 80,
-      "tprAtFpr5": 65.9,
-      "tprAtThreshold": 75.9,
-      "fprAtThreshold": 8,
+      "auc": 0.9209999999999999,
+      "operatingThreshold": 83,
+      "tprAtFpr5": 52.5,
+      "tprAtThreshold": 74.7,
+      "fprAtThreshold": 9.4,
       "tprAtLegacy60": 98.1,
-      "fprAtLegacy60": 37.7,
+      "fprAtLegacy60": 41.3,
       "percentiles": {
         "human": {
-          "p10": 17,
-          "p25": 30,
-          "p50": 51,
-          "p75": 67,
-          "p90": 74
+          "p10": 15,
+          "p25": 34,
+          "p50": 53,
+          "p75": 70,
+          "p90": 77
         },
         "ai": {
           "p10": 71,
-          "p25": 78,
-          "p50": 83,
-          "p75": 88,
+          "p25": 77,
+          "p50": 84,
+          "p75": 89,
           "p90": 93
         }
       }
@@ -73,20 +73,20 @@
         "human": 138,
         "ai": 59
       },
-      "auc": 0.912,
-      "operatingThreshold": 80,
-      "tprAtFpr5": 50.8,
-      "tprAtThreshold": 59.3,
-      "fprAtThreshold": 8,
-      "tprAtLegacy60": 96.6,
-      "fprAtLegacy60": 37.7,
+      "auc": 0.893,
+      "operatingThreshold": 83,
+      "tprAtFpr5": 37.3,
+      "tprAtThreshold": 61,
+      "fprAtThreshold": 9.4,
+      "tprAtLegacy60": 98.3,
+      "fprAtLegacy60": 41.3,
       "percentiles": {
         "human": {
-          "p10": 17,
-          "p25": 30,
-          "p50": 51,
-          "p75": 67,
-          "p90": 74
+          "p10": 15,
+          "p25": 34,
+          "p50": 53,
+          "p75": 70,
+          "p90": 77
         },
         "ai": {
           "p10": 70,
@@ -102,20 +102,20 @@
         "human": 138,
         "ai": 236
       },
-      "auc": 0.9420000000000001,
-      "operatingThreshold": 80,
-      "tprAtFpr5": 68.6,
-      "tprAtThreshold": 79.2,
-      "fprAtThreshold": 8,
-      "tprAtLegacy60": 98.3,
-      "fprAtLegacy60": 37.7,
+      "auc": 0.9229999999999999,
+      "operatingThreshold": 83,
+      "tprAtFpr5": 53.8,
+      "tprAtThreshold": 77.1,
+      "fprAtThreshold": 9.4,
+      "tprAtLegacy60": 97.9,
+      "fprAtLegacy60": 41.3,
       "percentiles": {
         "human": {
-          "p10": 17,
-          "p25": 30,
-          "p50": 51,
-          "p75": 67,
-          "p90": 74
+          "p10": 15,
+          "p25": 34,
+          "p50": 53,
+          "p75": 70,
+          "p90": 77
         },
         "ai": {
           "p10": 72,
@@ -128,268 +128,6 @@
     }
   },
   "history": [
-    {
-      "ranAt": "2026-08-02T20:11:22.038Z",
-      "corpusCounts": {
-        "userWorkDocs": 23,
-        "humanDocuments": 42,
-        "aiDocuments": 25,
-        "rejectedGarbled": 0,
-        "userDocsMissing": false,
-        "hasAiExtended": false
-      },
-      "seed": 42,
-      "metrics": {
-        "test": {
-          "n": {
-            "human": 50,
-            "ai": 7
-          },
-          "auc": 0.991,
-          "operatingThreshold": 72,
-          "tprAtFpr5": 85.7,
-          "tprAt60": 100,
-          "fprAt60": 18,
-          "percentiles": {
-            "human": {
-              "p10": 16,
-              "p25": 24,
-              "p50": 45,
-              "p75": 56,
-              "p90": 69
-            },
-            "ai": {
-              "p10": 89,
-              "p25": 91,
-              "p50": 91,
-              "p75": 92,
-              "p90": 92
-            }
-          }
-        },
-        "full": {
-          "n": {
-            "human": 138,
-            "ai": 25
-          },
-          "auc": 0.995,
-          "operatingThreshold": 69,
-          "tprAtFpr5": 100,
-          "tprAt60": 100,
-          "fprAt60": 13.8,
-          "percentiles": {
-            "human": {
-              "p10": 13,
-              "p25": 23,
-              "p50": 41,
-              "p75": 53,
-              "p90": 63
-            },
-            "ai": {
-              "p10": 75,
-              "p25": 89,
-              "p50": 92,
-              "p75": 93,
-              "p90": 96
-            }
-          }
-        },
-        "stealth": null,
-        "normal": null
-      }
-    },
-    {
-      "ranAt": "2026-08-02T20:12:09.491Z",
-      "corpusCounts": {
-        "userWorkDocs": 23,
-        "humanDocuments": 42,
-        "aiDocuments": 25,
-        "rejectedGarbled": 0,
-        "userDocsMissing": false,
-        "hasAiExtended": false
-      },
-      "seed": 42,
-      "metrics": {
-        "test": {
-          "n": {
-            "human": 50,
-            "ai": 7
-          },
-          "auc": 0.991,
-          "operatingThreshold": 72,
-          "tprAtFpr5": 85.7,
-          "tprAt60": 100,
-          "fprAt60": 18,
-          "percentiles": {
-            "human": {
-              "p10": 16,
-              "p25": 24,
-              "p50": 45,
-              "p75": 56,
-              "p90": 69
-            },
-            "ai": {
-              "p10": 89,
-              "p25": 91,
-              "p50": 91,
-              "p75": 92,
-              "p90": 92
-            }
-          }
-        },
-        "full": {
-          "n": {
-            "human": 138,
-            "ai": 25
-          },
-          "auc": 0.995,
-          "operatingThreshold": 69,
-          "tprAtFpr5": 100,
-          "tprAt60": 100,
-          "fprAt60": 13.8,
-          "percentiles": {
-            "human": {
-              "p10": 13,
-              "p25": 23,
-              "p50": 41,
-              "p75": 53,
-              "p90": 63
-            },
-            "ai": {
-              "p10": 75,
-              "p25": 89,
-              "p50": 92,
-              "p75": 93,
-              "p90": 96
-            }
-          }
-        },
-        "stealth": null,
-        "normal": null
-      }
-    },
-    {
-      "ranAt": "2026-08-03T06:44:42.731Z",
-      "corpusCounts": {
-        "userWorkDocs": 23,
-        "humanDocuments": 42,
-        "aiDocuments": 177,
-        "rejectedGarbled": 0,
-        "userDocsMissing": false,
-        "hasAiExtended": true
-      },
-      "seed": 42,
-      "metrics": {
-        "test": {
-          "n": {
-            "human": 50,
-            "ai": 53
-          },
-          "auc": 0.6459999999999999,
-          "operatingThreshold": 72,
-          "tprAtFpr5": 18.9,
-          "tprAt60": 34,
-          "fprAt60": 18,
-          "percentiles": {
-            "human": {
-              "p10": 16,
-              "p25": 24,
-              "p50": 45,
-              "p75": 56,
-              "p90": 69
-            },
-            "ai": {
-              "p10": 29,
-              "p25": 36,
-              "p50": 53,
-              "p75": 68,
-              "p90": 79
-            }
-          }
-        },
-        "full": {
-          "n": {
-            "human": 138,
-            "ai": 177
-          },
-          "auc": 0.72,
-          "operatingThreshold": 69,
-          "tprAtFpr5": 29.9,
-          "tprAt60": 40.7,
-          "fprAt60": 13.8,
-          "percentiles": {
-            "human": {
-              "p10": 13,
-              "p25": 23,
-              "p50": 41,
-              "p75": 53,
-              "p90": 63
-            },
-            "ai": {
-              "p10": 32,
-              "p25": 40,
-              "p50": 54,
-              "p75": 71,
-              "p90": 89
-            }
-          }
-        },
-        "stealth": {
-          "n": {
-            "human": 138,
-            "ai": 33
-          },
-          "auc": 0.5529999999999999,
-          "operatingThreshold": 69,
-          "tprAtFpr5": 9.1,
-          "tprAt60": 21.2,
-          "fprAt60": 13.8,
-          "percentiles": {
-            "human": {
-              "p10": 13,
-              "p25": 23,
-              "p50": 41,
-              "p75": 53,
-              "p90": 63
-            },
-            "ai": {
-              "p10": 23,
-              "p25": 33,
-              "p50": 41,
-              "p75": 52,
-              "p90": 68
-            }
-          }
-        },
-        "normal": {
-          "n": {
-            "human": 138,
-            "ai": 119
-          },
-          "auc": 0.7090000000000001,
-          "operatingThreshold": 69,
-          "tprAtFpr5": 21,
-          "tprAt60": 33.6,
-          "fprAt60": 13.8,
-          "percentiles": {
-            "human": {
-              "p10": 13,
-              "p25": 23,
-              "p50": 41,
-              "p75": 53,
-              "p90": 63
-            },
-            "ai": {
-              "p10": 34,
-              "p25": 42,
-              "p50": 53,
-              "p75": 66,
-              "p90": 75
-            }
-          }
-        }
-      }
-    },
     {
       "ranAt": "2026-08-03T06:50:39.453Z",
       "corpusCounts": {
@@ -2532,6 +2270,396 @@
               "p50": 51,
               "p75": 67,
               "p90": 74
+            },
+            "ai": {
+              "p10": 72,
+              "p25": 78,
+              "p50": 84,
+              "p75": 88,
+              "p90": 92
+            }
+          }
+        }
+      }
+    },
+    {
+      "ranAt": "2026-08-03T19:35:42.314Z",
+      "corpusCounts": {
+        "userWorkDocs": 23,
+        "humanDocuments": 42,
+        "aiDocuments": 320,
+        "rejectedGarbled": 0,
+        "userDocsMissing": false,
+        "hasAiExtended": true
+      },
+      "seed": 42,
+      "metrics": {
+        "test": {
+          "n": {
+            "human": 50,
+            "ai": 96
+          },
+          "auc": 0.9490000000000001,
+          "operatingThreshold": 77,
+          "tprAtFpr5": 74,
+          "tprAtThreshold": 72.9,
+          "fprAtThreshold": 4,
+          "tprAtLegacy60": 96.9,
+          "fprAtLegacy60": 42,
+          "percentiles": {
+            "human": {
+              "p10": 24,
+              "p25": 31,
+              "p50": 51,
+              "p75": 67,
+              "p90": 73
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 76,
+              "p50": 82,
+              "p75": 87,
+              "p90": 93
+            }
+          }
+        },
+        "full": {
+          "n": {
+            "human": 138,
+            "ai": 320
+          },
+          "auc": 0.9390000000000001,
+          "operatingThreshold": 80,
+          "tprAtFpr5": 65.9,
+          "tprAtThreshold": 75.9,
+          "fprAtThreshold": 8,
+          "tprAtLegacy60": 98.1,
+          "fprAtLegacy60": 37.7,
+          "percentiles": {
+            "human": {
+              "p10": 17,
+              "p25": 30,
+              "p50": 51,
+              "p75": 67,
+              "p90": 74
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 78,
+              "p50": 83,
+              "p75": 88,
+              "p90": 93
+            }
+          }
+        },
+        "stealth": {
+          "n": {
+            "human": 138,
+            "ai": 59
+          },
+          "auc": 0.912,
+          "operatingThreshold": 80,
+          "tprAtFpr5": 50.8,
+          "tprAtThreshold": 59.3,
+          "fprAtThreshold": 8,
+          "tprAtLegacy60": 96.6,
+          "fprAtLegacy60": 37.7,
+          "percentiles": {
+            "human": {
+              "p10": 17,
+              "p25": 30,
+              "p50": 51,
+              "p75": 67,
+              "p90": 74
+            },
+            "ai": {
+              "p10": 70,
+              "p25": 75,
+              "p50": 80,
+              "p75": 85,
+              "p90": 89
+            }
+          }
+        },
+        "normal": {
+          "n": {
+            "human": 138,
+            "ai": 236
+          },
+          "auc": 0.9420000000000001,
+          "operatingThreshold": 80,
+          "tprAtFpr5": 68.6,
+          "tprAtThreshold": 79.2,
+          "fprAtThreshold": 8,
+          "tprAtLegacy60": 98.3,
+          "fprAtLegacy60": 37.7,
+          "percentiles": {
+            "human": {
+              "p10": 17,
+              "p25": 30,
+              "p50": 51,
+              "p75": 67,
+              "p90": 74
+            },
+            "ai": {
+              "p10": 72,
+              "p25": 78,
+              "p50": 84,
+              "p75": 88,
+              "p90": 92
+            }
+          }
+        }
+      }
+    },
+    {
+      "ranAt": "2026-08-03T19:44:10.026Z",
+      "corpusCounts": {
+        "userWorkDocs": 23,
+        "humanDocuments": 42,
+        "aiDocuments": 320,
+        "rejectedGarbled": 0,
+        "userDocsMissing": false,
+        "hasAiExtended": true
+      },
+      "seed": 42,
+      "metrics": {
+        "test": {
+          "n": {
+            "human": 50,
+            "ai": 96
+          },
+          "auc": 0.927,
+          "operatingThreshold": 78,
+          "tprAtFpr5": 71.9,
+          "tprAtThreshold": 71.9,
+          "fprAtThreshold": 8,
+          "tprAtLegacy60": 97.9,
+          "fprAtLegacy60": 44,
+          "percentiles": {
+            "human": {
+              "p10": 24,
+              "p25": 38,
+              "p50": 51,
+              "p75": 70,
+              "p90": 76
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 76,
+              "p50": 82,
+              "p75": 88,
+              "p90": 93
+            }
+          }
+        },
+        "full": {
+          "n": {
+            "human": 138,
+            "ai": 320
+          },
+          "auc": 0.917,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 52.8,
+          "tprAtThreshold": 74.4,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 97.8,
+          "fprAtLegacy60": 42,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 35,
+              "p50": 54,
+              "p75": 70,
+              "p90": 77
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 77,
+              "p50": 83,
+              "p75": 89,
+              "p90": 93
+            }
+          }
+        },
+        "stealth": {
+          "n": {
+            "human": 138,
+            "ai": 59
+          },
+          "auc": 0.889,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 37.3,
+          "tprAtThreshold": 59.3,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 98.3,
+          "fprAtLegacy60": 42,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 35,
+              "p50": 54,
+              "p75": 70,
+              "p90": 77
+            },
+            "ai": {
+              "p10": 70,
+              "p25": 75,
+              "p50": 80,
+              "p75": 85,
+              "p90": 89
+            }
+          }
+        },
+        "normal": {
+          "n": {
+            "human": 138,
+            "ai": 236
+          },
+          "auc": 0.919,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 54.2,
+          "tprAtThreshold": 77.1,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 97.5,
+          "fprAtLegacy60": 42,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 35,
+              "p50": 54,
+              "p75": 70,
+              "p90": 77
+            },
+            "ai": {
+              "p10": 72,
+              "p25": 78,
+              "p50": 84,
+              "p75": 88,
+              "p90": 92
+            }
+          }
+        }
+      }
+    },
+    {
+      "ranAt": "2026-08-03T19:45:17.223Z",
+      "corpusCounts": {
+        "userWorkDocs": 23,
+        "humanDocuments": 42,
+        "aiDocuments": 320,
+        "rejectedGarbled": 0,
+        "userDocsMissing": false,
+        "hasAiExtended": true
+      },
+      "seed": 42,
+      "metrics": {
+        "test": {
+          "n": {
+            "human": 50,
+            "ai": 96
+          },
+          "auc": 0.932,
+          "operatingThreshold": 78,
+          "tprAtFpr5": 71.9,
+          "tprAtThreshold": 71.9,
+          "fprAtThreshold": 8,
+          "tprAtLegacy60": 97.9,
+          "fprAtLegacy60": 42,
+          "percentiles": {
+            "human": {
+              "p10": 24,
+              "p25": 38,
+              "p50": 51,
+              "p75": 69,
+              "p90": 75
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 76,
+              "p50": 82,
+              "p75": 88,
+              "p90": 93
+            }
+          }
+        },
+        "full": {
+          "n": {
+            "human": 138,
+            "ai": 320
+          },
+          "auc": 0.9209999999999999,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 52.5,
+          "tprAtThreshold": 74.7,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 98.1,
+          "fprAtLegacy60": 41.3,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 34,
+              "p50": 53,
+              "p75": 70,
+              "p90": 77
+            },
+            "ai": {
+              "p10": 71,
+              "p25": 77,
+              "p50": 84,
+              "p75": 89,
+              "p90": 93
+            }
+          }
+        },
+        "stealth": {
+          "n": {
+            "human": 138,
+            "ai": 59
+          },
+          "auc": 0.893,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 37.3,
+          "tprAtThreshold": 61,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 98.3,
+          "fprAtLegacy60": 41.3,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 34,
+              "p50": 53,
+              "p75": 70,
+              "p90": 77
+            },
+            "ai": {
+              "p10": 70,
+              "p25": 75,
+              "p50": 80,
+              "p75": 85,
+              "p90": 89
+            }
+          }
+        },
+        "normal": {
+          "n": {
+            "human": 138,
+            "ai": 236
+          },
+          "auc": 0.9229999999999999,
+          "operatingThreshold": 83,
+          "tprAtFpr5": 53.8,
+          "tprAtThreshold": 77.1,
+          "fprAtThreshold": 9.4,
+          "tprAtLegacy60": 97.9,
+          "fprAtLegacy60": 41.3,
+          "percentiles": {
+            "human": {
+              "p10": 15,
+              "p25": 34,
+              "p50": 53,
+              "p75": 70,
+              "p90": 77
             },
             "ai": {
               "p10": 72,

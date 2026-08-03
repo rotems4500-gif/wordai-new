@@ -9,20 +9,24 @@
 // קלט:
 //   AI:       samples/ai.txt + samples/ai-extended.txt (בלוקים מופרדי ===, כותרת
 //             #genre=... mode=... מוסרת)
-//   human:    שני מקורות ממוזגים במשקל (ר' HUMAN_MIX_WEIGHT למטה):
-//     • narrative — samples/human-global/*.txt (ויקיפדיה/ויקיטקסט, ~965k מילה) +
-//       samples/human.txt.
+//   human:    שלושה מקורות ממוזגים במשקל (ר' HUMAN_MIX_WEIGHT למטה):
+//     • narrative — samples/human-global/wiki-*.txt + wikisource-*.txt (ויקיפדיה/
+//       ויקיטקסט, ~965k מילה) + samples/human.txt.
 //     • academic  — 314999533/** (אותו שורש קורפוס כמו tools/test-bench/style-eval.mjs),
 //       **לא** כולל 'עבודות והגשות/עבודות סופיות' ולא 'טיוטות וגרסאות קודמות' (אלה
 //       כתיבת המשתמש עצמו). מאמרים/חוקות/פילוסופיה פוליטית של מחברים **אחרים**,
 //       ברגיסטר אקדמי — בדיוק הרגיסטר שהגלאי שופט בפועל, בשונה מוויקיפדיה הנרטיבית.
+//     • casual    — samples/human-global/wikitalk-*.txt (דפי שיחה ויקיפדיה, גרסה
+//       אחרונה לפני עידן ה-LLM — ר' fetch-human-corpus.mjs). רגיסטר אישי/ויכוחי —
+//       הפער שגילינו: מכתב יום-הולדת אנושי-אמיתי קיבל ציון AI מנופח (61) כי אף
+//       מקור אימון לא היה בלתי-פורמלי. זה התיקון.
 //   ⚠️ עבודות המשתמש עצמו (עבודות סופיות) אינן נכנסות לאף מקור אימון — הן קורפוס
 //   ולידציה בלבד (ר' שלב הגיזום למטה).
 //
 // שיטה: LLR(g) = log( P(g|AI) / P_human(g) ), עם add-k=1. P_human הוא תערובת
-// משוקללת של שני התת-מקורות (לא שרשור/שכפול טקסט — כל תת-מקור מוחלק בנפרד ואז
-// ממוצע במשקל, כך שרגיסטר-מיעוט (academic, קטן בהרבה מ-narrative) לא נבלע).
-// דירוג המועמדים: |LLR| × sqrt(תדירות משולבת) — כדי לא לבחור רק גרמים נדירים-קיצוניים.
+// משוקללת של שלושת התת-מקורות (לא שרשור/שכפול טקסט — כל תת-מקור מוחלק בנפרד ואז
+// ממוצע במשקל, כך שרגיסטר-מיעוט לא נבלע). דירוג המועמדים: |LLR| × sqrt(תדירות
+// משולבת) — כדי לא לבחור רק גרמים נדירים-קיצוניים.
 //
 // פלט: src/services/styleAiMarkers.data.js (AI_NGRAM_TABLE.grams + meta עם עוגני-ניקוד).
 //
@@ -47,10 +51,13 @@ const ACADEMIC_MIN_WORDS = 250; // מסמכים שלמים (docx/pdf), לא בל
 const MIN_DOC_FREQ = 5;
 const TOP_N = 4000;
 const LLR_CAP = 3;
-// משקל התערובת האנושית: 50/50 בין רגיסטר נרטיבי (ויקיפדיה) לרגיסטר אקדמי (מקורות
-// 314999533 של מחברים אחרים) — לא ספירת-טוקנים גולמית. אחרת ה-821 מסמכי ויקיפדיה
-// היו בולעים את ה-~73 מסמכים האקדמיים (פי ~11 בטוקנים) והפער-רגיסטר חוזר.
-const HUMAN_MIX_WEIGHT = { narrative: 0.5, academic: 0.5 };
+// משקל התערובת האנושית: 40% נרטיבי (ויקיפדיה/ויקיטקסט) / 35% אקדמי (מקורות
+// 314999533 של מחברים אחרים) / 25% casual (דפי שיחה) — לא ספירת-טוקנים גולמית.
+// אחרת מקור-הרוב היה בולע את המיעוטים והפער-רגיסטר חוזר (בדיוק מה שקרה לפני
+// שנוסף casual: אין שום ייצוג לרגיסטר אישי/בלתי-פורמלי בתערובת).
+// casual 0.20 (ולא 0.25): ב-0.25 המכתב-האישי ירד יפה (61→46) אבל FPR על עבודות
+// אמיתיות עלה 8%→9.4% ו-AUC ירד 0.94→0.92. ב-0.20 נבדק האיזון — ר' הרצת הכיול.
+const HUMAN_MIX_WEIGHT = { narrative: 0.45, academic: 0.35, casual: 0.20 };
 
 // ---------- קורפוס AI ----------
 
@@ -78,7 +85,8 @@ function loadNarrativeCorpus() {
   const docs = [];
   const globalDir = join(SAMPLES_DIR, 'human-global');
   if (existsSync(globalDir)) {
-    for (const file of readdirSync(globalDir).filter((f) => f.endsWith('.txt')).sort()) {
+    // ⚠️ wikitalk-* לא בבאקט הזה — יש לו בקטגוריה נפרדת (casual, ר' loadCasualCorpus).
+    for (const file of readdirSync(globalDir).filter((f) => f.endsWith('.txt') && !f.startsWith('wikitalk-')).sort()) {
       const raw = readFileSync(join(globalDir, file), 'utf8');
       for (const b of splitBlocks(raw)) {
         if (tokenizeForStyle(b).length >= MIN_WORDS) docs.push(b);
@@ -89,6 +97,22 @@ function loadNarrativeCorpus() {
   if (existsSync(humanTxt)) {
     for (const b of splitBlocks(readFileSync(humanTxt, 'utf8'))) {
       if (tokenizeForStyle(b).length >= MIN_WORDS) docs.push(b);
+    }
+  }
+  return docs;
+}
+
+// ---------- קורפוס אנושי: casual (דפי שיחה ויקיפדיה, רגיסטר אישי/ויכוחי) ----------
+
+function loadCasualCorpus() {
+  const docs = [];
+  const globalDir = join(SAMPLES_DIR, 'human-global');
+  if (existsSync(globalDir)) {
+    for (const file of readdirSync(globalDir).filter((f) => f.startsWith('wikitalk-') && f.endsWith('.txt')).sort()) {
+      const raw = readFileSync(join(globalDir, file), 'utf8');
+      for (const b of splitBlocks(raw)) {
+        if (tokenizeForStyle(b).length >= MIN_WORDS) docs.push(b);
+      }
     }
   }
   return docs;
@@ -170,17 +194,23 @@ async function loadAcademicCorpus() {
 const aiDocs = loadAiCorpus();
 const narrativeDocs = loadNarrativeCorpus();
 const academicDocs = await loadAcademicCorpus();
+const casualDocs = loadCasualCorpus();
 
 const wordsOf = (docs) => docs.reduce((a, d) => a + tokenizeForStyle(d).length, 0);
 const aiWords = wordsOf(aiDocs);
 const narrativeWords = wordsOf(narrativeDocs);
 const academicWords = wordsOf(academicDocs);
+const casualWords = wordsOf(casualDocs);
 
 console.log(`=== קורפוס AI: ${aiDocs.length} בלוקים (${aiWords} מילים) ===`);
 console.log(`=== קורפוס אנושי — narrative: ${narrativeDocs.length} מסמכים (${narrativeWords} מילים) ===`);
 console.log(`=== קורפוס אנושי — academic:  ${academicDocs.length} מסמכים (${academicWords} מילים, מ-${CORPUS_ROOT}, לא עבודות המשתמש) ===`);
+console.log(`=== קורפוס אנושי — casual:    ${casualDocs.length} מסמכים (${casualWords} מילים, דפי שיחה ויקיפדיה) ===`);
 if (!academicDocs.length) {
-  console.log('  ⚠️ קורפוס academic ריק (תיקייה לא נמצאה במכונה הזו?) — נופלים חזרה למקור narrative בלבד.');
+  console.log('  ⚠️ קורפוס academic ריק (תיקייה לא נמצאה במכונה הזו?) — נופלים חזרה למקורות הנותרים.');
+}
+if (!casualDocs.length) {
+  console.log('  ⚠️ קורפוס casual ריק (לא רץ fetch-human-corpus.mjs עם דפי שיחה?) — נופלים חזרה למקורות הנותרים.');
 }
 
 // ---------- ספירת גרמים ----------
@@ -248,6 +278,7 @@ function buildTable(aiDocsIn, humanSourcesIn) {
 const humanSources = [
   { docs: narrativeDocs, weight: HUMAN_MIX_WEIGHT.narrative, label: 'narrative' },
   { docs: academicDocs, weight: HUMAN_MIX_WEIGHT.academic, label: 'academic' },
+  { docs: casualDocs, weight: HUMAN_MIX_WEIGHT.casual, label: 'casual' },
 ];
 
 const fullTable = buildTable(aiDocs, humanSources);
@@ -338,18 +369,21 @@ function weightedPercentile(items, p) {
 const aiMeans = aiDocs.map((d) => meanLlrOf(d, grams));
 const narrativeMeans = narrativeDocs.map((d) => meanLlrOf(d, grams));
 const academicMeans = academicDocs.map((d) => meanLlrOf(d, grams));
+const casualMeans = casualDocs.map((d) => meanLlrOf(d, grams));
 
 const wNarrative = narrativeMeans.length ? HUMAN_MIX_WEIGHT.narrative / narrativeMeans.length : 0;
 const wAcademic = academicMeans.length ? HUMAN_MIX_WEIGHT.academic / academicMeans.length : 0;
+const wCasual = casualMeans.length ? HUMAN_MIX_WEIGHT.casual / casualMeans.length : 0;
 const humanWeightedItems = [
   ...narrativeMeans.map((value) => ({ value, weight: wNarrative })),
   ...academicMeans.map((value) => ({ value, weight: wAcademic })),
+  ...casualMeans.map((value) => ({ value, weight: wCasual })),
 ];
-const humanMeansAll = [...narrativeMeans, ...academicMeans]; // לדיווח בלתי-משוקלל בלבד
+const humanMeansAll = [...narrativeMeans, ...academicMeans, ...casualMeans]; // לדיווח בלתי-משוקלל בלבד
 
 let lowAnchor = weightedPercentile(humanWeightedItems, 75);
 let highAnchor = percentile(aiMeans, 25);
-let anchorNote = 'human(weighted 50/50) p75 / AI p25';
+let anchorNote = 'human(weighted 45/35/20) p75 / AI p25';
 if (!(highAnchor > lowAnchor)) {
   lowAnchor = weightedPercentile(humanWeightedItems, 60);
   highAnchor = percentile(aiMeans, 40);
@@ -360,6 +394,7 @@ console.log(`\nעוגני ניקוד (${anchorNote}): low=${lowAnchor.toFixed(4)
 console.log(`  human meanLLR (לא-משוקלל, לדיווח): p10=${percentile(humanMeansAll, 10).toFixed(4)} p50=${percentile(humanMeansAll, 50).toFixed(4)} p90=${percentile(humanMeansAll, 90).toFixed(4)}`);
 console.log(`  academic meanLLR: p10=${percentile(academicMeans, 10).toFixed(4)} p50=${percentile(academicMeans, 50).toFixed(4)} p90=${percentile(academicMeans, 90).toFixed(4)}`);
 console.log(`  narrative meanLLR: p10=${percentile(narrativeMeans, 10).toFixed(4)} p50=${percentile(narrativeMeans, 50).toFixed(4)} p90=${percentile(narrativeMeans, 90).toFixed(4)}`);
+console.log(`  casual meanLLR:    p10=${percentile(casualMeans, 10).toFixed(4)} p50=${percentile(casualMeans, 50).toFixed(4)} p90=${percentile(casualMeans, 90).toFixed(4)}`);
 console.log(`  AI meanLLR: p10=${percentile(aiMeans, 10).toFixed(4)} p50=${percentile(aiMeans, 50).toFixed(4)} p90=${percentile(aiMeans, 90).toFixed(4)}`);
 
 // ---------- בדיקת יציבות split-half (דיווח בלבד, לא שער) ----------
@@ -381,10 +416,13 @@ const header = `// styleAiMarkers.data.js — טבלת LLR של 3-גרמים ש�
 //
 // נבנה ע"י: node tools/detector-train/build-ngram-table.mjs
 // מקור AI: samples/ai.txt + samples/ai-extended.txt.
-// מקור אנושי: תערובת משוקללת 50/50 —
-//   • narrative: samples/human-global/*.txt (ויקיפדיה/ויקיטקסט) + samples/human.txt.
+// מקור אנושי: תערובת משוקללת 40% narrative / 35% academic / 25% casual —
+//   • narrative: samples/human-global/wiki-*.txt + wikisource-*.txt + samples/human.txt.
 //   • academic:  314999533/** (כמו tools/test-bench/style-eval.mjs), לא כולל
 //     עבודות המשתמש עצמו — מאמרים/חוקות/פילוסופיה של מחברים אחרים ברגיסטר אקדמי.
+//   • casual:    samples/human-global/wikitalk-*.txt (דפי שיחה ויקיפדיה, גרסה
+//     אחרונה לפני עידן ה-LLM) — רגיסטר אישי/ויכוחי, סוגר את הפער שגילינו: כתיבה
+//     אנושית בלתי-פורמלית (מכתב אישי) קיבלה ציון AI מנופח כי אף מקור לא ייצג אותה.
 // ⚠️ עבודות המשתמש עצמו (עבודות סופיות) אינן בשום מקור אימון — ולידציה בלבד
 // (גיזום גרמים, ר' תוצאה למטה).
 //
@@ -398,14 +436,15 @@ const header = `// styleAiMarkers.data.js — טבלת LLR של 3-גרמים ש�
 `;
 
 const meta = {
-  version: 2,
+  version: 3,
   ngramN: 3,
-  builtFrom: 'detector-train build-ngram-table (academic+narrative mix)',
+  builtFrom: 'detector-train build-ngram-table (academic+narrative+casual mix)',
   aiBlocks: aiDocs.length,
-  humanDocs: narrativeDocs.length + academicDocs.length,
-  humanWords: narrativeWords + academicWords,
+  humanDocs: narrativeDocs.length + academicDocs.length + casualDocs.length,
+  humanWords: narrativeWords + academicWords + casualWords,
   humanNarrativeDocs: narrativeDocs.length,
   humanAcademicDocs: academicDocs.length,
+  humanCasualDocs: casualDocs.length,
   humanMixWeight: HUMAN_MIX_WEIGHT,
   lowAnchor: Math.round(lowAnchor * 10000) / 10000,
   highAnchor: Math.round(highAnchor * 10000) / 10000,
