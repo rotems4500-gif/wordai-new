@@ -15,6 +15,11 @@
 // תלויות: sentenceComposeService (מסגרות), evidenceMatchService (formatProvenance
 // לא נחוץ — provenance כבר על הראיה). LEAF ביחס ל-aiService. browser+node.
 
+// ⚠️ styleMarkers.shared הוא מודול נתונים חסר-תלויות (מחרוזות ופונקציות טהורות),
+// ולכן הייבוא ממנו אינו פוגע ב-leaf-יות של הקובץ הזה ביחס ל-aiService.
+import {
+  STRIP_CONNECTIVE_OPENERS, DISCOURSE_OPENERS, buildAlternation,
+} from './styleMarkers.shared.js';
 import { composeMoveSentence, ensureSentenceGrammarReady } from './sentenceComposeService.js';
 import { fitSentencesToStyle, groupParagraphs } from './styleFitService.js';
 import { questionSubjects } from './localRewriteService.js';
@@ -206,7 +211,12 @@ const SOURCE_DEIXIS_RE = /לפני\s+(?:מספר|כמה)\s+(?:ימים|שבוע�
 //     שבר, וקילוף "זאת" משאיר "עמדה שמתבטאת…" שאינו משפט.
 // ⚠️ `^[,\s]+` בהתחלה: נמדד «מן החומר עולה כי**, אך** באותה נשימה ממש…» —
 // פסוקית שנשלפה עם פסיק פותח, והמסגרת הדביקה אותה ל"כי".
-const STRIP_CONNECTIVE_RE = /^[,\s]*(?:עם זאת|לעומת זאת|מנגד|מאידך|אך|אולם|אבל|בנוסף|כמו כן|יתרה מכך|יתר על כן|זאת ועוד|לפיכך|לכן|על כן|משום כך|כתוצאה מכך|מכאן|כלומר|למעשה)[,\s]+/;
+// ⚠️ **תת-קבוצה מכוונת ולא רשימה שנשכחה.** STRIP_CONNECTIVE_OPENERS =
+// SENTENCE_OPENER_CONNECTIVES פחות «ברם», «לצד זאת», «בפועל» (ר'
+// STRIP_CONNECTIVE_EXCLUDED ב-styleMarkers.shared). הרחבת הקילוף היא שינוי
+// התנהגות של המחולל — משפטים שהיום נשמרים כמו שהם היו מאבדים את הפתיח — ולכן
+// ההרחבה חייבת להימדד בבנצ' ולא להיגרר "בחינם" מהאיחוד.
+const STRIP_CONNECTIVE_RE = new RegExp(`^[,\\s]*(?:${buildAlternation(STRIP_CONNECTIVE_OPENERS)})[,\\s]+`);
 
 // ⚠️ הורחב 27.7 ל**כינויי גוף**, לא רק רומזים. נמדד בפלט:
 //   «עוד צוין כי **הוא** מתיר פגיעה בפרטיות»
@@ -224,7 +234,11 @@ const DANGLING_ANAPHOR_RE = /^(?:זאת|זו|זה|אלה|אלו|הדבר|כך|ל
 const PRONOUN_OPENER_RE = /^(?:הוא|היא|הם|הן|כשזו|כשהוא|כשהיא|כשהם)(?=[\s,])/;
 // ⚠️ בלי \b בסוף: `\b?` הוא ביטוי לא חוקי (אי אפשר לכמת גבול-מילה), ו-\b ממילא
 // חסר משמעות אחרי אות עברית. הגבול נאכף ע"י (?![א-ת]) כמו בשאר המסננים.
-const DISCOURSE_OPENER_RE = /^(?:במילים אחרות|לדוגמ[הא]|למשל|כפי שהזכרנו|כאמור|לסיכום|לסיום|ראשית|שנית|שלישית|כלומר|מנגד|לעומת זאת|בנוסף|יתרה מכך|זאת ועוד)(?![א-ת])/;
+// ⚠️ קבוצה **שלישית ונפרדת** (DISCOURSE_OPENERS ב-styleMarkers.shared) — לא
+// FORMAL_CONNECTORS של הגלאי ולא רשימת הפיצול. מרקרי המניין כאן הם בלי פסיק
+// ("ראשית") בעוד שבגלאי הם דווקא עם פסיק, ומקשרי הניגוד הבסיסיים ("אך", "אולם")
+// חסרים כאן בכוונה — להם **מותר** לפתוח פסוקית משועבדת.
+const DISCOURSE_OPENER_RE = new RegExp(`^(?:${buildAlternation(DISCOURSE_OPENERS)})(?![א-ת])`);
 // מקף שאינו מוקף ברווחים משני צדדיו = גבול משפט שנבלע בפורמט.
 const GLUED_DASH_RE = /\S[–—]\s*[א-ת]|[א-ת]\s*[–—]\S/;
 

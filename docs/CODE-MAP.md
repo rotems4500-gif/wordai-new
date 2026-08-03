@@ -137,7 +137,7 @@
 ממשק: `components/assignmentScaffold/AssignmentScaffoldStudio.jsx` 512, `EvidencePanel.jsx` 228. טאב "מטלה" ב-Ribbon.
 
 ### שונות
-`copyleaksService.js` 567 (מקוריות/AI-content), `styleAuthenticityService.js` 420 (מזהה AI מקומי), `humanizerLoopService.js` 160, `materialExtractBrowser.js` 133 (חילוץ docx/txt/xlsx/pptx/pdf/OCR בדפדפן), `httpTransport.js` 90, `webProxyService.js` 62, `uiFeedback.js` 202, `documentUpload.js` 113, `chatScope.js` 61
+`copyleaksService.js` 567 (מקוריות/AI-content), `styleAuthenticityService.js` 420 (מזהה AI מקומי), `styleMarkers.shared.js` 145 (**מקור האמת היחיד לרשימות המרקרים** — מחברים/קלישאות/רגיסטר-AI/מקשרים פותחי-משפט; LEAF באפס תלויות, מיובא ע"י הגלאי, ה-humanizer, aiService, proseCompose, styleFit ו-detector-train), `humanizerLoopService.js` 160, `materialExtractBrowser.js` 133 (חילוץ docx/txt/xlsx/pptx/pdf/OCR בדפדפן), `httpTransport.js` 90, `webProxyService.js` 62, `uiFeedback.js` 202, `documentUpload.js` 113, `chatScope.js` 61
 
 ---
 

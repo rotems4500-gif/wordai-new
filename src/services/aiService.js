@@ -42,6 +42,9 @@ import {
 import { classifySourceIntent, isSourceReuseOrIntegrationRequest } from "./sourceIntent";
 import { DEFAULT_COPYLEAKS_CONFIG, getCopyleaksBearerToken, normalizeCopyleaksConfig } from "./copyleaksService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./humanizerLoopService";
+// דוגמאות המרקרים ב-applicationRules (buildPortablePrompt) נגזרות מהמקור המשותף
+// ולא מועתקות ביד — ר' styleMarkers.shared.
+import { FORMAL_CONNECTORS, CLICHE_PHRASES, markerExamplesQuoted } from "./styleMarkers.shared";
 import { normalizeStyleEngine, buildStyleEngineInjectionBlock, classifyRequestGenre } from "./styleProfileService";
 import { selectChunks, buildChunkInjectionText, selectExemplarSentences } from "./styleRetrievalService";
 import { ensureSampleStoreReady, getChunks } from "./styleSampleStore";
@@ -6488,10 +6491,14 @@ export const buildPortablePrompt = async (options = {}) => {
     'איך ליישם את הסגנון (חובה בכל תוצר):',
     '1. כתוב כאילו המשתמש עצמו כתב — עדיף "נכון לקול שלו" על פני "כתיבה נכונה" סטנדרטית.',
     '2. קצב אנושי: ערבב אורכי משפטים. משפט קצר ליד ארוך. אסור רצף משפטים אחידים ומלוטשים.',
-    '3. אל תפתח שני משפטים סמוכים באותה מילה או מבנה, ואל תפתח בפתיחים שבלוניים ("בעולם של ימינו", "חשוב לציין").',
-    '4. מילות קישור: השתמש רק באלה שמופיעות בפרופיל או בדוגמאות. אל תוסיף "יתרה מכך", "זאת ועוד", "אשר על כן" וכדומה אם הן לא שם.',
+    // ⚠️ הדוגמאות ב-4 וב-6 נגזרות מרשימות הגלאי (3 ו-5 פריטים מהראש) ולא נכתבות ביד —
+    // כך שמרקר שנוסף לגלאי מגיע גם לפרומפט. **דוגמאות בלבד**: הרשימה המלאה היא 58+29
+    // ביטויים, ושפיכתה לפרומפט הייתה מנפחת אותו בלי להוסיף אות. סעיף 3 ויתר על
+    // הדוגמאות שלו ומפנה לשניים האלה, במקום לשמור עותק ידני שלישי.
+    '3. אל תפתח שני משפטים סמוכים באותה מילה או מבנה, ואל תפתח בפתיחים שבלוניים (ר\' 4 ו-6).',
+    `4. מילות קישור: השתמש רק באלה שמופיעות בפרופיל או בדוגמאות. אל תוסיף ${markerExamplesQuoted(FORMAL_CONNECTORS, 3)} וכדומה אם הן לא שם.`,
     '5. מבנה מאופק: מעט מקפים ארוכים, בלי נקודה-פסיק, בלי מרכאות-הדגשה, סוגריים רק כשבדוגמאות יש.',
-    '6. בלי קלישאות AI: "מגוון רחב", "אבן יסוד", "חלק בלתי נפרד", "ממלא תפקיד מרכזי", "כלי רב עוצמה".',
+    `6. בלי קלישאות AI: ${markerExamplesQuoted(CLICHE_PHRASES, 5)}.`,
     '7. הפרופיל והדוגמאות הם מקור לסגנון בלבד, לעולם לא לתוכן — כתוב על מה שמתבקש בשיחה.',
     '8. אם המשתמש מבקש לשכתב טקסט שכבר תואם את הסגנון — החזר אותו כמעט ללא שינוי. אל תשכתב לשם שכתוב.',
   ].join('\n');

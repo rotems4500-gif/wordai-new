@@ -6,6 +6,13 @@
 // שכבת browser כבדה). במקום זה: קוראים את שני הקבצים כטקסט, מאתרים כל בלוק מערך/אובייקט
 // עם regex, ומריצים אותו עם new Function כדי לקבל את הערך האמיתי (לא פרסור-טקסט שביר).
 //
+// ⚠️ מאז איחוד רשימות המרקרים (styleMarkers.shared.js) יש כאן **שני** סוגי שערים:
+//   · SHARED_NAMES (FORMAL_CONNECTORS / CLICHE_PHRASES) — לא מוכרזים יותר באף אחד
+//     משני הקבצים אלא מיובאים מהמקור המשותף. אין מה להשוות ערכית, ולכן נבדק שאף
+//     צד לא הכריז לעצמו עותק מקומי חדש ושהשניים באמת מייבאים משם.
+//   · NAMES (STOP_WORDS / DEFAULT_WEIGHTS / הקבועים) — עדיין משוכפלים ידנית, ולכן
+//     עדיין מושווים ערך-מול-ערך כמו קודם.
+//
 // הרצה: node tools/detector-train/sync-check.mjs   (exit≠0 = השערים לא מסונכרנים)
 
 import { readFileSync } from 'node:fs';
@@ -15,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVICE_PATH = path.join(HERE, '..', '..', 'src', 'services', 'styleAuthenticityService.js');
 const EXTRACTOR_PATH = path.join(HERE, 'extractor.mjs');
+const SHARED_PATH = path.join(HERE, '..', '..', 'src', 'services', 'styleMarkers.shared.js');
 
 // מאתר `const/export const NAME = <ביטוי>;` ומחזיר את גוף הביטוי (תומך במערכים/אובייקטים/
 // new Set([...]) — כל דבר שנגמר ב-`;` בסוף השורה שמכילה רק ')'/']'/'}' ואז ';').
@@ -50,10 +58,61 @@ function loadDecl(filePath, name) {
   return extractLiteral(source, name, filePath);
 }
 
-const NAMES = ['FORMAL_CONNECTORS', 'CLICHE_PHRASES', 'STOP_WORDS', 'DEFAULT_WEIGHTS', 'NGRAM_MIN_WORDS', 'DEFAULT_THRESHOLD'];
+// שמות שכבר **אינם** מוכרזים באף אחד משני הקבצים: הם חיים ב-styleMarkers.shared.js
+// ומיובאים לשניהם. עבורם אין מה להשוות ערך-מול-ערך (זה אותו אובייקט בדיוק); מה
+// שצריך שמירה הוא שאף צד לא יחזיר לעצמו עותק מקומי — וזה בדיוק מה שנבדק כאן.
+const SHARED_NAMES = ['FORMAL_CONNECTORS', 'CLICHE_PHRASES'];
+const NAMES = ['STOP_WORDS', 'DEFAULT_WEIGHTS', 'NGRAM_MIN_WORDS', 'DEFAULT_THRESHOLD'];
 
 let anyMismatch = false;
 const report = [];
+
+// ---- שער המקור המשותף ----
+const SHARED_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*['"][^'"]*styleMarkers\.shared(?:\.js)?['"]/g;
+const serviceSrc = readFileSync(SERVICE_PATH, 'utf8');
+const extractorSrc = readFileSync(EXTRACTOR_PATH, 'utf8');
+
+// כל השמות שקובץ נתון מייבא מהמקור המשותף (תומך בייבוא רב-שורתי ובכינוי `as`).
+const sharedImportNames = (src) => {
+  const names = new Set();
+  for (const m of src.matchAll(SHARED_IMPORT_RE)) {
+    m[1].split(',').forEach((part) => {
+      const raw = part.trim();
+      if (raw) names.add(raw.split(/\s+as\s+/)[0].trim());
+    });
+  }
+  return names;
+};
+const SERVICE_SHARED_IMPORTS = sharedImportNames(serviceSrc);
+const EXTRACTOR_SHARED_IMPORTS = sharedImportNames(extractorSrc);
+
+for (const name of SHARED_NAMES) {
+  let sharedVal;
+  try {
+    sharedVal = loadDecl(SHARED_PATH, name);
+  } catch (err) {
+    anyMismatch = true;
+    report.push(`${name}: ✗ לא נמצא ב-styleMarkers.shared.js — ${err.message}`);
+    continue;
+  }
+  const problems = [];
+  [
+    [serviceSrc, SERVICE_SHARED_IMPORTS, 'styleAuthenticityService.js'],
+    [extractorSrc, EXTRACTOR_SHARED_IMPORTS, 'extractor.mjs'],
+  ].forEach(([src, imported, label]) => {
+    // עותק מקומי שחזר: `const NAME = [` באותו קובץ.
+    if (new RegExp(`(?:export\\s+)?const\\s+${name}\\s*=\\s*\\[`).test(src)) {
+      problems.push(`${label} הכריז שוב עותק מקומי`);
+    }
+    if (!imported.has(name)) problems.push(`${label} אינו מייבא אותו מ-styleMarkers.shared`);
+  });
+  if (problems.length) {
+    anyMismatch = true;
+    report.push(`${name}: ${problems.join(' | ')}`);
+  } else {
+    report.push(`${name}: ✓ מקור אחד משותף (${sharedVal.length} ביטויים) — שני הקבצים מייבאים, אין עותק מקומי`);
+  }
+}
 
 for (const name of NAMES) {
   let serviceVal;
@@ -106,28 +165,14 @@ for (const name of NAMES) {
       report.push(`${name}: ✓ (${serviceVal})`);
     }
   } else {
-    // FORMAL_CONNECTORS / CLICHE_PHRASES — מערכים; משווים כרשימות מסודרות (סדר לא אמור
-    // להשפיע על ההתנהגות, אבל אם הוא שונה זה עדיין סימן לדריפט ידני שכדאי לדעת עליו).
-    const a = [...serviceVal];
-    const b = [...extractorVal];
-    const sortedA = [...a].sort();
-    const sortedB = [...b].sort();
-    const missingInExtractor = sortedA.filter((w) => !sortedB.includes(w));
-    const missingInService = sortedB.filter((w) => !sortedA.includes(w));
-    const orderDiffers = JSON.stringify(a) !== JSON.stringify(b) && !missingInExtractor.length && !missingInService.length;
-    if (missingInExtractor.length || missingInService.length) {
-      anyMismatch = true;
-      report.push(`${name}: קיים רק ב-service: [${missingInExtractor.join(', ')}] | קיים רק ב-extractor: [${missingInService.join(', ')}]`);
-    } else if (orderDiffers) {
-      anyMismatch = true;
-      report.push(`${name}: אותה תכולה אבל סדר שונה — סימן לדריפט ידני, לתקן ידנית.`);
-    } else {
-      report.push(`${name}: ✓ (${a.length} ביטויים)`);
-    }
+    // אין ענף גנרי בכוונה: כל שם ב-NAMES חייב כלל השוואה מפורש. שם חדש שנוסף בלי
+    // כלל היה נבדק "איכשהו" ומדווח ✓ — בדיוק סוג השקט שהשער הזה קיים כדי למנוע.
+    anyMismatch = true;
+    report.push(`${name}: ✗ אין כלל השוואה מוגדר ל-"${name}" ב-sync-check — להוסיף אותו.`);
   }
 }
 
-console.log('=== sync-check: styleAuthenticityService.js ↔ extractor.mjs ===');
+console.log('=== sync-check: styleMarkers.shared.js → styleAuthenticityService.js ↔ extractor.mjs ===');
 report.forEach((line) => console.log(`  ${line}`));
 
 if (anyMismatch) {

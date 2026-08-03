@@ -4,7 +4,8 @@
 הלולאה: מוסיפים דגימות → מאפיינים → מגלים מרקרים → מרחיבים לקסיקון → מאמתים.
 
 ## קבצים
-- `extractor.mjs` — מראה verbatim של ליבת הפיצ'רים מהשירות (רץ ב-Node טהור). **לסנכרן ידנית** עם השירות אם הליבה משתנה.
+- `extractor.mjs` — מראה verbatim של ליבת הפיצ'רים מהשירות (רץ ב-Node טהור). **לסנכרן ידנית** עם השירות אם הליבה משתנה — פרט לרשימות המרקרים, שכבר אינן משוכפלות אלא מיובאות מ-`src/services/styleMarkers.shared.js` בשני הצדדים.
+- `sync-check.mjs` — שער הסנכרון בין השירות ל-extractor: משווה STOP_WORDS/DEFAULT_WEIGHTS/הקבועים ערך-מול-ערך, ומוודא שרשימות המרקרים מיובאות מהמקור המשותף ולא הוכרזו מחדש מקומית.
 - `train.mjs` — מנתח: ממוצעי סיגנל לכל מחלקה, weights+סף מכויל, דיוק, וגילוי n-grams שכיחים ב-AI/נדירים באנושי.
 - `samples/ai.txt` — דגימות AI (בלוקים מופרדים בשורת `===`).
 - `samples/human.txt` — דגימות אנושיות (אותו פורמט).
@@ -21,7 +22,9 @@ node tools/detector-train/train.mjs --emit   # + כותב calibration.json
 3. מדביקים טקסטים אנושיים אמיתיים (שלך/של אחרים) ל-`samples/human.txt`.
 4. מריצים `train.mjs`, מסתכלים על "מרקרים מועמדים חדשים".
 5. מרקרים עם lift גבוה + human=0 → מוסיפים ל-`FORMAL_CONNECTORS`/`CLICHE_PHRASES`
-   ב**שני** הקבצים (השירות + extractor.mjs).
+   ב-`src/services/styleMarkers.shared.js` — **מקום אחד בלבד**. השירות, extractor.mjs
+   והפרומפטים (humanizer / portable prompt) מייבאים משם, ולכן אין יותר "שני הקבצים".
+   `node tools/detector-train/sync-check.mjs` נכשל אם מישהו החזיר עותק מקומי.
 6. חוזרים עד שאין מרקרים חדשים משמעותיים.
 
 ## הערות כיול
