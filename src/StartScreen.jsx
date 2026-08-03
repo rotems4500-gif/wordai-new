@@ -468,6 +468,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [isGenerating, setIsGenerating] = useState(false);
   const [humanizeLoopEnabled, setHumanizeLoopEnabled] = useState(() => Boolean(getAppMemory().humanizeLoopOnGenerate));
   const [aiAppendixEnabled, setAiAppendixEnabled] = useState(() => Boolean(getAppMemory().aiAppendixOnGenerate));
+  // מצב סגור: המשתמש מצהיר מפורשות שאין חיפוש חיצוני ביצירה (ישיר, סביבת עבודה, בישול).
+  const [closedModeEnabled, setClosedModeEnabled] = useState(() => Boolean(getAppMemory().closedModeOnGenerate));
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -1440,7 +1442,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         projectSeed: pendingProjectSeed,
         // Direct מבטיח "קריאה יחידה ונקייה": כשנדרשים מקורות הם מאוחזרים בקריאה-אחת
         // (googleSearch בתוך הכתיבה), לא ב-pipeline רב-קריאות. סביבות עבודה — היוריסטיקה.
-        ...(workspaceBypassActive ? { sourceRoute: 'single-call' } : {}),
+        // מצב סגור הוא הצהרה מפורשת של המשתמש — הוא גובר על ברירת המחדל של ה-bypass.
+        ...(closedModeEnabled
+          ? { sourceRoute: 'none', includeSources: false }
+          : (workspaceBypassActive ? { sourceRoute: 'single-call' } : {})),
       });
       setPendingProjectSeed(null);
     } finally {
@@ -1514,10 +1519,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         forceDirectMode: true,
         skipWorkflowAutomation: true,
         directModeReason: 'chef-final-compose',
-        ...(chefSourceRoute && chefSourceRoute !== 'auto' ? {
-          sourceRoute: chefSourceRoute,
-          includeSources: chefSourceRoute !== 'none',
-        } : {}),
+        // אכיפה גם כאן ולא רק ב-UI: session בישול משוחזר מ-localStorage יכול להביא
+        // מסלול מקורות ישן, ונעילת הכפתורים לבדה תדלוף.
+        ...(closedModeEnabled
+          ? { sourceRoute: 'none', includeSources: false }
+          : (chefSourceRoute && chefSourceRoute !== 'auto' ? {
+            sourceRoute: chefSourceRoute,
+            includeSources: chefSourceRoute !== 'none',
+          } : {})),
       });
       setSelectedModel(undefined);
       setShowChefDialog(false);
@@ -1808,6 +1817,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 <span className="flex flex-col">
                   <span className="text-white font-semibold text-sm">🧬 האנשה בלולאה עד תוצאה מספקת</span>
                   <span className="text-white/65 text-xs">אחרי היצירה, המסמך משוכתב שוב ושוב ונמדד מול גלאי ה-AI עד שאין שיפור. איטי יותר, אבל אנושי ככל האפשר.</span>
+                </span>
+              </label>
+            )}
+
+            {!isPresentationOutput && (
+              <label
+                className="flex items-center gap-3 mb-6 px-4 py-3 bg-white/10 backdrop-blur-md border border-white/25 rounded-2xl cursor-pointer text-right"
+                title="מבטל את מסלול המקורות ביצירה (ישיר, סביבת עבודה ובישול). לא משפיע על בדיקת מקורות בצ'אט, מילוי חורים או SPSS."
+              >
+                <input
+                  type="checkbox"
+                  checked={closedModeEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setClosedModeEnabled(next);
+                    saveAppMemory({ ...getAppMemory(), closedModeOnGenerate: next });
+                  }}
+                  className="w-4 h-4 accent-emerald-400 shrink-0"
+                />
+                <span className="flex flex-col">
+                  <span className="text-white font-semibold text-sm">🔒 מצב סגור — בלי חיפוש חיצוני</span>
+                  <span className="text-white/65 text-xs">המסמך נכתב רק מהבקשה, מההנחיות ומהחומרים שצירפת. בלי חיפוש ברשת, בלי אחזור מקורות ובלי ביבליוגרפיה אוטומטית — גם אם המילה "מקורות" מופיעה בהנחיות.</span>
                 </span>
               </label>
             )}
@@ -2624,6 +2655,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               setShowChefDialog(false);
             }}
             selectedModel={selectedModel || resolvedDirectProviderId}
+            forcedSourceRoute={closedModeEnabled ? 'none' : ''}
             chefContext={{
               prompt: String(prompt || '').trim(),
               templateId: selectedTemplate,

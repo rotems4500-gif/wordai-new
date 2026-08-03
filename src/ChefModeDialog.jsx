@@ -77,7 +77,7 @@ const buildChefContextKey = ({ prompt = '', templateId = '', instructions = '', 
 
 const trimChefMaterialsContext = (value = '') => String(value || '').trim().slice(0, CHEF_MATERIALS_CONTEXT_MAX_CHARS);
 
-export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModelChange, selectedModel = 'gemini', chefContext = {}, escapeBlocked = false }) {
+export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModelChange, selectedModel = 'gemini', chefContext = {}, escapeBlocked = false, forcedSourceRoute = '' }) {
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [questionFlow, setQuestionFlow] = useState([]);
   const [responses, setResponses] = useState([]);
@@ -87,7 +87,11 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
   const [finalAdditionsBaseResponses, setFinalAdditionsBaseResponses] = useState([]);
   const [isFinalAdditionsStep, setIsFinalAdditionsStep] = useState(false);
   // בחירת מסלול מקורות בסוף הבישול: auto (המערכת מחליטה) | pipeline | single-call | none
-  const [sourceRoute, setSourceRoute] = useState('auto');
+  const [sourceRoute, setSourceRoute] = useState(forcedSourceRoute || 'auto');
+  // המתג במסך הבית דורס גם session משוחזר.
+  useEffect(() => {
+    if (forcedSourceRoute) setSourceRoute(forcedSourceRoute);
+  }, [forcedSourceRoute]);
   const [askFinalAdditions, setAskFinalAdditions] = useState(() => {
     try {
       return localStorage.getItem('wordflow_chef_ask_final_additions') !== 'false';
@@ -653,6 +657,11 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
               <div className="mb-6 text-right">
                 <div className="text-white font-bold text-sm mb-1">איך לטפל במקורות?</div>
                 <p className="text-white/60 text-xs mb-3">בחירה מפורשת גוברת על ההחלטה האוטומטית של המערכת.</p>
+                {forcedSourceRoute === 'none' && (
+                  <div className="mb-3 px-3 py-2 rounded-xl border border-emerald-300/40 bg-emerald-400/15 text-emerald-50 text-xs">
+                    🔒 מצב סגור פעיל מהמסך הראשי — הבישול ייכתב בלי חיפוש חיצוני. לשינוי, כבה את המתג במסך הבית.
+                  </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {[
                     { id: 'auto', label: 'אוטומטי (מומלץ)', desc: 'המערכת בוחרת מסלול לפי דרישות המטלה' },
@@ -664,7 +673,8 @@ export default function ChefModeDialog({ onStart, onClose, onGoToEditor, onModel
                       key={route.id}
                       type="button"
                       onClick={() => setSourceRoute(route.id)}
-                      className={`p-3 rounded-xl border-2 transition-all text-right ${
+                      disabled={Boolean(forcedSourceRoute)}
+                      className={`p-3 rounded-xl border-2 transition-all text-right disabled:opacity-40 disabled:cursor-not-allowed ${
                         sourceRoute === route.id
                           ? 'border-cyan-300 bg-cyan-400/20 text-cyan-50 shadow-lg shadow-cyan-500/20'
                           : 'border-white/20 bg-white/5 hover:bg-white/10 text-white/80 hover:text-white'
