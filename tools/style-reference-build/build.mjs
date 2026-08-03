@@ -14,6 +14,10 @@
 //   node tools/style-reference-build/build.mjs --corpus <dir>
 //   node tools/style-reference-build/build.mjs --corpus <dir> --out <file>   (ברירת מחדל: הנכס עצמו)
 //   node tools/style-reference-build/build.mjs                               (בלי --corpus: מדפיס הסבר ויוצא)
+//
+// אם בתיקיית הקורפוס יש _corpus-manifest.json (נכתב ע"י prepare-corpus.mjs),
+// ההרכב שלו נכנס ל-meta.composition ולכותרת הקובץ — כך ש-meta מתעד מה באמת נכנס
+// לאוכלוסייה, ולא רק נתיב תיקייה (שעלול להיות תיקייה זמנית).
 // ============================================================================
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +51,18 @@ async function listTxtFiles(dir) {
     }
   }
   return files;
+}
+
+// קורא את _corpus-manifest.json של prepare-corpus.mjs, אם קיים. חסר/שבור → null
+// (הכלי עדיין עובד על תיקיית .txt "ידנית" שהוכנה בלי הסקריפט).
+async function readManifest(dir) {
+  try {
+    const raw = await readFile(path.join(dir, '_corpus-manifest.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function explainNoCorpus() {
@@ -120,24 +136,52 @@ async function main() {
   const global = aggregateReferenceDistribution(docMetrics);
 
   console.log('כורה n-grams...');
-  const ngramFreq = mineNgrams(texts, { sizes: [2, 3], topN: 30, minCount: 3 });
+  // minDocFraction=0.1 — גרם חייב להופיע ב-≥10% מהמסמכים כדי להיחשב "ביטוי
+  // אוכלוסייה" ולא צירוף-נושא/ריהוט-דף של מסמך בודד (ר' ההערה ב-lib.mjs).
+  const ngramFreq = mineNgrams(texts, { sizes: [2, 3], topN: 30, minCount: 3, minDocFraction: 0.1 });
+
+  // מניפסט ההכנה (אם קיים) — מתעד מאיזה מקורות הקורפוס הורכב.
+  const manifest = await readManifest(corpusDir);
+
+  const sourceLine = manifest?.sources?.length
+    ? `נבנה מקורפוס: ${docMetrics.length} מסמכים — ${manifest.sources.map((s) => `${s.name} ${s.docs}`).join(', ')}`
+    : `נבנה מקורפוס: ${docMetrics.length} מסמכים מתוך ${corpusDir}`;
 
   const output = {
     meta: {
       version: 1,
-      source: `נבנה מקורפוס: ${docMetrics.length} מסמכים מתוך ${corpusDir}`,
+      source: sourceLine,
       builtFrom: 'corpus',
+      docCount: docMetrics.length,
       updatedAt: new Date().toISOString(),
+      ...(manifest ? { composition: manifest } : {}),
     },
     global,
     genres: {},
     ngramFreq,
   };
 
+  const compositionComment = manifest?.sources?.length
+    ? [
+      '//',
+      '// הרכב הקורפוס שממנו נבנה הקובץ הזה:',
+      ...manifest.sources.map((s) => `//   • ${s.name}: ${s.docs} מסמכים (${s.words} מילים) — ${s.label}`),
+      ...(manifest.excluded || []).map((x) => `//   ✗ הוחרג: ${x}`),
+      ...(manifest.academicCorpusFound === false
+        ? ['//   ⚠️ הקורפוס האקדמי לא נמצא במכונה שבנתה — הנכס מבוסס ויקי בלבד.']
+        : []),
+    ].join('\n')
+    : '//';
+
   const fileContent = `// styleReferenceCorpus.data.js — נכס-ייחוס אוכלוסייה למנוע הסגנון (Style Engine).
 //
 // קובץ זה נוצר אוטומטית ע"י tools/style-reference-build/build.mjs — לא לערוך ידנית.
-// לרענון: node tools/style-reference-build/build.mjs --corpus <תיקיית קורפוס>
+// לרענון: node tools/style-reference-build/prepare-corpus.mjs && node tools/style-reference-build/build.mjs --corpus <תיקיית קורפוס>
+${compositionComment}
+//
+// meta.builtFrom='corpus' הוא מה שמפעיל את ניגוד-האוכלוסייה בפועל (isRealReference
+// ב-styleReferenceService.js): שקלול z ב-scoreStyleMatchLocal, סינון עוגנים
+// ב-buildStyleEngineInjectionBlock, ודירוג נדירות ב-mineSignatureNgrams.
 //
 // מבנה: ראו src/services/styleReferenceService.js לחוזה הטעינה/גישה.
 export const STYLE_REFERENCE = ${JSON.stringify(output, null, 2)};

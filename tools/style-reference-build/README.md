@@ -6,20 +6,52 @@
 
 ## מה זה עושה
 
+**שני שלבים.** `prepare-corpus.mjs` מכין את התיקייה (מסמך אחד לקובץ) מחומרי הגלם
+שכבר קיימים במכונה, ו-`build.mjs` מחשב ממנה את הנכס:
+
+```bash
+node tools/style-reference-build/prepare-corpus.mjs                    # → %TEMP%/wordai-style-ref-corpus
+node tools/style-reference-build/build.mjs --corpus "<אותה תיקייה>"    # → src/services/styleReferenceCorpus.data.js
+```
+
+`prepare-corpus.mjs`:
+
+1. מפצל את הבלובים מרובי-המסמכים של `tools/detector-train/samples/human-global/`
+   (מופרדי `===`) למסמכים בודדים.
+2. מחלץ טקסט מהקורפוס האקדמי (`314999533`, מחברים אחרים — **לא** עבודות המשתמש),
+   כולל שחזור שורות ופסקאות מ-PDF (`itemsToLines` + הוריסטיקת שורה-קצרה).
+3. מפעיל שערי איכות: כפילויות, רציפות-פרוזה, מרק-שברים, עברית, PDF משובש.
+4. כותב `_corpus-manifest.json` עם ההרכב — `build.mjs` מכניס אותו ל-`meta.composition`.
+
+⚠️ הרכב הקורפוס והשערים אינם שרירותיים — כל אחד מהם נמדד על הקורפוס האמיתי.
+הנימוקים מלאים בהערת הכותרת של `prepare-corpus.mjs`; אל תשנו ספים בלי למדוד מחדש.
+
+`build.mjs`:
+
 1. קורא את כל קבצי ה-`.txt` בתיקיית קורפוס שסופקה (`--corpus <dir>`).
 2. מריץ על כל קובץ `computeLocalMetrics` (`lib.mjs` — פורט טהור, בלי תלויות, של הפונקציה
    ב-`src/services/styleProfileService.js:125-270`).
 3. מאגרג mean/std לכל מדד על פני כל המסמכים (`aggregateReferenceDistribution`).
 4. כורה n-grams נפוצים (bigrams/trigrams) על פני הקורפוס כולו ומחשב `freqPer100Words`
-   (`mineNgrams`) — כריה בסיסית: ספירת רצפים, סינון n-grams שכולם stopwords, top-30.
+   (`mineNgrams`) — ספירת רצפים, סינון n-grams שכולם stopwords, **שער פיזור בין
+   מסמכים** (`minDocFraction=0.1`), top-30.
 5. כותב מחדש את `src/services/styleReferenceCorpus.data.js` עם `meta.builtFrom='corpus'`.
 
-## מצב נוכחי — bootstrap ידני
+## מצב נוכחי — קורפוס אמיתי (4.8.2026)
 
-עד שהכלי הזה רץ בפועל על קורפוס אמיתי, `styleReferenceCorpus.data.js` מכיל **seed ידני**
-(`meta.builtFrom='bootstrap'`) — הערכות מושכלות למדדי סגנון בכתיבה אקדמית עברית טיפוסית,
-לא ערכים מחושבים. זה מספיק כדי שהמנוע יעבוד (z-score מול אוכלוסייה משוערת), אבל הדיוק
-האמיתי דורש הרצה על קורפוס.
+`styleReferenceCorpus.data.js` נבנה מ-**96 מסמכים**: 48 אקדמיים (128k מילים, מחברים
+אחרים מקורפוס `314999533`) + 48 ערכי ויקיפדיה עברית (37k מילים). ההרכב המלא, השערים
+והדחיות נמצאים ב-`meta.composition` בתוך הנכס עצמו.
+
+`meta.builtFrom='corpus'` הוא מה שמפעיל בפועל את ניגוד-האוכלוסייה — `isRealReference`
+ב-`styleReferenceService.js` שומר על שלושה מסלולים שהיו no-op עם ה-bootstrap:
+שקלול-z ב-`scoreStyleMatchLocal`, סינון עוגנים (`zPop≥0.8`) ב-`buildStyleEngineInjectionBlock`,
+ודירוג נדירות ב-`mineSignatureNgrams`.
+
+⚠️ **מגבלה ידועה:** רוב המסמכים האקדמיים מגיעים מחילוץ PDF, והמשתמש נמדד על טקסט
+נקי מהעורך. `avgParagraphWords` ו-`oneWordSentenceRate` עדיין מושפעים מתנאי-המדידה
+ולא רק מהסגנון (ר' אותה אזהרה על `@paraSents` ב-CLAUDE.md). שחזור הפסקאות והשערים
+מצמצמים את הפער אך לא מבטלים אותו.
 
 ## איך משיגים קורפוס עברי אקדמי (public domain / חופשי לשימוש)
 

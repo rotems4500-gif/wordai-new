@@ -264,24 +264,37 @@ export function aggregateReferenceDistribution(docMetricsList) {
  * סופר מופעים גולמיים, ומחזיר את ה-topN התדירים ביותר כ-freqPer100Words
  * (מספר מופעים / סך המילים בקורפוס * 100). מסנן n-grams שכל מיליהם stopwords
  * בלבד (לא אינפורמטיביים) ו-n-grams עם ספירה נמוכה מ-minCount.
+ *
+ * ⚠️ minDocFraction — שער **פיזור בין מסמכים**, לא רק תדירות. הטבלה הזו אמורה
+ * לתאר ביטוי שכיח *באוכלוסייה*, אבל ספירה גולמית מדרגת גבוה כל צירוף-נושא
+ * שחוזר מאה פעם במסמך אחד. נמדד בבנייה הראשונה על קורפוס אמיתי: הטבלה התמלאה
+ * ב"מוגבלות שכלית"/"חיילים עם מוגבלות" (מאמר יחיד) וב-"jstor org terms"/
+ * "this content" (כותרת תחתונה של JSTOR ב-3 מסמכים). הדרישה שהגרם יופיע
+ * בשבריר מינימלי מהמסמכים מנקה את שניהם בלי רשימת-חריגים ידנית.
+ *
  * @param {string[]} texts
- * @param {{sizes?:number[], topN?:number, minCount?:number}} [opts]
+ * @param {{sizes?:number[], topN?:number, minCount?:number, minDocFraction?:number}} [opts]
  * @returns {Record<string, number>}
  */
 export function mineNgrams(texts, opts = {}) {
   const sizes = opts.sizes || [2, 3];
   const topN = opts.topN || 30;
   const minCount = opts.minCount || 3;
+  const minDocFraction = Number.isFinite(opts.minDocFraction) ? opts.minDocFraction : 0;
 
   const counts = new Map();
+  const docFreq = new Map();
   let totalWords = 0;
+  let docCount = 0;
 
   for (const text of texts || []) {
     const clean = stripToText(text);
     if (!clean) continue;
+    docCount += 1;
     const words = matchWords(clean).map((w) => w.toLowerCase());
     totalWords += words.length;
 
+    const seenInDoc = new Set();
     for (const size of sizes) {
       for (let i = 0; i + size <= words.length; i++) {
         const gram = words.slice(i, i + size);
@@ -289,14 +302,20 @@ export function mineNgrams(texts, opts = {}) {
         if (gram.every((w) => STOP_WORDS.has(w))) continue;
         const key = gram.join(' ');
         counts.set(key, (counts.get(key) || 0) + 1);
+        if (!seenInDoc.has(key)) {
+          seenInDoc.add(key);
+          docFreq.set(key, (docFreq.get(key) || 0) + 1);
+        }
       }
     }
   }
 
   if (!totalWords) return {};
 
+  const minDocs = minDocFraction > 0 ? Math.max(2, Math.ceil(docCount * minDocFraction)) : 0;
+
   const ranked = [...counts.entries()]
-    .filter(([, count]) => count >= minCount)
+    .filter(([gram, count]) => count >= minCount && (docFreq.get(gram) || 0) >= minDocs)
     .sort((a, b) => b[1] - a[1])
     .slice(0, topN);
 
