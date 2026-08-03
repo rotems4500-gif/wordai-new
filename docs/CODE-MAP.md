@@ -17,26 +17,26 @@
 
 | קובץ | שורות | תפקיד |
 |---|---:|---|
-| [main.jsx](../src/main.jsx) | ~8925 | **מונוליט #1.** React entry + `App()` — מעטפת עורך, חיווט TipTap, מנוע structural-edit, UI ליצירה חיה. מפת סקשנים למטה. |
-| [FileMenu.jsx](../src/FileMenu.jsx) | ~7582 | תפריט קבצים, Settings (כל הטאבים כולל GuideSettings tour בשורות 3322-3409), שמירה/פתיחה/ייצוא |
+| [main.jsx](../src/main.jsx) | ~10208 | **מונוליט #1.** React entry + `App()` — מעטפת עורך, חיווט TipTap, מנוע structural-edit, UI ליצירה חיה. מפת סקשנים למטה. |
+| [FileMenu.jsx](../src/FileMenu.jsx) | ~8341 | תפריט קבצים, Settings (כל הטאבים כולל GuideSettings tour בשורות 3328-3653), שמירה/פתיחה/ייצוא |
 | [AiSidebar.jsx](../src/AiSidebar.jsx) | ~6967 | חלונית ה-AI הצדדית הימנית (chat, attachments, streaming, modes) |
 | [StartScreen.jsx](../src/StartScreen.jsx) | ~2292 | מסך בית, ניהול workspaces, launcher למסמך חדש |
 | [SpssProjectStudio.jsx](../src/SpssProjectStudio.jsx) | ~1798 | סטודיו workflow פרויקט SPSS |
 | [SpssSyntaxStudio.jsx](../src/SpssSyntaxStudio.jsx) | ~1290 | סטודיו תחביר SPSS |
 | [DocumentEditor.jsx](../src/DocumentEditor.jsx) | ~1244 | רכיב העורך TipTap |
 | [ProfileOnboarding.jsx](../src/ProfileOnboarding.jsx) | ~1164 | onboarding ראשוני — קליטת סגנון + מפתחות API |
-| [Ribbon.jsx](../src/Ribbon.jsx) | ~1003 | סרגל כלים עליון (dropdown "עזרה" בשורות ~503-540) |
+| [Ribbon.jsx](../src/Ribbon.jsx) | ~1155 | סרגל כלים עליון (dropdown "עזרה" בשורות ~537-555) |
 | [OneAxisAirHockeyGame.jsx](../src/OneAxisAirHockeyGame.jsx) | ~762 | easter-egg game |
 | [ChefModeDialog.jsx](../src/ChefModeDialog.jsx) | ~760 | "Chef Mode" — ראיון מונחה לבניית מסמך |
 | [PresentationStudio.jsx](../src/PresentationStudio.jsx) | ~712 | סטודיו מצגות |
-| [UserGuide.jsx](../src/UserGuide.jsx) | ~522 | קרוסלת מדריך 10 טאבים (מערכי data קשיחים 18-91, `SECTIONS` 360-372) |
+| [UserGuide.jsx](../src/UserGuide.jsx) | ~712 | קרוסלת מדריך **15 טאבים** (מערכי data קשיחים 18-152, `SECTIONS` 541-557). ⚠️ ה-viewport והרצועה חייבים להישאר `dir="ltr"` (התוכן `dir="rtl"`) — ב-RTL החישוב `x = -index*vw` מוציא כל שקופית מהמסך |
 | [desktopShim.js](../src/desktopShim.js) | ~335 | גשר Tauri — משחזר `window.desktopApp` |
 | WordFlowAnimations.jsx | ~289 | אנימציות UI |
 | FindReplace.jsx | ~282 | חיפוש/החלפה |
 | CloudUnlockGate.jsx | ~252 | שער נעילת ענן |
 | TopBar.jsx | ~249 | סרגל עליון |
 | MagicWand.jsx | ~247 | ליטוש inline עם AI (bubble menu) |
-| HelpModal.jsx | ~208 | `GUIDE_CONTENT` קשיח בשורות 6-195 — נושאי עזרה בעברית |
+| HelpModal.jsx | ~261 | `GUIDE_CONTENT` קשיח בשורות 6-241 — נושאי עזרה בעברית |
 | PptxDraftStudio.jsx | ~203 | סטודיו טיוב PPTX |
 | DocumentDraftStudio.jsx | ~198 | סטודיו טיוטת מסמך |
 | SourceManager.jsx | ~150 | ניהול מקורות |
@@ -218,8 +218,8 @@ Stack: React 19.2 · TipTap 3.22 · Tauri 2.11 · Firebase 12 · framer-motion 1
 
 **חשוב: כשמעדכנים תוכן עזרה — חובה לעדכן את כל שלוש החזיתות, הן לא מסונכרנות אוטומטית.**
 
-1. **Ribbon dropdown "עזרה"** ([Ribbon.jsx](../src/Ribbon.jsx) שורות 503-540) → `onCommand('openHelp', id)` → main.jsx ~6927 → [HelpModal.jsx](../src/HelpModal.jsx) `GUIDE_CONTENT` (נושאים: `checkUpdates`, `guideUser`→קרוסלת UserGuide, `studios`, `guideAPIKeys`, `tsDocs`, `tsAPI`, `shortcuts`, `about`)
-2. **Settings → טאב "מדריך"** — `GuideSettings` ב-[FileMenu.jsx](../src/FileMenu.jsx) שורות 3322-3409 — סיור נפרד בן 6 צעדים
+1. **Ribbon dropdown "עזרה"** ([Ribbon.jsx](../src/Ribbon.jsx) שורות 537-555) → `onCommand('openHelp', id)` → main.jsx `openHelpTopic` (~3413) / `case 'openHelp'` (~7263) → [HelpModal.jsx](../src/HelpModal.jsx) `GUIDE_CONTENT` (נושאים: `checkUpdates`, `guideUser`→קרוסלת UserGuide, `studios`, `guideAPIKeys`, `tsDocs`, `tsAPI`, `shortcuts`, `about`). ⚠️ הוספת נושא חדש דורשת גם עריכה ב-Ribbon.jsx — ולכן תוכן חדש נדחף לתוך הנושאים הקיימים
+2. **Settings → טאב "מדריך"** — `GuideSettings` ב-[FileMenu.jsx](../src/FileMenu.jsx) שורות 3328-3653 — סיור נפרד בן 6 צעדים + `quickRoutes` (~3421)
 3. **[docs/user-guide.md](user-guide.md)** — markdown סטטי, **לא** מוצג באפליקציה, תוכן כפול
 
 ---
@@ -240,8 +240,17 @@ Stack: React 19.2 · TipTap 3.22 · Tauri 2.11 · Firebase 12 · framer-motion 1
 
 | קובץ | תפקיד |
 |---|---|
-| `user-guide.md` | מדריך משתמש — עדכני |
+| `user-guide.md` | מדריך משתמש — **מסונכרן ידנית** עם שלוש חזיתות העזרה (HelpModal, GuideSettings, UserGuide). כשמעדכנים תכונה — לעדכן את כל הארבע |
 | `api-keys-guide.md` | חיבור מפתחות LLM |
+| `assignment-scaffold.md` | **שלד מטלה** — ארכיטקטורה דו-שלבית, ספי רלוונטיות, גוצ'אס |
+| `nlg-handoff.md` | **מנוע ה-NLG המקומי** — המספרים המאומתים, שכבת הניסוח וארבעת שעריה |
+| `manual-training-feasibility.md` | ייתכנות אימון ידני של המנוע המקומי |
+| `opener-training-plan.md` | תוכנית אימון הפתיחים (`openerGrammar` + `openerProfileService`) |
+| `style-engine-plan.md` | תוכנית מנוע הסגנון האישי |
+| `code-signing.md` | חתימת קוד ו-SmartScreen בהתקנה הראשונה |
+| `handoff-1.3.0.md` | handoff לגרסה 1.3.0 |
+| `bench-neg-ai-labor.md` | ניתוח מקרה בבנצ' |
+| `session-2026-07-27.md` | לוג session |
 | `open-items.md` | פריטים פתוחים |
 | `tauri-migration-plan.md` | תוכנית מיגרציית Tauri |
 | `ux-audit-roadmap.md` | מפת דרכים UX |

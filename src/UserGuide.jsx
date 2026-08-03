@@ -19,7 +19,7 @@ const DAILY = [
   { k: '01', icon: 'ph-cursor-click', title: 'התחל ב-3 צעדים', body: 'מסך הבית ← נושא קצר ← «צור עם AI». זהו — יש לך טיוטה ראשונה.' },
   { k: '02', icon: 'ph-magic-wand', title: 'עדן בחלונית ה-AI', body: 'סמן קטע במסמך ובחר פעולה מהירה: תיקון, ניסוח אקדמי או האנשה.' },
   { k: '03', icon: 'ph-at', title: 'שני קיצורים ששווה לזכור', body: '@ מפעיל סוכן ייעודי · / מפעיל skill ממוקד אחד.' },
-  { k: '04', icon: 'ph-export', title: 'לפני הגשה', body: 'בדיקת מרצה ← בדיקת מקוריות ← ייצוא ל-Word (DOCX) מסודר.' },
+  { k: '04', icon: 'ph-export', title: 'לפני הגשה', body: 'בדיקת סגנון (הגלאי המקומי) ← בדיקת מרצה ← בדיקת מקוריות ← ייצוא ל-Word (DOCX) מסודר.' },
 ];
 
 const TOUR = [
@@ -64,7 +64,8 @@ const SLASH_EXAMPLES = ['/academic-structure בנה שלד לעבודה', '/sour
 const PROFILE = [
   { tag: 'פרופיל', icon: 'ph-identification-card', title: 'פרופיל והגשה', body: 'onboarding: שם, מוסד, חוג ותהליך הגשה. הבסיס שמכוון את כל הסוכנים.' },
   { tag: 'קבוע', icon: 'ph-fingerprint', title: 'סגנון אישי', body: 'דוגמאות כתיבה, כללי ניסוח והעדפות טון — משפיע על העבודה שלך לאורך זמן.' },
-  { tag: 'נקודתי', icon: 'ph-paperclip', title: 'חומרי עזר במסך הבית', body: 'מסמכים למסמך הנוכחי בלבד. סגנון אישי = קבוע, חומרי עזר = למסמך הזה.' },
+  { tag: 'נקודתי', icon: 'ph-paperclip', title: 'חומרי עזר במסך הבית', body: 'מסמכים למסמך הנוכחי בלבד. סגנון אישי = קבוע, חומרי עזר = למסמך הזה. מה שסימנת הוא מקור תוכן מחייב, והציטוט מופיע בטקסט בשם הקובץ — «לפי «שם הקובץ»». הבחירה האוטומטית מדרגת לפי תוכן, אז שווה לעבור עליה.' },
+  { tag: 'מצב', icon: 'ph-lock-simple', title: '🔒 מצב סגור — בלי חיפוש חיצוני', body: 'מתג במסך הבית (בין ההאנשה לנספח). כשהוא דולק המערכת כותבת אך ורק מהבקשה, מההנחיות ומהחומרים שסימנת: אין חיפוש ברשת, אין איתור מקורות ואין ביבליוגרפיה אוטומטית — גם אם כתבת «הוסף מקורות» בהנחיות. הוא גם נועל את בורר המקורות ב-Chef. בדיקת מקורות בצ׳אט, השלמת חוסרים ו-SPSS ממשיכים לעבוד כרגיל.' },
 ];
 
 const RECIPES = [
@@ -76,10 +77,68 @@ const RECIPES = [
 ];
 
 const ADVANCED = [
-  { emoji: '📈', title: 'עבודת SPSS', body: 'ניתוח נתונים מודרך — .sav / Excel / CSV, תחביר חכם לפי תפקיד המשתנה, זיהוי ערכי חיסר ולולאת תיקון שגיאות מ-SPSS.' },
-  { emoji: '📊', title: 'סטודיו מצגות', body: 'הזן נושא — נבנה deck שקופית-אחר-שקופית. אפשר גם להפוך טיוטת בסיס לשקופיות. סגנון ומספר תחת ⚙️ הגדרות מצגת.' },
+  { emoji: '📈', title: 'עבודת SPSS', body: 'ניתוח נתונים מודרך — .sav / Excel / CSV, תחביר חכם לפי תפקיד המשתנה, זיהוי ערכי חיסר ולולאת תיקון שגיאות מ-SPSS. קובץ פלט .spv נתמך ומפוענח.' },
+  { emoji: '👁️', title: 'קריאת גרפים ויועץ מרצה', body: 'הסטודיו קורא גם תרשימים — תמונה, PDF, docx או .spv — דרך מודל ראייה. פאנל "יועץ" מציע שינויים בתוכנית הניתוח ומעדכן את הקוד בלחיצה.' },
+  { emoji: '📊', title: 'סטודיו מצגות', body: 'הזן נושא — נבנה deck שקופית-אחר-שקופית. 18 ערכות עיצוב, שערים ייחודיים ובורר ערכה חי. סגנון ומספר תחת ⚙️ הגדרות מצגת.' },
   { emoji: '🎨', title: 'שכתוב טיוטת מצגת', body: 'העלה .pptx והטקסט נכתב מחדש בקול שלך. העיצוב המקורי נשמר במלואו, עם תצוגת השוואה מקור↔משוכתב.' },
   { emoji: '🧬', title: 'האנשה אנטי-זיהוי-AI', body: 'נבדק מול מזהה AI מקומי ונכתב מחדש בלולאה עד מתחת לסף. שליטה לכל ריצה: הפעלה, סף (10–60) ומספר מעברים.' },
+  { emoji: '🔤', title: 'מילים נרדפות', body: 'קליק ימני על מילה בעורך פותח חלופות בעברית — מילון מקומי, בלי קריאת API ובלי לשבור את המשפט.' },
+  { emoji: '⌨️', title: 'השלמה אוטומטית מקומית', body: 'המשך המשפט מוצע תוך כדי הקלדה מהמנוע המקומי. Tab מקבל, המשך הקלדה מתעלם. עובד גם בלי מפתח API.' },
+  { emoji: '🖱️', title: 'תפריט הקשר בסגנון Word', body: 'קליק ימני בעורך פותח תפריט RTL מלא: עיצוב, פעולות AI, נרדפות, הערות ומעקב שינויים — במקום התפריט של הדפדפן.' },
+];
+
+const NOKEY_FREE = [
+  '🧭 שלד מטלה — פירוק המטלה לסעיפים וכתיבה מעוגנת-ראיות.',
+  '🔎 אחזור ראיות מחומרי העזר שלך (חיפוש סמנטי מקומי).',
+  '✍️ פתיחים ומשפטים מהמנוע העברי המקומי.',
+  '🔍 גלאי ה-AI המקומי + סימון משפטים חשודים.',
+  '⌨️ השלמה אוטומטית ו-🔤 מילים נרדפות.',
+  '📄 העורך המלא, מעקב שינויים והייצוא ל-DOCX.',
+];
+const NOKEY_PAID = [
+  'יצירת מסמך שלם ממסך הבית.',
+  'חלונית ה-AI, הסוכנים והסקילים.',
+  'איתור מקורות מאומתים מהרשת.',
+  'Chef Mode ובניית מסמך דרך שאלות.',
+  'סטודיו SPSS וסטודיו מצגות.',
+];
+
+const SCAFFOLD = [
+  { icon: 'ph-list-numbers', title: 'קורא את המטלה', body: 'מדביקים את לשון המטלה — והמערכת מפרקת אותה לסעיפים, תת-סעיפים, מכסות ומונחים שחייבים להופיע.' },
+  { icon: 'ph-magnifying-glass', title: 'שולף ראיות מהחומרים', body: 'החומרים שהעלית נסרקים מקומית, וכל סעיף מקבל את הקטעים הרלוונטיים לו — עם ציון התאמה.' },
+  { icon: 'ph-shield-check', title: 'אפס המצאות', body: 'כל משפט תוכן נגזר מקטע ראיה מסומן. סעיף בלי ראיות נשאר חסום ולא מתמלא בטקסט יפה וריק.' },
+  { icon: 'ph-cards', title: 'פאנל הראיות', body: 'לכל סעיף: «הכנס» מכניס את הקטע למסמך, «רענן» מחפש שוב, «עוד כמו זה» מרחיב את החיפוש.' },
+];
+
+const PROJECTS = [
+  { icon: 'ph-folders', title: 'פרויקט = כמה מסמכים יחד', body: 'קורס, סמינר או לקוח — כל המסמכים תחת גג אחד, עם חומרי עזר משותפים.' },
+  { icon: 'ph-note-pencil', title: 'הנחיות קבועות וזיכרון', body: 'הנחיות שנשלחות עם כל מסמך בפרויקט, וזיכרון שמצטבר מהחלטות קודמות.' },
+  { icon: 'ph-flag-banner', title: 'מתווה ואבני דרך', body: 'Project Hub בונה roadmap עם שלבים ומשימות, ומראה התקדמות אמיתית ולא רשימת מטלות.' },
+  { icon: 'ph-compass-tool', title: '«מה הצעד הבא»', body: 'היועץ קורא את המצב, מציע את השלב הבא ובודק אם מה שנכתב תואם להנחיות הפרויקט.' },
+  { icon: 'ph-file-plus', title: '«צור מסמך לשלב»', body: 'פותח מסמך חדש שכבר יודע באיזה שלב הוא — וחומרי הפרויקט מצורפים אליו אוטומטית.' },
+];
+
+const STYLE_ENGINE = [
+  { icon: 'ph-upload-simple', title: 'הקמת פרופיל סגנון', body: 'מעלים עבודות קודמות, או מדביקים ניתוח סגנון חיצוני — והמערכת שואלת שאלות אימות כדי לקבע או לפסול כל טענה.' },
+  { icon: 'ph-sliders-horizontal', title: 'שליטה במסך הבית', body: 'סליידר יצירתיות ובורר עומק סגנון לכל ריצה — כמה חזק הפרופיל שלך משפיע על הטקסט.' },
+  { icon: 'ph-ruler', title: 'יעדים מבניים נלמדים', body: 'אורך משפט, צפיפות פסיקים ומבנה פסקה נגזרים מהכתיבה שלך ונאכפים על הפרוזה.' },
+  { icon: 'ph-lock-key', title: 'נשמרות מדידות, לא טקסטים', body: 'לענן עולות רשומות מדידה בלבד. העבודות עצמן לא עוזבות את המכשיר.' },
+];
+
+const DETECTOR = [
+  { icon: 'ph-gauge', title: 'ציון 0–100 + סימנים', body: 'הגלאי אומר כמה הטקסט "נשמע כמו AI" ומפרט אילו סימנים תפס — אחידות, ביטויים, מבנה.' },
+  { icon: 'ph-highlighter', title: '«סמן בעורך»', body: 'לא רק ציון: המשפטים החשודים מסומנים בגוף המסמך, כדי שתדע איפה לתקן.' },
+  { icon: 'ph-thumbs-up', title: 'כיול «זה אני» / «זה AI»', body: 'מתייגים דוגמאות מהעורך והגלאי מתכייל אליך. נדרשות לפחות שתי דוגמאות מכל סוג.' },
+  { icon: 'ph-desktop', title: 'רץ מקומית', body: 'הבדיקה כולה על המכשיר — שום טקסט לא נשלח החוצה. זו הערכה רכה, לא תחליף ל-Copyleaks.' },
+];
+
+const WORD_LEVEL = [
+  { icon: 'ph-files', title: 'עימוד ומספרי עמודים', body: 'המסמך מחולק לעמודים אמיתיים עם מספור — רואים איך זה ייראה מודפס.' },
+  { icon: 'ph-list-dashes', title: 'תוכן עניינים חי', body: 'תוכן עניינים שמתעדכן מהכותרות, ונשמר גם בייצוא.' },
+  { icon: 'ph-note-blank', title: 'הערות שוליים אמיתיות', body: 'הערות מ-Word נשמרות בייבוא, והייצוא כותב footnotes.xml אמיתי — לא סימן עליון מזויף.' },
+  { icon: 'ph-function', title: 'נוסחאות והפניות מוצלבות', body: 'עורך נוסחאות, והפניות מוצלבות לכותרות, לטבלאות ולתמונות.' },
+  { icon: 'ph-git-diff', title: 'מעקב שינויים והערות', body: 'Track changes עם פאנל צד לקבלה/דחייה, והערות שוליים לדיון על הטקסט.' },
+  { icon: 'ph-identification-badge', title: 'עמוד שער אוטומטי', body: 'שער שעיצבת פעם אחת נשמר בפרופיל וממולא אוטומטית — קורס, מרצה ותאריך.' },
 ];
 
 const TIPS = [
@@ -88,6 +147,8 @@ const TIPS = [
   'אם אתה צריך פעולה אחת בלבד — skill עדיף על workspace.',
   'מעדכן מסמך קיים? טיוטת בסיס כמעט תמיד עדיפה.',
   'התוצאה כללית מדי? חדד קהל יעד, טון ותוצר רצוי.',
+  'חומרים שסימנת נשלחים עם הבקשה ומצוטטים בשם הקובץ — סמן רק את מה שרלוונטי למסמך הזה.',
+  'רוצה שהמערכת תכתוב רק מהחומרים שלך? הדלק «מצב סגור» — הוא מכבה כל חיפוש חיצוני.',
 ];
 
 /* ── motion presets ───────────────────────────────────────────────────────── */
@@ -101,7 +162,7 @@ function SubCard({ children, className = '' }) {
     <motion.div
       variants={rise}
       whileHover={{ y: -3, transition: SPRING }}
-      className={`rounded-2xl border border-black/[0.06] bg-white p-5 shadow-[0_1px_2px_rgba(45,52,54,.04),0_10px_30px_-12px_rgba(108,92,231,.18)] ${className}`}
+      className={`rounded-2xl border border-black/[0.06] bg-surface p-5 shadow-[0_1px_2px_rgba(45,52,54,.04),0_10px_30px_-12px_rgba(108,92,231,.18)] dark:border-white/10 ${className}`}
     >
       {children}
     </motion.div>
@@ -138,7 +199,7 @@ function TourBody() {
       <div className="flex flex-col gap-3.5">
         {TOUR.map((s, i) => (
           <Item key={i} className="flex items-start gap-4">
-            <span className="relative z-10 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-[15px] font-bold text-brand shadow-[0_0_0_2px_rgba(108,92,231,.35)]">{i + 1}</span>
+            <span className="relative z-10 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface text-[15px] font-bold text-brand shadow-[0_0_0_2px_rgba(108,92,231,.35)]">{i + 1}</span>
             <div className="min-w-0 pt-1">
               <div className="text-[16px] font-bold text-ink">{s.title}</div>
               <p className="m-0 mt-0.5 max-w-2xl text-[14px] leading-relaxed text-muted">{s.body}</p>
@@ -159,7 +220,7 @@ function ChooseBody() {
     <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-4">
       {cols.map((col) => (
         <SubCard key={col.t} className="!p-6">
-          <div className="mb-4 flex items-center gap-3 border-b border-black/[0.06] pb-3.5">
+          <div className="mb-4 flex items-center gap-3 border-b border-black/[0.06] pb-3.5 dark:border-white/10">
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-brand/10 text-[19px] text-brand"><i className={`ph ${col.icon}`} aria-hidden="true" /></span>
             <div>
               <div className="text-[16px] font-bold text-ink">{col.t}</div>
@@ -188,7 +249,7 @@ function WorkspacesBody() {
             <span className="text-[15px] font-bold text-ink">{w.name}</span>
           </div>
           <p className="m-0 text-[13px] leading-relaxed text-ink">{w.fit}</p>
-          <p className="m-0 mt-1.5 border-t border-dashed border-black/[0.07] pt-1.5 text-[12.5px] leading-relaxed text-muted">{w.how}</p>
+          <p className="m-0 mt-1.5 border-t border-dashed border-black/[0.07] pt-1.5 text-[12.5px] leading-relaxed text-muted dark:border-white/15">{w.how}</p>
         </SubCard>
       ))}
     </motion.div>
@@ -219,7 +280,7 @@ function AiBody() {
     <motion.div variants={stagger} initial="hidden" animate="show">
       <Item className="mb-4 flex flex-wrap gap-2.5">
         {AI_EXAMPLES.map((e, i) => (
-          <span key={i} className="rounded-pill border border-black/[0.06] bg-white px-4 py-2 text-[13.5px] text-ink shadow-sm">“{e}”</span>
+          <span key={i} className="rounded-pill border border-black/[0.06] bg-surface px-4 py-2 text-[13.5px] text-ink shadow-sm dark:border-white/10">“{e}”</span>
         ))}
       </Item>
       <div className="grid grid-cols-2 gap-3.5">
@@ -317,9 +378,129 @@ function AdvancedBody() {
           </SubCard>
         ))}
       </div>
+      <Item className="mt-4 flex items-start gap-3 rounded-2xl border border-brand/25 bg-brand/[0.07] px-4 py-3.5">
+        <i className="ph ph-info mt-0.5 text-[19px] text-brand" aria-hidden="true" />
+        <span className="text-[14px] leading-relaxed text-ink">קובץ פלט <b>.spv</b> כבר נתמך — העלה אותו והמערכת מפענחת את הטבלאות (והתרשימים נקראים דרך מודל ראייה). ייצוא ל-Word / Excel / HTML עדיין עובד כמובן.</span>
+      </Item>
+    </motion.div>
+  );
+}
+
+function NoKeyBody() {
+  const cols = [
+    { t: 'עובד בלי מפתח API', sub: 'הכול רץ על המחשב שלך', items: NOKEY_FREE, icon: 'ph-plugs' },
+    { t: 'דורש מפתח API', sub: 'קריאה לספק AI', items: NOKEY_PAID, icon: 'ph-cloud' },
+  ];
+  return (
+    <motion.div variants={stagger} initial="hidden" animate="show">
+      <div className="grid grid-cols-2 gap-4">
+        {cols.map((col) => (
+          <SubCard key={col.t} className="!p-6">
+            <div className="mb-4 flex items-center gap-3 border-b border-black/[0.06] pb-3.5 dark:border-white/10">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-brand/10 text-[19px] text-brand"><i className={`ph ${col.icon}`} aria-hidden="true" /></span>
+              <div>
+                <div className="text-[16px] font-bold text-ink">{col.t}</div>
+                <div className="text-[12px] text-muted">{col.sub}</div>
+              </div>
+            </div>
+            {col.items.map((it, i) => (
+              <div key={i} className="mb-2.5 flex items-start gap-2.5">
+                <i className="ph ph-check mt-0.5 text-[15px] text-brand" aria-hidden="true" />
+                <span className="text-[14px] leading-relaxed text-ink">{it}</span>
+              </div>
+            ))}
+          </SubCard>
+        ))}
+      </div>
+      <Item className="mt-4">
+        <DaniAside text={<>אין לך עדיין מפתח? התחל ב<b>שלד מטלה</b> ממסך הבית — הוא בונה לך מבנה וראיות מהחומרים שלך בלי לשלם אגורה.</>} />
+      </Item>
+      <div className="mt-4 grid grid-cols-2 gap-3.5">
+        {SCAFFOLD.map((s) => (
+          <SubCard key={s.title} className="!p-4">
+            <div className="mb-2 flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-brand/10 text-[18px] text-brand"><i className={`ph ${s.icon}`} aria-hidden="true" /></span>
+              <span className="text-[15px] font-bold text-ink">{s.title}</span>
+            </div>
+            <p className="m-0 text-[13.5px] leading-relaxed text-muted">{s.body}</p>
+          </SubCard>
+        ))}
+      </div>
       <Item className="mt-4 flex items-start gap-3 rounded-2xl border border-warn/30 bg-warn/10 px-4 py-3.5">
         <i className="ph ph-warning mt-0.5 text-[19px] text-warn" aria-hidden="true" />
-        <span className="text-[14px] leading-relaxed text-ink">אל תעלה קובץ <b>.spv</b> — הוא בינארי ולא קריא. ייצא מ-SPSS ל-Word / Excel / HTML, או העתק את הטבלאות כטקסט.</span>
+        <span className="text-[14px] leading-relaxed text-ink">גבולות המסלול המקומי: מקורות <b>.pptx</b> משמשים לציטוט בלבד (תבליטי שקף אינם פרוזה), וקבצים שעברו סריקה/OCR פחות אמינים. סעיף בלי ראיות טובות יישאר חסום — וזו התנהגות מכוונת.</span>
+      </Item>
+    </motion.div>
+  );
+}
+
+function ProjectsBody() {
+  return (
+    <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3.5">
+      {PROJECTS.map((p) => (
+        <SubCard key={p.title} className="!p-4">
+          <div className="mb-2 flex items-center gap-2.5">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-2xl bg-brand/10 text-[18px] text-brand"><i className={`ph ${p.icon}`} aria-hidden="true" /></span>
+            <span className="text-[15px] font-bold text-ink">{p.title}</span>
+          </div>
+          <p className="m-0 text-[13.5px] leading-relaxed text-muted">{p.body}</p>
+        </SubCard>
+      ))}
+      <Item className="col-span-2 flex items-center gap-3 rounded-2xl px-5 py-3.5" style={{ background: 'linear-gradient(110deg,rgba(108,92,231,.10),rgba(162,155,254,.10))' }}>
+        <i className="ph ph-paperclip text-[20px] text-brand" aria-hidden="true" />
+        <span className="text-[14px] leading-relaxed text-ink">כשיוצרים מסמך לשלב, חומרי הפרויקט מצורפים לבד — ההודעה למעלה תגיד לך כמה חומרים נכנסו לבקשה.</span>
+      </Item>
+    </motion.div>
+  );
+}
+
+function StyleBody() {
+  const blocks = [
+    { t: 'מנוע הסגנון האישי', icon: 'ph-fingerprint', items: STYLE_ENGINE },
+    { t: 'גלאי ה-AI המקומי', icon: 'ph-shield-check', items: DETECTOR },
+  ];
+  return (
+    <motion.div variants={stagger} initial="hidden" animate="show" className="flex flex-col gap-5">
+      {blocks.map((b) => (
+        <div key={b.t}>
+          <Item className="mb-2.5 flex items-center gap-2.5">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-brand/10 text-[16px] text-brand"><i className={`ph ${b.icon}`} aria-hidden="true" /></span>
+            <span className="text-[17px] font-bold text-ink">{b.t}</span>
+          </Item>
+          <div className="grid grid-cols-2 gap-3">
+            {b.items.map((it) => (
+              <SubCard key={it.title} className="!p-4">
+                <div className="mb-1.5 flex items-center gap-2 text-[14.5px] font-bold text-ink">
+                  <i className={`ph ${it.icon} text-[17px] text-brand`} aria-hidden="true" />{it.title}
+                </div>
+                <p className="m-0 text-[13px] leading-relaxed text-muted">{it.body}</p>
+              </SubCard>
+            ))}
+          </div>
+        </div>
+      ))}
+      <Item><DaniAside text={<>הגלאי הוא <b>הערכה רכה</b> שרצה אצלך במחשב. הוא מראה לאן להסתכל — לא מחליף בדיקת מקוריות רשמית.</>} /></Item>
+    </motion.div>
+  );
+}
+
+function WordBody() {
+  return (
+    <motion.div variants={stagger} initial="hidden" animate="show">
+      <div className="grid grid-cols-2 gap-3.5">
+        {WORD_LEVEL.map((w) => (
+          <SubCard key={w.title} className="!p-4">
+            <div className="mb-2 flex items-center gap-2.5">
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-2xl bg-brand/10 text-[18px] text-brand"><i className={`ph ${w.icon}`} aria-hidden="true" /></span>
+              <span className="text-[15px] font-bold text-ink">{w.title}</span>
+            </div>
+            <p className="m-0 text-[13.5px] leading-relaxed text-muted">{w.body}</p>
+          </SubCard>
+        ))}
+      </div>
+      <Item className="mt-4 flex items-start gap-3 rounded-2xl px-5 py-3.5" style={{ background: 'linear-gradient(110deg,rgba(108,92,231,.10),rgba(162,155,254,.10))' }}>
+        <i className="ph ph-export text-[20px] text-brand" aria-hidden="true" />
+        <span className="text-[14px] leading-relaxed text-ink"><b>בייצוא ל-DOCX</b> נשמרים גם הערות השוליים, תוכן העניינים ועמוד השער — הקובץ נפתח ב-Word כמו שהוא נראה כאן.</span>
       </Item>
     </motion.div>
   );
@@ -330,7 +511,7 @@ function TipsBody() {
     <motion.div variants={stagger} initial="hidden" animate="show">
       <Item className="mb-5 grid grid-cols-1 gap-2.5">
         {TIPS.map((tip, i) => (
-          <div key={i} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 shadow-[0_1px_2px_rgba(45,52,54,.04)]">
+          <div key={i} className="flex items-start gap-3 rounded-2xl bg-surface px-4 py-3 shadow-[0_1px_2px_rgba(45,52,54,.04)] dark:border dark:border-white/10">
             <i className="ph ph-check-circle mt-0.5 text-[18px] text-brand" aria-hidden="true" />
             <span className="text-[14.5px] leading-relaxed text-ink">{tip}</span>
           </div>
@@ -359,6 +540,7 @@ function DaniAside({ text }) {
 /* ── sections meta ────────────────────────────────────────────────────────── */
 const SECTIONS = [
   { id: 'daily', tab: 'מדריך כיס', kicker: 'מדריך כיס', icon: 'ph-rocket-launch', title: 'ליום יום, בקצרה', lead: 'אם אתה כבר מכיר את WordFlow — זה כל מה שצריך כדי לעבוד מהר.', dani: 'ארבעה כרטיסים, ואתה בעניינים.', Body: DailyBody },
+  { id: 'nokey', tab: 'בלי API', kicker: 'בלי מפתח API', icon: 'ph-plugs', title: 'שתי דרגות — ומה עובד גם בלי מפתח', lead: 'חלק גדול מהמערכת רץ מקומית על המחשב שלך, כולל שלד המטלה והכתיבה מהחומרים.', dani: 'אין מפתח? עדיין יש לך הרבה מאוד מערכת.', Body: NoKeyBody },
   { id: 'tour', tab: 'הסיור', kicker: 'הסיור המודרך', icon: 'ph-map-trifold', title: 'תחנה אחר תחנה, מההתחלה ועד הסוף', lead: 'גרסה מקוצרת של הסיור מחכה גם בתוכנה, תחת הגדרות ← מדריך.', dani: 'נלך יחד תחנה-תחנה, בלי למהר.', Body: TourBody },
   { id: 'choose', tab: 'ישיר/סביבה', kicker: 'ההחלטה החשובה', icon: 'ph-signpost', title: 'ישיר מול סביבת עבודה', lead: 'ככל שהמשימה מורכבת יותר — כך כדאי לתת ל-workspace לעבוד בשבילך.', dani: 'מתלבט? תתחיל ישיר, תמיד אפשר לשדרג.', Body: ChooseBody },
   { id: 'workspaces', tab: 'סביבות', kicker: 'הספרייה המלאה', icon: 'ph-squares-four', title: 'כל סביבות העבודה', lead: 'עשר סביבות, לכל סוג משימה — למה כל אחת מתאימה ומה היא עושה.', dani: 'לא לפי שם הספק — לפי סוג המשימה.', Body: WorkspacesBody },
@@ -366,8 +548,11 @@ const SECTIONS = [
   { id: 'ai', tab: 'חלונית AI', kicker: 'בן הלוויה', icon: 'ph-sparkle', title: 'חלונית ה-AI', lead: 'כתוב בקשה בשפה חופשית — והטקסט נכתב בלייב, בצ׳אט ובמסמך.', dani: 'תדבר אליי כמו לחבר, לא כמו למכונה.', Body: AiBody },
   { id: 'skills', tab: 'סקילים', kicker: 'שליטה מדויקת', icon: 'ph-terminal-window', title: 'סקילים: @ ו-/', lead: '@ מפעיל סוכן ייעודי, / מפעיל skill ממוקד אחד.', dani: 'שני תווים שחוסכים המון הקלדה.', Body: SkillsBody },
   { id: 'profile', tab: 'פרופיל', kicker: 'שיהיה כמוך', icon: 'ph-user-focus', title: 'פרופיל, סגנון אישי וחומרי עזר', lead: 'ככל שתספר למערכת יותר עליך — היא תכתוב יותר כמוך.', dani: 'כמה דקות עכשיו = טקסט הרבה יותר שלך.', Body: ProfileBody },
+  { id: 'style', tab: 'סגנון וגלאי', kicker: 'שיישמע כמוך', icon: 'ph-shield-check', title: 'מנוע הסגנון וגלאי ה-AI', lead: 'המערכת לומדת איך אתה כותב — ואז בודקת אם מה שיצא באמת נשמע כמוך.', dani: 'קודם ללמוד אותך, אחר כך לבדוק את עצמנו.', Body: StyleBody },
   { id: 'recipes', tab: 'מסלולים', kicker: 'מתכונים', icon: 'ph-list-checks', title: 'מסלולי עבודה מומלצים', lead: 'חמישה מתכונים מוכנים. בחר את זה שמתאים, ועקוב אחרי הצעדים.', dani: 'כמו מתכון — צעד אחרי צעד.', Body: RecipesBody },
-  { id: 'advanced', tab: 'מתקדם', kicker: 'מעבר למסמכים', icon: 'ph-flask', title: 'כלים מתקדמים', lead: 'שלושה סטודיו ייעודיים ומנגנון האנשה חדש.', dani: 'זה כבר לא רק מעבד תמלילים.', Body: AdvancedBody },
+  { id: 'projects', tab: 'פרויקטים', kicker: 'עבודה לאורך זמן', icon: 'ph-folders', title: 'פרויקטים ו-Project Hub', lead: 'כשקורס שלם או סמינר ארוך לא נכנסים למסמך אחד — מקבצים אותם לפרויקט.', dani: 'פרויקט זוכר בשבילך מה כבר סוכם.', Body: ProjectsBody },
+  { id: 'word', tab: 'עורך Word', kicker: 'העורך עצמו', icon: 'ph-file-doc', title: 'עורך ברמת Word', lead: 'עימוד, תוכן עניינים, הערות שוליים, נוסחאות ומעקב שינויים — בלי לצאת מהאפליקציה.', dani: 'כל מה שהיית עושה ב-Word, כאן.', Body: WordBody },
+  { id: 'advanced', tab: 'מתקדם', kicker: 'מעבר למסמכים', icon: 'ph-flask', title: 'כלים מתקדמים', lead: 'סטודיו ייעודיים, מנגנון האנשה וכלי עריכה קטנים שחוסכים זמן.', dani: 'זה כבר לא רק מעבד תמלילים.', Body: AdvancedBody },
   { id: 'tips', tab: 'טיפים', kicker: 'לפני שנפרדים', icon: 'ph-lightbulb', title: 'טיפים לעבודה טובה יותר', lead: 'כמה הרגלים קטנים שמשנים את כל התוצאה.', dani: 'ואם הלכת לאיבוד — תמיד יש דרך חזרה.', Body: TipsBody },
 ];
 
@@ -435,7 +620,7 @@ export default function UserGuide() {
   return (
     <div dir="rtl" className="flex h-[80vh] flex-col bg-page text-ink">
       {/* intro */}
-      <div className="flex flex-shrink-0 items-center gap-3 border-b border-black/5 bg-white px-6 py-3.5">
+      <div className="flex flex-shrink-0 items-center gap-3 border-b border-black/5 bg-surface px-6 py-3.5 dark:border-white/10">
         <motion.span
           initial={{ rotate: -12, scale: 0.9 }} animate={{ rotate: 0, scale: 1 }} transition={SPRING}
           className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-[17px] font-bold text-white" style={{ background: 'linear-gradient(135deg,#6c5ce7,#a29bfe)' }}>ד</motion.span>
@@ -443,19 +628,25 @@ export default function UserGuide() {
       </div>
 
       {/* tabs */}
-      <div ref={tabsRef} className="flex flex-shrink-0 gap-1.5 overflow-x-auto border-b border-black/5 bg-white px-4 py-2.5" style={{ scrollbarWidth: 'none' }}>
+      <div ref={tabsRef} className="flex flex-shrink-0 gap-1.5 overflow-x-auto border-b border-black/5 bg-surface px-4 py-2.5 dark:border-white/10" style={{ scrollbarWidth: 'none' }}>
         {SECTIONS.map((s, i) => (
           <button key={s.id} data-tab={i} type="button" onClick={() => goTo(i)}
-            className={`flex flex-shrink-0 items-center gap-1.5 rounded-pill px-3.5 py-1.5 text-[13px] font-semibold transition ${i === index ? 'text-white shadow-sm' : 'text-muted hover:bg-black/[0.05]'}`}
+            className={`flex flex-shrink-0 items-center gap-1.5 rounded-pill px-3.5 py-1.5 text-[13px] font-semibold transition ${i === index ? 'text-white shadow-sm' : 'text-muted hover:bg-black/[0.05] dark:hover:bg-white/10'}`}
             style={i === index ? { background: 'linear-gradient(135deg,#6c5ce7,#a29bfe)' } : undefined}>
             <i className={`ph ${s.icon} text-[14px]`} aria-hidden="true" />{s.tab}
           </button>
         ))}
       </div>
 
-      {/* carousel */}
+      {/* carousel.
+          ⚠️ ה-viewport והרצועה חייבים להיות dir="ltr": ברצועת flex ב-RTL
+          שקופית 0 היא הימנית ביותר והרצועה גולשת שמאלה, ולכן החישוב
+          x = -index*vw (שמניח סדר LTR) דחף כל שקופית שאינה הראשונה
+          אל מחוץ למסך — עמוד ריק עם טאבים וחיצים שעובדים.
+          התוכן של כל שקופית חוזר ל-dir="rtl" בנפרד. */}
       <div
         ref={viewportRef}
+        dir="ltr"
         className="relative min-h-0 flex-1 overflow-hidden"
         style={{ touchAction: 'pan-y' }}
         onPointerDown={onPointerDown}
@@ -468,7 +659,7 @@ export default function UserGuide() {
           {SECTIONS.map((sec, i) => {
             const SBody = sec.Body;
             return (
-              <div key={sec.id} className="h-full overflow-y-auto" style={{ width: vw || '100%', flexShrink: 0 }}>
+              <div key={sec.id} dir="rtl" className="h-full overflow-y-auto" style={{ width: vw || '100%', flexShrink: 0 }}>
                 <div className="relative mx-auto max-w-3xl px-8 py-7">
                   <span aria-hidden="true" className="pointer-events-none absolute left-4 top-0 select-none font-black leading-none text-brand/[0.06]" style={{ fontSize: 150 }}>{String(i + 1).padStart(2, '0')}</span>
                   <motion.div variants={stagger} initial="hidden" animate="show" className="relative mb-6">
@@ -493,11 +684,11 @@ export default function UserGuide() {
       </div>
 
       {/* footer */}
-      <div className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-black/5 bg-white px-6 py-3">
+      <div className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-black/5 bg-surface px-6 py-3 dark:border-white/10">
         <div className="flex items-center gap-1.5">
           {SECTIONS.map((_, i) => (
             <button key={i} type="button" onClick={() => goTo(i)} aria-label={`כרטיסייה ${i + 1}`}>
-              <motion.span className="block rounded-pill" animate={{ width: i === index ? 22 : 7, backgroundColor: i === index ? '#6c5ce7' : 'rgba(0,0,0,.14)' }} transition={SPRING} style={{ height: 7 }} />
+              <motion.span className="block rounded-pill" animate={{ width: i === index ? 22 : 7, backgroundColor: i === index ? 'var(--color-brand)' : 'rgba(127,127,127,.42)' }} transition={SPRING} style={{ height: 7 }} />
             </button>
           ))}
         </div>
@@ -513,7 +704,7 @@ function NavArrow({ side, icon, hidden, onClick, label }) {
       type="button" onClick={onClick} aria-label={label}
       initial={false} animate={{ opacity: hidden ? 0 : 1, scale: hidden ? 0.8 : 1 }}
       whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }} transition={SPRING}
-      className={`absolute top-1/2 ${side === 'right' ? 'right-3' : 'left-3'} flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-black/5 bg-white text-brand shadow-md ${hidden ? 'pointer-events-none' : ''}`}
+      className={`absolute top-1/2 ${side === 'right' ? 'right-3' : 'left-3'} flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-black/5 bg-surface text-brand shadow-md dark:border-white/10 ${hidden ? 'pointer-events-none' : ''}`}
     >
       <i className={`ph ${icon} text-[20px]`} aria-hidden="true" />
     </motion.button>
