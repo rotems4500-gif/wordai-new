@@ -489,7 +489,7 @@ const MOVE_PLANS = {
  * @param {Array<object>} evidence  רשימת chunks מ-findEvidenceForSection (ranked)
  * @param {{quotaWords?:number, seedKey?:string, profile?:object,
  *          avgSentenceWords?:number}} opts
- * @returns {{sentences:Array<{text:string,move:string,evidenceId:string|null}>,
+ * @returns {{sentences:Array<{text:string,move:string,evidenceId:string|null,frameId:string|null}>,
  *            html:string, wordCount:number, notes:string[], usedEvidenceIds:string[]}|null}
  */
 export function composeSectionProse(section, evidence, opts = {}) {
@@ -773,7 +773,12 @@ export function composeSectionProse(section, evidence, opts = {}) {
   const emit = (result, evidenceId) => {
     if (!result) return false;
     if (KI_RE.test(result.text)) kiCount += 1;
-    sentences.push({ text: result.text, move: result.move, evidenceId: evidenceId || null });
+    // frameId נשמר כדי שה-UI יוכל לדווח accept/reject על המסגרת (recordFrameFeedback).
+    // מסלולים שבונים result ביד (ציטוט גולמי) אינם נושאים frameId — שם null, לא undefined.
+    sentences.push({
+      text: result.text, move: result.move, evidenceId: evidenceId || null,
+      frameId: result.frameId || null,
+    });
     avoidFrames.add(result.frameId);
     wordCount += countWords(result.text);
     // רישום צריכת המכסה. המפתח נכנס ל-usedSentences **ול-addedSentences**, ולכן
@@ -1063,7 +1068,9 @@ export function composeSectionProse(section, evidence, opts = {}) {
   }
 
   // פסקאות: 2-4 משפטים, מעבר פסקה אחרי wrap/transition או כל 3 משפטים.
-  // עם פרופיל סגנון היעד נגזר מהמשתמש (חציון 2.54 בקורפוס שנמדד) — וגודל קבוע
+  // עם פרופיל סגנון היעד נגזר מהמשתמש — בזמן ריצה מהפרופיל שלו, לא ממספר קבוע.
+  // (בקורפוס שנמדד: חציון 2.54 / ממוצע 3.59, 23 מסמכים 27.7.26. הנאכף = החציון,
+  // ר' ההערה בראש styleTargetsService.) וגודל קבוע
   // אינו יכול לפגוע ביעד לא-שלם, ולכן שם עובר הקיבוץ ל-groupParagraphs.
   const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const paraSize = cmds.has('st_short_paras') ? 2 : 3;

@@ -11,11 +11,20 @@ import {
   hasEncryptedSecrets,
 } from "./cloudCryptoSession";
 import { syncV3FromLegacy as syncWorkspacesV3FromLegacy } from "../v3/workspaces/store";
+import {
+  ensureStyleTargetsReady,
+  exportStyleTargets,
+  importStyleTargets,
+  STYLE_TARGETS_UPDATED_EVENT,
+} from "./styleTargetsStore";
 
 // schema 3 (2026-07-03): נוסף wordai_workspaces_v3 (ה-blob המאוחד של סביבות העבודה)
 // + תבניות workspace-v2. לקוחות schema-2 בוחרים מפתחות לפי הרשימה המקומית שלהם ולכן
 // מתעלמים מהמפתחות החדשים בבטחה; מפתחות ה-legacy ממשיכים להישלח (dual-write) עבורם.
-const CLOUD_PROFILE_SCHEMA_VERSION = 3;
+// schema 4 (2026-08-04): נוסף styleTargets — פרופיל הסגנון המבני (רשומות מדידה).
+// אותו כלל בטיחות: normalizeCloudProfile מעתיק **רק** מפתחות מוכרים, ולכן לקוח
+// ישן שמושך מסמך schema-4 פשוט מתעלם מהשדה במקום להיחנק בו.
+const CLOUD_PROFILE_SCHEMA_VERSION = 4;
 
 // ---- E2EE flag ----
 // כבוי כברירת מחדל. מודלק רק אחרי שהמשתמש מגדיר passphrase (setCloudCryptoEnabled(true)).
@@ -129,6 +138,23 @@ function getLocalProfilePayload() {
   };
 }
 
+/**
+ * אותו payload + פרופיל הסגנון המבני. אסינכרוני כי היעדים יושבים ב-IndexedDB,
+ * ולכן הגרסה הסינכרונית נשארת בשימוש ה-poller של initCloudSyncListeners.
+ *
+ * styleTargets נוסע **גלוי**, כמו appSettings: זו טבלת מספרים (אורך משפט,
+ * פסיקים למשפט, ספירות משמורת) עם docId שהוא hash תוכן — אין בו טקסט של
+ * המשתמש ואין שם קובץ. ההצפנה נשארת בלעדית ל-providerConfig.
+ */
+async function getLocalProfilePayloadFull() {
+  const payload = getLocalProfilePayload();
+  try {
+    await ensureStyleTargetsReady();
+    payload.styleTargets = exportStyleTargets();
+  } catch { /* פרופיל הסגנון הוא שיפור, לא תנאי לסנכרון ההגדרות */ }
+  return payload;
+}
+
 function buildPayloadSignature(payload = {}) {
   try {
     return JSON.stringify(payload);
@@ -174,6 +200,11 @@ function normalizeCloudProfile(cloudSettings = {}) {
       appSettings: pickCloudProfileAppSettings(cloudSettings.appSettings),
       providerConfig: cloudSettings.providerConfig && typeof cloudSettings.providerConfig === "object"
         ? cloudSettings.providerConfig
+        : null,
+      // schema 4: פרופיל הסגנון המבני עובר כמו שהוא. הוולידציה (גרסת סכמה,
+      // נרמול רשומות) נעשית ב-importStyleTargets ולא כאן.
+      styleTargets: cloudSettings.styleTargets && typeof cloudSettings.styleTargets === "object"
+        ? cloudSettings.styleTargets
         : null,
     };
   }
@@ -290,6 +321,16 @@ export async function pullFromCloud(user, { force = false } = {}) {
     }
     if (needsPassphrase) emitNeedsPassphrase();
 
+    // פרופיל הסגנון מוחל **בלי קשר לשער ה-timestamp**: המיזוג מונוטוני —
+    // importStyleTargets משאיר את הצד עם יותר מסמכים, ולכן משיכה לעולם לא
+    // מוחקת מדידות מקומיות גם כשהענן ישן יותר.
+    // ⚠️ v1: "יותר רשומות מנצח" הוא **החלפה ולא איחוד**. שני מכשירים עם מסמכים
+    // זרים מתכנסים לקבוצה הגדולה מבין השתיים, לא לאיחוד שלהן. מקובל לגרסה
+    // הזאת; איחוד לפי docId הוא המשך.
+    if (cloudProfile?.styleTargets) {
+      try { await importStyleTargets(cloudProfile.styleTargets); } catch {}
+    }
+
     if (force || shouldApplyCloudProfile(cloudProfile)) {
       const applied = applyCloudProfile(cloudProfile);
       return { ok: true, applied, needsPassphrase, hadProviderConfig: Boolean(cloudProfile.providerConfig && Object.keys(cloudProfile.providerConfig || {}).length) };
@@ -343,7 +384,7 @@ export async function triggerCloudSync(user, options = {}) {
   const runSync = async () => {
     isSyncingToCloud = true;
     try {
-      const payload = getLocalProfilePayload();
+      const payload = await getLocalProfilePayloadFull();
       // חתימת dedup מחושבת על ה-payload הגלוי (ה-ciphertext משתנה בכל הצפנה בגלל IV אקראי).
       const signature = buildPayloadSignature(payload);
       if (!options?.force && signature && signature === lastQueuedSnapshotSignature) return payload;
@@ -405,6 +446,9 @@ export function initCloudSyncListeners(user) {
   window.addEventListener("wordai-provider-config-changed", eventHandler);
   window.addEventListener("wordai-personal-style-updated", eventHandler);
   window.addEventListener("wordai-workspaces-v2-changed", eventHandler);
+  // יעדי הסגנון יושבים ב-IndexedDB ולכן ה-poller הסינכרוני לא רואה אותם —
+  // האירוע הוא הדרך היחידה לסמן מדידה חדשה כשינוי שדורש סנכרון.
+  window.addEventListener(STYLE_TARGETS_UPDATED_EVENT, eventHandler);
 
   const intervalId = window.setInterval(pollForProfileChanges, 4000);
 
@@ -418,5 +462,6 @@ export function initCloudSyncListeners(user) {
     window.removeEventListener("wordai-provider-config-changed", eventHandler);
     window.removeEventListener("wordai-personal-style-updated", eventHandler);
     window.removeEventListener("wordai-workspaces-v2-changed", eventHandler);
+    window.removeEventListener(STYLE_TARGETS_UPDATED_EVENT, eventHandler);
   };
 }

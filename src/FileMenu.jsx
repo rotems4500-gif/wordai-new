@@ -6,6 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-text-style";
 import ProfileOnboarding from './ProfileOnboarding';
 import StyleProfilePanel from './components/StyleProfilePanel';
+import PersonalTrainerPanel from './components/PersonalTrainerPanel';
 import DesktopDownloadCard from './components/DesktopDownloadCard';
 import { getSampleStoreStats } from './services/styleSampleStore';
 import { normalizeDelimitedList } from './delimitedListInput';
@@ -4443,6 +4444,14 @@ function PersonalStyleSettings({ profile, setProfile }) {
             אפשר לסוכן להמשיך ללמוד מהמסמכים המקומיים שלי עם הזמן
           </label>
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="🎓 מה המנוע למד ממך"
+        desc="שקיפות: ההרגלים שנמדדו מהעבודות שהעלית — פתיחים, מסגרות משפט ויעדים מבניים."
+        defaultOpen={false}
+      >
+        <PersonalTrainerPanel />
       </SettingsSection>
 
       <SettingsSection
