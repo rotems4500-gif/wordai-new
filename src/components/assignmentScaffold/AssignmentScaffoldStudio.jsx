@@ -38,7 +38,9 @@ import {
 import { ensureFrameProfile, getFrameProfile } from '../../services/styleFrameProfileService';
 import { ensureStyleTargetsReady, getStyleTargets } from '../../services/styleTargetsStore';
 import { scoreTextAuthenticity } from '../../services/styleAuthenticityService';
+import { ensureStyleSelectProfile, isStyleSelectEnabled, makeBlendedScoreFn } from '../../services/styleSelectService';
 import WorkReviewDialog from './WorkReviewDialog';
+import DraftReviewPanel from './DraftReviewPanel';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
 
 const revealClass = (mounted, extra = '') => (
@@ -48,6 +50,12 @@ const revealClass = (mounted, extra = '') => (
 const STAGE_BG = 'radial-gradient(125% 120% at 82% -8%, #14304a 0%, #0b1a2b 46%, #070f1c 100%)';
 
 const INTENT_OPTIONS = Object.entries(INTENT_LABELS);
+
+// משפטי הטיוטה המקומית האחרונה, לפי מזהה יחידה. ⚠️ מחוץ לרכיב **בכוונה**:
+// handleLocalDraft מסתיים ב-onOpenDocument, שמעביר את האפליקציה למצב 'word'
+// ומפרק את הסטודיו — state רגיל היה נמחק לפני שהמשתמש רואה את פאנל המשוב.
+// המטמון ברמת המודול שורד את החזרה לסטודיו באותה הפעלה (ולא נשמר לדיסק).
+let lastDraftSentences = {};
 
 // חילוץ טקסט מקובץ שהופל למסך. maxLength גבוה — מאמר שלם, לא תצוגה מקדימה.
 // ⚠️ extractMaterialTextFromBytes מחזיר {ok, text, error} ולא מחרוזת. בלי הפירוק
@@ -102,6 +110,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   }, []);
   // הטיוטה ממתינה לאישור: נכתבה, נסקרה, וטרם נכנסה לעורך.
   const [pendingDraft, setPendingDraft] = React.useState(null);
+  // משפטי הטיוטה המקומית לפי מזהה יחידה (section/subSection) — מזינים את פאנל
+  // המשוב על הניסוח. כל משפט: {text, move, evidenceId, frameId}.
+  const [draftSentences, setDraftSentences] = React.useState(() => lastDraftSentences);
   const [review, setReview] = React.useState(null);
 
   const instructionInputRef = React.useRef(null);
@@ -127,6 +138,12 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   // אחרת הסעיף הראשון נפתח בלי משפט פתיחה בפעם הראשונה בלבד.
   React.useEffect(() => {
     Promise.all([ensureOpenersReady(), ensureOpenerProfile()]).catch(() => {});
+  }, []);
+
+  // בחירת וריאנט לפי הסגנון האישי (ניסיוני, כבוי כברירת מחדל): בניית הפרופיל
+  // אסינכרונית ולא חוסמת. אם לא הספיקה — הבחירה נופלת לדטקטור לבדו כרגיל.
+  React.useEffect(() => {
+    if (isStyleSelectEnabled()) ensureStyleSelectProfile().catch(() => {});
   }, []);
 
   // Escape יוצא מהסטודיו — אותה קונבנציה כמו ProjectHubStudio.
@@ -390,6 +407,9 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       const profile = getOpenerProfile();
       const openers = {};
       const prose = {};
+      // המשפטים עצמם (ולא רק ה-HTML) נשמרים כדי שפאנל המשוב יוכל לדווח
+      // accept/reject על ה-frameId של כל משפט.
+      const sentencesByUnit = {};
       const used = new Set();
       const bySection = evidenceResult?.bySection || {};
       const frameProfile = getFrameProfile();
@@ -419,6 +439,11 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       //
       // דרגת `none` (אין Ollama / אתר) מדלגת לגמרי, והקוד מתנהג כמו קודם.
       const backendChoice = await ensureRewriteBackend();
+      // מנקד הבחירה: הדטקטור הגנרי, ובדגל הניסיוני גם מרכיב הסגנון האישי
+      // (חצי-חצי). נבנה פעם אחת לכל העבודה — לא לכל סעיף.
+      const selectionScoreFn = isStyleSelectEnabled()
+        ? makeBlendedScoreFn(scoreTextAuthenticity)
+        : scoreTextAuthenticity;
       const rewritesByUnit = {};
       let rewrittenSentences = 0;
       let cancelled = false;
@@ -480,10 +505,18 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
             // מכסת קשירת-הצד יחסית לגודל העבודה (ר' partyBudget).
             sectionCount: unitList.length,
           },
-          { scoreFn: scoreTextAuthenticity, variants },
+          { scoreFn: selectionScoreFn, variants },
         );
-        if (r?.html) { prose[u.id] = r.html; written += 1; }
+        if (r?.html) {
+          prose[u.id] = r.html;
+          written += 1;
+          if (Array.isArray(r.sentences) && r.sentences.length) {
+            sentencesByUnit[u.id] = { title: u.title || s.title || '', sentences: r.sentences };
+          }
+        }
       });
+      lastDraftSentences = sentencesByUnit;
+      setDraftSentences(sentencesByUnit);
       if (!written) {
         setNotice({ tone: 'warn', text: 'אין סעיף עם ראיות — הרץ "מצא ראיות" קודם, או הוסף חומרים.' });
         return;
@@ -1049,6 +1082,20 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                       </div>
                     ))}
                   </section>
+                )}
+
+                {/* משוב על הניסוח של הטיוטה המקומית האחרונה. מוצג רק כשיש משפטים
+                    שהורכבו בפועל — לפני "טיוטה מקומית" אין על מה לדווח. */}
+                {Object.keys(draftSentences).length > 0 && (
+                  <div className="space-y-3">
+                    {Object.entries(draftSentences).map(([unitId, entry]) => (
+                      <DraftReviewPanel
+                        key={unitId}
+                        title={entry.title}
+                        sentences={entry.sentences}
+                      />
+                    ))}
+                  </div>
                 )}
 
                 <div className="flex flex-wrap gap-2">
