@@ -42,8 +42,11 @@ const lex = await import('hebrewlex');
 
 const CORPUS = process.env.WORDAI_CORPUS_OUT
   || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/5dfe23d5-acbf-4f96-9551-9997128f4b6f/scratchpad/real-corpus';
+// run-openers-labelset.mjs קובע את WORDAI_LABELSET_OUT לפני שהוא טוען את הבאנדל.
+// הנפילה־לאחור כאן היא רק להרצה ישירה — הקובץ הזה רץ כבאנדל ב-scratch, ולכן
+// import.meta.url שלו לא מצביע על הריפו ואי אפשר לגזור ממנו נתיב.
 const OUT_DIR = process.env.WORDAI_LABELSET_OUT
-  || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/5dfe23d5-acbf-4f96-9551-9997128f4b6f/scratchpad/labelset';
+  || path.resolve('tools/test-bench/lab-results/openers-labelset');
 
 // מילון חיצוני אופציונלי (ראה hebrewLexiconService.mergeExternalWordlist).
 const WORDLIST = process.env.WORDAI_WORDLIST || '';

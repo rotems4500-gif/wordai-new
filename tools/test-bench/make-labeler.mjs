@@ -7,9 +7,13 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+// ברירת המחדל היא אותה תיקייה ש-run-openers-labelset.mjs כותב אליה
+// (tools/test-bench/lab-results/openers-labelset — gitignored). עוקפים ב-WORDAI_LABELSET_OUT.
+const DIR = path.dirname(fileURLToPath(import.meta.url));
 const IN_DIR = process.env.WORDAI_LABELSET_OUT
-  || 'C:/Users/rotem/AppData/Local/Temp/claude/C--Users-rotem-Projects--wordai-new/5dfe23d5-acbf-4f96-9551-9997128f4b6f/scratchpad/labelset';
+  || path.join(DIR, 'lab-results', 'openers-labelset');
 const OUT = process.env.WORDAI_LABELER_OUT
   || 'C:/Users/rotem/OneDrive/שולחן העבודה/תיוג-פתיחים.html';
 const PER_REJECT = Number(process.env.WORDAI_PER_REJECT || 25);

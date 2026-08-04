@@ -75,7 +75,7 @@ slot: connector   stance      framing-verb  reference
 ## סטטוס ביצוע (2026-07-22)
 
 **נבנה והורץ:**
-- שלב 0: ה-harness רץ (24 עבודות, 329 מועמדים, 53 לתיוג) → labeler על שולחן העבודה (`תיוג-פתיחים.html`). **ממתין לתיוג ידני**; אחריו: `node tools/test-bench/score-openers.mjs` → baseline.
+- שלב 0: ה-harness רץ (24 עבודות, 329 מועמדים, 53 לתיוג) → labeler על שולחן העבודה (`תיוג-פתיחים.html`). **ממתין לתיוג ידני — runbook בסוף המסמך.** בלי זה אין baseline, ו-`openers-gate.mjs` משווה מול ריק.
 - שלב 1: סכמה הוקפאה — 9 אינטנטים קנוניים (הוספו cues ל-argument/exposition), סלוטים `connector/stance/framingVerb(inf|fin)/reference/hedge/subjectNP` עם `{g,n}` + `tails`. שתי משפחות תבניות (אימפרסונלית / נושא-עם-סינון-צורות) = התאם מובטח בלי מודל. seed ידני ~180 ערכים + תיוג Flash של הלקסיקון (`tools/opener-grammar-build/build.mjs`, checkpoint/resume) → `src/services/openerGrammar.data.js` (lazy). מנוע הרכבה: `composeOpeners` ב-`styleOpenerService` (RNG זרוע, ייחודיות וריאנטים, הצלבת tails).
 - שלב 2: `openerProfileService.js` — כרייה (decomposeOpener, התאמת טוקנים בלי `\b`), משקלים `wordai_opener_profile_v1`, משוב insert/refresh, מיזוג `score = base·(1+λ·boost)`, `λ=min(0.8, docs/10)`. עובד על הקורפוס האמיתי (23 מסמכים).
 - שלב 3: `judge-composed-openers.mjs` (שופט Flash), `openers-gate.mjs` (דקדוקיות ≥95%, התאמה ≥85%, precision מול baseline), `validate.mjs` (שיפוט התיוג).
@@ -92,4 +92,55 @@ node tools/test-bench/score-openers.mjs           # אחרי תיוג ידני �
 
 **תוצאות האימון הגלובלי (2026-07-22):** תיוג Flash של כל 5,724 הלמות (58 אצוות, ~אגורות) → 275 תיוגים גולמיים. צנרת גיזום בשלוש שכבות ב-build.mjs: (א) מחלקות סגורות — stance/connector/hedge מה-seed בלבד (connectors אוטומטיים "על מנת"/"מתוך ש" הפילו דקדוקיות ל-69%); (ב) תכונות סותרות — צורת שטח אחת עם כמה `{g,n}` = הזיית מתייג, נזרקת ("הדגים" תויג m/s וגם f/p); (ג) BLOCKLIST ממשוב שופט-המשפטים (העריך, מצביע-כי, להשפיע…). בנוסף שומר-שורש במנוע ("נקודת הדמיון הבולטת בולטת"). ציוני שופט סופיים: **דקדוקיות 97.8%, התאמת אינטנט 93.3% — שער ירוק**. המודול הסופי 21KB, chunk lazy נפרד.
 
-**פתוח:** תיוג ידני של רותם (baseline; ה-labeler בשולחן העבודה) · מסנן styleAuthenticityService על וריאנטים בזמן ריצה (nice-to-have).
+**פתוח:** תיוג ידני של רותם — **ממתין לתיוג ידני, runbook למטה** (baseline; ה-labeler בשולחן העבודה) · מסנן styleAuthenticityService על וריאנטים בזמן ריצה (nice-to-have).
+
+---
+
+## Runbook — מדידת הבסיס של שלב 0 (תיוג ידני)
+
+שלושה צעדים, ~20 דקות. אין רשת ואין מפתחות — הכול מקומי.
+
+**1. לתייג.** לפתוח בדפדפן:
+
+```
+C:/Users/rotem/OneDrive/שולחן העבודה/תיוג-פתיחים.html
+```
+
+קובץ HTML עצמאי (הכרטיסים מוטמעים בתוכו — אין שרת, השורות לא עוזבות את המכונה).
+53 כרטיסים, לכל אחד שלוש תשובות:
+
+| כפתור | מקש | משמעות |
+|---|---|---|
+| כן — ניסוח שלי | חץ ימינה → | `כ` — זה **ניסוח**, פתיח לשימוש חוזר |
+| לא — תוכן/שם | חץ שמאלה ← | `ל` — זה תוכן ספציפי, לא פתיח |
+| לא בטוח | רווח | `?` — לא נספר בציון |
+
+Backspace = אחורה (מוחק את התיוג של הכרטיס הקודם). ההתקדמות נשמרת ב-localStorage,
+אפשר לעצור באמצע ולחזור. **לתייג את כל 53** — `?` הוא לא תיוג.
+
+**2. לייצא.** בסיום → כפתור **«שמור קובץ»** → `opener-labels.json` יורד לתיקיית ההורדות
+(`~/Downloads`). אפשר גם להעתיק את ה-JSON מהתיבה שנפתחת בסוף.
+
+**3. לצייַן.**
+
+```bash
+node tools/test-bench/score-openers.mjs
+# ברירת מחדל: ~/Downloads/opener-labels.json — או להעביר נתיב:
+node tools/test-bench/score-openers.mjs D:/somewhere/opener-labels.json
+```
+
+הפלט נכתב ל-**`tools/test-bench/lab-results/openers-baseline.json`** (התיקייה gitignored):
+`precision` (מתוך הנשמרים — כמה באמת ניסוח שלי), `recall` (כמה טובים נפסלו),
+ופירוק **אבדות לפי סיבת פסילה** — זו הטבלה שאומרת איזה מסנן לכוונן.
+מאותו רגע `openers-gate.mjs` מודד מול המספר הזה.
+
+**אם ה-HTML לא קיים בשולחן העבודה** — לייצר מחדש:
+
+```bash
+node tools/test-bench/run-openers-labelset.mjs   # מועמדים -> tools/test-bench/lab-results/openers-labelset/
+node tools/test-bench/make-labeler.mjs           # -> תיוג-פתיחים.html בשולחן העבודה
+```
+
+עקיפות: `WORDAI_LABELSET_OUT` (תיקיית המועמדים, משותפת לשני הסקריפטים) ·
+`WORDAI_LABELER_OUT` (יעד ה-HTML) · `WORDAI_CORPUS_OUT` (הקורפוס) ·
+`WORDAI_LABELSET_REBUILD=0` (דילוג על בניית הבאנדל).

@@ -47,6 +47,9 @@ import { addDocumentSamples, ensureSampleStoreReady, getSampleStoreStats, getChu
 import { ensureOpenerProfile, getOpenerProfile, getOpenerProfileStatus } from '../../src/services/openerProfileService.js';
 import { ensureFrameProfile, getFrameProfile, getFrameProfileStatus } from '../../src/services/styleFrameProfileService.js';
 import { scoreTextAuthenticity } from '../../src/services/styleAuthenticityService.js';
+import {
+  buildAuthorProfile, burrowsDelta, styleMatchScore, tokenizeForStyle, MIN_DOC_WORDS,
+} from '../../src/services/styleFingerprintService.js';
 import { composeSectionProseBest, ensureProseReady } from '../../src/services/proseComposeService.js';
 import { deriveStyleTargets, describeStyleTargets } from '../../src/services/styleTargetsService.js';
 import { enabledCommaSlots } from '../../src/services/styleFitService.js';
@@ -67,6 +70,23 @@ if (process.env.WORDAI_FRAME_REWRITES === '0') globalThis.__WORDAI_FRAME_REWRITE
 if (process.env.WORDAI_REWRITE === '1' && !process.env.WORDAI_REWRITE_BACKEND) {
   process.env.WORDAI_REWRITE_BACKEND = 'ollama';
 }
+// ---------- זרוע ניסוי: בחירת וריאנט לפי הסגנון האישי ----------
+// WORDAI_SELECT_STYLE=off|only|blend  (ברירת מחדל off = בדיוק ההתנהגות הקיימת)
+//   off   — הדטקטור הגנרי ("נשמע כמו AI") בלבד, כמו עד היום.
+//   only  — 100 − styleMatchScore מול הפרופיל האישי (Burrows Delta) בלבד.
+//   blend — w·דטקטור + (1−w)·(100 − styleMatchScore),  w=WORDAI_SELECT_BLEND_W.
+// ⚠️ הזרוע נרשמת ב-metrics.config. אותו לקח כמו WORDAI_REWRITE: ריצות של תצורות
+// שונות **אסור** להשוות זו לזו, ובלי רישום ההבדל נראה בדיוק כמו נסיגת קוד.
+const SELECT_STYLE_RAW = String(process.env.WORDAI_SELECT_STYLE || 'off').toLowerCase();
+const SELECT_STYLE = ['off', 'only', 'blend'].includes(SELECT_STYLE_RAW) ? SELECT_STYLE_RAW : 'off';
+if (SELECT_STYLE !== SELECT_STYLE_RAW) {
+  console.log(`⚠ WORDAI_SELECT_STYLE="${SELECT_STYLE_RAW}" לא מוכר — נופל ל-off`);
+}
+const SELECT_BLEND_W = Number.isFinite(Number(process.env.WORDAI_SELECT_BLEND_W))
+  ? Math.max(0, Math.min(1, Number(process.env.WORDAI_SELECT_BLEND_W)))
+  : 0.5;
+const SELECT_STYLE_REFS = Number(process.env.WORDAI_SELECT_STYLE_REFS || 40);
+
 const NLG_DIR = process.env.WORDAI_NLG_OUT || path.join(SCRATCH, 'nlg-loop');
 const ROUND_DIR = path.join(NLG_DIR, process.env.WORDAI_NLG_ROUND || 'round-2');
 const ASSIGNMENT_PATH = process.env.WORDAI_NLG_ASSIGNMENT || path.join(NLG_DIR, 'assignment.txt');
@@ -406,6 +426,114 @@ if (styleTargets) {
   console.log(`פרופיל סגנון: ${process.env.WORDAI_STYLE_FIT === '0' ? 'מנוטרל (WORDAI_STYLE_FIT=0)' : 'אין מספיק עבודות'}`);
 }
 
+// ---------- זרוע הניסוי: פרופיל סגנון אישי לבחירת וריאנטים ----------
+// נבנה **פעם אחת** לריצה. מסמכי המחבר = אותם טקסטים אישיים שכבר נקלטו; מסמכי
+// הייחוס = שאר הקורפוס (מחברים אחרים, עברית, אותו ז'אנר) — בדיוק כמו style-eval,
+// כי העוגנים ב-style-anchors.json כוילו מול אוכלוסיית תקנון כזו. פרופיל שנבנה
+// בלי מסמכי ייחוס מסומן degenerate והסקאלה שלו אינה תואמת את העוגנים.
+function findAnchorsFile() {
+  if (process.env.WORDAI_STYLE_ANCHORS) return process.env.WORDAI_STYLE_ANCHORS;
+  // ⚠️ הקובץ הזה רץ מ-bundle ב-scratch, ולכן import.meta.url לא מצביע על הריפו.
+  // מטפסים מ-cwd עד שמוצאים את tools/test-bench.
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i += 1) {
+    const p = path.join(dir, 'tools', 'test-bench', 'style-anchors.json');
+    if (fs.existsSync(p)) return p;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
+
+const PURE_TOKEN_RE_STYLE = /^[֐-׿]{2,}[.,;:!?'"׳״)]?$|^[A-Za-z]{2,}[.,;:!?'")]?$|^\d+([.,]\d+)?$/;
+function styleRefUsable(text) {
+  if (tokenizeForStyle(text).length < MIN_DOC_WORDS) return false;
+  const letters = String(text).match(/[א-תA-Za-z]/g) || [];
+  if (!letters.length) return false;
+  if (letters.filter((c) => /[א-ת]/.test(c)).length / letters.length < 0.6) return false;
+  const toks = (String(text).match(/\S+/g) || []).slice(0, 2000);
+  if (toks.length < 40) return false;
+  return toks.filter((t) => PURE_TOKEN_RE_STYLE.test(t)).length / toks.length >= GARBLE_FLOOR;
+}
+
+function walkCorpus(dir, out = []) {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) walkCorpus(full, out);
+    else if (/\.(docx|pdf)$/i.test(e.name) && !e.name.startsWith('~$')) out.push(full);
+  }
+  return out;
+}
+
+let selectProfile = null;
+let selectAnchors = null;
+let selectRefCount = 0;
+if (SELECT_STYLE !== 'off') {
+  const anchorsPath = findAnchorsFile();
+  try { selectAnchors = anchorsPath ? JSON.parse(fs.readFileSync(anchorsPath, 'utf8')) : null; } catch {}
+  if (!selectAnchors) {
+    console.log('⚠ style-anchors.json לא נמצא — זרוע הסגנון מנוטרלת (הרץ style-eval.mjs)');
+  } else {
+    const refs = [];
+    const personalRoots = PERSONAL_DIRS.map((d) => path.resolve(d));
+    for (const p of walkCorpus(CORPUS_DIR)) {
+      if (refs.length >= SELECT_STYLE_REFS) break;
+      const rp = path.resolve(p);
+      if (personalRoots.some((root) => rp.startsWith(root))) continue;
+      let text = '';
+      try { text = (await extractFile(p)).text || ''; } catch { continue; }
+      if (!styleRefUsable(text)) continue;
+      refs.push(text);
+    }
+    selectRefCount = refs.length;
+    selectProfile = buildAuthorProfile(personalTexts, { referenceDocs: refs });
+    if (!selectProfile) {
+      console.log('⚠ הפרופיל האישי חזר null — זרוע הסגנון מנוטרלת');
+    } else {
+      console.log(`זרוע בחירה: ${SELECT_STYLE}${SELECT_STYLE === 'blend' ? ` (w=${SELECT_BLEND_W})` : ''} · `
+        + `פרופיל מ-${selectProfile.docCount} עבודות מול ${selectRefCount} מסמכי ייחוס · `
+        + `${selectProfile.words.length} n-גרמים · מרחק ${selectAnchors.distance} · `
+        + `עוגנים ${selectAnchors.selfDelta.toFixed(3)}/${selectAnchors.otherDelta.toFixed(3)}`
+        + `${selectProfile.degenerate ? ' ⚠ degenerate' : ''}`);
+    }
+  }
+}
+
+// מנקד הבחירה. **נמוך = טוב יותר**, כמו הדטקטור.
+let styleFallbackCount = 0;
+let styleScoredCount = 0;
+// כל וריאנט שנוקד נרשם כאן, כדי שנוכל לדווח בנפרד דטקטור וסגנון של **הזוכה**
+// (composeSectionProseBest מחזיר רק את הציון המשולב).
+let variantLog = [];
+const detectorOf = (plain) => {
+  const s = Number(scoreTextAuthenticity(plain)?.score);
+  return Number.isFinite(s) ? s : 50;
+};
+const selectionScoreFn = (SELECT_STYLE === 'off' || !selectProfile)
+  ? scoreTextAuthenticity
+  : (plain) => {
+    const det = detectorOf(plain);
+    const r = burrowsDelta(plain, selectProfile);
+    const dist = selectAnchors.distance === 'classic' ? r?.delta : r?.cosineDelta;
+    const match = r ? styleMatchScore(dist, selectAnchors) : null;
+    styleScoredCount += 1;
+    if (match == null) {
+      // מדד מנוון/טקסט קצר מדי — נופלים לדטקטור לבדו, וסופרים.
+      styleFallbackCount += 1;
+      variantLog.push({ combined: det, detector: det, styleMatch: null });
+      return det;
+    }
+    const styleCost = 100 - match;
+    const combined = SELECT_STYLE === 'only'
+      ? styleCost
+      : (SELECT_BLEND_W * det) + ((1 - SELECT_BLEND_W) * styleCost);
+    variantLog.push({ combined, detector: det, styleMatch: match });
+    return combined;
+  };
+
 // ---------- אבחון (WORDAI_NLG_DIAG=1) ----------
 if (process.env.WORDAI_NLG_DIAG === '1') {
   const { readMaterialStore } = await import('../../src/services/materialChunkStore.js');
@@ -516,6 +644,23 @@ const metrics = {
   generatedAt: new Date().toISOString(),
   assignment: { title: spec.title, totalWords: spec.totalWords, citationStyle: spec.citationStyle, sectionCount: sections.length },
   corpus: getMaterialStoreStats(),
+  // ⚠️ תצורת הריצה. ריצות מתצורות שונות אינן ברות-השוואה — אותו לקח בדיוק כמו
+  // WORDAI_REWRITE שירש מהמעטפת ולא נרשם, ונתן "נסיגה" שהייתה הבדל סביבה.
+  config: {
+    selectStyle: SELECT_STYLE,
+    selectBlendW: SELECT_STYLE === 'blend' ? SELECT_BLEND_W : null,
+    selectStyleActive: Boolean(SELECT_STYLE !== 'off' && selectProfile),
+    selectStyleRefDocs: selectRefCount,
+    selectStyleProfileDocs: selectProfile?.docCount ?? 0,
+    selectStyleAnchors: selectAnchors
+      ? { distance: selectAnchors.distance, selfDelta: selectAnchors.selfDelta, otherDelta: selectAnchors.otherDelta, auc: selectAnchors.auc }
+      : null,
+    rewrite: process.env.WORDAI_REWRITE === '1' ? (process.env.WORDAI_REWRITE_BACKEND || 'ollama') : 'off',
+    styleFit: process.env.WORDAI_STYLE_FIT === '0' ? 'off' : 'on',
+    styleShots: STYLE_SHOT_COUNT,
+    evidenceK: process.env.WORDAI_EV_K ? Number(process.env.WORDAI_EV_K) : 'default',
+    seedSalt: process.env.WORDAI_NLG_SEED_SALT || '',
+  },
   styleProfile: { openerDocs: oStatus.distinctDocs, openerPersonalWords: oStatus.personalWords, blendLambda: oStatus.blendLambda, frameCount: fStatus.minedFrames, frameDocs: fStatus.distinctDocs },
   sections: [],
   totals: {},
@@ -667,8 +812,14 @@ for (const section of sections) {
         styleTargets,
         sectionCount: totalUnits,
       },
-      { scoreFn: scoreTextAuthenticity, variants: 3 },
+      { scoreFn: selectionScoreFn, variants: 3 },
     );
+    // הזוכה לפי הציון המשולב — מחלצים ממנו את שני המרכיבים לדיווח נפרד, כדי
+    // שהדטקטור יישאר בר-השוואה בין הזרועות.
+    const winner = (SELECT_STYLE !== 'off' && selectProfile && Number.isFinite(r?.authenticityScore))
+      ? variantLog.find((v) => Math.abs(v.combined - r.authenticityScore) < 1e-9)
+      : null;
+    variantLog = [];
 
     // ---------- מדד "תשובה מול פיגום" ----------
     // ⚠️ הביקורת שהובילה למדד: הפלט נראה כמו רצף **פתיחים**, לא כמו תשובה.
@@ -753,7 +904,13 @@ for (const section of sections) {
     secMetric.wordCount = r.wordCount;
     secMetric.anchoredPct = content ? Math.round((anchored / content) * 100) : 0;
     secMetric.anchoredContentSentences = `${anchored}/${content}`;
-    secMetric.detectorScore = Number.isFinite(r.authenticityScore) ? Math.round(r.authenticityScore) : null;
+    // ⚠️ detectorScore נשאר **תמיד** ציון הדטקטור הגנרי — גם כשהבחירה נעשתה לפי
+    // הסגנון. אחרת עמודה אחת בבנצ' הייתה מחליפה משמעות בין זרועות בלי להודיע.
+    secMetric.detectorScore = winner
+      ? Math.round(winner.detector)
+      : (Number.isFinite(r.authenticityScore) ? Math.round(r.authenticityScore) : null);
+    secMetric.selectScore = Number.isFinite(r.authenticityScore) ? Math.round(r.authenticityScore) : null;
+    secMetric.styleMatch = winner ? winner.styleMatch : null;
     secMetric.usedSources = usedSources;
     // ⚠️ `note` היחידה שנשמרה עד 27.7 הייתה **notes[0]**, וזו כמעט תמיד הערת
     // "הראיות נבחרו בדירוג יחסי" — בעוד שהערת המכסה נדחפת אחריה. האינווריאנטה
@@ -806,6 +963,13 @@ metrics.totals = {
     const xs = metrics.sections.map((s) => s.detectorScore).filter((x) => Number.isFinite(x));
     return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
   })(),
+  avgStyleMatch: (() => {
+    const xs = metrics.sections.map((s) => s.styleMatch).filter((x) => Number.isFinite(x));
+    return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  })(),
+  // כמה פעמים מדד הסגנון חזר null (טקסט קצר/מדד מנוון) והבחירה נפלה לדטקטור.
+  styleScoredVariants: styleScoredCount,
+  styleFallbackVariants: styleFallbackCount,
 };
 
 fs.writeFileSync(path.join(ROUND_DIR, 'draft.html'), `<!doctype html><meta charset="utf-8"><body dir="rtl">${htmlParts.join('\n')}</body>`, 'utf8');
@@ -821,6 +985,9 @@ for (const s of metrics.sections) {
   const mark = s.status === 'local-draft' ? '✓' : '⛔';
   console.log(`${mark} ${s.id} [${s.intent}] ${s.status} · ${s.wordCount}/${s.quota} מ' · עיגון ${s.anchoredPct}% (${s.anchoredContentSentences || '-'}) · דטקטור ${s.detectorScore ?? '-'} · ${(s.usedSources || []).length} מקורות${s.fit?.commas || s.fit?.split ? ` · התאמה +${s.fit.commas}פסיק/${s.fit.split}פיצול` : ''}${s.note ? ` · ${s.note.slice(0, 34)}` : ''}`);
 }
+console.log(`זרוע בחירה: ${SELECT_STYLE}${SELECT_STYLE === 'blend' ? ` w=${SELECT_BLEND_W}` : ''}`
+  + `${metrics.config.selectStyleActive ? '' : ' (לא פעילה)'} · סגנון ממוצע ${metrics.totals.avgStyleMatch ?? '-'}`
+  + ` · נפילות-לדטקטור ${styleFallbackCount}/${styleScoredCount}`);
 console.log(`\n${metrics.totals.localDraft}/${metrics.totals.units} יחידות נכתבו · ${metrics.totals.blocked} חסומות · ${metrics.totals.totalWords} מילים · עיגון כולל ${metrics.totals.overallAnchoredPct}% · דטקטור ממוצע ${metrics.totals.avgDetectorScore}`);
 console.log(`פלט: ${ROUND_DIR}`);
 

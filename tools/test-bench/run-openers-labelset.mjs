@@ -16,6 +16,11 @@ const SCRATCH = process.env.WORDAI_VERIFY_SCRATCH
   || path.join(process.env.LOCALAPPDATA || '', 'Temp', 'wordai-labelset');
 const BUNDLE = path.join(SCRATCH, 'out-labelset', 'sf.mjs');
 
+// יעד הפלט נקבע כאן ולא בבאנדל: הבאנדל רץ מ-scratch ואינו יודע איפה הריפו.
+// אותה ברירת מחדל בדיוק ש-make-labeler.mjs קורא ממנה.
+process.env.WORDAI_LABELSET_OUT = process.env.WORDAI_LABELSET_OUT
+  || path.join(DIR, 'lab-results', 'openers-labelset');
+
 const run = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
   const p = spawn(cmd, args, { stdio: 'inherit', shell: process.platform === 'win32', ...opts });
   p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
