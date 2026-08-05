@@ -10689,10 +10689,14 @@ ${isGeneralWritingScope
       }
       case 'scholar': {
         if (!cfg.scholar.key) throw new Error('מפתח Google Scholar לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        const sources = await fetchScholarSources({ query: cleanUserPrompt, apiKey: cfg.scholar.key, signal, limit: 10 });
+        // scholar אינו מודל שיחה — הוא מנוע חיפוש. פרומפט מלא (במיוחד של workspace) כ-q
+        // מנפח את ה-URL מעבר לגבול של SerpAPI ⇒ 400. גוזרים נושא קצר; אין נושא ⇒ 420 תווים.
+        const scholarTopicQuery = deriveResearchTopicQuery(cleanUserPrompt)
+          || String(cleanUserPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 420);
+        const sources = await fetchScholarSources({ query: scholarTopicQuery, apiKey: cfg.scholar.key, signal, limit: 10 });
         const text = sources.length
           ? [
-              `הנה המאמרים שאותרו ישירות ב-Google Scholar עבור: ${cleanUserPrompt}`,
+              `הנה המאמרים שאותרו ישירות ב-Google Scholar עבור: ${scholarTopicQuery}`,
               ...sources.map((source, index) => formatSourceItem(source, index)),
               'לא הוספתי מקורות שלא הופיעו בתוצאות האחזור.',
             ].join('\n\n')

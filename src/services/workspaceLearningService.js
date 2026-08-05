@@ -2982,7 +2982,11 @@ function resolveWorkspaceV2StepRoute({ step = {}, template = {}, requestedProvid
   const templateProviderId = String(template?.providerId || '').trim();
   const requestProviderId = String(requestedProviderSelection?.providerId || '').trim();
   // בחירה מפורשת של המשתמש מנצחת את ניתוב השלב/התבנית. כשאין בחירה — נשמר הניתוב המקורי.
-  const providerOverride = requestProviderId || stepProviderId || templateProviderId;
+  let providerOverride = requestProviderId || stepProviderId || templateProviderId;
+  // scholar אינו מודל כתיבה — הוא מנוע חיפוש מקורות. בחירתו כספק של שלב workspace הופכת
+  // את "המסמך" לרשימת מקורות (ולפני ה-clamp גם ל-400 של SerpAPI). מתעלמים מה-override:
+  // הכתיבה חוזרת לספק הצ'אט הפעיל, והמקורות מ-Scholar ממשיכים להגיע דרך מסלול האחזור.
+  if (providerOverride === 'scholar') providerOverride = '';
 
   const stepModel = String(step?.model || '').trim();
   const templateModel = String(template?.model || '').trim();

@@ -37,7 +37,10 @@ const delayRespectingSignal = (ms, signal) => new Promise((resolve, reject) => {
 });
 
 export const fetchScholarSources = async ({ query = '', apiKey = '', signal, timeoutMs = 0, yearLow = 0, yearHigh = 0 } = {}) => {
-  const safeQuery = String(query || '').trim();
+  // clamp הגנתי (כמו normalizeQuery של ה-pipeline): פרומפט ארוך שמגיע כשאילתה מנפח את
+  // ה-URL מעבר לגבול request-line של SerpAPI (HAProxy) ⇒ "400 Bad request". נצפה בפועל
+  // כשמשתמש בחר את scholar כספק הצ'אט וה-prompt המלא של ה-workspace נשלח כ-q.
+  const safeQuery = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 420);
   const safeApiKey = String(apiKey || '').trim();
   if (!safeQuery || !safeApiKey) return [];
 
