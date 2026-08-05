@@ -3227,7 +3227,8 @@ const SOURCE_ASSIGNMENT_REQUIREMENT_SIGNAL_PATTERN = /(הוראות\s+המשתמ
 const SOURCE_UNCHOSEN_TOPIC_LIST_PATTERN = /(אחד\s+מהנושאים\s+הבאים|אחת\s+מהאפשרויות\s+הבאות|choose\s+one\s+of\s+the\s+following|one\s+of\s+the\s+following\s+topics)/i;
 const SOURCE_RESEARCH_SUBJECT_MARKER_PATTERNS = [
   // "הנושא: X" / "נושא העבודה: X" — הניסוח הטבעי ביותר במטלות; דורש נקודתיים/מקף כדי לא לתפוס "נושא" סתמי.
-  /(?:^|[\n.;,])\s*(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?|topic)\s*[:：\-–]\s*([^\n.;]+)/im,
+  // גם "המקרה הנבחר: X" — מטלות ניתוח-מקרה ("בחרו מקרה עכשווי...") שבהן המשתמש מצהיר על הבחירה.
+  /(?:^|[\n.;,])\s*(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?|ה?מקרה\s+(?:הנבחר|שנבחר|שלי)|topic)\s*[:：\-–]\s*([^\n.;]+)/im,
   // צורת-פקודה: "מצא לי 3 מקורות אקדמיים על X" → מחזיר רק את הנושא X. קריטי ל-Google Scholar
   // שעושה התאמת-מילים מילולית: המילים "מצא לי N מקורות אקדמיים על" הן רעש שמזהם את החיפוש.
   // דורש פועל + שם-עצם-מקור + מילת-קישור (על/בנושא/...) כדי לא לבלוע את הנושא בטעות.
@@ -4451,6 +4452,18 @@ const extractAssignmentSourceRequirements = (text = '', academicSources = null) 
   if (academicSources) {
     addUniqueRequirement(requirements, { kind: 'academic-article', count: academicSources, notes: 'מכסת מאמרים/מקורות אקדמיים כללית', required: true });
   }
+  // מכסת מקורות לא-אקדמיים ("לפחות שני מקורות לא-אקדמיים") — נפוצה לצד המכסה האקדמית.
+  // ה-kind בכוונה בלי המחרוזות academic/אקדמ/מאמר: SOURCE_QUOTA_ACADEMIC_KIND_PATTERN תופס
+  // אותן גם בתוך "לא-אקדמי" (מלכודת שלילה שנצפתה: הדרישה סווגה כאקדמית ולא אוחזרו כתבות).
+  // "לא-אקדמיים" מגיע גם כ"לא - אקדמיים" (חילוץ PDF מפזר רווחים סביב מקפים) — לכן \s*[-–]?\s*.
+  if (/מקורות\s+(?:לא|שאינם)\s*[-–]?\s*אקדמיים?|non[-\s]?academic\s+sources?/i.test(source)) {
+    const nonAcademicCount = findAssignmentNumber(source, [
+      /(\d{1,2}|[א-ת]{3,6})\s+מקורות\s+(?:לא|שאינם)\s*[-–]?\s*אקדמיים?/iu,
+      /מקורות\s+(?:לא|שאינם)\s*[-–]?\s*אקדמיים?\D{0,15}(\d{1,2})/iu,
+      /(\d{1,2}|one|two|three|four|five)\s+non[-\s]?academic\s+sources?/i,
+    ]);
+    addUniqueRequirement(requirements, { kind: 'popular-source', count: nonAcademicCount || 2, notes: 'מכסת מקורות לא-אקדמיים (כתבות/אתרי מידע)', required: true });
+  }
   if (/(?:defin(?:e|ing|ition)\s+(?:of\s+)?["“”']?international\s+crisis|הגדר(?:ה|ת)\s+[^\n]{0,80}משבר\s+בינלאומי|משבר\s+בינלאומי[^\n]{0,80}הגדר)/i.test(source)) {
     addUniqueRequirement(requirements, { kind: 'academic-definition-article', count: 1, notes: 'מאמר אקדמי שמגדיר international crisis', required: true });
   }
@@ -4527,14 +4540,20 @@ const normalizeAssignmentRequirements = (requirements = {}) => {
 };
 
 const SOURCE_QUOTA_ACADEMIC_KIND_PATTERN = /(academic|scholar|journal|peer|doi|citation|quote|bibliograph|syllabus|אקדמ|ציטוט|ביבליוגרפ|סילבוס|מאמר)/i;
+// מלכודת שלילה: "לא-אקדמי"/"non-academic" מכילים את "אקדמ"/"academic" — בדיקה נאיבית של
+// ה-pattern מסווגת דרישת מקורות לא-אקדמיים כאקדמית (נצפה: המטלה דרשה 2 לא-אקדמיים ולא
+// אוחזרה אף כתבה). כל סיווג kind חייב לעבור דרך העוזר הזה.
+const NON_ACADEMIC_KIND_NEGATION_PATTERN = /(non[-\s]?academic|לא\s*[-–]?\s*אקדמ|שאינ(?:ם|ו|ן)\s+אקדמ|popular)/i;
+const isAcademicQuotaKind = (kind = '') => !NON_ACADEMIC_KIND_NEGATION_PATTERN.test(String(kind || ''))
+  && SOURCE_QUOTA_ACADEMIC_KIND_PATTERN.test(String(kind || ''));
 const SOURCE_QUOTA_GENERAL_AGENT_PATTERN = /(general|web|news|media|visual|image|content|article|רשת|חדשות|תקשורת|חזותי|תמונה|כתבות|תוכן)/i;
 const SOURCE_QUOTA_ACADEMIC_AGENT_PATTERN = /(academic|scholar|citation|literature|bibliograph|אקדמי|אקדמית|ציטוט|ביבליוגרפ|ספרות|מאמרים)/i;
 
 const resolveAssignmentSourceQuotaRoute = (requirements = {}, agentContext = {}) => {
   const normalized = normalizeAssignmentRequirements(requirements);
   const sourceKinds = normalized.sourceRequirements.map((item) => item.kind).filter(Boolean);
-  const academicSourceKinds = sourceKinds.filter((kind) => SOURCE_QUOTA_ACADEMIC_KIND_PATTERN.test(kind));
-  const nonAcademicSourceKinds = sourceKinds.filter((kind) => !SOURCE_QUOTA_ACADEMIC_KIND_PATTERN.test(kind));
+  const academicSourceKinds = sourceKinds.filter((kind) => isAcademicQuotaKind(kind));
+  const nonAcademicSourceKinds = sourceKinds.filter((kind) => !isAcademicQuotaKind(kind));
   const hasAcademicQuota = Number(normalized.academicSources) > 0
     || Number(normalized.directQuotes) > 0
     || academicSourceKinds.length > 0;
@@ -4572,7 +4591,7 @@ const buildSourceQueryKindSuffix = (requirements = {}) => {
   const normalized = normalizeAssignmentRequirements(requirements);
   const sourceKinds = normalized.sourceRequirements.map((item) => item.kind).filter(Boolean);
   if (Number(normalized.contentItems) > 0) return 'כתבות ומקורות תוכן';
-  if (Number(normalized.academicSources) > 0 || Number(normalized.directQuotes) > 0 || sourceKinds.some((kind) => SOURCE_QUOTA_ACADEMIC_KIND_PATTERN.test(kind))) {
+  if (Number(normalized.academicSources) > 0 || Number(normalized.directQuotes) > 0 || sourceKinds.some((kind) => isAcademicQuotaKind(kind))) {
     return 'מאמרים אקדמיים';
   }
   return sourceKinds.slice(0, 2).join(' ');
@@ -4834,7 +4853,7 @@ const getRequestedSourceRetrievalLimit = (requirements = {}, { academic = false,
   return Math.max(VERIFIED_SOURCE_RESULT_LIMIT, Math.min(VERIFIED_SOURCE_RESULT_HARD_LIMIT, requestedQuota || VERIFIED_SOURCE_RESULT_LIMIT));
 };
 
-const SIMPLE_SOURCE_PLAN_NEWS_PATTERN = /(כתבה|כתבות|כתבת\s+חדשות|תקשורתי|בתקשורת|עיתונאי|עיתונות|ידיעה|ידיעות|news\s+articles?|media\s+coverage)/i;
+const SIMPLE_SOURCE_PLAN_NEWS_PATTERN = /(כתבה|כתבות|כתבת\s+חדשות|תקשורתי|בתקשורת|עיתונאי|עיתונות|ידיעה|ידיעות|news\s+articles?|media\s+coverage|מקורות\s+(?:לא|שאינם)\s*[-–]?\s*אקדמיים?|non[-\s]?academic\s+sources?)/i;
 const SIMPLE_SOURCE_PLAN_WEB_PATTERN = /(אתר(?:ים)?\s+רשמ(?:י|יים)|עמותה|ארגון|משרד\s+ממשלתי|נתונים\s+עדכניים|דוח(?:ות)?|reports?|official\s+site|organization|ngo|government|web\s+sources?)/i;
 
 const buildDeterministicSourceRetrievalPlan = ({
@@ -4852,7 +4871,7 @@ const buildDeterministicSourceRetrievalPlan = ({
 
   const normalized = normalizeAssignmentRequirements(assignmentRequirements);
   const sourceRequirements = normalized.sourceRequirements.filter((item) => item.required === true);
-  const academicRequirementCount = sourceRequirements.filter((item) => SOURCE_QUOTA_ACADEMIC_KIND_PATTERN.test(item.kind)).length;
+  const academicRequirementCount = sourceRequirements.filter((item) => isAcademicQuotaKind(item.kind)).length;
   const nonAcademicRequirementCount = sourceRequirements.length - academicRequirementCount;
   const hasMixedExplicitSourceKinds = academicRequirementCount > 0 && nonAcademicRequirementCount > 0;
   const hasSeveralSpecificSourceKinds = sourceRequirements.length > 1;
@@ -4871,7 +4890,9 @@ const buildDeterministicSourceRetrievalPlan = ({
       const entry = normalizeRetrievalPlanEntry({ kind: 'academic', query, count: getRequestedSourceRetrievalLimit(normalized, { academic: true }) });
       if (entry) entries.push(entry);
     }
-    if (demandsNews) {
+    // מכסה לא-אקדמית מפורשת ⇒ entry של כתבות גם כשהטקסט לא מכיל "כתבות/תקשורת" —
+    // "מקורות לא-אקדמיים" הוא הניסוח הנפוץ במטלות והכתיבה נחסמת בלעדיו ([דרוש מקור לא-אקדמי]).
+    if (demandsNews || nonAcademicRequirementCount > 0) {
       const entry = normalizeRetrievalPlanEntry({ kind: 'news', query, count: getRequestedSourceRetrievalLimit(normalized, { articleRequest: true }) });
       if (entry) entries.push(entry);
     }
@@ -8683,7 +8704,7 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       userPrompt: cleanUserPrompt,
       extraSystemPrompt,
     });
-  const suppressResearchRouting = options.forceSuppressResearchRouting === true
+  let suppressResearchRouting = options.forceSuppressResearchRouting === true
     || suppressResearchRoutingForEditMode
     || directChatSourceReuseRequested
     || suppressResearchRoutingForDirectAgent
@@ -8757,6 +8778,18 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     agentLabel: options.agentLabel || '',
     agentName: options.agentName || '',
   });
+  // ביטול דיכוי "סקירת מסמך" כשכותבים מסמך עם מכסת מקורות מפורשת: טקסט מטלה מלא מכיל
+  // מילות פעולה (בדקו/השוו/תקנו) + אזכורי עבודה/מרצה שמפעילים את isDocumentReviewOrEditRequest
+  // בטעות, וכל האחזור דוכא למרות quotaRoute=strict (נצפה: המטלה דרשה 2+2 מקורות ואפס אוחזרו).
+  // מצטמצם למקרה שבו סקירת-מסמך היא סיבת הדיכוי היחידה — עריכה/שיחה-ישירה נשארות מדוכאות.
+  const suppressedOnlyByDocumentReview = suppressResearchRouting
+    && options.forceSuppressResearchRouting !== true
+    && !suppressResearchRoutingForEditMode
+    && !directChatSourceReuseRequested
+    && !suppressResearchRoutingForDirectAgent;
+  if (suppressedOnlyByDocumentReview && options.expectDocumentOutput === true && assignmentSourceQuotaRoute.hasSourceQuota) {
+    suppressResearchRouting = false;
+  }
   const sourceFocusedWorkflowAgent = !suppressResearchRouting
     && options.skipAutomation === true
     && !directChatRequest
@@ -8974,7 +9007,14 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
     hasRunScopeSourceLock: Boolean(runScopeSourceLockForIntent),
     persistedAllowedUrlCount: recentVerifiedSourceAllowedUrls.size,
   };
-  logEvent('source-routing-decision', `החלטת ניתוב מקורות: required=${sourceGroundingRequired} retrieveFirst=${shouldRetrieveVerifiedSourcesFirst} groundedWeb=${groundedWebResultsRequired} groundedWebRetrieveFirst=${sourceQuotaLog.groundedWebRetrieveFirst} skipAutomation=${options.skipAutomation === true} directChat=${directChatRequest} strictProviderOverride=${strictProviderOverride} sourceQuota=${sourceQuotaLog.sourceQuota} contentItems=${sourceQuotaLog.contentItems || 0} sourceKinds=${sourceQuotaLog.sourceKinds.join(',') || 'none'} quotaRoute=${sourceQuotaLog.quotaRoute} skipAutomationQuotaBypass=${sourceQuotaLog.skipAutomationQuotaBypass} sourceQueryOverride=${sourceQuotaLog.sourceQueryOverride} querySource=${sourceQuotaLog.querySource} provider=${activeProvider} model=${resolvedModel}`, {
+  // suppress=<מי חסם> — בלי זה אי אפשר לאבחן מהיומן למה required=false למרות מכסה (נצפה).
+  const suppressReasonLabel = !suppressResearchRouting ? 'none'
+    : options.forceSuppressResearchRouting === true ? 'forced'
+      : suppressResearchRoutingForEditMode ? 'edit-mode'
+        : directChatSourceReuseRequested ? 'source-reuse'
+          : suppressResearchRoutingForDirectAgent ? 'direct-agent'
+            : 'document-review';
+  logEvent('source-routing-decision', `החלטת ניתוב מקורות: suppress=${suppressReasonLabel} required=${sourceGroundingRequired} retrieveFirst=${shouldRetrieveVerifiedSourcesFirst} groundedWeb=${groundedWebResultsRequired} groundedWebRetrieveFirst=${sourceQuotaLog.groundedWebRetrieveFirst} skipAutomation=${options.skipAutomation === true} directChat=${directChatRequest} strictProviderOverride=${strictProviderOverride} sourceQuota=${sourceQuotaLog.sourceQuota} contentItems=${sourceQuotaLog.contentItems || 0} sourceKinds=${sourceQuotaLog.sourceKinds.join(',') || 'none'} quotaRoute=${sourceQuotaLog.quotaRoute} skipAutomationQuotaBypass=${sourceQuotaLog.skipAutomationQuotaBypass} sourceQueryOverride=${sourceQuotaLog.sourceQueryOverride} querySource=${sourceQuotaLog.querySource} provider=${activeProvider} model=${resolvedModel}`, {
     state: 'info',
     provider: activeProvider,
     model: resolvedModel,

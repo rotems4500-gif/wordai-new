@@ -1872,8 +1872,9 @@ function deriveDocumentResearchTopic(promptText = '', instructionsText = '') {
   let text = [String(promptText || ''), String(instructionsText || '')].filter((s) => s.trim()).join(' ').replace(/\s+/g, ' ').trim();
   if (!text) return '';
   // הערה: אין להשתמש ב-\b סביב עברית — ב-JS regex \b הוא ASCII בלבד ולא תופס גבול-מילה עברי.
-  // עדיפות: "הנושא: X" מפורש
-  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?)\s*[:：\-–]\s*([^\n.;]+)/i);
+  // עדיפות: "הנושא: X" מפורש — וגם "המקרה הנבחר: X" (מטלות ניתוח-מקרה). בלי זה afterVerb
+  // תופס "על ידי" באמצע טקסט-מטלה ומייצר שאילתת-פרגמנט חסרת-משמעות (נצפה).
+  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?|ה?מקרה\s+(?:הנבחר|שנבחר|שלי))\s*[:：\-–]\s*([^\n.;]+)/i);
   if (explicit) {
     text = explicit[1];
   } else {

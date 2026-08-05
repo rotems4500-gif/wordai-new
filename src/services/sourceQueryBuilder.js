@@ -88,7 +88,8 @@ export const deriveResearchTopicQuery = (promptText = '', instructionsText = '')
   if (!text) return '';
   // הערה: אין להשתמש ב-\b סביב עברית — ב-JS regex \b הוא ASCII בלבד ולא תופס גבול-מילה עברי.
   // עדיפות: "הנושא: X" מפורש
-  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?)\s*[:：\-–]\s*([^\n.;]+)/i);
+  // גם "המקרה הנבחר: X" (מטלות ניתוח-מקרה) — אותו מעמד כמו "הנושא: X".
+  const explicit = text.match(/(?:^|[\s.;,])(?:ה?נושא(?:\s+(?:העבודה|המחקר|הנבחר|שלי))?|ה?מקרה\s+(?:הנבחר|שנבחר|שלי))\s*[:：\-–]\s*([^\n.;]+)/i);
   if (explicit) {
     text = explicit[1];
   } else {
