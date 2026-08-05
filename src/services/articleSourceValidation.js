@@ -270,7 +270,7 @@ const extractFocusPhrase = (query = '') => {
   return phrase;
 };
 
-const tokenizeFocusText = (text = '') => Array.from(
+export const tokenizeFocusText = (text = '') => Array.from(
   new Set(
     normalizeText(text)
       .split(' ')

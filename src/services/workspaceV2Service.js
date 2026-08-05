@@ -8,6 +8,7 @@ export const WORKSPACE_V2_TEMPLATE_IDS = {
   MARKETING: 'marketing',
   ACADEMIC_HEAVY: 'academic-heavy',
   ACADEMIC_LIGHT: 'academic-light',
+  ACADEMIC_SCHOLAR_DIRECT: 'academic-scholar-direct',
   ARGUMENT: 'argument',
 };
 
@@ -286,6 +287,40 @@ export const WORKSPACE_V2_TEMPLATES = {
         goal: 'לוודא שהתשובה עונה לשאלה בלי עודף.',
         instructions: ['הסר חזרות.', 'חדד משפטים עמומים.'],
         output: 'גרסה נקייה להגשה',
+      }),
+    ],
+  },
+  // "קריאה ישירה + סקולר": שלב יחיד ⇒ קריאת כתיבה אחת (המסלול הישיר), בעוד שה-id בקידומת
+  // "academic" מדליק isAcademicTask בכל שלב (workspaceLearningService:3195) ⇒ אחזור מקורות
+  // מאומת דרך Google Scholar לפני הכתיבה. ניסוח ה-role כולל "מקורות"/"אקדמי" בכוונה —
+  // זה מה שמפעיל את שער ה-grounding (SOURCE_FOCUSED_WORKFLOW_AGENT_PATTERN) תחת skipAutomation.
+  [WORKSPACE_V2_TEMPLATE_IDS.ACADEMIC_SCHOLAR_DIRECT]: {
+    id: WORKSPACE_V2_TEMPLATE_IDS.ACADEMIC_SCHOLAR_DIRECT,
+    label: 'כתיבה ישירה + מקורות סקולר',
+    mission: 'קריאת כתיבה ישירה אחת, מעוגנת במקורות אקדמיים אמיתיים מ-Google Scholar שאוחזרו ואומתו לפני הכתיבה.',
+    taskSignals: ['סקולר', 'scholar', 'מקורות אקדמיים', 'מאמרים שפיטים', 'peer reviewed', 'כתיבה ישירה', 'ישיר עם מקורות'],
+    sourcePolicy: {
+      mode: 'sources-first',
+      requireSourcesWhen: ['תמיד — הכתיבה מתחילה רק אחרי אחזור מקורות אקדמיים מאומתים'],
+      citationStyle: 'academic-requested-or-apa',
+    },
+    stylePolicy: {
+      preservePersonalStyle: true,
+      allowPersuasiveReframing: false,
+      avoid: ['מקורות מומצאים', 'קביעות לא מגובות', 'ניפוח מבני שלא נדרש במטלה'],
+    },
+    pipeline: [
+      buildWorkspaceV2Step({
+        id: 'scholar-direct-writer',
+        role: 'כותב אקדמי עם מקורות סקולר',
+        goal: 'לכתוב את העבודה בקריאה ישירה אחת, מעוגנת אך ורק במקורות האקדמיים המאומתים שאוחזרו.',
+        instructions: [
+          'השתמש רק במקורות שאוחזרו ואומתו — אל תמציא מקור, DOI או ציטוט.',
+          'שלב את המקורות בגוף הטקסט לפי מחבר ושנה, וצרף ביבליוגרפיה בסוף.',
+          'אם אין מקור מתאים לטענה — כתוב [דרוש מקור] במקום להמציא.',
+          'שמור על הסגנון האישי של המשתמש ועל היקף שמתאים למטלה.',
+        ],
+        output: 'מסמך מלא ומעוגן-מקורות',
       }),
     ],
   },

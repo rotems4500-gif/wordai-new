@@ -9375,6 +9375,13 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
           const englishEntry = { ...entry, query: entry.queryEn, queryEn: undefined, lang: 'en' };
           return wantsEnglishSources ? [englishEntry] : [entry, englishEntry];
         }
+        // טלמטריה (C1): פריט אקדמי בלי queryEn = פרומפט התכנון לא סיפק תרגום — ה-pipeline
+        // ישלים וריאנט אנגלי אוטומטי (queryTranslate), אבל שווה לדעת כמה זה קורה.
+        if (entry.kind === 'academic') {
+          logEvent('source-plan-missing-query-en', `פריט אקדמי ללא queryEn מתוכנית האחזור: "${entry.query}"`, {
+            state: 'info', query: entry.query,
+          });
+        }
         return [entry];
       });
       emitStatus(onStatus, {
@@ -12176,6 +12183,38 @@ export const testProviderConnection = async (providerId, providerConfig = {}) =>
         availableModels: [],
         requestedModel: '',
         requestedModelAvailable: null,
+      };
+    }
+  }
+
+  // scholar אין לו מודל שיחה — בודקים את חשבון SerpAPI (חינם, לא שורף חיפוש)
+  if (providerId === 'scholar') {
+    const key = String(pCfg.key || '').trim();
+    if (!key) {
+      return { ok: false, model: '', reply: '', triedModels: [], error: 'מפתח API חסר', availableModels: [], requestedModel: '', requestedModelAvailable: null };
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const data = await requestJsonOverHttp({
+        url: `https://serpapi.com/account?api_key=${encodeURIComponent(key)}`,
+        method: 'GET', signal: controller.signal, timeoutMs: 12000,
+      });
+      clearTimeout(timeout);
+      if (data?.error) throw new Error(String(data.error));
+      const plan = String(data?.plan_name || data?.plan_id || '').trim();
+      const searchesLeft = data?.total_searches_left ?? data?.plan_searches_left;
+      return {
+        ok: true, model: plan || 'serpapi',
+        reply: `נותרו ${searchesLeft ?? '?'} חיפושים בחשבון${plan ? ` (${plan})` : ''}`,
+        triedModels: ['account'], error: '', availableModels: [], requestedModel: '', requestedModelAvailable: null,
+      };
+    } catch (err) {
+      clearTimeout(timeout);
+      return {
+        ok: false, model: '', reply: '', triedModels: ['account'],
+        error: err?.name === 'AbortError' ? 'הבקשה פגה (timeout)' : (err?.message || 'שגיאה לא ידועה'),
+        availableModels: [], requestedModel: '', requestedModelAvailable: null,
       };
     }
   }

@@ -843,7 +843,9 @@ function ApiTestButton({ providerId, providerConfig }) {
         const modelLabel = result.model ? ` (${result.model})` : '';
         const tried = result.triedModels.length > 1 ? ` · ניסה ${result.triedModels.length} מודלים` : '';
         const available = availableModelsLabel ? ` · זמינים למפתח: ${availableModelsLabel}` : '';
-        setResultText(`✅ מחובר${modelLabel}${tried}${available}`);
+        const replyText = String(result.reply || '').trim();
+        const replyLabel = replyText ? ` — ${replyText}` : '';
+        setResultText(`✅ מחובר${modelLabel}${tried}${available}${replyLabel}`);
       } else {
         setStatus('fail');
         const tried = result.triedModels.length ? ` · נוסו: ${result.triedModels.join(', ')}` : '';

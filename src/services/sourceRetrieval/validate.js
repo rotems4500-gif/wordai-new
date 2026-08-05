@@ -8,6 +8,7 @@ import {
   buildArticleSearchQueryVariants,
   extractDomainFromUrl,
   isKnownNewsDomain,
+  normalizeText,
   normalizeUrl,
   validateArticleCandidate,
 } from '../articleSourceValidation';
@@ -40,6 +41,34 @@ const CONTENT_MATCH_REJECTION_PREFIXES = [
 // topicMode (ברירת מחדל): חיפוש נושאי — בדיקות תוכן-מול-שאילתה רכות (מנוע החיפוש כבר
 // דירג רלוונטיות); בדיקות אתר-חדשות/blocklist/דומיין נשארות קשיחות. exact-hunt (URL
 // מדויק בשאילתה) שומר על הקשיחות המלאה.
+// מסנן רלוונטיות דטרמיניסטי למועמדים אקדמיים — רץ לפני אימות ה-URL החי (חוסך verify calls).
+// סלחני בכוונה: snippets של Scholar קצרים, אז נדרשת חפיפת מונח *אחת* בלבד (substring על
+// טקסט מנורמל — עמיד לתחיליות עברית כמו ה/ב/ל). שאילתה עם <2 מונחי-תוכן לא מסננת כלל,
+// ומועמד עם doi/citedBy מוגן (המטא-דאטה של Scholar כבר מעיד שזה מאמר אמיתי — אותו עיקרון
+// כמו contentPageFilter). דחייה כאן היא רק על אפס-חפיפה מוחלט (למשל "Palestine, Duel at the
+// Summit" לשאילתת לשון הרע — התוצאה האמיתית שנצפתה כשה-corpus העברי של Scholar דל).
+export const filterAcademicCandidates = (queryMeta, candidates = []) => {
+  const safeCandidates = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
+  const focusTokens = Array.isArray(queryMeta?.focusTokens) ? queryMeta.focusTokens.filter(Boolean) : [];
+  if (focusTokens.length < 2) return { accepted: safeCandidates, rejected: [] };
+  const accepted = [];
+  const rejected = [];
+  safeCandidates.forEach((candidate) => {
+    if (candidate.doi || candidate.citedBy) {
+      accepted.push(candidate);
+      return;
+    }
+    const candidateText = normalizeText([candidate.title, candidate.snippet, candidate.summary].filter(Boolean).join(' '));
+    const overlaps = candidateText && focusTokens.some((token) => candidateText.includes(token));
+    if (overlaps) {
+      accepted.push(candidate);
+    } else {
+      rejected.push({ candidate, reason: 'אפס חפיפה בין מונחי השאילתה לכותרת/תקציר (מסנן רלוונטיות אקדמי)' });
+    }
+  });
+  return { accepted, rejected };
+};
+
 export const filterNewsCandidates = (queryMeta, candidates = [], { topicMode } = {}) => {
   const safeCandidates = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
   const effectiveTopicMode = typeof topicMode === 'boolean' ? topicMode : !queryMeta?.exactUrl;

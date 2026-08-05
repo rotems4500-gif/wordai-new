@@ -119,6 +119,10 @@ export const normalizeScholarSource = (raw = {}) => {
   const summary = normalizeSourceSearchText(publicationInfo.summary || '');
   const title = normalizeSourceSearchText(raw.title || '');
   const url = normalizeSourceSearchText(raw.link || raw.inline_links?.html_version || raw.resources?.[0]?.link || '');
+  // קישור ה-PDF הפתוח (resources[0]) נשמר בנפרד — fallback כשה-URL הראשי חסום-בוטים
+  // (פייוול כמו jstor/tandfonline) או מת. ריק כשה-url הראשי כבר הגיע ממנו.
+  const resourceLink = normalizeSourceSearchText(raw.resources?.[0]?.link || '');
+  const pdfUrl = resourceLink && resourceLink !== url ? resourceLink : '';
   const snippet = normalizeSourceSearchText(raw.snippet || '');
   const citedByRaw = Number(raw.inline_links?.cited_by?.total);
   const citedBy = Number.isFinite(citedByRaw) && citedByRaw > 0 ? citedByRaw : null;
@@ -134,6 +138,7 @@ export const normalizeScholarSource = (raw = {}) => {
     year: parseSourceYear(summary),
     citedBy,
     doi,
+    ...(pdfUrl ? { pdfUrl } : {}),
     provider: 'serpapi-scholar',
   };
 };

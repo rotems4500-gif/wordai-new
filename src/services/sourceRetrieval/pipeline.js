@@ -9,13 +9,14 @@ import { extractDomainFromUrl, isUniversallyBlockedSourceDomain } from '../artic
 import { dedupeSources } from './candidates';
 import { filterNonContentCandidates } from './contentPageFilter';
 import { vetSourceRelevance } from './relevanceVet';
+import { shouldTranslateAcademicQuery, translateAcademicQueryToEnglish } from './queryTranslate';
 import { getDefaultRetrievalSession } from './cache';
 import { fetchGeminiGroundedSources } from './providers/geminiGrounded';
 import { fetchPerplexitySources } from './providers/perplexitySearch';
 import { fetchScholarSources } from './providers/serpApiScholar';
 import { makeRetrievalLogger } from './telemetry';
 import { verifyUrls } from './urlVerifier';
-import { analyzeQuery, buildArticleSearchQueryVariants, filterNewsCandidates, isKnownNewsDomain } from './validate';
+import { analyzeQuery, buildArticleSearchQueryVariants, filterAcademicCandidates, filterNewsCandidates, isKnownNewsDomain } from './validate';
 
 const DEFAULT_TIMEOUT_MS = 45000; // מסגרת-על (מגבלת 45s של מסלולי Claude)
 const PER_PROVIDER_TIMEOUT_MS = 20000;
@@ -47,7 +48,7 @@ const normalizeKind = (kind = 'web') => {
 const normalizeQuery = (query = '') => String(query || '').replace(/\s+/g, ' ').trim().slice(0, 420);
 
 // סולם הספקים לפי סוג הבקשה. כל attempt: {providerId, run(searchQuery, signal)}.
-const buildAttempts = ({ kind, cfg, count, after }) => {
+const buildAttempts = ({ kind, cfg, count, after, before }) => {
   const attempts = [];
   const scholarKey = String(cfg?.scholar?.key || '').trim();
   const scholarConfigured = String(cfg?.scholar?.provider || '').trim() === 'serpapi' && scholarKey;
@@ -58,9 +59,12 @@ const buildAttempts = ({ kind, cfg, count, after }) => {
     attempts.push({
       providerId: 'serpapi-scholar',
       endpointHost: 'serpapi.com',
+      // Scholar תמיד מביא 10 תוצאות (over-fetch מכוון — SerpAPI מחייב לפי חיפוש);
+      // הדירוג והחיתוך ל-count קורים בהמשך ה-pipeline.
       run: (searchQuery, signal, timeoutMs) => fetchScholarSources({
-        query: searchQuery, apiKey: scholarKey, signal, timeoutMs, limit: count,
+        query: searchQuery, apiKey: scholarKey, signal, timeoutMs,
         yearLow: after ? Number(after.slice(0, 4)) : 0,
+        yearHigh: before ? Number(before.slice(0, 4)) : 0,
       }),
     });
   }
@@ -203,6 +207,65 @@ const applyLiveVerification = async ({ candidates, session, signal, log, require
   return survivors;
 };
 
+// Fallback ל-PDF פתוח (Scholar בלבד): מועמד שה-URL הראשי שלו חסום-בוטים (פייוול) או מת,
+// אבל SerpAPI סיפק לו resources[0].link — בודקים את ה-PDF, ואם חי מחליפים אליו. batch יחיד,
+// fail-open (שגיאה משאירה את verified כמו שהוא). ספקים אחרים לא מייצרים pdfUrl — לא מושפעים.
+const applyScholarPdfFallback = async ({ originalCandidates, verified, session, signal, log }) => {
+  try {
+    const verifiedKeys = new Set(verified.map((candidate) => candidate.url || ''));
+    // חסומים ששרדו + מתים שנפלו באימות — רק כאלה עם pdfUrl נפרד.
+    const blockedSurvivors = verified.filter((candidate) => candidate.pdfUrl && candidate.verification?.botBlocked);
+    const droppedDead = originalCandidates.filter((candidate) => candidate.pdfUrl
+      && !verifiedKeys.has(candidate.url) && !verified.some((survivor) => survivor.finalUrl === candidate.url));
+    const fallbackCandidates = [...blockedSurvivors, ...droppedDead];
+    if (!fallbackCandidates.length) return verified;
+
+    const budgetSlots = session.remainingUrlChecks();
+    const toCheck = fallbackCandidates.slice(0, Math.max(0, budgetSlots));
+    if (!toCheck.length) return verified;
+    const pdfUrls = [...new Set(toCheck.map((candidate) => candidate.pdfUrl))];
+    session.noteUrlChecks(pdfUrls.length);
+    log('source-pdf-fallback-start', `בדיקת PDF פתוח ל-${pdfUrls.length} מועמדים חסומים/מתים`, { urlCount: pdfUrls.length });
+    const verdicts = await verifyUrls(pdfUrls, { signal });
+    const verdictByUrl = new Map(verdicts.map((verdict) => [verdict.url, verdict]));
+
+    const swapToPdf = (candidate) => {
+      const verdict = verdictByUrl.get(candidate.pdfUrl);
+      if (!verdict || verdict.dead) return null;   // סלחני: botBlocked על PDF עדיף על כלום, רק "מת" נפסל
+      const finalUrl = verdict.finalUrl && verdict.finalUrl !== candidate.pdfUrl ? verdict.finalUrl : candidate.pdfUrl;
+      log('source-pdf-fallback-swap', `הוחלף ל-PDF פתוח: ${finalUrl} (במקום ${candidate.url})`, {
+        state: 'success', url: finalUrl, replacedUrl: candidate.url, status: verdict.status,
+      });
+      return {
+        ...candidate,
+        url: finalUrl,
+        finalUrl,
+        domain: extractDomainFromUrl(finalUrl) || candidate.domain,
+        verification: {
+          httpStatus: verdict.status,
+          finalUrl,
+          checkedAt: verdict.checkedAt,
+          method: 'pdf-fallback',
+          ...(verdict.botBlocked ? { botBlocked: true } : {}),
+        },
+      };
+    };
+
+    const result = verified.map((candidate) => {
+      if (!blockedSurvivors.includes(candidate)) return candidate;
+      return swapToPdf(candidate) || candidate;
+    });
+    droppedDead.forEach((candidate) => {
+      const swapped = swapToPdf(candidate);
+      if (swapped) result.push(swapped);
+    });
+    return result;
+  } catch (error) {
+    log('source-pdf-fallback-error', `כשל ב-fallback ל-PDF: ${error?.message || String(error)}`, { state: 'error' });
+    return verified;
+  }
+};
+
 // בונוס עדכניות למקור אקדמי לפי שנת פרסום: מקור טרי (≤2 שנים) מקבל את הבונוס הגדול
 // ביותר, ודועך ככל שהמקור ישן יותר. שנה חסרה/לא תקינה => 0 (לא עונש, רק אין בונוס).
 const academicRecencyBonus = (year) => {
@@ -244,6 +307,9 @@ const normalizeAfter = (value = '') => {
   const raw = String(value || '').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
 };
+// גבול-עליון ("עד שנת X") — כרגע אין קורא upstream שמייצר אותו; הפרמטר חשוף כדי ש-as_yhi
+// של Scholar יהיה זמין כשהתכנון יתחיל להפיק before. אותו פורמט ISO כמו after.
+const normalizeBefore = normalizeAfter;
 
 // מסנן מקורות שתאריך-הפרסום שלהם קודם לסף. מסנן רק כשיש שנה במטא-דאטה — מקור בלי שנה
 // לא נזרק (אי אפשר להוכיח שהוא ישן), אבל מסומן כדי שהמודל ידע לבדוק.
@@ -267,6 +333,7 @@ export const retrieveSources = async ({
   kind = 'web',
   count = 3,
   after = '',
+  before = '',
   signal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   session = null,
@@ -284,6 +351,7 @@ export const retrieveSources = async ({
   const safeQuery = normalizeQuery(query);
   const safeCount = Math.max(1, Math.min(10, Number(count) || 3));
   const safeAfter = normalizeAfter(after);
+  const safeBefore = normalizeBefore(before);
   const activeSession = session || getDefaultRetrievalSession();
   const baseResult = { query: safeQuery, kind: safeKind, providerTrail: [], fromCache: false };
 
@@ -293,7 +361,7 @@ export const retrieveSources = async ({
 
   // שלב 7 (קריאה): cache hit ⇒ אפס קריאות. מפתח ה-cache כולל את safeAfter (דרך count+kind+query
   // הוא לא ייחודי מספיק — אבל אותה שאילתה עם אותו after תיתן אותה תוצאה).
-  const cacheParams = { query: `${safeQuery}::after=${safeAfter}`, kind: safeKind, count: safeCount };
+  const cacheParams = { query: `${safeQuery}::after=${safeAfter}${safeBefore ? `::before=${safeBefore}` : ''}`, kind: safeKind, count: safeCount };
   const cached = activeSession.getCached(cacheParams);
   if (cached) {
     log('source-cache-hit', `אחזור מה-cache: "${safeQuery}" (${cached.sources.length} מקורות, אפס קריאות API)`, {
@@ -308,7 +376,7 @@ export const retrieveSources = async ({
   }
   activeSession.noteQuery();
 
-  const attempts = buildAttempts({ kind: safeKind, cfg, count: safeCount, after: safeAfter });
+  const attempts = buildAttempts({ kind: safeKind, cfg, count: safeCount, after: safeAfter, before: safeBefore });
   if (!attempts.length) {
     log('verified-source-provider-missing', `אין ספק אחזור מוגדר (kind=${safeKind})`, { state: 'error', query: safeQuery, kind: safeKind });
     return { ...baseResult, ok: false, sources: [], failureReason: 'no-provider' };
@@ -317,9 +385,16 @@ export const retrieveSources = async ({
   const queryMeta = analyzeQuery(safeQuery);
   // חדשות: וריאנטים של שאילתה (הטיה לאתרי חדשות) — מוגבל ל-2 כדי לא לשרוף את תקציב
   // קריאות ה-run על וריאציות של אותה שאילתה. אחרת — השאילתה עצמה.
-  const searchQueries = safeKind === 'news'
+  let searchQueries = safeKind === 'news'
     ? buildArticleSearchQueryVariants(safeQuery, queryMeta).slice(0, 2)
     : [safeQuery];
+  // אקדמי בעברית: הקורפוס העברי של Scholar דל (נמדד) — מוסיפים וריאנט אנגלי מתורגם
+  // במודל זול (fail-open; דלוק כברירת מחדל, כיבוי: cfg.retrieval.autoTranslateAcademic===false).
+  // מכסה גם קוראים בלי queryEn משלהם (gapSourceService/retrievalGate). מוגבל ל-2 כמו news.
+  if (shouldTranslateAcademicQuery({ kind: safeKind, query: safeQuery, cfg })) {
+    const translated = await translateAcademicQueryToEnglish({ query: safeQuery, cfg, log });
+    if (translated) searchQueries = [...searchQueries, translated].slice(0, 2);
+  }
 
   const providerTrail = [];
   const deadlineAt = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS);
@@ -362,7 +437,7 @@ export const retrieveSources = async ({
           providerTimeoutMs,
           () => abortController?.abort(),
         );
-        const candidates = dedupeSources(rawCandidates);
+        let candidates = dedupeSources(rawCandidates);
         log('verified-source-provider-result', `תוצאת אחזור: provider=${attempt.providerId} resultCount=${candidates.length}`, {
           state: candidates.length ? 'success' : 'error',
           provider: attempt.providerId,
@@ -371,12 +446,35 @@ export const retrieveSources = async ({
         });
         if (!candidates.length) continue;
 
+        // שלב 3ב (Scholar במסלול אקדמי): מסנן רלוונטיות דטרמיניסטי לפני אימות ה-URL — חוסך
+        // verify calls על מועמדים חסרי-קשר. רק ל-Scholar: הקורפוס העברי הדל שלו מחזיר תוצאות
+        // חסרות-קשר לחלוטין (נמדד); לספקים אחרים יש דירוג רלוונטיות משלהם, ותוצאה עברית
+        // לשאילתה אנגלית שם לגיטימית. ה-meta מחושב על searchQuery הנוכחי (לא על השאילתה
+        // המקורית): וריאנט אנגלי נבדק מול המונחים האנגליים שלו, לא מול העברית.
+        if (safeKind === 'academic' && attempt.providerId === 'serpapi-scholar') {
+          const searchQueryMeta = searchQuery === safeQuery ? queryMeta : analyzeQuery(searchQuery);
+          const { accepted, rejected } = filterAcademicCandidates(searchQueryMeta, candidates);
+          rejected.forEach(({ candidate, reason }) => {
+            log('verified-source-candidate-rejected', `מועמד נפסל: ${candidate.url} — ${reason}`, {
+              state: 'error', url: candidate.url, reason,
+            });
+          });
+          candidates = accepted;
+          if (!candidates.length) continue;
+        }
+
         // שלב 4: אימות URL חי — לפני הוולידציה, כי קישורי grounding-redirect של Google
         // (vertexaisearch) חייבים להיפתר ל-URL/דומיין האמיתי; ולידציית דומיין-חדשות על
         // ה-redirect נכשלת תמיד ופוסלת מקורות אמיתיים.
-        const verified = await applyLiveVerification({
+        let verified = await applyLiveVerification({
           candidates, session: activeSession, signal, log, requireLiveUrl,
         });
+        // Scholar: ניסיון הצלה דרך ה-PDF הפתוח לפני שמוותרים על חסומים/מתים.
+        if (attempt.providerId === 'serpapi-scholar' && requireLiveUrl) {
+          verified = await applyScholarPdfFallback({
+            originalCandidates: candidates, verified, session: activeSession, signal, log,
+          });
+        }
         if (!verified.length) {
           log('verified-source-output-blocked', `כל הקישורים של ${attempt.providerId} מתים — עוברים לספק הבא`, {
             state: 'error', provider: attempt.providerId, query: searchQuery,
@@ -433,7 +531,12 @@ export const retrieveSources = async ({
         bestPool = dedupeSources([...bestPool, ...collapsed]);
         attemptYielded = true;
         providerTrail.push({ providerId: attempt.providerId, resultCount: collapsed.length, ms: Date.now() - startedAt });
-        if (bestPool.length >= sufficientCount) {
+        // אקדמי עם וריאנט אנגלי מתורגם: שני הווריאנטים משלימים (קורפוסים שונים) — לא
+        // עוצרים אחרי העברית רק כי הצטברו 2 תוצאות; הדירוג יכריע אחרי ששניהם רצו.
+        // (בלי זה, 3 תוצאות עבריות חסומות-בוטים היו מרעיבות את החיפוש האנגלי — נצפה בפועל.)
+        const moreSearchQueriesPending = safeKind === 'academic'
+          && searchQuery !== searchQueries[searchQueries.length - 1];
+        if (!moreSearchQueriesPending && bestPool.length >= sufficientCount) {
           return finalizePoolResult();
         }
         // מעט מדי אחרי הסינון — שומרים את מה שיש וממשיכים לספק הבא בסולם.

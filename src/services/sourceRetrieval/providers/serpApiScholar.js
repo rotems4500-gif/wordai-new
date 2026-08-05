@@ -36,17 +36,20 @@ const delayRespectingSignal = (ms, signal) => new Promise((resolve, reject) => {
   signal?.addEventListener?.('abort', onAbort, { once: true });
 });
 
-export const fetchScholarSources = async ({ query = '', apiKey = '', signal, timeoutMs = 0, limit = 5, yearLow = 0, yearHigh = 0 } = {}) => {
+export const fetchScholarSources = async ({ query = '', apiKey = '', signal, timeoutMs = 0, yearLow = 0, yearHigh = 0 } = {}) => {
   const safeQuery = String(query || '').trim();
   const safeApiKey = String(apiKey || '').trim();
   if (!safeQuery || !safeApiKey) return [];
 
-  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
+  // תמיד מבקשים 10: SerpAPI מחייב לפי חיפוש (לא לפי תוצאה), ו-Scholar מחזיר סט
+  // שונה (לא prefix) ל-num קטן — num=3 איבד מאמר עם 89 ציטוטים שנמצא ב-num=5.
+  // הדירוג והחיתוך ל-count קורים ב-pipeline (rankSources + slice), לא כאן.
+  const FETCH_NUM = 10;
   const params = new URLSearchParams({
     engine: 'google_scholar',
     q: safeQuery,
     api_key: safeApiKey,
-    num: String(safeLimit),
+    num: String(FETCH_NUM),
     hl: HEBREW_TEXT_PATTERN.test(safeQuery) ? 'iw' : 'en',
     as_vis: '1',
     output: 'json',
@@ -79,5 +82,5 @@ export const fetchScholarSources = async ({ query = '', apiKey = '', signal, tim
     console.warn(`[serpApiScholar] organic_results missing/not-array (typeof organic_results=${typeof data?.organic_results}); response keys: ${hint}`);
   }
   const results = Array.isArray(data?.organic_results) ? data.organic_results : [];
-  return dedupeSources(results.map(normalizeScholarSource).filter(Boolean)).slice(0, safeLimit);
+  return dedupeSources(results.map(normalizeScholarSource).filter(Boolean));
 };

@@ -34,6 +34,7 @@ import {
   setVetModelTransport,
   buildSourcesQueryOverride,
   buildHoleFillSourceQueryOverride,
+  setTranslateModelTransport,
 } from 'srcretr';
 
 let failures = 0;
@@ -348,6 +349,235 @@ console.log('\n[11] query fidelity');
 
   const holeFill = buildHoleFillSourceQueryOverride('השלם חורים במסמך', { messages: [{ content: 'נושא ישן מהשיחה: דיני עבודה' }], selectedText: selection });
   check('מילוי-חורים עם סימון: הסימון נשלח, בלי כריית היסטוריה', holeFill === selection, holeFill);
+}
+
+// ---- 12. Scholar over-fetch + ranking (A): תמיד num=10, הדירוג+חיתוך קורים ב-pipeline ----
+console.log('\n[12] scholar over-fetch + ranking (A)');
+{
+  const scholarPayload = {
+    search_metadata: { status: 'success' },
+    organic_results: Array.from({ length: 10 }, (_, i) => ({
+      title: `Study habits paper ${i + 1}`,
+      link: `https://ok.a1.org/articles/2026/x${i + 1}`,
+      snippet: 'Research about study habits of students',
+      inline_links: { cited_by: { total: (i + 1) * 10 } },
+    })),
+  };
+  const capturedBodies = [];
+  globalThis.fetch = async (url, init) => {
+    capturedBodies.push(String(init?.body || ''));
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, status: 200, body: JSON.stringify(scholarPayload) }),
+      text: async () => '',
+    };
+  };
+  const session = createRetrievalSession({ runId: 'overfetch-a' });
+  const result = await retrieveSources({
+    query: 'study habits of students', kind: 'academic', count: 3,
+    cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+    session,
+  });
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('הבקשה ל-SerpAPI ביקשה num=10', capturedBodies.some((body) => body.includes('num=10')));
+  check('הוחזרו בדיוק count=3 מקורות', result.sources.length === 3, String(result.sources.length));
+  const urls = JSON.stringify(result.sources);
+  check('שלושת המצוטטים ביותר נבחרו (x8/x9/x10), לא ה-3 הראשונים בתשובה',
+    urls.includes('/x8') && urls.includes('/x9') && urls.includes('/x10') && !urls.includes('/x1"') && !urls.includes('/x2"'));
+}
+
+// ---- 13. פילטר רלוונטיות אקדמי (D): אפס-חפיפה נפסל *לפני* אימות URL; doi/citedBy מוגנים ----
+console.log('\n[13] academic relevance filter (D)');
+{
+  const scholarPayload = {
+    search_metadata: { status: 'success' },
+    organic_results: [
+      { title: 'Study habits and academic achievement of students', link: 'https://ok.d1.org/articles/2026/rel1', snippet: 'about study habits' },
+      { title: 'מחקר על תזונה ים תיכונית ובריאות הלב', link: 'https://ok.d2.org/articles/2026/rel2', snippet: 'נושא שונה לגמרי' },
+      { title: 'Completely unrelated topic on cooking', link: 'https://ok.d3.org/articles/2026/rel3', snippet: 'x', inline_links: { cited_by: { total: 50 } } },
+    ],
+  };
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, status: 200, body: JSON.stringify(scholarPayload) }),
+    text: async () => '',
+  });
+  let verifyCallCount = 0;
+  const countingTransport = async (urls) => {
+    verifyCallCount += urls.length;
+    return baseTransport(urls);
+  };
+  setUrlVerifierTransport(countingTransport);
+  const session = createRetrievalSession({ runId: 'relevance-d' });
+  const result = await retrieveSources({
+    query: 'study habits of students', kind: 'academic', count: 5,
+    cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+    session,
+  });
+  setUrlVerifierTransport(baseTransport);
+  const urls = JSON.stringify(result.sources);
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('התקבלו 2 מקורות (חופף + מוגן ב-citedBy)', result.sources.length === 2, String(result.sources.length));
+  check('המקור החופף נשאר', urls.includes('rel1'));
+  check('המקור המוגן ב-citedBy נשאר גם בלי חפיפה', urls.includes('rel3'));
+  check('המקור חסר-החפיפה נפסל לפני אימות URL (אף פעם לא נבדק)', verifyCallCount === 2, String(verifyCallCount));
+}
+
+// ---- 14. Scholar PDF fallback (B): URL ראשי חסום/מת עם resources[0].link ⇒ מתחלף ל-PDF פתוח ----
+console.log('\n[14] scholar pdf fallback (B)');
+{
+  const scholarPayload = {
+    search_metadata: { status: 'success' },
+    organic_results: [
+      {
+        title: 'Study habits of students behind a paywall',
+        link: 'https://blocked.paywall-journal.com/stable/abc',
+        snippet: 'study habits research',
+        resources: [{ link: 'https://ok.openaccess1.org/paper1.pdf' }],
+      },
+      {
+        title: 'Study habits longitudinal research with a dead link',
+        link: 'https://dead.old-journal.com/doi/456',
+        snippet: 'study habits research',
+        resources: [{ link: 'https://ok.openaccess2.org/paper2.pdf' }],
+      },
+    ],
+  };
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, status: 200, body: JSON.stringify(scholarPayload) }),
+    text: async () => '',
+  });
+  const session = createRetrievalSession({ runId: 'pdf-fallback-b' });
+  const result = await retrieveSources({
+    query: 'study habits of students', kind: 'academic', count: 5,
+    cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+    session,
+  });
+  const urls = JSON.stringify(result.sources);
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('שני המקורות שרדו דרך ה-PDF הפתוח', result.sources.length === 2, String(result.sources.length));
+  check('URL הסופי הוא ה-PDF (היה חסום)', urls.includes('openaccess1.org/paper1.pdf'));
+  check('URL הסופי הוא ה-PDF (היה מת)', urls.includes('openaccess2.org/paper2.pdf'));
+  check('verification.method === pdf-fallback לשני המקורות', result.sources.every((source) => source.verification?.method === 'pdf-fallback'));
+}
+
+// ---- 15. yearHigh (E): before → as_yhi, לצד after → as_ylo ----
+console.log('\n[15] before param -> as_yhi (E)');
+{
+  const scholarPayload = {
+    search_metadata: { status: 'success' },
+    organic_results: [
+      { title: 'Study habits and achievement of students', link: 'https://ok.e1.org/articles/2021/e1', snippet: 'study habits' },
+    ],
+  };
+  const capturedBodies = [];
+  globalThis.fetch = async (url, init) => {
+    capturedBodies.push(String(init?.body || ''));
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, status: 200, body: JSON.stringify(scholarPayload) }),
+      text: async () => '',
+    };
+  };
+  const session = createRetrievalSession({ runId: 'yearhigh-e' });
+  const result = await retrieveSources({
+    query: 'study habits of students', kind: 'academic', count: 3,
+    after: '2020-01-01', before: '2022-12-31',
+    cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+    session,
+  });
+  check('אחזור הצליח', result.ok === true, JSON.stringify(result.failureReason || ''));
+  check('הבקשה כוללת as_ylo=2020', capturedBodies.some((body) => body.includes('as_ylo=2020')));
+  check('הבקשה כוללת as_yhi=2022', capturedBodies.some((body) => body.includes('as_yhi=2022')));
+}
+
+// ---- 16. וריאנט אנגלי אוטומטי לשאילתה אקדמית עברית (C2) ----
+console.log('\n[16] auto-translate academic query (C2)');
+{
+  const hebrewQuery = 'ייצוג מוגבלות בתקשורת';
+  const heResult = {
+    title: 'מאמר על ייצוג מוגבלות', link: 'https://ok.he1.org/articles/2026/he1',
+    snippet: 'ייצוג מוגבלות בתקשורת', inline_links: { cited_by: { total: 5 } },
+  };
+  const enResults = [
+    { title: 'Media representation of disability in the press', link: 'https://ok.en1.org/articles/2026/en1', snippet: 'media representation disability', inline_links: { cited_by: { total: 20 } } },
+    { title: 'Disability portrayal in mass media', link: 'https://ok.en2.org/articles/2026/en2', snippet: 'media representation disability', inline_links: { cited_by: { total: 15 } } },
+  ];
+
+  // --- 16a: translate דלוק (ברירת מחדל) — שתי שאילתות, גם התוצאה האנגלית נכנסת ---
+  setTranslateModelTransport(async () => 'media representation disability');
+  {
+    const capturedBodies = [];
+    globalThis.fetch = async (url, init) => {
+      const rawBody = String(init?.body || '');
+      capturedBodies.push(rawBody);
+      const isEnglish = rawBody.includes('media+representation+disability');
+      const payload = { search_metadata: { status: 'success' }, organic_results: isEnglish ? enResults : [heResult] };
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: true, status: 200, body: JSON.stringify(payload) }),
+        text: async () => '',
+      };
+    };
+    const session = createRetrievalSession({ runId: 'translate-on' });
+    const result = await retrieveSources({
+      query: hebrewQuery, kind: 'academic', count: 5,
+      cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+      session,
+    });
+    check('אחזור הצליח (translate דלוק)', result.ok === true, JSON.stringify(result.failureReason || ''));
+    check('שתי שאילתות חיפוש נשלחו (עברית + אנגלית)', capturedBodies.length === 2, String(capturedBodies.length));
+    check('השאילתה האנגלית המתורגמת הופיעה בבקשה', capturedBodies.some((body) => body.includes('media+representation+disability')));
+    check('התוצאות כוללות גם את המאמר האנגלי', JSON.stringify(result.sources).includes('en1.org'));
+  }
+
+  // --- 16b: cfg.retrieval.autoTranslateAcademic=false — חיפוש עברי בלבד ---
+  {
+    const capturedBodies = [];
+    globalThis.fetch = async (url, init) => {
+      capturedBodies.push(String(init?.body || ''));
+      const payload = { search_metadata: { status: 'success' }, organic_results: [heResult] };
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: true, status: 200, body: JSON.stringify(payload) }),
+        text: async () => '',
+      };
+    };
+    const session = createRetrievalSession({ runId: 'translate-off' });
+    const result = await retrieveSources({
+      query: hebrewQuery, kind: 'academic', count: 5,
+      cfg: { scholar: { provider: 'serpapi', key: 'serp-test' }, retrieval: { autoTranslateAcademic: false } },
+      session,
+    });
+    check('אחזור הצליח (translate כבוי)', result.ok === true, JSON.stringify(result.failureReason || ''));
+    check('רק חיפוש אחד נשלח כשה-translate כבוי', capturedBodies.length === 1, String(capturedBodies.length));
+  }
+
+  // --- 16c: fail-open — טרנספורט התרגום נופל, האחזור ממשיך בעברית בלבד ---
+  {
+    setTranslateModelTransport(async () => { throw new Error('translate model down'); });
+    const capturedBodies = [];
+    globalThis.fetch = async (url, init) => {
+      capturedBodies.push(String(init?.body || ''));
+      const payload = { search_metadata: { status: 'success' }, organic_results: [heResult] };
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: true, status: 200, body: JSON.stringify(payload) }),
+        text: async () => '',
+      };
+    };
+    const session = createRetrievalSession({ runId: 'translate-fail-open' });
+    const result = await retrieveSources({
+      query: hebrewQuery, kind: 'academic', count: 5,
+      cfg: { scholar: { provider: 'serpapi', key: 'serp-test' } },
+      session,
+    });
+    check('fail-open: אחזור הצליח למרות כשל התרגום', result.ok === true, JSON.stringify(result.failureReason || ''));
+    check('fail-open: רק שאילתה עברית אחת נשלחה', capturedBodies.length === 1, String(capturedBodies.length));
+  }
+
+  setTranslateModelTransport(null);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL PASS');

@@ -21,6 +21,7 @@ export {
 export { verifyUrls, setUrlVerifierTransport, isGoogleGroundingRedirectUrl } from './urlVerifier';
 export { nonContentPageReason, filterNonContentCandidates } from './contentPageFilter';
 export { vetSourceRelevance, setVetModelTransport } from './relevanceVet';
+export { translateAcademicQueryToEnglish, setTranslateModelTransport } from './queryTranslate';
 export { formatSourcesReply, formatSourcesFailureReply, formatSourceItem } from './format';
 export { fetchScholarSources } from './providers/serpApiScholar';
 export { extractGeminiGroundedSources } from './providers/geminiGrounded';
