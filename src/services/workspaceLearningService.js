@@ -1879,7 +1879,11 @@ function deriveDocumentResearchTopic(promptText = '', instructionsText = '') {
     text = explicit[1];
   } else {
     // "כתוב/צור/הכן ... על X" — לוקחים מהמופע הראשון של מילת-קישור אחרי פועל-הכתיבה
-    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
+    // "על(?!\s+ידי)" — מונע מ"הופעלו בפועל על ידי המדינה" באמצע מטלה להיתפס כ"על X" (נצפה).
+    // טקסט ארוך (מטלה מלאה שהודבקה) בלי סמן נושא מפורש — afterVerb תמיד ימצא איזה "על"
+    // באמצע ההוראות ויחזיר פרגמנט. עדיף '' ⇒ מתכנן-המודל יגזור נושא אמיתי מהמטלה.
+    if (text.length > 600) return '';
+    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על(?!\s+ידי)|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
     if (afterVerb) text = afterVerb[1];
   }
   // הסרת סעיפי-דרישות/מבנה נגררים (הכולל.., בהיקף.., לפי APA, עם N מקורות..). בלי \b.

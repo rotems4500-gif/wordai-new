@@ -94,7 +94,11 @@ export const deriveResearchTopicQuery = (promptText = '', instructionsText = '')
     text = explicit[1];
   } else {
     // "כתוב/צור/הכן ... על X" — לוקחים מהמופע הראשון של מילת-קישור אחרי פועל-הכתיבה
-    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
+    // "על(?!\s+ידי)" — בלי זה "הופעלו בפועל על ידי המדינה" באמצע טקסט-מטלה נתפס כ"על X"
+    // והשאילתה הופכת לפרגמנט חסר-משמעות (נצפה על מטלה אמיתית).
+    // טקסט ארוך (מטלה מלאה) בלי סמן מפורש — לא מנחשים; '' ⇒ הנושא ייגזר במתכנן.
+    if (text.length > 600) return '';
+    const afterVerb = text.match(/(?:כתוב|כתבי|תכתוב|צור|צרי|תצור|הכן|הכיני|תכין|נסח|תנסח|בנה|תבנה|הפק|write|draft|compose|prepare|generate|create)(?:\s[^\n]*?)?\s(?:על(?!\s+ידי)|בנושא|אודות|בנוגע\s+ל|בקשר\s+ל|לגבי|about|on|regarding|concerning)\s+(.+)/i);
     if (!afterVerb) return '';
     text = afterVerb[1];
   }
