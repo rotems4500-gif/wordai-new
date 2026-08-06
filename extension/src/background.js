@@ -1,6 +1,6 @@
 // background.js — Service worker MV3: תפריטי הקשר, אורקסטרציה של כל מצבי הקליפה, כתיבה ל-Firebase.
 import { getCachedUser, watchAuthState } from './lib/auth.js';
-import { writeTextClip, writeImageClip } from './lib/clipWriter.js';
+import { writeTextClip, writeImageClip, writeFileClip } from './lib/clipWriter.js';
 
 // --- שמירת דגל "יש לפתוח את הפופאפ ולהתחבר" כשקליפ נשלח כשהמשתמש מנותק ---
 const NEEDS_LOGIN_KEY = 'wordflow_needs_login';
@@ -95,8 +95,51 @@ async function requireUser() {
 }
 
 // ---------- מצב 1: קליפת עמוד שלם (Readability) ----------
+// ⚠️ PDF שנפתח בצופה של Chrome הוא plugin, לא DOM: כל מסלולי החילוץ מהדף מחזירים 0.
+// לכן מזהים אותו ומעלים את הקובץ עצמו — האפליקציה כבר יודעת לחלץ PDF (כולל OCR לסרוק).
+// fetch מה-service worker מותר כאן: activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה,
+// ו-credentials:'include' שולח את עוגיות ה-session (חובה ל-Moodle).
+const PDF_URL_PATTERN = /\.pdf(?:[?#]|$)/i;
+
+async function fetchTabBytes(url) {
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) throw new Error(`הורדת הקובץ נכשלה: ${res.status}`);
+  const buf = await res.arrayBuffer();
+  return { bytes: new Uint8Array(buf), contentType: res.headers.get('content-type') || '' };
+}
+
+function fileNameFromUrl(url, fallback = 'clip.pdf') {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
+    return name || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function clipPdfDocument(tab, user, bytes) {
+  const fileName = fileNameFromUrl(tab.url);
+  await writeFileClip({
+    uid: user.uid,
+    title: tab.title || fileName,
+    bytes,
+    fileName,
+    sourceUrl: tab.url,
+    captureMode: 'page',
+    contentType: 'application/pdf',
+  });
+  handleSuccess(tab.id);
+}
+
 async function handleClipPage(tab) {
   const user = await requireUser();
+
+  if (PDF_URL_PATTERN.test(tab.url || '')) {
+    const { bytes } = await fetchTabBytes(tab.url);
+    await clipPdfDocument(tab, user, bytes);
+    return;
+  }
+
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     files: ['content/extract.js'],
@@ -113,6 +156,19 @@ async function handleClipPage(tab) {
   });
 
   if (!result) throw new Error('חילוץ התוכן מהעמוד נכשל');
+  if (!String(result.textContent || '').trim()) {
+    // דף בלי טקסט ב-DOM הוא לרוב מסמך מוטמע שה-URL שלו לא נגמר ב-.pdf.
+    // בודקים content-type לפני שמכריזים כישלון.
+    try {
+      const probe = await fetchTabBytes(tab.url);
+      if (probe.contentType.includes('application/pdf')) {
+        await clipPdfDocument(tab, user, probe.bytes);
+        return;
+      }
+    } catch (err) {
+      console.warn('[wordflow][clip] בדיקת PDF נכשלה:', err);
+    }
+  }
   if (!String(result.textContent || '').trim()) {
     // כולל אבחון: איזה מסלול ניסה ומה כל אחד החזיר. בלי זה "לא נמצא טקסט" חסר ערך.
     throw new Error(`לא נמצא טקסט בעמוד (${result.diag || 'ללא אבחון'})${result.error ? ` · ${result.error}` : ''}`);

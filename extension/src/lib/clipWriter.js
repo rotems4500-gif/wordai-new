@@ -54,6 +54,44 @@ export async function writeTextClip({ uid, title, text, sourceUrl, captureMode }
 }
 
 /**
+ * כותב קליפ קובץ (PDF וכו'): מעלה ל-Storage וכותב מסמך kind='file'.
+ * החילוץ עצמו נעשה באפליקציה (extractMaterialTextFromBytes), כמו OCR לתמונות —
+ * התוסף נשאר רזה ולא גורר pdf.js.
+ * @param {{uid:string, title:string, bytes:Uint8Array|ArrayBuffer, fileName:string,
+ *          sourceUrl:string, captureMode:string, contentType?:string}} params
+ */
+export async function writeFileClip({ uid, title, bytes, fileName, sourceUrl, captureMode, contentType = 'application/pdf' }) {
+  const settings = await getSettings();
+  const clipId = makeClipId();
+  const safeName = String(fileName || 'clip.pdf').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'clip.pdf';
+  const storagePath = `users/${uid}/clips/${clipId}/${safeName}`;
+
+  const storage = getStorageInstance();
+  await uploadBytes(ref(storage, storagePath), bytes, { contentType });
+
+  const db = getDb();
+  await setDoc(doc(db, 'users', uid, 'clips', clipId), {
+    kind: 'file',
+    status: 'pending',
+    captureMode,
+    title: title || safeName,
+    fileName: safeName,
+    text: null,
+    sourceUrl: sourceUrl || null,
+    domain: domainFromUrl(sourceUrl),
+    createdAt: serverTimestamp(),
+    destination: settings.defaultDestination,
+    projectId: settings.lastProjectId || null,
+    storagePath,
+    truncated: false,
+    errorMessage: null,
+    processedAt: null,
+  });
+
+  return clipId;
+}
+
+/**
  * כותב קליפ תמונה: מעלה קודם ל-Storage, ואז כותב את מסמך ה-Firestore עם הנתיב.
  * @param {{uid:string, title:string, bytes:Uint8Array|ArrayBuffer, sourceUrl:string, captureMode:string, contentType?:string}} params
  */

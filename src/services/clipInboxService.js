@@ -14,7 +14,7 @@ import {
   deleteClipImage,
   deleteClipDoc,
 } from '../firebase/services';
-import { extractImageOcr, pureTokenRatio } from './materialExtractBrowser';
+import { extractImageOcr, pureTokenRatio, extractMaterialTextFromBytes } from './materialExtractBrowser';
 import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
@@ -78,6 +78,16 @@ async function ingestClip(user, clip) {
   let text = clip.text || '';
   let cleanDigital = true;
   let lowConfidenceOcr = false;
+
+  // קליפ קובץ (PDF מצופה Chrome): אותו מחלץ של העלאת חומרים, כולל OCR ל-PDF סרוק.
+  if (clip.kind === 'file') {
+    const bytes = await downloadClipImageBytes(user, clip.storagePath);
+    const res = await extractMaterialTextFromBytes(clip.fileName || 'clip.pdf', bytes, 200000, { ocr: true });
+    if (!res.ok) throw new Error(res.error || 'חילוץ הקובץ נכשל');
+    text = res.text || '';
+    cleanDigital = !res.viaOcr;
+    lowConfidenceOcr = Boolean(res.viaOcr) && pureTokenRatio(text) < OCR_QUALITY_FLOOR;
+  }
 
   if (clip.kind === 'image') {
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
@@ -180,7 +190,7 @@ export async function ingestPendingClips(user = currentUser) {
         results.push(result);
         if (result.destination === 'material') addedMaterials = true;
         await updateClipStatus(user, clip.id, { status: 'processed' });
-        if (clip.kind === 'image' && clip.storagePath) {
+        if (clip.storagePath) { // תמונה או קובץ — הבייטים כבר חולצו לטקסט
           await deleteClipImage(user, clip.storagePath);
         }
       } catch (err) {
@@ -245,7 +255,7 @@ export async function routeInboxClip(user, clip, { destination, projectId = null
   }
   if (result.destination !== 'inbox') {
     await updateClipStatus(user || currentUser, clip.id, { status: 'processed' });
-    if (clip.kind === 'image' && clip.storagePath) {
+    if (clip.storagePath) { // תמונה או קובץ — הבייטים כבר חולצו לטקסט
       await deleteClipImage(user || currentUser, clip.storagePath);
     }
   }
@@ -255,7 +265,7 @@ export async function routeInboxClip(user, clip, { destination, projectId = null
 // מחיקת קליפ מהתיבה בלי לקלוט (כולל תמונה יתומה ב-Storage).
 export async function discardInboxClip(user, clip) {
   const u = user || currentUser;
-  if (clip.kind === 'image' && clip.storagePath) {
+  if (clip.storagePath) { // תמונה או קובץ — הבייטים כבר חולצו לטקסט
     await deleteClipImage(u, clip.storagePath);
   }
   await deleteClipDoc(u, clip.id);
