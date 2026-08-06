@@ -1,0 +1,159 @@
+:root {
+  color-scheme: light dark;
+  --wf-bg: #ffffff;
+  --wf-fg: #1f2937;
+  --wf-muted: #6b7280;
+  --wf-border: #e5e7eb;
+  --wf-primary: #4f46e5;
+  --wf-primary-fg: #ffffff;
+  --wf-danger: #dc2626;
+  --wf-success: #16a34a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wf-bg: #1f2430;
+    --wf-fg: #e5e7eb;
+    --wf-muted: #9ca3af;
+    --wf-border: #333a4a;
+    --wf-primary: #6366f1;
+    --wf-primary-fg: #ffffff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 300px;
+  background: var(--wf-bg);
+  color: var(--wf-fg);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  direction: rtl;
+}
+
+.wf-app {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wf-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--wf-border);
+}
+
+.wf-logo {
+  font-size: 18px;
+}
+
+.wf-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.wf-hint {
+  color: var(--wf-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.wf-user-email {
+  margin: 0;
+  color: var(--wf-muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.wf-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.wf-btn:hover {
+  opacity: 0.9;
+}
+
+.wf-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wf-btn-primary {
+  background: var(--wf-primary);
+  color: var(--wf-primary-fg);
+  font-weight: 600;
+}
+
+.wf-destination {
+  border: 1px solid var(--wf-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-destination legend {
+  font-size: 11px;
+  color: var(--wf-muted);
+  padding: 0 4px;
+}
+
+.wf-radio,
+.wf-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.wf-status {
+  margin: 0;
+  font-size: 12px;
+}
+
+.wf-status.success {
+  color: var(--wf-success);
+}
+
+.wf-status.error {
+  color: var(--wf-danger);
+}
+
+.wf-error {
+  margin: 0;
+  color: var(--wf-danger);
+  font-size: 12px;
+}
+
+.wf-link-btn {
+  background: none;
+  border: none;
+  color: var(--wf-muted);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 0;
+  align-self: flex-start;
+}

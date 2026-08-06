@@ -58,6 +58,7 @@ const MEMORY_SOURCE_LABELS = {
   'brainstorm-start': 'שיחת תכנון (מסך הבית)',
   'brainstorm-sidebar': 'שיחת תכנון (בתוך מסמך)',
   'external-link': 'שיחה חיצונית מצורפת',
+  'web-clip': 'קליפ מהדפדפן',
 };
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);

@@ -222,7 +222,7 @@ const withTimeout = (promise, ms, timeoutMessage) => {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 };
 
-const extractImageOcr = async (uint8) => {
+export const extractImageOcr = async (uint8) => {
   const { createWorker } = await import('tesseract.js');
   const worker = await withTimeout(
     createWorker('heb+eng', 1, ocrWorkerOptions()),

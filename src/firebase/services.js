@@ -1,6 +1,6 @@
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
 import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
+import { deleteObject, getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
 import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getFirebaseApp, hasFirebaseConfig } from "./config";
 
@@ -344,6 +344,52 @@ export async function getCloudDocument(user, documentId = "") {
     const snapshot = await getDoc(doc(clients.db, "users", user.uid, "documents", resolvedDocumentId));
     if (!snapshot.exists()) return null;
     return normalizeCloudDocument(snapshot);
+}
+
+// --- WordFlow Clipper: קליפים שמגיעים מתוסף הדפדפן (users/{uid}/clips) ---
+
+export async function fetchPendingClips(user, maxResults = 10) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return [];
+    const q = query(
+        collection(clients.db, "users", user.uid, "clips"),
+        where("status", "==", "pending"),
+        limit(maxResults),
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+}
+
+export async function updateClipStatus(user, clipId, patch = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid || !clipId) return;
+    await setDoc(
+        doc(clients.db, "users", user.uid, "clips", clipId),
+        { ...patch, processedAt: serverTimestamp() },
+        { merge: true },
+    );
+}
+
+export async function downloadClipImageBytes(user, storagePath) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !storagePath) throw new Error("Missing clip storage path.");
+    const blob = await getBlob(ref(clients.storage, storagePath));
+    return new Uint8Array(await blob.arrayBuffer());
+}
+
+export async function deleteClipDoc(user, clipId) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid || !clipId) return;
+    await deleteDoc(doc(clients.db, "users", user.uid, "clips", clipId));
+}
+
+// אחרי קליטה מוצלחת התמונה הגולמית נמחקת — הטקסט שחולץ הוא מה שנשמר.
+export async function deleteClipImage(user, storagePath) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !storagePath) return;
+    try {
+        await deleteObject(ref(clients.storage, storagePath));
+    } catch { /* לא קריטי — נשאר קובץ יתום בענן */ }
 }
 
 export async function fetchCoursesForUser(user) {

@@ -237,7 +237,38 @@ const GUIDE_CONTENT = {
         <p className="mt-7 text-xs text-slate-500">פותח בשביל ליצור חוויית עריכה פורצת דרך. תשובה שאין לה תבנית.</p>
       </div>
     )
-  }
+  },
+  clipper: {
+    title: 'תוסף הדפדפן (Clipper)',
+    content: (
+      <div>
+        <p className="leading-relaxed mb-3">
+          <b>WordFlow Clipper</b> הוא תוסף Chrome (MV3) שאוסף תוכן מהאינטרנט ישירות לתוך המערכת שלך — בלי לעזוב את הדפדפן.
+        </p>
+        <h3 className="text-lg font-bold mb-2 mt-4">ארבע דרכים לתפוס תוכן:</h3>
+        <ul className="pr-5 list-disc leading-[1.7]">
+          <li><b>עמוד שלם:</b> קליק-ימני → WordFlow AI → "שלח את כל העמוד" — מחלץ את התוכן הראשי בלי פרסומות ותפריטים.</li>
+          <li><b>טקסט מסומן:</b> בחרו קטע, קליק-ימני → WordFlow AI → "שלח את הקטע המסומן".</li>
+          <li><b>תמונה:</b> קליק-ימני על תמונה → WordFlow AI → "שלח את התמונה" — הטקסט בתמונה מזוהה (OCR) בעברית ואנגלית.</li>
+          <li><b>צילום אזור:</b> קליק-ימני → WordFlow AI → "בחר אזור מהמסך ושלח", גררו מלבן על המסך.</li>
+        </ul>
+        <h3 className="text-lg font-bold mb-2 mt-4">לאן הקליפ הולך?</h3>
+        <ul className="pr-5 list-disc leading-[1.7]">
+          <li><b>חומר עזר</b> (ברירת מחדל) — מתווסף למאגר חומרי הלימוד עם אחזור ראיות.</li>
+          <li><b>מקור לפרויקט</b> — נכנס לזיכרון הפרויקט הנוכחי עם ה-URL.</li>
+          <li><b>תיבת דואר</b> — ממתין בפאנל "קליפים" לניתוב ידני.</li>
+        </ul>
+        <h3 className="text-lg font-bold mb-2 mt-4">ב-WordFlow:</h3>
+        <p className="leading-relaxed">
+          בסרגל העליון כפתור <b>📎 קליפים</b> פותח את פאנל הקליפים הממתינים. לכל קליפ — כותרת, קטע טקסט, וכפתורים:
+          "קלוט כחומר עזר", "צרף כמקור" (לפרויקט שנבחר) או "מחק".
+        </p>
+        <p className="leading-relaxed mt-3 text-sm text-slate-600">
+          כל קליפ מסונכרן דרך Firebase בין דסקטופ, אתר ודפדפן — שימוש ממשך בכל המכשירים.
+        </p>
+      </div>
+    )
+  },
 };
 
 export default function HelpModal({ isOpen, onClose, topic }) {
@@ -259,3 +290,4 @@ export default function HelpModal({ isOpen, onClose, topic }) {
     </Modal>
   );
 }
+

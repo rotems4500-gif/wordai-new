@@ -20,6 +20,8 @@ The same React frontend ships two ways:
 - **Study-material context** — load local files (PDF/DOCX/TXT/XLSX/PPTX, OCR) and inject selected ones into AI context.
 - **DOCX export** — DOM → `.docx` in the browser ([browserDocxExport.js](src/services/browserDocxExport.js)).
 - **SPSS syntax studio, presentation studio, comments / track-changes / find-replace** — full editing suite.
+- **WordFlow Clipper (תוסף דפדפן)** — Chrome extension (MV3) that captures web content (full page, selected text, images, screenshots) and sends it to your workspace as study materials, project sources, or drafts. OCR for images, Firebase-backed sync across devices.
+
 - **Cloud sync** — Firebase auth + Firestore + Storage, cross-device.
 - **Multiple AI providers** — Gemini (default), OpenAI, Claude, Groq, Ollama, Perplexity, custom — via [src/services/aiService.js](src/services/aiService.js). API keys are stored locally, encrypted with Windows DPAPI.
 
@@ -36,6 +38,7 @@ npm run dev           # Vite dev server for the website on https://localhost:300
 npm run desktop:dev   # tauri dev — Vite (http) on :1420 + Tauri window
 npm run build         # vite build -> dist/  (website + Tauri frontendDist)
 npm run desktop:build # tauri build — NSIS installer + exe -> src-tauri/target/release/bundle/
+npm run build:extension # Chrome extension MV3 → dist-extension/
 ```
 
 - **Website**: Vite dev on `:3001` (HTTPS, self-signed cert in [vite.config.js](vite.config.js)). Deploy with `firebase deploy`.
@@ -56,3 +59,5 @@ Keys are entered in-app (Settings / onboarding) and stored locally in `ai-provid
 
 ---
 *App id `com.wordai.assistant` · productName **WordFlow AI**. Version in [package.json](package.json).*
+
+

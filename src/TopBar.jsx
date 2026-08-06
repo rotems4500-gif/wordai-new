@@ -25,6 +25,7 @@ export default function TopBar({
   onModeChange = () => {},
   cloudAvailable = false,
   cloudUser = null,
+  onOpenClipInbox = null,
   cloudStatusLabel = '',
   cloudBusy = false,
   onCloudSignIn = () => {},
@@ -163,6 +164,17 @@ export default function TopBar({
           <>
             {cloudUser ? (
               <>
+                {onOpenClipInbox && (
+                  <button
+                    type="button"
+                    onClick={onOpenClipInbox}
+                    title="קליפים שנשלחו מתוסף הדפדפן (WordFlow Clipper)"
+                    className="flex items-center gap-2 rounded-full border border-violet-200/60 bg-violet-300/15 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-300/25"
+                  >
+                    <i className="ph ph-paperclip text-base"></i>
+                    <span className="hidden sm:inline">קליפים</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={onCloudSave}

@@ -67,6 +67,8 @@ import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEd
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
+import { startClipInboxPolling, CLIP_INGESTED_EVENT } from './services/clipInboxService';
+import ClipInboxPanel from './components/ClipInboxPanel';
 import { startAutoUpdateChecks, checkForUpdateNow } from './services/appUpdateService';
 import { Modal, Button, Input, TextArea } from './components/ui';
 import { COPYLEAKS_CLASSIFICATION_AI, COPYLEAKS_CLASSIFICATION_HUMAN, COPYLEAKS_HELP_LINES, COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS, detectCopyleaksText, getCopyleaksTextStats, getCopyleaksValidationMessage, normalizeCopyleaksConfig } from './services/copyleaksService';
@@ -3410,6 +3412,7 @@ function App() {
   ));
   const [helpModalOpen, setHelpModalOpen] = React.useState(false);
   const [helpModalTopic, setHelpModalTopic] = React.useState('guideUser');
+  const [clipInboxOpen, setClipInboxOpen] = React.useState(false);
   const openHelpTopic = React.useCallback((topic = 'guideUser') => {
     setHelpModalTopic(topic);
     setHelpModalOpen(true);
@@ -3805,6 +3808,32 @@ function App() {
     if (cloudUser) {
       return initCloudSyncListeners(cloudUser);
     }
+  }, [cloudUser]);
+  // WordFlow Clipper: קליטת קליפים מתוסף הדפדפן (poll עצמאי, מנותק מ-cloudSync).
+  React.useEffect(() => {
+    if (!cloudUser) return;
+    const stop = startClipInboxPolling(cloudUser);
+    const onIngested = (event) => {
+      const results = event?.detail?.results || [];
+      if (!results.length) return;
+      const first = results[0];
+      const label = first.domain ? `מ-${first.domain}` : 'מהדפדפן';
+      if (results.length === 1 && first.destination === 'inbox') {
+        showToast(`קליפ חדש ${label} ממתין בתיבת הדואר של הקליפים.`, { tone: 'info' });
+      } else {
+        showToast(
+          results.length === 1
+            ? `קליפ חדש ${label} נקלט כחומר עזר${first.lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
+            : `${results.length} קליפים חדשים נקלטו מהדפדפן.`,
+          { tone: 'info' },
+        );
+      }
+    };
+    window.addEventListener(CLIP_INGESTED_EVENT, onIngested);
+    return () => {
+      stop();
+      window.removeEventListener(CLIP_INGESTED_EVENT, onIngested);
+    };
   }, [cloudUser]);
   const refreshAssignmentBrief = React.useCallback(() => {
     setAssignmentBrief(getPersistedDocumentAssignmentBrief());
@@ -8819,6 +8848,7 @@ ${sidebarReviewContext}`
           Promise.resolve(handlePullFromCloud()).catch(() => {});
         }}
         onCloudSignOut={handleCloudSignOut}
+        onOpenClipInbox={() => setClipInboxOpen(true)}
         documentTitle={getDraftTitleFromFilePath(currentFilePath)}
         startScreenActive={showStartScreen}
         onOpenSettings={() => { setFileMenuTargetTab('ai'); setFileMenuOpen(true); }}
@@ -10100,6 +10130,12 @@ ${sidebarReviewContext}`
           topic={helpModalTopic}
         />
       )}
+
+      <ClipInboxPanel
+        user={cloudUser}
+        open={clipInboxOpen}
+        onClose={() => setClipInboxOpen(false)}
+      />
 
       {showWelcome && (
         <WelcomeGate

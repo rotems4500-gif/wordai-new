@@ -937,6 +937,7 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'citation-style',
   'bib-sources',
   'wordai_blocked_source_domains',
+  'wordai_clip_default_destination',
 ];
 
 const hasMeaningfulStoredValue = (value = '') => {

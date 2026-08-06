@@ -544,6 +544,7 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
             { id: 'tsDocs', label: 'פתרון תקלות - יצירת מסמך', icon: 'ph-wrench' },
             { id: 'tsAPI', label: 'פתרון תקלות - API', icon: 'ph-plugs-connected' },
             { id: 'shortcuts', label: 'קיצורי מקלדת', icon: 'ph-keyboard' },
+            { id: 'clipper', label: 'תוסף הדפדפן (Clipper)', icon: 'ph-paperclip' },
             { id: 'about', label: 'אודות', icon: 'ph-info' },
           ].filter(opt => opt.id !== 'checkUpdates' || isDesktopApp()).map(opt => (
             <button key={opt.id} className="r-btn" style={{ width: '100%', justifyContent: 'start', padding: '8px 16px', borderRadius: 0, gap: '8px' }}
@@ -1153,3 +1154,5 @@ export default function Ribbon({ onCommand = () => {}, onToggleTaskpane = () => 
     </nav>
   );
 }
+
+

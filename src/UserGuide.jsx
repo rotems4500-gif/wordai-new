@@ -525,6 +525,56 @@ function TipsBody() {
   );
 }
 
+
+function CliperBody() {
+  const captures = [
+    { emoji: '📄', title: 'עמוד שלם', body: 'קליק-ימני "Capture Full Page" — חילוץ תוכן ראשי בלי פרסומות וגרם הדפדפן.' },
+    { emoji: '✏️', title: 'טקסט מסומן', body: 'בחרו קטע, קליק-ימני "Capture Selected Text".' },
+    { emoji: '🖼️', title: 'תמונה', body: 'קליק-ימני על תמונה "Capture Image" — זיהוי טקסט (OCR) בעברית ואנגלית.' },
+    { emoji: '📸', title: 'צילום אזור', body: 'כפתור "Take Screenshot" בתוסף, גרור מלבן לציור אזור מהחלון.' },
+  ];
+  const destinations = [
+    { title: 'חומר עזר (ברירת מחדל)', desc: 'נכנס למאגר חומרי הלימוד עם חיפוש סמנטי וניתוח הוכחות.' },
+    { title: 'מקור לפרויקט', desc: 'נוסף לזיכרון הפרויקט הנוכחי עם ה-URL כהיסטוריית עזר.' },
+    { title: 'תיבת דואר (Inbox)', desc: 'ממתין בפאנל "קליפים" לניתוב ידני.' },
+  ];
+  return (
+    <motion.div variants={stagger} initial="hidden" animate="show">
+      <Item className="mb-5">
+        <h3 className="m-0 mb-3 text-[17px] font-bold text-ink">ארבע דרכים לתפוס תוכן</h3>
+        <div className="grid grid-cols-2 gap-2.5">
+          {captures.map((c) => (
+            <SubCard key={c.title} className="!p-4">
+              <div className="mb-2 text-[28px]">{c.emoji}</div>
+              <div className="text-[15px] font-bold text-ink mb-1">{c.title}</div>
+              <p className="m-0 text-[13px] leading-relaxed text-muted">{c.body}</p>
+            </SubCard>
+          ))}
+        </div>
+      </Item>
+      <Item className="mb-5">
+        <h3 className="m-0 mb-3 text-[17px] font-bold text-ink">לאן הקליפ הולך?</h3>
+        {destinations.map((d, i) => (
+          <div key={i} className={`flex items-start gap-3 rounded-xl bg-surface px-4 py-3 ${i > 0 ? 'mt-2.5' : ''} shadow-[0_1px_2px_rgba(45,52,54,.04)] dark:border dark:border-white/10`}>
+            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-brand/10 text-[14px] font-bold text-brand">{i + 1}</span>
+            <div>
+              <div className="text-[14px] font-bold text-ink">{d.title}</div>
+              <p className="m-0 mt-0.5 text-[13px] leading-relaxed text-muted">{d.desc}</p>
+            </div>
+          </div>
+        ))}
+      </Item>
+      <Item className="rounded-2xl border border-brand/25 bg-brand/[0.07] px-5 py-4 flex items-start gap-3">
+        <i className="ph ph-info mt-0.5 text-[19px] text-brand flex-shrink-0" aria-hidden="true" />
+        <div>
+          <div className="text-[14px] font-bold text-ink mb-1">בעורך: כפתור 📎 "קליפים"</div>
+          <p className="m-0 text-[13px] leading-relaxed text-muted">בסרגל העליון — פתח את פאנל הקליפים הממתינים, ראה תוכן וקבע יעד: חומר עזר, מקור לפרויקט או מחק.</p>
+        </div>
+      </Item>
+    </motion.div>
+  );
+}
+
 function DaniAside({ text }) {
   return (
     <div className="flex items-start gap-3">
@@ -554,6 +604,7 @@ const SECTIONS = [
   { id: 'word', tab: 'עורך Word', kicker: 'העורך עצמו', icon: 'ph-file-doc', title: 'עורך ברמת Word', lead: 'עימוד, תוכן עניינים, הערות שוליים, נוסחאות ומעקב שינויים — בלי לצאת מהאפליקציה.', dani: 'כל מה שהיית עושה ב-Word, כאן.', Body: WordBody },
   { id: 'advanced', tab: 'מתקדם', kicker: 'מעבר למסמכים', icon: 'ph-flask', title: 'כלים מתקדמים', lead: 'סטודיו ייעודיים, מנגנון האנשה וכלי עריכה קטנים שחוסכים זמן.', dani: 'זה כבר לא רק מעבד תמלילים.', Body: AdvancedBody },
   { id: 'tips', tab: 'טיפים', kicker: 'לפני שנפרדים', icon: 'ph-lightbulb', title: 'טיפים לעבודה טובה יותר', lead: 'כמה הרגלים קטנים שמשנים את כל התוצאה.', dani: 'ואם הלכת לאיבוד — תמיד יש דרך חזרה.', Body: TipsBody },
+  { id: 'clipper', tab: 'Clipper 📎', kicker: 'תוסף הדפדפן', icon: 'ph-paperclip', title: 'WordFlow Clipper — לתפוס מהאינטרנט', lead: 'תוסף Chrome שאוסף תוכן מהאינטרנט בארבע דרכים — עמוד שלם, טקסט מסומן, תמונה או צילום אזור — וישלח לחומרי עזר, פרויקט או תיבת דואר.', dani: 'כל מה שקראתם לעכשיו או למועד — קלט לעורך בלחיצה.', Body: CliperBody },
 ];
 
 /* ── carousel shell ───────────────────────────────────────────────────────── */
@@ -710,3 +761,5 @@ function NavArrow({ side, icon, hidden, onClick, label }) {
     </motion.button>
   );
 }
+
+

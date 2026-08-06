@@ -28,7 +28,8 @@
     "desktop:build": "tauri build",
     "desktop:build:signed": "tauri build --config src-tauri/tauri.signing.conf.json",
     "desktop:release": "node scripts/make-latest-json.mjs",
-    "dist:win": "tauri build"
+    "dist:win": "tauri build",
+    "build:extension": "cd extension && node build.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

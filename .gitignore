@@ -77,3 +77,9 @@ tools/test-bench/.verify-scratch/
 # tesseract self-hosted — נגזר מ-node_modules ע"י scripts/copy-tesseract.mjs
 public/ocr/
 tools/test-bench/nlg-bench/.bench-out/
+
+# WordFlow Clipper (Chrome extension) — פלט בילד + deps מקומיים
+dist-extension/
+extension/node_modules/
+wordflow-clipper-dev.pem
+pubkey.b64

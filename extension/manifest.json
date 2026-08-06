@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "WordFlow Clipper",
+  "version": "0.1.0",
+  "description": "קליפת תוכן מהאינטרנט ישירות לתוך WordFlow AI — עמודים, קטעי טקסט, תמונות ואזורים נבחרים.",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "scripting",
+    "storage",
+    "identity"
+  ],
+  "host_permissions": [],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "WordFlow Clipper"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvSHTBNBNLRakYaJOqlCvf0ipdii/c9wNOkBvY8fwgmVSjlvXdPhLv1VUUiHXFudYfhjYrp/FkcRHdm4zcauDCnqFLKHkxKIhaud2mslzWZz/eLgptYQotrasrfYV8VqJYe2MBA0siBZxw4Lr43nNkjjxJhOXssGDi4awyeSqDelVF/VKWQ66J0lhpM0oezTMLThIBIeuZCssqA1Sg2QbRtx1xKv0NYMsjjxmcSGaQBFkFlesPfW7dZvdrB5u6sqyr1+qYjjKb/DY4hW1dCx8QjV3JTb3DgAZaJxI+QRSokeRhm+5HYlXUlGCEEfrZLNYQRqIKmzKg/N17DAoM0KgEwIDAQAB"
+}

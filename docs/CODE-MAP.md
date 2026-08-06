@@ -46,6 +46,8 @@
 | MobileToolbar.jsx | ~99 | סרגל כלים למובייל (מחליף Ribbon ב-≤640px) |
 | theme.js | ~53 | הגדרות ערכת נושא |
 | [agentConfig.js](../src/agentConfig.js) | ~48 | **`AGENTS_CONFIG`** — כל סוכני ה-AI: `fix`, `reviewFix`, `humanize`, `summary`, `academic`, `organize`, `textToTable` (inline/BubbleMenu) · `sources`, `holeFill`, `lecturer`, `continue`, `draft`, `chef` (chat) |
+| [ClipInboxPanel.jsx](../src/components/ClipInboxPanel.jsx) | ~320 | Clip inbox UI — list pending clips, preview, actions (add to materials/project/delete) |
+| [clipInboxService.js](../src/services/clipInboxService.js) | ~280 | Poll Firebase for clips every 5s, OCR processing, clip routing to materials/project/inbox |
 | useDelimitedListInput.js | ~31 | hook |
 | delimitedListInput.js | ~18 | util |
 | appVersion.js | ~7 | `APP_VERSION_LABEL` |
@@ -164,6 +166,13 @@
 
 גם: `tauri.conf.json`, `capabilities/default.json`
 
+### extension/ — Chrome MV3 (WordFlow Clipper)
+Browser extension for capturing web content to WordFlow. Build: `npm run build:extension` → `dist-extension/`.
+- **extension/manifest.json** — extension config (MV3, permissions, content scripts)
+- **extension/background.js** — service worker, message relay to popup/content scripts
+- **extension/popup.html / popup.js** — UI for selecting clip destination (material/project/inbox)
+- **extension/content-script.js** — page interaction, readability extraction, screenshot capture
+
 ---
 
 ## functions/
@@ -277,3 +286,9 @@ Untracked scratch (לא ב-git בהכרח): `temp-docx-inspect*/`, `temp-ocr-cac
 ---
 
 *מסמך זה משלים את [CLAUDE.md](../CLAUDE.md) — שם המידע התפעולי/ארכיטקטוני, כאן אינדקס-קבצים ומפות סקשנים.*
+
+
+
+
+
+
