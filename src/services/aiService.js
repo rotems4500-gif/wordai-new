@@ -7964,8 +7964,8 @@ export const rememberConversationTurn = ({ userPrompt = '', reply = '', agentLab
   return saveAppMemory({ ...current, recentChats, memoryNotes });
 };
 
-const MAX_CONVERSATION_HISTORY_PROMPT_TURNS = 12;
-const MAX_CONVERSATION_HISTORY_PROMPT_CHARS = 2400;
+const MAX_CONVERSATION_HISTORY_PROMPT_TURNS = 24;
+const MAX_CONVERSATION_HISTORY_PROMPT_CHARS = 9000;
 
 const normalizeConversationHistoryForPrompt = (value = []) => {
   if (!Array.isArray(value) || !value.length) return [];
@@ -7975,7 +7975,7 @@ const normalizeConversationHistoryForPrompt = (value = []) => {
       const role = entry?.role === 'assistant'
         ? 'assistant'
         : (entry?.role === 'user' ? 'user' : '');
-      const content = trimLogText(String(entry?.content || '').replace(/\s+/g, ' ').trim(), 320);
+      const content = trimLogText(String(entry?.content || '').replace(/\s+/g, ' ').trim(), 1200);
       if (!role || !content) return null;
       return { role, content };
     })

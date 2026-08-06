@@ -209,10 +209,20 @@ const normalizeComposerMode = (value = '') => (String(value || '').trim() === 'e
 
 const buildSidebarConversationHistory = (entries = []) => (Array.isArray(entries) ? entries : [])
   .filter((entry) => entry && (entry.role === 'user' || entry.role === 'assistant'))
-  .map((entry) => ({
-    role: entry.role,
-    content: String(entry.content || '').trim(),
-  }))
+  .map((entry) => {
+    const baseContent = String(entry.content || '').trim();
+    // המשכיות על החלות: אם ההודעה הזו גררה פעולה במסמך, המודל צריך לדעת מה בוצע בפועל,
+    // אחרת הוא מציע שוב את אותו שינוי בסבב הבא.
+    const actionNote = entry.role === 'assistant'
+      ? String(entry.documentActionMessage || '').replace(/\s+/g, ' ').trim()
+      : '';
+    return {
+      role: entry.role,
+      content: actionNote
+        ? `${baseContent}\n[פעולה שבוצעה במסמך: ${actionNote}]`.trim()
+        : baseContent,
+    };
+  })
   .filter((entry) => entry.content);
 const formatSidebarConversationHistory = (entries = []) => buildSidebarConversationHistory(entries)
   .slice(-12)
@@ -224,7 +234,21 @@ const TASKPANE_FIX_APPLY_INTENT_PATTERN = /(?:^|[\s"'“”])(?:תתחיל|תח�
 const NUMBERED_REVIEW_APPLY_INTENT_PATTERN = /(?:^|\s)(?:תעשה|תעשי|עשה|עשי|בצע|בצעי|תבצע|תבצעי|החל|תחיל|החילי|יישם|יישמי|תיישם|תיישמי|תקן|תקני|תתקן|תתקני|עדכן|עדכני|תעדכן|תעדכני)\s+(?:לי\s+)?(?:את\s+)?(?:ה)?(?:המלצות|תיקונים|סעיפים|נקודות)?\s*(?:מספר(?:י)?\s*)?(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית)(?:\s*(?:,|،|\+|ו|עד|-)\s*(?:\d+|אחד|אחת|ראשון|ראשונה|שניים|שני|שתיים|שתי|שניה|שנייה|שלוש|שלושה|שלישי|שלישית|ארבע|ארבעה|רביעי|רביעית|חמש|חמישה|חמישי|חמישית|שש|שישה|שישי|שישית))*/iu;
 const NUMBERED_REVIEW_CONTEXT_PATTERN = /(?:מרצה|המלצ|הערות|ביקורת|בדיקת|תיקונים|בעיות|ניסוח\s+מוצע|suggestions?|recommendations?)/iu;
 const NUMBERED_LIST_MARKER_PATTERN = /(?:^|\n)(?:(?:#{1,6}\s*)?(?:\*\*)?(?:\d{1,2}[.)]|(?:המלצה|תיקון|סעיף|נקודה|suggestion|recommendation)\s+\d{1,2}[:.)-])|[•*-])\s+/iu;
+// בקשת שכתוב של *כל* המסמך מהצ'אט. חובה מילת כוללנות ("כל המסמך", "המסמך כולו",
+// "מהתחלה עד הסוף") — בקשה לסעיף/פרק בודד נשארת במסלול action-plan הקיים.
+// אין שימוש ב-\b (חסר משמעות בעברית) — הגבול נבדק בתו מפריד מפורש.
+const DOCUMENT_REVISION_INTENT_PATTERN = /(?:שכתב|תשכתב|שכתבי|תשכתבי|לשכתב|כתוב\s+מחדש|תכתוב\s+מחדש|שפר|תשפר|שפרי|תשפרי|לשפר|שדרג|תשדרג|ערוך|תערוך|לערוך|תקן|תתקן|תקני|תתקני|עבור|תעבור|תעברי|תעבור\s+על)[^\n]{0,80}?(?:(?:^|[\s"'“”״,.:;(-])כל\s+ה(?:מסמך|עבודה|חיבור|טקסט|מאמר)|ה(?:מסמך|עבודה|חיבור|טקסט|מאמר)\s+כול[והם]|ה(?:מסמך|עבודה|חיבור|טקסט|מאמר)\s+מ(?:ה)?התחלה\s+(?:ו)?עד\s+(?:ה)?סוף|מ(?:ה)?התחלה\s+(?:ו)?עד\s+(?:ה)?סוף)/iu;
 const SOURCE_INTEGRATION_PLAN_PATTERN = /(?:איפה\s+להוסיף|ניסוח\s+קיים|הצעה\s+לשילוב|שילוב\s+(?:הכתבה|עמדת|הסרט|המקור)|טבלה\s+מסכמת|מקורות\s+חדשים|ציטוט|APA|Ynet|mako|מעריב|האגודה\s+לזכויות\s+האזרח|סעיף\s+\d+)/iu;
+// זיהוי כוונת עריכה בהודעת משתמש בצ׳אט (לא במצב עריכה מובנית) — משמש רק כדי להבליט
+// את כפתור ההחלה בתשובת ה-assistant. לא משנה ניתוב ולא מחיל שום דבר אוטומטית.
+const hasChatApplyEditIntent = (text = '') => {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  return documentWideEditPlanPattern.test(value)
+    || TASKPANE_FIX_APPLY_INTENT_PATTERN.test(value)
+    || NUMBERED_REVIEW_APPLY_INTENT_PATTERN.test(value);
+};
+
 const hasRecentNumberedReviewContext = (entries = []) => buildSidebarConversationHistory(entries)
   .slice(-8)
   .some((entry) => {
@@ -983,7 +1007,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onReviseDocument = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
@@ -994,6 +1018,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [workspaceAutomation, setWorkspaceAutomation] = useState(() => getWorkspaceAutomation());
   const [roleAgents, setRoleAgents] = useState(() => getOrderedRoleAgents(getWorkspaceAutomation().workflowMode));
   const [messages, setMessages] = useState(() => getSavedMessagesForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
+  // מזהה הצעת השכתוב שרצה כרגע (שכתוב מסמך מלא מהצ'אט) — לחיווי טעינה על הכפתור
+  const [runningRevisionOfferId, setRunningRevisionOfferId] = useState('');
   const [activeChatSessionId, setActiveChatSessionId] = useState(() => getSavedActiveChatSessionIdForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds) || createChatSessionId());
   const [chatSessions, setChatSessions] = useState(() => getSavedChatSessionsForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
   const [reviewLedger, setReviewLedger] = useState(() => readReviewLedgerForDocumentIds(getWorkspaceAutomation().activeWorkspaceId, documentPersistenceIds));
@@ -3540,6 +3566,77 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     );
   };
 
+  // שכתוב מסמך מלא מהצ'אט — רץ רק אחרי אישור מפורש של המשתמש על כפתור ההצעה.
+  const runChatDocumentRevision = async (msg = {}) => {
+    const offerId = String(msg?.revisionOfferId || '').trim();
+    const feedback = String(msg?.revisionFeedback || '').trim();
+    if (!offerId || !feedback || typeof onReviseDocument !== 'function') return;
+    if (runningRevisionOfferId || msg?.revisionDone) return;
+
+    setRunningRevisionOfferId(offerId);
+    const patchOfferMessage = (patch) => {
+      setMessages((prev) => prev.map((entry) => (
+        entry?.revisionOfferId === offerId ? { ...entry, ...patch } : entry
+      )));
+    };
+
+    try {
+      const result = await onReviseDocument({ feedback });
+      if (result?.ok) {
+        patchOfferMessage({
+          revisionDone: true,
+          documentActionStatus: result.usedFallback ? 'partial' : 'applied',
+          documentActionMessage: result.usedFallback
+            ? `המסמך שוכתב חלקית. ${String(result.errorMessage || '').trim()}`.trim()
+            : 'המסמך שוכתב. אפשר לבטל עם Ctrl+Z.',
+        });
+      } else {
+        patchOfferMessage({
+          documentActionStatus: 'failed',
+          documentActionMessage: String(result?.errorMessage || '').trim() || 'שכתוב המסמך נכשל.',
+        });
+      }
+    } catch (error) {
+      patchOfferMessage({
+        documentActionStatus: 'failed',
+        documentActionMessage: `שכתוב המסמך נכשל: ${error?.message || 'שגיאה לא ידועה'}`,
+      });
+    } finally {
+      setRunningRevisionOfferId('');
+    }
+  };
+
+  const renderDocumentRevisionOfferButton = (msg, variant = 'light') => {
+    if (!msg?.revisionOffer || typeof onReviseDocument !== 'function') return null;
+    const dark = variant === 'dark';
+    const offerId = String(msg.revisionOfferId || '').trim();
+    const running = Boolean(offerId) && runningRevisionOfferId === offerId;
+    const done = msg.revisionDone === true;
+    const disabled = running || done || Boolean(runningRevisionOfferId) || loading;
+    return (
+      <button
+        type="button"
+        onClick={() => runChatDocumentRevision(msg)}
+        disabled={disabled}
+        style={{
+          marginTop: 7,
+          padding: '9px 16px',
+          borderRadius: 10,
+          border: 0,
+          background: dark ? '#6366F1' : '#4F46E5',
+          color: '#FFFFFF',
+          fontSize: 12.5,
+          fontWeight: 900,
+          boxShadow: '0 2px 8px rgba(79, 70, 229, 0.35)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.55 : 1,
+        }}
+      >
+        {running ? '⏳ משכתב את המסמך…' : (done ? '✓ המסמך שוכתב' : '✓ שכתב את המסמך')}
+      </button>
+    );
+  };
+
   const buildContext = (targetState = null, batchTargets = [], requestPrompt = '') => {
     if (isEditComposerMode) return buildEditModeContext(targetState, batchTargets, requestPrompt);
     const isAiAppendixRequest = activeClassicAgentId === 'aiAppendix';
@@ -4064,6 +4161,34 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       && !TASKPANE_FIX_ANALYSIS_QUESTION_PATTERN.test(txt);
     const shouldSkipTaskpaneApply = Boolean(cAgent && !forcedAgent && cAgent.taskpaneSkipApply === true && !taskpaneFixApplyIntent);
 
+    // בקשה לשכתוב *כל* המסמך: לא שולחים למודל אלא מציעים אישור מפורש בצ'אט.
+    if (!isEditComposerMode && typeof onReviseDocument === 'function' && DOCUMENT_REVISION_INTENT_PATTERN.test(txt)) {
+      const recentUserPrompts = messages
+        .filter((entry) => entry?.role === 'user' && String(entry.content || '').trim())
+        .slice(-3)
+        .map((entry) => String(entry.content || '').trim())
+        .filter((entry) => entry !== txt);
+      const revisionFeedback = recentUserPrompts.length
+        ? `${txt}\n\nהקשר מהשיחה (בקשות קודמות של המשתמש):\n${recentUserPrompts.map((entry, idx) => `${idx + 1}. ${entry.slice(0, 400)}`).join('\n')}`
+        : txt;
+
+      appendPromptHistory(originalText);
+      clearPendingMentionSelection();
+      appendBlockedEditExchange(
+        originalText,
+        'פעולה זו תשכתב את המסמך כולו. אפשר לבטל עם Ctrl+Z.',
+        { composerMode },
+        {
+          composerMode,
+          revisionOffer: true,
+          revisionOfferId: `rev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          revisionFeedback,
+        },
+      );
+      inputRef.current?.focus();
+      return;
+    }
+
     if (!shouldSkipTaskpaneApply && shouldUseDocumentWideEditPlan(txt, {
       hasPromptResolvedTarget,
       batchTargets: requestEditBatchTargets,
@@ -4172,7 +4297,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     setLoading(true);
     updateAgentStatus(effectiveDirectAgentMeta.id, directAgentName, { state: 'running', progress: 10, message: 'מתחיל טיפול' });
     
-    setMessages((prev) => [...prev, { role: 'assistant', content: '', composerMode }]);
+    const chatApplySuggested = !isEditComposerMode && hasChatApplyEditIntent(originalText);
+    setMessages((prev) => [...prev, { role: 'assistant', content: '', composerMode, ...(chatApplySuggested ? { applySuggested: true } : {}) }]);
 
     try {
       // אימות מקורות חי ("חבר ביקורתי"): כשנשאל על מקור/קישור קיים — בודקים את ה-URLs
@@ -4933,6 +5059,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         </div>
                       )}
                       {renderDocumentActionCompletionButton(msg, 'light')}
+                      {renderDocumentRevisionOfferButton(msg, 'light')}
                       {(msg.content || '').trim() && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 7 }}>
                           {msg.role === 'assistant' && !msg.error && !isEditMessage && onApplyDocumentPlan && (
@@ -4940,9 +5067,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                               type="button"
                               onClick={() => applyChatMessageToDocument(msg)}
                               disabled={loading}
-                              style={{ padding: '7px 13px', borderRadius: 9, border: 0, background: 'var(--chat-accent)', color: 'var(--chat-accent-ink)', fontSize: 12, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
+                              style={msg.applySuggested
+                                ? { padding: '9px 16px', borderRadius: 10, border: 0, background: '#4F46E5', color: '#FFFFFF', fontSize: 12.5, fontWeight: 900, boxShadow: '0 2px 8px rgba(79, 70, 229, 0.35)', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }
+                                : { padding: '7px 13px', borderRadius: 9, border: 0, background: 'var(--chat-accent)', color: 'var(--chat-accent-ink)', fontSize: 12, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1 }}
                             >
-                              ↪ החל במיקומים
+                              {msg.applySuggested ? '↪ החל את השינוי במסמך' : '↪ החל במיקומים'}
                             </button>
                           )}
                           {msg.role === 'assistant' && !msg.error && !isEditMessage && onInsert && (
@@ -5877,6 +6006,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   </div>
                 )}
                 {renderDocumentActionCompletionButton(msg, 'dark')}
+                {renderDocumentRevisionOfferButton(msg, 'dark')}
 
                 {(msg.content || '').trim() && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
@@ -5892,9 +6022,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         type="button"
                         onClick={() => applyChatMessageToDocument(msg)}
                         disabled={loading}
-                        style={{ fontSize: 11, color: '#6EE7B7', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.22)', borderRadius: 12, padding: '4px 12px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1, fontWeight: 500 }}
+                        style={msg.applySuggested
+                          ? { fontSize: 12, color: '#FFFFFF', background: '#4F46E5', border: '1px solid rgba(129, 140, 248, 0.6)', borderRadius: 12, padding: '6px 14px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1, fontWeight: 800, boxShadow: '0 2px 8px rgba(79, 70, 229, 0.4)' }
+                          : { fontSize: 11, color: '#6EE7B7', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.22)', borderRadius: 12, padding: '4px 12px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.55 : 1, fontWeight: 500 }}
                       >
-                        החל במיקומים
+                        {msg.applySuggested ? 'החל את השינוי במסמך' : 'החל במיקומים'}
                       </button>
                     )}
                     {msg.role === 'assistant' && !msg.error && normalizeComposerMode(msg.composerMode || '') !== 'edit' && onInsert && (

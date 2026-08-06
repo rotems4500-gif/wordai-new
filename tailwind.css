@@ -665,6 +665,21 @@
         .ai-suggestion { color: #C50F1F; text-decoration: underline; text-decoration-style: dashed; cursor: pointer; }
         .ai-suggestion:hover { background-color: #FDE7E9; }
 
+        /* הבהוב אחרי החלת עריכה מהצ'אט */
+        @keyframes aiSuggestionFlash {
+          0%   { background-color: rgba(253, 224, 71, 0.85); box-shadow: 0 0 0 4px rgba(253, 224, 71, 0.45); }
+          60%  { background-color: rgba(253, 224, 71, 0.45); box-shadow: 0 0 0 4px rgba(253, 224, 71, 0.18); }
+          100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(253, 224, 71, 0); }
+        }
+        .ai-suggestion-flash { animation: aiSuggestionFlash 1.4s ease-out 1; border-radius: 2px; }
+        @media (prefers-color-scheme: dark) {
+          @keyframes aiSuggestionFlash {
+            0%   { background-color: rgba(250, 204, 21, 0.45); box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.28); }
+            60%  { background-color: rgba(250, 204, 21, 0.22); box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.12); }
+            100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
+          }
+        }
+
         /* --- Inline AI Menu --- */
         #inline-menu { position: absolute; background: white; border: 1px solid #C8C6C4; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: none; padding: 4px; gap: 2px; z-index: 50; flex-direction: row; align-items: center; }
         .inline-btn { padding: 4px 8px; border: none; background: transparent; cursor: pointer; font-size: 12px; border-radius: 2px; display: flex; align-items: center; gap: 4px; }

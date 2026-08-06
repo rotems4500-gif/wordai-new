@@ -5258,6 +5258,22 @@ function App() {
     };
   }, [editor]);
 
+  const flashAppliedSuggestion = React.useCallback((suggestionId) => {
+    const id = String(suggestionId || '').trim();
+    if (!id) return;
+    window.setTimeout(() => {
+      try {
+        const dom = document.querySelector('.ProseMirror');
+        const el = dom?.querySelector(`[data-suggestion-id="${id}"]`)
+          || document.querySelector(`[data-suggestion-id="${id}"]`);
+        if (!el) return;
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.classList.add('ai-suggestion-flash');
+        window.setTimeout(() => el.classList.remove('ai-suggestion-flash'), 1400);
+      } catch { /* הבהוב הוא קישוט בלבד */ }
+    }, 60);
+  }, []);
+
   const handleApplyAssistantEdit = React.useCallback(({ replacementText, target, agentType = 'assistant-sidebar-edit' } = {}) => {
     if (!editor) {
       return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
@@ -5295,8 +5311,14 @@ function App() {
       return { ok: false, message: 'המודל לא החזיר טקסט חלופי שניתן להחיל במסמך.' };
     }
 
-    return { ok: true, message: 'העריכה הוחלה במסמך כהצעת AI. אפשר לאשר או לדחות מתוך המסמך.' };
-  }, [editor]);
+    flashAppliedSuggestion(result.suggestionId);
+
+    return {
+      ok: true,
+      message: 'העריכה הוחלה במסמך כהצעת AI. אפשר לאשר או לדחות מתוך המסמך.',
+      suggestionId: result.suggestionId || '',
+    };
+  }, [editor, flashAppliedSuggestion]);
 
   const consolidateAssistantEditBatchEntries = React.useCallback((entries = []) => {
     const merged = new Map();
@@ -5389,6 +5411,8 @@ function App() {
       return { ok: false, message: error?.message || 'העריכות לא הוחלו במסמך.' };
     }
 
+    flashAppliedSuggestion(applied.find((entry) => entry?.suggestionId)?.suggestionId);
+
     return {
       ok: true,
       message: applied.length === 1
@@ -5397,7 +5421,7 @@ function App() {
       appliedCount: applied.length,
       applied,
     };
-  }, [consolidateAssistantEditBatchEntries, editor]);
+  }, [consolidateAssistantEditBatchEntries, editor, flashAppliedSuggestion]);
 
   const insertAssistantTextAtActivePosition = React.useCallback((text = '', agentType = 'assistant-sidebar-insert') => {
     if (!editor) {
@@ -6437,6 +6461,10 @@ ${sidebarReviewContext}`
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
+    const revisionSource = String(action?.source || 'survey').trim() || 'survey';
+    const isChatSource = revisionSource === 'chat';
+    // מהצ'אט מחזירים מבנה תוצאה; ממודאל הסקר משאירים את חוזה ה-true ההיסטורי
+    const finishRevision = (result) => (isChatSource ? result : true);
     const resolvedAction = {
       ...action,
       kind: 'feedback-revision',
@@ -6448,7 +6476,9 @@ ${sidebarReviewContext}`
       : { ...DEFAULT_FEEDBACK_SURVEY };
     const workflowAvailable = isFeedbackWorkflowAvailable();
     const requestedExecutionMode = normalizeFeedbackExecutionMode(payload.executionMode || surveySnapshot.executionMode);
-    const executionMode = requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct';
+    const executionMode = isChatSource
+      ? 'direct'
+      : (requestedExecutionMode === 'workspace' && workflowAvailable ? 'workspace' : 'direct');
     const roundIndex = normalizeFeedbackRoundIndex(payload.roundIndex || surveySnapshot.roundIndex);
     const templateId = String(payload.templateId || activeTemplateId || 'blank').trim() || 'blank';
     const selectedMaterials = Array.isArray(payload.selectedMaterials) ? payload.selectedMaterials.filter(Boolean) : [];
@@ -6458,31 +6488,35 @@ ${sidebarReviewContext}`
     const existingHtml = payload.existingHtml || editor?.getHTML?.() || '';
     const generationRequest = beginGenerationRequest('doc-feedback');
     const originWorkspaceId = generationRequest.workspaceId;
-    setLastGenerationAction({
-      ...resolvedAction,
-      runId: generationRequest.runId,
-      inspector: buildStartScreenGenerationInspector({
+    if (!isChatSource) {
+      setLastGenerationAction({
+        ...resolvedAction,
         runId: generationRequest.runId,
-        actionType: 'revise',
-        prompt: String(payload.originalPrompt || '').trim(),
-        instructions: String(payload.feedback || '').trim(),
-        selectedMaterials,
-        templateId,
-        selectedProviderId,
-        selectedProviderModel,
-        route: 'reviseDocumentWithFeedback',
-        routeMode: executionMode === 'workspace' ? 'workspace-automation' : 'direct',
-        routeModeReason: executionMode === 'workspace' ? '' : 'feedback-direct',
-      }),
-    });
+        inspector: buildStartScreenGenerationInspector({
+          runId: generationRequest.runId,
+          actionType: 'revise',
+          prompt: String(payload.originalPrompt || '').trim(),
+          instructions: String(payload.feedback || '').trim(),
+          selectedMaterials,
+          templateId,
+          selectedProviderId,
+          selectedProviderModel,
+          route: 'reviseDocumentWithFeedback',
+          routeMode: executionMode === 'workspace' ? 'workspace-automation' : 'direct',
+          routeModeReason: executionMode === 'workspace' ? '' : 'feedback-direct',
+        }),
+      });
+    }
     clearDocumentArrival();
-    setFeedbackSurvey((prev) => ({
-      ...prev,
-      open: false,
-      phase: 'details',
-      submitting: true,
-      submissionRequestId: generationRequest.requestId,
-    }));
+    if (!isChatSource) {
+      setFeedbackSurvey((prev) => ({
+        ...prev,
+        open: false,
+        phase: 'details',
+        submitting: true,
+        submissionRequestId: generationRequest.requestId,
+      }));
+    }
     setAssistantTrigger('manual');
     setSidebarOpen(true);
     setLiveGeneration({
@@ -6496,6 +6530,7 @@ ${sidebarReviewContext}`
     });
 
     const clearHiddenFeedbackSubmittingAfterStale = () => {
+      if (isChatSource) return;
       setFeedbackSurvey((prev) => {
         if (prev.submissionRequestId !== generationRequest.requestId || prev.open || !prev.submitting) {
           return prev;
@@ -6531,7 +6566,7 @@ ${sidebarReviewContext}`
       const consumedRevisionRound = !usedFallback || String(revisedHtml || '').trim() !== String(existingHtml || '').trim();
       if (!isGenerationRequestCurrent(generationRequest)) {
         clearHiddenFeedbackSubmittingAfterStale();
-        return true;
+        return finishRevision({ ok: false, usedFallback, errorMessage: 'הבקשה הוחלפה בפעולה חדשה' });
       }
 
       if (editor && revisedHtml) {
@@ -6562,52 +6597,64 @@ ${sidebarReviewContext}`
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
       const resolvedFeedbackProviderId = resolvedInspectorMeta.requestedProviderId || selectedProviderId;
       const resolvedFeedbackProviderModel = resolvedInspectorMeta.requestedProviderModel || selectedProviderModel;
-      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
-        ...prev,
-        inspector: {
-          ...(prev?.inspector || {}),
-          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
-          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
-          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
-          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
-          usedFallback,
-          errorMessage: String(result?.errorMessage || '').trim(),
-          liveState: usedFallback ? 'warning' : 'success',
-          routeResolved: 'reviseDocumentWithFeedback',
-        },
-      }));
+      if (!isChatSource) {
+        setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+          ...prev,
+          inspector: {
+            ...(prev?.inspector || {}),
+            requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+            requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+            routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+            routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+            usedFallback,
+            errorMessage: String(result?.errorMessage || '').trim(),
+            liveState: usedFallback ? 'warning' : 'success',
+            routeResolved: 'reviseDocumentWithFeedback',
+          },
+        }));
 
-      setFeedbackSurvey({
-        ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
-          prompt: payload.originalPrompt,
-          templateId,
+        setFeedbackSurvey({
+          ...buildFeedbackSurveyStateWithGenerationContext(surveySnapshot, {
+            prompt: payload.originalPrompt,
+            templateId,
+            usedFallback,
+            selectedMaterials,
+            selectedModel,
+            selectedProviderId: resolvedFeedbackProviderId,
+            selectedProviderModel: resolvedFeedbackProviderModel,
+          }),
+          open: false,
+          phase: 'details',
+          executionMode,
+          roundIndex: consumedRevisionRound ? normalizeFeedbackRoundIndex(roundIndex + 1) : roundIndex,
           usedFallback,
-          selectedMaterials,
-          selectedModel,
-          selectedProviderId: resolvedFeedbackProviderId,
-          selectedProviderModel: resolvedFeedbackProviderModel,
-        }),
-        open: false,
-        phase: 'details',
-        executionMode,
-        roundIndex: consumedRevisionRound ? normalizeFeedbackRoundIndex(roundIndex + 1) : roundIndex,
-        usedFallback,
-      });
+        });
+      }
 
       if (usedFallback && result?.errorMessage) {
         showToast(`לא הצלחתי ליישם את כל ההערות: ${result.errorMessage}`, { tone: 'error' });
+      } else if (isChatSource) {
+        showToast('המסמך שוכתב לפי הבקשה', { tone: 'success' });
       }
+
+      return finishRevision({
+        ok: true,
+        usedFallback,
+        errorMessage: String(result?.errorMessage || '').trim(),
+      });
     } catch (error) {
       if (!isGenerationRequestCurrent(generationRequest)) {
         clearHiddenFeedbackSubmittingAfterStale();
-        return true;
+        return finishRevision({ ok: false, usedFallback: false, errorMessage: 'הבקשה הוחלפה בפעולה חדשה' });
       }
-      setFeedbackSurvey({
-        ...surveySnapshot,
-        open: true,
-        phase: 'details',
-        submitting: false,
-      });
+      if (!isChatSource) {
+        setFeedbackSurvey({
+          ...surveySnapshot,
+          open: true,
+          phase: 'details',
+          submitting: false,
+        });
+      }
       const latestSummary = getLatestAgentRunSummary(getWorkspaceAutomation(), generationRequest.runId);
       const latestLogs = getRecentAgentLogs(18, { workspaceId: originWorkspaceId, runId: generationRequest.runId });
       const resolvedInspectorMeta = resolveStartScreenGenerationInspectorMeta({ summary: latestSummary, logs: latestLogs });
@@ -6626,24 +6673,25 @@ ${sidebarReviewContext}`
         runId: generationRequest.runId,
         workspaceId: originWorkspaceId,
       });
-      setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
-        ...prev,
-        inspector: {
-          ...(prev?.inspector || {}),
-          requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
-          requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
-          routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
-          routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
-          usedFallback: false,
-          errorMessage: terminalState.errorMessage,
-          liveState: terminalState.state,
-          routeResolved: 'reviseDocumentWithFeedback',
-        },
-      }));
+      if (!isChatSource) {
+        setLastGenerationAction((prev) => (prev?.runId !== generationRequest.runId ? prev : {
+          ...prev,
+          inspector: {
+            ...(prev?.inspector || {}),
+            requestedProviderId: resolvedInspectorMeta.requestedProviderId || String(prev?.inspector?.requestedProviderId || '').trim(),
+            requestedProviderModel: resolvedInspectorMeta.requestedProviderModel || String(prev?.inspector?.requestedProviderModel || '').trim(),
+            routeMode: resolvedInspectorMeta.routeMode || String(prev?.inspector?.routeMode || '').trim(),
+            routeModeReason: resolvedInspectorMeta.routeModeReason || String(prev?.inspector?.routeModeReason || '').trim(),
+            usedFallback: false,
+            errorMessage: terminalState.errorMessage,
+            liveState: terminalState.state,
+            routeResolved: 'reviseDocumentWithFeedback',
+          },
+        }));
+      }
       showToast(terminalState.alertMessage, { tone: terminalState.state === 'error' ? 'error' : 'success', duration: 6000 });
+      return finishRevision({ ok: false, usedFallback: false, errorMessage: terminalState.errorMessage || terminalState.alertMessage });
     }
-
-    return true;
   }, [activeTemplateId, beginGenerationRequest, clearDocumentArrival, editor, isGenerationRequestCurrent, persistLocalCache, triggerDocumentArrival]);
 
   const runDocumentRecommendationsReview = React.useCallback(async (action) => {
@@ -9298,6 +9346,27 @@ ${sidebarReviewContext}`
                 onApplyEdit={handleApplyAssistantEdit}
                 onApplyEditBatch={handleApplyAssistantEditBatch}
                 onApplyDocumentPlan={handleApplyDocumentActionPlan}
+                onReviseDocument={async ({ feedback } = {}) => {
+                  const requestedFeedback = String(feedback || '').trim();
+                  if (!requestedFeedback) return { ok: false, usedFallback: false, errorMessage: 'לא נמסרה בקשת שכתוב' };
+                  return runDocumentFeedbackRevision({
+                    kind: 'feedback-revision',
+                    source: 'chat',
+                    workspaceId: getActiveWorkspaceId(),
+                    payload: {
+                      existingHtml: editor?.getHTML?.() || '',
+                      originalPrompt: String(feedbackSurvey.prompt || '').trim() || 'המסמך הנוכחי',
+                      templateId: activeTemplateId || 'blank',
+                      feedback: requestedFeedback,
+                      selectedMaterials: Array.isArray(feedbackSurvey.selectedMaterials)
+                        ? feedbackSurvey.selectedMaterials.filter(Boolean)
+                        : [],
+                      selectedProviderId: String(feedbackSurvey.selectedProviderId || '').trim(),
+                      selectedProviderModel: String(feedbackSurvey.selectedProviderModel || '').trim(),
+                      executionMode: 'direct',
+                    },
+                  });
+                }}
                 onInsert={(text) => {
                   if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
                 }}
