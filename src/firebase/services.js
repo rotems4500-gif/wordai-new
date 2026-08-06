@@ -348,12 +348,15 @@ export async function getCloudDocument(user, documentId = "") {
 
 // --- WordFlow Clipper: קליפים שמגיעים מתוסף הדפדפן (users/{uid}/clips) ---
 
-export async function fetchPendingClips(user, maxResults = 10) {
+// statuses: ברירת מחדל pending בלבד (מסלול הקליטה). הפאנל מבקש גם 'error' —
+// בלי זה קליפ שנכשל נעלם מכל מסך באפליקציה ואין למשתמש דרך לדעת שהוא קיים.
+export async function fetchPendingClips(user, maxResults = 10, statuses = ["pending"]) {
     const clients = ensureFirebaseClients();
     if (!clients || !user?.uid) return [];
+    const wanted = Array.isArray(statuses) && statuses.length ? statuses : ["pending"];
     const q = query(
         collection(clients.db, "users", user.uid, "clips"),
-        where("status", "==", "pending"),
+        wanted.length === 1 ? where("status", "==", wanted[0]) : where("status", "in", wanted),
         limit(maxResults),
     );
     const snapshot = await getDocs(q);

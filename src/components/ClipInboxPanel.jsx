@@ -177,6 +177,11 @@ export default function ClipInboxPanel({ user, open, onClose }) {
                       <h3 className="font-semibold text-slate-900 dark:text-white truncate">
                         {clip.title || '(בלי שם)'}
                       </h3>
+                      {clip.status === 'error' && (
+                        <p className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
+                          הקליטה נכשלה: {clip.errorMessage || 'שגיאה לא ידועה'} — אפשר לנסות שוב מכאן.
+                        </p>
+                      )}
                       <div className="text-sm text-slate-500 dark:text-slate-400 flex items-center gap-2">
                         <a
                           href={clip.sourceUrl}

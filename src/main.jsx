@@ -3814,7 +3814,18 @@ function App() {
     if (!cloudUser) return;
     const stop = startClipInboxPolling(cloudUser);
     const onIngested = (event) => {
-      const results = event?.detail?.results || [];
+      const all = event?.detail?.results || [];
+      if (!all.length) return;
+      const failed = all.filter((r) => r.failed);
+      if (failed.length) {
+        showToast(
+          failed.length === 1
+            ? `קליטת הקליפ נכשלה: ${failed[0].errorMessage}. הקליפ ממתין בתיבת הקליפים.`
+            : `${failed.length} קליפים נכשלו בקליטה וממתינים בתיבת הקליפים.`,
+          { tone: 'error' },
+        );
+      }
+      const results = all.filter((r) => !r.failed);
       if (!results.length) return;
       const first = results[0];
       const label = first.domain ? `מ-${first.domain}` : 'מהדפדפן';

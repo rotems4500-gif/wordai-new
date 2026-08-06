@@ -15,7 +15,7 @@ import {
   deleteClipDoc,
 } from '../firebase/services';
 import { extractImageOcr, pureTokenRatio } from './materialExtractBrowser';
-import { addMaterialDocument, commitMaterialStore } from './materialChunkStore';
+import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
 
@@ -148,6 +148,11 @@ export async function ingestPendingClips(user = currentUser) {
     const pending = await fetchPendingClips(user, 10);
     if (!pending.length) return [];
 
+    // ⚠️ חובה לפני addMaterialDocument: החנות נטענת מ-IndexedDB אסינכרונית, והפולינג
+    // מתחיל מיד אחרי ההתחברות. בלי ההמתנה readMaterialStore() מחזיר בלוב ריק, הקליפ
+    // נכתב לתוכו, וההידרציה שמסתיימת אחר כך דורסת אותו — toast מצליח וחומר לא קיים.
+    await ensureMaterialStoreReady();
+
     let addedMaterials = false;
     for (const clip of pending) {
       try {
@@ -161,10 +166,18 @@ export async function ingestPendingClips(user = currentUser) {
         }
       } catch (err) {
         console.error('[clipInbox] ingest failed for clip', clip.id, err);
-        await updateClipStatus(user, clip.id, {
-          status: 'error',
-          errorMessage: String(err?.message || err),
-        }).catch(() => {});
+        const message = String(err?.message || err);
+        await updateClipStatus(user, clip.id, { status: 'error', errorMessage: message })
+          .catch(() => {});
+        // נכנס ל-results כדי שה-toast ידווח על הכישלון. עד כה כשל היה שקט לחלוטין:
+        // הקליפ סומן error, נפל מ-fetchPendingClips, ונעלם מהפאנל בלי חיווי.
+        results.push({
+          clipId: clip.id,
+          title: clipTitle(clip),
+          domain: clip.domain || '',
+          failed: true,
+          errorMessage: message,
+        });
       }
     }
 
@@ -191,8 +204,9 @@ export async function ingestPendingClips(user = currentUser) {
 // קליפים שממתינים בתיבה (destination==='inbox' נשארים pending בכוונה).
 export async function listInboxClips(user = currentUser) {
   if (!user?.uid) return [];
-  const pending = await fetchPendingClips(user, 25);
-  return pending.filter((clip) => {
+  const clips = await fetchPendingClips(user, 25, ['pending', 'error']);
+  return clips.filter((clip) => {
+    if (clip.status === 'error') return true; // כשל קליטה — מוצג עם הסיבה, לניתוב חוזר
     const dest = clip.destination || 'material';
     return dest === 'inbox' || (dest === 'source' && !clip.projectId);
   });
@@ -200,6 +214,7 @@ export async function listInboxClips(user = currentUser) {
 
 // ניתוב ידני של קליפ מהתיבה: קולט עם destination/projectId שנבחרו עכשיו.
 export async function routeInboxClip(user, clip, { destination, projectId = null }) {
+  await ensureMaterialStoreReady(); // ר' ההערה ב-ingestPendingClips
   const resolved = { ...clip, destination, projectId };
   const result = await ingestClip(user || currentUser, resolved);
   if (result.destination === 'material') {
