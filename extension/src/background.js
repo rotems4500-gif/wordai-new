@@ -114,8 +114,10 @@ async function handleClipPage(tab) {
 
   if (!result) throw new Error('חילוץ התוכן מהעמוד נכשל');
   if (!String(result.textContent || '').trim()) {
-    throw new Error(result.error ? `חילוץ נכשל: ${result.error}` : 'לא נמצא טקסט בעמוד');
+    // כולל אבחון: איזה מסלול ניסה ומה כל אחד החזיר. בלי זה "לא נמצא טקסט" חסר ערך.
+    throw new Error(`לא נמצא טקסט בעמוד (${result.diag || 'ללא אבחון'})${result.error ? ` · ${result.error}` : ''}`);
   }
+  console.info('[wordflow][clip] חולץ דרך', result.via, '·', result.diag);
 
   await writeTextClip({
     uid: user.uid,

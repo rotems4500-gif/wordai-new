@@ -29,9 +29,10 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   }, []);
 
   // Load clips when opening
-  const loadClips = async () => {
+  // silent=true לרענון ברקע: בלי ספינר, כדי שהפאנל לא יהבהב מתחת לידיים של המשתמש.
+  const loadClips = async ({ silent = false } = {}) => {
     if (!user) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const items = await listInboxClips(user);
       setClips(items || []);
@@ -39,7 +40,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
       console.error('Failed to load clips:', err);
       showToast('שגיאה בטעינת הקליפים', { tone: 'error' });
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -52,7 +53,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   // Listen for new clips arriving
   useEffect(() => {
     const handleClipIngested = () => {
-      if (open) loadClips();
+      if (open) loadClips({ silent: true });
     };
     window.addEventListener(CLIP_INGESTED_EVENT, handleClipIngested);
     return () => window.removeEventListener(CLIP_INGESTED_EVENT, handleClipIngested);

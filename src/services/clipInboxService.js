@@ -31,6 +31,9 @@ const OCR_QUALITY_FLOOR = 0.5;
 let pollTimer = null;
 let currentUser = null;
 let ingestInFlight = false;
+// קליפ שיועד לתיבת הדואר נשאר pending בכוונה — ולכן כל סבב פולינג "קולט" אותו שוב.
+// בלי הסט הזה הפאנל נטען מחדש וה-toast חוזר כל 5 שניות. מוכרז פעם אחת בלבד.
+const announcedInboxClipIds = new Set();
 
 export function getClipDefaultDestination() {
   const v = localStorage.getItem(CLIP_DEFAULT_DESTINATION_KEY) || 'material';
@@ -166,8 +169,15 @@ export async function ingestPendingClips(user = currentUser) {
     for (const clip of pending) {
       try {
         const result = await ingestClip(user, clip);
+        if (result.destination === 'inbox') {
+          // נשאר pending בכוונה — מוכרז פעם אחת, אחרת הפאנל וה-toast חוזרים כל סבב.
+          if (!announcedInboxClipIds.has(clip.id)) {
+            announcedInboxClipIds.add(clip.id);
+            results.push(result);
+          }
+          continue;
+        }
         results.push(result);
-        if (result.destination === 'inbox') continue; // נשאר pending בכוונה
         if (result.destination === 'material') addedMaterials = true;
         await updateClipStatus(user, clip.id, { status: 'processed' });
         if (clip.kind === 'image' && clip.storagePath) {
