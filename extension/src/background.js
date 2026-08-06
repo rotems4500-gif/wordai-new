@@ -97,12 +97,25 @@ async function requireUser() {
 // ---------- מצב 1: קליפת עמוד שלם (Readability) ----------
 async function handleClipPage(tab) {
   const user = await requireUser();
-  const [{ result }] = await chrome.scripting.executeScript({
+  await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     files: ['content/extract.js'],
   });
 
+  // קריאה שנייה לאיסוף התוצאה — ר' ההערה בראש extract.js.
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      const value = window.__wordflowClipExtract;
+      delete window.__wordflowClipExtract;
+      return value || null;
+    },
+  });
+
   if (!result) throw new Error('חילוץ התוכן מהעמוד נכשל');
+  if (!String(result.textContent || '').trim()) {
+    throw new Error(result.error ? `חילוץ נכשל: ${result.error}` : 'לא נמצא טקסט בעמוד');
+  }
 
   await writeTextClip({
     uid: user.uid,

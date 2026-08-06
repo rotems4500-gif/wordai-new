@@ -1,8 +1,13 @@
 // extract.js — content script שרץ ברגע injection (chrome.scripting.executeScript)
-// מריץ Readability על שכפול של המסמך ומחזיר {title, textContent, url, excerpt} כתוצאת ה-executeScript.
+// מריץ Readability על שכפול של המסמך ומניח {title, textContent, url, excerpt} על
+// window.__wordflowClipExtract.
+//
+// ⚠️ לא מסתמכים על ערך ההחזרה של executeScript({files}): esbuild עוטף ב-IIFE עם גוף
+// בלוק, ולכן ערך הסיום של הסקריפט הוא תמיד undefined והתוצאה נבלעת. background קורא
+// את הגלובל בקריאה שנייה (אותו isolated world, אותו window).
 import { Readability } from '@mozilla/readability';
 
-(function extractReadablePage() {
+window.__wordflowClipExtract = (function extractReadablePage() {
   try {
     const documentClone = document.cloneNode(true);
     const article = new Readability(documentClone).parse();
