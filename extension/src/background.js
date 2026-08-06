@@ -99,13 +99,74 @@ async function requireUser() {
 // לכן מזהים אותו ומעלים את הקובץ עצמו — האפליקציה כבר יודעת לחלץ PDF (כולל OCR לסרוק).
 // fetch מה-service worker מותר כאן: activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה,
 // ו-credentials:'include' שולח את עוגיות ה-session (חובה ל-Moodle).
-const PDF_URL_PATTERN = /\.pdf(?:[?#]|$)/i;
+// מאומץ מ-pdf-grabber (פרויקט oil price): נקודות קצה של PDF לרוב חסרות סיומת.
+const PDF_URL_PATTERN = /\.pdf(?:[?#]|$)|[?&](?:type|format|mode|action)=[^&]*pdf|\/(?:download|getpdf|pdf)\b/i;
+
+const isPdfBytes = (b) => b?.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
 
 async function fetchTabBytes(url) {
   const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) throw new Error(`הורדת הקובץ נכשלה: ${res.status}`);
   const buf = await res.arrayBuffer();
   return { bytes: new Uint8Array(buf), contentType: res.headers.get('content-type') || '' };
+}
+
+/**
+ * משיכה מתוך הדף עצמו (MAIN world) — שם ה-session, ה-Referer וכותרות האתר תקפים.
+ * נקודות קצה כמו Moodle מחזירות דף התחברות ב-HTTP 200 למשיכה "עירומה", ולכן
+ * בודקים את מספר הקסם %PDF- ומזהים דף התחברות במקום לשמור HTML בשם .pdf.
+ * מאומץ מ-pdf-grabber/background.js refetchInTab.
+ */
+async function fetchPdfViaTab(tabId, url) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      args: [url],
+      func: async (target) => {
+        const r = await fetch(target, { credentials: 'include' });
+        if (!r.ok) return null;
+        const buf = new Uint8Array(await r.arrayBuffer());
+        const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
+        let s = '';
+        for (let i = 0; i < buf.length; i += 0x8000) {
+          s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        }
+        // s הוא latin1 של הבייטים — התאמה לסמנים ASCII בלבד.
+        const looksLikeLogin = !isPdf && /login|sign[- ]?in|authenticate|password|התחבר/i.test(s.slice(0, 20000));
+        return { isPdf, looksLikeLogin, data: isPdf ? btoa(s) : '' };
+      },
+    });
+    return res?.result || null;
+  } catch {
+    return null; // אין גישה ללשונית (צופה PDF פנימי, chrome://) — הקורא ינסה מסלול אחר
+  }
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/** מחזיר בייטים של PDF מאומתים, או זורק שגיאה מדויקת. */
+async function resolvePdfBytes(tab) {
+  const viaTab = await fetchPdfViaTab(tab.id, tab.url);
+  if (viaTab?.isPdf) return base64ToBytes(viaTab.data);
+  if (viaTab && !viaTab.isPdf) {
+    throw new Error(viaTab.looksLikeLogin
+      ? 'השרת החזיר דף התחברות במקום קובץ — יש להתחבר לאתר בדפדפן ולנסות שוב'
+      : 'השרת החזיר דף ולא PDF');
+  }
+
+  // הדף לא נגיש להזרקה (הצופה הפנימי של Chrome) — משיכה מה-service worker.
+  // מותרת כי activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה.
+  const direct = await fetchTabBytes(tab.url);
+  if (!isPdfBytes(direct.bytes)) {
+    throw new Error('מה שהתקבל אינו PDF תקין');
+  }
+  return direct.bytes;
 }
 
 function fileNameFromUrl(url, fallback = 'clip.pdf') {
@@ -135,8 +196,7 @@ async function handleClipPage(tab) {
   const user = await requireUser();
 
   if (PDF_URL_PATTERN.test(tab.url || '')) {
-    const { bytes } = await fetchTabBytes(tab.url);
-    await clipPdfDocument(tab, user, bytes);
+    await clipPdfDocument(tab, user, await resolvePdfBytes(tab));
     return;
   }
 
@@ -161,7 +221,7 @@ async function handleClipPage(tab) {
     // בודקים content-type לפני שמכריזים כישלון.
     try {
       const probe = await fetchTabBytes(tab.url);
-      if (probe.contentType.includes('application/pdf')) {
+      if (probe.contentType.includes('application/pdf') || isPdfBytes(probe.bytes)) {
         await clipPdfDocument(tab, user, probe.bytes);
         return;
       }
