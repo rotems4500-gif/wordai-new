@@ -38,6 +38,12 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['page', 'selection', 'image', 'action'],
   });
   chrome.contextMenus.create({
+    id: 'wordflow-clip-files',
+    parentId: 'wordflow-root',
+    title: 'קלוט את כל הקבצים בעמוד',
+    contexts: ['page', 'selection', 'image', 'action'],
+  });
+  chrome.contextMenus.create({
     id: 'wordflow-clip-area',
     parentId: 'wordflow-root',
     title: 'בחר אזור מהמסך ושלח',
@@ -56,6 +62,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       break;
     case 'wordflow-clip-image':
       handleClipImage(info, tab).catch((err) => handleFailure(tab.id, err));
+      break;
+    case 'wordflow-clip-files':
+      handleClipAllFiles(tab).catch((err) => handleFailure(tab.id, err));
       break;
     case 'wordflow-clip-area':
       handleClipArea(tab).catch((err) => handleFailure(tab.id, err));
@@ -148,6 +157,123 @@ function base64ToBytes(b64) {
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
   return out;
+}
+
+/**
+ * משיכת קובץ כלשהו מתוך הדף, עם אימות סוג. עוקב אחרי הפניות (Moodle
+ * /mod/resource/view.php מפנה ל-pluginfile), ולכן מחזיר גם את ה-URL הסופי.
+ * מחזיר null כשאין גישה ללשונית.
+ */
+async function fetchFileViaTab(tabId, url) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      args: [url],
+      func: async (target) => {
+        const r = await fetch(target, { credentials: 'include' });
+        if (!r.ok) return { ok: false, status: r.status };
+        const buf = new Uint8Array(await r.arrayBuffer());
+        const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
+        // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
+        const isZip = buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+        let s = '';
+        for (let i = 0; i < buf.length; i += 0x8000) {
+          s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        }
+        const looksLikeLogin = !isPdf && !isZip
+          && /login|sign[- ]?in|authenticate|password/i.test(s.slice(0, 20000));
+        return {
+          ok: true,
+          isPdf,
+          isZip,
+          looksLikeLogin,
+          finalUrl: r.url || target,
+          contentType: r.headers.get('content-type') || '',
+          disposition: r.headers.get('content-disposition') || '',
+          data: (isPdf || isZip) ? btoa(s) : '',
+        };
+      },
+    });
+    return res?.result || null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------- קליטת כל הקבצים בעמוד (דף קורס עם הרבה מסמכים) ----------
+const CONTENT_TYPE_EXT = [
+  ['application/pdf', 'pdf'],
+  ['wordprocessingml', 'docx'],
+  ['presentationml', 'pptx'],
+  ['spreadsheetml', 'xlsx'],
+];
+
+function resolveFileName(link, probe) {
+  const fromDisposition = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(probe.disposition || '');
+  if (fromDisposition) {
+    try { return decodeURIComponent(fromDisposition[1]); } catch { return fromDisposition[1]; }
+  }
+  const fromUrl = fileNameFromUrl(probe.finalUrl || link.url, '');
+  if (fromUrl && /\.[a-z0-9]{2,5}$/i.test(fromUrl)) return fromUrl;
+  // אין שם בהפניה ולא ב-URL: גוזרים סיומת מ-content-type ומשתמשים בטקסט הקישור.
+  const ct = String(probe.contentType || '').toLowerCase();
+  const ext = (CONTENT_TYPE_EXT.find(([needle]) => ct.includes(needle)) || [null, probe.isPdf ? 'pdf' : 'bin'])[1];
+  const base = String(link.title || 'קובץ').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80) || 'קובץ';
+  return `${base}.${ext}`;
+}
+
+async function handleClipAllFiles(tab) {
+  const user = await requireUser();
+
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/scanLinks.js'] });
+  const [{ result: scan }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      const value = window.__wordflowClipLinks;
+      delete window.__wordflowClipLinks;
+      return value || null;
+    },
+  });
+
+  const links = scan?.links || [];
+  if (!links.length) throw new Error('לא נמצאו קישורים לקבצים בעמוד');
+
+  flashBadge(tab.id, String(links.length), '#2563eb', 4000);
+
+  let saved = 0;
+  const skipped = [];
+  for (const link of links) {
+    try {
+      const probe = await fetchFileViaTab(tab.id, link.url);
+      if (!probe?.ok) { skipped.push(`${link.title || link.url}: לא נגיש`); continue; }
+      if (!probe.isPdf && !probe.isZip) {
+        // דף HTML (ניווט/התחברות) ולא קובץ — מדלגים בשקט, זה הרוב בדף קורס.
+        if (probe.looksLikeLogin) skipped.push(`${link.title || link.url}: נדרשת התחברות`);
+        continue;
+      }
+      const fileName = resolveFileName(link, probe);
+      await writeFileClip({
+        uid: user.uid,
+        title: link.title || fileName,
+        bytes: base64ToBytes(probe.data),
+        fileName,
+        sourceUrl: probe.finalUrl || link.url,
+        captureMode: 'page-files',
+        contentType: probe.isPdf ? 'application/pdf' : 'application/octet-stream',
+      });
+      saved += 1;
+      flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+    } catch (err) {
+      console.warn('[wordflow][files] דילוג על', link.url, err);
+      skipped.push(`${link.title || link.url}: ${err?.message || err}`);
+    }
+  }
+
+  console.info(`[wordflow][files] נשלחו ${saved} קבצים · דילוגים:`, skipped);
+  if (!saved) throw new Error('לא נמצא אף קובץ שניתן להוריד בעמוד');
+  handleSuccess(tab.id);
+  return { saved, skipped };
 }
 
 /** מחזיר בייטים של PDF מאומתים, או זורק שגיאה מדויקת. */
@@ -337,6 +463,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     pendingAreaSelect.reject(new Error('בחירת האזור בוטלה'));
     pendingAreaSelect = null;
     return;
+  }
+
+  // הודעה מהפופאפ: "קלוט את כל הקבצים בעמוד"
+  if (message.type === 'wordflow-popup-send-files') {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.id) throw new Error('לא נמצא טאב פעיל');
+        const res = await handleClipAllFiles(tab);
+        sendResponse({ ok: true, saved: res.saved, skipped: res.skipped });
+      } catch (err) {
+        console.error('[wordflow][popup] שליחת הקבצים נכשלה:', err);
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+    return true;
   }
 
   // הודעה מהפופאפ: "שלח את העמוד הנוכחי" (משתמשת באותה לוגיקה כמו תפריט ההקשר)

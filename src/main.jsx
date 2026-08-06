@@ -67,7 +67,7 @@ import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEd
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
-import { startClipInboxPolling, CLIP_INGESTED_EVENT } from './services/clipInboxService';
+import { startClipInboxPolling, CLIP_INGESTED_EVENT, CLIP_PROGRESS_EVENT } from './services/clipInboxService';
 import ClipInboxPanel from './components/ClipInboxPanel';
 import { startAutoUpdateChecks, checkForUpdateNow } from './services/appUpdateService';
 import { Modal, Button, Input, TextArea } from './components/ui';
@@ -3840,10 +3840,20 @@ function App() {
         );
       }
     };
+    // OCR של PDF סרוק רץ ~8 שניות לעמוד. בלי החיווי הזה זה נראה כמו תקיעה.
+    const onProgress = (event) => {
+      const { title = '', pages = 0 } = event?.detail || {};
+      showToast(
+        `מזהה טקסט ב-"${title}" (${pages} עמודים). זה עשוי לקחת כמה דקות — השאר את הלשונית פתוחה.`,
+        { tone: 'info', duration: 8000 },
+      );
+    };
     window.addEventListener(CLIP_INGESTED_EVENT, onIngested);
+    window.addEventListener(CLIP_PROGRESS_EVENT, onProgress);
     return () => {
       stop();
       window.removeEventListener(CLIP_INGESTED_EVENT, onIngested);
+      window.removeEventListener(CLIP_PROGRESS_EVENT, onProgress);
     };
   }, [cloudUser]);
   const refreshAssignmentBrief = React.useCallback(() => {

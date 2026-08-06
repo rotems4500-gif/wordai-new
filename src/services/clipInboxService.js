@@ -23,6 +23,9 @@ import { saveClipAsHelperMaterial } from './workspaceLearningService';
 const POLL_INTERVAL_MS = 5000;
 const CLIP_DEFAULT_DESTINATION_KEY = 'wordai_clip_default_destination';
 export const CLIP_INGESTED_EVENT = 'wordai-clip-ingested';
+// מדווח על התחלת OCR ארוך. בלי זה קליטת PDF סרוק נראית כמו תקיעה: OCR רץ
+// ~8 שניות לעמוד, וה-toast היחיד מגיע רק בסוף.
+export const CLIP_PROGRESS_EVENT = 'wordai-clip-progress';
 
 // שער איכות ל-OCR: מתחת לרצפה לא זורקים (המשתמש בחר לגזור את התמונה במפורש) —
 // מסמנים low-confidence כדי שה-UI יציג אזהרה. אותה רצפה כמו GARBLE_FLOOR.
@@ -82,7 +85,17 @@ async function ingestClip(user, clip) {
   // קליפ קובץ (PDF מצופה Chrome): אותו מחלץ של העלאת חומרים, כולל OCR ל-PDF סרוק.
   if (clip.kind === 'file') {
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
-    const res = await extractMaterialTextFromBytes(clip.fileName || 'clip.pdf', bytes, 200000, { ocr: true });
+    const res = await extractMaterialTextFromBytes(clip.fileName || 'clip.pdf', bytes, 200000, {
+      ocr: true,
+      // מדווח פעם אחת, בעמוד הראשון: משם והלאה זה רק ספירה ומספיק שהמשתמש יודע
+      // שזה רץ וכמה זמן זה ייקח.
+      onOcrProgress: ({ page, pages }) => {
+        if (page !== 1) return;
+        window.dispatchEvent(new CustomEvent(CLIP_PROGRESS_EVENT, {
+          detail: { title: clipTitle(clip), pages, phase: 'ocr' },
+        }));
+      },
+    });
     if (!res.ok) throw new Error(res.error || 'חילוץ הקובץ נכשל');
     text = res.text || '';
     cleanDigital = !res.viaOcr;

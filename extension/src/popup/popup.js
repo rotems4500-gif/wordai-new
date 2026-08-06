@@ -9,6 +9,7 @@ const signOutBtn = document.getElementById('sign-out-btn');
 const signedOutError = document.getElementById('signed-out-error');
 const userEmailEl = document.getElementById('user-email');
 const sendPageBtn = document.getElementById('send-page-btn');
+const sendFilesBtn = document.getElementById('send-files-btn');
 const sendStatusEl = document.getElementById('send-status');
 const setDefaultCheckbox = document.getElementById('set-default-checkbox');
 const destinationRadios = document.querySelectorAll('input[name="destination"]');
@@ -69,6 +70,24 @@ signInBtn.addEventListener('click', async () => {
 signOutBtn.addEventListener('click', async () => {
   await signOutUser();
   renderSignedOut();
+});
+
+sendFilesBtn.addEventListener('click', () => {
+  sendFilesBtn.disabled = true;
+  sendFilesBtn.textContent = 'סורק ומוריד...';
+  chrome.runtime.sendMessage({ type: 'wordflow-popup-send-files' }, (response) => {
+    sendFilesBtn.disabled = false;
+    sendFilesBtn.textContent = 'קלוט את כל הקבצים בעמוד';
+    if (chrome.runtime.lastError) {
+      showStatus(chrome.runtime.lastError.message, 'error');
+      return;
+    }
+    if (response && response.ok) {
+      showStatus(`נשלחו ${response.saved} קבצים ✓`, 'success');
+    } else {
+      showStatus((response && response.error) || 'שליחה נכשלה', 'error');
+    }
+  });
 });
 
 sendPageBtn.addEventListener('click', () => {

@@ -93,6 +93,17 @@ async function run() {
   });
 
   await build({
+    entryPoints: [path.join(ROOT, 'src/content/scanLinks.js')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: ['chrome110'],
+    outfile: path.join(OUT_DIR, 'content/scanLinks.js'),
+    define: defineFlags,
+    logLevel: 'info',
+  });
+
+  await build({
     entryPoints: [path.join(ROOT, 'src/content/areaSelectOverlay.js')],
     bundle: true,
     format: 'iife',
