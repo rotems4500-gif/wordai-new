@@ -4,6 +4,10 @@ import {
   routeInboxClip,
   discardInboxClip,
   CLIP_INGESTED_EVENT,
+  getClipClientRole,
+  setClipClientRole,
+  startClipInboxPolling,
+  stopClipInboxPolling,
 } from '../services/clipInboxService';
 import { listProjects } from '../services/projectService';
 import { showToast } from '../services/uiFeedback';
@@ -14,6 +18,17 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   const [projects, setProjects] = useState([]);
   const [selectedProjectByClipId, setSelectedProjectByClipId] = useState({});
   const [busyClipId, setBusyClipId] = useState(null);
+  const [clientRole, setClientRole] = useState(() => getClipClientRole());
+
+  // שינוי תפקיד מפעיל/עוצר את הפולינג מיד — בלי לחכות לריענון (ה-effect
+  // ב-main.jsx רץ רק על שינוי משתמש).
+  const handleRoleToggle = (isConsumer) => {
+    const role = isConsumer ? 'consumer' : 'producer';
+    setClipClientRole(role);
+    setClientRole(role);
+    if (isConsumer) startClipInboxPolling(user);
+    else stopClipInboxPolling();
+  };
 
   // Load projects once on mount
   useEffect(() => {
@@ -283,6 +298,22 @@ export default function ClipInboxPanel({ user, open, onClose }) {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Footer — תפקיד המכשיר */}
+        <div className="px-6 py-3 border-t border-slate-200 dark:border-slate-700 flex-shrink-0">
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-600 dark:text-slate-300">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={clientRole === 'consumer'}
+              onChange={(e) => handleRoleToggle(e.target.checked)}
+            />
+            <span>המכשיר הזה קולט קליפים (OCR וקליטה לחומרים)</span>
+          </label>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+            כבה בטלפון כדי שהקליפים יחכו למחשב במקום להיקלט כאן.
+          </p>
         </div>
       </div>
     </div>

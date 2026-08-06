@@ -61,7 +61,11 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
             ? 'tools/test-bench/materials-context-unit.mjs'
             : process.env.WORDAI_VERIFY_ENTRY === 'scholar'
               ? 'tools/test-bench/scholar-probe.mjs'
-              : 'tools/test-bench/source-pipeline-harness.mjs';
+              : process.env.WORDAI_VERIFY_ENTRY === 'restyle'
+                ? 'tools/test-bench/restyle-bands-unit.mjs'
+                : process.env.WORDAI_VERIFY_ENTRY === 'autodepth'
+                  ? 'tools/test-bench/auto-depth-planner-unit.mjs'
+                  : 'tools/test-bench/source-pipeline-harness.mjs';
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
@@ -82,7 +86,9 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                                 : process.env.WORDAI_VERIFY_ENTRY === 'nlgloop' ? 'out-nlgloop'
                                   : process.env.WORDAI_VERIFY_ENTRY === 'styleseed' ? 'out-styleseed'
                                     : process.env.WORDAI_VERIFY_ENTRY === 'materials' ? 'out-materials'
-                                      : process.env.WORDAI_VERIFY_ENTRY === 'scholar' ? 'out-scholar' : 'out-sf';
+                                      : process.env.WORDAI_VERIFY_ENTRY === 'scholar' ? 'out-scholar'
+                                        : process.env.WORDAI_VERIFY_ENTRY === 'restyle' ? 'out-restyle'
+                                          : process.env.WORDAI_VERIFY_ENTRY === 'autodepth' ? 'out-autodepth' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {
@@ -106,6 +112,10 @@ export default defineConfig({
     hebrewlex: path.join(PROJECT, 'src/services/hebrewLexiconService.js'),
     cloudcrypto: path.join(PROJECT, 'src/services/cloudCrypto.js'),
     styleauth: path.join(PROJECT, 'src/services/styleAuthenticityService.js'),
+    restyleband: path.join(PROJECT, 'src/services/restyleAggressiveness.js'),
+    autodepth: path.join(PROJECT, 'src/services/autoDepthPlanner.js'),
+    modelcaps: path.join(PROJECT, 'src/services/modelCapabilities.js'),
+    lexrel: path.join(PROJECT, 'src/services/lexicalRelevance.js'),
     // Personal Style Engine services (LAB style-engine endpoints).
     styleprofile: path.join(PROJECT, 'src/services/styleProfileService.js'),
     stylesamples: path.join(PROJECT, 'src/services/styleSampleStore.js'),

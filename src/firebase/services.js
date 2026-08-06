@@ -1,6 +1,6 @@
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
 import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { deleteObject, getBlob, getDownloadURL, getStorage, ref } from "firebase/storage";
+import { deleteObject, getBlob, getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getFirebaseApp, hasFirebaseConfig } from "./config";
 
@@ -393,6 +393,29 @@ export async function deleteClipImage(user, storagePath) {
     try {
         await deleteObject(ref(clients.storage, storagePath));
     } catch { /* לא קריטי — נשאר קובץ יתום בענן */ }
+}
+
+// --- צד המפיק: שליחת קליפ מהאתר/PWA (טלפון → מחשב) ---
+// כותב בדיוק את אותה סכימה של התוסף; הקליטה בצד המחשב לא יודעת מי כתב.
+
+export async function uploadClipImage(user, { clipId, bytes, contentType = "image/png" } = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("הענן לא זמין.");
+    if (!user?.uid || !clipId) throw new Error("חסר משתמש או מזהה קליפ.");
+    const storagePath = `users/${user.uid}/clips/${clipId}/image.png`;
+    await uploadBytes(ref(clients.storage, storagePath), bytes, { contentType });
+    return storagePath;
+}
+
+export async function createClipDoc(user, clipId, data = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("הענן לא זמין.");
+    if (!user?.uid || !clipId) throw new Error("חסר משתמש או מזהה קליפ.");
+    await setDoc(doc(clients.db, "users", user.uid, "clips", clipId), {
+        ...data,
+        createdAt: serverTimestamp(),
+    });
+    return clipId;
 }
 
 export async function fetchCoursesForUser(user) {

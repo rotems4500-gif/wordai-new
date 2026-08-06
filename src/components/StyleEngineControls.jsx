@@ -15,8 +15,10 @@ export function getStyleCreativityTemperature() {
   return Math.round((0.3 + (n / 100) * 0.7) * 100) / 100;
 }
 
-// עומק מנוע הסגנון: 'fast' | 'normal' | 'deep'. ברירת מחדל 'normal'.
-const STYLE_DEPTH_VALUES = ['fast', 'normal', 'deep'];
+// עומק מנוע הסגנון: 'auto' | 'fast' | 'normal' | 'deep'. ברירת מחדל 'normal'.
+// 'auto' = המתכנן הדטרמיניסטי (autoDepthPlanner) בוחר לבד גם את ה-tier וגם האם
+// לתמצת חומרים לפני הכתיבה. opt-in בשלב זה — יהפוך לברירת מחדל אחרי אימות ב-LAB.
+const STYLE_DEPTH_VALUES = ['auto', 'fast', 'normal', 'deep'];
 export function getStyleDepth() {
   const raw = getAppMemory().styleDepth;
   return STYLE_DEPTH_VALUES.includes(raw) ? raw : 'normal';
@@ -30,6 +32,7 @@ export function getStyleAutocompleteEnabled() {
 }
 
 const DEPTH_OPTIONS = [
+  { value: 'auto', label: 'אוטומטי', hint: 'המערכת בוחרת לבד לפי המשימה והמודל: קריאה אחת כשהכול נכנס, וכשיש הרבה חומר — קודם קוראת ומסכמת אותו ואז כותבת.' },
   { value: 'fast', label: 'מהיר', hint: 'קריאה אחת לדגם — מיידי וזול, מתאים לטיוטה ראשונה או לטקסט קצר.' },
   { value: 'normal', label: 'רגיל', hint: 'איזון בין מהירות לאיכות — ברירת המחדל לרוב המסמכים.' },
   { value: 'deep', label: 'מעמיק', hint: 'כתיבה מקטע-מקטע + שופט AI שבודק ומשפר כל מקטע — התוצאה הכי טובה, אבל איטית ויקרה יותר.' },
@@ -187,7 +190,9 @@ export default function StyleEngineControls({ visible = true }) {
               יציבים ורחוקים יותר מהסגנון שלך.
             </p>
             <p>
-              <b>עומק</b> — כמה עבודה מושקעת בכל בקשה. <b>מהיר</b>: יצירה בקריאה אחת, זול ומיידי.
+              <b>עומק</b> — כמה עבודה מושקעת בכל בקשה. <b>אוטומטי</b>: המערכת מחליטה לבד לפי
+              היקף המשימה, כמות החומרים ויכולות המודל — כולל קריאות סיכום מקדימות כשהחומרים
+              גדולים מדי לקריאה אחת. <b>מהיר</b>: יצירה בקריאה אחת, זול ומיידי.
               <b> רגיל</b>: איזון בין מהירות לאיכות. <b>מעמיק</b>: כתיבה מקטע-מקטע + שופט AI שבודק
               ומשפר כל מקטע — התוצאה הכי טובה, אבל איטית ויקרה יותר.
             </p>
@@ -219,7 +224,7 @@ export default function StyleEngineControls({ visible = true }) {
           })}
         </div>
         <span className="text-white/65 text-xs text-right">
-          <b className="text-white/80">עומק העבודה</b> — {(DEPTH_OPTIONS.find((o) => o.value === depth) || DEPTH_OPTIONS[1]).hint}
+          <b className="text-white/80">עומק העבודה</b> — {(DEPTH_OPTIONS.find((o) => o.value === depth) || DEPTH_OPTIONS.find((o) => o.value === 'normal')).hint}
         </span>
       </div>
     </>

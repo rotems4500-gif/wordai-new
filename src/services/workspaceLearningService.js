@@ -12,11 +12,14 @@ import {
   scoreStyleForDocument,
   rewriteDocumentStyle,
   hashStyleSeed,
+  getProviderConfig,
 } from './aiService';
 import { recordGenerationQuality } from './styleIngestService';
 import { extractMaterialTextFromBytes } from './materialExtractBrowser';
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService';
 import { createRunScope, setScopeTopic } from '../v3/orchestration/runScope';
+import { HEBREW_STOP_WORDS, CONTEXT_MATCH_MIN_TERM_LENGTH, extractContextMatchTerms, countContextTermOverlap, countContextTermCoverage } from './lexicalRelevance';
+import { planAutoDepth, selectRelevantExcerpts } from './autoDepthPlanner';
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const BROWSER_MATERIALS_KEY = 'wordai_browser_uploaded_materials';
@@ -29,7 +32,6 @@ const PAST_DOCS_INDEX_URL = 'PAST-DOC/index.json';
 const PROJECT_MATERIALS_INDEX_URL = 'project-materials/index.json';
 const MAX_HISTORY_ITEMS = 24;
 const AUTO_CONTEXT_SOURCE_LIMIT = 3;
-const CONTEXT_MATCH_MIN_TERM_LENGTH = 3;
 // בחירה אוטומטית של חומרי עזר מנקדת גם את **תוכן** החומר, לא רק את המטא-דאטה (כותרת/תווית/רמז).
 // AUTO_CONTEXT_CONTENT_SCORE_CHARS = כמה מהתוכן השמור נסרק לניקוד (הטקסט כבר קיים על החומר —
 // contentText/previewText — ולכן אין כאן שום I/O נוסף).
@@ -89,7 +91,7 @@ const SYLLABUS_ACCEPT_LIST = '.docx,.txt,.md,.markdown,.html,.htm,.pdf,.csv,.tsv
 const SYLLABUS_RICH_ACCEPT_SUFFIX = ',.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
 const ACADEMIC_REQUEST_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|ציטוט|references?|citation|journal|doi|peer[-\s]?reviewed|קורס|מרצה|מנחה|מטלה|סטודנט|assignment|syllabus|course)/i;
 const LOCAL_FALLBACK_RICH_REQUEST_PATTERN = /(מקור(?:ות)?|ביבליוגרפ|ציטוט|references?|citation|doi|מאמר(?:ים)?|סקיר(?:ת)?\s+ספרות|מחקר|מסמך\s+מלא|מסמך\s+עשיר|מקיף|מעמיק|literature\s+review|comprehensive|rich)/i;
-const HEBREW_STOP_WORDS = new Set(['של', 'על', 'עם', 'זה', 'זאת', 'היא', 'הוא', 'הם', 'הן', 'אני', 'אתה', 'את', 'אנחנו', 'גם', 'אבל', 'או', 'אם', 'כי', 'כל', 'לא', 'כן', 'כך', 'מאוד', 'עוד', 'רק', 'כדי', 'היה', 'היו', 'יש', 'אין', 'אל', 'מן', 'אלו', 'אלה', 'המשתמש', 'ביקש', 'בקשה', 'החל', 'יישם', 'תיקון', 'תיקונים', 'המלצה', 'המלצות', 'הערה', 'הערות', 'מרצה', 'המרצה', 'מסמך', 'המסמך', 'עבודה', 'העבודה']);
+// HEBREW_STOP_WORDS / extractContextMatchTerms וכו' עברו ל-lexicalRelevance.js (משותפים עם המתכנן האוטומטי).
 const EXPLICIT_SOURCE_URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>()]+/gi;
 export const MATERIAL_UPLOAD_PRESETS = {
     general: { id: 'general', label: 'קובץ עזר כללי', category: 'general', templateId: 'blank', learningHint: 'השתמש בקובץ הזה כהקשר כללי להעדפות המשתמש.' },
@@ -1516,29 +1518,7 @@ export async function buildSelectedMaterialsContext(selectedMaterials = []) {
   }).join('\n');
 }
 
-function extractContextMatchTerms(text = '') {
-  const terms = String(text || '').toLowerCase().match(/[\u0590-\u05ffa-z0-9][\u0590-\u05ffa-z0-9'"׳״-]*/g) || [];
-  return Array.from(new Set(
-    terms
-      .map((term) => term.replace(/^["'׳״-]+|["'׳״-]+$/g, ''))
-      .filter((term) => term.length >= CONTEXT_MATCH_MIN_TERM_LENGTH && !HEBREW_STOP_WORDS.has(term)),
-  ));
-}
-
-function countContextTermOverlap(text = '', requestTermsSet = new Set()) {
-  if (!requestTermsSet.size) return 0;
-  return extractContextMatchTerms(text).reduce((count, term) => count + (requestTermsSet.has(term) ? 1 : 0), 0);
-}
-
-// כמה מונחים **מובחנים** של הבקשה מופיעים בטקסט (ולא כמה פעמים הם מופיעים).
-function countContextTermCoverage(text = '', requestTermsSet = new Set()) {
-  if (!requestTermsSet.size) return 0;
-  const found = new Set();
-  extractContextMatchTerms(text).forEach((term) => {
-    if (requestTermsSet.has(term)) found.add(term);
-  });
-  return found.size;
-}
+// extractContextMatchTerms / countContextTermOverlap / countContextTermCoverage — מיובאים מ-lexicalRelevance.js.
 
 function scoreAutoContextCandidate({ title = '', summary = '', label = '', learningHint = '', content = '' } = {}, requestTermsSet = new Set()) {
   if (!requestTermsSet.size) return 0;
@@ -1669,6 +1649,99 @@ async function buildEffectiveMaterialsContext({ selectedMaterials = [], requestT
   }
 
   return buildAutoSelectedMaterialsContext(requestText);
+}
+
+// הספק/מודל האפקטיביים לצורך הערכת חלון-קונטקסט: הבחירה המפורשת אם יש, אחרת
+// התצורה הפעילה. מודל ריק ⇒ modelCapabilities נופל ל-fallback שמרני (32k) — בטוח.
+function resolveEffectiveModelSelection({ providerId = '', providerModel = '' } = {}) {
+  try {
+    const cfg = getProviderConfig();
+    const effectiveProviderId = String(providerId || cfg?.provider || '').trim();
+    const effectiveModel = String(providerModel || cfg?.[effectiveProviderId]?.model || '').trim();
+    return { providerId: effectiveProviderId, model: effectiveModel };
+  } catch {
+    return { providerId: String(providerId || '').trim(), model: String(providerModel || '').trim() };
+  }
+}
+
+const AUTO_BRIEF_FALLBACK_HEAD_CHARS = 4000;
+
+// מצב אוטומטי, חומרים גדולים מהחלון: קריאת תמצות אחת לכל חומר שסומן 'brief' בתוכנית,
+// ואז הקשר משולב — טקסט מלא לחומרים שנכנסים, תמצית + קטעים רלוונטיים לשאר.
+// סדרתי בכוונה (לא Promise.all): לא נלחם ב-rate limiter, ומאפשר חיווי התקדמות אמיתי.
+// כשל בתמצות בודד לא מפיל את היצירה — נופל לפתיח הגולמי של החומר.
+async function buildAutoPlannedMaterialsContext({
+  selectedMaterials = [],
+  requestText = '',
+  plan = null,
+  runId = '',
+  agentLabel = '',
+  requestLogContext = {},
+} = {}) {
+  const previews = await Promise.all(selectedMaterials.map(async (item) => ({
+    id: item?.id || item?.file || item?.title || '',
+    title: item?.title || item?.file || 'חומר עזר',
+    label: item?.label || 'כללי',
+    text: (await loadMaterialPreview(item)) || '',
+  })));
+  const byId = new Map(previews.map((p) => [p.id, p]));
+
+  const briefEntries = (plan?.materialPlan || []).filter((entry) => entry.action === 'brief');
+  const sections = [];
+  let briefIndex = 0;
+  for (const entry of plan?.materialPlan || []) {
+    const material = byId.get(entry.id) || previews.find((p) => p.title === entry.title);
+    if (!material) continue;
+    if (entry.action !== 'brief') {
+      sections.push(`- ${material.title} (${material.label})${material.text ? `\nתוכן עזר:\n${material.text}` : ''}`);
+      continue;
+    }
+    briefIndex += 1;
+    logAgentDebugEvent({
+      type: 'auto-depth-brief',
+      state: 'running',
+      runId,
+      agentLabel,
+      message: `קורא חומרים (${briefIndex}/${briefEntries.length}): ${material.title}`,
+      ...requestLogContext,
+    });
+    let brief = '';
+    try {
+      const response = await chatWithActiveProvider(
+        [
+          'לפניך חומר עזר לכתיבת מסמך. הפק ממנו תמצית דחוסה (עד 400 מילים) שתשמש את הכותב.',
+          `נושא המסמך: ${requestText.slice(0, 1500)}`,
+          'שמור על עובדות, מספרים, שמות, ציטוטים מדויקים ומראי מקום. אל תוסיף פרשנות ואל תמציא.',
+          `החומר:\n${material.text}`,
+        ].join('\n\n'),
+        '',
+        'אתה מתמצת חומרי עזר לכתיבה אקדמית. החזר תמצית עניינית בעברית, בלי פתיחים ובלי מסקנות משלך.',
+        {
+          runId,
+          agentLabel: `${agentLabel} · תמצות`,
+          skipAutomation: true,
+          skipAutomationPrompt: true,
+          skipMultiModel: true,
+          skipSkillSelection: true,
+          directChat: true,
+          temperature: 0.2,
+        },
+      );
+      brief = String(response?.text ?? response ?? '').trim();
+    } catch {
+      brief = '';
+    }
+    if (!brief) brief = material.text.slice(0, AUTO_BRIEF_FALLBACK_HEAD_CHARS);
+    const excerpts = plan?.requestTermsSet
+      ? selectRelevantExcerpts(material.text, plan.requestTermsSet, entry.charBudget || 0)
+      : '';
+    sections.push([
+      `- ${material.title} (${material.label})`,
+      `תמצית החומר:\n${brief}`,
+      excerpts ? `קטעים רלוונטיים מתוך החומר (ציטוט מדויק):\n${excerpts}` : '',
+    ].filter(Boolean).join('\n'));
+  }
+  return sections.join('\n');
 }
 
 function truncateContextSectionText(value = '', maxChars = 0) {
@@ -3090,6 +3163,7 @@ async function runWorkspaceV2DocumentGeneration({
   runScope = null,
   includeSources = null,
   temperature = null,
+  styleDepth = 'normal',
 }) {
   const personalStyleProfile = getPersonalStyleProfile();
   const runContext = buildWorkspaceV2RunContext({
@@ -3342,13 +3416,59 @@ async function runWorkspaceV2DocumentGeneration({
     operationLabel: `האנשת ${workspaceLabel}`,
   });
 
+  // שופט הסגנון — אותו בלוק אי-הרסני כמו בנתיב הרגיל (ר' generateDocumentFromPrompt).
+  // עד עכשיו styleDepth כלל לא הגיע לכאן ו-V2 רץ בלי ליטוש סגנון — 'fast' מדלג, 'deep' שופט מלא.
+  let v2StyleScore = null;
+  let v2StyleRewriteSuggested = false;
+  let v2StyleRewriteApplied = false;
+  let v2StyleFinalHtml = humanizedV2Response;
+  if (returnMeta) {
+    try {
+      const plainDocText = stripHtmlTags(v2StyleFinalHtml);
+      if (plainDocText && plainDocText.length >= 40) {
+        const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto', requestText: cleanPrompt });
+        if (styleResult && Number.isFinite(styleResult.score)) {
+          v2StyleScore = styleResult;
+          v2StyleRewriteSuggested = styleResult.score <= 70;
+        }
+      }
+    } catch {
+      // ניקוד סגנון הוא best-effort — לא נוגע בפלט המסמך.
+    }
+
+    if (v2StyleScore && Number.isFinite(v2StyleScore.score) && v2StyleScore.score < 75 && styleDepth !== 'fast') {
+      try {
+        const rewriteResult = await rewriteDocumentStyle(v2StyleFinalHtml, { runId, styleDepth, target: 75, requestText: cleanPrompt });
+        if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
+          v2StyleFinalHtml = rewriteResult.html;
+          v2StyleRewriteApplied = true;
+          const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto' });
+          if (rescored && Number.isFinite(rescored.score)) v2StyleScore = rescored;
+        }
+      } catch {
+        // כשל שכתוב לעולם לא שובר יצירה ולא מאפס את הציון הקיים.
+      }
+    }
+
+    if (v2StyleScore && Number.isFinite(v2StyleScore.score)) {
+      try {
+        recordGenerationQuality(v2StyleScore.score, { genre: v2StyleScore.genre });
+      } catch {
+        // רישום איכות לעולם לא שובר יצירה.
+      }
+    }
+  }
+
   return returnMeta
     ? {
-      html: humanizedV2Response,
+      html: v2StyleFinalHtml,
       usedFallback: false,
       runId,
       errorMessage: '',
       title,
+      styleScore: v2StyleScore,
+      styleRewriteSuggested: v2StyleRewriteSuggested,
+      styleRewriteApplied: v2StyleRewriteApplied,
       workspaceV2: {
         templateId: template.id,
         label: workspaceLabel,
@@ -4205,17 +4325,73 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
   let templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
   let notes = '';
   let materialsText = '';
+  // 'auto' הוא ערך של המתכנן בלבד — כל ההשוואות בהמשך (=== 'deep' / !== 'fast')
+  // רואות רק את ה-tier שנפתר. ברירת מחדל 'normal' עד שהמתכנן מחליט.
+  let resolvedStyleDepth = styleDepth === 'auto' ? 'normal' : styleDepth;
+  let autoDepthPlan = null;
 
   try {
     const learning = await syncLearnedStyleFromWorkspace();
 
     templateGuide = TEMPLATE_GUIDES[templateId] || TEMPLATE_GUIDES.blank;
     notes = learning.notes?.join('\n') || '';
-    materialsText = await buildEffectiveMaterialsContext({
-      selectedMaterials,
-      requestText: [cleanPrompt, cleanInstructions].filter(Boolean).join('\n'),
-      allowAutoSelection: !(Array.isArray(selectedMaterials) && selectedMaterials.length),
-    });
+    const materialsRequestText = [cleanPrompt, cleanInstructions].filter(Boolean).join('\n');
+    const hasSelectedMaterials = Array.isArray(selectedMaterials) && selectedMaterials.length > 0;
+
+    if (styleDepth === 'auto') {
+      const effectiveSelection = resolveEffectiveModelSelection(requestedProviderSelection);
+      const plannerMaterials = hasSelectedMaterials
+        ? await Promise.all(selectedMaterials.map(async (item, index) => ({
+          id: item?.id || item?.file || item?.title || `material-${index + 1}`,
+          title: item?.title || item?.file || `חומר ${index + 1}`,
+          label: item?.label || '',
+          text: (await loadMaterialPreview(item)) || '',
+        })))
+        : [];
+      autoDepthPlan = planAutoDepth({
+        promptText: cleanPrompt,
+        instructionsText: cleanInstructions,
+        materials: plannerMaterials,
+        model: effectiveSelection.model,
+        providerId: effectiveSelection.providerId,
+        hasBaseDraft: false,
+        additionalReviewRounds: normalizedAdditionalReviewRounds,
+      });
+      resolvedStyleDepth = autoDepthPlan.resolvedStyleDepth;
+      logAgentDebugEvent({
+        type: 'auto-depth-plan',
+        state: 'running',
+        runId,
+        agentLabel: documentRunLabel,
+        message: `מצב אוטומטי: ${autoDepthPlan.reason}`,
+        mode: autoDepthPlan.mode,
+        estimatedPromptTokens: autoDepthPlan.estimatedPromptTokens,
+        contextBudget: autoDepthPlan.contextBudget,
+        ...requestLogContext,
+      });
+      if (hasSelectedMaterials && autoDepthPlan.mode === 'brief-then-write') {
+        materialsText = await buildAutoPlannedMaterialsContext({
+          selectedMaterials,
+          requestText: materialsRequestText,
+          plan: autoDepthPlan,
+          runId,
+          agentLabel: documentRunLabel,
+          requestLogContext,
+        });
+      } else {
+        materialsText = await buildEffectiveMaterialsContext({
+          selectedMaterials,
+          requestText: materialsRequestText,
+          allowAutoSelection: !hasSelectedMaterials,
+        });
+      }
+    } else {
+      materialsText = await buildEffectiveMaterialsContext({
+        selectedMaterials,
+        requestText: materialsRequestText,
+        allowAutoSelection: !hasSelectedMaterials,
+      });
+    }
   } catch (error) {
     logAgentDebugEvent({
       type: 'doc-generation-preparation-error',
@@ -4281,6 +4457,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         onHumanizeProgress,
         runScope: documentRunScope,
         includeSources,
+        styleDepth: resolvedStyleDepth,
         ...(Number.isFinite(temperature) ? { temperature } : {}),
       });
     }
@@ -4338,7 +4515,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     // אלא jitter של טמפרטורה + styleEngineSeed טרי לכל קריאה. הקריאה הראשונה (הפתיחה) על ה-base,
     // וההמשכים (הגוף) מקבלים base+0.1 clamped 0.3-1.0 + seed שונה → רוטציית דפוסים בין פתיחה לגוף.
     // ה-jitter של ההמשכים מיושם בתוך requestGeneratedHtmlResponseWithSingleContinuation.
-    if (styleDepth === 'deep') {
+    if (resolvedStyleDepth === 'deep') {
       // call index 0 (פתיחה): seed דטרמיניסטי מהפרומפט (שחזור מלא של אותה בקשה);
       // ההמשכים מקבלים offset פר-pass — גיוון בין פתיחה לגוף נשמר. טמפרטורה נשארת base.
       requestOptions.styleEngineSeed = hashStyleSeed(prompt);
@@ -4492,7 +4669,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         const plainDocText = stripHtmlTags(styleFinalHtml);
         if (plainDocText && plainDocText.length >= 40) {
           // deep tier מריץ את שופט ה-LLM המלא; אחרת 'auto' (מקומי + LLM רק בטווח אפור).
-          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto', requestText: prompt });
+          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: resolvedStyleDepth === 'deep' ? 'deep' : 'auto', requestText: prompt });
           if (styleResult && Number.isFinite(styleResult.score)) {
             styleScore = styleResult;
             styleRewriteSuggested = styleResult.score <= 70;
@@ -4503,13 +4680,13 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       }
 
       // Stage A: אם הציון נמוך והמנוע פעיל — שכתוב פסקאות לכיוון הסגנון (אי-הרסני-מבנית).
-      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && styleDepth !== 'fast') {
+      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && resolvedStyleDepth !== 'fast') {
         try {
-          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth, target: 75, requestText: prompt });
+          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth: resolvedStyleDepth, target: 75, requestText: prompt });
           if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
             styleFinalHtml = rewriteResult.html;
             styleRewriteApplied = true;
-            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto' });
+            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: resolvedStyleDepth === 'deep' ? 'deep' : 'auto' });
             if (rescored && Number.isFinite(rescored.score)) styleScore = rescored;
           }
         } catch {
@@ -4650,7 +4827,7 @@ async function prepareFeedbackDrivenDocumentContext({
 
 // forceDirectMode=true כברירת מחדל: שכתוב לפי feedback הוא עריכה ממוקדת — רץ ישירות במודל יחיד
 // בלי workflow automation. בכוונה שונה מ-generateDocumentFromPrompt (false) שמאפשר ריבוי סוכנים ביצירה חדשה.
-export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null, sourceRoute = '', includeSources = null, styleDepth = '', temperature = null }) {
+export async function reviseDocumentWithFeedback({ existingHtml = '', feedback = '', originalPrompt = '', templateId = 'blank', selectedMaterials = [], selectedModel = '', selectedProviderId = '', selectedProviderModel = '', additionalReviewRounds = 0, runId: providedRunId = '', returnMeta = false, forceDirectMode = true, useWorkspaceV2 = false, workspaceV2TemplateId = '', humanizeLoop = null, onHumanizeProgress = null, sourceRoute = '', includeSources = null, styleDepth = 'normal', temperature = null }) {
   // sourceRoute — בחירת מסלול מקורות (בורר בסוף הבישול / מצב Direct): 'pipeline' | 'single-call' | 'none' | '' (auto).
   // מקביל ל-generateDocumentFromPrompt: 'none' → includeSources=false; המסלול קובע רק *איך*,
   // includeSources מפורש או ה-regex קובעים *אם*.
@@ -4677,7 +4854,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     runId,
     agentLabel: documentUpdateLabel,
     notes,
-    materialsText,
+    materialsText: preparedMaterialsText,
     preparationError,
   } = await prepareFeedbackDrivenDocumentContext({
     originalPrompt,
@@ -4698,6 +4875,56 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     return returnMeta
       ? { html: cleanHtml, usedFallback: true, runId, errorMessage: preparationError?.message || 'שגיאה לא ידועה' }
       : cleanHtml;
+  }
+
+  let materialsText = preparedMaterialsText;
+  // מצב אוטומטי בעדכון: אותו מתכנן כמו ביצירה — המסמך הקיים נספר בתקציב (הוא נשלח
+  // בפרומפט), וחומרים שלא נכנסים בחלון מתומצתים לפני קריאת העדכון.
+  let resolvedStyleDepth = styleDepth === 'auto' ? 'normal' : styleDepth;
+  if (styleDepth === 'auto') {
+    try {
+      const effectiveSelection = resolveEffectiveModelSelection(requestedProviderSelection);
+      const hasSelectedMaterials = Array.isArray(selectedMaterials) && selectedMaterials.length > 0;
+      const plannerMaterials = hasSelectedMaterials
+        ? await Promise.all(selectedMaterials.map(async (item, index) => ({
+          id: item?.id || item?.file || item?.title || `material-${index + 1}`,
+          title: item?.title || item?.file || `חומר ${index + 1}`,
+          label: item?.label || '',
+          text: (await loadMaterialPreview(item)) || '',
+        })))
+        : [];
+      const autoPlan = planAutoDepth({
+        promptText: [originalPrompt, cleanFeedback].filter(Boolean).join('\n'),
+        instructionsText: cleanHtml,
+        materials: plannerMaterials,
+        model: effectiveSelection.model,
+        providerId: effectiveSelection.providerId,
+        hasBaseDraft: true,
+        additionalReviewRounds: normalizedAdditionalReviewRounds,
+      });
+      resolvedStyleDepth = autoPlan.resolvedStyleDepth;
+      logAgentDebugEvent({
+        type: 'auto-depth-plan',
+        state: 'running',
+        runId,
+        agentLabel: documentUpdateLabel,
+        message: `מצב אוטומטי (עדכון): ${autoPlan.reason}`,
+        mode: autoPlan.mode,
+        ...requestLogContext,
+      });
+      if (hasSelectedMaterials && autoPlan.mode === 'brief-then-write') {
+        materialsText = await buildAutoPlannedMaterialsContext({
+          selectedMaterials,
+          requestText: [originalPrompt, cleanFeedback].filter(Boolean).join('\n'),
+          plan: autoPlan,
+          runId,
+          agentLabel: documentUpdateLabel,
+          requestLogContext,
+        });
+      }
+    } catch {
+      // המתכנן הוא best-effort — כשל בו לא מפיל עדכון מסמך.
+    }
   }
 
   if (useWorkspaceV2 === true && String(workspaceV2TemplateId || '').trim()) {
@@ -4725,6 +4952,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       returnMeta,
       humanizeLoop,
       onHumanizeProgress,
+      styleDepth: resolvedStyleDepth,
     });
   }
 
@@ -4891,7 +5119,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       try {
         const plainDocText = stripHtmlTags(styleFinalHtml);
         if (plainDocText && plainDocText.length >= 40) {
-          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto', requestText: styleRequestText });
+          const styleResult = await scoreStyleForDocument(plainDocText, { runId, mode: resolvedStyleDepth === 'deep' ? 'deep' : 'auto', requestText: styleRequestText });
           if (styleResult && Number.isFinite(styleResult.score)) {
             styleScore = styleResult;
             styleRewriteSuggested = styleResult.score <= 70;
@@ -4901,13 +5129,13 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
         // ניקוד סגנון הוא best-effort.
       }
 
-      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && styleDepth !== 'fast') {
+      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && resolvedStyleDepth !== 'fast') {
         try {
-          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth, target: 75, requestText: styleRequestText });
+          const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth: resolvedStyleDepth, target: 75, requestText: styleRequestText });
           if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
             styleFinalHtml = rewriteResult.html;
             styleRewriteApplied = true;
-            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: styleDepth === 'deep' ? 'deep' : 'auto' });
+            const rescored = await scoreStyleForDocument(stripHtmlTags(rewriteResult.html), { runId, mode: resolvedStyleDepth === 'deep' ? 'deep' : 'auto' });
             if (rescored && Number.isFinite(rescored.score)) styleScore = rescored;
           }
         } catch {

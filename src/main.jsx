@@ -68,6 +68,7 @@ import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffSty
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm } from './services/uiFeedback';
 import { startClipInboxPolling, CLIP_INGESTED_EVENT, CLIP_PROGRESS_EVENT } from './services/clipInboxService';
+import { sendImageClipToDesktop } from './services/clipUploadService';
 import ClipInboxPanel from './components/ClipInboxPanel';
 import { startAutoUpdateChecks, checkForUpdateNow } from './services/appUpdateService';
 import { Modal, Button, Input, TextArea } from './components/ui';
@@ -3855,6 +3856,60 @@ function App() {
       window.removeEventListener(CLIP_INGESTED_EVENT, onIngested);
       window.removeEventListener(CLIP_PROGRESS_EVENT, onProgress);
     };
+  }, [cloudUser]);
+  // share_target של אנדרואיד: שיתוף תמונה לאפליקציה מגיע כ-POST ל-./share-target,
+  // ה-service worker שומר את הקובץ ב-cache ומפנה לכאן עם ?shared=1. אוספים אותו
+  // ושולחים לקליפים בדיוק כמו כפתור המצלמה. PWA/אתר בלבד — בדסקטופ אין share_target.
+  const sharedImageHandledRef = React.useRef(false);
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || window.desktopApp) return undefined;
+    if (sharedImageHandledRef.current) return undefined;
+    if (!new URLSearchParams(window.location.search).has('shared')) return undefined;
+
+    const clearSharedParam = () => {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('shared');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      } catch { /* לא קריטי — רק ניקוי כתובת */ }
+    };
+
+    if (!cloudUser) {
+      // משאירים את הקובץ ב-cache; ההרצה הבאה (אחרי התחברות) תאסוף אותו.
+      showToast('התמונה ששיתפת מחכה — התחבר לחשבון כדי לשלוח אותה למחשב.', { tone: 'warning', duration: 7000 });
+      return undefined;
+    }
+
+    sharedImageHandledRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        // caches.match סורק את כל ה-caches — כך שגם שם cache שהתחלף בגרסה נמצא.
+        const response = await caches.match('/__shared/pending');
+        if (!response) { clearSharedParam(); return; }
+        const blob = await response.blob();
+        const rawName = response.headers.get('x-shared-name') || '';
+        let name = 'shared.jpg';
+        try { name = decodeURIComponent(rawName) || name; } catch { name = rawName || name; }
+        // מוחקים לפני השליחה כדי שרענון לא ישלח פעמיים.
+        const keys = await caches.keys();
+        await Promise.all(keys.map(async (key) => {
+          const cache = await caches.open(key);
+          await cache.delete('/__shared/pending').catch(() => {});
+        }));
+        clearSharedParam();
+        if (cancelled || !blob?.size) return;
+        const file = new File([blob], name, { type: blob.type || 'image/jpeg' });
+        await sendImageClipToDesktop({ user: cloudUser, file, title: name });
+        if (!cancelled) showToast('נשלח למחשב ✓', { tone: 'success' });
+      } catch (error) {
+        clearSharedParam();
+        if (!cancelled) {
+          showToast(error?.message || 'שליחת התמונה ששיתפת נכשלה.', { tone: 'error' });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
   }, [cloudUser]);
   const refreshAssignmentBrief = React.useCallback(() => {
     setAssignmentBrief(getPersistedDocumentAssignmentBrief());
@@ -9854,6 +9909,7 @@ ${sidebarReviewContext}`
               }}
             >
               <StartScreen
+                cloudUser={cloudUser}
                 onOpenHelp={openHelpTopic}
                 instructionsResetToken={startScreenInstructionsResetToken}
                 onInstructionsResetConsumed={() => setStartScreenInstructionsResetToken(0)}

@@ -7,8 +7,11 @@
 
 import React, { useReducer, useState } from 'react';
 import {
-  restyleDocumentDraft, setParaText, exportDocxBase64, exportDocxBlob, draftToHtml,
+  restyleDocumentDraft, setParaText, exportDocxBase64, exportDocxBlob, draftToHtml, repairFlaggedParas,
 } from './services/documentDraftService';
+import { getRestyleAggressiveness, saveRestyleAggressiveness, resolveRestyleBand } from './services/restyleAggressiveness';
+import AggressivenessSlider from './components/AggressivenessSlider';
+import DraftDetectorPanel, { AiScoreChip } from './components/DraftDetectorPanel';
 
 // diff ברמת מילים (LCS) — מחזיר { oldParts, newParts } עם דגל removed/added לכל מקטע.
 const splitWords = (s) => String(s || '').split(/(\s+)/).filter((t) => t.length);
@@ -54,6 +57,7 @@ export default function DocumentDraftStudio({
   const [exporting, setExporting] = useState(false);
   const [compare, setCompare] = useState(false);     // תצוגת השוואה מקור↔משוכתב
   const [onlyChanged, setOnlyChanged] = useState(false);
+  const [aggressiveness, setAggressiveness] = useState(() => getRestyleAggressiveness('docx'));
 
   const paras = draft?.paras || [];
   const changedCount = paras.filter((p) => p.text !== p.original).length;
@@ -67,6 +71,7 @@ export default function DocumentDraftStudio({
       const { changed } = await restyleDocumentDraft(draft, {
         instructions: instructions.trim(),
         paraIds,
+        aggressiveness,
         onProgress: (done, total) => setProgress({ done, total }),
       });
       forceRender();
@@ -74,6 +79,21 @@ export default function DocumentDraftStudio({
     } catch (e) {
       showToast(e?.message || 'השכתוב נכשל', { tone: 'error' });
     } finally { setBusy(false); setProgress(null); }
+  };
+
+  const changeAggressiveness = (value) => {
+    setAggressiveness(value);
+    saveRestyleAggressiveness('docx', value);
+  };
+
+  // סבב תיקון על הפסקאות שהגלאי סימן. הפסקאות מוטציה in-place ⇒ forceRender.
+  const runDetectorRepair = async ({ onProgress }) => {
+    setBusy(true);
+    try {
+      const res = await repairFlaggedParas(draft, { aggressiveness, onProgress });
+      forceRender();
+      return res;
+    } finally { setBusy(false); }
   };
 
   const handleExport = async () => {
@@ -135,14 +155,18 @@ export default function DocumentDraftStudio({
           placeholder="הנחיה לשכתוב (אופציונלי) — למשל: שמור על מונחים אקדמיים, פשט נוסחים מסורבלים, הקפד על גוף שלישי..."
           className="min-h-[44px] flex-1 rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm leading-6 text-slate-100 outline-none focus:border-cyan-400"
         />
+        <AggressivenessSlider value={aggressiveness} onChange={changeAggressiveness} disabled={busy} />
         <button
           onClick={() => runRestyle(null)}
           disabled={busy || !paras.length}
           className="shrink-0 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-600 px-4 py-2.5 text-sm font-bold text-white hover:from-violet-400 disabled:opacity-50"
         >
-          {busy ? `משכתב... ${progress ? `${progress.done}/${progress.total}` : ''}` : '✨ שכתב הכול לסגנון שלי'}
+          {busy ? `משכתב... ${progress ? `${progress.done}/${progress.total}` : ''}` : `✨ שכתב הכול לסגנון שלי (${resolveRestyleBand(aggressiveness).label})`}
         </button>
       </div>
+
+      {/* בדיקת גלאי AI + שכתוב חוזר סלקטיבי */}
+      <DraftDetectorPanel paras={paras} onRepair={runDetectorRepair} disabled={busy} />
 
       {/* רשימת פסקאות */}
       <div className="flex-1 overflow-auto px-4 py-4">
@@ -162,6 +186,7 @@ export default function DocumentDraftStudio({
                   <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                     {label}
                     {dirty ? <span className="text-emerald-400">● שונה</span> : <span className="text-slate-600">ללא שינוי</span>}
+                    <AiScoreChip para={para} />
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="rounded-xl border border-slate-700 bg-slate-800/30 px-3 py-2 text-sm leading-6 text-slate-300">
@@ -183,6 +208,7 @@ export default function DocumentDraftStudio({
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   {label}
                   {dirty && <span className="text-emerald-400">● שונה</span>}
+                  <AiScoreChip para={para} />
                   <div className="flex-1" />
                   <button
                     onClick={() => runRestyle([para.id])}

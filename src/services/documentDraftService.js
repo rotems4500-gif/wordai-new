@@ -9,20 +9,18 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { chatWithActiveProvider, getPersonalStyleProfile, hashStyleSeed } from './aiService';
-import { scoreStyleMatchLocal } from './styleJudgeService';
 import { normalizeStyleEngine } from './styleProfileService';
-import { scoreTextAuthenticity } from './styleAuthenticityService';
+import { restyleSourceOf, scoreParaAiness, acceptRestyledPara } from './restyleGate';
+import { resolveRestyleBand, getRestyleAggressiveness } from './restyleAggressiveness';
+import {
+  selectRepairTargets, buildParaRepairPrompt, rescorePara, cleanModelText,
+} from './draftDetectorPass';
 
 // כמה פסקאות לשלוח ב-prompt אחד (איזון בין מספר קריאות לאורך פלט).
 const PARA_BATCH = 12;
 // תקרת תווים לפסקה בודדת שנשלחת למודל. פסקה ארוכה מזה מדולגת לגמרי —
 // חיתוך-קלט עם החלפת-פלט-מלאה איבד בעבר את זנב הפסקה בשקט.
 const MAX_PARA_CHARS = 2000;
-// אורך מינימלי (בתווים) כדי שפסקה תיחשב לשכתוב — פסקאות זעירות (כותרות
-// קצרות, פריטי רשימה בני מילה-שתיים) נושאות מבנה ולא קול, ושכתובן רק מזיק.
-const MIN_RESTYLE_CHARS = 40;
-// מאיזה אורך מפעילים את שער הניקוד המקומי (מתחת לזה הציון לא אמין).
-const SCORE_GATE_MIN_CHARS = 120;
 
 let paraIdCounter = 0;
 const nextParaId = () => { paraIdCounter += 1; return `d${paraIdCounter}`; };
@@ -133,21 +131,7 @@ const extractJson = (raw = '') => {
   catch { return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1')); }
 };
 
-// טקסט המקור לשכתוב: אם הפסקה כבר שוכתבה ע"י ה-AI — חוזרים לטקסט המקורי
-// מהייבוא (ריצה חוזרת לא מצטברת על פלט קודם); עריכה ידנית של המשתמש נשמרת.
-const restyleSourceOf = (para) => (para.restyledByAi ? para.original : para.text);
-
-// דירוג "נשמע כמו AI" פר-פסקה: ההחלטה מה חייב שכתוב היא של הגלאי, לא של המודל.
-// בלי הסימון, ה-escape hatch ("אם כבר טוב — אל תיגע") גרם למודל להשאיר גם פסקאות
-// גנריות לחלוטין ללא שינוי. null = הפסקה קצרה מדי לניקוד אמין.
-const scoreParaAiness = (text) => {
-  try {
-    const res = scoreTextAuthenticity(String(text || ''));
-    return res?.ok ? { score: res.score, threshold: res.threshold } : null;
-  } catch { return null; }
-};
-
-const buildRestylePrompt = (batch, instructions) => {
+const buildRestylePrompt = (batch, instructions, band = null) => {
   const block = batch.map(({ index, para, aiFlagged }) => ({
     i: index,
     t: restyleSourceOf(para),
@@ -162,7 +146,7 @@ const buildRestylePrompt = (batch, instructions) => {
 - פסקה קצרה (כותרת/פריט) נשארת קצרה. אל תנפח פסקה.
 - אל תוסיף מספור, תבליטים, גרשיים או markdown — רק הטקסט עצמו.
 - שמור על ציטוטים, שמות, ומראי מקום כמות שהם.
-- עברית.${instructions ? `\n- הנחיה נוספת מהמשתמש: ${instructions}` : ''}
+- עברית.${band?.promptSuffix ? `\n- ${band.promptSuffix}` : ''}${instructions ? `\n- הנחיה נוספת מהמשתמש: ${instructions}` : ''}
 
 קלט (JSON):
 ${JSON.stringify({ paras: block }, null, 0)}
@@ -171,53 +155,27 @@ ${JSON.stringify({ paras: block }, null, 0)}
 {"paras":[{"i":<מספר>,"t":"..."}]}`;
 };
 
-// שער קבלה פר-פסקה (במודל של styleJudgeService.rewriteDocumentHtmlTowardStyle):
-// (1) רצועת אורך ~0.6×–1.6× מהמקור — פרפרזה שקיצצה/ניפחה נדחית.
-// (2) פסקה שסומנה כגנרית (aiFlagged) — המדד הרלוונטי הוא הגלאי: מקבלים אם ציון
-//     ה-AI לא עלה. רצפת הסגנון המבני *לא* חלה עליה — היא דחתה שכתובים לגיטימיים
-//     של פסקאות גנריות (המדד המבני מעדיף לפעמים את הניסוח המכונתי החלק).
-// (3) פסקה לא-מסומנת ארוכה מספיק — never-net-worse על ציון הסגנון המקומי.
-// כשל ניקוד בכל מקום ⇒ קבלה לפי רצועת האורך בלבד.
-const acceptRestyledPara = (source, current, next, styleEngine, aiFlagged = false) => {
-  const srcLen = String(source || '').length;
-  const nextLen = String(next || '').length;
-  if (!nextLen) return false;
-  if (srcLen >= MIN_RESTYLE_CHARS && (nextLen < srcLen * 0.6 || nextLen > srcLen * 1.6)) return false;
-  if (aiFlagged) {
-    const before = scoreParaAiness(current);
-    const after = scoreParaAiness(next);
-    if (before && after && after.score > before.score + 5) return false;
-    return true;
-  }
-  if (styleEngine?.enabled && srcLen >= SCORE_GATE_MIN_CHARS) {
-    try {
-      const oldScore = scoreStyleMatchLocal(current, styleEngine)?.score;
-      const newScore = scoreStyleMatchLocal(next, styleEngine)?.score;
-      if (Number.isFinite(oldScore) && Number.isFinite(newScore) && newScore < oldScore - 1) return false;
-    } catch { /* ניקוד נכשל — שער האורך הספיק */ }
-  }
-  return true;
-};
-
 /**
  * restyleDocumentDraft — משכתב את פסקאות המסמך לסגנון המשתמש (in-place).
  * מעדכן את ה-DOM ואת שדות ה-text של הפסקאות. מחזיר {changed} מספר פסקאות ששונו.
  * @param {object} draft
- * @param {object} opts - { instructions, paraIds?, onProgress, signal }
+ * @param {object} opts - { instructions, paraIds?, onProgress, signal, aggressiveness? }
  */
 export const restyleDocumentDraft = async (draft, opts = {}) => {
-  const { instructions = '', paraIds = null, onProgress = () => {}, signal } = opts;
+  const { instructions = '', paraIds = null, onProgress = () => {}, signal, aggressiveness = null } = opts;
+  // עוצמת השכתוב: ערך מפורש מהקורא, אחרת מה שהמשתמש קבע בסליידר.
+  const band = resolveRestyleBand(Number.isFinite(aggressiveness) ? aggressiveness : getRestyleAggressiveness('docx'));
   // בחירה מפורשת של פסקאות (כפתור "שכתב פסקה") עוקפת את פילטרי הכותרת/מינימום —
   // המשתמש ביקש במפורש. תקרת MAX נשארת תמיד (באג חיתוך-ואובדן-זנב).
   const explicitSelection = Array.isArray(paraIds) && paraIds.length > 0;
   const targets = draft.paras
     .map((para, index) => ({ para, index }))
     .filter(({ para }) => (paraIds ? paraIds.includes(para.id) : true))
-    // כותרות נושאות מבנה ולא קול — לא נוגעים בהן בשכתוב-הכול.
-    .filter(({ para }) => explicitSelection || !para.titleish)
+    // כותרות נושאות מבנה ולא קול — לא נוגעים בהן בשכתוב-הכול (אלא ברצועה אגרסיבית).
+    .filter(({ para }) => explicitSelection || band.includeTitles || !para.titleish)
     .filter(({ para }) => {
       const len = restyleSourceOf(para).trim().length;
-      return (explicitSelection || len >= MIN_RESTYLE_CHARS) && len <= MAX_PARA_CHARS;
+      return (explicitSelection || len >= band.minRestyleChars) && len <= MAX_PARA_CHARS;
     });
 
   if (!targets.length) return { changed: 0 };
@@ -227,6 +185,12 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
     const scored = scoreParaAiness(restyleSourceOf(target.para));
     target.aiFlagged = Boolean(scored && scored.score >= scored.threshold);
   });
+
+  // ברצועה העדינה נוגעים רק במה שהגלאי סימן. בחירה מפורשת של פסקה תמיד עוקפת.
+  const scoped = (band.onlyFlagged && !explicitSelection)
+    ? targets.filter((t) => t.aiFlagged)
+    : targets;
+  if (!scoped.length) return { changed: 0 };
 
   // פרופיל המנוע לשער הקבלה (never-net-worse). כשל טעינה ⇒ שער אורך בלבד.
   let styleEngine = null;
@@ -242,7 +206,7 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
       skipSkillSelection: true,
       styleEngineSeed: docSeed,
       // שכתוב הוא משימת עריכה — טמפרטורת ברירת-מחדל (~1.0) היא מקור שונות מיותר.
-      temperature: 0.4,
+      temperature: band.temperature,
       // שכתוב ברמת פסקה לא צריך העדפות מבנה/עמוד-שער מהפרופיל.
       omitPersonalStyleStructureHints: true,
       ...(signal ? { signal } : {}),
@@ -250,24 +214,24 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
 
   // חלוקה ל-batches של פסקאות.
   const batches = [];
-  for (let i = 0; i < targets.length; i += PARA_BATCH) batches.push(targets.slice(i, i + PARA_BATCH));
+  for (let i = 0; i < scoped.length; i += PARA_BATCH) batches.push(scoped.slice(i, i + PARA_BATCH));
 
   let changed = 0;
   let done = 0;
   const changedIndexes = new Set();
   const runBatch = async (batch, extraInstructions, countProgress) => {
-    const prompt = buildRestylePrompt(batch, extraInstructions);
+    const prompt = buildRestylePrompt(batch, extraInstructions, band);
     let parsed;
     try { parsed = extractJson(await runChat(prompt)); }
     catch {
-      if (countProgress) { done += batch.length; onProgress(done, targets.length); }
+      if (countProgress) { done += batch.length; onProgress(done, scoped.length); }
       return;
     }
     const byIndex = new Map((Array.isArray(parsed.paras) ? parsed.paras : []).map((p) => [Number(p.i), p.t]));
     for (const { para, index, aiFlagged } of batch) {
       const next = byIndex.has(index) ? String(byIndex.get(index) == null ? '' : byIndex.get(index)).trim() : '';
       const source = restyleSourceOf(para);
-      if (next && next !== para.text && acceptRestyledPara(source, para.text, next, styleEngine, aiFlagged)) {
+      if (next && next !== para.text && acceptRestyledPara(source, para.text, next, styleEngine, aiFlagged, band)) {
         para.text = next;
         para.restyledByAi = true;
         writePara(para);
@@ -276,7 +240,7 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
       }
       if (countProgress) { done += 1; }
     }
-    if (countProgress) onProgress(done, targets.length);
+    if (countProgress) onProgress(done, scoped.length);
   };
 
   for (const batch of batches) {
@@ -285,7 +249,7 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
 
   // סבב-חוזר יחיד: פסקאות שהגלאי סימן כגנריות אבל המודל בכל זאת החזיר ללא שינוי.
   // בלי זה "חובה לשכתב" נשארת בקשה — מודל שמתעלם ממנה משאיר פסקאות-AI במסמך בשקט.
-  const stubborn = targets.filter((t) => t.aiFlagged && !changedIndexes.has(t.index));
+  const stubborn = scoped.filter((t) => t.aiFlagged && !changedIndexes.has(t.index));
   if (stubborn.length) {
     const retryNote = [String(instructions || '').trim(),
       'הפסקאות בקלט סומנו כולן כגנריות/מכונתיות וחזרו ללא שינוי בסבב הקודם. הפעם שכתוב מלא הוא חובה: החזר לכל פסקה ניסוח שונה מהותית מהקלט, באותה משמעות ובקול המשתמש.']
@@ -298,11 +262,69 @@ export const restyleDocumentDraft = async (draft, opts = {}) => {
   return { changed };
 };
 
+// system של סבב התיקון הממוקד (פסקה בודדת, טקסט חופשי ולא JSON).
+const REPAIR_SYSTEM = 'אתה עורך לשוני. שכתב את הפסקה כך שתישמע אנושית וטבעית בקול המשתמש. החזר את הפסקה המשוכתבת בלבד, בלי הסברים.';
+
+/**
+ * repairFlaggedParas — סבב תיקון ממוקד לפסקאות שהגלאי עדיין מסמן אחרי השכתוב.
+ * דורש ש-scoreDraftParas רץ קודם (הוא זה שכותב את lastAiScore/‏_lastAiResult).
+ * @param {object} draft
+ * @param {object} opts - { onProgress, signal, aggressiveness? }
+ * @returns {Promise<{repaired:number, remaining:number}>}
+ */
+export async function repairFlaggedParas(draft, { onProgress = () => {}, signal, aggressiveness = null } = {}) {
+  const band = resolveRestyleBand(Number.isFinite(aggressiveness) ? aggressiveness : getRestyleAggressiveness('docx'));
+  const targets = selectRepairTargets(draft?.paras || []);
+  if (!targets.length) return { repaired: 0, remaining: 0 };
+
+  let styleEngine = null;
+  try { styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine); } catch { /* לא קריטי */ }
+
+  const docSeed = hashStyleSeed(String(draft?.fileName || '') + String(draft?.title || ''));
+  const runChat = (prompt) =>
+    chatWithActiveProvider(prompt, '', REPAIR_SYSTEM, {
+      skipAutomation: true,
+      skipMultiModel: true,
+      directChat: true,
+      skipSkillSelection: true,
+      styleEngineSeed: docSeed,
+      temperature: band.temperature,
+      omitPersonalStyleStructureHints: true,
+      ...(signal ? { signal } : {}),
+    });
+
+  let repaired = 0;
+  let done = 0;
+  for (const para of targets) {
+    let next = '';
+    try { next = cleanModelText(await runChat(buildParaRepairPrompt(para))); }
+    catch { next = ''; }
+    // הפסקה כאן מסומנת בהגדרה (selectRepairTargets) ⇒ aiFlagged=true בשער.
+    if (next && next !== para.text
+      && acceptRestyledPara(restyleSourceOf(para), para.text, next, styleEngine, true, band)) {
+      para.text = next;
+      para.restyledByAi = true;
+      writePara(para);
+      repaired += 1;
+    }
+    // הסבב נספר גם כשנדחה — אחרת פסקה עיקשת תילכד בלולאה אינסופית.
+    para.aiCheckPasses = (para.aiCheckPasses || 0) + 1;
+    rescorePara(para);
+    done += 1;
+    onProgress(done, targets.length);
+  }
+
+  return { repaired, remaining: selectRepairTargets(draft?.paras || []).length };
+}
+
 // מחיל עריכה ידנית של פסקה בודדת (מהממשק) על ה-DOM.
 // עריכה ידנית מאפסת את סימון השכתוב — שכתוב הבא יוצא מהטקסט שהמשתמש קבע.
 export const setParaText = (para, text) => {
   para.text = String(text == null ? '' : text);
   para.restyledByAi = false;
+  // הטקסט השתנה ⇒ הניקוד הישן ומכסת הסבבים כבר לא רלוונטיים.
+  para.lastAiScore = null;
+  para.aiCheckPasses = 0;
   writePara(para);
 };
 

@@ -19,9 +19,11 @@ import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } fr
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
 import { saveClipAsHelperMaterial } from './workspaceLearningService';
+import { isDesktopApp } from '../platform';
 
 const POLL_INTERVAL_MS = 5000;
 const CLIP_DEFAULT_DESTINATION_KEY = 'wordai_clip_default_destination';
+const CLIP_ROLE_KEY = 'wordai_clip_client_role';
 export const CLIP_INGESTED_EVENT = 'wordai-clip-ingested';
 // מדווח על התחלת OCR ארוך. בלי זה קליטת PDF סרוק נראית כמו תקיעה: OCR רץ
 // ~8 שניות לעמוד, וה-toast היחיד מגיע רק בסוף.
@@ -46,6 +48,25 @@ export function getClipDefaultDestination() {
 export function setClipDefaultDestination(value) {
   if (!['material', 'source', 'inbox'].includes(value)) return;
   localStorage.setItem(CLIP_DEFAULT_DESTINATION_KEY, value);
+}
+
+// תפקיד הלקוח מול תיבת הקליפים: 'consumer' קולט (OCR + מחיקה מהענן), 'producer'
+// רק שולח. בלי השער הזה PWA פתוח בטלפון בולע קליפים לתוך IndexedDB מקומי ומוחק
+// אותם מהענן — והמחשב לא רואה אותם לעולם.
+// ברירת מחדל: אפליקציית דסקטופ או מסך רחב = consumer; טלפון = producer.
+// הערכה פעם אחת בזמן התחברות (ה-effect רץ רק על שינוי משתמש) — רוטציית מסך
+// באמצע session לא הופכת טלפון לצרכן.
+export function getClipClientRole() {
+  try {
+    const stored = localStorage.getItem(CLIP_ROLE_KEY);
+    if (stored === 'consumer' || stored === 'producer') return stored;
+  } catch { /* localStorage חסום — נופל לברירת מחדל */ }
+  return (isDesktopApp() || window.innerWidth > 640) ? 'consumer' : 'producer';
+}
+
+export function setClipClientRole(value) {
+  if (value !== 'consumer' && value !== 'producer') return;
+  try { localStorage.setItem(CLIP_ROLE_KEY, value); } catch { /* noop */ }
 }
 
 // upscale ×2 לפני OCR — נמדד בharness (6.8.26): עברית 11px עלתה מ-recall 0.72
@@ -287,6 +308,8 @@ export async function discardInboxClip(user, clip) {
 // מופעל מ-main.jsx ליד initCloudSyncListeners; מחזיר פונקציית עצירה.
 export function startClipInboxPolling(user) {
   stopClipInboxPolling();
+  // producer (טלפון) לא צורך — אחרת הוא בולע קליפים שנועדו למחשב.
+  if (getClipClientRole() !== 'consumer') return () => {};
   currentUser = user || null;
   if (!currentUser?.uid) return () => {};
   ingestPendingClips(currentUser).catch(() => {});

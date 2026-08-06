@@ -1,5 +1,8 @@
-const STATIC_CACHE = 'wordflow-static-v32';
-const RUNTIME_CACHE = 'wordflow-runtime-v32';
+const STATIC_CACHE = 'wordflow-static-v33';
+const RUNTIME_CACHE = 'wordflow-runtime-v33';
+
+// share_target (אנדרואיד): הקובץ המשותף נשמר כאן והאפליקציה אוספת אותו אחרי ההפניה.
+const SHARED_PENDING_KEY = '/__shared/pending';
 
 const getAppUrls = () => {
   const scope = self.registration?.scope || self.location.origin + '/';
@@ -52,6 +55,30 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // שיתוף תמונה מאנדרואיד: POST רב-חלקי אל ./share-target. שומרים את הקובץ
+  // ב-cache ומפנים חזרה לאפליקציה (303) — היא מרימה אותו משם ושולחת למחשב.
+  if (event.request.method === 'POST' && new URL(event.request.url).pathname.endsWith('/share-target')) {
+    event.respondWith((async () => {
+      try {
+        const form = await event.request.formData();
+        const file = form.get('image');
+        if (file && file.size) {
+          const cache = await caches.open(RUNTIME_CACHE);
+          await cache.put(SHARED_PENDING_KEY, new Response(file, {
+            headers: {
+              'content-type': file.type || 'image/jpeg',
+              'x-shared-name': encodeURIComponent(file.name || 'shared.jpg'),
+            },
+          }));
+        }
+      } catch (e) {
+        // מתעלמים — עדיף לחזור לאפליקציה בלי קובץ מאשר להיתקע על מסך שגיאה.
+      }
+      return Response.redirect('./?shared=1', 303);
+    })());
+    return;
+  }
+
   if (event.request.method !== 'GET') return;
 
   const requestUrl = new URL(event.request.url);

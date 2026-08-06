@@ -37,7 +37,7 @@ export const STEALTH_HUMANIZE_GUIDE = [
 ].join('\n');
 
 // ממפה את ה-markers שהגלאי החזיר להוראות תיקון ממוקדות וקונקרטיות.
-const MARKER_REPAIR = {
+export const MARKER_REPAIR = {
   uniformity: (d) => `אורך המשפטים אחיד מדי${d ? ` (${d})` : ''} — שבור את האחידות: הכנס כמה משפטים קצרים מאוד (3-6 מילים) לצד ארוכים.`,
   formalConnector: (d) => `יש עומס מחברים פורמליים${d ? `: ${d}` : ''} — מחק או החלף אותם בקשר טבעי ופשוט, או הסר את המחבר לגמרי.`,
   cliche: (d) => `יש קלישאות שחוקות${d ? `: ${d}` : ''} — נסח אותן מחדש במילים קונקרטיות ומקוריות.`,
@@ -54,7 +54,7 @@ const MARKER_REPAIR = {
   aiRegister: (d) => `יש ניסוחי מסגור והמלצה אופייניים ל-AI${d ? `: ${d}` : ''} — הימנע מ${markerExamplesQuoted(AI_REGISTER_PROMPT_EXAMPLES, 5)}. תבע את הטענה ישירות, בלי המסגור הכללי.`,
 };
 
-const buildRepairPrompt = (currentText, scoreResult, passNumber, htmlMode = false) => {
+export const buildRepairPrompt = (currentText, scoreResult, passNumber, htmlMode = false) => {
   const markers = Array.isArray(scoreResult?.markers) ? scoreResult.markers : [];
   const directives = markers
     .map((m) => (MARKER_REPAIR[m.key] ? `• ${MARKER_REPAIR[m.key](m.detail)}` : `• ${m.label}`))

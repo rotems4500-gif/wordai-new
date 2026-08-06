@@ -15,6 +15,7 @@ import {
   PROJECTS_UPDATED_EVENT,
 } from './services/projectService';
 import { scoreTextAuthenticity } from './services/styleAuthenticityService';
+import { sendImageClipToDesktop } from './services/clipUploadService';
 import {
   getHomeInstructions,
   saveHomeInstructionFileText,
@@ -457,7 +458,7 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {} }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {}, cloudUser = null }) {
   const [prompt, setPrompt] = useState('');
   // seed שהגיע מ-Project Hub ("צור מסמך לשלב"): נשמר כדי לשייך את המסמך שנוצר לשלב.
   const [pendingProjectSeed, setPendingProjectSeed] = useState(null);
@@ -516,6 +517,32 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const fileInputRef = useRef(null);
   const baseDraftInputRef = useRef(null);
   const docDraftInputRef = useRef(null);
+  // צילום מהטלפון → קליפ ממתין שהמחשב קולט. הכפתור מוצג רק בטלפון (sm:hidden).
+  const cameraClipInputRef = useRef(null);
+  const [isSendingCameraClip, setIsSendingCameraClip] = useState(false);
+
+  const handleCameraClip = async (event) => {
+    const file = event?.target?.files?.[0];
+    if (event?.target) event.target.value = '';
+    if (!file) return;
+    if (!cloudUser?.uid) {
+      showToast('צריך להתחבר לחשבון כדי לשלוח למחשב', { tone: 'warning' });
+      return;
+    }
+    setIsSendingCameraClip(true);
+    try {
+      await sendImageClipToDesktop({
+        user: cloudUser,
+        file,
+        title: `צילום מהטלפון ${new Date().toLocaleString('he-IL')}`,
+      });
+      showToast('נשלח למחשב ✓ — ייקלט שם תוך שניות', { tone: 'success' });
+    } catch (error) {
+      showToast(error?.message || 'השליחה למחשב נכשלה', { tone: 'error' });
+    } finally {
+      setIsSendingCameraClip(false);
+    }
+  };
   const instructionFileInputRef = useRef(null);
   const [instructions, setInstructions] = useState(() => {
     if (instructionsResetToken > 0) return '';
@@ -1661,6 +1688,34 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             <p className="text-base sm:text-xl md:text-2xl text-white/80 max-w-3xl mx-auto leading-relaxed" style={{ textShadow: '1px 1px 10px rgba(0,0,0,0.3)' }}>
               AI שמבין אותך, יוצר איתך, וממשיך ללמוד מהסגנון שלך ⚡
             </p>
+          </div>
+
+          {/* צילום מהטלפון → המחשב. מוצג רק בטלפון; במסכים רחבים sm:hidden מסתיר לגמרי. */}
+          <div className="sm:hidden max-w-3xl mx-auto mb-6">
+            <input
+              ref={cameraClipInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleCameraClip}
+            />
+            <button
+              type="button"
+              onClick={() => cameraClipInputRef.current?.click()}
+              disabled={isSendingCameraClip}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/35 bg-gradient-to-r from-cyan-500/80 to-blue-600/80 px-6 py-4 text-base font-bold text-white shadow-[0_16px_50px_rgba(8,47,73,0.4)] transition-all duration-300 disabled:opacity-60"
+              title="צלם דף/מסמך והוא ייקלט אוטומטית במחשב"
+            >
+              {isSendingCameraClip ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  שולח למחשב…
+                </>
+              ) : (
+                <>📷 צלם ושלח למחשב</>
+              )}
+            </button>
           </div>
 
           {/* Quick Prompt Animation */}

@@ -8,7 +8,13 @@
 // טבלאות, גרפים) נשאר זהה למקור.
 // ═══════════════════════════════════════════════════════════════
 
-import { chatWithActiveProvider, getFeatureProviderConfig, hashStyleSeed } from './aiService';
+import { chatWithActiveProvider, getFeatureProviderConfig, getPersonalStyleProfile, hashStyleSeed } from './aiService';
+import { normalizeStyleEngine } from './styleProfileService';
+import { restyleSourceOf, scoreParaAiness, acceptRestyledPara } from './restyleGate';
+import { resolveRestyleBand, getRestyleAggressiveness } from './restyleAggressiveness';
+import {
+  selectRepairTargets, buildParaRepairPrompt, rescorePara, cleanModelText,
+} from './draftDetectorPass';
 
 // כמה שקופיות לשלוח ב-prompt אחד (איזון בין מספר קריאות לאורך פלט).
 const SLIDE_BATCH = 8;
@@ -163,41 +169,80 @@ const extractJson = (raw = '') => {
   catch { return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1')); }
 };
 
-const buildRestylePrompt = (batch, instructions) => {
+const buildRestylePrompt = (batch, instructions, band = null) => {
   const slideBlocks = batch.map(({ index, paras }) => ({
     i: index,
-    paras: paras.map((p) => (p.text.length > MAX_PARA_CHARS ? p.text.slice(0, MAX_PARA_CHARS) : p.text)),
+    paras: paras.map((p) => {
+      const src = restyleSourceOf(p);
+      return {
+        t: src.length > MAX_PARA_CHARS ? src.slice(0, MAX_PARA_CHARS) : src,
+        ...(p._aiFlagged ? { ai: 1 } : {}),
+      };
+    }),
   }));
   return `לפניך טקסט גולמי משקופיות במצגת קיימת. שכתב כל פסקה כך שתישמע בסגנון הכתיבה האישי של המשתמש (ראה פרופיל הסגנון שסופק לך), בלי לשנות את המשמעות, העובדות או המספרים.
 
 חוקים נוקשים:
+- פסקה עם "ai":1 זוהתה על-ידי גלאי אוטומטי כגנרית/מכונתית — חובה לשכתב אותה בקול המשתמש. אסור להחזיר אותה ללא שינוי.
 - אם פסקה כבר נשמעת טבעית ובסגנון המשתמש, או שהיא כותרת/נקודה קצרה — החזר אותה ללא שינוי, אות באות.
 - שמור בדיוק על אותו מספר פסקאות בכל שקופית ועל אותו סדר. אל תוסיף, תמזג או תמחק פסקאות.
 - פסקה קצרה (כותרת/נקודה) נשארת קצרה. אל תנפח טקסט של שקופית לפסקה.
 - אל תוסיף מספור, תבליטים, גרשיים או markdown — רק הטקסט עצמו.
-- עברית.${instructions ? `\n- הנחיה נוספת מהמשתמש: ${instructions}` : ''}
+- עברית.${band?.promptSuffix ? `\n- ${band.promptSuffix}` : ''}${instructions ? `\n- הנחיה נוספת מהמשתמש: ${instructions}` : ''}
 
 קלט (JSON):
 ${JSON.stringify({ slides: slideBlocks }, null, 0)}
 
-החזר JSON תקין בלבד באותו מבנה בדיוק, אותם מפתחות i, אותו מספר פסקאות:
-{"slides":[{"i":<מספר>,"paras":["...","..."]}]}`;
+החזר JSON תקין בלבד באותו מבנה בדיוק, אותם מפתחות i, אותו מספר פסקאות בכל שקופית, כל פסקה כאובייקט עם שדה t (בלי שדה ai בפלט):
+{"slides":[{"i":<מספר>,"paras":[{"t":"..."},{"t":"..."}]}]}`;
+};
+
+// פסקה מהפלט יכולה לחזור כמחרוזת (החוזה הישן) או כאובייקט {t} (החוזה החדש).
+// מודלים מחזירים את שתי הצורות — קורא שמכיר רק אחת מהן מפיל שקופיות שלמות בשקט.
+const paraTextOf = (item) => {
+  if (item == null) return '';
+  if (typeof item === 'string') return item.trim();
+  if (typeof item === 'object') return String(item.t == null ? '' : item.t).trim();
+  return String(item).trim();
 };
 
 /**
  * restylePptxDraft — משכתב את כל פסקאות הטקסט בטיוטה לסגנון המשתמש (in-place).
  * מעדכן את ה-DOM ואת שדות ה-text של הפסקאות. מחזיר {changed} מספר פסקאות ששונו.
  * @param {object} draft
- * @param {object} opts - { instructions, slideIds?, onProgress, signal }
+ * @param {object} opts - { instructions, slideIds?, onProgress, signal, aggressiveness? }
  */
 export const restylePptxDraft = async (draft, opts = {}) => {
-  const { instructions = '', slideIds = null, onProgress = () => {}, signal } = opts;
-  const targetSlides = draft.slides
+  const { instructions = '', slideIds = null, onProgress = () => {}, signal, aggressiveness = null } = opts;
+  // עוצמת השכתוב: ערך מפורש מהקורא, אחרת מה שהמשתמש קבע בסליידר (scope מצגת).
+  const band = resolveRestyleBand(Number.isFinite(aggressiveness) ? aggressiveness : getRestyleAggressiveness('pptx'));
+  const explicitSelection = Array.isArray(slideIds) && slideIds.length > 0;
+  let targetSlides = draft.slides
     .map((slide, index) => ({ slide, index }))
     .filter(({ slide }) => (slideIds ? slideIds.includes(slide.slidePath) : true))
     .filter(({ slide }) => slide.paras.length);
 
   if (!targetSlides.length) return { changed: 0 };
+
+  // סימון פר-פסקה לפני החלוקה ל-batches: הגלאי מחליט מה גנרי, לא המודל.
+  // תבליט קצר מקבל ok:false מהגלאי (פחות מ-25 מילים) — ואז הוא פשוט לא מסומן.
+  for (const { slide } of targetSlides) {
+    for (const para of slide.paras) {
+      const src = restyleSourceOf(para).trim();
+      const scored = src.length >= band.minRestyleChars ? scoreParaAiness(src) : null;
+      para._aiFlagged = Boolean(scored && scored.score >= scored.threshold);
+    }
+  }
+
+  // ברצועה העדינה נוגעים רק בשקופיות שיש בהן פסקה מסומנת. בחירה מפורשת עוקפת.
+  if (band.onlyFlagged && !explicitSelection) {
+    targetSlides = targetSlides.filter(({ slide }) => slide.paras.some((p) => p._aiFlagged));
+    if (!targetSlides.length) return { changed: 0 };
+  }
+
+  // פרופיל המנוע לשער הקבלה (never-net-worse). כשל טעינה ⇒ שער אורך בלבד.
+  let styleEngine = null;
+  try { styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine); } catch { /* לא קריטי */ }
 
   const featureOverride = getFeatureProviderConfig('presentations')?.config || null;
   // seed סגנון אחד לכל המצגת — כל ה-batches חולקים את אותה רוטציית תבניות.
@@ -209,7 +254,7 @@ export const restylePptxDraft = async (draft, opts = {}) => {
       directChat: true,
       skipSkillSelection: true,
       // שכתוב הוא משימת עריכה — טמפרטורה נמוכה מקטינה שונות מיותרת.
-      temperature: 0.4,
+      temperature: band.temperature,
       omitPersonalStyleStructureHints: true,
       styleEngineSeed: deckSeed,
       ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
@@ -224,14 +269,21 @@ export const restylePptxDraft = async (draft, opts = {}) => {
 
   let changed = 0;
   let done = 0;
-  for (const batch of batches) {
+  const changedParaIds = new Set();
+  // retryPass: בסבב החוזר מחילים אך ורק את הפסקאות העיקשות (מסומנות ולא שונו) —
+  // שקופית נשלחת בשלמותה כדי לשמור על חוזה מספר-הפסקאות, אבל השאר לא נוגעים בהן שוב.
+  const runBatch = async (batch, extraInstructions, countProgress, retryPass = false) => {
     const prompt = buildRestylePrompt(
       batch.map(({ slide, index }) => ({ index, paras: slide.paras })),
-      instructions,
+      extraInstructions,
+      band,
     );
     let parsed;
     try { parsed = extractJson(await runChat(prompt)); }
-    catch { done += batch.length; onProgress(done, targetSlides.length); continue; }
+    catch {
+      if (countProgress) { done += batch.length; onProgress(done, targetSlides.length); }
+      return;
+    }
 
     const bySlide = new Map((Array.isArray(parsed.slides) ? parsed.slides : []).map((s) => [Number(s.i), s.paras]));
     for (const { slide, index } of batch) {
@@ -239,22 +291,118 @@ export const restylePptxDraft = async (draft, opts = {}) => {
       // אם המודל לא שמר על מספר הפסקאות — מדלגים על השקופית (בטוח, לא משבש).
       if (Array.isArray(newParas) && newParas.length === slide.paras.length) {
         slide.paras.forEach((para, pi) => {
-          const next = String(newParas[pi] == null ? '' : newParas[pi]).trim();
-          if (next && next !== para.text) { para.text = next; writePara(para); changed += 1; }
+          // ברצועה העדינה מחילים רק את הפסקאות שסומנו (אלא אם הבחירה מפורשת).
+          if (band.onlyFlagged && !explicitSelection && !para._aiFlagged) return;
+          if (retryPass && (!para._aiFlagged || changedParaIds.has(para.id))) return;
+          const next = paraTextOf(newParas[pi]);
+          const source = restyleSourceOf(para);
+          if (!next || next === para.text) return;
+          if (!acceptRestyledPara(source, para.text, next, styleEngine, para._aiFlagged, band)) return;
+          para.text = next;
+          para.restyledByAi = true;
+          writePara(para);
+          changedParaIds.add(para.id);
+          changed += 1;
         });
         slide.title = (slide.paras.find((p) => p.titleish && p.kind === 'body')?.text || slide.title);
       }
-      done += 1;
+      if (countProgress) done += 1;
     }
-    onProgress(done, targetSlides.length);
+    if (countProgress) onProgress(done, targetSlides.length);
+  };
+
+  for (const batch of batches) {
+    await runBatch(batch, instructions, true);
+  }
+
+  // סבב-חוזר יחיד: פסקאות שהגלאי סימן כגנריות אבל חזרו ללא שינוי. בלי זה
+  // "חובה לשכתב" נשארת בקשה — מודל שמתעלם ממנה משאיר טקסט-AI במצגת בשקט.
+  const stubbornSlides = targetSlides
+    .map(({ slide, index }) => ({ index, slide, paras: slide.paras.filter((p) => p._aiFlagged && !changedParaIds.has(p.id)) }))
+    .filter((entry) => entry.paras.length);
+  if (stubbornSlides.length) {
+    const retryNote = [String(instructions || '').trim(),
+      'הפסקאות שסומנו ב-"ai":1 חזרו ללא שינוי בסבב הקודם. הפעם שכתוב מלא הוא חובה: החזר לכל פסקה כזו ניסוח שונה מהותית מהקלט, באותה משמעות ובקול המשתמש.']
+      .filter(Boolean).join('\n');
+    for (let i = 0; i < stubbornSlides.length; i += SLIDE_BATCH) {
+      await runBatch(stubbornSlides.slice(i, i + SLIDE_BATCH).map(({ index, slide }) => ({ index, slide })), retryNote, false, true);
+    }
   }
 
   return { changed };
 };
 
+// system של סבב התיקון הממוקד (פסקה בודדת, טקסט חופשי ולא JSON).
+const REPAIR_SYSTEM = 'אתה עורך לשוני. שכתב את הפסקה כך שתישמע אנושית וטבעית בקול המשתמש. החזר את הפסקה המשוכתבת בלבד, בלי הסברים.';
+
+/**
+ * repairFlaggedParas — סבב תיקון ממוקד לפסקאות שהגלאי עדיין מסמן אחרי השכתוב.
+ * דורש ש-scoreDraftParas רץ קודם (הוא זה שכותב את lastAiScore/‏_lastAiResult).
+ * @param {object} draft
+ * @param {object} opts - { onProgress, signal, aggressiveness? }
+ * @returns {Promise<{repaired:number, remaining:number}>}
+ */
+export async function repairFlaggedParas(draft, { onProgress = () => {}, signal, aggressiveness = null } = {}) {
+  const band = resolveRestyleBand(Number.isFinite(aggressiveness) ? aggressiveness : getRestyleAggressiveness('pptx'));
+  const allParas = draftParas(draft || { slides: [] });
+  const targets = selectRepairTargets(allParas);
+  if (!targets.length) return { repaired: 0, remaining: 0 };
+
+  let styleEngine = null;
+  try { styleEngine = normalizeStyleEngine(getPersonalStyleProfile()?.styleEngine); } catch { /* לא קריטי */ }
+
+  const featureOverride = getFeatureProviderConfig('presentations')?.config || null;
+  const deckSeed = hashStyleSeed(String(draft?.fileName || '') + String(draft?.slides?.[0]?.paras?.[0]?.text || ''));
+  const runChat = (prompt) =>
+    chatWithActiveProvider(prompt, '', REPAIR_SYSTEM, {
+      skipAutomation: true,
+      skipMultiModel: true,
+      directChat: true,
+      skipSkillSelection: true,
+      temperature: band.temperature,
+      omitPersonalStyleStructureHints: true,
+      styleEngineSeed: deckSeed,
+      ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
+      ...(signal ? { signal } : {}),
+    });
+
+  let repaired = 0;
+  let done = 0;
+  for (const para of targets) {
+    let next = '';
+    try { next = cleanModelText(await runChat(buildParaRepairPrompt(para))); }
+    catch { next = ''; }
+    // הפסקה כאן מסומנת בהגדרה (selectRepairTargets) ⇒ aiFlagged=true בשער.
+    if (next && next !== para.text
+      && acceptRestyledPara(restyleSourceOf(para), para.text, next, styleEngine, true, band)) {
+      para.text = next;
+      para.restyledByAi = true;
+      writePara(para);
+      repaired += 1;
+    }
+    // הסבב נספר גם כשנדחה — אחרת פסקה עיקשת תילכד בלולאה אינסופית.
+    para.aiCheckPasses = (para.aiCheckPasses || 0) + 1;
+    rescorePara(para);
+    done += 1;
+    onProgress(done, targets.length);
+  }
+
+  // כותרת השקופית עשויה להשתנות בעקבות התיקון.
+  for (const slide of draft?.slides || []) {
+    slide.title = (slide.paras.find((p) => p.titleish && p.kind === 'body')?.text || slide.title);
+  }
+
+  return { repaired, remaining: selectRepairTargets(draftParas(draft || { slides: [] })).length };
+}
+
 // מחיל עריכה ידנית של פסקה בודדת (מהממשק) על ה-DOM.
+// עריכה ידנית מאפסת את סימון השכתוב — שכתוב הבא יוצא מהטקסט שהמשתמש קבע.
 export const setParaText = (para, text) => {
   para.text = String(text == null ? '' : text);
+  para.restyledByAi = false;
+  // הטקסט השתנה ⇒ הניקוד הישן ומכסת הסבבים כבר לא רלוונטיים.
+  para.lastAiScore = null;
+  para.aiCheckPasses = 0;
   writePara(para);
 };
 
