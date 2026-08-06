@@ -40,6 +40,7 @@ import {
 import { getTheme, toggleTheme, onThemeChange } from './theme';
 import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
+import { CLIP_INGESTED_EVENT } from './services/clipInboxService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -241,6 +242,7 @@ const MATERIAL_FILTER_OPTIONS = [
   { id: 'course-materials', label: 'חומרי קורס' },
   { id: 'writing-samples', label: 'דוגמאות כתיבה' },
   { id: 'templates', label: 'תבניות' },
+  { id: 'web-clips', label: 'קליפים' },
 ];
 
 const ACADEMIC_GENERATION_STRONG_SIGNAL_PATTERN = /(אקדמ|סמינר|סילבוס|ביבליוגרפ|apa|mla|doi|peer[-\s]?reviewed|journal|מאמר|מחקר\s+אקדמי|literature\s+review)/i;
@@ -257,9 +259,10 @@ const isLikelyAcademicGenerationRequest = ({ prompt = '', instructions = '', tem
   || countAcademicGenerationWeakSignals([prompt, instructions].filter(Boolean).join('\n')) >= 2
 );
 
-const MATERIAL_GROUP_ORDER = ['course-materials', 'writing-samples', 'templates', 'examples', 'other'];
+const MATERIAL_GROUP_ORDER = ['web-clips', 'course-materials', 'writing-samples', 'templates', 'examples', 'other'];
 
 const MATERIAL_GROUP_LABELS = {
+  'web-clips': 'קליפים מהאינטרנט',
   'course-materials': 'חומרי קורס',
   'writing-samples': 'דוגמאות כתיבה',
   templates: 'תבניות',
@@ -290,10 +293,14 @@ const isExampleMaterial = ({ kind = '', label = '' } = {}) => (
   || /דוגמ(?:ת|ה)?|example|sample/.test(label)
 );
 
+// קליפים מזוהים לפי uploadKind בלבד — הוא נקבע ע"י clipInboxService, לא ע"י שם הקובץ.
+const isWebClipMaterial = ({ kind = '' } = {}) => kind === 'web-clip';
+
 const resolveMaterialGroupId = (item = {}) => {
   const kind = normalizeMaterialValue(item.uploadKind);
   const label = normalizeMaterialValue(item.label);
 
+  if (isWebClipMaterial({ kind })) return 'web-clips';
   if (isCourseMaterial({ kind, label })) return 'course-materials';
   if (isWritingSampleMaterial({ kind, label })) return 'writing-samples';
   if (isTemplateMaterial({ kind, label })) return 'templates';
@@ -306,6 +313,7 @@ const doesMaterialMatchFilter = (item = {}, filter = 'all') => {
 
   const kind = normalizeMaterialValue(item.uploadKind);
   const label = normalizeMaterialValue(item.label);
+  if (filter === 'web-clips') return isWebClipMaterial({ kind });
   if (filter === 'course-materials') return isCourseMaterial({ kind, label });
   if (filter === 'writing-samples') return isWritingSampleMaterial({ kind, label });
   if (filter === 'templates') return isTemplateMaterial({ kind, label });
@@ -870,13 +878,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     refreshWorkspaceState();
 
     if (typeof window === 'undefined') return undefined;
+    // קליפ שנקלט ברקע (poll של 5 שניות) חייב להופיע ברשימה בלי רענון ידני.
+    const refreshMaterialsFromClip = () => {
+      if (typeof loadProjectMaterials === 'function') loadProjectMaterials().then(setMaterials).catch(() => null);
+    };
     window.addEventListener('wordai-workspace-changed', refreshWorkspaceState);
     window.addEventListener('wordai-provider-config-changed', refreshWorkspaceState);
     window.addEventListener('wordai-settings-hydrated', refreshWorkspaceState);
+    window.addEventListener(CLIP_INGESTED_EVENT, refreshMaterialsFromClip);
     return () => {
       window.removeEventListener('wordai-workspace-changed', refreshWorkspaceState);
       window.removeEventListener('wordai-provider-config-changed', refreshWorkspaceState);
       window.removeEventListener('wordai-settings-hydrated', refreshWorkspaceState);
+      window.removeEventListener(CLIP_INGESTED_EVENT, refreshMaterialsFromClip);
     };
   }, []);
 
@@ -2066,7 +2080,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                          onChange={(e) => setUploadKind(e.target.value)}
                          className="px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/25 rounded-xl text-white text-xs transition-all shadow-sm appearance-none cursor-pointer min-w-[220px]"
                        >
-                         {Object.values(MATERIAL_UPLOAD_PRESETS).map((item) => (
+                         {/* web-clip נוצר רק ע"י התוסף — לא בחירה להעלאה ידנית */}
+                         {Object.values(MATERIAL_UPLOAD_PRESETS).filter((item) => item.id !== 'web-clip').map((item) => (
                            <option key={item.id} value={item.id} className="bg-slate-900 text-white">{item.label}</option>
                          ))}
                        </select>

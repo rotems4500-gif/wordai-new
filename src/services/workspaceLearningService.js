@@ -97,6 +97,8 @@ export const MATERIAL_UPLOAD_PRESETS = {
   'template-example': { id: 'template-example', label: 'תבנית מסמך לדוגמה', category: 'office', templateId: 'report', learningHint: 'למד את המבנה, סדר הפרקים והעיצוב שהמשתמש מעדיף למסמכים.' },
   'writing-sample': { id: 'writing-sample', label: 'דוגמת כתיבה אישית', category: 'academic', templateId: 'academic', learningHint: 'למד את הטון, אוצר המילים והניסוח האישי של המשתמש.' },
   'course-material': { id: 'course-material', label: 'חומר קורס או רקע', category: 'academic', templateId: 'summary', learningHint: 'השתמש בקובץ כדי להבין את עולם התוכן, המושגים והדרישות האקדמיות.' },
+  // נוצר רק ע"י תוסף הדפדפן (clipInboxService) — לא מוצע בתפריט ההעלאה הידני.
+  'web-clip': { id: 'web-clip', label: 'קליפ מהאינטרנט', category: 'academic', templateId: 'summary', learningHint: 'קטע שנגזר מדף אינטרנט. השתמש בו כחומר רקע, וציין את כתובת המקור כשמצטטים.' },
 };
 
 export function getMaterialUploadMeta(kind = 'general') {
@@ -5611,6 +5613,42 @@ export async function saveHelperMaterial(file, options = {}) {
   const browserEntry = buildUploadedMaterialEntry(payload);
   await saveBrowserUploadedMaterialEntry(browserEntry);
   return { ok: true, file: browserEntry.file, entry: browserEntry };
+}
+
+/**
+ * שומר קליפ מתוסף הדפדפן כחומר עזר ברשימת חומרי הפרויקט.
+ *
+ * ⚠️ זו רשימה אחרת מ-materialChunkStore: הראשונה היא מה שהמשתמש רואה ובוחר
+ * במסך הבית, השנייה היא אינדקס הראיות ל-RAG. קליפ צריך להיכנס לשתיהן —
+ * עד כה הוא נכתב רק לשנייה ולכן "נעלם" מבחינת המשתמש.
+ *
+ * אין קובץ מקור, ולכן גם בדסקטופ נשמרת רשומת דפדפן (IndexedDB) ולא קובץ מקומי.
+ */
+export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '' } = {}) {
+  const body = String(text || '').trim();
+  if (!body) return { ok: false, error: 'קליפ ריק' };
+  const meta = getMaterialUploadMeta('web-clip');
+  const safeTitle = String(title || '').trim() || 'קליפ מהאינטרנט';
+  const entry = buildUploadedMaterialEntry({
+    name: `${safeTitle}.txt`,
+    title: safeTitle,
+    uploadKind: meta.id,
+    label: meta.label,
+    category: meta.category,
+    templateId: meta.templateId,
+    learningHint: meta.learningHint,
+    previewText: body.slice(0, MATERIAL_PREVIEW_MAX_LENGTH),
+    contentText: body.slice(0, MATERIAL_CONTENT_MAX_LENGTH),
+    previewChars: Math.min(body.length, MATERIAL_PREVIEW_MAX_LENGTH),
+    previewStatus: 'ready',
+    previewSource: sourceUrl ? `web-clip:${sourceUrl}` : 'web-clip',
+    extractedChars: body.length,
+    extractionStatus: 'success',
+    extractionMessage: sourceUrl ? `נגזר מ-${sourceUrl}` : 'נגזר מדף אינטרנט',
+    ...(projectId ? { projectId: String(projectId).trim() } : {}),
+  });
+  await saveBrowserUploadedMaterialEntry(entry);
+  return { ok: true, entry };
 }
 
 export async function removeHelperMaterial(material = {}) {

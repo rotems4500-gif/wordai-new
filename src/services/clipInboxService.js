@@ -18,6 +18,7 @@ import { extractImageOcr, pureTokenRatio } from './materialExtractBrowser';
 import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
+import { saveClipAsHelperMaterial } from './workspaceLearningService';
 
 const POLL_INTERVAL_MS = 5000;
 const CLIP_DEFAULT_DESTINATION_KEY = 'wordai_clip_default_destination';
@@ -136,6 +137,14 @@ async function ingestClip(user, clip) {
   if (clip.projectId && result.materialId) {
     attachMaterialToProject(clip.projectId, result.materialId);
   }
+  // ...וגם לרשימת חומרי הפרויקט — זו הרשימה שהמשתמש רואה במסך הבית.
+  // כשל כאן לא מפיל את הקליטה: הראיה כבר באינדקס.
+  await saveClipAsHelperMaterial({
+    title: result.title,
+    text,
+    sourceUrl: clip.sourceUrl || '',
+    projectId: clip.projectId || '',
+  }).catch((err) => console.error('[clipInbox] saveClipAsHelperMaterial failed', err));
   return result;
 }
 
