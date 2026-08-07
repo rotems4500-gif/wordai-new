@@ -14,7 +14,8 @@ import {
   deleteClipImage,
   deleteClipDoc,
 } from '../firebase/services';
-import { extractImageOcr, pureTokenRatio, extractMaterialTextFromBytes } from './materialExtractBrowser';
+import { extractImageOcr, pureTokenRatio, extractMaterialTextFromBytes, renderPdfPageToDataUrl } from './materialExtractBrowser';
+import { makeImageThumbnailDataUrl } from './clipPreviewService';
 import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
@@ -24,6 +25,8 @@ import { isDesktopApp } from '../platform';
 const POLL_INTERVAL_MS = 5000;
 const CLIP_DEFAULT_DESTINATION_KEY = 'wordai_clip_default_destination';
 const CLIP_ROLE_KEY = 'wordai_clip_client_role';
+const CLIP_REQUIRE_REVIEW_KEY = 'wordai_clip_require_review';
+const CLIP_REVIEW_HINT_KEY = 'wordai_clip_review_hint_shown';
 export const CLIP_INGESTED_EVENT = 'wordai-clip-ingested';
 // מדווח על התחלת OCR ארוך. בלי זה קליטת PDF סרוק נראית כמו תקיעה: OCR רץ
 // ~8 שניות לעמוד, וה-toast היחיד מגיע רק בסוף.
@@ -69,6 +72,56 @@ export function setClipClientRole(value) {
   try { localStorage.setItem(CLIP_ROLE_KEY, value); } catch { /* noop */ }
 }
 
+// שער סקירה: כשהוא דלוק שום קליפ לא נכנס לעבודה לבד — הכל ממתין בתיבה לאישור.
+// כבוי כברירת מחדל (התנהגות קיימת: קליטה אוטומטית לפי destination).
+export function getClipRequireReview() {
+  try {
+    return localStorage.getItem(CLIP_REQUIRE_REVIEW_KEY) === '1';
+  } catch { return false; }
+}
+
+export function setClipRequireReview(value) {
+  try {
+    if (value) localStorage.setItem(CLIP_REQUIRE_REVIEW_KEY, '1');
+    else localStorage.removeItem(CLIP_REQUIRE_REVIEW_KEY);
+  } catch { /* noop */ }
+}
+
+// רמז חד-פעמי: בפעם הראשונה שקליפ נקלט לבד, מספרים למשתמש שיש שער סקירה.
+function consumeReviewHint() {
+  if (getClipRequireReview()) return false;
+  try {
+    if (localStorage.getItem(CLIP_REVIEW_HINT_KEY) === '1') return false;
+    localStorage.setItem(CLIP_REVIEW_HINT_KEY, '1');
+    return true;
+  } catch { return false; }
+}
+
+// תמונת תצוגה קבועה לקליפ (נשמרת עם חומר העזר). כשל כאן לעולם לא מפיל קליטה.
+const CLIP_THUMBNAIL_MAX_WIDTH = 320;
+const CLIP_THUMBNAIL_QUALITY = 0.7;
+async function buildClipThumbnail(clip, bytes) {
+  try {
+    if (clip.kind === 'image') {
+      return await makeImageThumbnailDataUrl(bytes, {
+        maxWidth: CLIP_THUMBNAIL_MAX_WIDTH,
+        quality: CLIP_THUMBNAIL_QUALITY,
+      });
+    }
+    if (/\.pdf$/i.test(String(clip.fileName || ''))) {
+      const { dataUrl } = await renderPdfPageToDataUrl(bytes, {
+        page: 1,
+        maxWidth: CLIP_THUMBNAIL_MAX_WIDTH,
+        quality: CLIP_THUMBNAIL_QUALITY,
+      });
+      return dataUrl || '';
+    }
+  } catch (err) {
+    console.error('[clipInbox] thumbnail failed', err);
+  }
+  return '';
+}
+
 // upscale ×2 לפני OCR — נמדד בharness (6.8.26): עברית 11px עלתה מ-recall 0.72
 // ל-0.96 אחרי ההגדלה (אותו עיקרון כמו OCR_PAGE_SCALE=2.0 בנתיב ה-PDF).
 // תמונות גדולות ממילא לא מוגדלות — רק בזבוז זמן וזיכרון canvas.
@@ -98,14 +151,47 @@ const clipTitle = (clip) => {
 };
 
 // קליטת קליפ יחיד → מחזיר תוצאה ל-toast/פאנל. זורק במקרה כשל (נתפס בלולאה).
-async function ingestClip(user, clip) {
+// skipReviewGate=true בניתוב ידני מהפאנל: המשתמש כבר סקר, אין טעם להחזיר לתיבה.
+async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
+  // ⚠️ הניתוב נקבע **לפני** החילוץ. קליפ שמיועד לתיבה לא צריך OCR בכלל — עד כה
+  // קליפ קובץ עבר OCR מלא (שניות לעמוד) גם כשהוא רק המתין לאישור ידני.
+  let destination = clip.destination || 'material';
+  // destination 'source' בלי פרויקט לא שמיש — נופל ל-inbox (מוצג לניתוב ידני).
+  if (destination === 'source' && !clip.projectId) destination = 'inbox';
+
+  const heldForReview = !skipReviewGate && destination !== 'inbox' && getClipRequireReview();
+  if (heldForReview) destination = 'inbox';
+
+  if (destination === 'inbox') {
+    // מתמיד את הניתוב במסמך עצמו כדי ש-listInboxClips (וריסטארט של האפליקציה)
+    // יראו אותו בתיבה. הסטטוס נשאר pending — הבייטים ב-Storage שורדים לתצוגה.
+    if (heldForReview) {
+      await updateClipStatus(user, clip.id, { destination: 'inbox', heldForReview: true })
+        .catch(() => {});
+    }
+    // נשאר pending — ClipInboxPanel מציג אותו עד שהמשתמש מנתב ידנית.
+    return {
+      clipId: clip.id,
+      title: clipTitle(clip),
+      domain: clip.domain || '',
+      destination: 'inbox',
+      heldForReview,
+      lowConfidenceOcr: false,
+      truncated: Boolean(clip.truncated),
+      materialId: null,
+      chunkCount: 0,
+    };
+  }
+
   let text = clip.text || '';
   let cleanDigital = true;
   let lowConfidenceOcr = false;
+  let thumbnailDataUrl = '';
 
   // קליפ קובץ (PDF מצופה Chrome): אותו מחלץ של העלאת חומרים, כולל OCR ל-PDF סרוק.
   if (clip.kind === 'file') {
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
+    thumbnailDataUrl = await buildClipThumbnail(clip, bytes);
     const res = await extractMaterialTextFromBytes(clip.fileName || 'clip.pdf', bytes, 200000, {
       ocr: true,
       // מדווח פעם אחת, בעמוד הראשון: משם והלאה זה רק ספירה ומספיק שהמשתמש יודע
@@ -125,6 +211,7 @@ async function ingestClip(user, clip) {
 
   if (clip.kind === 'image') {
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
+    thumbnailDataUrl = await buildClipThumbnail(clip, bytes);
     text = await extractImageOcr(await upscaleForOcr(bytes));
     cleanDigital = false;
     if (!String(text || '').trim()) {
@@ -137,25 +224,17 @@ async function ingestClip(user, clip) {
     throw new Error('קליפ ריק — אין טקסט לקליטה');
   }
 
-  // destination 'source' בלי פרויקט לא שמיש — נופל ל-inbox (מוצג לניתוב ידני).
-  let destination = clip.destination || 'material';
-  if (destination === 'source' && !clip.projectId) destination = 'inbox';
-
   const result = {
     clipId: clip.id,
     title: clipTitle(clip),
     domain: clip.domain || '',
     destination,
+    heldForReview: false,
     lowConfidenceOcr,
     truncated: Boolean(clip.truncated),
     materialId: null,
     chunkCount: 0,
   };
-
-  if (destination === 'inbox') {
-    // נשאר pending — ClipInboxPanel מציג אותו עד שהמשתמש מנתב ידנית.
-    return result;
-  }
 
   if (destination === 'source') {
     appendProjectMemory(clip.projectId, {
@@ -191,6 +270,7 @@ async function ingestClip(user, clip) {
     text,
     sourceUrl: clip.sourceUrl || '',
     projectId: clip.projectId || '',
+    thumbnailDataUrl,
   }).catch((err) => console.error('[clipInbox] saveClipAsHelperMaterial failed', err));
   return result;
 }
@@ -221,6 +301,8 @@ export async function ingestPendingClips(user = currentUser) {
           }
           continue;
         }
+        // רמז חד-פעמי על שער הסקירה — נתלה על הקליטה האוטומטית הראשונה בלבד.
+        if (consumeReviewHint()) result.reviewHint = true;
         results.push(result);
         if (result.destination === 'material') addedMaterials = true;
         await updateClipStatus(user, clip.id, { status: 'processed' });
@@ -279,7 +361,8 @@ export async function listInboxClips(user = currentUser) {
 export async function routeInboxClip(user, clip, { destination, projectId = null }) {
   await ensureMaterialStoreReady(); // ר' ההערה ב-ingestPendingClips
   const resolved = { ...clip, destination, projectId };
-  const result = await ingestClip(user || currentUser, resolved);
+  // המשתמש בחר במפורש מהתיבה — שער הסקירה כבר מוצה, אחרת הקליפ היה חוזר אליה.
+  const result = await ingestClip(user || currentUser, resolved, { skipReviewGate: true });
   if (result.destination === 'material') {
     commitMaterialStore();
     for (let i = 0; i < 25; i += 1) {

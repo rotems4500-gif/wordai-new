@@ -3830,14 +3830,18 @@ function App() {
       if (!results.length) return;
       const first = results[0];
       const label = first.domain ? `מ-${first.domain}` : 'מהדפדפן';
+      // רמז חד-פעמי על שער הסקירה (clipInboxService מסמן אותו פעם אחת בלבד).
+      const hint = results.some((r) => r.reviewHint)
+        ? ' רוצה לאשר כל קליפ לפני שהוא נכנס? סמן "שאל אותי לפני שקליפ נכנס לעבודה" בתיבת הקליפים.'
+        : '';
       if (results.length === 1 && first.destination === 'inbox') {
         showToast(`קליפ חדש ${label} ממתין בתיבת הדואר של הקליפים.`, { tone: 'info' });
       } else {
         showToast(
-          results.length === 1
+          (results.length === 1
             ? `קליפ חדש ${label} נקלט כחומר עזר${first.lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
-            : `${results.length} קליפים חדשים נקלטו מהדפדפן.`,
-          { tone: 'info' },
+            : `${results.length} קליפים חדשים נקלטו מהדפדפן.`) + hint,
+          { tone: 'info', ...(hint ? { duration: 9000 } : {}) },
         );
       }
     };

@@ -2280,6 +2280,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                                >
                                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                                    <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
+                                   {item.thumbnailDataUrl ? (
+                                     // תמונת הקליפ נשמרת בקליטה (clipInboxService) — קיימת רק לקליפים.
+                                     <img
+                                       src={item.thumbnailDataUrl}
+                                       alt=""
+                                       className="w-8 h-8 shrink-0 rounded object-cover border border-white/20"
+                                     />
+                                   ) : null}
                                    <div className="flex min-w-0 flex-col overflow-hidden">
                                      <span className="text-white/90 text-xs truncate leading-tight w-full">{item.title}</span>
                                      <span className={`text-[10px] truncate ${successTone ? 'text-emerald-100' : 'text-rose-100'}`}>{extractionInfo.label}</span>

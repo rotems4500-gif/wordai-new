@@ -862,6 +862,9 @@ export async function loadProjectMaterials() {
         extractionTruncated: item?.extractionTruncated === true,
         canPreviewText: canPreviewMaterialText(type) || Boolean(previewText),
         projectId: String(item.projectId || '').trim(),
+        // ⚠️ גם הרשימה הזו היא whitelist — בלי השורה הזו התמונה נשמרת אבל
+        // אף פעם לא מגיעה למסך הבית.
+        thumbnailDataUrl: String(item.thumbnailDataUrl || ''),
       };
     });
 }
@@ -5705,7 +5708,8 @@ async function saveBrowserUploadedMaterialEntry(entry = {}) {
   } catch {
     // Very old/private browsers may disable IndexedDB. Keep a bounded preview
     // fallback in localStorage instead of serializing every full document.
-    next = next.map((item) => ({ ...item, contentText: '' }));
+    // גם התמונה יורדת: data URL של מאות KB ב-localStorage מפוצץ את המכסה מיד.
+    next = next.map((item) => ({ ...item, contentText: '', thumbnailDataUrl: '' }));
     while (next.length) {
       try {
         localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
@@ -5797,6 +5801,9 @@ function buildUploadedMaterialEntry(payload = {}) {
     extractionStatus: String(payload?.extractionStatus || '').trim(),
     extractionMessage: String(payload?.extractionMessage || '').trim(),
     extractionTruncated: payload?.extractionTruncated === true,
+    // תמונת תצוגה (data URL, ~320px JPEG) — נוצרת בקליטת קליפ מהדפדפן.
+    // ⚠️ הרשומה הזו היא whitelist: שדה שלא מופיע כאן נזרק בשקט.
+    thumbnailDataUrl: String(payload?.thumbnailDataUrl || ''),
     uploadedAt: new Date().toISOString(),
   };
 }
@@ -5852,7 +5859,7 @@ export async function saveHelperMaterial(file, options = {}) {
  *
  * אין קובץ מקור, ולכן גם בדסקטופ נשמרת רשומת דפדפן (IndexedDB) ולא קובץ מקומי.
  */
-export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '' } = {}) {
+export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '', thumbnailDataUrl = '' } = {}) {
   const body = String(text || '').trim();
   if (!body) return { ok: false, error: 'קליפ ריק' };
   const meta = getMaterialUploadMeta('web-clip');
@@ -5873,6 +5880,7 @@ export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', pr
     extractedChars: body.length,
     extractionStatus: 'success',
     extractionMessage: sourceUrl ? `נגזר מ-${sourceUrl}` : 'נגזר מדף אינטרנט',
+    thumbnailDataUrl,
     ...(projectId ? { projectId: String(projectId).trim() } : {}),
   });
   await saveBrowserUploadedMaterialEntry(entry);

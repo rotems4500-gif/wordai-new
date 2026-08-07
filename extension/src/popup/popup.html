@@ -21,8 +21,31 @@
     <div id="signed-in-view" class="wf-view hidden">
       <p class="wf-user-email" id="user-email"></p>
 
-      <button id="send-page-btn" class="wf-btn wf-btn-primary">שלח את העמוד הנוכחי</button>
-      <button id="send-files-btn" class="wf-btn">קלוט את כל הקבצים בעמוד</button>
+      <div id="state-scanning" class="wf-state">
+        <p class="wf-hint wf-scanning">סורק את העמוד...</p>
+      </div>
+
+      <div id="state-pdf" class="wf-state hidden">
+        <p class="wf-file-line">📄 <span id="pdf-file-name"></span></p>
+        <button id="send-pdf-btn" class="wf-btn wf-btn-primary">שלח PDF זה</button>
+      </div>
+
+      <div id="state-page" class="wf-state hidden">
+        <button id="send-page-btn" class="wf-btn wf-btn-primary">שלח את העמוד הנוכחי</button>
+
+        <div id="file-list-block" class="wf-files hidden">
+          <div class="wf-files-head">
+            <label class="wf-checkbox">
+              <input type="checkbox" id="select-all-checkbox" />
+              <span id="files-count">נמצאו 0 קבצים</span>
+            </label>
+          </div>
+          <ul id="file-list" class="wf-file-list"></ul>
+          <button id="download-selected-btn" class="wf-btn">הורד 0 נבחרים</button>
+          <p id="files-summary" class="wf-status hidden"></p>
+        </div>
+      </div>
+
       <p id="send-status" class="wf-status hidden"></p>
 
       <fieldset class="wf-destination">
@@ -37,7 +60,7 @@
         </label>
         <label class="wf-radio">
           <input type="radio" name="destination" value="inbox" />
-          <span>תיבת דואר</span>
+          <span>תיבת קליפים (אישור לפני קליטה)</span>
         </label>
       </fieldset>
 

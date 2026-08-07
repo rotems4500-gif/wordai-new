@@ -223,9 +223,14 @@ function resolveFileName(link, probe) {
   return `${base}.${ext}`;
 }
 
-async function handleClipAllFiles(tab) {
-  const user = await requireUser();
-
+/**
+ * סריקת הקישורים בעמוד בלבד — בלי הורדה. מחזיר {pageTitle, links}.
+ * ⚠️ שתי קריאות executeScript בכוונה: esbuild עוטף ב-IIFE וערך ההחזרה
+ * של הזרקת {files} תמיד undefined (ר' scanLinks.js). הקריאה השנייה קוראת
+ * את הגלובל ומוחקת אותו.
+ * רשימה ריקה אינה שגיאה — הפופאפ מציג מצב "לא נמצאו קבצים".
+ */
+async function scanPageFiles(tab) {
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/scanLinks.js'] });
   const [{ result: scan }] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -236,20 +241,60 @@ async function handleClipAllFiles(tab) {
     },
   });
 
-  const links = scan?.links || [];
-  if (!links.length) throw new Error('לא נמצאו קישורים לקבצים בעמוד');
+  return { pageTitle: scan?.pageTitle || tab.title || '', links: scan?.links || [] };
+}
 
-  flashBadge(tab.id, String(links.length), '#2563eb', 4000);
+const TAB_CHANGED_MSG = 'הדף השתנה — פתח מחדש את החלון ונסה שוב';
+
+/**
+ * הורדה סדרתית של רשימת קישורים. onItem נקרא לכל פריט עם
+ * {index, url, title, status: 'saved'|'skipped'|'login'|'error', fileName, reason}.
+ * ⚠️ הרשאת activeTab נשללת ברגע שהלשונית מנווטת — לכן בודקים את ה-URL לפני
+ * כל משיכה ועוצרים במקום להיכשל בשקט על כל שאר הקבצים.
+ */
+async function downloadFiles(tab, links, onItem = () => {}) {
+  const user = await requireUser();
+  const startUrl = tab.url;
 
   let saved = 0;
   const skipped = [];
-  for (const link of links) {
+  let aborted = false;
+
+  for (let index = 0; index < links.length; index += 1) {
+    const link = links[index];
+    const emit = (status, extra = {}) => {
+      onItem({ index, url: link.url, title: link.title || '', status, ...extra });
+    };
+
+    if (!aborted) {
+      try {
+        const current = await chrome.tabs.get(tab.id);
+        if (current?.url && startUrl && current.url !== startUrl) aborted = true;
+      } catch {
+        aborted = true; // הלשונית נסגרה
+      }
+    }
+    if (aborted) {
+      skipped.push(`${link.title || link.url}: ${TAB_CHANGED_MSG}`);
+      emit('error', { reason: TAB_CHANGED_MSG });
+      continue;
+    }
+
     try {
       const probe = await fetchFileViaTab(tab.id, link.url);
-      if (!probe?.ok) { skipped.push(`${link.title || link.url}: לא נגיש`); continue; }
+      if (!probe?.ok) {
+        skipped.push(`${link.title || link.url}: לא נגיש`);
+        emit('skipped', { reason: 'לא נגיש' });
+        continue;
+      }
       if (!probe.isPdf && !probe.isZip) {
         // דף HTML (ניווט/התחברות) ולא קובץ — מדלגים בשקט, זה הרוב בדף קורס.
-        if (probe.looksLikeLogin) skipped.push(`${link.title || link.url}: נדרשת התחברות`);
+        if (probe.looksLikeLogin) {
+          skipped.push(`${link.title || link.url}: נדרשת התחברות`);
+          emit('login', { reason: 'נדרשת התחברות לאתר' });
+        } else {
+          emit('skipped', { reason: 'אינו קובץ' });
+        }
         continue;
       }
       const fileName = resolveFileName(link, probe);
@@ -264,17 +309,127 @@ async function handleClipAllFiles(tab) {
       });
       saved += 1;
       flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+      emit('saved', { fileName });
     } catch (err) {
       console.warn('[wordflow][files] דילוג על', link.url, err);
-      skipped.push(`${link.title || link.url}: ${err?.message || err}`);
+      const reason = String(err?.message || err);
+      skipped.push(`${link.title || link.url}: ${reason}`);
+      emit('error', { reason });
     }
   }
+
+  return { saved, skipped };
+}
+
+async function handleClipAllFiles(tab) {
+  await requireUser();
+
+  const { links } = await scanPageFiles(tab);
+  if (!links.length) throw new Error('לא נמצאו קישורים לקבצים בעמוד');
+
+  flashBadge(tab.id, String(links.length), '#2563eb', 4000);
+
+  const { saved, skipped } = await downloadFiles(tab, links);
 
   console.info(`[wordflow][files] נשלחו ${saved} קבצים · דילוגים:`, skipped);
   if (!saved) throw new Error('לא נמצא אף קובץ שניתן להוריד בעמוד');
   handleSuccess(tab.id);
   return { saved, skipped };
 }
+
+/**
+ * זיהוי מהיר של סוג הלשונית לפי ה-URL בלבד (בלי בקשת רשת) — הפופאפ צריך
+ * להחליט בין מצב "PDF" למצב "רשימת קבצים" מיד עם הפתיחה.
+ */
+function detectTabKind(tab) {
+  const url = tab?.url || '';
+  if (!url) return { isPdf: false, fileName: '', url: '' };
+  const isPdf = PDF_URL_PATTERN.test(url);
+  return { isPdf, fileName: isPdf ? fileNameFromUrl(url) : '', url };
+}
+
+// ---------- מצב עבודה נמשך (הפופאפ נסגר באמצע הורדה) ----------
+const jobKey = (tabId) => `wordflow_job_${tabId}`;
+
+async function readJob(tabId) {
+  try {
+    const store = await chrome.storage.session.get(jobKey(tabId));
+    return store?.[jobKey(tabId)] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeJob(tabId, job) {
+  try {
+    await chrome.storage.session.set({ [jobKey(tabId)]: job });
+  } catch (err) {
+    console.warn('[wordflow][files] שמירת מצב העבודה נכשלה:', err);
+  }
+}
+
+async function clearJob(tabId) {
+  try {
+    await chrome.storage.session.remove(jobKey(tabId));
+  } catch {
+    /* אין מה לעשות */
+  }
+}
+
+/**
+ * ערוץ ההורדה של הפופאפ. הפורט מחזיק את ה-service worker בחיים לאורך העבודה,
+ * וניתוקו (סגירת הפופאפ) לא מבטל אותה — ההתקדמות ממשיכה להישמר ב-storage.session
+ * וה-scan הבא מחזיר אותה כדי לצייר מחדש את המצב.
+ */
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'wordflow-files-job') return;
+
+  let alive = true;
+  port.onDisconnect.addListener(() => { alive = false; });
+
+  port.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'start') return;
+    (async () => {
+      const tabId = msg.tabId;
+      const links = Array.isArray(msg.links) ? msg.links : [];
+      const post = (payload) => { if (alive) { try { port.postMessage(payload); } catch { /* הפופאפ נסגר */ } } };
+
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        const job = {
+          startedAt: Date.now(),
+          tabUrl: tab.url || '',
+          items: links.map((l) => ({ url: l.url, title: l.title || '', status: 'pending' })),
+          done: false,
+          saved: 0,
+        };
+        await writeJob(tabId, job);
+
+        const result = await downloadFiles(tab, links, async (item) => {
+          const entry = job.items[item.index];
+          if (entry) {
+            entry.status = item.status;
+            entry.fileName = item.fileName || '';
+            entry.reason = item.reason || '';
+          }
+          if (item.status === 'saved') job.saved += 1;
+          await writeJob(tabId, job);
+          post({ type: 'item', ...item });
+        });
+
+        job.done = true;
+        job.saved = result.saved;
+        job.total = links.length;
+        await writeJob(tabId, job);
+        post({ type: 'done', saved: result.saved, total: links.length });
+      } catch (err) {
+        console.error('[wordflow][files] עבודת ההורדה נכשלה:', err);
+        await clearJob(tabId);
+        post({ type: 'done', saved: 0, total: links.length, error: String(err?.message || err) });
+      }
+    })();
+  });
+});
 
 /** מחזיר בייטים של PDF מאומתים, או זורק שגיאה מדויקת. */
 async function resolvePdfBytes(tab) {
@@ -463,6 +618,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     pendingAreaSelect.reject(new Error('בחירת האזור בוטלה'));
     pendingAreaSelect = null;
     return;
+  }
+
+  // הודעה מהפופאפ: סריקת הלשונית הפעילה (סוג הדף + רשימת קבצים + עבודה שרצה)
+  if (message.type === 'wordflow-popup-scan') {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.id) throw new Error('לא נמצא טאב פעיל');
+        const kind = detectTabKind(tab);
+        const job = await readJob(tab.id);
+        if (kind.isPdf) {
+          sendResponse({
+            ok: true, tabId: tab.id, isPdf: true, fileName: kind.fileName, pageTitle: tab.title || '', links: [], job,
+          });
+          return;
+        }
+        const { pageTitle, links } = await scanPageFiles(tab);
+        sendResponse({ ok: true, tabId: tab.id, isPdf: false, fileName: '', pageTitle, links, job });
+      } catch (err) {
+        console.error('[wordflow][popup] סריקת העמוד נכשלה:', err);
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+    return true;
   }
 
   // הודעה מהפופאפ: "קלוט את כל הקבצים בעמוד"

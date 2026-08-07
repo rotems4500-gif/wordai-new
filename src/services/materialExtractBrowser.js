@@ -189,6 +189,49 @@ const extractPdf = async (uint8, maxLength) => {
   return { text, pages, scanned: scanned || garbled, garbled };
 };
 
+/**
+ * רינדור עמוד בודד של PDF לתמונת תצוגה מקדימה (data URL).
+ * לא מחלץ טקסט ולא מריץ OCR — נועד לתצוגה בלבד (תיבת הקליפים).
+ *
+ * ⚠️ שני הגוצ'אס של נתיב ה-OCR חלים גם כאן: עותק של הבייטים (pdf.js מנטרל את
+ * ה-buffer המקורי) ו-intent:'print' (רינדור רגיל תלוי rAF שלא נורה בטאב מוסתר).
+ * canvas רגיל ולא OffscreenCanvas — רק לו יש toDataURL.
+ *
+ * @param {Uint8Array} uint8
+ * @param {{page?:number, maxWidth?:number, quality?:number}} opts
+ * @returns {Promise<{dataUrl:string, numPages:number, width:number, height:number}>}
+ */
+export const renderPdfPageToDataUrl = async (uint8, opts = {}) => {
+  const { page = 1, maxWidth = 360, quality = 0.72 } = opts || {};
+  const pdfjs = await loadPdfjs();
+  const doc = await pdfjs.getDocument({ data: uint8.slice() }).promise;
+  try {
+    const numPages = doc.numPages;
+    const pageNumber = Math.min(Math.max(1, Math.round(Number(page) || 1)), numPages);
+    const pdfPage = await doc.getPage(pageNumber);
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const scale = Math.max(0.05, maxWidth / (baseViewport.width || maxWidth));
+    const viewport = pdfPage.getViewport({ scale });
+    const width = Math.max(1, Math.ceil(viewport.width));
+    const height = Math.max(1, Math.ceil(viewport.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    // רקע לבן — PDF שקוף על JPEG יוצא שחור.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    await pdfPage.render({ canvasContext: ctx, viewport, intent: 'print' }).promise;
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    canvas.width = 0;
+    canvas.height = 0;
+    try { pdfPage.cleanup(); } catch { /* no-op */ }
+    return { dataUrl, numPages, width, height };
+  } finally {
+    try { await doc.destroy(); } catch { /* no-op */ }
+  }
+};
+
 // יחס הטוקנים ה"טהורים": עברית נקייה / לטינית נקייה / מספר (בתוספת פיסוק סופי).
 // קבצים תקינים נמדדו 0.71–0.95; שבורי-קידוד 0.12–0.25. הסף באמצע הרווח.
 const GARBLE_FLOOR = 0.5;

@@ -27,7 +27,7 @@
 
 body {
   margin: 0;
-  width: 300px;
+  width: 380px;
   background: var(--wf-bg);
   color: var(--wf-fg);
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -144,6 +144,102 @@ body {
   margin: 0;
   color: var(--wf-danger);
   font-size: 12px;
+}
+
+/* ---------- מצבי הפופאפ ורשימת הקבצים ---------- */
+.wf-state {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-scanning {
+  font-size: 12px;
+}
+
+.wf-file-line {
+  margin: 0;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.wf-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--wf-border);
+  padding-top: 8px;
+}
+
+.wf-files-head {
+  font-size: 12px;
+  color: var(--wf-muted);
+}
+
+.wf-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--wf-border);
+  border-radius: 8px;
+}
+
+.wf-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--wf-border);
+}
+
+.wf-file-row:last-child {
+  border-bottom: none;
+}
+
+.wf-ext-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--wf-primary);
+  color: var(--wf-primary-fg);
+}
+
+.wf-kind-badge {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--wf-border);
+  color: var(--wf-muted);
+}
+
+.wf-file-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.wf-file-status {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--wf-muted);
+}
+
+.wf-file-status.wf-status-saved {
+  color: var(--wf-success);
+}
+
+.wf-file-status.wf-status-error {
+  color: var(--wf-danger);
 }
 
 .wf-link-btn {
