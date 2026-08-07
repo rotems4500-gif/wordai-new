@@ -34,7 +34,13 @@ const ARTICLE_PROXY_PREFIX_KEY = 'wordflow_article_proxy_prefix';
 export function getInstitutionProxyPrefix() {
   try {
     if (typeof localStorage === 'undefined' || !localStorage) return '';
-    return String(localStorage.getItem(ARTICLE_PROXY_PREFIX_KEY) || '').trim();
+    const stored = String(localStorage.getItem(ARTICLE_PROXY_PREFIX_KEY) || '').trim();
+    // ריפוי-עצמי: ערך ישן ששמור בלי ?url= (למשל כתובת תפריט שהודבקה לפני תיקון
+    // הנרמול) היה מדביק את היעד לנתיב ומחזיר 404 — מנרמלים מחדש ושומרים.
+    if (stored && !/\?url=/i.test(stored) && !stored.endsWith('=')) {
+      return setInstitutionProxyPrefix(stored);
+    }
+    return stored;
   } catch {
     return '';
   }
@@ -51,12 +57,20 @@ export function setInstitutionProxyPrefix(value) {
   let prefix = String(value || '').trim();
 
   if (prefix) {
-    // host חשוף (mgs.jmc.ac.il / mgs.jmc.ac.il/) — משלימים את נתיב ההתחברות המקובל ב-EZproxy.
-    const bare = prefix.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-    const looksBareHost = !/\?url=/i.test(prefix) && !prefix.endsWith('=')
-      && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(bare);
-    if (looksBareHost) prefix = `https://${bare}/login?url=`;
-    else if (!/^https?:\/\//i.test(prefix)) prefix = `https://${prefix.replace(/^\/+/, '')}`;
+    // כל קלט שאינו קידומת EZproxy מוכנה (אין בו ?url= והוא לא נגמר ב-=) מנורמל לפי
+    // ה-host בלבד: `https://<host>/login?url=`. כך גם הדבקה של כתובת תפריט המאגרים
+    // ("login.mgs.jmc.ac.il/menu") או host חשוף נותנת קידומת תקינה — בלי הנתיב,
+    // שאחרת נדבק ליעד ומחזיר 404 ("menuhttps://...").
+    if (!/\?url=/i.test(prefix) && !prefix.endsWith('=')) {
+      const withScheme = /^https?:\/\//i.test(prefix) ? prefix : `https://${prefix.replace(/^\/+/, '')}`;
+      try {
+        prefix = `https://${new URL(withScheme).hostname}/login?url=`;
+      } catch {
+        prefix = `https://${withScheme.replace(/^https?:\/\//i, '').split(/[/?#]/)[0]}/login?url=`;
+      }
+    } else if (!/^https?:\/\//i.test(prefix)) {
+      prefix = `https://${prefix.replace(/^\/+/, '')}`;
+    }
     // מוסדות מגישים את הפרוקסי ב-https בלבד; http יפיל את ההתחברות.
     prefix = prefix.replace(/^http:\/\//i, 'https://');
   }
