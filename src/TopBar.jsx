@@ -207,7 +207,7 @@ export default function TopBar({
                   type="button"
                   onClick={onCloudSignOut}
                   disabled={cloudBusy}
-                  title="התנתק מחשבון Google"
+                  title="התנתק מחשבון הענן"
                   className="hidden sm:flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/15"
                 >
                   <i className="ph ph-sign-out text-base"></i>
@@ -219,15 +219,15 @@ export default function TopBar({
                 type="button"
                 onClick={onCloudSignIn}
                 disabled={cloudBusy}
-                title="התחבר עם Google כדי לשמור ב-Firebase"
+                title="התחבר לחשבון ענן (Google או אימייל וסיסמה)"
                 className={`flex items-center gap-2 rounded-full border px-3 py-1.5 transition text-xs font-semibold ${
                   cloudBusy
                     ? 'border-white/20 bg-white/10 text-white/70 cursor-wait'
                     : 'border-white/30 bg-white/12 text-white hover:bg-white/20'
                 }`}
               >
-                <i className="ph ph-google-logo text-base"></i>
-                <span className="hidden sm:inline">התחבר עם Google</span>
+                <i className="ph ph-user-circle text-base"></i>
+                <span className="hidden sm:inline">התחבר</span>
               </button>
             )}
             <div className="hidden xl:flex max-w-[18rem] items-center gap-2 rounded-full border border-white/15 bg-white/8 px-3 py-1.5 text-[11px] font-semibold text-white/80">

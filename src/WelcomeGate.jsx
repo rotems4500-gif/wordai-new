@@ -3,13 +3,14 @@ import { initializePassphrase as initCryptoPassphrase } from './services/cloudCr
 import { saveCloudCryptoMeta } from './firebase/services';
 import { setCloudCryptoEnabled, triggerCloudSync } from './services/cloudSyncManager';
 import { showToast } from './services/uiFeedback';
+import EmailAuthForm from './EmailAuthForm';
 
 const MIN_PASSPHRASE_LEN = 8;
 
 // מסך פתיחה בהפעלה ראשונה. פותר את סדר התלות: התחברות Google קודם, אז הצפנה.
 // onFinish({ openOnboarding }) — סוגר את המסך וממשיך (פותח onboarding או לא).
 export default function WelcomeGate({ cloudUser, cloudAvailable = true, onSignIn, onFinish }) {
-  const [screen, setScreen] = useState('choice'); // choice | waitingAuth | newSetup
+  const [screen, setScreen] = useState('choice'); // choice | method | waitingAuth | newSetup
   const [pendingMode, setPendingMode] = useState(null); // 'returning' | 'new'
   const [busy, setBusy] = useState(false);
   const [pass, setPass] = useState('');
@@ -28,8 +29,12 @@ export default function WelcomeGate({ cloudUser, cloudAvailable = true, onSignIn
     }
   }, [cloudUser, pendingMode, screen, recovery, onFinish]);
 
-  const startSignIn = (mode) => {
+  const pickMode = (mode) => {
     setPendingMode(mode);
+    setScreen('method');
+  };
+
+  const startGoogleSignIn = () => {
     setScreen('waitingAuth');
     Promise.resolve(onSignIn?.()).catch(() => {});
   };
@@ -120,6 +125,35 @@ export default function WelcomeGate({ cloudUser, cloudAvailable = true, onSignIn
     );
   }
 
+  if (screen === 'method') {
+    return shell(
+      <div>
+        <div className="text-center mb-5">
+          <div className="text-4xl mb-2">🔑</div>
+          <h2 className="text-[19px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">
+            {pendingMode === 'new' ? 'יצירת חשבון' : 'כניסה לחשבון'}
+          </h2>
+          <p className="text-[13px] text-slate-500 leading-relaxed mt-1 dark:text-[#8ba3bd]">
+            אפשר עם Google או עם אימייל וסיסמה — שניהם מגיעים לאותו חשבון ענן.
+          </p>
+        </div>
+        <button type="button" onClick={startGoogleSignIn} className={primary}>
+          המשך עם Google
+        </button>
+        <div className="flex items-center gap-3 my-4">
+          <div className="h-px flex-1 bg-slate-200 dark:bg-white/10" />
+          <span className="text-[11px] font-bold text-slate-400 dark:text-[#8ba3bd]">או עם אימייל</span>
+          <div className="h-px flex-1 bg-slate-200 dark:bg-white/10" />
+        </div>
+        <EmailAuthForm initialMode={pendingMode === 'new' ? 'signup' : 'signin'} />
+        <button type="button" onClick={() => { setPendingMode(null); setScreen('choice'); }}
+          className="w-full text-center text-[12px] font-bold text-slate-400 hover:underline mt-4 dark:text-[#8ba3bd]">
+          חזור
+        </button>
+      </div>,
+    );
+  }
+
   if (screen === 'waitingAuth') {
     return shell(
       <div className="text-center py-6">
@@ -146,8 +180,8 @@ export default function WelcomeGate({ cloudUser, cloudAvailable = true, onSignIn
       <div className="grid gap-2.5">
         {cloudAvailable && (
           <>
-            <button type="button" onClick={() => startSignIn('returning')} className={primary}>כבר יש לי חשבון</button>
-            <button type="button" onClick={() => startSignIn('new')} className={secondary}>אני חדש — צור חשבון</button>
+            <button type="button" onClick={() => pickMode('returning')} className={primary}>כבר יש לי חשבון</button>
+            <button type="button" onClick={() => pickMode('new')} className={secondary}>אני חדש — צור חשבון</button>
           </>
         )}
         <button type="button" onClick={() => onFinish({ openOnboarding: true })}

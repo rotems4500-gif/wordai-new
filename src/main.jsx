@@ -30,6 +30,7 @@ import TrackChangesPanel from './TrackChangesPanel';
 import FileMenu from './FileMenu';
 import CloudUnlockGate from './CloudUnlockGate';
 import WelcomeGate from './WelcomeGate';
+import AccountAuthDialog from './AccountAuthDialog';
 import MagicWand from './MagicWand';
 import AuthenticityModal from './components/AuthenticityModal';
 import { buildDocCharMap } from './FindReplace';
@@ -3482,6 +3483,7 @@ function App() {
   const [showSplash, setShowSplash] = React.useState(() => isLegacyHomeEnabled() ? true : getWordPreferences().showStartExperience !== false);
   const [startScreenInstructionsResetToken, setStartScreenInstructionsResetToken] = React.useState(0);
   const [showWelcome, setShowWelcome] = React.useState(false);
+  const [showAuthDialog, setShowAuthDialog] = React.useState(false);
   const [assignmentBrief, setAssignmentBrief] = React.useState(() => getPersistedDocumentAssignmentBrief());
   const [assignmentBriefOpen, setAssignmentBriefOpen] = React.useState(false);
   const [assignmentBriefDraft, setAssignmentBriefDraft] = React.useState(() => getPersistedDocumentAssignmentBrief().text || '');
@@ -7095,7 +7097,7 @@ ${sidebarReviewContext}`
       return null;
     }
     if (!cloudUser) {
-      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
+      showToast('צריך קודם להתחבר לחשבון ענן.', { tone: 'warning' });
       return null;
     }
     if (!editor) {
@@ -7209,7 +7211,7 @@ ${sidebarReviewContext}`
       return;
     }
     if (!cloudUser) {
-      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
+      showToast('צריך קודם להתחבר לחשבון ענן.', { tone: 'warning' });
       return;
     }
 
@@ -7256,7 +7258,7 @@ ${sidebarReviewContext}`
       return;
     }
     if (!cloudUser) {
-      showToast('צריך קודם להתחבר עם Google.', { tone: 'warning' });
+      showToast('צריך קודם להתחבר לחשבון ענן.', { tone: 'warning' });
       return;
     }
 
@@ -8968,7 +8970,7 @@ ${sidebarReviewContext}`
         cloudUser={cloudUser}
         cloudStatusLabel={cloudStatusLabel}
         cloudBusy={cloudSyncState.status === 'saving'}
-        onCloudSignIn={handleCloudGoogleSignIn}
+        onCloudSignIn={() => setShowAuthDialog(true)}
         onCloudSave={() => {
           Promise.resolve(handleManualCloudSync()).catch(() => {});
         }}
@@ -10302,6 +10304,13 @@ ${sidebarReviewContext}`
           }}
         />
       )}
+
+      <AccountAuthDialog
+        open={showAuthDialog}
+        cloudUser={cloudUser}
+        onClose={() => setShowAuthDialog(false)}
+        onGoogleSignIn={handleCloudGoogleSignIn}
+      />
 
       <CloudUnlockGate user={cloudUser} />
 

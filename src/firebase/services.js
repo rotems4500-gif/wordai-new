@@ -1,4 +1,4 @@
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, EmailAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification, updateProfile, linkWithCredential, signInWithPopup, signOut, signInWithRedirect, getRedirectResult } from "firebase/auth";
 import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { deleteObject, getBlob, getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { getFirestore, initializeFirestore } from "firebase/firestore";
@@ -83,6 +83,88 @@ export async function cloudSignIn(email, password) {
     if (!clients) throw new Error("Firebase config is missing.");
     const result = await signInWithEmailAndPassword(clients.auth, email, password);
     return result.user;
+}
+
+// ---- כניסה עם אימייל+סיסמה (לצד Google; שני הספקים יכולים לחיות על אותו חשבון) ----
+
+// מיפוי קודי שגיאה של Firebase Auth להודעות בעברית.
+export function describeAuthError(error) {
+    const code = String(error?.code || "");
+    const map = {
+        "auth/invalid-email": "כתובת האימייל אינה תקינה.",
+        "auth/user-disabled": "החשבון הזה הושבת.",
+        "auth/user-not-found": "לא נמצא חשבון עם האימייל הזה.",
+        "auth/wrong-password": "הסיסמה שגויה.",
+        "auth/invalid-credential": "האימייל או הסיסמה שגויים.",
+        "auth/email-already-in-use": "כבר קיים חשבון עם האימייל הזה. אם נרשמת עם Google — התחבר עם Google ואז הוסף סיסמה בהגדרות → אבטחה.",
+        "auth/weak-password": "הסיסמה חלשה מדי — לפחות 6 תווים.",
+        "auth/too-many-requests": "יותר מדי ניסיונות. נסה שוב בעוד כמה דקות.",
+        "auth/network-request-failed": "בעיית רשת — בדוק את החיבור לאינטרנט.",
+        "auth/requires-recent-login": "מטעמי אבטחה צריך להתחבר מחדש ואז לנסות שוב.",
+        "auth/credential-already-in-use": "פרטי הכניסה האלה כבר משויכים לחשבון אחר.",
+        "auth/provider-already-linked": "כבר מוגדרת סיסמה לחשבון הזה.",
+        "auth/operation-not-allowed": "כניסה עם אימייל וסיסמה לא מופעלת בפרויקט (Firebase Console → Authentication → Sign-in method).",
+    };
+    return map[code] || error?.message || "שגיאת התחברות לא צפויה.";
+}
+
+export async function cloudSignInWithEmail(email, password) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    try {
+        const result = await signInWithEmailAndPassword(clients.auth, String(email || "").trim(), password);
+        return result.user;
+    } catch (error) {
+        throw new Error(describeAuthError(error));
+    }
+}
+
+export async function cloudSignUpWithEmail(email, password, displayName = "") {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    try {
+        const result = await createUserWithEmailAndPassword(clients.auth, String(email || "").trim(), password);
+        if (displayName) {
+            try { await updateProfile(result.user, { displayName: String(displayName).trim() }); } catch { /* לא קריטי */ }
+        }
+        // אימות אימייל: בלעדיו, כניסה עתידית עם Google על אותה כתובת עלולה לנתק את ספק הסיסמה.
+        try { await sendEmailVerification(result.user); } catch { /* לא קריטי */ }
+        return result.user;
+    } catch (error) {
+        throw new Error(describeAuthError(error));
+    }
+}
+
+export async function cloudSendPasswordReset(email) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    try {
+        await sendPasswordResetEmail(clients.auth, String(email || "").trim());
+    } catch (error) {
+        throw new Error(describeAuthError(error));
+    }
+}
+
+// האם לחשבון (אובייקט user של Firebase) כבר מקושרת כניסה עם סיסמה.
+export function userHasPasswordProvider(user) {
+    return Boolean(user?.providerData?.some((p) => p?.providerId === "password"));
+}
+
+// קישור סיסמה לחשבון המחובר (למשל משתמש Google שרוצה גם כניסה עם סיסמה).
+// אחרי זה אפשר להתחבר לאותו חשבון גם עם Google וגם עם אימייל+סיסמה.
+export async function cloudLinkPasswordToCurrentUser(password) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("Firebase config is missing.");
+    const current = clients.auth.currentUser;
+    if (!current) throw new Error("צריך להיות מחובר כדי להוסיף סיסמה.");
+    if (!current.email) throw new Error("לחשבון אין כתובת אימייל — אי אפשר לקשר סיסמה.");
+    try {
+        const credential = EmailAuthProvider.credential(current.email, password);
+        const result = await linkWithCredential(current, credential);
+        return result.user;
+    } catch (error) {
+        throw new Error(describeAuthError(error));
+    }
 }
 
 export async function cloudSignInWithGooglePopup() {
