@@ -188,10 +188,56 @@ body {
 
 .wf-file-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   padding: 5px 8px;
   border-bottom: 1px solid var(--wf-border);
+}
+
+.wf-file-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* הסיבה לדילוג — טקסט גלוי, לא tooltip. זו הייתה התלונה המרכזית. */
+.wf-file-reason {
+  font-size: 11px;
+  color: var(--wf-muted);
+  padding-inline-start: 22px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.wf-file-reason.wf-reason-error {
+  color: var(--wf-danger);
+}
+
+.wf-job-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--wf-border);
+  border-radius: 8px;
+  color: var(--wf-muted);
+}
+
+.wf-job-banner > span {
+  flex: 1 1 auto;
+}
+
+.wf-job-banner .wf-link-btn {
+  flex: none;
+  text-decoration: none;
+  padding: 0;
+}
+
+.wf-btn-ghost {
+  background: none;
+  border: 1px solid var(--wf-border);
+  color: var(--wf-fg);
 }
 
 .wf-file-row:last-child {
@@ -240,6 +286,11 @@ body {
 
 .wf-file-status.wf-status-error {
   color: var(--wf-danger);
+}
+
+.wf-file-status.wf-status-login,
+.wf-file-status.wf-status-skipped {
+  color: var(--wf-muted);
 }
 
 .wf-link-btn {

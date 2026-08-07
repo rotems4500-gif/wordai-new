@@ -181,8 +181,16 @@ async function fetchFileViaTab(tabId, url) {
         for (let i = 0; i < buf.length; i += 0x8000) {
           s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
         }
-        const looksLikeLogin = !isPdf && !isZip
-          && /login|sign[- ]?in|authenticate|password/i.test(s.slice(0, 20000));
+        // ⚠️ לא לחפש "login"/"password" סתם בטקסט: בדף קורס של Moodle יש קישור
+        // "התחברות" בכל עמוד, וזה סימן כל דף HTML כ"נדרשת התחברות". בודקים סמנים
+        // של טופס התחברות אמיתי, או הפניה סופית לנתיב login.
+        const head = s.slice(0, 40000);
+        const looksLikeLogin = !isPdf && !isZip && (
+          /<input[^>]+type\s*=\s*["']?password/i.test(head)
+          || /name\s*=\s*["']?(?:password|passwd|pwd)["']?/i.test(head)
+          || /id\s*=\s*["']?login(?:form|_form|box)?["']/i.test(head)
+          || /\/login\/index\.php|\/auth\/login|saml2\/login|adfs\/ls/i.test(r.url || '')
+        );
         return {
           ok: true,
           isPdf,
@@ -245,6 +253,23 @@ async function scanPageFiles(tab) {
 }
 
 const TAB_CHANGED_MSG = 'הדף השתנה — פתח מחדש את החלון ונסה שוב';
+const NO_TAB_ACCESS_MSG = 'אין גישה לדף — רענן את הלשונית ונסה שוב';
+const LOGIN_MSG = 'נדרשת התחברות לאתר';
+
+/**
+ * הסיבה שמוצגת כשהמשיכה הצליחה אבל מה שחזר אינו קובץ.
+ * ⚠️ זו הסיבה הנפוצה ביותר בדף קורס — היא חייבת להיות מובנת, לא "אינו קובץ".
+ */
+function notAFileReason(probe) {
+  const ct = String(probe.contentType || '').toLowerCase();
+  if (ct.includes('text/html') || ct.includes('application/xhtml')) {
+    return 'לא קובץ (כנראה דף אינטרנט)';
+  }
+  if (ct.includes('image/')) return 'לא קובץ מסמך (תמונה)';
+  if (ct.includes('video/') || ct.includes('audio/')) return 'לא קובץ מסמך (מדיה)';
+  if (ct) return `לא קובץ נתמך (${ct.split(';')[0]})`;
+  return 'לא קובץ (כנראה דף אינטרנט)';
+}
 
 /**
  * הורדה סדרתית של רשימת קישורים. onItem נקרא לכל פריט עם
@@ -282,18 +307,27 @@ async function downloadFiles(tab, links, onItem = () => {}) {
 
     try {
       const probe = await fetchFileViaTab(tab.id, link.url);
-      if (!probe?.ok) {
-        skipped.push(`${link.title || link.url}: לא נגיש`);
-        emit('skipped', { reason: 'לא נגיש' });
+      if (!probe) {
+        // executeScript נכשל — אין גישה ללשונית (chrome://, צופה PDF פנימי, דף שנסגר)
+        skipped.push(`${link.title || link.url}: ${NO_TAB_ACCESS_MSG}`);
+        emit('skipped', { reason: NO_TAB_ACCESS_MSG });
+        continue;
+      }
+      if (!probe.ok) {
+        const reason = probe.status
+          ? `השרת דחה את הבקשה (${probe.status}${probe.status === 403 || probe.status === 401 ? ' — נדרשת התחברות' : ''})`
+          : 'הקובץ לא נגיש';
+        skipped.push(`${link.title || link.url}: ${reason}`);
+        emit('skipped', { reason });
         continue;
       }
       if (!probe.isPdf && !probe.isZip) {
-        // דף HTML (ניווט/התחברות) ולא קובץ — מדלגים בשקט, זה הרוב בדף קורס.
+        // דף HTML (ניווט/התחברות) ולא קובץ — הרוב בדף קורס. הסיבה מוצגת למשתמש.
         if (probe.looksLikeLogin) {
           skipped.push(`${link.title || link.url}: נדרשת התחברות`);
-          emit('login', { reason: 'נדרשת התחברות לאתר' });
+          emit('login', { reason: LOGIN_MSG });
         } else {
-          emit('skipped', { reason: 'אינו קובץ' });
+          emit('skipped', { reason: notAFileReason(probe) });
         }
         continue;
       }
@@ -377,6 +411,41 @@ async function clearJob(tabId) {
 }
 
 /**
+ * לשוניות שבהן רצה כרגע הורדה *בתהליך הזה*. ⚠️ אם ה-service worker נהרג באמצע,
+ * ה-Set מתאפס — וזה בדיוק הרצוי: עבודה שנשארה 'pending' ב-storage בלי ריצה חיה
+ * היא מתה, ואסור שתנעל את הפופאפ לנצח.
+ */
+const activeJobTabs = new Set();
+
+/**
+ * מחליט מה הפופאפ יראה: רק עבודה *חיה* על *אותו URL* משתלטת על התצוגה.
+ * כל השאר (הסתיימה / הדף התחלף / הריצה מתה) — נמחקת, וכשהיא הסתיימה באותו דף
+ * מוחזר lastSummary כדי להציג שורת סיכום מעל הרשימה הטרייה.
+ */
+async function resolveStoredJob(tab) {
+  const job = await readJob(tab.id);
+  if (!job) return { job: null, lastSummary: null };
+
+  const sameUrl = (job.tabUrl || '') === (tab.url || '');
+  const live = !job.done && activeJobTabs.has(tab.id);
+  if (live && sameUrl) return { job, lastSummary: null };
+
+  await clearJob(tab.id);
+  if (!sameUrl) return { job: null, lastSummary: null };
+
+  const items = Array.isArray(job.items) ? job.items : [];
+  return {
+    job: null,
+    lastSummary: {
+      saved: job.saved || 0,
+      total: job.total || items.length,
+      items,
+      interrupted: !job.done,
+    },
+  };
+}
+
+/**
  * ערוץ ההורדה של הפופאפ. הפורט מחזיק את ה-service worker בחיים לאורך העבודה,
  * וניתוקו (סגירת הפופאפ) לא מבטל אותה — ההתקדמות ממשיכה להישמר ב-storage.session
  * וה-scan הבא מחזיר אותה כדי לצייר מחדש את המצב.
@@ -393,10 +462,11 @@ chrome.runtime.onConnect.addListener((port) => {
       const tabId = msg.tabId;
       const links = Array.isArray(msg.links) ? msg.links : [];
       const post = (payload) => { if (alive) { try { port.postMessage(payload); } catch { /* הפופאפ נסגר */ } } };
+      let job = null;
 
       try {
         const tab = await chrome.tabs.get(tabId);
-        const job = {
+        job = {
           startedAt: Date.now(),
           tabUrl: tab.url || '',
           items: links.map((l) => ({ url: l.url, title: l.title || '', status: 'pending' })),
@@ -404,6 +474,7 @@ chrome.runtime.onConnect.addListener((port) => {
           saved: 0,
         };
         await writeJob(tabId, job);
+        activeJobTabs.add(tabId);
 
         const result = await downloadFiles(tab, links, async (item) => {
           const entry = job.items[item.index];
@@ -418,14 +489,25 @@ chrome.runtime.onConnect.addListener((port) => {
         });
 
         job.done = true;
+        job.finishedAt = Date.now();
         job.saved = result.saved;
         job.total = links.length;
         await writeJob(tabId, job);
-        post({ type: 'done', saved: result.saved, total: links.length });
+        // ⚠️ items נשלחים גם ב-done: אם הפופאפ נפתח מחדש באמצע העבודה הוא פספס
+        // את הודעות ה-item, וזו הדרך היחידה שלו לצייר את הסיבות לכל שורה.
+        post({ type: 'done', saved: result.saved, total: links.length, items: job.items });
       } catch (err) {
         console.error('[wordflow][files] עבודת ההורדה נכשלה:', err);
         await clearJob(tabId);
-        post({ type: 'done', saved: 0, total: links.length, error: String(err?.message || err) });
+        post({
+          type: 'done',
+          saved: 0,
+          total: links.length,
+          items: (job && job.items) || [],
+          error: String(err?.message || err),
+        });
+      } finally {
+        activeJobTabs.delete(tabId);
       }
     })();
   });
@@ -627,17 +709,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.id) throw new Error('לא נמצא טאב פעיל');
         const kind = detectTabKind(tab);
-        const job = await readJob(tab.id);
+        const { job, lastSummary } = await resolveStoredJob(tab);
         if (kind.isPdf) {
           sendResponse({
-            ok: true, tabId: tab.id, isPdf: true, fileName: kind.fileName, pageTitle: tab.title || '', links: [], job,
+            ok: true,
+            tabId: tab.id,
+            isPdf: true,
+            fileName: kind.fileName,
+            pageTitle: tab.title || '',
+            links: [],
+            job,
+            lastSummary,
           });
           return;
         }
         const { pageTitle, links } = await scanPageFiles(tab);
-        sendResponse({ ok: true, tabId: tab.id, isPdf: false, fileName: '', pageTitle, links, job });
+        sendResponse({ ok: true, tabId: tab.id, isPdf: false, fileName: '', pageTitle, links, job, lastSummary });
       } catch (err) {
         console.error('[wordflow][popup] סריקת העמוד נכשלה:', err);
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+    return true;
+  }
+
+  // הודעה מהפופאפ: "סרוק שוב את העמוד" — מוחק את מצב העבודה כדי שהסריקה הבאה
+  // תחזיר את הרשימה המלאה. זה מסלול המילוט מכל מצב תקוע.
+  if (message.type === 'wordflow-popup-clear-job') {
+    (async () => {
+      try {
+        let tabId = message.tabId;
+        if (!tabId) {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          tabId = tab?.id;
+        }
+        if (tabId) {
+          activeJobTabs.delete(tabId);
+          await clearJob(tabId);
+        }
+        sendResponse({ ok: true });
+      } catch (err) {
         sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
       }
     })();
