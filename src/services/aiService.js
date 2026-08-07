@@ -110,7 +110,7 @@ export const DEFAULT_PROVIDER_CONFIG = {
   },
 };
 
-export const DEFAULT_SIDEBAR_MODE_IDS = ['reviewFix', 'fix', 'holeFill', 'humanize', 'sources', 'lecturer', 'continue', 'summary', 'academic', 'aiAppendix', 'brainstorm'];
+export const DEFAULT_SIDEBAR_MODE_IDS = ['reviewFix', 'fix', 'holeFill', 'humanize', 'sources', 'articleLibrary', 'lecturer', 'continue', 'summary', 'academic', 'aiAppendix', 'brainstorm'];
 
 export const buildDefaultSidebarModeSettings = () => ({
   forceGlobalProvider: false,

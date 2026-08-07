@@ -12,6 +12,8 @@ import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext 
 import { classifyChatScope } from "./services/chatScope";
 import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock, applyStyleJudgeToText } from "./services/aiService";
 import { isV3FlagEnabled } from "./v3/flags";
+import { searchArticleLibrary, formatArticleLibraryReply, addArticleToMaterials, primeArticleMaterialsIndex } from "./services/articleLibraryService";
+import ArticleResultsList from "./components/articleLibrary/ArticleResultsList";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
 
@@ -1092,6 +1094,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   const [activeAgentStatus, setActiveAgentStatus] = useState(() => ({ ...IDLE_AGENT_STATUS }));
   const [agentProgressMap, setAgentProgressMap] = useState({});
     const [activeClassicAgentId, setActiveClassicAgentId] = useState(null);
+  // התקדמות הוספה פר-כרטיס של "ספריית מאמרים". מכוון *לא* על ההודעה — הודעות
+  // נשמרות ל-localStorage ו-"⏳ מוריד…" תקוע היה שורד ריסטרט.
+  const [articleAddState, setArticleAddState] = useState({}); // {[articleId]: {status, error, strength}}
   const [showLogs, setShowLogs] = useState(false);
   const [debugLogs, setDebugLogs] = useState(() => {
     const initialAutomation = getWorkspaceAutomation();
@@ -3717,6 +3722,70 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     });
   };
 
+  // ───────── ספריית מאמרים: הוספת כרטיס לחומרי העזר ─────────
+  // מחמם את חנות החומרים פעם אחת, כדי שכרטיסים ששוחזרו מ-localStorage יידעו
+  // להציג "✓ כבר בחומרים" בלי שהמשתמש יחפש שוב.
+  useEffect(() => { primeArticleMaterialsIndex().catch(() => {}); }, []);
+
+  const setArticleCardState = (articleId, patch) => {
+    if (!articleId) return;
+    setArticleAddState((prev) => ({ ...prev, [articleId]: { ...(prev[articleId] || {}), ...patch } }));
+  };
+
+  const addArticleResultToMaterials = async (article) => {
+    const articleId = article?.id || article?.url || '';
+    if (!articleId) return;
+    if (!activeProject?.id) {
+      showToast('פתח או צור פרויקט כדי להוסיף חומרי עזר', { tone: 'warning' });
+      return;
+    }
+    const currentStatus = articleAddState[articleId]?.status || 'idle';
+    // guard כפילות-לחיצה: רק idle/error מתחילים ריצה חדשה.
+    if (currentStatus !== 'idle' && currentStatus !== 'error') return;
+
+    setArticleCardState(articleId, { status: 'fetching', error: '' });
+    try {
+      // ⚠️ ה-`loading` של הצ'אט לא נוגע — הטמעה ארוכה לא חוסמת את השיחה.
+      const res = await addArticleToMaterials(article, {
+        projectId: activeProject.id,
+        onStage: (stage) => {
+          if (stage === 'fetching' || stage === 'adding' || stage === 'embedding') {
+            setArticleCardState(articleId, { status: stage });
+          }
+        },
+      });
+      if (res?.status === 'added') {
+        setArticleCardState(articleId, { status: 'added', strength: res.strength || 'full', error: '' });
+        showToast(
+          `"${String(article?.title || 'המאמר').slice(0, 60)}" נוסף לחומרי העזר של "${activeProject.name}" ✅`,
+          { tone: 'success' },
+        );
+      } else if (res?.status === 'already') {
+        setArticleCardState(articleId, { status: 'already', error: '' });
+      } else if (res?.status === 'too-thin') {
+        setArticleCardState(articleId, { status: 'error', error: 'לא נמצא מספיק טקסט במקור כדי להוסיף אותו' });
+      } else {
+        setArticleCardState(articleId, { status: 'error', error: res?.error || 'ההוספה נכשלה' });
+      }
+    } catch (err) {
+      setArticleCardState(articleId, { status: 'error', error: err?.message || 'ההוספה נכשלה' });
+    }
+  };
+
+  const renderArticleResultRows = (msg, variant = 'dark') => {
+    if (msg?.role !== 'assistant') return null;
+    if (!Array.isArray(msg?.articleResults) || !msg.articleResults.length) return null;
+    return (
+      <ArticleResultsList
+        articles={msg.articleResults}
+        addState={articleAddState}
+        onAdd={addArticleResultToMaterials}
+        variant={variant}
+        projectMissing={!activeProject?.id}
+      />
+    );
+  };
+
   const appendBlockedEditExchange = (userContent, assistantContent, userExtra = {}, assistantExtra = {}) => {
     const normalizedUserContent = String(userContent ?? '').trim();
     const nextAssistantMessage = {
@@ -3925,6 +3994,28 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         } catch (err) {
           appendAssistantMessage('❌ ' + (err?.message || 'שגיאה בבדיקת הסגנון'));
         }
+      }
+      return;
+    }
+
+    // ספריית מאמרים — סוכן דטרמיניסטי לחלוטין: אפס קריאות LLM, הכל אחזור מאומת.
+    if (activeClassicAgentId === 'articleLibrary' && !isEditComposerMode) {
+      setTab('chat');
+      setMessages((prev) => [...prev, { role: 'user', content: originalText }]);
+      setLoading(true);
+      try {
+        const res = await searchArticleLibrary({ prompt: txt, cfg: providerConfig });
+        appendAssistantMessage(
+          formatArticleLibraryReply(res),
+          res?.ok && res.articles?.length
+            ? { articleResults: res.articles, articleQuery: res.query, articleKind: res.kind }
+            : {},
+          { dedupeConsecutive: false },
+        );
+      } catch (err) {
+        appendAssistantMessage('❌ ' + (err?.message || 'חיפוש המאמרים נכשל'), { error: true });
+      } finally {
+        setLoading(false);
       }
       return;
     }
@@ -4694,6 +4785,14 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   };
 
   // מפעיל את סוכן "נספח AI" ישירות מהסיידבר, בלי צורך בבחירת טקסט בתפריט הבועה.
+  // מפעיל את סוכן "ספריית מאמרים" — חיפוש מקורות בלתי-תלוי בטקסט מסומן, ולכן צ'יפ ולא bubble menu.
+  const launchArticleLibraryAgent = () => {
+    setActiveClassicAgentId('articleLibrary');
+    setTab('chat');
+    setInput('');
+    try { inputRef?.current?.focus?.(); } catch { /* אין קלט ממוקד — לא קריטי */ }
+  };
+
   const launchAiAppendixAgent = () => {
     setActiveClassicAgentId('aiAppendix');
     setTab('chat');
@@ -5053,6 +5152,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                         {renderChatMessageContent(msg.content)}
                       </div>
                       {renderReviewFindingRows(msg, 'light')}
+                      {renderArticleResultRows(msg, 'light')}
                       {msg.documentActionMessage && (
                         <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, fontSize: 11, lineHeight: 1.5, ...documentActionTone }}>
                           {msg.documentActionMessage}
@@ -5154,6 +5254,15 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                   </div>
                 )}
                 <div className="nicebar" style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 0 9px' }}>
+                  <button
+                    type="button"
+                    onClick={launchArticleLibraryAgent}
+                    disabled={loading}
+                    title="חיפוש מאמרים אקדמיים מאומתים והוספה לחומרי העזר"
+                    style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, border: '1px solid rgba(14, 165, 233, 0.4)', background: 'rgba(14, 165, 233, 0.12)', color: '#0369A1', fontSize: 12, fontWeight: 800, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                  >
+                    📚 ספריית מאמרים
+                  </button>
                   <button
                     type="button"
                     onClick={launchAiAppendixAgent}
@@ -5976,6 +6085,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 </div>
                 
                 {renderReviewFindingRows(msg, 'dark')}
+                {renderArticleResultRows(msg, 'dark')}
                 {msg.documentActionMessage && (
                   <div
                     style={{

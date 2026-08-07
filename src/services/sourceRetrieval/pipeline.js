@@ -345,6 +345,9 @@ export const retrieveSources = async ({
   vetRelevance = null,
   // הקשר-נושא עשיר לווטינג (למשל תקציר המטלה) — ברירת מחדל: השאילתה עצמה.
   vetTopic = '',
+  // כמה מקורות "מספיקים" כדי לעצור את סולם הספקים. 0 = ברירת המחדל ההיסטורית (2).
+  // קורא שמבקש 8 תוצאות חייב להעביר minResults, אחרת ה-early-exit מחזיר 2.
+  minResults = 0,
 } = {}) => {
   const log = makeRetrievalLogger(logEvent);
   const safeKind = normalizeKind(kind);
@@ -405,7 +408,7 @@ export const retrieveSources = async ({
   // מאגר מצטבר בין ספקים: ספק שהחזיר רק 0-1 מקורות רלוונטיים אחרי הסינון לא עוצר
   // את הסולם — התוצאות נשמרות וממשיכים לספק הבא, במקום להחזיר תוצאה מורעבת.
   let bestPool = [];
-  const sufficientCount = Math.min(safeCount, 2);
+  const sufficientCount = Math.max(1, Math.min(safeCount, Number(minResults) > 0 ? Number(minResults) : 2));
   const finalizePoolResult = () => {
     const collapsed = rankSources(dedupeSources(bestPool), safeKind).slice(0, safeCount);
     const result = { ...baseResult, ok: true, sources: collapsed, providerTrail };

@@ -1,6 +1,6 @@
 // sourceRetrieval — מודול אחזור המקורות המאומת. ה-API הציבורי היחיד:
 //
-//   retrieveSources({query, kind, count, signal, session, cfg, logEvent})
+//   retrieveSources({query, kind, count, signal, session, cfg, logEvent, minResults})
 //     → {ok, sources, providerTrail, fromCache, failureReason?}
 //   lockSources(sources, opts) → SourceLock  (נעילת URLs לכתיבה + audit)
 //   verifyUrls(urls, opts)     → verdicts    (בדיקת חיות ישירה)

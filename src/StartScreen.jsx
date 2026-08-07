@@ -6,6 +6,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import ProjectBrainstormPanel from './components/ProjectBrainstormPanel';
 import StyleEngineControls, { getStyleCreativityTemperature, getStyleDepth } from './components/StyleEngineControls';
 import DesktopDownloadCard from './components/DesktopDownloadCard';
+import ArticleLibraryModal from './components/articleLibrary/ArticleLibraryModal';
 import { showToast, showConfirm } from './services/uiFeedback';
 import {
   listProjects,
@@ -572,6 +573,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [recentDocs, setRecentDocs] = useState(() => (typeof getRecentDocuments === 'function' ? getRecentDocuments(8) : []));
   const canOpenRecentDocs = typeof window !== 'undefined' && typeof window.desktopApp?.openDocumentByPath === 'function';
   const [projectsList, setProjectsList] = useState(() => (typeof listProjects === 'function' ? listProjects() : []));
+  const [showArticleLibrary, setShowArticleLibrary] = useState(false);
   const [selectedProjectForSettings, setSelectedProjectForSettings] = useState(null);
   const [selectedProjectForBrainstorm, setSelectedProjectForBrainstorm] = useState(null);
   useEffect(() => {
@@ -2376,6 +2378,14 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </button>
 
             <button
+              onClick={() => setShowArticleLibrary(true)}
+              className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105"
+              title="חיפוש מאמרים אקדמיים מאומתים והוספה לחומרי העזר"
+            >
+              📚 ספריית מאמרים
+            </button>
+
+            <button
               onClick={() => onOpenSettings('onboarding')}
               className="flex w-full sm:w-auto items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500/80 to-orange-600/80 hover:from-amber-600/80 hover:to-orange-700/80 border border-white/30 rounded-xl text-white transition-all duration-300 transform hover:scale-105 shadow-lg"
             >
@@ -2742,6 +2752,13 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               baseDraftText: String(baseDraft?.text || '').trim()
                 || String(baseDraft?.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
             }}
+          />
+        )}
+
+        {showArticleLibrary && (
+          <ArticleLibraryModal
+            projects={projectsList}
+            onClose={() => setShowArticleLibrary(false)}
           />
         )}
 
