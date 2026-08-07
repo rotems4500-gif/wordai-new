@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WordFlow Clipper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "קליפת תוכן מהאינטרנט ישירות לתוך WordFlow AI — עמודים, קטעי טקסט, תמונות ואזורים נבחרים.",
   "permissions": [
     "activeTab",

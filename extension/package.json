@@ -1,6 +1,6 @@
 {
   "name": "wordflow-clipper-extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "WordFlow Clipper — Chrome MV3 extension (dev tooling only, not published to npm)",
   "scripts": {
