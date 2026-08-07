@@ -222,8 +222,17 @@ async function fetchFileViaTab(tabId, url) {
           return /<form[^>]+(?:action\s*=\s*["']?[^"'>]*(?:login|auth|signin|sso)|id\s*=\s*["']?login)/i.test(head);
         };
 
-        // חילוץ ה-URL האמיתי מדף עטיפה, לפי סדר עדיפות.
-        const findEmbedded = (html, baseUrl) => {
+        // ⚠️ **הבאג שהפיל 7/7 משאבים**: דף עטיפה של Moodle מלא ב-pluginfile.php
+        // שהם *תמונות* — אווטאר משתמש, תמונת קורס, נכסי ערכת נושא. "ה-pluginfile
+        // הראשון בגוף" קפץ תמיד לאווטאר, וכל משאב נדחה כ"תמונה". לכן: אוספים את
+        // **כל** המועמדים, מסננים את הכרום של הדף, מדרגים, ומנסים עד 3.
+        const DOC_EXT = /\.(pdf|docx?|pptx?|xlsx?)(?:[?#]|$)/i;
+        const IMG_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|avif|tiff?)(?:[?#]|$)/i;
+        // נתיבי "כרום" של Moodle תחת pluginfile — לעולם לא המשאב עצמו
+        const CHROME_PATH = /\/(?:user\/icon|user|course\/overviewfiles|theme|blocks)\//i;
+        const DOC_CT = /application\/pdf|wordprocessingml|presentationml|spreadsheetml/i;
+
+        const collectCandidates = (html, baseUrl) => {
           const abs = (raw) => {
             const v = decodeEntities(raw).trim().replace(/^["']|["']$/g, '');
             if (!v || /^(?:#|javascript:|mailto:|data:|about:)/i.test(v)) return '';
@@ -233,46 +242,70 @@ async function fetchFileViaTab(tabId, url) {
             } catch { return ''; }
           };
 
-          // 1. pluginfile.php — הקובץ האמיתי של Moodle (מוחלט או יחסי, גם בתוך JS)
-          const plugin = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/i.exec(html);
-          if (plugin) { const u = abs(plugin[0]); if (u) return u; }
+          const out = [];
+          const add = (u, rank) => {
+            if (!u) return;
+            const isPlugin = /pluginfile\.php/i.test(u);
+            if (IMG_EXT.test(u)) return;                     // תמונה — לא משאב
+            if (isPlugin && CHROME_PATH.test(u)) return;     // אווטאר/תמונת קורס/ערכת נושא
+            const hit = out.find((c) => c.url === u);
+            if (hit) { if (rank < hit.rank) hit.rank = rank; return; }
+            out.push({ url: u, rank, seq: out.length });
+          };
 
-          // 2. <meta http-equiv="refresh" content="0; url=...">
+          // דרגה 1 — המטען האמיתי: mod_resource/content, סיומת מסמך, forcedownload
+          const payloadRank = (u) => (
+            /pluginfile\.php\/[^\s"']*\/mod_resource\/content\//i.test(u)
+            || DOC_EXT.test(u)
+            || /[?&]forcedownload=1/i.test(u) ? 1 : 0);
+
+          // כל ה-pluginfile בגוף (כולל בתוך JS) — מדורגים 1 או 4, לא "ראשון מנצח"
+          const pluginRe = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/gi;
+          for (const m of html.match(pluginRe) || []) {
+            const u = abs(m);
+            add(u, payloadRank(u) || 4);
+          }
+
+          // דרגה 2 — יעדים מבניים: object/iframe/embed, ואז <a href> שנראה כמו קובץ
+          for (const tag of html.match(/<(?:iframe|embed|object)\b[^>]*>/gi) || []) {
+            const attr = /\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+            if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
+          }
+          for (const tag of html.match(/<a\b[^>]*>/gi) || []) {
+            const attr = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+            if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
+          }
+
+          // דרגה 3 — meta refresh
           const meta = /<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/i.exec(html)
             || /<meta[^>]*content\s*=\s*["'][^"']*url\s*=[^"']*["'][^>]*>/i.exec(html);
           if (meta) {
             const content = /content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(meta[0]);
             const raw = content && (content[1] || content[2] || content[3] || '');
             const target2 = raw && /url\s*=\s*(.+)$/i.exec(raw.trim());
-            if (target2) { const u = abs(target2[1]); if (u) return u; }
+            if (target2) { const u = abs(target2[1]); add(u, payloadRank(u) || 3); }
           }
 
-          // 3. מסמך מוטמע: iframe/embed/object
-          for (const tag of html.match(/<(?:iframe|embed|object)\b[^>]*>/gi) || []) {
-            const attr = /\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
-            if (u && FILE_LIKE.test(u)) return u;
-          }
-
-          // 4. קישור "לחץ כאן להורדה" — <a href> שנראה כמו קובץ
-          for (const tag of html.match(/<a\b[^>]*>/gi) || []) {
-            const attr = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
-            if (u && FILE_LIKE.test(u)) return u;
-          }
-          return '';
+          return out.sort((a, b) => a.rank - b.rank || a.seq - b.seq).map((c) => c.url);
         };
 
-        const pack = (res, extra) => Object.assign({
-          ok: true,
-          isPdf: res.isPdf,
-          isZip: res.isZip,
-          looksLikeLogin: !res.isPdf && !res.isZip && isLoginPage(res.s.slice(0, 60000), res.finalUrl),
-          finalUrl: res.finalUrl,
-          contentType: res.contentType,
-          disposition: res.disposition,
-          data: (res.isPdf || res.isZip) ? btoa(res.s) : '',
-        }, extra || {});
+        const pack = (res, extra) => {
+          const isDoc = res.isPdf || res.isZip
+            || (!!res.contentType && DOC_CT.test(res.contentType));
+          return Object.assign({
+            ok: true,
+            isPdf: res.isPdf,
+            isZip: res.isZip,
+            isDoc,
+            looksLikeLogin: !isDoc && isLoginPage(res.s.slice(0, 60000), res.finalUrl),
+            finalUrl: res.finalUrl,
+            contentType: res.contentType,
+            disposition: res.disposition,
+            data: isDoc ? btoa(res.s) : '',
+          }, extra || {});
+        };
 
         const first = await grab(target);
         if (!first.ok) return { ok: false, status: first.status, finalUrl: first.finalUrl };
@@ -280,21 +313,35 @@ async function fetchFileViaTab(tabId, url) {
 
         // ⚠️ הקפיצה קודמת להכרעת ההתחברות, ובכוונה: ערכות נושא של Moodle מרנדרות
         // טופס התחברות אמיתי במגירה גם למשתמש מחובר, ולכן isLoginPage לבדו עדיין
-        // היה חוסם. דף התחברות אמיתי לעולם אינו מכיל קישור pluginfile — אז אם
-        // נמצא קובץ מוטמע, הוא התשובה. קפיצה אחת בלבד.
+        // היה חוסם. דף התחברות אמיתי לעולם אינו מכיל מועמד מסמך — אז אם נמצא קובץ
+        // מוטמע, הוא התשובה. **קפיצה אחת בלבד**: כל המועמדים נאספים מדף העטיפה
+        // הראשון, ותוצאת קפיצה לעולם אינה מייצרת מועמדים חדשים.
         const firstLogin = isLoginPage(first.s.slice(0, 60000), first.finalUrl);
-        const next = findEmbedded(first.s.slice(0, 400000), first.finalUrl);
-        if (!next || next === first.finalUrl || next === target) return pack(first);
+        const candidates = collectCandidates(first.s.slice(0, 400000), first.finalUrl)
+          .filter((u) => u !== first.finalUrl && u !== target)
+          .slice(0, 3);
+        if (!candidates.length) return pack(first, { candidates: [] });
 
-        let second = null;
-        try { second = await grab(next); } catch { second = null; }
-        if (!second || !second.ok) return pack(first, { wrapperUrl: next });
-        if (second.isPdf || second.isZip) return pack(second, { wrapperUrl: next, viaWrapper: true });
-        // הקפיצה לא הניבה קובץ: אם הדף הראשון היה באמת דף התחברות, זו הסיבה
-        // המדויקת יותר. אחרת מדווחים על היעד — שם רואים את המארח החיצוני.
-        return firstLogin
-          ? pack(first, { wrapperUrl: next })
-          : pack(second, { wrapperUrl: next, viaWrapper: true });
+        let lastRes = null;
+        let lastUrl = '';
+        for (const u of candidates) {
+          let res2 = null;
+          try { res2 = await grab(u); } catch { res2 = null; }
+          if (!res2 || !res2.ok) continue;
+          lastRes = res2;
+          lastUrl = u;
+          const ct = String(res2.contentType || '').toLowerCase();
+          if (res2.isPdf || res2.isZip || (DOC_CT.test(ct) && !ct.includes('image/'))) {
+            return pack(res2, { wrapperUrl: u, viaWrapper: true, candidates });
+          }
+          // תמונה/HTML — ממשיכים למועמד הבא במקום להיכשל
+        }
+
+        // אף מועמד לא אימת קובץ. אם הדף הראשון היה באמת דף התחברות — זו הסיבה
+        // המדויקת יותר. אחרת מדווחים על היעד האחרון, שם רואים מארח חיצוני.
+        return firstLogin || !lastRes
+          ? pack(first, { candidates, wrapperUrl: candidates[0] })
+          : pack(lastRes, { candidates, wrapperUrl: lastUrl, viaWrapper: true });
       },
     });
     return res?.result || null;
@@ -375,6 +422,11 @@ function loginReason(probe, pageHost) {
 function notAFileReason(probe, pageHost = '') {
   const ct = String(probe.contentType || '').toLowerCase();
   const foreign = foreignHost(probe, pageHost);
+  // דף עטיפה שהיו בו מועמדים ואף אחד לא אימת קובץ — הסיבה המדויקת. בלי זה
+  // המשתמש רואה "תמונה" (ה-content-type של המועמד האחרון) וזה מטעה.
+  if (probe.candidates && probe.candidates.length) {
+    return foreign ? `לא נמצא קובץ בתוך הדף (${foreign})` : 'לא נמצא קובץ בתוך הדף';
+  }
   if (ct.includes('text/html') || ct.includes('application/xhtml') || !ct) {
     return foreign ? `לא קובץ (דף אינטרנט ב-${foreign})` : 'לא קובץ (כנראה דף אינטרנט)';
   }
@@ -434,7 +486,13 @@ async function downloadFiles(tab, links, onItem = () => {}) {
         emit('skipped', { reason });
         continue;
       }
-      if (!probe.isPdf && !probe.isZip) {
+      if (probe.candidates && probe.candidates.length) {
+        console.info(
+          '[wordflow][files] מועמדים בדף עטיפה עבור', link.title || link.url, '→',
+          probe.candidates.map((u) => (u.length > 140 ? `${u.slice(0, 140)}…` : u)),
+        );
+      }
+      if (!probe.isPdf && !probe.isZip && !probe.isDoc) {
         // דף HTML (ניווט/התחברות) ולא קובץ — הרוב בדף קורס. הסיבה מוצגת למשתמש,
         // כולל המארח שאליו נחתה הבקשה כשהוא שונה מהדף (SSO/מו"ל/EZproxy).
         if (probe.looksLikeLogin) {
