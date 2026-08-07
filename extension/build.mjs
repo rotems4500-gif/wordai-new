@@ -127,7 +127,18 @@ async function run() {
   });
 
   // --- העתקת קבצים סטטיים ---
-  fs.copyFileSync(path.join(ROOT, 'manifest.json'), path.join(OUT_DIR, 'manifest.json'));
+  // ⚠️ שדה key: מקבע את ה-ID של ההתקנה הלא-ארוזה (kbfdnoab...) כדי שה-redirect
+  // של OAuth יישאר יציב בפיתוח. החנות הקצתה ID אחר (dficnbiob...) כי ה-zip
+  // הראשון הוגש בלי key — ולכן חבילה לחנות שמכילה key נדחית עם
+  // "ערך השדה key שבמניפסט לא תואם לפריט הנוכחי". בונים לחנות עם
+  // WORDFLOW_STORE_BUILD=1 והשדה מוסר.
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  const forStore = process.env.WORDFLOW_STORE_BUILD === '1';
+  if (forStore) {
+    delete manifest.key;
+    console.log('[build] בילד לחנות — שדה key הוסר מהמניפסט.');
+  }
+  fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   fs.copyFileSync(path.join(ROOT, 'src/popup/popup.html'), path.join(OUT_DIR, 'popup/popup.html'));
   fs.copyFileSync(path.join(ROOT, 'src/popup/popup.css'), path.join(OUT_DIR, 'popup/popup.css'));
 
