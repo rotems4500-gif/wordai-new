@@ -248,12 +248,18 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
   }
 
   // material (ברירת מחדל)
+  let clipCourseId = null;
+  try {
+    const { deriveCourseIdForIngest } = await import('./activeCourseService');
+    clipCourseId = deriveCourseIdForIngest(clip.projectId || null);
+  } catch {}
   const added = addMaterialDocument({
     title: result.title,
     text,
     source: 'web-clip',
     sourceUrl: clip.sourceUrl || null,
     projectId: clip.projectId || null,
+    courseId: clipCourseId,
     cleanDigital,
     strength: 'full',
     defer: true,
@@ -270,6 +276,7 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
     text,
     sourceUrl: clip.sourceUrl || '',
     projectId: clip.projectId || '',
+    courseId: clipCourseId || '',
     thumbnailDataUrl,
   }).catch((err) => console.error('[clipInbox] saveClipAsHelperMaterial failed', err));
   return result;

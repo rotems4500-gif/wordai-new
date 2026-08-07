@@ -21,22 +21,32 @@ import { createRunScope, setScopeTopic } from '../v3/orchestration/runScope';
 import { HEBREW_STOP_WORDS, CONTEXT_MATCH_MIN_TERM_LENGTH, extractContextMatchTerms, countContextTermOverlap, countContextTermCoverage } from './lexicalRelevance';
 import { planAutoDepth, selectRelevantExcerpts } from './autoDepthPlanner';
 import { buildLecturerRulesBlock, resolveLecturerContext } from './lecturerRulesService';
+import { resolveActiveCourse } from './activeCourseService';
+import { buildCourseContextBlock } from './courseStore';
 
 /**
- * בלוק לקחי המרצים לפרומפטי יצירת/עדכון מסמך — כסיומת מוכנה לשרשור ('' כשאין).
- * הרזולוציה מהפרופיל האישי; יצירה בתוך פרויקט מקבלת את הלקחים ממילא דרך
- * buildProjectContextBlock, וה-builder מסנן כפילויות טקסט זהות ברמת המודל.
+ * בלוק הקשר הקורס + לקחי המרצים לפרומפטי יצירת/עדכון מסמך — כסיומת מוכנה
+ * לשרשור ('' כשאין). הרזולוציה: קורס פעיל → פרופיל אישי; יצירה בתוך פרויקט
+ * מקבלת את שניהם ממילא דרך buildProjectContextBlock.
  */
 function lecturerRulesSuffix() {
+  const parts = [];
+  let activeCourse = null;
+  try {
+    activeCourse = resolveActiveCourse().course;
+    if (activeCourse) {
+      const courseBlock = buildCourseContextBlock(activeCourse.id, { budget: 1800 });
+      if (courseBlock) parts.push(courseBlock);
+    }
+  } catch {}
   try {
     const block = buildLecturerRulesBlock({
-      ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile() }),
+      ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile(), course: activeCourse }),
       budget: 1000,
     });
-    return block ? `\n${block}` : '';
-  } catch {
-    return '';
-  }
+    if (block) parts.push(block);
+  } catch {}
+  return parts.length ? `\n${parts.join('\n')}` : '';
 }
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
@@ -883,6 +893,7 @@ export async function loadProjectMaterials() {
         extractionTruncated: item?.extractionTruncated === true,
         canPreviewText: canPreviewMaterialText(type) || Boolean(previewText),
         projectId: String(item.projectId || '').trim(),
+        courseId: String(item.courseId || '').trim(),
         // ⚠️ גם הרשימה הזו היא whitelist — בלי השורה הזו התמונה נשמרת אבל
         // אף פעם לא מגיעה למסך הבית.
         thumbnailDataUrl: String(item.thumbnailDataUrl || ''),
@@ -987,7 +998,7 @@ export function updateDocumentHistoryEntry(docHistoryId, patch = {}) {
   return next;
 }
 
-export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual', filePath = '', projectId = '' }) {
+export function saveDocumentHistory({ title = '', content = '', templateId = 'blank', source = 'manual', filePath = '', projectId = '', courseId = '' }) {
   const plainText = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!plainText) return [];
 
@@ -1000,6 +1011,8 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     ? current.find((item) => String(item?.filePath || '').trim() === cleanPath)
     : null;
   const cleanProjectId = String(projectId || '').trim() || String(previousEntry?.projectId || '').trim();
+  // אותה דביקות כמו projectId — שמירה חוזרת לא מנתקת מסמך מהקורס שלו.
+  const cleanCourseId = String(courseId || '').trim() || String(previousEntry?.courseId || '').trim();
   const entry = {
     id: `${Date.now()}`,
     title: entryTitle,
@@ -1014,6 +1027,7 @@ export function saveDocumentHistory({ title = '', content = '', templateId = 'bl
     // נתיב הקובץ נשמר רק אם הוא קיים, כדי שמסך הפתיחה יוכל לפתוח מחדש
     ...(cleanPath ? { filePath: cleanPath } : {}),
     ...(cleanProjectId ? { projectId: cleanProjectId } : {}),
+    ...(cleanCourseId ? { courseId: cleanCourseId } : {}),
   };
 
   // אם יש כבר רשומה עם אותו filePath - מחליפים אותה (מסמך זהה שנפתח/נשמר שוב)
@@ -1627,7 +1641,21 @@ async function buildAutoSelectedMaterialsContext(requestText = '') {
       loadProjectMaterials(),
     ]);
 
-    const materialEntries = (Array.isArray(projectMaterials) ? projectMaterials : []).map((item, index) => ({
+    // סינון קורס רך: חומר/מסמך מקורס *אחר* לא נכנס לאוטו-קונטקסט; פריטים בלי
+    // שיוך (legacy) נשארים. בלי קורס פעיל — אפס סינון, כמו קודם.
+    let scopedHistory = Array.isArray(history) ? history : [];
+    let scopedMaterials = Array.isArray(projectMaterials) ? projectMaterials : [];
+    try {
+      const { resolveActiveCourse, matchesCourseFilter, buildProjectCourseMap } = await import('./activeCourseService');
+      const activeCourseId = resolveActiveCourse().course?.id || '';
+      if (activeCourseId) {
+        const projectCourseMap = buildProjectCourseMap();
+        scopedHistory = scopedHistory.filter((item) => matchesCourseFilter(item, activeCourseId, projectCourseMap));
+        scopedMaterials = scopedMaterials.filter((item) => matchesCourseFilter(item, activeCourseId, projectCourseMap));
+      }
+    } catch { /* שירות הקורסים הוא שיפור — כשל בו לא מפיל אוטו-קונטקסט */ }
+
+    const materialEntries = scopedMaterials.map((item, index) => ({
       id: item?.id || item?.file || `material-${index + 1}`,
       title: item?.title || item?.file || `material-${index + 1}`,
       label: item?.label || '',
@@ -1639,7 +1667,7 @@ async function buildAutoSelectedMaterialsContext(requestText = '') {
     }));
 
     const topCandidates = rankAutoContextCandidates({
-      history: Array.isArray(history) ? history : [],
+      history: scopedHistory,
       materials: materialEntries,
       requestText,
       limit: AUTO_CONTEXT_SOURCE_LIMIT,
@@ -5819,6 +5847,7 @@ function buildUploadedMaterialEntry(payload = {}) {
     previewError: String(payload?.previewError || '').trim(),
     extractedChars: Math.max(0, Number(payload?.extractedChars) || 0),
     projectId: String(payload?.projectId || '').trim(),
+    courseId: String(payload?.courseId || '').trim(),
     extractionStatus: String(payload?.extractionStatus || '').trim(),
     extractionMessage: String(payload?.extractionMessage || '').trim(),
     extractionTruncated: payload?.extractionTruncated === true,
@@ -5851,8 +5880,9 @@ export async function saveHelperMaterial(file, options = {}) {
     extractionStatus: previewMeta.extractionStatus,
     extractionMessage: previewMeta.extractionMessage,
     extractionTruncated: previewMeta.extractionTruncated,
-    // שיוך לפרויקט (אופציונלי): חומר בלי projectId נשאר גלובלי כמו היום.
+    // שיוך לפרויקט/קורס (אופציונלי): חומר בלי שיוך נשאר גלובלי כמו היום.
     ...(options.projectId ? { projectId: String(options.projectId).trim() } : {}),
+    ...(options.courseId ? { courseId: String(options.courseId).trim() } : {}),
   };
 
   if (window.desktopApp?.saveLocalMaterial) {
@@ -5880,7 +5910,7 @@ export async function saveHelperMaterial(file, options = {}) {
  *
  * אין קובץ מקור, ולכן גם בדסקטופ נשמרת רשומת דפדפן (IndexedDB) ולא קובץ מקומי.
  */
-export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '', thumbnailDataUrl = '' } = {}) {
+export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '', courseId = '', thumbnailDataUrl = '' } = {}) {
   const body = String(text || '').trim();
   if (!body) return { ok: false, error: 'קליפ ריק' };
   const meta = getMaterialUploadMeta('web-clip');
@@ -5903,9 +5933,54 @@ export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', pr
     extractionMessage: sourceUrl ? `נגזר מ-${sourceUrl}` : 'נגזר מדף אינטרנט',
     thumbnailDataUrl,
     ...(projectId ? { projectId: String(projectId).trim() } : {}),
+    ...(courseId ? { courseId: String(courseId).trim() } : {}),
   });
   await saveBrowserUploadedMaterialEntry(entry);
   return { ok: true, entry };
+}
+
+/**
+ * שיוך קבוצתי של חומרי עזר לקורס (או ניתוק, כש-courseId ריק).
+ *
+ * ⚠️ מטפל **רק** ברשומות דפדפן (source: 'materials-browser', IndexedDB) — לחומרים
+ * מקומיים בדסקטופ אין נתיב עדכון ב-window.desktopApp, ולכן הם נספרים ב-skippedLocal
+ * ומדווחים למשתמש במקום להיכשל בשקט.
+ *
+ * @param {string[]} materialIds מזהי החומרים לשיוך
+ * @param {string} courseId מזהה הקורס; '' מנתק מהקורס
+ * @returns {Promise<{ok:boolean, updated:number, skippedLocal:number}>}
+ */
+export async function assignMaterialsToCourse(materialIds = [], courseId = '') {
+  const wanted = new Set(
+    (Array.isArray(materialIds) ? materialIds : [materialIds])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  );
+  if (!wanted.size) return { ok: false, updated: 0, skippedLocal: 0 };
+
+  const cleanCourseId = String(courseId || '').trim();
+  const entries = await getBrowserUploadedMaterials();
+  let updated = 0;
+  const next = entries.map((item) => {
+    const id = String(item?.id || '').trim();
+    if (!id || !wanted.has(id)) return item;
+    wanted.delete(id); // מה שנשאר בסט בסוף = מזהים שלא נמצאו (חומרים מקומיים/ישנים)
+    updated += 1;
+    return { ...item, courseId: cleanCourseId };
+  });
+
+  if (updated) {
+    try {
+      await replaceBrowserMaterialsInDb(next);
+      localStorage.removeItem(BROWSER_MATERIALS_KEY);
+    } catch {
+      // אותו fallback כמו בשמירה/מחיקה: localStorage בלי הטקסט המלא.
+      localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next.map((item) => ({ ...item, contentText: '' }))));
+    }
+    syncPersistedAppSettings();
+  }
+
+  return { ok: true, updated, skippedLocal: wanted.size };
 }
 
 export async function removeHelperMaterial(material = {}) {

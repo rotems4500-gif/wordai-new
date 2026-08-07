@@ -151,7 +151,9 @@ function normalizeProject(raw = {}) {
     memory: Array.isArray(raw.memory) ? raw.memory.filter(isPlainObject) : [],
     linkedWorkspaceId: String(raw.linkedWorkspaceId || ''),
     deletedAt: raw.deletedAt || null,
-    // שיוך לקורס/מרצה — מפתח הרזולוציה של לקחי המרצים (lecturerProfileStore).
+    // שיוך לקורס/מרצה. courseId מצביע ל-courseStore; courseName נשמר מסונכרן
+    // (course.name) עבור צרכני מחרוזת legacy — לקחי מרצים ומכשירים ישנים.
+    courseId: String(raw.courseId || '').trim(),
     courseName: String(raw.courseName || '').trim().slice(0, 120),
     lecturerName: String(raw.lecturerName || '').trim().slice(0, 120),
     // ── v2: roadmap ──
@@ -358,6 +360,7 @@ export function updateProjectMeta(projectId, patch = {}) {
     if ('targetDate' in patch) p.targetDate = String(patch.targetDate || '');
     if ('wordTarget' in patch) p.wordTarget = Number.isFinite(+patch.wordTarget) ? Math.max(0, Math.round(+patch.wordTarget)) : 0;
     if ('status' in patch) p.status = PROJECT_STATUSES.includes(patch.status) ? patch.status : p.status;
+    if ('courseId' in patch) p.courseId = String(patch.courseId || '').trim();
     if ('courseName' in patch) p.courseName = String(patch.courseName || '').trim().slice(0, 120);
     if ('lecturerName' in patch) p.lecturerName = String(patch.lecturerName || '').trim().slice(0, 120);
     return p;
@@ -661,6 +664,16 @@ export async function buildProjectContextBlock(projectId) {
   if (!project) return '';
 
   const sections = [];
+
+  // הקשר הקורס (סילבוס + הנחיות פר-קורס) — לפני הנחיות הפרויקט: כללי הקורס
+  // הם המסגרת, הנחיות הפרויקט הן הפירוט.
+  if (project.courseId) {
+    try {
+      const { buildCourseContextBlock } = await import('./courseStore');
+      const courseBlock = buildCourseContextBlock(project.courseId, { budget: 2500 });
+      if (courseBlock) sections.push(courseBlock);
+    } catch {}
+  }
 
   const instructions = clip(project.instructions, PROJECT_INSTRUCTIONS_MAX_CHARS);
   if (instructions) sections.push(`הנחיות קבועות של הפרויקט:\n${instructions}`);

@@ -7846,8 +7846,13 @@ ${sidebarReviewContext}`
         try {
           const { findEvidenceForSpec } = await import('./services/evidenceMatchService');
           const { saveScaffold } = await import('./services/assignmentScaffoldStore');
+          const { resolveActiveCourse, buildProjectCourseMap } = await import('./services/activeCourseService');
           // בלי k מפורש — DEFAULT_EVIDENCE_K, אותו ערך שה-Studio וההרנס מריצים.
-          const result = await findEvidenceForSpec(current.spec, {});
+          // סינון קורס רך — אותה תצורה כמו ב-Studio.
+          const activeCourseId = resolveActiveCourse().course?.id || '';
+          const result = await findEvidenceForSpec(current.spec, activeCourseId
+            ? { courseId: activeCourseId, projectCourseMap: buildProjectCourseMap() }
+            : {});
           saveScaffold({
             spec: current.spec,
             evidence: result.bySection,

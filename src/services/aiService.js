@@ -926,6 +926,7 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_home_instructions',
   'wordai_hidden_project_materials',
   'wordai_projects_v1',
+  'wordai_courses_v1',
   'wordai_saved_docs_history',
   'wordai_app_memory',
   'wordflow_home_customizations',
@@ -1068,6 +1069,24 @@ const mergeProjectsV1Blobs = (currentRaw, incomingRaw) => {
   return JSON.stringify(incoming);
 };
 
+// אותו מיזוג ברמת-רשומה עבור הקורסים (wordai_courses_v1) — updatedAt מנצח,
+// tombstone (deletedAt) לא קם לתחייה.
+const mergeCoursesV1Blobs = (currentRaw, incomingRaw) => {
+  let incoming;
+  try { incoming = JSON.parse(incomingRaw); } catch { return incomingRaw; }
+  if (!incoming || typeof incoming !== 'object') return incomingRaw;
+  let current = null;
+  try { current = currentRaw ? JSON.parse(currentRaw) : null; } catch { current = null; }
+  if (current && typeof current === 'object') {
+    incoming.courses = mergeWorkspaceMaps(
+      current.courses && typeof current.courses === 'object' ? current.courses : {},
+      incoming.courses && typeof incoming.courses === 'object' ? incoming.courses : {},
+      Date.now(),
+    );
+  }
+  return JSON.stringify(incoming);
+};
+
 // אותו עיקרון עבור ה-blob המאוחד של V3: activeWorkspaceId (ו-bypass) הם מצב per-device.
 const mergeWorkspacesV3PreservingLocalPointer = (currentRaw, incomingRaw) => {
   let incoming;
@@ -1109,7 +1128,9 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
         ? mergeWorkspacesV3PreservingLocalPointer(current, incoming)
         : key === 'wordai_projects_v1'
           ? mergeProjectsV1Blobs(current, incoming)
-          : incoming;
+          : key === 'wordai_courses_v1'
+            ? mergeCoursesV1Blobs(current, incoming)
+            : incoming;
     if (current === nextValue) return;
 
     localStorage.setItem(key, nextValue);

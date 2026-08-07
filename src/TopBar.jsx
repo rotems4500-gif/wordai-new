@@ -1,6 +1,13 @@
 import React from 'react';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
 import { isDesktopApp } from './platform';
+import { listCourses, COURSES_UPDATED_EVENT } from './services/courseStore';
+import {
+  resolveActiveCourse,
+  setActiveCourseOverride,
+  clearActiveCourseOverride,
+  ACTIVE_COURSE_CHANGED_EVENT,
+} from './services/activeCourseService';
 
 export default function TopBar({
   onSave = () => {},
@@ -49,6 +56,84 @@ export default function TopBar({
     .map((part) => part[0])
     .join('')
     .toUpperCase() || 'CL';
+  // ── בורר קורס קומפקטי ──
+  // מציג את הקורס הפעיל (override ידני או ירושה מהפרויקט) ומאפשר להחליף.
+  // נעלם לגמרי כשאין קורסים כדי לא להעמיס את הסרגל אצל מי שלא משתמש בפיצ'ר.
+  const [courses, setCourses] = React.useState(() => {
+    try { return listCourses(); } catch { return []; }
+  });
+  const [activeCourse, setActiveCourse] = React.useState(() => {
+    try { return resolveActiveCourse(); } catch { return { course: null, source: 'none' }; }
+  });
+  const [coursePickerOpen, setCoursePickerOpen] = React.useState(false);
+  React.useEffect(() => {
+    const refresh = () => {
+      try { setCourses(listCourses()); } catch { setCourses([]); }
+      try { setActiveCourse(resolveActiveCourse()); } catch { setActiveCourse({ course: null, source: 'none' }); }
+    };
+    refresh();
+    window.addEventListener(COURSES_UPDATED_EVENT, refresh);
+    window.addEventListener(ACTIVE_COURSE_CHANGED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(COURSES_UPDATED_EVENT, refresh);
+      window.removeEventListener(ACTIVE_COURSE_CHANGED_EVENT, refresh);
+    };
+  }, []);
+  const activeCourseName = activeCourse?.course?.name || '';
+  const pickCourse = (courseId) => {
+    setCoursePickerOpen(false);
+    setActiveCourseOverride(courseId || null);
+  };
+  const coursePicker = courses.length > 0 ? (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setCoursePickerOpen((prev) => !prev)}
+        title={activeCourseName ? `קורס פעיל: ${activeCourseName}` : 'בחר קורס פעיל'}
+        className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+          activeCourseName
+            ? 'border-amber-200/60 bg-amber-300/20 text-white hover:bg-amber-300/30'
+            : 'border-white/25 bg-white/10 text-white/85 hover:bg-white/20'
+        }`}
+      >
+        <i className="ph ph-graduation-cap text-base"></i>
+        {activeCourseName ? (
+          <span className="hidden max-w-[9rem] truncate sm:inline">{activeCourseName}</span>
+        ) : null}
+      </button>
+      {coursePickerOpen ? (
+        <div className="absolute left-0 z-40 mt-1 max-h-64 w-52 overflow-y-auto rounded-xl border border-white/20 bg-slate-900/95 p-1 text-right shadow-xl backdrop-blur">
+          {courses.map((course) => (
+            <button
+              key={course.id}
+              type="button"
+              onClick={() => pickCourse(course.id)}
+              className={`w-full truncate rounded px-2 py-1.5 text-right text-[11px] transition hover:bg-white/10 ${
+                activeCourse?.course?.id === course.id ? 'text-amber-200' : 'text-white/85'
+              }`}
+            >
+              {course.name}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => pickCourse(null)}
+            className="mt-1 w-full rounded border-t border-white/10 px-2 py-1.5 text-right text-[11px] text-white/70 transition hover:bg-white/10"
+          >
+            ללא קורס
+          </button>
+          <button
+            type="button"
+            onClick={() => { setCoursePickerOpen(false); clearActiveCourseOverride(); }}
+            className="w-full rounded px-2 py-1.5 text-right text-[11px] text-white/50 transition hover:bg-white/10"
+          >
+            נקה בחירה
+          </button>
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
   const quickBtn = (icon, title, action, disabled = false, extraClass = '') => (
     <button
       onClick={action}
@@ -145,6 +230,7 @@ export default function TopBar({
         </div>
       )}
       <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 lg:flex-nowrap lg:shrink-0">
+        {coursePicker}
         <button
           type="button"
           onClick={() => toggleTheme()}

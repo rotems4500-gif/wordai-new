@@ -84,6 +84,7 @@ function normalizeRule(raw) {
     text,
     scope: ['global', 'lecturer', 'course'].includes(raw.scope) ? raw.scope : 'lecturer',
     courseName: String(raw.courseName || ''),
+    courseId: String(raw.courseId || '').trim(),
     category: RULE_CATEGORIES.includes(raw.category) ? raw.category : 'other',
     source: ['distilled', 'manual', 'diff'].includes(raw.source) ? raw.source : 'distilled',
     evidenceCount,
@@ -119,6 +120,7 @@ function normalizeReturn(raw) {
     id: raw.id ? String(raw.id) : `ret_${hash36(`${raw.assignmentTitle || ''}|${raw.date || nowIso()}`)}`,
     date: raw.date || nowIso(),
     courseName: String(raw.courseName || ''),
+    courseId: String(raw.courseId || '').trim(),
     assignmentTitle: clip(raw.assignmentTitle, 120),
     grade: raw.grade === 0 || raw.grade ? raw.grade : null,
     source: ['docx-comments', 'pdf-annots', 'manual', 'diff'].includes(raw.source) ? raw.source : 'manual',
@@ -466,7 +468,7 @@ const CONFIDENCE_RANK = { high: 3, medium: 2, low: 1 };
  * הלקחים הפעילים לכתיבה הנוכחית: לקחי קורס + לקחי מרצה + גלובליים, dedup לפי
  * id, ממוינים ביטחון ואז ראיות. null-safe — בלי מרצה מחזיר גלובליים בלבד.
  */
-export function getActiveRulesFor({ lecturerName = '', courseName = '' } = {}) {
+export function getActiveRulesFor({ lecturerName = '', courseName = '', courseId = '' } = {}) {
   if (!cache) return { lecturer: null, rules: [] };
   const lecturer = lecturerName ? resolveLecturerByName(lecturerName) : null;
   const seen = new Set();
@@ -478,8 +480,14 @@ export function getActiveRulesFor({ lecturerName = '', courseName = '' } = {}) {
   };
   if (lecturer) {
     const courseNorm = String(courseName || '').trim();
+    const cleanCourseId = String(courseId || '').trim();
     for (const rule of lecturer.rules) {
-      if (rule.scope === 'course' && courseNorm && rule.courseName === courseNorm) push(rule);
+      // התאמה כפולה: courseId (החדש) או מחרוזת courseName (legacy) — לקח ישן
+      // ממשיך לעבוד גם אחרי שהקורס הפך לישות.
+      if (rule.scope !== 'course') continue;
+      const idHit = cleanCourseId && rule.courseId && rule.courseId === cleanCourseId;
+      const nameHit = courseNorm && rule.courseName === courseNorm;
+      if (idHit || nameHit) push(rule);
     }
     for (const rule of lecturer.rules) {
       if (rule.scope !== 'course') push(rule);

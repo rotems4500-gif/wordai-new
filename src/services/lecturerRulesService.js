@@ -297,8 +297,8 @@ const MAX_BLOCK_RULES = 12;
  *
  * @param {{lecturerName?:string, courseName?:string, budget?:number}} opts
  */
-export function buildLecturerRulesBlock({ lecturerName = '', courseName = '', budget = DEFAULT_BLOCK_BUDGET } = {}) {
-  const { lecturer, rules } = getActiveRulesFor({ lecturerName, courseName });
+export function buildLecturerRulesBlock({ lecturerName = '', courseName = '', courseId = '', budget = DEFAULT_BLOCK_BUDGET } = {}) {
+  const { lecturer, rules } = getActiveRulesFor({ lecturerName, courseName, courseId });
   if (!rules.length) return '';
 
   const headerParts = [];
@@ -323,11 +323,16 @@ export function buildLecturerRulesBlock({ lecturerName = '', courseName = '', bu
 }
 
 /**
- * רזולוציית ההקשר: פרויקט (courseName/lecturerName) → fallback לפרופיל האישי
- * (lecturerNames[0]/currentCourses[0]). מחזיר את הפרמטרים ל-buildLecturerRulesBlock.
+ * רזולוציית ההקשר: ישות קורס (אם סופקה) → פרויקט (courseName/lecturerName) →
+ * fallback לפרופיל האישי (lecturerNames[0]/currentCourses[0]).
+ * מחזיר את הפרמטרים ל-buildLecturerRulesBlock/getActiveRulesFor.
  */
-export function resolveLecturerContext({ project = null, personalStyle = null } = {}) {
-  const lecturerName = String(project?.lecturerName || personalStyle?.lecturerNames?.[0] || personalStyle?.lecturerName || '').trim();
-  const courseName = String(project?.courseName || personalStyle?.currentCourses?.[0] || '').trim();
-  return { lecturerName, courseName };
+export function resolveLecturerContext({ project = null, personalStyle = null, course = null } = {}) {
+  const lecturerName = String(
+    course?.lecturerName || project?.lecturerName
+    || personalStyle?.lecturerNames?.[0] || personalStyle?.lecturerName || '',
+  ).trim();
+  const courseName = String(course?.name || project?.courseName || personalStyle?.currentCourses?.[0] || '').trim();
+  const courseId = String(course?.id || project?.courseId || '').trim();
+  return { lecturerName, courseName, courseId };
 }

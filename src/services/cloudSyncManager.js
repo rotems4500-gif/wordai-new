@@ -72,6 +72,7 @@ const CLOUD_PROFILE_APP_SETTING_KEYS = [
   "wordai_home_instructions",
   "wordai_hidden_project_materials",
   "wordai_projects_v1",
+  "wordai_courses_v1",
   "wordflow_home_customizations",
   "wordflow_style_overrides",
   "default-font",

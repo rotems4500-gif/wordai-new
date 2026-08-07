@@ -196,6 +196,12 @@ export async function fillGapForSection(section, {
   const ingested = [];
   const skipped = [];
   let added = 0;
+  // מקור שנמשך למילוי פער נכנס לקורס הפעיל — שלא יזלוג לראיות של קורס אחר.
+  let ingestCourseId = null;
+  try {
+    const { deriveCourseIdForIngest } = await import('./activeCourseService');
+    ingestCourseId = deriveCourseIdForIngest();
+  } catch {}
 
   for (const source of sources) {
     const page = pageByUrl.get(source.url);
@@ -222,6 +228,7 @@ export async function fillGapForSection(section, {
       kind: 'retrieved-source',
       sourceUrl: resolvedUrl,
       strength,
+      courseId: ingestCourseId,
     });
 
     if (result.skipped) {

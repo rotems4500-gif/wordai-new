@@ -15,11 +15,27 @@ import { readScaffold } from './assignmentScaffoldStore';
 import { formatProvenance } from './evidenceMatchService';
 import { INTENT_LABELS } from './assignmentSpecService';
 import { buildLecturerRulesBlock, resolveLecturerContext } from './lecturerRulesService';
+import { resolveActiveCourse } from './activeCourseService';
+import { buildCourseContextBlock } from './courseStore';
 
 /** בלוק לקחי המרצים לפרומפטי הטיוטה. '' כשאין — משורשר בעיוורון. */
 function lecturerRulesForDraft() {
   try {
-    return buildLecturerRulesBlock({ ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile() }), budget: 800 });
+    const course = resolveActiveCourse().course;
+    return buildLecturerRulesBlock({
+      ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile(), course }),
+      budget: 800,
+    });
+  } catch {
+    return '';
+  }
+}
+
+/** בלוק הקשר הקורס (הנחיות+סילבוס) לטיוטות. '' כשאין קורס פעיל. */
+function courseContextForDraft() {
+  try {
+    const course = resolveActiveCourse().course;
+    return course ? buildCourseContextBlock(course.id, { budget: 1500 }) : '';
   } catch {
     return '';
   }
@@ -96,6 +112,7 @@ export async function draftSectionFromEvidence(section, { evidence = null, scaff
     section.instructions ? `הנחיות המטלה לסעיף:\n${section.instructions}` : '',
     quota ? `היקף מבוקש: כ-${quota} מילים.` : '',
     citationStyle ? `סגנון ציטוט: ${citationStyle}.` : '',
+    courseContextForDraft(),
     lecturerRulesForDraft(),
     '',
     'הקטעים היחידים שמותר להסתמך עליהם:',
@@ -254,6 +271,7 @@ export async function draftWholeWork(spec, { scaffold = null, sectionIds = null 
     blocked.length
       ? `שים לב: ${blocked.length} סעיפים נוספים בעבודה חסרי מקורות ולכן אינם נכתבים כאן. אל תתייחס אליהם ואל תכתוב אותם.`
       : '',
+    courseContextForDraft(),
     lecturerRulesForDraft(),
     '',
     sectionBlocks.join('\n\n---\n\n'),
@@ -382,8 +400,9 @@ export function buildScaffoldContextBlock({ sectionId = null, scaffold = null } 
     if (titles.length) lines.push('', `סעיפי המטלה: ${titles.join(' · ')}`);
   }
 
-  // לקחים ממשובי מרצים — רזולוציה מהפרופיל האישי (אין לסקאפולד שיוך פרויקט).
-  // תקציב 800: הפרומפטים כאן כבר עמוסים בראיות.
+  // הקשר קורס + לקחים ממשובי מרצים. תקציבים צנועים: הפרומפטים כאן כבר עמוסים בראיות.
+  const courseBlock = courseContextForDraft();
+  if (courseBlock) lines.push('', courseBlock);
   const rulesBlock = lecturerRulesForDraft();
   if (rulesBlock) lines.push('', rulesBlock);
 

@@ -32,6 +32,7 @@ import { draftWholeWork } from '../../services/assignmentAiService';
 import { hasUsableAiProvider, getPersonalStyleProfile } from '../../services/aiService';
 import { getActiveRulesFor } from '../../services/lecturerProfileStore';
 import { resolveLecturerContext } from '../../services/lecturerRulesService';
+import { resolveActiveCourse, buildProjectCourseMap } from '../../services/activeCourseService';
 import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
 import { composeSectionProseBest, ensureProseReady, PROSE_COMMANDS } from '../../services/proseComposeService';
 import {
@@ -217,6 +218,8 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
         title: file.name.replace(/\.[^.]+$/, ''), text, source: 'scaffold-upload', defer: true,
         cleanDigital: !viaOcr,
         sourceKind: isSlides ? 'slides' : null,
+        // החתמת הקורס הפעיל — עד כה ההעלאה המרכזית הזו לא החתימה כלום והכול נחת גלובלי.
+        courseId: resolveActiveCourse().course?.id || null,
       });
       if (result.skipped) skipped += 1;
       else added += result.added;
@@ -307,7 +310,11 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
     try {
       // ⚠️ בלי k מפורש — יורש את DEFAULT_EVIDENCE_K. הערך שהיה כאן (5) נבדל
       // מזה של ההרנס (6), ולכן הבנצ' מדד תצורה אחרת מזו שהמשתמש קיבל.
-      const result = await findEvidenceForSpec(spec, {});
+      // סינון קורס רך: ראיות מקורס אחר לא נכנסות; חומרים בלי שיוך (legacy) כן.
+      const activeCourseId = resolveActiveCourse().course?.id || '';
+      const result = await findEvidenceForSpec(spec, activeCourseId
+        ? { courseId: activeCourseId, projectCourseMap: buildProjectCourseMap() }
+        : {});
       setEvidenceResult(result);
       // gaps כולל עכשיו גם תתי-סעיפים — סופרים סעיפים ראשיים בנפרד להודעה.
       const sectionIds = new Set(spec.sections.filter((s) => s.enabled !== false).map((s) => s.id));

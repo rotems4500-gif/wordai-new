@@ -454,10 +454,11 @@ export function getMaterials() {
 }
 
 /**
- * @param {{materialIds?:string[], projectId?:string|null}} opts סינון אופציונלי
+ * @param {{materialIds?:string[], projectId?:string|null, courseId?:string|null,
+ *          projectCourseMap?:Map<string,string>|null}} opts סינון אופציונלי
  * @returns {Array<object>} chunks[]
  */
-export function getMaterialChunks({ materialIds = null, projectId = null } = {}) {
+export function getMaterialChunks({ materialIds = null, projectId = null, courseId = null, projectCourseMap = null } = {}) {
   const blob = readMaterialStore();
   let list = blob.chunks;
   if (Array.isArray(materialIds) && materialIds.length) {
@@ -469,6 +470,25 @@ export function getMaterialChunks({ materialIds = null, projectId = null } = {})
       blob.materials.filter((m) => m.projectId === projectId).map((m) => m.id),
     );
     list = list.filter((c) => inProject.has(c.materialId));
+  }
+  if (courseId) {
+    // ⚠️ סינון **רך**, בניגוד מכוון ל-projectId שמעליו: חומר בלי courseId (legacy,
+    // הרוב המוחלט) נשאר בפנים — מוחרג רק חומר שמשויך לקורס *אחר*. exact-match
+    // כאן היה מרוקן את כל בריכת הראיות ביום ההפעלה.
+    const active = String(courseId).trim();
+    const excluded = new Set(
+      blob.materials
+        .filter((m) => {
+          const own = String(m.courseId || '').trim();
+          const derived = !own && projectCourseMap && m.projectId
+            ? String(projectCourseMap.get(String(m.projectId)) || '').trim()
+            : '';
+          const effective = own || derived;
+          return effective && effective !== active;
+        })
+        .map((m) => m.id),
+    );
+    if (excluded.size) list = list.filter((c) => !excluded.has(c.materialId));
   }
   return list;
 }
@@ -505,6 +525,7 @@ export function addMaterialDocument({
   text,
   source = 'upload',
   projectId = null,
+  courseId = null,
   kind = 'course-materials',
   materialKey = null,
   sourceUrl = null,
@@ -582,6 +603,7 @@ export function addMaterialDocument({
     addedAt,
     source,
     projectId,
+    courseId,
     kind,
     materialKey, // מקשר לרשומה ב-wordai_browser_uploaded_materials
     sourceUrl: safeSourceUrl,

@@ -13,6 +13,7 @@ import {
   PROJECTS_UPDATED_EVENT,
 } from '../services/projectService';
 import { ensureLecturerProfilesReady, listLecturerProfiles } from '../services/lecturerProfileStore';
+import { listCourses, createCourse, COURSES_UPDATED_EVENT } from '../services/courseStore';
 import {
   loadProjectMaterials,
   saveHelperMaterial,
@@ -44,9 +45,11 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
   const [globalMaterials, setGlobalMaterials] = useState([]);
   const [loadingMaterials, setLoadingMaterials] = useState(false);
   const [expandedMemoryId, setExpandedMemoryId] = useState(null);
-  const [courseDraft, setCourseDraft] = useState(String(initialProject?.courseName || ''));
   const [lecturerDraft, setLecturerDraft] = useState(String(initialProject?.lecturerName || ''));
   const [knownLecturers, setKnownLecturers] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [newCourseName, setNewCourseName] = useState('');
+  const [showNewCourse, setShowNewCourse] = useState(false);
   const instructionFileInputRef = useRef(null);
   const materialFileInputRef = useRef(null);
 
@@ -96,11 +99,57 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
     return () => { alive = false; };
   }, []);
 
-  // שיוך קורס/מרצה — מפתח הרזולוציה של לקחי המרצים. נשמר ב-blur.
-  const handleSaveCourseLecturer = () => {
+  const refreshCourses = () => {
+    try { setCourses(listCourses({ includeArchived: true })); } catch { setCourses([]); }
+  };
+
+  useEffect(() => {
+    refreshCourses();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener(COURSES_UPDATED_EVENT, refreshCourses);
+    return () => window.removeEventListener(COURSES_UPDATED_EVENT, refreshCourses);
+  }, []);
+
+  // שיוך הקורס — מפתח הרזולוציה של הנחיות הקורס ולקחי המרצים. הקורס נבחר מרשימת
+  // הקורסים (courseStore) ולא כטקסט חופשי, כדי שהשיוך יהיה על courseId אמיתי.
+  const applyCourse = (course) => {
     if (!project?.id) return;
-    if (courseDraft === (project.courseName || '') && lecturerDraft === (project.lecturerName || '')) return;
-    updateProjectMeta(project.id, { courseName: courseDraft, lecturerName: lecturerDraft });
+    if (!course) {
+      updateProjectMeta(project.id, { courseId: '', courseName: '' });
+      refreshProject();
+      showToast('השיוך לקורס הוסר', { tone: 'success' });
+      return;
+    }
+    const lecturerName = course.lecturerName || lecturerDraft;
+    updateProjectMeta(project.id, { courseId: course.id, courseName: course.name, lecturerName });
+    if (lecturerName !== lecturerDraft) setLecturerDraft(lecturerName);
+    refreshProject();
+    showToast('השיוך נשמר', { tone: 'success' });
+  };
+
+  const handleCourseSelect = (value) => {
+    if (value === '__new__') { setShowNewCourse(true); return; }
+    setShowNewCourse(false);
+    if (!value) { applyCourse(null); return; }
+    applyCourse(courses.find((c) => c.id === value) || null);
+  };
+
+  const handleCreateCourse = () => {
+    const name = newCourseName.trim();
+    if (!name) { showToast('צריך שם קורס', { tone: 'error' }); return; }
+    const created = createCourse({ name, lecturerName: lecturerDraft.trim() });
+    if (!created) { showToast('לא הצלחתי ליצור את הקורס', { tone: 'error' }); return; }
+    refreshCourses();
+    setNewCourseName('');
+    setShowNewCourse(false);
+    applyCourse(created);
+  };
+
+  // המרצה נשאר טקסט חופשי — הוא עשוי להיות שונה ממרצה ברירת המחדל של הקורס.
+  const handleSaveLecturer = () => {
+    if (!project?.id) return;
+    if (lecturerDraft === (project.lecturerName || '')) return;
+    updateProjectMeta(project.id, { lecturerName: lecturerDraft });
     refreshProject();
     showToast('השיוך נשמר', { tone: 'success' });
   };
@@ -199,13 +248,19 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-[11.5px] text-slate-300">
                   קורס
-                  <input
-                    value={courseDraft}
-                    onChange={(e) => setCourseDraft(e.target.value)}
-                    onBlur={handleSaveCourseLecturer}
-                    placeholder="שם הקורס"
-                    className="mt-1 w-full rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white placeholder-white/40 outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
-                  />
+                  <select
+                    value={showNewCourse ? '__new__' : (project.courseId && courses.some((c) => c.id === project.courseId) ? project.courseId : '')}
+                    onChange={(e) => handleCourseSelect(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
+                  >
+                    <option value="" className="text-slate-900">— ללא קורס —</option>
+                    {courses.map((c) => (
+                      <option key={c.id} value={c.id} className="text-slate-900">
+                        {c.name}{c.archivedAt ? ' (בארכיון)' : ''}
+                      </option>
+                    ))}
+                    <option value="__new__" className="text-slate-900">➕ קורס חדש…</option>
+                  </select>
                 </label>
                 <label className="text-[11.5px] text-slate-300">
                   מרצה
@@ -213,7 +268,7 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
                     list="wf-project-lecturer-names"
                     value={lecturerDraft}
                     onChange={(e) => setLecturerDraft(e.target.value)}
-                    onBlur={handleSaveCourseLecturer}
+                    onBlur={handleSaveLecturer}
                     placeholder="שם המרצה"
                     className="mt-1 w-full rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white placeholder-white/40 outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
                   />
@@ -222,7 +277,26 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
                   </datalist>
                 </label>
               </div>
-              <div className="mt-2 text-[11px] text-slate-400">שיוך למרצה מפעיל את הלקחים שנלמדו ממנו בכתיבה בפרויקט הזה.</div>
+              {showNewCourse && (
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    autoFocus
+                    value={newCourseName}
+                    onChange={(e) => setNewCourseName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreateCourse(); } }}
+                    placeholder="שם הקורס החדש"
+                    className="min-w-0 flex-1 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white placeholder-white/40 outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
+                  />
+                  <button type="button" onClick={handleCreateCourse} className="shrink-0 rounded-lg bg-cyan-500/80 px-3 py-1.5 text-[11.5px] font-bold text-white transition hover:bg-cyan-500">צור</button>
+                  <button type="button" onClick={() => { setShowNewCourse(false); setNewCourseName(''); }} className="shrink-0 text-[11px] text-slate-400 hover:text-slate-200">ביטול</button>
+                </div>
+              )}
+              {!showNewCourse && project.courseName && !courses.some((c) => c.id === project.courseId) && (
+                <div className="mt-2 text-[11px] text-amber-300">
+                  הפרויקט משויך לשם קורס ישן ("{project.courseName}") שאין לו עדיין רשומת קורס. בחר קורס מהרשימה או צור אותו כדי לשמור עליו הנחיות וסילבוס.
+                </div>
+              )}
+              <div className="mt-2 text-[11px] text-slate-400">שיוך לקורס מכניס את ההנחיות והסילבוס שלו לכתיבה בפרויקט. שיוך למרצה מפעיל את הלקחים שנלמדו ממנו.</div>
             </div>
 
             <textarea

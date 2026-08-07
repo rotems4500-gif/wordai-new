@@ -23,6 +23,7 @@ import {
   recordGradedReturn,
 } from '../services/lecturerProfileStore';
 import { distillLecturerRules, saveDistilledRules } from '../services/lecturerRulesService';
+import { listCourses, findCourseByName } from '../services/courseStore';
 import { showToast } from '../services/uiFeedback';
 
 const KIND_LABELS = {
@@ -229,9 +230,13 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
     setSelected(new Set(events.map((_, i) => i)));
   }, [events]);
 
+  // רשימת הקורסים המנוהלת (courseStore) + שמות הקורסים ה-legacy שנשמרו על המרצים.
   const courseOptions = useMemo(() => {
+    let managed = [];
+    try { managed = listCourses({ includeArchived: true }).map((c) => c.name); } catch {}
     const match = lecturers.find((l) => l.name === lecturerName);
-    return match ? match.courses : [...new Set(lecturers.flatMap((l) => l.courses))];
+    const legacy = match ? match.courses : lecturers.flatMap((l) => l.courses);
+    return [...new Set([...managed, ...legacy].filter(Boolean))];
   }, [lecturers, lecturerName]);
 
   const resetExtraction = () => {
@@ -337,11 +342,16 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
     setBusy('שומר…');
     setError('');
     try {
+      // שם קורס שמתאים לרשומת קורס מנוהלת נשמר גם כ-courseId, כדי שהמשוב יתחבר
+      // לקורס עצמו ולא רק למחרוזת.
+      let matchedCourseId = '';
+      try { matchedCourseId = findCourseByName(courseName.trim())?.id || ''; } catch {}
       const result = await recordGradedReturn(
         lecturerName.trim(),
         {
           date: date ? new Date(date).toISOString() : new Date().toISOString(),
           courseName: courseName.trim(),
+          courseId: matchedCourseId,
           assignmentTitle: assignmentTitle.trim(),
           grade: grade.trim() || null,
           // annotated מתפצל לפי סוג הקובץ בפועל — docxResult קיים רק במסלול ה-docx.

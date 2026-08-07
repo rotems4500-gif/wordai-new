@@ -29,6 +29,7 @@ import {
   getMaterialExtractionStatusInfo,
   saveHelperMaterial,
   removeHelperMaterial,
+  assignMaterialsToCourse,
   saveHomeInstructions,
   getRecentDocuments,
   removeDocumentHistoryByFilePath,
@@ -43,6 +44,15 @@ import { getTheme, toggleTheme, onThemeChange } from './theme';
 import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { CLIP_INGESTED_EVENT } from './services/clipInboxService';
+import { listCourses, COURSES_UPDATED_EVENT } from './services/courseStore';
+import {
+  resolveActiveCourse,
+  setActiveCourseOverride,
+  clearActiveCourseOverride,
+  matchesCourseFilter,
+  buildProjectCourseMap,
+  ACTIVE_COURSE_CHANGED_EVENT,
+} from './services/activeCourseService';
 
 const MODERN_TEMPLATES = [
   { 
@@ -554,6 +564,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [materials, setMaterials] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [materialsFilter, setMaterialsFilter] = useState('all');
+  // סקופ קורס: הרשימה עצמה + הקורס הפעיל שנפתר (override ידני או ירושה מהפרויקט).
+  const [coursesList, setCoursesList] = useState(() => (typeof listCourses === 'function' ? listCourses() : []));
+  const [activeCourseInfo, setActiveCourseInfo] = useState(() => resolveActiveCourse());
+  const [courseAssignOpen, setCourseAssignOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   // התקדמות העלאה לכל קובץ - מאפשר feedback אמיתי במקום ספינר עיוור
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '' });
@@ -923,6 +937,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     };
   }, []);
 
+  // רשימת הקורסים והקורס הפעיל מתעדכנים משני מקורות: עריכת קורסים ושינוי ה-override.
+  useEffect(() => {
+    const refreshCourseState = () => {
+      try { setCoursesList(listCourses()); } catch { setCoursesList([]); }
+      try { setActiveCourseInfo(resolveActiveCourse()); } catch { setActiveCourseInfo({ course: null, source: 'none' }); }
+    };
+    refreshCourseState();
+    window.addEventListener(COURSES_UPDATED_EVENT, refreshCourseState);
+    window.addEventListener(ACTIVE_COURSE_CHANGED_EVENT, refreshCourseState);
+    return () => {
+      window.removeEventListener(COURSES_UPDATED_EVENT, refreshCourseState);
+      window.removeEventListener(ACTIVE_COURSE_CHANGED_EVENT, refreshCourseState);
+    };
+  }, []);
+
   const processMaterialUploads = async (files = []) => {
     const normalizedFiles = Array.from(files || []).filter(Boolean);
     if (!normalizedFiles.length || uploading) return;
@@ -937,6 +966,12 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     setUploading(true);
     setUploadProgress({ current: 0, total: normalizedFiles.length, fileName: '' });
     const failedUploads = [];
+    // מחתימים את הקורס הפעיל **ברגע ההעלאה** (ולא מה-state), כדי שלא נחתום קורס ישן.
+    let uploadCourseId = '';
+    try { uploadCourseId = resolveActiveCourse()?.course?.id || ''; } catch { uploadCourseId = ''; }
+    const uploadOptions = uploadCourseId
+      ? { ...selectedUploadMeta, courseId: uploadCourseId }
+      : selectedUploadMeta;
     try {
       const uploadedIds = [];
       for (let i = 0; i < normalizedFiles.length; i += 1) {
@@ -944,7 +979,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         setUploadProgress({ current: i + 1, total: normalizedFiles.length, fileName: file?.name || '' });
         if (typeof saveHelperMaterial !== 'function') break;
         try {
-          const result = await saveHelperMaterial(file, selectedUploadMeta);
+          const result = await saveHelperMaterial(file, uploadOptions);
           if (result?.entry?.id) uploadedIds.push(result.entry.id);
         } catch (err) {
           // נכשל קובץ בודד - לא להפיל את כל הבאצ', לאסוף לדוח סופי
@@ -1263,9 +1298,49 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const canGeneratePresentation = Boolean(String(prompt || '').trim() || hasBaseDraft);
   const canGenerate = (isPresentationOutput ? canGeneratePresentation : hasGenerationInput) && !isGenerating;
 
+  const activeCourseId = activeCourseInfo?.course?.id || '';
+  const hasCourseOverride = activeCourseInfo?.source === 'override';
+  const isCourseAutoResolved = activeCourseInfo?.source === 'project';
+  // מיפוי projectId→courseId לגזירת שיוך של חומרים ישנים; נבנה מחדש רק כשיש סיבה.
+  const projectCourseMap = React.useMemo(
+    () => buildProjectCourseMap(),
+    [activeCourseId, coursesList, projectsList],
+  );
+
   const filteredMaterials = React.useMemo(() => (
-    materials.filter((item) => doesMaterialMatchFilter(item, materialsFilter))
-  ), [materials, materialsFilter]);
+    materials.filter((item) => (
+      doesMaterialMatchFilter(item, materialsFilter)
+      // סינון רך: חומר בלי שיוך נשאר גלוי, מוסתר רק חומר של קורס אחר.
+      && matchesCourseFilter(item, activeCourseId, projectCourseMap)
+    ))
+  ), [materials, materialsFilter, activeCourseId, projectCourseMap]);
+
+  const isMaterialUnassignedToCourse = React.useCallback((item = {}) => {
+    if (String(item?.courseId || '').trim()) return false;
+    const viaProject = item?.projectId ? String(projectCourseMap.get(String(item.projectId)) || '').trim() : '';
+    return !viaProject;
+  }, [projectCourseMap]);
+
+  const handleAssignSelectedToCourse = async (courseId) => {
+    setCourseAssignOpen(false);
+    const ids = selectedIds.filter(Boolean);
+    if (!ids.length) return;
+    try {
+      const result = await assignMaterialsToCourse(ids, courseId);
+      if (typeof loadProjectMaterials === 'function') {
+        setMaterials(await loadProjectMaterials());
+      }
+      const skipped = Number(result?.skippedLocal || 0);
+      const updated = Number(result?.updated || 0);
+      const targetName = coursesList.find((course) => course.id === courseId)?.name || 'ללא קורס';
+      showToast(
+        `שויכו ${updated} חומרים ל"${targetName}"${skipped ? ` · ${skipped} חומרים מקומיים אינם ניתנים לשיוך` : ''}`,
+        { tone: skipped ? 'warning' : 'success' },
+      );
+    } catch (error) {
+      showToast(`השיוך נכשל: ${error?.message || 'שגיאה לא ידועה'}`, { tone: 'error' });
+    }
+  };
 
   const groupedFilteredMaterials = React.useMemo(() => {
     const grouped = filteredMaterials.reduce((acc, item) => {
@@ -2240,6 +2315,81 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                          })}
                        </div>
                      ) : null}
+                     {coursesList.length > 0 ? (
+                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                         <span className="text-white/45 text-[10px] font-semibold">קורס:</span>
+                         <button
+                           type="button"
+                           onClick={() => { if (hasCourseOverride) setActiveCourseOverride(null); }}
+                           title="הצג חומרים מכל הקורסים"
+                           className={`px-2 py-1 rounded-lg text-[10px] border transition-colors ${!activeCourseId
+                             ? 'bg-amber-500/35 border-amber-200/60 text-amber-50'
+                             : 'bg-white/5 border-white/15 text-white/70 hover:bg-white/10'}`}
+                         >
+                           הכול
+                         </button>
+                         {coursesList.map((course) => {
+                           const isActive = activeCourseId === course.id;
+                           return (
+                             <button
+                               key={course.id}
+                               type="button"
+                               onClick={() => setActiveCourseOverride(course.id)}
+                               title={[course.name, course.lecturerName, course.term].filter(Boolean).join(' · ')}
+                               className={`px-2 py-1 rounded-lg text-[10px] border transition-colors ${isActive
+                                 ? 'bg-amber-500/35 border-amber-200/60 text-amber-50'
+                                 : 'bg-white/5 border-white/15 text-white/70 hover:bg-white/10'}`}
+                             >
+                               {course.name}
+                               {/* אוטומטי = נגזר מהפרויקט ולא נבחר ידנית */}
+                               {isActive && isCourseAutoResolved ? <span className="opacity-70"> · אוטומטי</span> : null}
+                             </button>
+                           );
+                         })}
+                         {hasCourseOverride ? (
+                           <button
+                             type="button"
+                             onClick={() => clearActiveCourseOverride()}
+                             title="נקה את בחירת הקורס הידנית (חזרה לזיהוי אוטומטי)"
+                             className="px-1.5 py-1 rounded-lg text-[10px] border border-white/15 bg-white/5 text-white/60 hover:bg-white/10 transition-colors"
+                           >
+                             ✕
+                           </button>
+                         ) : null}
+                       </div>
+                     ) : null}
+                     {materials.length > 0 && coursesList.length > 0 && selectedIds.length > 0 ? (
+                       <div className="relative mb-2">
+                         <button
+                           type="button"
+                           onClick={() => setCourseAssignOpen((prev) => !prev)}
+                           className="px-2 py-1 rounded-lg text-[10px] border border-amber-200/40 bg-amber-500/15 text-amber-50 hover:bg-amber-500/25 transition-colors"
+                         >
+                           שיוך לקורס ({selectedIds.length})
+                         </button>
+                         {courseAssignOpen ? (
+                           <div className="absolute z-20 mt-1 w-48 max-h-56 overflow-y-auto rounded-lg border border-white/20 bg-slate-900/95 p-1 shadow-xl backdrop-blur">
+                             {coursesList.map((course) => (
+                               <button
+                                 key={`assign-${course.id}`}
+                                 type="button"
+                                 onClick={() => handleAssignSelectedToCourse(course.id)}
+                                 className="w-full text-right px-2 py-1.5 rounded text-[11px] text-white/85 hover:bg-white/10 transition-colors truncate"
+                               >
+                                 {course.name}
+                               </button>
+                             ))}
+                             <button
+                               type="button"
+                               onClick={() => handleAssignSelectedToCourse('')}
+                               className="w-full text-right px-2 py-1.5 rounded text-[11px] text-white/60 hover:bg-white/10 transition-colors border-t border-white/10 mt-1"
+                             >
+                               נתק מקורס
+                             </button>
+                           </div>
+                         ) : null}
+                       </div>
+                     ) : null}
                      {materials.length > 0 ? (
                        <div className="flex flex-wrap items-center gap-1.5 mb-2">
                          {MATERIAL_FILTER_OPTIONS.map((option) => {
@@ -2296,6 +2446,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                                    </div>
                                  </div>
                                  <div className="flex shrink-0 items-center gap-1">
+                                   {/* כשקורס פעיל — מסמנים במפורש מה נכלל רק בזכות הסינון הרך. */}
+                                   {activeCourseId && isMaterialUnassignedToCourse(item) ? (
+                                     <span className="text-white/35 text-[9px] whitespace-nowrap border border-white/10 bg-white/5 px-1.5 py-0.5 rounded">ללא קורס</span>
+                                   ) : null}
                                    <span className="text-white/50 text-[9px] whitespace-nowrap border border-white/20 bg-white/5 px-2 py-0.5 rounded">{item.label || 'כללי'}</span>
                                    <button
                                      type="button"

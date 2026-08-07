@@ -8,6 +8,9 @@ import ProfileOnboarding from './ProfileOnboarding';
 import StyleProfilePanel from './components/StyleProfilePanel';
 import PersonalTrainerPanel from './components/PersonalTrainerPanel';
 import LecturerProfilePanel from './components/LecturerProfilePanel';
+import CourseManagerPanel from './components/CourseManagerPanel';
+import { COURSES_UPDATED_EVENT } from './services/courseStore';
+import { resolveActiveCourse, ACTIVE_COURSE_CHANGED_EVENT } from './services/activeCourseService';
 import DesktopDownloadCard from './components/DesktopDownloadCard';
 import { getSampleStoreStats } from './services/styleSampleStore';
 import { normalizeDelimitedList } from './delimitedListInput';
@@ -4169,6 +4172,22 @@ function PersonalStyleSettings({ profile, setProfile }) {
   // האוטומטית כאן מיותרים ברגע שיש לו chunks אמיתיים. engineHasChunks נבדק פעם אחת + על אירועי עדכון.
   const [engineHasChunks, setEngineHasChunks] = useState(false);
   const [lecturerPanelOpen, setLecturerPanelOpen] = useState(false);
+  const [coursePanelOpen, setCoursePanelOpen] = useState(false);
+  // הקורס הפעיל — תצוגה בלבד (מי מקבל את החומרים שיועלו כאן).
+  const [activeCourseName, setActiveCourseName] = useState('');
+  useEffect(() => {
+    const refreshActiveCourse = () => {
+      try { setActiveCourseName(resolveActiveCourse().course?.name || ''); } catch { setActiveCourseName(''); }
+    };
+    refreshActiveCourse();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener(ACTIVE_COURSE_CHANGED_EVENT, refreshActiveCourse);
+    window.addEventListener(COURSES_UPDATED_EVENT, refreshActiveCourse);
+    return () => {
+      window.removeEventListener(ACTIVE_COURSE_CHANGED_EVENT, refreshActiveCourse);
+      window.removeEventListener(COURSES_UPDATED_EVENT, refreshActiveCourse);
+    };
+  }, []);
   useEffect(() => {
     const refreshEngineChunks = () => {
       try { setEngineHasChunks((getSampleStoreStats()?.chunkCount || 0) > 0); } catch { setEngineHasChunks(false); }
@@ -4208,7 +4227,11 @@ function PersonalStyleSettings({ profile, setProfile }) {
     setUploading(true);
     const failedUploads = [];
     try {
-      const selectedUploadMeta = getMaterialUploadMeta(uploadKind);
+      const baseUploadMeta = getMaterialUploadMeta(uploadKind);
+      // החתמת הקורס הפעיל על החומר, כדי שהפילטר הרך של הקורס יזהה אותו.
+      let activeCourseId = '';
+      try { activeCourseId = resolveActiveCourse().course?.id || ''; } catch { activeCourseId = ''; }
+      const selectedUploadMeta = activeCourseId ? { ...baseUploadMeta, courseId: activeCourseId } : baseUploadMeta;
       const uploadedIds = [];
       for (const file of files) {
         try {
@@ -4456,7 +4479,20 @@ function PersonalStyleSettings({ profile, setProfile }) {
         defaultOpen={false}
       >
         <PersonalTrainerPanel onOpenLecturerProfiles={() => setLecturerPanelOpen(true)} />
+        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setCoursePanelOpen(true)}
+            style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #93C5FD', background: 'white', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+          >
+            📚 ניהול קורסים
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--s-muted)' }}>
+            שם הקורס, המרצה, ההנחיות הקבועות והסילבוס — במקום אחד.
+          </span>
+        </div>
         {lecturerPanelOpen ? <LecturerProfilePanel onClose={() => setLecturerPanelOpen(false)} /> : null}
+        {coursePanelOpen ? <CourseManagerPanel onClose={() => setCoursePanelOpen(false)} /> : null}
       </SettingsSection>
 
       <SettingsSection
@@ -4723,6 +4759,9 @@ function PersonalStyleSettings({ profile, setProfile }) {
             </button>
           </div>
           <input ref={fileInputRef} type="file" multiple accept={getHelperMaterialAcceptList()} style={{ display: 'none' }} onChange={handleUpload} />
+        </div>
+        <div style={{ fontSize: 11, color: activeCourseName ? '#1D4ED8' : 'var(--s-muted)', fontWeight: 600, marginBottom: 6 }}>
+          {activeCourseName ? `📚 קורס פעיל: ${activeCourseName} — קבצים שיועלו כאן ישויכו אליו` : '📚 ללא קורס פעיל — הקבצים יישמרו בלי שיוך לקורס'}
         </div>
         <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
           לחומרי הקשר כלליים, דפי שער לדוגמה, תבניות מסמך או חומרי קורס — בחר את סוג הקובץ לפני ההעלאה. לעבודות כתיבה שלך שממנן לומדים את הסגנון עצמו — בקטע "מנוע הסגנון האישי" למטה.

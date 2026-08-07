@@ -3,6 +3,8 @@ import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAge
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { getProjectForDocument, buildProjectContextBlock, summarizeConversationForMemory, appendProjectMemory, isSupportedExternalChatShareUrl, PROJECTS_UPDATED_EVENT } from "./services/projectService";
 import { buildLecturerRulesBlock, resolveLecturerContext } from "./services/lecturerRulesService";
+import { resolveActiveCourse } from "./services/activeCourseService";
+import { buildCourseContextBlock } from "./services/courseStore";
 import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/styleAuthenticityService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLoopService";
 import { showToast } from "./services/uiFeedback";
@@ -4041,7 +4043,16 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     if (activeProject) {
       try { projectContextBlock = await buildProjectContextBlock(activeProject.id); } catch {}
     }
-    let finalExtraSystemPrompt = [projectContextBlock, composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
+    // הקשר קורס בלי פרויקט: כשהפרויקט משויך לקורס הבלוק כבר בתוך קונטקסט
+    // הפרויקט; כאן מכסים override ידני או מסמך ללא פרויקט.
+    let courseContextBlock = '';
+    try {
+      const resolved = resolveActiveCourse({ projectId: activeProject?.id || null });
+      if (resolved.course && resolved.course.id !== (activeProject?.courseId || '')) {
+        courseContextBlock = buildCourseContextBlock(resolved.course.id, { budget: 2000 });
+      }
+    } catch {}
+    let finalExtraSystemPrompt = [projectContextBlock, courseContextBlock, composerModeSystemPrompt, String(extraSystemPrompt || '').trim()]
       .filter(Boolean)
       .join('\n\n');
     let finalProviderId = effectiveSidebarProviderId;
@@ -4204,8 +4215,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         // לקחים שנלמדו ממשובי מרצים אמיתיים: הסוכן בודק אותם במיוחד, ומסמן
         // ממצא שנובע מלקח ("המרצה העיר על זה בעבר"). הרזולוציה: פרויקט → פרופיל.
         try {
+          const activeCourseForRules = resolveActiveCourse({ projectId: activeProject?.id || null }).course;
           const lecturerRulesBlock = buildLecturerRulesBlock({
-            ...resolveLecturerContext({ project: activeProject, personalStyle: getPersonalStyleProfile() }),
+            ...resolveLecturerContext({ project: activeProject, personalStyle: getPersonalStyleProfile(), course: activeCourseForRules }),
             budget: 1200,
           });
           if (lecturerRulesBlock) {

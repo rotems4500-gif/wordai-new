@@ -245,13 +245,18 @@ function buildVectorMap() {
  *
  * @param {object} section סעיף מ-parseAssignmentSpec
  * @param {{k?:number, materialIds?:string[]|null, projectId?:string|null,
+ *          courseId?:string|null, projectCourseMap?:Map|null,
  *          vectorMap?:Map|null, minCosine?:number}} opts
+ *        courseId — סינון קורס **רך** (ר' getMaterialChunks): legacy בלי שיוך
+ *        נשאר, רק חומר של קורס אחר מוחרג.
  * @returns {Promise<{sectionId:string, evidence:Array<object>, gap:boolean, mode:string}>}
  */
 export async function findEvidenceForSection(section, {
   k = DEFAULT_EVIDENCE_K,
   materialIds = null,
   projectId = null,
+  courseId = null,
+  projectCourseMap = null,
   vectorMap = null,
   minCosine = MIN_COSINE_FLOOR,
   domainVector = null,
@@ -260,7 +265,7 @@ export async function findEvidenceForSection(section, {
   await ensureRetrievalBackend();
 
   const query = buildSectionQuery(section);
-  const corpus = getMaterialChunks({ materialIds, projectId });
+  const corpus = getMaterialChunks({ materialIds, projectId, courseId, projectCourseMap });
   const base = { sectionId: section?.id || null, evidence: [], gap: true, mode: 'none' };
   if (!query || !corpus.length) return base;
 

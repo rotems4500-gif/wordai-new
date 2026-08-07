@@ -735,6 +735,11 @@ export async function addArticleToMaterials(article, { projectId = '', signal, o
     // ── write #1: אינדקס הראיות ──
     report('adding', { strength });
     const title = String(article?.title || '').trim() || resolvedUrl || 'מאמר';
+    let ingestCourseId = null;
+    try {
+      const { deriveCourseIdForIngest } = await import('./activeCourseService');
+      ingestCourseId = deriveCourseIdForIngest(cleanProjectId || null);
+    } catch {}
     const added = addMaterialDocument({
       title,
       text,
@@ -742,6 +747,7 @@ export async function addArticleToMaterials(article, { projectId = '', signal, o
       kind: 'retrieved-source',
       sourceUrl: resolvedUrl || null,
       projectId: cleanProjectId || null,
+      courseId: ingestCourseId,
       cleanDigital: useFull ? cleanDigital : false,
       strength,
       defer: true,

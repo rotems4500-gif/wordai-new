@@ -19,6 +19,7 @@ import {
   exportLecturerProfiles,
   LECTURER_PROFILES_UPDATED_EVENT,
 } from '../services/lecturerProfileStore';
+import { listCourses } from '../services/courseStore';
 import { showToast, showConfirm } from '../services/uiFeedback';
 import GradedReturnWizard from './GradedReturnWizard';
 
@@ -251,9 +252,13 @@ function ManualFeedbackForm({ lecturers, defaultLecturerName = '', onDone, onCan
   const [feedbackText, setFeedbackText] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // רשימת הקורסים המנוהלת (courseStore) + שמות הקורסים ה-legacy שנשמרו על המרצים.
   const courseOptions = useMemo(() => {
+    let managed = [];
+    try { managed = listCourses({ includeArchived: true }).map((c) => c.name); } catch {}
     const match = lecturers.find((l) => l.name === lecturerName);
-    return match ? match.courses : [...new Set(lecturers.flatMap((l) => l.courses))];
+    const legacy = match ? match.courses : lecturers.flatMap((l) => l.courses);
+    return [...new Set([...managed, ...legacy].filter(Boolean))];
   }, [lecturers, lecturerName]);
 
   const submit = async () => {
