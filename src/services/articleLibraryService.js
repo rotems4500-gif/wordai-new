@@ -110,6 +110,19 @@ export function wrapWithInstitutionProxy(url) {
   return target.includes('&') ? prefix + encodeURIComponent(target) : prefix + target;
 }
 
+/**
+ * קישור חיפוש של המאמר ב-Google Scholar (הכותרת במרכאות — התאמה מדויקת).
+ * עטוף בפרוקסי המוסדי כשהוא מוגדר — כך סקולר מציג "Full text @ המוסד" ליד התוצאות.
+ * @param {object} article
+ * @returns {string} '' כשאין כותרת
+ */
+export function buildScholarSearchUrl(article) {
+  const title = String(article?.title || '').trim();
+  if (!title) return '';
+  const scholarUrl = `https://scholar.google.com/scholar?q=%22${encodeURIComponent(title)}%22`;
+  return wrapWithInstitutionProxy(scholarUrl);
+}
+
 // ─────────────────────────── Unpaywall (Open Access) ───────────────────────────
 // API חינמי ללא מפתח; דורש רק כתובת מייל ליצירת קשר. מחזיר את המיקום החוקי
 // הטוב ביותר לעותק פתוח של המאמר — כך שתוצאה מאחורי paywall הופכת לפתיחה/הורדה/הטמעה.

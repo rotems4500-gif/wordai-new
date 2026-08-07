@@ -4,6 +4,7 @@ import {
   articleHasPdfCandidate,
   getInstitutionProxyPrefix,
   wrapWithInstitutionProxy,
+  buildScholarSearchUrl,
 } from '../../services/articleLibraryService';
 
 /**
@@ -167,6 +168,19 @@ export default function ArticleResultsList({
                   className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${openCls}`}
                 >
                   {proxyPrefix ? '🔗 פתח 🎓' : '🔗 פתח'}
+                </a>
+              )}
+              {buildScholarSearchUrl(article) && (
+                <a
+                  href={buildScholarSearchUrl(article)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={proxyPrefix
+                    ? 'חיפוש המאמר ב-Google Scholar דרך הגישה המוסדית (עם קישורי Full text של המוסד)'
+                    : 'חיפוש המאמר ב-Google Scholar'}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${openCls}`}
+                >
+                  🔍 בסקולר
                 </a>
               )}
               {onDownloadPdf && articleHasPdfCandidate(article) && (
