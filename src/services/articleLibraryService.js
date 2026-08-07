@@ -339,6 +339,79 @@ export function isArticleAlreadyInMaterials(url = '') {
   }
 }
 
+// ─────────────────────────── מסלול PDF (דסקטופ בלבד) ───────────────────────────
+
+// ה-shim של Tauri בלבד: באתר אין דרך לעקוף CORS למשיכת בינארי.
+function isPdfBinaryFetchAvailable() {
+  return typeof window !== 'undefined' && typeof window.desktopApp?.fetchPdfBinary === 'function';
+}
+
+// מעדיפים pdfUrl מפורש (Scholar מחזיר אותו); אחרת URL שנראה כמו PDF.
+function resolvePdfCandidateUrl(article, fallbackUrl = '') {
+  const explicit = String(article?.pdfUrl || '').trim();
+  if (explicit) return explicit;
+  const url = String(fallbackUrl || article?.url || '').trim();
+  return /\.pdf($|\?)/i.test(url) ? url : '';
+}
+
+// true אם לכרטיס יש מסלול PDF כלשהו — משמש את ה-UI להצגת כפתור ההורדה.
+export function articleHasPdfCandidate(article) {
+  return Boolean(resolvePdfCandidateUrl(article));
+}
+
+const PDF_FETCH_TIMEOUT_MS = 30000;
+
+// משיכת בייטים + חילוץ טקסט (OCR כלול). מחזיר תמיד אובייקט — אף פעם לא זורק.
+async function fetchPdfFullText(pdfUrl, signal) {
+  try {
+    if (signal?.aborted) return { text: '', finalUrl: '', viaOcr: false };
+    const res = await window.desktopApp.fetchPdfBinary(pdfUrl, { timeoutMs: PDF_FETCH_TIMEOUT_MS });
+    if (!res?.ok || !res.bytes?.length) return { text: '', finalUrl: '', viaOcr: false };
+    if (signal?.aborted) return { text: '', finalUrl: '', viaOcr: false };
+    // dynamic — ראש המודול נשאר נקי מתלויות דפדפן (pdf.js/tesseract).
+    const { extractMaterialTextFromBytes } = await import('./materialExtractBrowser');
+    const out = await extractMaterialTextFromBytes('article.pdf', res.bytes, MAX_PAGE_CHARS, { ocr: true });
+    if (!out?.ok) return { text: '', finalUrl: '', viaOcr: false };
+    return {
+      text: String(out.text || '').trim(),
+      finalUrl: String(res.finalUrl || '').trim(),
+      viaOcr: Boolean(out.viaOcr),
+    };
+  } catch (err) {
+    console.error('[articleLibrary] pdf fetch/extract failed', err);
+    return { text: '', finalUrl: '', viaOcr: false };
+  }
+}
+
+// שם קובץ בטוח מתוך כותרת המאמר (עברית נשמרת; רק תווים אסורים ב-Windows יורדים).
+function pdfFileNameFor(article) {
+  const raw = String(article?.title || '').trim() || 'article';
+  const slug = raw.replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return `${slug || 'article'}.pdf`;
+}
+
+/**
+ * הורדת ה-PDF של המאמר לדיסק דרך דיאלוג שמירה native. דסקטופ בלבד.
+ * @returns {Promise<{ok:boolean, canceled?:boolean, path?:string, error?:string}>}
+ */
+export async function downloadArticlePdf(article) {
+  if (!isPdfBinaryFetchAvailable() || typeof window.desktopApp?.saveBinaryFile !== 'function') {
+    return { ok: false, error: 'desktop-only' };
+  }
+  const pdfUrl = resolvePdfCandidateUrl(article);
+  if (!pdfUrl) return { ok: false, error: 'לא נמצא קישור ל-PDF' };
+
+  const fetched = await window.desktopApp.fetchPdfBinary(pdfUrl, { timeoutMs: PDF_FETCH_TIMEOUT_MS });
+  if (!fetched?.ok || !fetched.bytes?.length) {
+    return { ok: false, error: fetched?.error || 'משיכת ה-PDF נכשלה' };
+  }
+
+  const saved = await window.desktopApp.saveBinaryFile(pdfFileNameFor(article), fetched.bytes);
+  if (saved?.canceled) return { ok: false, canceled: true };
+  if (!saved?.ok) return { ok: false, error: saved?.error || 'השמירה נכשלה' };
+  return { ok: true, path: saved.filePath || '' };
+}
+
 /**
  * מוסיף מאמר לחומרי העזר: משיכת טקסט → אינדקס ראיות → רשימת חומרי הפרויקט → הטמעה.
  *
@@ -397,6 +470,23 @@ export async function addArticleToMaterials(article, { projectId = '', signal, o
         if (snapshotText.length > fullText.length) {
           fullText = snapshotText;
           resolvedUrl = String(snapshot?.finalUrl || '').trim() || resolvedUrl;
+        }
+      }
+    }
+
+    // ── הסלמה אחרונה: PDF. fetch_page_text דוחה non-HTML, ולכן מאמרי PDF
+    // נכנסו עד כה כ-strength:'abstract'. בדסקטופ מושכים את הבייטים ומחלצים
+    // טקסט (כולל OCR לסרוקים) עם אותו מחלץ שמשמש את העלאת החומרים.
+    if (fullText.length < MIN_FULL_TEXT_CHARS) {
+      const pdfCandidate = resolvePdfCandidateUrl(article, url);
+      if (pdfCandidate && isPdfBinaryFetchAvailable()) {
+        report('fetching-pdf', { url: pdfCandidate });
+        const pdfText = await fetchPdfFullText(pdfCandidate, signal);
+        if (pdfText.text.length > fullText.length) {
+          fullText = pdfText.text;
+          resolvedUrl = pdfText.finalUrl || resolvedUrl;
+          // OCR ⇒ הטקסט אינו "דיגיטלי נקי" (משפיע על ספי הרלוונטיות במנוע).
+          cleanDigital = !pdfText.viaOcr;
         }
       }
     }

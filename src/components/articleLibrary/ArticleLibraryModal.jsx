@@ -7,6 +7,7 @@ import {
   formatArticleLibraryReply,
   addArticleToMaterials,
   primeArticleMaterialsIndex,
+  downloadArticlePdf,
 } from '../../services/articleLibraryService';
 
 /**
@@ -96,6 +97,20 @@ export default function ArticleLibraryModal({ projects = [], onClose }) {
     }
   };
 
+  // הורדת PDF — דסקטופ בלבד; באתר ה-prop לא מועבר והכפתור לא מוצג.
+  const canDownloadPdf = typeof window !== 'undefined'
+    && typeof window.desktopApp?.fetchPdfBinary === 'function';
+
+  const handleDownloadPdf = async (article) => {
+    try {
+      const res = await downloadArticlePdf(article);
+      if (res?.ok) showToast('ה-PDF נשמר למחשב ✅', { tone: 'success' });
+      else if (!res?.canceled) showToast(res?.error || 'הורדת ה-PDF נכשלה', { tone: 'error' });
+    } catch (error) {
+      showToast(String(error?.message || error), { tone: 'error' });
+    }
+  };
+
   const articles = Array.isArray(result?.articles) ? result.articles : [];
 
   return (
@@ -182,6 +197,7 @@ export default function ArticleLibraryModal({ projects = [], onClose }) {
               onAdd={handleAdd}
               variant="dark"
               projectMissing={false}
+              onDownloadPdf={canDownloadPdf ? handleDownloadPdf : null}
             />
           ) : null}
         </div>

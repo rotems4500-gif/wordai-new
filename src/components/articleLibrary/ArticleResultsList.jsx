@@ -1,5 +1,5 @@
-import React from 'react';
-import { isArticleAlreadyInMaterials } from '../../services/articleLibraryService';
+import React, { useState } from 'react';
+import { isArticleAlreadyInMaterials, articleHasPdfCandidate } from '../../services/articleLibraryService';
 
 /**
  * כרטיסי תוצאות של "ספריית מאמרים" — רכיב אחד המשמש גם את הסיידבר וגם את מודאל דף הבית.
@@ -10,6 +10,8 @@ import { isArticleAlreadyInMaterials } from '../../services/articleLibraryServic
  * @param {Function} props.onAdd          (article) => void — גם "נסה שוב"
  * @param {'light'|'dark'} props.variant  התאמה לרקע בהיר/כהה
  * @param {boolean}  props.projectMissing אין פרויקט פעיל → רמז + כפתורים מנוטרלים
+ * @param {Function} [props.onDownloadPdf] (article) => Promise — אופציונלי. מועבר רק
+ *                   בדסקטופ (window.desktopApp.fetchPdfBinary); בלעדיו הכפתור לא מוצג.
  */
 export default function ArticleResultsList({
   articles,
@@ -17,7 +19,24 @@ export default function ArticleResultsList({
   onAdd,
   variant = 'dark',
   projectMissing = false,
+  onDownloadPdf = null,
 }) {
+  // busy מקומי לכפתור ההורדה — אין לו state בקורא, ודיאלוג השמירה חוסם ממילא.
+  const [downloadingIds, setDownloadingIds] = useState(() => new Set());
+  const runDownload = async (cardKey, article) => {
+    if (!onDownloadPdf || downloadingIds.has(cardKey)) return;
+    setDownloadingIds((prev) => new Set(prev).add(cardKey));
+    try {
+      await onDownloadPdf(article);
+    } finally {
+      setDownloadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(cardKey);
+        return next;
+      });
+    }
+  };
+
   const list = Array.isArray(articles) ? articles : [];
   if (!list.length) return null;
 
@@ -127,6 +146,17 @@ export default function ArticleResultsList({
                 >
                   🔗 פתח
                 </a>
+              )}
+              {onDownloadPdf && articleHasPdfCandidate(article) && (
+                <button
+                  type="button"
+                  onClick={() => runDownload(key, article)}
+                  disabled={downloadingIds.has(key)}
+                  title="שמור את קובץ ה-PDF של המאמר למחשב"
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${openCls} ${downloadingIds.has(key) ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                >
+                  {downloadingIds.has(key) ? '⏳ מוריד…' : '⬇ PDF'}
+                </button>
               )}
               <button
                 type="button"

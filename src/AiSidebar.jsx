@@ -12,7 +12,7 @@ import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext 
 import { classifyChatScope } from "./services/chatScope";
 import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock, applyStyleJudgeToText } from "./services/aiService";
 import { isV3FlagEnabled } from "./v3/flags";
-import { searchArticleLibrary, formatArticleLibraryReply, addArticleToMaterials, primeArticleMaterialsIndex } from "./services/articleLibraryService";
+import { searchArticleLibrary, formatArticleLibraryReply, addArticleToMaterials, primeArticleMaterialsIndex, downloadArticlePdf } from "./services/articleLibraryService";
 import ArticleResultsList from "./components/articleLibrary/ArticleResultsList";
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { toggleTheme, getTheme, onThemeChange } from './theme';
@@ -3772,6 +3772,20 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     }
   };
 
+  // הורדת PDF — דסקטופ בלבד; באתר הכפתור לא מוצג כי ה-prop לא מועבר.
+  const canDownloadArticlePdf = typeof window !== 'undefined'
+    && typeof window.desktopApp?.fetchPdfBinary === 'function';
+
+  const downloadArticleResultPdf = async (article) => {
+    try {
+      const res = await downloadArticlePdf(article);
+      if (res?.ok) showToast('ה-PDF נשמר למחשב ✅', { tone: 'success' });
+      else if (!res?.canceled) showToast(res?.error || 'הורדת ה-PDF נכשלה', { tone: 'error' });
+    } catch (err) {
+      showToast(err?.message || 'הורדת ה-PDF נכשלה', { tone: 'error' });
+    }
+  };
+
   const renderArticleResultRows = (msg, variant = 'dark') => {
     if (msg?.role !== 'assistant') return null;
     if (!Array.isArray(msg?.articleResults) || !msg.articleResults.length) return null;
@@ -3782,6 +3796,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         onAdd={addArticleResultToMaterials}
         variant={variant}
         projectMissing={!activeProject?.id}
+        onDownloadPdf={canDownloadArticlePdf ? downloadArticleResultPdf : null}
       />
     );
   };

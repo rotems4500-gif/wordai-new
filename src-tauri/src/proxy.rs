@@ -425,6 +425,138 @@ pub async fn fetch_page_text(request: FetchPageTextRequest) -> FetchPageTextResp
     }
 }
 
+// ---- fetch_binary: משיכת PDF בינארי ממקור ציבורי (ספריית מאמרים) ----
+// אותן הגנות-צורה כמו fetch_page_text (https ציבורי בלבד, בלי פרטי הזדהות,
+// 5 redirects, Chrome UA) + הגנות תוכן: **רק application/pdf**, cap 25MB עם
+// stream שנקטע (הבקשה נכשלת ולא מחזירה קובץ חתוך למחצה). הגוף חוזר base64
+// כי ה-IPC של Tauri הוא JSON. חילוץ הטקסט עצמו נעשה ב-JS (materialExtractBrowser).
+
+const FETCH_BINARY_MAX_BYTES: usize = 25 * 1024 * 1024;
+
+#[derive(Deserialize)]
+pub struct FetchBinaryRequest {
+    pub url: String,
+    #[serde(default, rename = "timeoutMs")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Serialize)]
+pub struct FetchBinaryResponse {
+    pub ok: bool,
+    pub status: u16,
+    #[serde(rename = "finalUrl")]
+    pub final_url: String,
+    #[serde(rename = "contentType")]
+    pub content_type: String,
+    #[serde(rename = "dataBase64")]
+    pub data_base64: String,
+    pub error: String,
+}
+
+fn fetch_binary_err(status: u16, message: &str) -> FetchBinaryResponse {
+    FetchBinaryResponse {
+        ok: false,
+        status,
+        final_url: String::new(),
+        content_type: String::new(),
+        data_base64: String::new(),
+        error: message.to_string(),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_binary(request: FetchBinaryRequest) -> FetchBinaryResponse {
+    let parsed = match url::Url::parse(&request.url) {
+        Ok(u) => u,
+        Err(_) => return fetch_binary_err(0, "כתובת לא תקינה"),
+    };
+    if parsed.scheme() != "https" {
+        return fetch_binary_err(0, "רק https מורשה");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return fetch_binary_err(0, "כתובת עם פרטי הזדהות אינה מורשית");
+    }
+    if !is_public_web_host(&parsed) {
+        return fetch_binary_err(0, "Host לא ציבורי");
+    }
+
+    let timeout_ms = if request.timeout_ms > 0 {
+        request.timeout_ms.clamp(1000, 30000)
+    } else {
+        20000
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(VERIFY_UA)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return fetch_binary_err(0, &format!("שגיאת אתחול: {e}")),
+    };
+
+    let response = match client.get(parsed).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = if e.is_timeout() { "timeout".to_string() } else { e.to_string() };
+            return fetch_binary_err(0, &msg);
+        }
+    };
+
+    let status = response.status().as_u16();
+    let final_url = response.url().to_string();
+    if !(200..400).contains(&status) {
+        return fetch_binary_err(status, "הקובץ לא נגיש");
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    // רק PDF — זה fetcher צר בכוונה, לא הורדת קבצים כללית.
+    if !content_type.starts_with("application/pdf") {
+        return fetch_binary_err(status, &format!("סוג תוכן לא נתמך: {content_type}"));
+    }
+
+    // הצהרת גודל מוקדמת חוסכת הורדה של קובץ ענק.
+    if let Some(len) = response.content_length() {
+        if len as usize > FETCH_BINARY_MAX_BYTES {
+            return fetch_binary_err(status, "הקובץ גדול מ-25MB");
+        }
+    }
+
+    let mut body_bytes: Vec<u8> = Vec::new();
+    let mut stream = response;
+    loop {
+        match stream.chunk().await {
+            Ok(Some(chunk)) => {
+                if body_bytes.len() + chunk.len() > FETCH_BINARY_MAX_BYTES {
+                    return fetch_binary_err(status, "הקובץ גדול מ-25MB");
+                }
+                body_bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => return fetch_binary_err(status, &e.to_string()),
+        }
+    }
+
+    if body_bytes.is_empty() {
+        return fetch_binary_err(status, "התקבל גוף ריק");
+    }
+
+    FetchBinaryResponse {
+        ok: true,
+        status,
+        final_url,
+        content_type,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&body_bytes),
+        error: String::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn proxy_http_request(request: ProxyRequest) -> ProxyResponse {
     let request_id = request.request_id.clone();

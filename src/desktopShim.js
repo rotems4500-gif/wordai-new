@@ -288,6 +288,56 @@ const verifyUrl = async (request = {}) => invoke('verify_url', { request });
 // קריאת תוכן טקסטואלי של עמוד מקור (התאמת טענה-מקור) — ראה proxy.rs::fetch_page_text.
 const fetchPageText = async (request = {}) => invoke('fetch_page_text', { request });
 
+// משיכת PDF בינארי (ספריית מאמרים) — ראה proxy.rs::fetch_binary.
+// ה-Rust מחזיר base64 (IPC=JSON); כאן מפענחים ל-Uint8Array שהמחלץ מצפה לו.
+const base64ToBytes = (b64 = '') => {
+  const binary = atob(String(b64 || ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
+
+const fetchPdfBinary = async (url = '', { timeoutMs = 0 } = {}) => {
+  try {
+    const r = await invoke('fetch_binary', { request: { url: String(url || ''), timeoutMs } });
+    if (!r?.ok) {
+      return { ok: false, bytes: null, finalUrl: r?.finalUrl || '', status: r?.status || 0, error: r?.error || 'משיכת הקובץ נכשלה' };
+    }
+    return {
+      ok: true,
+      bytes: base64ToBytes(r.dataBase64),
+      finalUrl: r.finalUrl || url,
+      status: r.status || 200,
+      error: '',
+    };
+  } catch (err) {
+    return { ok: false, bytes: null, finalUrl: '', status: 0, error: err?.message || 'משיכת הקובץ נכשלה' };
+  }
+};
+
+// שמירת בייטים לדיסק דרך דיאלוג native (pick_save_file + write_file_base64 הקיימים).
+const saveBinaryFile = async (suggestedName = 'file.pdf', bytes = null) => {
+  try {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    if (!data.length) return { ok: false, canceled: false, error: 'אין תוכן לשמירה' };
+    const name = String(suggestedName || 'file.pdf');
+    const ext = getExt(name) || 'pdf';
+    const filePath = await invoke('pick_save_file', {
+      defaultName: name,
+      filters: [{ name: ext === 'pdf' ? 'PDF' : ext.toUpperCase(), extensions: [ext] }],
+      title: 'שמור בשם',
+    });
+    if (!filePath) return { ok: false, canceled: true };
+    let binary = '';
+    for (let i = 0; i < data.length; i += 1) binary += String.fromCharCode(data[i]);
+    const r = await invoke('write_file_base64', { path: filePath, dataBase64: btoa(binary) });
+    if (!r?.ok) return { ok: false, canceled: false, error: r?.error || 'השמירה נכשלה' };
+    return { ok: true, canceled: false, filePath };
+  } catch (err) {
+    return { ok: false, canceled: false, error: err?.message || 'השמירה נכשלה' };
+  }
+};
+
 // ── updater (tauri-plugin-updater דרך פקודות Rust) ──────────────────────────
 const decorateUpdateResult = (result = {}) => ({
   percent: result.status === 'up-to-date' ? 100 : 0,
@@ -338,6 +388,8 @@ export function installDesktopShim() {
     abortProxyHttpRequest,
     verifyUrl,
     fetchPageText,
+    fetchPdfBinary,
+    saveBinaryFile,
     googleOAuth,
 
     openDocumentDialog,
