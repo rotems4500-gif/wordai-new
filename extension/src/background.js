@@ -163,6 +163,14 @@ function base64ToBytes(b64) {
  * משיכת קובץ כלשהו מתוך הדף, עם אימות סוג. עוקב אחרי הפניות (Moodle
  * /mod/resource/view.php מפנה ל-pluginfile), ולכן מחזיר גם את ה-URL הסופי.
  * מחזיר null כשאין גישה ללשונית.
+ *
+ * ⚠️ שני מקרים שהפילו קליטה של דף קורס אמיתי:
+ * 1. **דף עטיפה של Moodle** — משאב עם display=auto/page/frame מחזיר HTML שבתוכו
+ *    הקישור האמיתי (pluginfile.php), לפעמים כ-meta refresh או iframe. בעבר ויתרנו
+ *    עליו. עכשיו מחלצים את ה-URL המוטמע ומושכים אותו — **קפיצה אחת בלבד**.
+ * 2. **זיהוי התחברות רגיש מדי** — ערכות נושא של Moodle מכילות טופס התחברות מוסתר
+ *    (drawer/בלוק) גם למשתמש מחובר. לכן שדה סיסמה לבדו אינו מספיק: נדרש גם
+ *    טופס שה-action/id שלו הוא login, או שה-URL הסופי הוא נתיב התחברות.
  */
 async function fetchFileViaTab(tabId, url) {
   try {
@@ -171,36 +179,122 @@ async function fetchFileViaTab(tabId, url) {
       world: 'MAIN',
       args: [url],
       func: async (target) => {
-        const r = await fetch(target, { credentials: 'include' });
-        if (!r.ok) return { ok: false, status: r.status };
-        const buf = new Uint8Array(await r.arrayBuffer());
-        const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
-        // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
-        const isZip = buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
-        let s = '';
-        for (let i = 0; i < buf.length; i += 0x8000) {
-          s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-        }
-        // ⚠️ לא לחפש "login"/"password" סתם בטקסט: בדף קורס של Moodle יש קישור
-        // "התחברות" בכל עמוד, וזה סימן כל דף HTML כ"נדרשת התחברות". בודקים סמנים
-        // של טופס התחברות אמיתי, או הפניה סופית לנתיב login.
-        const head = s.slice(0, 40000);
-        const looksLikeLogin = !isPdf && !isZip && (
-          /<input[^>]+type\s*=\s*["']?password/i.test(head)
-          || /name\s*=\s*["']?(?:password|passwd|pwd)["']?/i.test(head)
-          || /id\s*=\s*["']?login(?:form|_form|box)?["']/i.test(head)
-          || /\/login\/index\.php|\/auth\/login|saml2\/login|adfs\/ls/i.test(r.url || '')
-        );
-        return {
-          ok: true,
-          isPdf,
-          isZip,
-          looksLikeLogin,
-          finalUrl: r.url || target,
-          contentType: r.headers.get('content-type') || '',
-          disposition: r.headers.get('content-disposition') || '',
-          data: (isPdf || isZip) ? btoa(s) : '',
+        // כל העזרים חייבים לחיות כאן: הפונקציה מוזרקת לעולם של הדף בלי closure.
+        const FILE_LIKE = /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|csv)(?:[?#]|$)|pluginfile\.php|forcedownload=1|[?&](?:type|format|mode|action)=[^&]*(?:pdf|doc|ppt|xls)|\/(?:download|getpdf|pdf)\b/i;
+
+        const decodeEntities = (t) => String(t || '')
+          .replace(/&#x2f;/gi, '/')
+          .replace(/&#0*47;/g, '/')
+          .replace(/&quot;/gi, '"')
+          .replace(/&apos;|&#0*39;/gi, "'")
+          .replace(/&lt;/gi, '<')
+          .replace(/&gt;/gi, '>')
+          .replace(/&#0*38;|&amp;/gi, '&'); // אחרון: כדי לא לפרק ישויות מקוננות פעמיים
+
+        const grab = async (u) => {
+          const r = await fetch(u, { credentials: 'include' });
+          const finalUrl = r.url || u;
+          if (!r.ok) return { ok: false, status: r.status, finalUrl };
+          const buf = new Uint8Array(await r.arrayBuffer());
+          let s = '';
+          for (let i = 0; i < buf.length; i += 0x8000) {
+            s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+          }
+          return {
+            ok: true,
+            // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
+            isPdf: buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46,
+            isZip: buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04,
+            s,
+            finalUrl,
+            contentType: r.headers.get('content-type') || '',
+            disposition: r.headers.get('content-disposition') || '',
+          };
         };
+
+        // ⚠️ לא לחפש "login"/"password" סתם בטקסט: בדף קורס של Moodle יש קישור
+        // "התחברות" בכל עמוד. גם שדה סיסמה לבדו לא מספיק (טופס מוסתר בערכת הנושא).
+        const isLoginPage = (head, finalUrl) => {
+          if (/\/login\/index\.php|\/auth\/login|\/login\/?(?:[?#]|$)|saml2?\/login|adfs\/ls|\/idp\/|\/sso\/|\/oauth2?\/authorize/i.test(finalUrl)) return true;
+          const hasPassword = /<input[^>]+type\s*=\s*["']?password/i.test(head)
+            || /<input[^>]+name\s*=\s*["']?(?:password|passwd|pwd)["'\s/>]/i.test(head);
+          if (!hasPassword) return false;
+          return /<form[^>]+(?:action\s*=\s*["']?[^"'>]*(?:login|auth|signin|sso)|id\s*=\s*["']?login)/i.test(head);
+        };
+
+        // חילוץ ה-URL האמיתי מדף עטיפה, לפי סדר עדיפות.
+        const findEmbedded = (html, baseUrl) => {
+          const abs = (raw) => {
+            const v = decodeEntities(raw).trim().replace(/^["']|["']$/g, '');
+            if (!v || /^(?:#|javascript:|mailto:|data:|about:)/i.test(v)) return '';
+            try {
+              const u = new URL(v, baseUrl);
+              return /^https?:$/.test(u.protocol) ? u.href : '';
+            } catch { return ''; }
+          };
+
+          // 1. pluginfile.php — הקובץ האמיתי של Moodle (מוחלט או יחסי, גם בתוך JS)
+          const plugin = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/i.exec(html);
+          if (plugin) { const u = abs(plugin[0]); if (u) return u; }
+
+          // 2. <meta http-equiv="refresh" content="0; url=...">
+          const meta = /<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/i.exec(html)
+            || /<meta[^>]*content\s*=\s*["'][^"']*url\s*=[^"']*["'][^>]*>/i.exec(html);
+          if (meta) {
+            const content = /content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(meta[0]);
+            const raw = content && (content[1] || content[2] || content[3] || '');
+            const target2 = raw && /url\s*=\s*(.+)$/i.exec(raw.trim());
+            if (target2) { const u = abs(target2[1]); if (u) return u; }
+          }
+
+          // 3. מסמך מוטמע: iframe/embed/object
+          for (const tag of html.match(/<(?:iframe|embed|object)\b[^>]*>/gi) || []) {
+            const attr = /\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+            if (u && FILE_LIKE.test(u)) return u;
+          }
+
+          // 4. קישור "לחץ כאן להורדה" — <a href> שנראה כמו קובץ
+          for (const tag of html.match(/<a\b[^>]*>/gi) || []) {
+            const attr = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+            if (u && FILE_LIKE.test(u)) return u;
+          }
+          return '';
+        };
+
+        const pack = (res, extra) => Object.assign({
+          ok: true,
+          isPdf: res.isPdf,
+          isZip: res.isZip,
+          looksLikeLogin: !res.isPdf && !res.isZip && isLoginPage(res.s.slice(0, 60000), res.finalUrl),
+          finalUrl: res.finalUrl,
+          contentType: res.contentType,
+          disposition: res.disposition,
+          data: (res.isPdf || res.isZip) ? btoa(res.s) : '',
+        }, extra || {});
+
+        const first = await grab(target);
+        if (!first.ok) return { ok: false, status: first.status, finalUrl: first.finalUrl };
+        if (first.isPdf || first.isZip) return pack(first);
+
+        // ⚠️ הקפיצה קודמת להכרעת ההתחברות, ובכוונה: ערכות נושא של Moodle מרנדרות
+        // טופס התחברות אמיתי במגירה גם למשתמש מחובר, ולכן isLoginPage לבדו עדיין
+        // היה חוסם. דף התחברות אמיתי לעולם אינו מכיל קישור pluginfile — אז אם
+        // נמצא קובץ מוטמע, הוא התשובה. קפיצה אחת בלבד.
+        const firstLogin = isLoginPage(first.s.slice(0, 60000), first.finalUrl);
+        const next = findEmbedded(first.s.slice(0, 400000), first.finalUrl);
+        if (!next || next === first.finalUrl || next === target) return pack(first);
+
+        let second = null;
+        try { second = await grab(next); } catch { second = null; }
+        if (!second || !second.ok) return pack(first, { wrapperUrl: next });
+        if (second.isPdf || second.isZip) return pack(second, { wrapperUrl: next, viaWrapper: true });
+        // הקפיצה לא הניבה קובץ: אם הדף הראשון היה באמת דף התחברות, זו הסיבה
+        // המדויקת יותר. אחרת מדווחים על היעד — שם רואים את המארח החיצוני.
+        return firstLogin
+          ? pack(first, { wrapperUrl: next })
+          : pack(second, { wrapperUrl: next, viaWrapper: true });
       },
     });
     return res?.result || null;
@@ -256,19 +350,37 @@ const TAB_CHANGED_MSG = 'הדף השתנה — פתח מחדש את החלון �
 const NO_TAB_ACCESS_MSG = 'אין גישה לדף — רענן את הלשונית ונסה שוב';
 const LOGIN_MSG = 'נדרשת התחברות לאתר';
 
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./i, ''); } catch { return ''; }
+}
+
+/**
+ * המארח שאליו נחתה הבקשה, רק אם הוא שונה מזה של הדף. ההפרש הזה הוא כל ההסבר
+ * במקרה של הפניה ל-SSO/מו"ל/EZproxy — בלעדיו "נדרשת התחברות" נראה כמו באג.
+ */
+function foreignHost(probe, pageHost) {
+  const h = hostOf(probe?.finalUrl || '');
+  return h && h !== pageHost ? h : '';
+}
+
+function loginReason(probe, pageHost) {
+  const h = foreignHost(probe, pageHost);
+  return h ? `${LOGIN_MSG} (${h})` : LOGIN_MSG;
+}
+
 /**
  * הסיבה שמוצגת כשהמשיכה הצליחה אבל מה שחזר אינו קובץ.
  * ⚠️ זו הסיבה הנפוצה ביותר בדף קורס — היא חייבת להיות מובנת, לא "אינו קובץ".
  */
-function notAFileReason(probe) {
+function notAFileReason(probe, pageHost = '') {
   const ct = String(probe.contentType || '').toLowerCase();
-  if (ct.includes('text/html') || ct.includes('application/xhtml')) {
-    return 'לא קובץ (כנראה דף אינטרנט)';
+  const foreign = foreignHost(probe, pageHost);
+  if (ct.includes('text/html') || ct.includes('application/xhtml') || !ct) {
+    return foreign ? `לא קובץ (דף אינטרנט ב-${foreign})` : 'לא קובץ (כנראה דף אינטרנט)';
   }
   if (ct.includes('image/')) return 'לא קובץ מסמך (תמונה)';
   if (ct.includes('video/') || ct.includes('audio/')) return 'לא קובץ מסמך (מדיה)';
-  if (ct) return `לא קובץ נתמך (${ct.split(';')[0]})`;
-  return 'לא קובץ (כנראה דף אינטרנט)';
+  return `לא קובץ נתמך (${ct.split(';')[0]})${foreign ? ` — ${foreign}` : ''}`;
 }
 
 /**
@@ -280,6 +392,7 @@ function notAFileReason(probe) {
 async function downloadFiles(tab, links, onItem = () => {}) {
   const user = await requireUser();
   const startUrl = tab.url;
+  const pageHost = hostOf(startUrl || '');
 
   let saved = 0;
   const skipped = [];
@@ -322,14 +435,19 @@ async function downloadFiles(tab, links, onItem = () => {}) {
         continue;
       }
       if (!probe.isPdf && !probe.isZip) {
-        // דף HTML (ניווט/התחברות) ולא קובץ — הרוב בדף קורס. הסיבה מוצגת למשתמש.
+        // דף HTML (ניווט/התחברות) ולא קובץ — הרוב בדף קורס. הסיבה מוצגת למשתמש,
+        // כולל המארח שאליו נחתה הבקשה כשהוא שונה מהדף (SSO/מו"ל/EZproxy).
         if (probe.looksLikeLogin) {
-          skipped.push(`${link.title || link.url}: נדרשת התחברות`);
-          emit('login', { reason: LOGIN_MSG });
+          const reason = loginReason(probe, pageHost);
+          skipped.push(`${link.title || link.url}: ${reason}`);
+          emit('login', { reason });
         } else {
-          emit('skipped', { reason: notAFileReason(probe) });
+          emit('skipped', { reason: notAFileReason(probe, pageHost) });
         }
         continue;
+      }
+      if (probe.viaWrapper) {
+        console.info('[wordflow][files] דף עטיפה — הקובץ נמשך מ-', probe.finalUrl);
       }
       const fileName = resolveFileName(link, probe);
       await writeFileClip({
