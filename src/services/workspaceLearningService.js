@@ -20,6 +20,24 @@ import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from './humanizerLoopService
 import { createRunScope, setScopeTopic } from '../v3/orchestration/runScope';
 import { HEBREW_STOP_WORDS, CONTEXT_MATCH_MIN_TERM_LENGTH, extractContextMatchTerms, countContextTermOverlap, countContextTermCoverage } from './lexicalRelevance';
 import { planAutoDepth, selectRelevantExcerpts } from './autoDepthPlanner';
+import { buildLecturerRulesBlock, resolveLecturerContext } from './lecturerRulesService';
+
+/**
+ * בלוק לקחי המרצים לפרומפטי יצירת/עדכון מסמך — כסיומת מוכנה לשרשור ('' כשאין).
+ * הרזולוציה מהפרופיל האישי; יצירה בתוך פרויקט מקבלת את הלקחים ממילא דרך
+ * buildProjectContextBlock, וה-builder מסנן כפילויות טקסט זהות ברמת המודל.
+ */
+function lecturerRulesSuffix() {
+  try {
+    const block = buildLecturerRulesBlock({
+      ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile() }),
+      budget: 1000,
+    });
+    return block ? `\n${block}` : '';
+  } catch {
+    return '';
+  }
+}
 
 const HISTORY_KEY = 'wordai_saved_docs_history';
 const BROWSER_MATERIALS_KEY = 'wordai_browser_uploaded_materials';
@@ -101,6 +119,9 @@ export const MATERIAL_UPLOAD_PRESETS = {
   'course-material': { id: 'course-material', label: 'חומר קורס או רקע', category: 'academic', templateId: 'summary', learningHint: 'השתמש בקובץ כדי להבין את עולם התוכן, המושגים והדרישות האקדמיות.' },
   // נוצר רק ע"י תוסף הדפדפן (clipInboxService) — לא מוצע בתפריט ההעלאה הידני.
   'web-clip': { id: 'web-clip', label: 'קליפ מהאינטרנט', category: 'academic', templateId: 'summary', learningHint: 'קטע שנגזר מדף אינטרנט. השתמש בו כחומר רקע, וציין את כתובת המקור כשמצטטים.' },
+  // עבודה שחזרה מהמרצה עם הערות/ציון — מנותבת ל-GradedReturnWizard (קליטת משוב),
+  // לא לאינדקס החומרים: הערות מרצה אינן ראיות תוכן.
+  'graded-return': { id: 'graded-return', label: 'עבודה בדוקה שחזרה מהמרצה', category: 'academic', templateId: 'blank', learningHint: 'קובץ מוחזר עם משוב מרצה. אל תשתמש בו כמקור תוכן — הוא משמש ללמידת העדפות המרצה בלבד.' },
 };
 
 export function getMaterialUploadMeta(kind = 'general') {
@@ -4595,7 +4616,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
           '- כשאין בחומרים כיסוי לסעיף מסוים, כתוב אותו בלי להמציא נתונים ובלי לייחס לחומר.',
         ].join('\n')
       : 'אל תחזיר למשתמש את קובץ ההנחיות או חומרי העזר כפי שהם. השתמש בהם רק כהכוונה לבניית המסמך.';
-    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\n${materialsDirective}\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
+    const systemPrompt = `תפקידך לבנות מסמך שלם מוכן לעריכה בתוך WordFlow AI. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li.\nכאשר צריך מעבר עמוד, הדפס בדיוק: <div data-type="page-break"></div>\nסוג תבנית מועדף: ${templateGuide}.${cleanInstructions ? `\nהנחיות מחייבות של המשתמש:\n${cleanInstructions}` : ''}\n${materialsDirective}\nאם חסר מידע עובדתי או מבני, אל תמציא — השאר כותרת בלבד או מקום ריק.\nכלל עליון: עקוב בדיוק אחרי הוראות המשתמש והמבנה שהתבקש.\nאם המשתמש ביקש מבוא - כתוב מבוא.\nאם המשתמש לא ביקש מבוא - אל תוסיף מבוא.\nאם המשתמש ביקש פרקים - כתוב פרקים לפי הבקשה.\nאם המשתמש לא ביקש פרקים - אל תוסיף פרקים קבועים על דעת עצמך.\nאם המשתמש ביקש היקף מסוים, מספר שאלות מסוים, או מבנה מדויק - שמור עליהם במדויק.\nאל תכפה מבנה אקדמי ברירת מחדל כמו "מבוא / דיון / סיכום" אלא אם המשתמש ביקש אותו במפורש.${structureLockInstructions ? `\nנעילת מבנה מפורשת:\n${structureLockInstructions}` : ''}${notes ? `\nלמידה מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה שלעיל גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}${lecturerRulesSuffix()}`;
 
     const cleanedResponse = await requestGeneratedHtmlResponseWithSingleContinuation({
       userPrompt,
@@ -4967,8 +4988,8 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     : 'אם המשוב מבקש שינוי נקודתי, בצע שינוי נקודתי בלבד. אם המשתמש ביקש במפורש שכתוב מלא, מותר לבנות את המסמך מחדש לפי הבקשה.';
   const revisionPreservationContract = `חוזה מחייב לעדכון: ${targetedRevisionContract} החזר תמיד את המסמך המלא מתחילתו ועד סופו, גם אם התיקון נוגע רק בפסקה אחת. אסור להחזיר רק fragment, רק קטע מתוקן, או רק את ההמשך החסר. ברירת המחדל היא שימור: כל חלק שלא התבקש להשתנות צריך להישאר באותה משמעות, באותו סדר ובאותו מבנה; אם אין סיבה חזקה לשנות ניסוח קיים, השאר אותו כפי שהוא.`;
   const systemPrompt = shouldUseWorkflowAutomation
-    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`
-    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}`;
+    ? `עדכן את המסמך הקיים בהתאם למשוב המשתמש. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}${lecturerRulesSuffix()}`
+    : `פעל כעורך ישיר של WordFlow AI. קרא את המשוב, ועדכן בעצמך את המסמך הקיים בהתאם בלי לתאם עם צוות ובלי לפרק את המשימה לשלבים. החזר HTML בלבד עם תגיות כמו h1, h2, p, ul, li. שמור על כל מידע טוב שכבר קיים, ותקן רק מה שנדרש לפי המשוב. אם חסר מידע עובדתי, אל תמציא — השאר כותרות או ניסוח זהיר. אל תוסיף מבוא, סיכום, כותרות קבועות או חלקים חדשים שלא קיימים במסמך המקורי אם המשתמש לא ביקש זאת. ${revisionPreservationContract} סוג תבנית מועדף: ${templateGuide}.${materialsText ? '\nאם סופקו חומרי עזר, השתמש בהם רק כהקשר משלים לעדכון המסמך.' : ''}${notes ? `\nסגנון שנלמד מעבודות קודמות:\nנא לשים לב: ההערות הבאות הן תצפיות על סגנון כתיבה קודם בלבד, לא הנחיות מבנה. כללי המבנה של המסמך הקיים והמשוב גוברים עליהן.\n${notes}` : ''}${exactArticleGroundingInstructions ? `\nנעילת מקור URL מדויקת:\n${exactArticleGroundingInstructions}` : ''}${lecturerRulesSuffix()}`;
 
   try {
     logAgentDebugEvent({

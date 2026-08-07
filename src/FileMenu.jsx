@@ -7,6 +7,7 @@ import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-t
 import ProfileOnboarding from './ProfileOnboarding';
 import StyleProfilePanel from './components/StyleProfilePanel';
 import PersonalTrainerPanel from './components/PersonalTrainerPanel';
+import LecturerProfilePanel from './components/LecturerProfilePanel';
 import DesktopDownloadCard from './components/DesktopDownloadCard';
 import { getSampleStoreStats } from './services/styleSampleStore';
 import { normalizeDelimitedList } from './delimitedListInput';
@@ -17,7 +18,7 @@ import { COPYLEAKS_TEXT_MAX_CHARS, COPYLEAKS_TEXT_MIN_CHARS } from './services/c
 import { saveBlobInBrowser } from './services/browserDocxExport';
 import { SUPPORTED_DATA_FILE_ACCEPT, readDataFileToAnalysis } from './services/spssDataIngest';
 import { showToast, showConfirm } from './services/uiFeedback';
-import { onCloudAuthChange, saveCloudCryptoMeta, fetchCloudCryptoMeta, deleteCloudCryptoMeta } from './firebase/services';
+import { onCloudAuthChange, saveCloudCryptoMeta, fetchCloudCryptoMeta, deleteCloudCryptoMeta, userHasPasswordProvider, cloudLinkPasswordToCurrentUser, cloudSendPasswordReset } from './firebase/services';
 import {
   isCloudCryptoEnabled,
   setCloudCryptoEnabled,
@@ -4167,6 +4168,7 @@ function PersonalStyleSettings({ profile, setProfile }) {
   // מנוע הסגנון (טאב מאוחד, למטה) מכסה כבר "העלה עבודות ללמוד סגנון" — כרטיסי הזהב/הלמידה
   // האוטומטית כאן מיותרים ברגע שיש לו chunks אמיתיים. engineHasChunks נבדק פעם אחת + על אירועי עדכון.
   const [engineHasChunks, setEngineHasChunks] = useState(false);
+  const [lecturerPanelOpen, setLecturerPanelOpen] = useState(false);
   useEffect(() => {
     const refreshEngineChunks = () => {
       try { setEngineHasChunks((getSampleStoreStats()?.chunkCount || 0) > 0); } catch { setEngineHasChunks(false); }
@@ -4453,7 +4455,8 @@ function PersonalStyleSettings({ profile, setProfile }) {
         desc="שקיפות: ההרגלים שנמדדו מהעבודות שהעלית — פתיחים, מסגרות משפט ויעדים מבניים."
         defaultOpen={false}
       >
-        <PersonalTrainerPanel />
+        <PersonalTrainerPanel onOpenLecturerProfiles={() => setLecturerPanelOpen(true)} />
+        {lecturerPanelOpen ? <LecturerProfilePanel onClose={() => setLecturerPanelOpen(false)} /> : null}
       </SettingsSection>
 
       <SettingsSection
@@ -7276,6 +7279,83 @@ function PassphraseField({ value, onChange, placeholder, autoFocus = false }) {
   );
 }
 
+// כניסה עם סיסמה לחשבון הענן (לצד Google). קישור ספק password לאותו חשבון Firebase.
+function PasswordLoginCard({ user }) {
+  const [hasPassword, setHasPassword] = useState(() => userHasPasswordProvider(user));
+  const [showForm, setShowForm] = useState(false);
+  const [pass, setPass] = useState('');
+  const [pass2, setPass2] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setHasPassword(userHasPasswordProvider(user)); }, [user]);
+
+  const card = 'rounded-2xl border border-slate-200 bg-white p-5 dark:border-white/12 dark:bg-white/5';
+  const primaryBtn = 'px-5 py-2.5 rounded-xl bg-[var(--wf-accent)] text-[var(--wf-accent-text)] text-[13px] font-extrabold hover:brightness-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed';
+  const ghostBtn = 'px-4 py-2.5 rounded-xl bg-slate-50 text-slate-600 border border-slate-200 text-[13px] font-bold hover:bg-slate-100 transition-colors disabled:opacity-50 dark:bg-white/5 dark:text-[#cfe0ef] dark:border-white/12';
+  const label = 'block text-[12px] font-bold text-slate-500 mb-1.5 dark:text-[#8ba3bd]';
+
+  const handleLink = async () => {
+    if (pass.length < 6) { showToast('הסיסמה חייבת להיות באורך 6 תווים לפחות.', 'error'); return; }
+    if (pass !== pass2) { showToast('הסיסמאות לא תואמות.', 'error'); return; }
+    setBusy(true);
+    try {
+      await cloudLinkPasswordToCurrentUser(pass);
+      setHasPassword(true); setShowForm(false); setPass(''); setPass2('');
+      showToast('נוספה כניסה עם סיסמה. מעכשיו אפשר להתחבר גם עם אימייל וסיסמה.', 'success');
+    } catch (e) {
+      showToast(e?.message || 'הוספת הסיסמה נכשלה.', 'error');
+    } finally { setBusy(false); }
+  };
+
+  const handleReset = async () => {
+    setBusy(true);
+    try {
+      await cloudSendPasswordReset(user.email);
+      showToast('נשלח אימייל לאיפוס סיסמה.', 'success');
+    } catch (e) {
+      showToast(e?.message || 'שליחת האיפוס נכשלה.', 'error');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className={card} style={{ marginBottom: 20 }}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[14px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">🔑 כניסה עם אימייל וסיסמה</span>
+        <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${hasPassword ? 'text-emerald-700 bg-emerald-100 dark:bg-emerald-400/15 dark:text-emerald-200' : 'text-slate-500 bg-slate-100 dark:bg-white/10 dark:text-[#8ba3bd]'}`}>
+          {hasPassword ? 'פעילה' : 'לא מוגדרת'}
+        </span>
+      </div>
+      <p className="text-[12px] text-slate-500 mb-3 leading-relaxed dark:text-[#8ba3bd]">
+        {hasPassword
+          ? <>אפשר להתחבר לחשבון הזה ({user.email}) גם עם Google וגם עם אימייל וסיסמה.</>
+          : <>הוסף סיסמה לחשבון ({user.email}) כדי שאפשר יהיה להתחבר גם בלי Google — לאותו חשבון בדיוק.</>}
+      </p>
+      {hasPassword ? (
+        <button type="button" onClick={handleReset} disabled={busy} className={ghostBtn}>
+          {busy ? 'שולח…' : 'שלח אימייל לאיפוס סיסמה'}
+        </button>
+      ) : !showForm ? (
+        <button type="button" onClick={() => setShowForm(true)} className={ghostBtn}>הוסף סיסמה לחשבון</button>
+      ) : (
+        <div className="grid gap-3 max-w-md">
+          <div>
+            <label className={label}>סיסמה (לפחות 6 תווים)</label>
+            <PassphraseField value={pass} onChange={setPass} placeholder="סיסמה" />
+          </div>
+          <div>
+            <label className={label}>אימות סיסמה</label>
+            <PassphraseField value={pass2} onChange={setPass2} placeholder="שוב" />
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={handleLink} disabled={busy} className={primaryBtn}>{busy ? 'מוסיף…' : 'הוסף סיסמה'}</button>
+            <button type="button" onClick={() => { setShowForm(false); setPass(''); setPass2(''); }} className={ghostBtn}>ביטול</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SecuritySettings() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -7509,6 +7589,7 @@ function SecuritySettings() {
     return (
       <div>
         {intro}
+        <PasswordLoginCard user={user} />
         <div className={card}>
           <div className="text-[15px] font-extrabold text-slate-800 mb-1 dark:text-[#f1f6fb]">הפעלת הצפנת ענן</div>
           <p className="text-[13px] text-slate-500 leading-relaxed mb-4 dark:text-[#8ba3bd]">
@@ -7604,6 +7685,7 @@ function SecuritySettings() {
   return (
     <div className="flex flex-col gap-5">
       {intro}
+      <PasswordLoginCard user={user} />
       <div className={card}>
         <div className="flex items-center gap-2">
           <span className="text-[15px] font-extrabold text-slate-800 dark:text-[#f1f6fb]">🔓 פעיל ופתוח</span>

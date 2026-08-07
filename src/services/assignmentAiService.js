@@ -10,10 +10,20 @@
 //
 // תלויות: aiService (chatWithActiveProvider), assignmentScaffoldStore, assignmentPrepService.
 
-import { chatWithActiveProvider, hasUsableAiProvider } from './aiService';
+import { chatWithActiveProvider, hasUsableAiProvider, getPersonalStyleProfile } from './aiService';
 import { readScaffold } from './assignmentScaffoldStore';
 import { formatProvenance } from './evidenceMatchService';
 import { INTENT_LABELS } from './assignmentSpecService';
+import { buildLecturerRulesBlock, resolveLecturerContext } from './lecturerRulesService';
+
+/** בלוק לקחי המרצים לפרומפטי הטיוטה. '' כשאין — משורשר בעיוורון. */
+function lecturerRulesForDraft() {
+  try {
+    return buildLecturerRulesBlock({ ...resolveLecturerContext({ personalStyle: getPersonalStyleProfile() }), budget: 800 });
+  } catch {
+    return '';
+  }
+}
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
@@ -86,6 +96,7 @@ export async function draftSectionFromEvidence(section, { evidence = null, scaff
     section.instructions ? `הנחיות המטלה לסעיף:\n${section.instructions}` : '',
     quota ? `היקף מבוקש: כ-${quota} מילים.` : '',
     citationStyle ? `סגנון ציטוט: ${citationStyle}.` : '',
+    lecturerRulesForDraft(),
     '',
     'הקטעים היחידים שמותר להסתמך עליהם:',
     formatEvidenceForPrompt(list),
@@ -243,6 +254,7 @@ export async function draftWholeWork(spec, { scaffold = null, sectionIds = null 
     blocked.length
       ? `שים לב: ${blocked.length} סעיפים נוספים בעבודה חסרי מקורות ולכן אינם נכתבים כאן. אל תתייחס אליהם ואל תכתוב אותם.`
       : '',
+    lecturerRulesForDraft(),
     '',
     sectionBlocks.join('\n\n---\n\n'),
   ].filter(Boolean).join('\n');
@@ -369,6 +381,11 @@ export function buildScaffoldContextBlock({ sectionId = null, scaffold = null } 
     const titles = (spec.sections || []).map((s) => s.title).filter(Boolean);
     if (titles.length) lines.push('', `סעיפי המטלה: ${titles.join(' · ')}`);
   }
+
+  // לקחים ממשובי מרצים — רזולוציה מהפרופיל האישי (אין לסקאפולד שיוך פרויקט).
+  // תקציב 800: הפרומפטים כאן כבר עמוסים בראיות.
+  const rulesBlock = lecturerRulesForDraft();
+  if (rulesBlock) lines.push('', rulesBlock);
 
   return lines.join('\n');
 }

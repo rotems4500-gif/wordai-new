@@ -17,6 +17,9 @@ import { STYLE_SAMPLES_UPDATED_EVENT } from '../services/styleSampleStore';
 import {
   ensureStyleSelectProfile, describeStyleSelect, isStyleSelectEnabled, setStyleSelectEnabled,
 } from '../services/styleSelectService';
+import {
+  ensureLecturerProfilesReady, getLecturerProfilesStatus, LECTURER_PROFILES_UPDATED_EVENT,
+} from '../services/lecturerProfileStore';
 
 // מנוהל ע"י פאנל המשוב על מסגרות המשפט.
 const FRAME_FEEDBACK_UPDATED_EVENT = 'wordai-frame-feedback-updated';
@@ -69,9 +72,9 @@ function fmt(n, digits = 1) {
   return Number.isFinite(v) ? v.toFixed(digits) : '—';
 }
 
-export default function PersonalTrainerPanel() {
+export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) {
   const [loading, setLoading] = useState(true);
-  const [state, setState] = useState({ opener: null, frame: null, targetsStatus: null, targets: null });
+  const [state, setState] = useState({ opener: null, frame: null, targetsStatus: null, targets: null, lecturers: null });
   const [selectOn, setSelectOn] = useState(() => { try { return isStyleSelectEnabled(); } catch { return false; } });
   const [selectStatus, setSelectStatus] = useState(null);
 
@@ -82,14 +85,16 @@ export default function PersonalTrainerPanel() {
         Promise.resolve(ensureOpenerProfile()).catch(() => null),
         Promise.resolve(ensureFrameProfile()).catch(() => null),
         Promise.resolve(ensureStyleTargetsReady()).catch(() => null),
+        Promise.resolve(ensureLecturerProfilesReady()).catch(() => null),
       ]);
     } catch {}
-    let opener = null; let frame = null; let targetsStatus = null; let targets = null;
+    let opener = null; let frame = null; let targetsStatus = null; let targets = null; let lecturers = null;
     try { opener = getOpenerProfileStatus(); } catch {}
     try { frame = getFrameProfileStatus(); } catch {}
     try { targetsStatus = getStyleTargetsStatus(); } catch {}
     try { targets = getStyleTargets(); } catch {}
-    setState({ opener, frame, targetsStatus, targets });
+    try { lecturers = getLecturerProfilesStatus(); } catch {}
+    setState({ opener, frame, targetsStatus, targets, lecturers });
     setLoading(false);
   }, []);
 
@@ -101,6 +106,7 @@ export default function PersonalTrainerPanel() {
       window.addEventListener(STYLE_SAMPLES_UPDATED_EVENT, run);
       window.addEventListener(STYLE_TARGETS_UPDATED_EVENT, run);
       window.addEventListener(FRAME_FEEDBACK_UPDATED_EVENT, run);
+      window.addEventListener(LECTURER_PROFILES_UPDATED_EVENT, run);
     }
     return () => {
       alive = false;
@@ -108,6 +114,7 @@ export default function PersonalTrainerPanel() {
         window.removeEventListener(STYLE_SAMPLES_UPDATED_EVENT, run);
         window.removeEventListener(STYLE_TARGETS_UPDATED_EVENT, run);
         window.removeEventListener(FRAME_FEEDBACK_UPDATED_EVENT, run);
+        window.removeEventListener(LECTURER_PROFILES_UPDATED_EVENT, run);
       }
     };
   }, [load]);
@@ -127,7 +134,7 @@ export default function PersonalTrainerPanel() {
     setSelectOn((prev) => { setStyleSelectEnabled(!prev); return !prev; });
   }, []);
 
-  const { opener, frame, targetsStatus, targets } = state;
+  const { opener, frame, targetsStatus, targets, lecturers } = state;
 
   const openerEmpty = !opener?.ready || !(opener.personalWords > 0);
   const frameEmpty = !frame?.ready || !(frame.minedFrames > 0);
@@ -170,6 +177,31 @@ export default function PersonalTrainerPanel() {
           ))}
         </div>
       </Section>
+
+      <div style={CARD_STYLE}>
+        <div style={TITLE_STYLE}>🧑‍🏫 לקחים ממרצים</div>
+        <div style={BODY_STYLE}>
+          {lecturers?.ruleCount
+            ? (
+              <>
+                נלמדו {lecturers.ruleCount} לקחים מ-{lecturers.lecturerCount} מרצים · {lecturers.returnCount} עבודות נקלטו.
+                <div style={{ marginTop: 3, opacity: 0.75 }}>
+                  תיאור של ההערות שחזרו בעבודות הבדוקות שלך — לא הבטחה לגבי העבודה הבאה.
+                </div>
+              </>
+            )
+            : <span style={EMPTY_STYLE}>עדיין לא נקלטו משובי מרצים — הוסף משוב ידני או טען עבודה בדוקה עם הערות.</span>}
+        </div>
+        {typeof onOpenLecturerProfiles === 'function' ? (
+          <button
+            type="button"
+            onClick={onOpenLecturerProfiles}
+            style={{ marginTop: 8, fontSize: 11.5, fontWeight: 700, padding: '5px 10px', borderRadius: 8, border: '1px solid #1D4ED8', background: '#DBEAFE', color: '#1D4ED8', cursor: 'pointer' }}
+          >
+            פתח פרופיל מרצים
+          </button>
+        ) : null}
+      </div>
 
       <div style={CARD_STYLE}>
         <div style={TITLE_STYLE}>🧪 ניסיוני</div>

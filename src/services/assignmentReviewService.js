@@ -38,15 +38,72 @@ const countWords = (text = '') => String(text || '').split(/\s+/).filter(Boolean
 const CITATION_RE = /\([^)]*(?:עמ['׳]|\d{4})[^)]*\)/;
 const GAP_MARK_RE = /\[דרוש מקור/;
 
+// הפניה *בלי* עימוד: (כהן, 2019) בלי עמ'. נבדק רק כשלקח מרצה על עימוד פעיל.
+const CITATION_ANY_RE = /\([^)]*\d{4}[^)]*\)/g;
+const CITATION_HAS_PAGE_RE = /עמ['׳]|pp?\.\s*\d/;
+
+/**
+ * בדיקות דטרמיניסטיות שנגזרות מלקחי מרצה (lecturerProfileStore). רק קטגוריות
+ * ברות-בדיקה-בקוד נבדקות כאן; לקחי טיעון/ניסוח נשארים לסוכן ה-lecturer.
+ * מקבל rules דרך פרמטר — הקובץ נשאר טהור (הרנס Node בלי IndexedDB).
+ */
+function reviewAgainstLecturerRules(writtenSections, rules, lecturerName) {
+  const findings = [];
+  const active = (rules || []).filter((r) => r?.status === 'active');
+  if (!active.length || !writtenSections.length) return findings;
+  const who = lecturerName ? `של ${lecturerName} ` : '';
+  const cite = (rule) => `לקח ממשוב קודם ${who}(${rule.evidenceCount} ${rule.evidenceCount === 1 ? 'מקרה' : 'מקרים'}): "${rule.text}"`;
+
+  // עימוד: לקח citation שמזכיר עימוד/עמ' ⇒ כל הפניה בלי עמ' מסומנת.
+  const pageRule = active.find((r) => r.category === 'citation' && /עימוד|עמ['׳]/.test(r.text));
+  if (pageRule) {
+    let missing = 0;
+    for (const s of writtenSections) {
+      for (const m of String(s.text || '').match(CITATION_ANY_RE) || []) {
+        if (!CITATION_HAS_PAGE_RE.test(m)) missing += 1;
+      }
+    }
+    if (missing) {
+      findings.push({
+        id: 'lect-citation-pages',
+        severity: SEVERITY.WARN,
+        title: `${missing} הפניות ללא עימוד`,
+        detail: cite(pageRule),
+        lecturerRuleId: pageRule.id,
+      });
+    }
+  }
+
+  // מבנה: לקח structure שמזכיר מסקנה/סיכום ⇒ ודא שקיים סעיף/פסקת סיכום.
+  const conclusionRule = active.find((r) => r.category === 'structure' && /מסקנ|סיכום/.test(r.text));
+  if (conclusionRule) {
+    const hasConclusion = writtenSections.some((s) =>
+      /מסקנ|סיכום/.test(String(s.title || '')) || /לסיכום|במסקנה|מן האמור/.test(String(s.text || '').slice(-600)));
+    if (!hasConclusion) {
+      findings.push({
+        id: 'lect-conclusion',
+        severity: SEVERITY.WARN,
+        title: 'אין פסקת מסקנה/סיכום מזוהה',
+        detail: cite(conclusionRule),
+        lecturerRuleId: conclusionRule.id,
+      });
+    }
+  }
+
+  return findings;
+}
+
 /**
  * סוקר את פלט draftWholeWork. אפס קריאות API.
  *
  * @param {object} spec
  * @param {object} draft פלט draftWholeWork
- * @param {{evidenceBySection?:object}} opts
+ * @param {{evidenceBySection?:object, lecturerRules?:Array, lecturerName?:string}} opts
+ *        lecturerRules — לקחים פעילים מ-lecturerProfileStore (getActiveRulesFor);
+ *        מוזרקים מבחוץ כדי שהקובץ יישאר טהור וניתן לבדיקה ב-Node.
  * @returns {{findings:Array, stats:object, ready:boolean}}
  */
-export function reviewDraft(spec, draft = {}, { evidenceBySection = {} } = {}) {
+export function reviewDraft(spec, draft = {}, { evidenceBySection = {}, lecturerRules = [], lecturerName = '' } = {}) {
   const findings = [];
   const sections = Array.isArray(spec?.sections) ? spec.sections.filter((s) => s?.enabled !== false) : [];
   const written = new Map((draft.sections || []).map((s) => [s.id, s]));
@@ -159,6 +216,9 @@ export function reviewDraft(spec, draft = {}, { evidenceBySection = {} } = {}) {
       detail: 'ההיקף הכולל נגזר מכמות המקורות. ראה ההתראות לכל סעיף.',
     });
   }
+
+  // בדיקות שנגזרות מלקחי המרצה — "המרצה יוריד על זה" לפני ההגשה.
+  findings.push(...reviewAgainstLecturerRules([...written.values()], lecturerRules, lecturerName));
 
   const order = { [SEVERITY.BLOCK]: 0, [SEVERITY.WARN]: 1, [SEVERITY.INFO]: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);

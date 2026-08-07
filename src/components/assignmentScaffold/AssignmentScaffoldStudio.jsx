@@ -29,7 +29,9 @@ import { buildScaffoldHtml, buildWholeWorkHtml } from '../../services/assignment
 import { ensureOpenersReady, composeSectionOpener } from '../../services/styleOpenerService';
 import { ensureOpenerProfile, getOpenerProfile } from '../../services/openerProfileService';
 import { draftWholeWork } from '../../services/assignmentAiService';
-import { hasUsableAiProvider } from '../../services/aiService';
+import { hasUsableAiProvider, getPersonalStyleProfile } from '../../services/aiService';
+import { getActiveRulesFor } from '../../services/lecturerProfileStore';
+import { resolveLecturerContext } from '../../services/lecturerRulesService';
 import { reviewDraft, applyFinishingPasses, FINISHING_PASSES } from '../../services/assignmentReviewService';
 import { composeSectionProseBest, ensureProseReady, PROSE_COMMANDS } from '../../services/proseComposeService';
 import {
@@ -42,6 +44,7 @@ import { ensureStyleSelectProfile, isStyleSelectEnabled, makeBlendedScoreFn } fr
 import WorkReviewDialog from './WorkReviewDialog';
 import DraftReviewPanel from './DraftReviewPanel';
 import { extractMaterialTextFromBytes } from '../../services/materialExtractBrowser';
+import GradedReturnWizard from '../GradedReturnWizard';
 
 const revealClass = (mounted, extra = '') => (
   `${extra} transition-all duration-500 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`
@@ -88,6 +91,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
   const [notice, setNotice] = React.useState(null);
   const [evidenceResult, setEvidenceResult] = React.useState(null);
   const [dropActive, setDropActive] = React.useState(false);
+  const [gradedWizardOpen, setGradedWizardOpen] = React.useState(false);
   // פקודות הטיוטה המקומית: בחירה מרשימה סגורה (PROSE_COMMANDS) — לא שפה חופשית.
   const [proseCommands, setProseCommands] = React.useState(() => new Set());
   // "נסח מחדש" = seed חדש; המונה נכנס ל-seedKey כך שכל לחיצה מגרילה מסגרות אחרות.
@@ -567,7 +571,15 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
       // לא נכנס ישר לעורך: קודם סבב תיקונים. הסקירה עצמה חינם (אפס קריאות),
       // והליטוש רץ רק אם המשתמש בוחר אותו שם.
       setPendingDraft(draft);
-      setReview(reviewDraft(spec, draft, { evidenceBySection: evidenceResult?.bySection || {} }));
+      // לקחי המרצה נכנסים לסקירה — "המרצה יוריד על זה" לפני ההגשה.
+      let lecturerRules = [];
+      let lecturerName = '';
+      try {
+        const resolved = getActiveRulesFor(resolveLecturerContext({ personalStyle: getPersonalStyleProfile() }));
+        lecturerRules = resolved.rules;
+        lecturerName = resolved.lecturer?.name || '';
+      } catch { /* לקחים הם שיפור */ }
+      setReview(reviewDraft(spec, draft, { evidenceBySection: evidenceResult?.bySection || {}, lecturerRules, lecturerName }));
     } catch (err) {
       setNotice({ tone: 'err', text: String(err?.message || err) });
     } finally {
@@ -803,6 +815,16 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
             >
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-bold">2. חומרי עזר</h2>
+                <div className="flex items-center gap-2">
+                  {/* עבודה בדוקה אינה "חומר עזר" — היא לא נכנסת לאינדקס אלא לפרופיל
+                      המרצה. הכפתור יושב כאן כי זו הנקודה שבה המשתמש מעלה קבצים. */}
+                  <button
+                    type="button"
+                    onClick={() => setGradedWizardOpen(true)}
+                    className="rounded-lg border border-white/15 px-2 py-0.5 text-[11px] text-white/70 transition hover:border-cyan-400/40 hover:text-cyan-200"
+                  >
+                    📥 קליטת עבודה בדוקה
+                  </button>
                 {stats.chunks > 0 && (
                   <button
                     type="button"
@@ -822,6 +844,7 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
                     נקה אינדקס
                   </button>
                 )}
+                </div>
               </div>
               <div className="rounded-xl border border-dashed border-white/25 p-4 text-center text-xs text-white/60">
                 גרור לכאן מאמרים (PDF, DOCX, TXT) — או
@@ -1164,6 +1187,10 @@ export default function AssignmentScaffoldStudio({ onExit, onOpenDocument, onOpe
             });
           }}
         />
+      )}
+
+      {gradedWizardOpen && (
+        <GradedReturnWizard onClose={() => setGradedWizardOpen(false)} />
       )}
     </div>
   );

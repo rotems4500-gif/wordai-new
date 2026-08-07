@@ -59,6 +59,7 @@ const MEMORY_SOURCE_LABELS = {
   'brainstorm-sidebar': 'שיחת תכנון (בתוך מסמך)',
   'external-link': 'שיחה חיצונית מצורפת',
   'web-clip': 'קליפ מהדפדפן',
+  'lecturer-feedback': 'משוב מרצה',
 };
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -150,6 +151,9 @@ function normalizeProject(raw = {}) {
     memory: Array.isArray(raw.memory) ? raw.memory.filter(isPlainObject) : [],
     linkedWorkspaceId: String(raw.linkedWorkspaceId || ''),
     deletedAt: raw.deletedAt || null,
+    // שיוך לקורס/מרצה — מפתח הרזולוציה של לקחי המרצים (lecturerProfileStore).
+    courseName: String(raw.courseName || '').trim().slice(0, 120),
+    lecturerName: String(raw.lecturerName || '').trim().slice(0, 120),
     // ── v2: roadmap ──
     projectType: PROJECT_TYPES.includes(raw.projectType) ? raw.projectType : '',
     goal: String(raw.goal || '').trim().slice(0, 1500),
@@ -354,6 +358,8 @@ export function updateProjectMeta(projectId, patch = {}) {
     if ('targetDate' in patch) p.targetDate = String(patch.targetDate || '');
     if ('wordTarget' in patch) p.wordTarget = Number.isFinite(+patch.wordTarget) ? Math.max(0, Math.round(+patch.wordTarget)) : 0;
     if ('status' in patch) p.status = PROJECT_STATUSES.includes(patch.status) ? patch.status : p.status;
+    if ('courseName' in patch) p.courseName = String(patch.courseName || '').trim().slice(0, 120);
+    if ('lecturerName' in patch) p.lecturerName = String(patch.lecturerName || '').trim().slice(0, 120);
     return p;
   });
 }
@@ -709,6 +715,20 @@ export async function buildProjectContextBlock(projectId) {
     });
     if (lines.length) sections.push(`מסקנות משיחות קודמות בפרויקט (מהחדש לישן):\n${lines.join('\n\n')}`);
   }
+
+  // לקחים ממשובי מרצים — רזולוציה לפי שיוך הקורס/מרצה של הפרויקט. תקציב 1200
+  // תווים בתוך תקרת ה-16k; הבלוק קוצץ את עצמו פנימית.
+  try {
+    const { buildLecturerRulesBlock } = await import('./lecturerRulesService');
+    const { ensureLecturerProfilesReady } = await import('./lecturerProfileStore');
+    await ensureLecturerProfilesReady();
+    const rulesBlock = buildLecturerRulesBlock({
+      lecturerName: project.lecturerName,
+      courseName: project.courseName,
+      budget: 1200,
+    });
+    if (rulesBlock) sections.push(rulesBlock);
+  } catch {}
 
   if (!sections.length) return '';
 

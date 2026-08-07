@@ -17,6 +17,12 @@ import {
   importStyleTargets,
   STYLE_TARGETS_UPDATED_EVENT,
 } from "./styleTargetsStore";
+import {
+  ensureLecturerProfilesReady,
+  exportLecturerProfiles,
+  importLecturerProfiles,
+  LECTURER_PROFILES_UPDATED_EVENT,
+} from "./lecturerProfileStore";
 
 // schema 3 (2026-07-03): נוסף wordai_workspaces_v3 (ה-blob המאוחד של סביבות העבודה)
 // + תבניות workspace-v2. לקוחות schema-2 בוחרים מפתחות לפי הרשימה המקומית שלהם ולכן
@@ -24,7 +30,9 @@ import {
 // schema 4 (2026-08-04): נוסף styleTargets — פרופיל הסגנון המבני (רשומות מדידה).
 // אותו כלל בטיחות: normalizeCloudProfile מעתיק **רק** מפתחות מוכרים, ולכן לקוח
 // ישן שמושך מסמך schema-4 פשוט מתעלם מהשדה במקום להיחנק בו.
-const CLOUD_PROFILE_SCHEMA_VERSION = 4;
+// schema 5 (2026-08-07): נוסף lecturerProfiles — לקחים ממשובי מרצים (הערות קצרות
+// ולקחים מזוקקים, בלי גוף מסמך). אותו כלל תאימות.
+const CLOUD_PROFILE_SCHEMA_VERSION = 5;
 
 // ---- E2EE flag ----
 // כבוי כברירת מחדל. מודלק רק אחרי שהמשתמש מגדיר passphrase (setCloudCryptoEnabled(true)).
@@ -152,6 +160,10 @@ async function getLocalProfilePayloadFull() {
     await ensureStyleTargetsReady();
     payload.styleTargets = exportStyleTargets();
   } catch { /* פרופיל הסגנון הוא שיפור, לא תנאי לסנכרון ההגדרות */ }
+  try {
+    await ensureLecturerProfilesReady();
+    payload.lecturerProfiles = exportLecturerProfiles();
+  } catch { /* כמו styleTargets — שיפור, לא תנאי */ }
   return payload;
 }
 
@@ -205,6 +217,11 @@ function normalizeCloudProfile(cloudSettings = {}) {
       // נרמול רשומות) נעשית ב-importStyleTargets ולא כאן.
       styleTargets: cloudSettings.styleTargets && typeof cloudSettings.styleTargets === "object"
         ? cloudSettings.styleTargets
+        : null,
+      // schema 5: פרופילי המרצים עוברים כמו שהם. הוולידציה והמיזוג (tombstones,
+      // עריכת-משתמש-מנצחת) נעשים ב-importLecturerProfiles ולא כאן.
+      lecturerProfiles: cloudSettings.lecturerProfiles && typeof cloudSettings.lecturerProfiles === "object"
+        ? cloudSettings.lecturerProfiles
         : null,
     };
   }
@@ -331,6 +348,12 @@ export async function pullFromCloud(user, { force = false } = {}) {
       try { await importStyleTargets(cloudProfile.styleTargets); } catch {}
     }
 
+    // פרופילי מרצים: המיזוג הוא איחוד אמיתי פר-רשומה (id + updatedAt + tombstones),
+    // ולכן — כמו styleTargets — מוחל בלי קשר לשער ה-timestamp; משיכה לא מוחקת.
+    if (cloudProfile?.lecturerProfiles) {
+      try { await importLecturerProfiles(cloudProfile.lecturerProfiles); } catch {}
+    }
+
     if (force || shouldApplyCloudProfile(cloudProfile)) {
       const applied = applyCloudProfile(cloudProfile);
       return { ok: true, applied, needsPassphrase, hadProviderConfig: Boolean(cloudProfile.providerConfig && Object.keys(cloudProfile.providerConfig || {}).length) };
@@ -449,6 +472,8 @@ export function initCloudSyncListeners(user) {
   // יעדי הסגנון יושבים ב-IndexedDB ולכן ה-poller הסינכרוני לא רואה אותם —
   // האירוע הוא הדרך היחידה לסמן מדידה חדשה כשינוי שדורש סנכרון.
   window.addEventListener(STYLE_TARGETS_UPDATED_EVENT, eventHandler);
+  // פרופילי המרצים גם הם ב-IndexedDB — אותו טיפול כמו יעדי הסגנון.
+  window.addEventListener(LECTURER_PROFILES_UPDATED_EVENT, eventHandler);
 
   const intervalId = window.setInterval(pollForProfileChanges, 4000);
 
@@ -463,5 +488,6 @@ export function initCloudSyncListeners(user) {
     window.removeEventListener("wordai-personal-style-updated", eventHandler);
     window.removeEventListener("wordai-workspaces-v2-changed", eventHandler);
     window.removeEventListener(STYLE_TARGETS_UPDATED_EVENT, eventHandler);
+    window.removeEventListener(LECTURER_PROFILES_UPDATED_EVENT, eventHandler);
   };
 }

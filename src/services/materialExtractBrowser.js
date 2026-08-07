@@ -232,6 +232,103 @@ export const renderPdfPageToDataUrl = async (uint8, opts = {}) => {
   }
 };
 
+/**
+ * חילוץ הערות (annotations) מ-PDF — לקליטת משוב מרצה מקובץ מוחזר.
+ * דטרמיניסטי: page.getAnnotations() של pdf.js, בלי רינדור ובלי OCR.
+ *
+ * עוגן להערות מרקר/קו (Highlight/Underline/StrikeOut): חיתוך גיאומטרי של
+ * quadPoints עם פריטי getTextContent — הטקסט שהפריט המסומן חופף אליו.
+ * הערות Text/FreeText מקבלות כעוגן את השורה הקרובה ביותר אנכית.
+ *
+ * @param {Uint8Array} uint8
+ * @returns {Promise<{ok:boolean, annotations:Array<{kind:string, author:string,
+ *          text:string, anchorExcerpt:string, page:number}>, pages?:number, error?:string}>}
+ */
+export const extractPdfAnnotations = async (uint8) => {
+  const MARKUP_SUBTYPES = { Highlight: 'highlight', Underline: 'highlight', StrikeOut: 'deletion', Squiggly: 'highlight' };
+  const NOTE_SUBTYPES = { Text: 'comment', FreeText: 'comment' };
+  try {
+    const pdfjs = await loadPdfjs();
+    const doc = await pdfjs.getDocument({ data: uint8.slice() }).promise;
+    const annotations = [];
+    try {
+      for (let i = 1; i <= doc.numPages; i += 1) {
+        const page = await doc.getPage(i);
+        const annots = await page.getAnnotations();
+        if (!annots.length) continue;
+        const content = await page.getTextContent();
+        const items = content.items.filter((it) => String(it?.str || '').trim());
+
+        // חפיפת מלבנים: פריט טקסט (transform[4/5] + width/height) מול rect ההערה.
+        const overlapText = (rect) => {
+          if (!Array.isArray(rect) || rect.length < 4) return '';
+          const [x1, y1, x2, y2] = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+          const parts = [];
+          for (const it of items) {
+            const ix = it.transform[4];
+            const iy = it.transform[5];
+            const iw = it.width || 0;
+            const ih = it.height || 8;
+            if (ix < x2 && ix + iw > x1 && iy < y2 && iy + ih > y1) parts.push(it.str);
+          }
+          return parts.join(' ').replace(/\s+/g, ' ').trim();
+        };
+
+        for (const a of annots) {
+          const subtype = String(a?.subtype || '');
+          const contents = String(a?.contentsObj?.str ?? a?.contents ?? '').trim();
+          const author = String(a?.titleObj?.str ?? a?.title ?? '').trim();
+          if (MARKUP_SUBTYPES[subtype]) {
+            // quadPoints: רביעיות נקודות פר-שורה מסומנת; fallback ל-rect.
+            let anchor = '';
+            const quads = a?.quadPoints;
+            if (quads && quads.length) {
+              const anchorParts = [];
+              // pdf.js מחזיר Float32Array שטוח (x,y ×4 לכל quad) או מערך נקודות.
+              const flat = ArrayBuffer.isView(quads) ? Array.from(quads) : quads.flat(2).flatMap((p) => (typeof p === 'object' ? [p.x, p.y] : [p]));
+              for (let q = 0; q + 7 < flat.length; q += 8) {
+                const xs = [flat[q], flat[q + 2], flat[q + 4], flat[q + 6]];
+                const ys = [flat[q + 1], flat[q + 3], flat[q + 5], flat[q + 7]];
+                anchorParts.push(overlapText([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]));
+              }
+              anchor = anchorParts.filter(Boolean).join(' ');
+            }
+            if (!anchor) anchor = overlapText(a?.rect);
+            if (!anchor && !contents) continue;
+            annotations.push({
+              kind: contents ? 'comment' : MARKUP_SUBTYPES[subtype],
+              author,
+              text: contents,
+              anchorExcerpt: anchor,
+              page: i,
+            });
+          } else if (NOTE_SUBTYPES[subtype] && contents) {
+            // פתק צף: העוגן הוא השורה הקרובה אנכית למיקום הפתק.
+            let anchor = '';
+            if (Array.isArray(a?.rect)) {
+              const y = (a.rect[1] + a.rect[3]) / 2;
+              let bestDist = Infinity;
+              let bestLine = '';
+              for (const it of items) {
+                const d = Math.abs(it.transform[5] - y);
+                if (d < bestDist) { bestDist = d; bestLine = it.str; }
+              }
+              if (bestDist < 40) anchor = bestLine;
+            }
+            annotations.push({ kind: 'comment', author, text: contents, anchorExcerpt: anchor, page: i });
+          }
+        }
+      }
+      return { ok: true, annotations, pages: doc.numPages };
+    } finally {
+      try { await doc.destroy(); } catch { /* no-op */ }
+    }
+  } catch (err) {
+    const detail = [err?.name, err?.message].filter(Boolean).join(': ');
+    return { ok: false, annotations: [], error: detail || String(err) || 'שגיאת חילוץ הערות PDF' };
+  }
+};
+
 // יחס הטוקנים ה"טהורים": עברית נקייה / לטינית נקייה / מספר (בתוספת פיסוק סופי).
 // קבצים תקינים נמדדו 0.71–0.95; שבורי-קידוד 0.12–0.25. הסף באמצע הרווח.
 const GARBLE_FLOOR = 0.5;

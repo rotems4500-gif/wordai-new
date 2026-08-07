@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { chatWithActiveProvider, getConfiguredProviderChoices, getOrderedRoleAgents, chatWithRoleAgent, getWorkspaceAutomation, getAgentDebugLogs, clearAgentDebugLogs, getSkillCatalog, getSkillsConfig, getAppMemory, saveAppMemory, getActiveProviderName, getProviderConfig, getProviderModelChoices, normalizeProviderModelName, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, DEFAULT_WORKSPACES_LIBRARY, DEFAULT_SIDEBAR_MODE_IDS, normalizeSidebarModeSettings, parseStructuredEditBatchResponse, getHumanizerPreferences, saveHumanizerPreferences, getPersonalStyleProfile } from "./services/aiService";
 import { readInstructionFile } from "./services/workspaceLearningService";
 import { getProjectForDocument, buildProjectContextBlock, summarizeConversationForMemory, appendProjectMemory, isSupportedExternalChatShareUrl, PROJECTS_UPDATED_EVENT } from "./services/projectService";
+import { buildLecturerRulesBlock, resolveLecturerContext } from "./services/lecturerRulesService";
 import { scoreTextAuthenticity, formatAuthenticityResultText } from "./services/styleAuthenticityService";
 import { runHumanizerLoop, STEALTH_HUMANIZE_GUIDE } from "./services/humanizerLoopService";
 import { showToast } from "./services/uiFeedback";
@@ -4200,6 +4201,21 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         if (reviewLedgerDigest) {
           finalExtraSystemPrompt = [finalExtraSystemPrompt, reviewLedgerDigest].filter(Boolean).join('\n\n');
         }
+        // לקחים שנלמדו ממשובי מרצים אמיתיים: הסוכן בודק אותם במיוחד, ומסמן
+        // ממצא שנובע מלקח ("המרצה העיר על זה בעבר"). הרזולוציה: פרויקט → פרופיל.
+        try {
+          const lecturerRulesBlock = buildLecturerRulesBlock({
+            ...resolveLecturerContext({ project: activeProject, personalStyle: getPersonalStyleProfile() }),
+            budget: 1200,
+          });
+          if (lecturerRulesBlock) {
+            finalExtraSystemPrompt = [
+              finalExtraSystemPrompt,
+              lecturerRulesBlock,
+              'בדוק במיוחד עמידה בלקחים שלמעלה. ממצא שנובע מלקח — ציין זאת במפורש ("המרצה העיר על זה בעבר").',
+            ].filter(Boolean).join('\n\n');
+          }
+        } catch { /* לקחי מרצים הם שיפור — לא מפילים את הבקשה */ }
       }
       if (cAgent.sidebarSelection && cAgent.sidebarSelection.providerId) {
         const fallbackSelection = buildClassicTaskpaneSelection(activeClassicAgentId);

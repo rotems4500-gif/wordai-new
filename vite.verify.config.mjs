@@ -65,7 +65,9 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
                 ? 'tools/test-bench/restyle-bands-unit.mjs'
                 : process.env.WORDAI_VERIFY_ENTRY === 'autodepth'
                   ? 'tools/test-bench/auto-depth-planner-unit.mjs'
-                  : 'tools/test-bench/source-pipeline-harness.mjs';
+                  : process.env.WORDAI_VERIFY_ENTRY === 'lprof'
+                    ? 'tools/test-bench/lecturer-learning-unit.mjs'
+                    : 'tools/test-bench/source-pipeline-harness.mjs';
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
@@ -88,7 +90,8 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                                     : process.env.WORDAI_VERIFY_ENTRY === 'materials' ? 'out-materials'
                                       : process.env.WORDAI_VERIFY_ENTRY === 'scholar' ? 'out-scholar'
                                         : process.env.WORDAI_VERIFY_ENTRY === 'restyle' ? 'out-restyle'
-                                          : process.env.WORDAI_VERIFY_ENTRY === 'autodepth' ? 'out-autodepth' : 'out-sf';
+                                          : process.env.WORDAI_VERIFY_ENTRY === 'autodepth' ? 'out-autodepth'
+                                            : process.env.WORDAI_VERIFY_ENTRY === 'lprof' ? 'out-lprof' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

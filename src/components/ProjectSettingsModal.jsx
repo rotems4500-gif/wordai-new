@@ -9,8 +9,10 @@ import {
   detachMaterialFromProject,
   getProjectMemory,
   removeProjectMemory,
+  updateProjectMeta,
   PROJECTS_UPDATED_EVENT,
 } from '../services/projectService';
+import { ensureLecturerProfilesReady, listLecturerProfiles } from '../services/lecturerProfileStore';
 import {
   loadProjectMaterials,
   saveHelperMaterial,
@@ -42,6 +44,9 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
   const [globalMaterials, setGlobalMaterials] = useState([]);
   const [loadingMaterials, setLoadingMaterials] = useState(false);
   const [expandedMemoryId, setExpandedMemoryId] = useState(null);
+  const [courseDraft, setCourseDraft] = useState(String(initialProject?.courseName || ''));
+  const [lecturerDraft, setLecturerDraft] = useState(String(initialProject?.lecturerName || ''));
+  const [knownLecturers, setKnownLecturers] = useState([]);
   const instructionFileInputRef = useRef(null);
   const materialFileInputRef = useRef(null);
 
@@ -82,6 +87,23 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
     if (activeTab === 'materials') refreshMaterials();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, project?.id]);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve(ensureLecturerProfilesReady())
+      .then(() => { if (alive) setKnownLecturers(listLecturerProfiles()); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // שיוך קורס/מרצה — מפתח הרזולוציה של לקחי המרצים. נשמר ב-blur.
+  const handleSaveCourseLecturer = () => {
+    if (!project?.id) return;
+    if (courseDraft === (project.courseName || '') && lecturerDraft === (project.lecturerName || '')) return;
+    updateProjectMeta(project.id, { courseName: courseDraft, lecturerName: lecturerDraft });
+    refreshProject();
+    showToast('השיוך נשמר', { tone: 'success' });
+  };
 
   const handleSaveInstructions = () => {
     updateProjectInstructions(project.id, instructionsDraft);
@@ -172,6 +194,37 @@ export default function ProjectSettingsModal({ project: initialProject, onClose 
 
         {activeTab === 'instructions' && (
           <div className="flex flex-col gap-3">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="mb-2 text-[12.5px] font-semibold text-white">שיוך אקדמי</div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[11.5px] text-slate-300">
+                  קורס
+                  <input
+                    value={courseDraft}
+                    onChange={(e) => setCourseDraft(e.target.value)}
+                    onBlur={handleSaveCourseLecturer}
+                    placeholder="שם הקורס"
+                    className="mt-1 w-full rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white placeholder-white/40 outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
+                  />
+                </label>
+                <label className="text-[11.5px] text-slate-300">
+                  מרצה
+                  <input
+                    list="wf-project-lecturer-names"
+                    value={lecturerDraft}
+                    onChange={(e) => setLecturerDraft(e.target.value)}
+                    onBlur={handleSaveCourseLecturer}
+                    placeholder="שם המרצה"
+                    className="mt-1 w-full rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-[12.5px] text-white placeholder-white/40 outline-none focus:border-transparent focus:ring-1 focus:ring-cyan-300"
+                  />
+                  <datalist id="wf-project-lecturer-names">
+                    {knownLecturers.map((l) => <option key={l.id} value={l.name} />)}
+                  </datalist>
+                </label>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-400">שיוך למרצה מפעיל את הלקחים שנלמדו ממנו בכתיבה בפרויקט הזה.</div>
+            </div>
+
             <textarea
               value={instructionsDraft}
               onChange={(e) => setInstructionsDraft(e.target.value)}
