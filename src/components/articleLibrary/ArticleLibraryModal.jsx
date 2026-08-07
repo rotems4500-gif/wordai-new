@@ -8,6 +8,8 @@ import {
   addArticleToMaterials,
   primeArticleMaterialsIndex,
   downloadArticlePdf,
+  getInstitutionProxyPrefix,
+  setInstitutionProxyPrefix,
 } from '../../services/articleLibraryService';
 
 /**
@@ -24,6 +26,9 @@ export default function ArticleLibraryModal({ projects = [], onClose }) {
   const [selectedProjectId, setSelectedProjectId] = useState('');
   // { [articleId]: { status, error?, strength? } }
   const [addState, setAddState] = useState({});
+  // גישה מוסדית (EZproxy) — עטיפת קישורי "פתח" בלבד.
+  const [proxyOpen, setProxyOpen] = useState(false);
+  const [proxyPrefix, setProxyPrefix] = useState(() => getInstitutionProxyPrefix());
   // ref במקבילה ל-state: מונע לחיצה כפולה לפני שה-setState נכנס לתוקף.
   const inFlightRef = useRef(new Set());
 
@@ -111,6 +116,12 @@ export default function ArticleLibraryModal({ projects = [], onClose }) {
     }
   };
 
+  const handleSaveProxy = () => {
+    const saved = setInstitutionProxyPrefix(proxyPrefix);
+    setProxyPrefix(saved);
+    showToast(saved ? 'הגישה המוסדית נשמרה ✓' : 'הגישה המוסדית בוטלה', { tone: 'success' });
+  };
+
   const articles = Array.isArray(result?.articles) ? result.articles : [];
 
   return (
@@ -162,6 +173,48 @@ export default function ArticleLibraryModal({ projects = [], onClose }) {
           >
             {searching ? 'מחפש…' : 'חפש'}
           </button>
+        </div>
+
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setProxyOpen((prev) => !prev)}
+            className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[11.5px] font-semibold text-slate-200 hover:bg-white/20 transition-colors"
+            title="פתיחת קישורים דרך המנוי של המוסד"
+          >
+            🎓 גישה מוסדית{getInstitutionProxyPrefix() ? ' ✓' : ''} {proxyOpen ? '▲' : '▼'}
+          </button>
+
+          {proxyOpen && (
+            <div className="mt-2 rounded-xl border border-white/15 bg-white/[0.06] p-3">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  dir="ltr"
+                  value={proxyPrefix}
+                  onChange={(event) => setProxyPrefix(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleSaveProxy();
+                    }
+                  }}
+                  placeholder="https://mgs.jmc.ac.il/login?url="
+                  className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/40 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveProxy}
+                  className="px-4 py-2 rounded-lg bg-white/15 border border-white/20 text-white text-sm font-semibold hover:bg-white/25 transition-colors"
+                >
+                  שמור
+                </button>
+              </div>
+              <div className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                הדבק את קידומת הפרוקסי של הספרייה שלך (EZproxy). קישורי "פתח" ייפתחו דרך המנוי
+                המוסדי — נדרשת התחברות אחת למוסד בדפדפן.
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">

@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { isArticleAlreadyInMaterials, articleHasPdfCandidate } from '../../services/articleLibraryService';
+import {
+  isArticleAlreadyInMaterials,
+  articleHasPdfCandidate,
+  getInstitutionProxyPrefix,
+  wrapWithInstitutionProxy,
+} from '../../services/articleLibraryService';
 
 /**
  * כרטיסי תוצאות של "ספריית מאמרים" — רכיב אחד המשמש גם את הסיידבר וגם את מודאל דף הבית.
@@ -39,6 +44,9 @@ export default function ArticleResultsList({
 
   const list = Array.isArray(articles) ? articles : [];
   if (!list.length) return null;
+
+  // קריאה אחת לרינדור — הקידומת נקראת מ-localStorage ולא משתנה בתוך רשימה אחת.
+  const proxyPrefix = getInstitutionProxyPrefix();
 
   const dark = variant === 'dark';
   const cardCls = dark
@@ -97,6 +105,8 @@ export default function ArticleResultsList({
         const openHref = article?.botBlocked
           ? (article?.oaUrl || article?.pdfUrl || article?.url)
           : article?.url;
+        // עטיפה מוסדית — רק לפתיחה בדפדפן (שם יושבת עוגיית ההתחברות); אחזור באפליקציה נשאר גולמי.
+        const finalHref = wrapWithInstitutionProxy(openHref);
 
         const addBtnCls = done
           ? (dark ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700')
@@ -150,12 +160,13 @@ export default function ArticleResultsList({
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               {!article?.missingUrl && openHref && (
                 <a
-                  href={openHref}
+                  href={finalHref}
                   target="_blank"
                   rel="noreferrer"
+                  title={proxyPrefix ? 'נפתח דרך הגישה המוסדית' : undefined}
                   className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${openCls}`}
                 >
-                  🔗 פתח
+                  {proxyPrefix ? '🔗 פתח 🎓' : '🔗 פתח'}
                 </a>
               )}
               {onDownloadPdf && articleHasPdfCandidate(article) && (

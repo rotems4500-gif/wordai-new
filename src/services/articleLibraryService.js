@@ -18,6 +18,84 @@ const LOOKUP_RESULT_COUNT = 4;
 const RETRIEVAL_TIMEOUT_MS = 60000;
 const PAGE_FETCH_TIMEOUT_MS = 12000;
 
+// ───────────────────── גישה מוסדית (EZproxy link-wrapping) ─────────────────────
+// המנוי של המוסד תקף רק בדפדפן של המשתמש (עוגיית ההתחברות ל-EZproxy יושבת שם).
+// לכן העטיפה חלה **אך ורק** על קישורים שנפתחים בדפדפן (כפתור "🔗 פתח" בכרטיס),
+// ולעולם לא על אחזור בתוך האפליקציה (fetchPagesText/fetch_binary) — שם אין session
+// והעטיפה רק תחזיר דף התחברות במקום המאמר.
+//
+// דוגמה חיה (המרכז האקדמי הרב תחומי ירושלים): https://mgs.jmc.ac.il/login?url=<TARGET>
+const ARTICLE_PROXY_PREFIX_KEY = 'wordflow_article_proxy_prefix';
+
+/**
+ * קידומת הפרוקסי המוסדי ששמורה מקומית, או '' אם לא הוגדרה.
+ * @returns {string}
+ */
+export function getInstitutionProxyPrefix() {
+  try {
+    if (typeof localStorage === 'undefined' || !localStorage) return '';
+    return String(localStorage.getItem(ARTICLE_PROXY_PREFIX_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * שומר קידומת פרוקסי מוסדי אחרי נרמול. ערך ריק מוחק את ההגדרה.
+ * נרמול: trim → השלמת סכימת https → הרחבת host חשוף ל-`https://<host>/login?url=`.
+ *
+ * @param {string} value
+ * @returns {string} הקידומת המנורמלת שנשמרה ('' אם נמחקה)
+ */
+export function setInstitutionProxyPrefix(value) {
+  let prefix = String(value || '').trim();
+
+  if (prefix) {
+    // host חשוף (mgs.jmc.ac.il / mgs.jmc.ac.il/) — משלימים את נתיב ההתחברות המקובל ב-EZproxy.
+    const bare = prefix.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    const looksBareHost = !/\?url=/i.test(prefix) && !prefix.endsWith('=')
+      && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(bare);
+    if (looksBareHost) prefix = `https://${bare}/login?url=`;
+    else if (!/^https?:\/\//i.test(prefix)) prefix = `https://${prefix.replace(/^\/+/, '')}`;
+    // מוסדות מגישים את הפרוקסי ב-https בלבד; http יפיל את ההתחברות.
+    prefix = prefix.replace(/^http:\/\//i, 'https://');
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) {
+      if (prefix) localStorage.setItem(ARTICLE_PROXY_PREFIX_KEY, prefix);
+      else localStorage.removeItem(ARTICLE_PROXY_PREFIX_KEY);
+    }
+  } catch { /* לא מפיל — ההגדרה פשוט לא נשמרת */ }
+
+  return prefix;
+}
+
+/**
+ * עוטף כתובת מאמר בקידומת הפרוקסי המוסדי — **לפתיחה בדפדפן בלבד**.
+ * מחזיר את הכתובת כמו שהיא אם אין קידומת, אם היא לא http(s), או אם היא כבר עטופה.
+ *
+ * @param {string} url
+ * @returns {string}
+ */
+export function wrapWithInstitutionProxy(url) {
+  const target = String(url || '').trim();
+  if (!target || !/^https?:\/\//i.test(target)) return target;
+
+  const prefix = getInstitutionProxyPrefix();
+  if (!prefix) return target;
+
+  // כבר עובר דרך אותו פרוקסי (או שזו כתובת של הפרוקסי עצמו) — לא עוטפים פעמיים.
+  let proxyHost = '';
+  try { proxyHost = new URL(prefix.replace(/\?url=.*$/i, '')).hostname.toLowerCase(); } catch { proxyHost = ''; }
+  if (proxyHost && target.toLowerCase().includes(proxyHost)) return target;
+
+  // EZproxy מקבל את היעד **לא מקודד** — כך בדיוק בונה אותו תפריט הספרייה של המוסד,
+  // וקידוד גורף שובר חלק מהתצורות. החריג היחיד: יעד שמכיל '&' — בלי קידוד ה-query
+  // שלו נקטע ונבלע כפרמטר של הפרוקסי, ולכן דווקא שם מקודדים.
+  return target.includes('&') ? prefix + encodeURIComponent(target) : prefix + target;
+}
+
 // ─────────────────────────── Unpaywall (Open Access) ───────────────────────────
 // API חינמי ללא מפתח; דורש רק כתובת מייל ליצירת קשר. מחזיר את המיקום החוקי
 // הטוב ביותר לעותק פתוח של המאמר — כך שתוצאה מאחורי paywall הופכת לפתיחה/הורדה/הטמעה.
