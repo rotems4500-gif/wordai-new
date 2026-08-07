@@ -18,6 +18,124 @@ const LOOKUP_RESULT_COUNT = 4;
 const RETRIEVAL_TIMEOUT_MS = 60000;
 const PAGE_FETCH_TIMEOUT_MS = 12000;
 
+// ─────────────────────────── Unpaywall (Open Access) ───────────────────────────
+// API חינמי ללא מפתח; דורש רק כתובת מייל ליצירת קשר. מחזיר את המיקום החוקי
+// הטוב ביותר לעותק פתוח של המאמר — כך שתוצאה מאחורי paywall הופכת לפתיחה/הורדה/הטמעה.
+const UNPAYWALL_API_BASE = 'https://api.unpaywall.org/v2/';
+const UNPAYWALL_CONTACT_EMAIL = 'rotems4500@gmail.com';
+const UNPAYWALL_TIMEOUT_MS = 5000;
+// תקציב רך: מעבר לזה לא מעכבים את הצגת התוצאות.
+const UNPAYWALL_MAX_ARTICLES = 10;
+const UNPAYWALL_CONCURRENCY = 4;
+
+// מנקה קידומות נפוצות ל-DOI ("https://doi.org/…", "doi:…") ומחזיר את המזהה הגולמי.
+const normalizeDoi = (doi = '') => String(doi || '')
+  .trim()
+  .replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, '')
+  .replace(/^doi:\s*/i, '')
+  .replace(/[.,;)\]]+$/, '')
+  .trim();
+
+/**
+ * שואל את Unpaywall על עותק גישה-חופשית חוקי למאמר לפי DOI.
+ * **fail-open**: כל כשל (רשת/404/JSON) מחזיר null ולעולם לא זורק.
+ *
+ * @param {string} doi
+ * @param {{signal?:AbortSignal, timeoutMs?:number}} [opts]
+ * @returns {Promise<{oaUrl:string, oaPdfUrl:string, isOa:boolean}|null>}
+ */
+export async function fetchUnpaywallOa(doi, { signal, timeoutMs = UNPAYWALL_TIMEOUT_MS } = {}) {
+  const clean = normalizeDoi(doi);
+  if (!/^10\.\d{4,9}\/\S+$/.test(clean)) return null;
+
+  const url = `${UNPAYWALL_API_BASE}${encodeURIComponent(clean).replace(/%2F/gi, '/')}`
+    + `?email=${encodeURIComponent(UNPAYWALL_CONTACT_EMAIL)}`;
+
+  // timeout משלנו: במסלול ה-fetch (אתר/Node) requestJsonOverHttp מתעלם מ-timeoutMs.
+  let timer = null;
+  let controller = null;
+  let abortRelay = null;
+  try {
+    if (typeof AbortController === 'function') {
+      controller = new AbortController();
+      timer = setTimeout(() => { try { controller.abort(); } catch { /* לא מפיל */ } }, timeoutMs);
+      if (signal) {
+        if (signal.aborted) return null;
+        abortRelay = () => { try { controller.abort(); } catch { /* לא מפיל */ } };
+        signal.addEventListener('abort', abortRelay, { once: true });
+      }
+    }
+
+    const { requestJsonOverHttp } = await import('./httpTransport');
+    const data = await requestJsonOverHttp({
+      url,
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller ? controller.signal : signal,
+      timeoutMs,
+    });
+
+    const best = data?.best_oa_location || null;
+    const oaPdfUrl = String(best?.url_for_pdf || '').trim();
+    const oaUrl = String(best?.url || '').trim();
+    const isOa = Boolean(data?.is_oa);
+    if (!oaUrl && !oaPdfUrl && !isOa) return null;
+    return { oaUrl, oaPdfUrl, isOa };
+  } catch {
+    // fail-open — העשרה היא בונוס, לא תנאי להצגת התוצאות.
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal && abortRelay) signal.removeEventListener('abort', abortRelay);
+  }
+}
+
+/**
+ * מעשיר כרטיסי מאמרים בעותקי גישה-חופשית (in-place). מוגבל ל-UNPAYWALL_MAX_ARTICLES
+ * ראשונים ולריצה מקבילה של UNPAYWALL_CONCURRENCY. כשלים שקטים.
+ * @returns {Promise<number>} כמה כרטיסים הועשרו
+ */
+async function enrichArticlesWithOpenAccess(articles, { signal } = {}) {
+  const targets = (Array.isArray(articles) ? articles : [])
+    .slice(0, UNPAYWALL_MAX_ARTICLES)
+    .filter((a) => normalizeDoi(a?.doi));
+  if (!targets.length) return 0;
+
+  let found = 0;
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      if (signal?.aborted) return;
+      const index = cursor;
+      cursor += 1;
+      const article = targets[index];
+      if (!article) return;
+
+      const oa = await fetchUnpaywallOa(article.doi, { signal });
+      if (!oa) continue;
+
+      let touched = false;
+      if (oa.oaPdfUrl && !article.pdfUrl) { article.pdfUrl = oa.oaPdfUrl; touched = true; }
+      if (article.missingUrl && oa.oaUrl) {
+        article.url = oa.oaUrl;
+        article.missingUrl = false;
+        touched = true;
+      } else if (article.botBlocked && oa.oaUrl) {
+        // משאירים את ה-URL המקורי, ומוסיפים יעד חלופי לכפתור "פתח".
+        article.oaUrl = oa.oaUrl;
+        touched = true;
+      }
+      if (oa.isOa) { article.openAccess = true; touched = true; }
+      if (touched) found += 1;
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(UNPAYWALL_CONCURRENCY, targets.length) }, worker),
+  );
+  return found;
+}
+
 // ─────────────────────────── פירוק הבקשה (טהור, ניתן לבדיקה ב-node) ───────────────────────────
 
 // מילים פותחות שאינן חלק מהשאילתה: פעלי בקשה, נימוס, ומילות-חיבור לנושא.
@@ -212,6 +330,9 @@ const toArticleCard = (source, canonicalize) => {
     provider: String(source?.provider || '').trim(),
     botBlocked: Boolean(source?.verification?.botBlocked),
     missingUrl: Boolean(source?.verification?.missingUrl) || !url,
+    // מתמלאים ב-enrichArticlesWithOpenAccess (Unpaywall) אחרי המיפוי.
+    openAccess: false,
+    oaUrl: '',
     _raw: source,
   };
 };
@@ -273,6 +394,11 @@ export async function searchArticleLibrary({ prompt = '', cfg = null, signal, on
   }
 
   const articles = sources.map((source) => toArticleCard(source, canonicalizeSourceUrl));
+
+  // ── העשרת Open Access: הופך תוצאות חסומות/ללא-קישור לפתיחות והורדות חוקיות ──
+  const oaFound = await enrichArticlesWithOpenAccess(articles, { signal }).catch(() => 0);
+  report('open-access', { found: oaFound });
+
   report('done', { count: articles.length });
   return { ...base, ok: true, articles, providerTrail: trail };
 }

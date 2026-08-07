@@ -50,6 +50,9 @@ export default function ArticleResultsList({
   const badgeCls = dark
     ? 'border-amber-400/30 bg-amber-400/10 text-amber-200'
     : 'border-amber-300 bg-amber-50 text-amber-700';
+  const oaBadgeCls = dark
+    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+    : 'border-emerald-300 bg-emerald-50 text-emerald-700';
   const openCls = dark
     ? 'border-white/15 bg-white/10 text-slate-100 hover:bg-white/20'
     : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100';
@@ -90,7 +93,10 @@ export default function ArticleResultsList({
         const metaParts = [authorsText, article?.year ? String(article.year) : '', article?.domain || '']
           .filter(Boolean);
 
-        const openHref = (article?.botBlocked && article?.pdfUrl) ? article.pdfUrl : article?.url;
+        // כשהמקור חסום לבדיקה אוטומטית מעדיפים עותק גישה-חופשית (Unpaywall) ואז PDF.
+        const openHref = article?.botBlocked
+          ? (article?.oaUrl || article?.pdfUrl || article?.url)
+          : article?.url;
 
         const addBtnCls = done
           ? (dark ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700')
@@ -121,8 +127,13 @@ export default function ArticleResultsList({
               </div>
             )}
 
-            {(article?.botBlocked || article?.missingUrl) && (
+            {(article?.openAccess || article?.botBlocked || article?.missingUrl) && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {article?.openAccess && (
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${oaBadgeCls}`}>
+                    🔓 גישה חופשית
+                  </span>
+                )}
                 {article?.botBlocked && (
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${badgeCls}`}>
                     🔒 חסום לבדיקה אוטומטית

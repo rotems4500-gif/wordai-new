@@ -30,6 +30,7 @@ const ALLOWED_HTTPS_HOSTS: &[&str] = &[
     "openrouter.ai",
     "api.x.ai",
     "serpapi.com",
+    "api.unpaywall.org",
     "quickchart.io",
     "api.pexels.com",
     "images.pexels.com",
