@@ -13,6 +13,9 @@
     </header>
 
     <div id="signed-out-view" class="wf-view hidden">
+      <p id="needs-login-note" class="wf-job-banner hidden">
+        <span>יש להתחבר — קליפ שנשלח קודם לא נשמר.</span>
+      </p>
       <p class="wf-hint">התחברו כדי לשלוח תוכן מהדפדפן ישירות ל-WordFlow AI.</p>
       <button id="sign-in-btn" class="wf-btn wf-btn-primary">התחברות עם Google</button>
       <p id="signed-out-error" class="wf-error hidden"></p>
@@ -28,6 +31,9 @@
       <div id="state-pdf" class="wf-state hidden">
         <p class="wf-file-line">📄 <span id="pdf-file-name"></span></p>
         <button id="send-pdf-btn" class="wf-btn wf-btn-primary">שלח PDF זה</button>
+        <!-- מסלולי מילוט: זיהוי PDF שגוי לא ישאיר את המשתמש בלי אף פעולה. -->
+        <button id="pdf-send-page-btn" class="wf-btn wf-btn-ghost">שלח את העמוד הנוכחי (טקסט)</button>
+        <button id="pdf-scan-files-btn" class="wf-btn wf-btn-ghost">סרוק קבצים בעמוד</button>
       </div>
 
       <div id="state-page" class="wf-state hidden">

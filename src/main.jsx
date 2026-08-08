@@ -3830,19 +3830,28 @@ function App() {
       }
       const results = all.filter((r) => !r.failed);
       if (!results.length) return;
-      const first = results[0];
-      const label = first.domain ? `מ-${first.domain}` : 'מהדפדפן';
-      // רמז חד-פעמי על שער הסקירה (clipInboxService מסמן אותו פעם אחת בלבד).
-      const hint = results.some((r) => r.reviewHint)
-        ? ' רוצה לאשר כל קליפ לפני שהוא נכנס? סמן "שאל אותי לפני שקליפ נכנס לעבודה" בתיבת הקליפים.'
-        : '';
-      if (results.length === 1 && first.destination === 'inbox') {
-        showToast(`קליפ חדש ${label} ממתין בתיבת הדואר של הקליפים.`, { tone: 'info' });
-      } else {
+      const labelOf = (r) => (r?.domain ? `מ-${r.domain}` : 'מהדפדפן');
+      // ⚠️ מפרידים בין מוחזקים לנקלטים: אצווה מעורבת (או שני קליפים מוחזקים)
+      // דיווחה עד כה "נקלטו" על קליפים שאף אחד מהם לא נכנס לעבודה.
+      const held = results.filter((r) => r.destination === 'inbox');
+      const ingested = results.filter((r) => r.destination !== 'inbox');
+      if (held.length) {
         showToast(
-          (results.length === 1
-            ? `קליפ חדש ${label} נקלט כחומר עזר${first.lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
-            : `${results.length} קליפים חדשים נקלטו מהדפדפן.`) + hint,
+          held.length === 1
+            ? `קליפ חדש ${labelOf(held[0])} ממתין בתיבת הדואר של הקליפים.`
+            : `${held.length} קליפים חדשים ממתינים בתיבת הדואר של הקליפים.`,
+          { tone: 'info' },
+        );
+      }
+      if (ingested.length) {
+        // רמז חד-פעמי על שער הסקירה (clipInboxService מסמן אותו פעם אחת בלבד).
+        const hint = ingested.some((r) => r.reviewHint)
+          ? ' רוצה לאשר כל קליפ לפני שהוא נכנס? סמן "שאל אותי לפני שקליפ נכנס לעבודה" בתיבת הקליפים.'
+          : '';
+        showToast(
+          (ingested.length === 1
+            ? `קליפ חדש ${labelOf(ingested[0])} נקלט כחומר עזר${ingested[0].lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
+            : `${ingested.length} קליפים חדשים נקלטו מהדפדפן.`) + hint,
           { tone: 'info', ...(hint ? { duration: 9000 } : {}) },
         );
       }

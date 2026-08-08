@@ -53,6 +53,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab || !tab.id) return;
+  sweepStaleState();
   switch (info.menuItemId) {
     case 'wordflow-clip-page':
       handleClipPage(tab).catch((err) => handleFailure(tab.id, err));
@@ -75,12 +76,57 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 // ---------- בדג'ים (משוב הצלחה/כשל בלי הרשאת notifications) ----------
+// ⚠️ ב-MV3 ה-service worker נהרג בין אירועים, ואז ה-setTimeout שמנקה את הבדג'
+// לעולם לא רץ — הבדג' נתקע על האייקון עד לריסטרט הדפדפן. לכן מלבד ה-timeout
+// (מסלול מהיר כשה-SW חי) נרשם מועד תפוגה ב-storage.session, וכל נקודת כניסה
+// לתוסף מנקה בדג'ים שפג תוקפם. גם ניווט בלשונית מנקה את הבדג' שלה.
+// לא משתמשים ב-chrome.alarms כדי לא להוסיף הרשאה חדשה למניפסט (סקירת חנות).
+const badgeKey = (tabId) => `wordflow_badge_${tabId}`;
+const badgeTimers = new Map();
+
+async function sweepStaleBadges() {
+  try {
+    const all = await chrome.storage.session.get(null);
+    const now = Date.now();
+    const dead = [];
+    for (const [key, expiresAt] of Object.entries(all || {})) {
+      if (!key.startsWith('wordflow_badge_')) continue;
+      if (typeof expiresAt === 'number' && expiresAt > now) continue;
+      dead.push(key);
+      const tabId = Number(key.slice('wordflow_badge_'.length));
+      if (Number.isFinite(tabId)) {
+        try { chrome.action.setBadgeText({ text: '', tabId }); } catch { /* הלשונית נסגרה */ }
+      }
+    }
+    if (dead.length) await chrome.storage.session.remove(dead);
+  } catch { /* אין storage.session — הבדג' פשוט יישאר */ }
+}
+
 function flashBadge(tabId, text, color, ms = 2500) {
   chrome.action.setBadgeText({ text, tabId });
   chrome.action.setBadgeBackgroundColor({ color, tabId });
-  setTimeout(() => {
+  chrome.storage.session.set({ [badgeKey(tabId)]: Date.now() + ms }).catch(() => {});
+  clearTimeout(badgeTimers.get(tabId));
+  badgeTimers.set(tabId, setTimeout(() => {
+    badgeTimers.delete(tabId);
     chrome.action.setBadgeText({ text: '', tabId });
-  }, ms);
+    chrome.storage.session.remove(badgeKey(tabId)).catch(() => {});
+  }, ms));
+}
+
+// ניווט בלשונית = "הפעולה הבאה" — מנקה את הבדג' שנשאר מהפעולה הקודמת.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'loading') return;
+  clearTimeout(badgeTimers.get(tabId));
+  badgeTimers.delete(tabId);
+  try { chrome.action.setBadgeText({ text: '', tabId }); } catch { /* נסגרה */ }
+  chrome.storage.session.remove(badgeKey(tabId)).catch(() => {});
+});
+
+/** ניקיון שרץ בכל נקודת כניסה: בדג'ים תקועים + בחירות אזור נטושות. */
+function sweepStaleState() {
+  sweepStaleBadges();
+  sweepStaleAreaSelects();
 }
 
 function handleSuccess(tabId) {
@@ -109,7 +155,19 @@ async function requireUser() {
 // fetch מה-service worker מותר כאן: activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה,
 // ו-credentials:'include' שולח את עוגיות ה-session (חובה ל-Moodle).
 // מאומץ מ-pdf-grabber (פרויקט oil price): נקודות קצה של PDF לרוב חסרות סיומת.
-const PDF_URL_PATTERN = /\.pdf(?:[?#]|$)|[?&](?:type|format|mode|action)=[^&]*pdf|\/(?:download|getpdf|pdf)\b/i;
+//
+// ⚠️ **הבאג שהרג את קליפת הטקסט**: הגרסה הקודמת השתמשה ב-`\/(?:download|getpdf|pdf)\b`,
+// ו-`\b` תופס מילה *באמצע* הנתיב. כך `wiki/PDF`, `docs/PDF/manual.html`,
+// `/pdf-guide/intro`, `/download/index.html` ו-`/download.aspx?id=5` כולם סווגו PDF,
+// handleClipPage נכנס לענף ה-PDF, resolvePdfBytes זרק — ו-Readability מעולם לא רץ.
+// עכשיו: סיומת .pdf בסוף הנתיב · פרמטר שאילתה pdf-י · forcedownload=1 · או
+// **סגמנט נתיב אחרון** download/getpdf (תיקייה בשם /pdf/ אינה נחשבת).
+// `pdf` כסגמנט בודד הוסר בכוונה — הוא תפס את ערך wikipedia.
+const PDF_URL_PATTERN = /\.pdf(?:[?#]|$)|[?&](?:type|format|mode|action)=[^&]*pdf|[?&]forcedownload=1|\/(?:download|getpdf)(?:[?#]|$)/i;
+
+// זיהוי הפופאפ חייב להיות שמרני עוד יותר: כאן טעות נועלת את הממשק על מצב PDF.
+// רק סיומת .pdf אמיתית בסוף הנתיב.
+const PDF_URL_STRICT = /\.pdf(?:[?#]|$)/i;
 
 const isPdfBytes = (b) => b?.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
 
@@ -121,35 +179,25 @@ async function fetchTabBytes(url) {
 }
 
 /**
- * משיכה מתוך הדף עצמו (MAIN world) — שם ה-session, ה-Referer וכותרות האתר תקפים.
- * נקודות קצה כמו Moodle מחזירות דף התחברות ב-HTTP 200 למשיכה "עירומה", ולכן
- * בודקים את מספר הקסם %PDF- ומזהים דף התחברות במקום לשמור HTML בשם .pdf.
- * מאומץ מ-pdf-grabber/background.js refetchInTab.
+ * משיכת PDF מתוך הדף עצמו (MAIN world) — שם ה-session, ה-Referer וכותרות האתר תקפים.
+ *
+ * ⚠️ בעבר הייתה כאן פונקציה מוזרקת *שנייה* עם זיהוי התחברות רופף
+ * (`/login|sign[- ]?in|password|התחבר/` על 20KB הראשונים) — כל דף Moodle מכיל את
+ * המילים האלה, ולכן כישלון רגיל אובחן כ"נדרשת התחברות". שתי הפונקציות המוזרקות
+ * לא יכולות לחלוק closure, ולכן הפתרון הוא שיתוף *הפונקציה עצמה*: כאן רק עוטפים
+ * את fetchFileViaTab, שכבר מחזיק את isLoginPage המבני היחיד.
  */
 async function fetchPdfViaTab(tabId, url) {
-  try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      args: [url],
-      func: async (target) => {
-        const r = await fetch(target, { credentials: 'include' });
-        if (!r.ok) return null;
-        const buf = new Uint8Array(await r.arrayBuffer());
-        const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
-        let s = '';
-        for (let i = 0; i < buf.length; i += 0x8000) {
-          s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-        }
-        // s הוא latin1 של הבייטים — התאמה לסמנים ASCII בלבד.
-        const looksLikeLogin = !isPdf && /login|sign[- ]?in|authenticate|password|התחבר/i.test(s.slice(0, 20000));
-        return { isPdf, looksLikeLogin, data: isPdf ? btoa(s) : '' };
-      },
-    });
-    return res?.result || null;
-  } catch {
-    return null; // אין גישה ללשונית (צופה PDF פנימי, chrome://) — הקורא ינסה מסלול אחר
-  }
+  const res = await fetchFileViaTab(tabId, url);
+  if (!res) return null;
+  if (!res.ok) return { isPdf: false, looksLikeLogin: false, data: '', status: res.status };
+  return {
+    isPdf: !!res.isPdf,
+    looksLikeLogin: !!res.looksLikeLogin,
+    contentType: res.contentType || '',
+    finalUrl: res.finalUrl || url,
+    data: res.isPdf ? res.data : '',
+  };
 }
 
 function base64ToBytes(b64) {
@@ -291,9 +339,14 @@ async function fetchFileViaTab(tabId, url) {
           return out.sort((a, b) => a.rank - b.rank || a.seq - b.seq).map((c) => c.url);
         };
 
+        // ⚠️ content-type לבדו אינו הוכחה: שרתים (ובעיקר Moodle/EZproxy) מגישים דף
+        // שגיאה או דף ניווט עם `application/pdf`. בלי הבדיקה הזו ה-HTML נשמר כ-.pdf
+        // ומדווח "נשלח" — קובץ פגום שהאפליקציה לא תצליח לחלץ.
+        const looksLikeMarkup = (s) => /^\s*(?:<!doctype|<html|<\?xml|<head|<body|<)/i.test(String(s || '').slice(0, 200));
+
         const pack = (res, extra) => {
           const isDoc = res.isPdf || res.isZip
-            || (!!res.contentType && DOC_CT.test(res.contentType));
+            || (!!res.contentType && DOC_CT.test(res.contentType) && !looksLikeMarkup(res.s));
           return Object.assign({
             ok: true,
             isPdf: res.isPdf,
@@ -331,7 +384,8 @@ async function fetchFileViaTab(tabId, url) {
           lastRes = res2;
           lastUrl = u;
           const ct = String(res2.contentType || '').toLowerCase();
-          if (res2.isPdf || res2.isZip || (DOC_CT.test(ct) && !ct.includes('image/'))) {
+          if (res2.isPdf || res2.isZip
+            || (DOC_CT.test(ct) && !ct.includes('image/') && !looksLikeMarkup(res2.s))) {
             return pack(res2, { wrapperUrl: u, viaWrapper: true, candidates });
           }
           // תמונה/HTML — ממשיכים למועמד הבא במקום להיכשל
@@ -356,20 +410,50 @@ const CONTENT_TYPE_EXT = [
   ['wordprocessingml', 'docx'],
   ['presentationml', 'pptx'],
   ['spreadsheetml', 'xlsx'],
+  ['msword', 'doc'],
+  ['ms-powerpoint', 'ppt'],
+  ['ms-excel', 'xls'],
+  ['opendocument.text', 'odt'],
+  ['rtf', 'rtf'],
+  ['text/csv', 'csv'],
+  ['text/plain', 'txt'],
 ];
+
+// ⚠️ **הבאג**: `/\.[a-z0-9]{2,5}$/` עובר על `view.php`, ולכן משאב Moodle שמוגש
+// ישירות מ-view.php הועלה בשם "view.php" — והאפליקציה מחלצת לפי הסיומת, כלומר
+// הקובץ נשמר ולא נקרא לעולם. שם מה-URL מתקבל רק אם סיומתו ברשימה מוכרת.
+const KNOWN_FILE_EXT = /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|csv|odt|ods|odp|epub|zip|png|jpe?g|gif|webp|bmp|tiff?|svg)$/i;
+// סיומות של סקריפט שרת — לעולם לא שם קובץ אמיתי, וגם לא בסיס טוב לשם.
+const SCRIPT_EXT = /\.(php\d?|aspx?|jsp|jspx|cgi|do|action|html?|xhtml)$/i;
+
+function sanitizeFileName(value) {
+  return String(value || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function extFromContentType(probe) {
+  const ct = String(probe.contentType || '').toLowerCase();
+  const hit = CONTENT_TYPE_EXT.find(([needle]) => ct.includes(needle));
+  if (hit) return hit[1];
+  if (probe.isPdf) return 'pdf';
+  if (probe.isZip) return 'zip';
+  return 'bin';
+}
 
 function resolveFileName(link, probe) {
   const fromDisposition = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(probe.disposition || '');
+  let base = '';
   if (fromDisposition) {
-    try { return decodeURIComponent(fromDisposition[1]); } catch { return fromDisposition[1]; }
+    try { base = decodeURIComponent(fromDisposition[1]); } catch { base = fromDisposition[1]; }
   }
-  const fromUrl = fileNameFromUrl(probe.finalUrl || link.url, '');
-  if (fromUrl && /\.[a-z0-9]{2,5}$/i.test(fromUrl)) return fromUrl;
-  // אין שם בהפניה ולא ב-URL: גוזרים סיומת מ-content-type ומשתמשים בטקסט הקישור.
-  const ct = String(probe.contentType || '').toLowerCase();
-  const ext = (CONTENT_TYPE_EXT.find(([needle]) => ct.includes(needle)) || [null, probe.isPdf ? 'pdf' : 'bin'])[1];
-  const base = String(link.title || 'קובץ').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80) || 'קובץ';
-  return `${base}.${ext}`;
+  if (!base) base = fileNameFromUrl(probe.finalUrl || link.url, '');
+  base = sanitizeFileName(base);
+  if (base && KNOWN_FILE_EXT.test(base)) return base;
+
+  // אין סיומת שימושית: גוזרים אותה מה-content-type ובוחרים בסיס קריא.
+  const stem = (base && !SCRIPT_EXT.test(base) ? base.replace(/\.[a-z0-9]{1,8}$/i, '') : '')
+    || sanitizeFileName(link.title)
+    || 'קובץ';
+  return `${stem.slice(0, 80)}.${extFromContentType(probe)}`;
 }
 
 /**
@@ -435,13 +519,82 @@ function notAFileReason(probe, pageHost = '') {
   return `לא קובץ נתמך (${ct.split(';')[0]})${foreign ? ` — ${foreign}` : ''}`;
 }
 
+// Moodle: תיקייה היא דף אחד עם N קבצים. "קפיצה" רגילה מחזירה את הראשון בלבד.
+const FOLDER_RESOURCE = /\/mod\/folder\/view\.php/i;
+const FOLDER_FILE_CAP = 20;
+
+/**
+ * אוסף את *כל* קישורי ה-pluginfile מדף תיקייה של Moodle (לא רק הראשון).
+ * ⚠️ הלוגיקה משוכפלת מ-collectCandidates בכוונה: פונקציה מוזרקת רצה ב-MAIN world
+ * בלי closure, ואי אפשר לחלוק עזרים בין שתי הזרקות.
+ */
+async function scanFolderCandidates(tabId, url) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      args: [url, FOLDER_FILE_CAP],
+      func: async (target, cap) => {
+        const r = await fetch(target, { credentials: 'include' });
+        if (!r.ok) return [];
+        const html = await r.text();
+        const IMG_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|avif|tiff?)(?:[?#]|$)/i;
+        const CHROME_PATH = /\/(?:user\/icon|user|course\/overviewfiles|theme|blocks)\//i;
+        const re = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/gi;
+        const seen = new Set();
+        const out = [];
+        for (const raw of html.match(re) || []) {
+          let href = '';
+          try {
+            href = new URL(String(raw).replace(/&amp;/gi, '&'), r.url || target).href;
+          } catch { continue; }
+          if (!/^https?:/i.test(href) || IMG_EXT.test(href) || CHROME_PATH.test(href)) continue;
+          if (seen.has(href)) continue;
+          seen.add(href);
+          let name = '';
+          try { name = decodeURIComponent(new URL(href).pathname.split('/').filter(Boolean).pop() || ''); } catch { name = ''; }
+          out.push({ url: href, title: name });
+          if (out.length >= cap) break;
+        }
+        return out;
+      },
+    });
+    return res?.result || [];
+  } catch {
+    return [];
+  }
+}
+
+/** כתיבת קליפ אחד מתוך probe מאומת. מחזיר את שם הקובץ שנשמר. */
+async function saveProbedFile(user, link, probe, captureMode = 'page-files') {
+  const fileName = resolveFileName(link, probe);
+  // ⚠️ בעבר נכתב תמיד application/octet-stream לכל מה שאינו PDF — docx/pptx איבדו
+  // את הסוג האמיתי שלהם. מעבירים את ה-content-type שהשרת הצהיר עליו כשהוא שפוי.
+  const declared = String(probe.contentType || '').split(';')[0].trim();
+  const contentType = declared && !/^(?:text\/html|application\/xhtml)/i.test(declared)
+    ? declared
+    : (probe.isPdf ? 'application/pdf' : 'application/octet-stream');
+  await writeFileClip({
+    uid: user.uid,
+    title: link.title || fileName,
+    bytes: base64ToBytes(probe.data),
+    fileName,
+    sourceUrl: probe.finalUrl || link.url,
+    captureMode,
+    contentType,
+  });
+  return fileName;
+}
+
 /**
  * הורדה סדרתית של רשימת קישורים. onItem נקרא לכל פריט עם
  * {index, url, title, status: 'saved'|'skipped'|'login'|'error', fileName, reason}.
  * ⚠️ הרשאת activeTab נשללת ברגע שהלשונית מנווטת — לכן בודקים את ה-URL לפני
  * כל משיכה ועוצרים במקום להיכשל בשקט על כל שאר הקבצים.
+ * shouldCancel נבדק בכל איטרציה: "סרוק שוב" באמצע עבודה חייב לעצור אותה באמת,
+ * אחרת הלולאה ממשיכה לכתוב את מצב העבודה חזרה ל-storage ומריצה כפילויות.
  */
-async function downloadFiles(tab, links, onItem = () => {}) {
+async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () => false) {
   const user = await requireUser();
   const startUrl = tab.url;
   const pageHost = hostOf(startUrl || '');
@@ -449,12 +602,15 @@ async function downloadFiles(tab, links, onItem = () => {}) {
   let saved = 0;
   const skipped = [];
   let aborted = false;
+  let cancelled = false;
 
   for (let index = 0; index < links.length; index += 1) {
     const link = links[index];
     const emit = (status, extra = {}) => {
       onItem({ index, url: link.url, title: link.title || '', status, ...extra });
     };
+
+    if (shouldCancel()) { cancelled = true; break; }
 
     if (!aborted) {
       try {
@@ -471,6 +627,26 @@ async function downloadFiles(tab, links, onItem = () => {}) {
     }
 
     try {
+      // תיקיית Moodle: כל הקבצים שבתוכה, לא רק הראשון.
+      if (FOLDER_RESOURCE.test(link.url)) {
+        const folder = await downloadFolderFiles(tab, user, link, shouldCancel);
+        if (folder) {
+          saved += folder.saved;
+          if (folder.saved) {
+            emit('saved', {
+              fileName: folder.total > 1 ? `${folder.saved} קבצים מהתיקייה` : folder.firstName,
+              reason: folder.failed ? `${folder.failed} מתוך ${folder.total} לא נקלטו` : '',
+            });
+          } else {
+            const reason = folder.lastReason || 'לא נמצא קובץ בתוך התיקייה';
+            skipped.push(`${link.title || link.url}: ${reason}`);
+            emit('skipped', { reason });
+          }
+          continue;
+        }
+        // אין מועמדים בתיקייה — נופלים למסלול הרגיל (אולי זו בכלל לא תיקייה).
+      }
+
       const probe = await fetchFileViaTab(tab.id, link.url);
       if (!probe) {
         // executeScript נכשל — אין גישה ללשונית (chrome://, צופה PDF פנימי, דף שנסגר)
@@ -500,23 +676,18 @@ async function downloadFiles(tab, links, onItem = () => {}) {
           skipped.push(`${link.title || link.url}: ${reason}`);
           emit('login', { reason });
         } else {
-          emit('skipped', { reason: notAFileReason(probe, pageHost) });
+          // ⚠️ זו הקטגוריה הנפוצה ביותר — בעבר היא לא נרשמה ב-skipped ולכן
+          // ערך ההחזרה והלוג של תפריט ההקשר החמיצו בדיוק את מה שקרה בפועל.
+          const reason = notAFileReason(probe, pageHost);
+          skipped.push(`${link.title || link.url}: ${reason}`);
+          emit('skipped', { reason });
         }
         continue;
       }
       if (probe.viaWrapper) {
         console.info('[wordflow][files] דף עטיפה — הקובץ נמשך מ-', probe.finalUrl);
       }
-      const fileName = resolveFileName(link, probe);
-      await writeFileClip({
-        uid: user.uid,
-        title: link.title || fileName,
-        bytes: base64ToBytes(probe.data),
-        fileName,
-        sourceUrl: probe.finalUrl || link.url,
-        captureMode: 'page-files',
-        contentType: probe.isPdf ? 'application/pdf' : 'application/octet-stream',
-      });
+      const fileName = await saveProbedFile(user, link, probe);
       saved += 1;
       flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
       emit('saved', { fileName });
@@ -528,7 +699,47 @@ async function downloadFiles(tab, links, onItem = () => {}) {
     }
   }
 
-  return { saved, skipped };
+  return { saved, skipped, cancelled };
+}
+
+/**
+ * קליטת כל הקבצים שבתוך תיקיית Moodle אחת. מחזיר null כשאין מועמדים בכלל
+ * (ואז הקורא ממשיך במסלול הרגיל של קפיצה בודדת).
+ */
+async function downloadFolderFiles(tab, user, link, shouldCancel = () => false) {
+  const entries = await scanFolderCandidates(tab.id, link.url);
+  if (!entries.length) return null;
+
+  let saved = 0;
+  let failed = 0;
+  let firstName = '';
+  let lastReason = '';
+
+  for (const entry of entries) {
+    if (shouldCancel()) break;
+    try {
+      const probe = await fetchFileViaTab(tab.id, entry.url);
+      if (!probe || !probe.ok || (!probe.isPdf && !probe.isZip && !probe.isDoc)) {
+        failed += 1;
+        lastReason = probe && probe.looksLikeLogin ? LOGIN_MSG : 'לא נמצא קובץ בתוך התיקייה';
+        continue;
+      }
+      const name = await saveProbedFile(
+        user,
+        { url: entry.url, title: entry.title || link.title || '' },
+        probe,
+      );
+      if (!firstName) firstName = name;
+      saved += 1;
+      flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+    } catch (err) {
+      failed += 1;
+      lastReason = String(err?.message || err);
+    }
+  }
+
+  console.info('[wordflow][files] תיקייה', link.url, `→ נשמרו ${saved}/${entries.length}`);
+  return { saved, failed, total: entries.length, firstName, lastReason };
 }
 
 async function handleClipAllFiles(tab) {
@@ -554,7 +765,10 @@ async function handleClipAllFiles(tab) {
 function detectTabKind(tab) {
   const url = tab?.url || '';
   if (!url) return { isPdf: false, fileName: '', url: '' };
-  const isPdf = PDF_URL_PATTERN.test(url);
+  // ⚠️ מבחן *קפדני* בכוונה. הזיהוי הרחב נעל את הפופאפ על מצב "PDF" בכל דף
+  // שהמילה pdf/download הופיעה בנתיב שלו, והכפתור היחיד שנשאר הוביל לכישלון.
+  // גם עכשיו הפופאפ מציג במצב הזה מסלול חלופי (עמוד/סריקה) — ר' popup.js.
+  const isPdf = PDF_URL_STRICT.test(url);
   return { isPdf, fileName: isPdf ? fileNameFromUrl(url) : '', url };
 }
 
@@ -594,6 +808,37 @@ async function clearJob(tabId) {
 const activeJobTabs = new Set();
 
 /**
+ * לשוניות שבהן המשתמש ביקש לבטל עבודה חיה ("סרוק שוב"). ⚠️ בלי דגל אמיתי
+ * הלולאה ממשיכה לרוץ אחרי clearJob וכותבת את המפתח חזרה בכל פריט — הסריקה
+ * הבאה מדווחת "נקטעה" בזמן שהיא עדיין רצה, והמשתמש יכול להתחיל ריצה *שנייה*
+ * במקביל על אותה לשונית (קליפים כפולים ב-Firebase).
+ */
+const cancelledJobTabs = new Set();
+
+/** פורטים פתוחים של הפופאפ לכל לשונית — כדי שפופאפ שנפתח מחדש יקבל התקדמות חיה. */
+const jobPorts = new Map(); // tabId -> Set<port>
+
+function attachPort(tabId, port) {
+  if (!jobPorts.has(tabId)) jobPorts.set(tabId, new Set());
+  jobPorts.get(tabId).add(port);
+}
+
+function detachPort(tabId, port) {
+  const set = jobPorts.get(tabId);
+  if (!set) return;
+  set.delete(port);
+  if (!set.size) jobPorts.delete(tabId);
+}
+
+function postToTab(tabId, payload) {
+  const set = jobPorts.get(tabId);
+  if (!set) return;
+  for (const port of set) {
+    try { port.postMessage(payload); } catch { /* הפופאפ נסגר */ }
+  }
+}
+
+/**
  * מחליט מה הפופאפ יראה: רק עבודה *חיה* על *אותו URL* משתלטת על התצוגה.
  * כל השאר (הסתיימה / הדף התחלף / הריצה מתה) — נמחקת, וכשהיא הסתיימה באותו דף
  * מוחזר lastSummary כדי להציג שורת סיכום מעל הרשימה הטרייה.
@@ -626,86 +871,173 @@ async function resolveStoredJob(tab) {
  * וניתוקו (סגירת הפופאפ) לא מבטל אותה — ההתקדמות ממשיכה להישמר ב-storage.session
  * וה-scan הבא מחזיר אותה כדי לצייר מחדש את המצב.
  */
+/** ממתין (עד ~15 שניות) שריצה שבוטלה תסיים את הפריט הנוכחי ותשחרר את הלשונית. */
+async function waitForCancelledJob(tabId) {
+  for (let i = 0; i < 60 && activeJobTabs.has(tabId) && cancelledJobTabs.has(tabId); i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+async function runFilesJob(tabId, links) {
+  if (activeJobTabs.has(tabId) && cancelledJobTabs.has(tabId)) await waitForCancelledJob(tabId);
+  // ⚠️ שומר בפני ריצה כפולה על אותה לשונית — המקור לקליפים כפולים ב-Firebase.
+  if (activeJobTabs.has(tabId)) {
+    postToTab(tabId, {
+      type: 'done',
+      saved: 0,
+      total: links.length,
+      items: [],
+      error: 'הורדה כבר רצה בלשונית הזו',
+    });
+    return;
+  }
+
+  let job = null;
+  cancelledJobTabs.delete(tabId);
+  activeJobTabs.add(tabId);
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    job = {
+      startedAt: Date.now(),
+      tabUrl: tab.url || '',
+      items: links.map((l) => ({ url: l.url, title: l.title || '', status: 'pending' })),
+      done: false,
+      saved: 0,
+      total: links.length,
+    };
+    await writeJob(tabId, job);
+
+    const isCancelled = () => cancelledJobTabs.has(tabId);
+
+    const result = await downloadFiles(tab, links, async (item) => {
+      const entry = job.items[item.index];
+      if (entry) {
+        entry.status = item.status;
+        entry.fileName = item.fileName || '';
+        entry.reason = item.reason || '';
+      }
+      if (item.status === 'saved') job.saved += 1;
+      // ⚠️ אחרי ביטול אסור לכתוב את מצב העבודה חזרה — זה מה שהחיה אותה בעבר.
+      if (!isCancelled()) await writeJob(tabId, job);
+      postToTab(tabId, { type: 'item', ...item });
+    }, isCancelled);
+
+    if (result.cancelled || isCancelled()) {
+      await clearJob(tabId);
+      postToTab(tabId, {
+        type: 'done',
+        saved: result.saved,
+        total: links.length,
+        items: job.items,
+        cancelled: true,
+      });
+      return;
+    }
+
+    job.done = true;
+    job.finishedAt = Date.now();
+    job.saved = result.saved;
+    job.total = links.length;
+    await writeJob(tabId, job);
+    // ⚠️ items נשלחים גם ב-done: אם הפופאפ נפתח מחדש באמצע העבודה הוא פספס
+    // את הודעות ה-item, וזו הדרך היחידה שלו לצייר את הסיבות לכל שורה.
+    postToTab(tabId, { type: 'done', saved: result.saved, total: links.length, items: job.items });
+  } catch (err) {
+    console.error('[wordflow][files] עבודת ההורדה נכשלה:', err);
+    await clearJob(tabId);
+    postToTab(tabId, {
+      type: 'done',
+      saved: 0,
+      total: links.length,
+      items: (job && job.items) || [],
+      error: String(err?.message || err),
+    });
+  } finally {
+    activeJobTabs.delete(tabId);
+    cancelledJobTabs.delete(tabId);
+  }
+}
+
+/**
+ * פופאפ שנפתח מחדש באמצע עבודה: משדר לו את המצב הנוכחי מיד, וממשיך להזרים
+ * את שאר ההודעות דרך postToTab. ⚠️ עבודה שהסתיימה בין הסריקה ל-attach חייבת
+ * עדיין לקבל done — אחרת הרשימה נשארת נעולה על "⏳" לנצח.
+ */
+async function attachToJob(tabId) {
+  const job = await readJob(tabId);
+  if (!job) {
+    postToTab(tabId, { type: 'gone' });
+    return;
+  }
+  const items = Array.isArray(job.items) ? job.items : [];
+  postToTab(tabId, {
+    type: 'sync',
+    items,
+    saved: job.saved || 0,
+    total: job.total || items.length,
+    running: !job.done && activeJobTabs.has(tabId),
+  });
+  if (job.done || !activeJobTabs.has(tabId)) {
+    postToTab(tabId, {
+      type: 'done',
+      saved: job.saved || 0,
+      total: job.total || items.length,
+      items,
+    });
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'wordflow-files-job') return;
+  sweepStaleState();
 
-  let alive = true;
-  port.onDisconnect.addListener(() => { alive = false; });
+  let boundTab = null;
+  port.onDisconnect.addListener(() => {
+    if (boundTab !== null) detachPort(boundTab, port);
+  });
 
   port.onMessage.addListener((msg) => {
-    if (!msg || msg.type !== 'start') return;
-    (async () => {
-      const tabId = msg.tabId;
-      const links = Array.isArray(msg.links) ? msg.links : [];
-      const post = (payload) => { if (alive) { try { port.postMessage(payload); } catch { /* הפופאפ נסגר */ } } };
-      let job = null;
-
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        job = {
-          startedAt: Date.now(),
-          tabUrl: tab.url || '',
-          items: links.map((l) => ({ url: l.url, title: l.title || '', status: 'pending' })),
-          done: false,
-          saved: 0,
-        };
-        await writeJob(tabId, job);
-        activeJobTabs.add(tabId);
-
-        const result = await downloadFiles(tab, links, async (item) => {
-          const entry = job.items[item.index];
-          if (entry) {
-            entry.status = item.status;
-            entry.fileName = item.fileName || '';
-            entry.reason = item.reason || '';
-          }
-          if (item.status === 'saved') job.saved += 1;
-          await writeJob(tabId, job);
-          post({ type: 'item', ...item });
-        });
-
-        job.done = true;
-        job.finishedAt = Date.now();
-        job.saved = result.saved;
-        job.total = links.length;
-        await writeJob(tabId, job);
-        // ⚠️ items נשלחים גם ב-done: אם הפופאפ נפתח מחדש באמצע העבודה הוא פספס
-        // את הודעות ה-item, וזו הדרך היחידה שלו לצייר את הסיבות לכל שורה.
-        post({ type: 'done', saved: result.saved, total: links.length, items: job.items });
-      } catch (err) {
-        console.error('[wordflow][files] עבודת ההורדה נכשלה:', err);
-        await clearJob(tabId);
-        post({
-          type: 'done',
-          saved: 0,
-          total: links.length,
-          items: (job && job.items) || [],
-          error: String(err?.message || err),
-        });
-      } finally {
-        activeJobTabs.delete(tabId);
-      }
-    })();
+    if (!msg || typeof msg.tabId !== 'number') return;
+    if (msg.type === 'start') {
+      boundTab = msg.tabId;
+      attachPort(msg.tabId, port);
+      runFilesJob(msg.tabId, Array.isArray(msg.links) ? msg.links : []);
+    } else if (msg.type === 'attach') {
+      boundTab = msg.tabId;
+      attachPort(msg.tabId, port);
+      attachToJob(msg.tabId);
+    }
   });
 });
 
-/** מחזיר בייטים של PDF מאומתים, או זורק שגיאה מדויקת. */
+/**
+ * מחזיר בייטים של PDF מאומתים, או **null** כשמסתבר שזה בכלל לא PDF —
+ * ואז הקורא ממשיך למסלול חילוץ הטקסט.
+ *
+ * ⚠️ בעבר כל תשובה שאינה PDF זרקה שגיאה, ולכן דפי HTML רגילים ש-URL שלהם
+ * הכיל "pdf"/"download" הפכו ללא-ניתנים-לקליפה לחלוטין. זריקה נשמרת רק
+ * למקרה שבו אנחנו *בטוחים* שמדובר בנקודת קצה של PDF (סיומת .pdf אמיתית)
+ * שהחזירה דף התחברות — שם ההודעה באמת מסבירה למשתמש מה לעשות.
+ */
 async function resolvePdfBytes(tab) {
-  const viaTab = await fetchPdfViaTab(tab.id, tab.url);
+  const url = tab.url || '';
+  const viaTab = await fetchPdfViaTab(tab.id, url);
   if (viaTab?.isPdf) return base64ToBytes(viaTab.data);
-  if (viaTab && !viaTab.isPdf) {
-    throw new Error(viaTab.looksLikeLogin
-      ? 'השרת החזיר דף התחברות במקום קובץ — יש להתחבר לאתר בדפדפן ולנסות שוב'
-      : 'השרת החזיר דף ולא PDF');
+  if (viaTab && viaTab.looksLikeLogin && PDF_URL_STRICT.test(url)) {
+    throw new Error('השרת החזיר דף התחברות במקום קובץ — יש להתחבר לאתר בדפדפן ולנסות שוב');
   }
+  if (viaTab) return null; // תשובה תקינה שאינה PDF — ננסה לחלץ טקסט
 
   // הדף לא נגיש להזרקה (הצופה הפנימי של Chrome) — משיכה מה-service worker.
   // מותרת כי activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה.
-  const direct = await fetchTabBytes(tab.url);
-  if (!isPdfBytes(direct.bytes)) {
-    throw new Error('מה שהתקבל אינו PDF תקין');
+  try {
+    const direct = await fetchTabBytes(url);
+    return isPdfBytes(direct.bytes) ? direct.bytes : null;
+  } catch (err) {
+    console.warn('[wordflow][clip] משיכת PDF ישירה נכשלה:', err);
+    return null;
   }
-  return direct.bytes;
 }
 
 function fileNameFromUrl(url, fallback = 'clip.pdf') {
@@ -735,8 +1067,14 @@ async function handleClipPage(tab) {
   const user = await requireUser();
 
   if (PDF_URL_PATTERN.test(tab.url || '')) {
-    await clipPdfDocument(tab, user, await resolvePdfBytes(tab));
-    return;
+    const bytes = await resolvePdfBytes(tab);
+    if (bytes) {
+      await clipPdfDocument(tab, user, bytes);
+      return;
+    }
+    // ⚠️ לא PDF אחרי הכול — ממשיכים למסלול הטקסט הרגיל. דפוס URL לעולם
+    // לא יכול להפוך דף רגיל לבלתי-ניתן-לקליפה.
+    console.info('[wordflow][clip] ה-URL נראה כמו PDF אבל התוכן אינו — ממשיך לחילוץ טקסט');
   }
 
   await chrome.scripting.executeScript({
@@ -863,19 +1201,75 @@ async function handleClipImage(info, tab) {
 }
 
 // ---------- מצב 4: קליפת אזור נבחר (צילום מסך + חיתוך) ----------
-// state זמני לקישור בין הטריגר (context menu) לתשובת ה-content script
-let pendingAreaSelect = null; // { tabId, resolve, reject }
+// ⚠️ בעבר ה-state היה גלובל בזיכרון (`pendingAreaSelect`) שהמתינו לו ב-await בלי
+// timeout. ב-MV3 ה-service worker נהרג אחרי ~30 שניות ללא אירוע — בדיוק בזמן
+// שהמשתמש גורר — וההודעה `wordflow-area-select-done` נפלה בין כל הענפים: בלי
+// תשובה, בלי בדג', בלי לוג. עכשיו הטיפול **חסר-מצב**: ההודעה עצמה נושאת את
+// המלבן, וה-handler מצלם/חותך/מעלה במקום. ה-storage.session משמש רק לזיהוי
+// בחירה נטושה (timeout → בדג' '!' + לוג).
+const AREA_TIMEOUT_MS = 3 * 60 * 1000;
+const areaKey = (tabId) => `wordflow_area_${tabId}`;
+
+async function markAreaSelectPending(tabId) {
+  try {
+    await chrome.storage.session.set({ [areaKey(tabId)]: Date.now() + AREA_TIMEOUT_MS });
+  } catch { /* אין storage — לא קריטי, המסלול חסר-מצב בכל מקרה */ }
+}
+
+async function clearAreaSelectPending(tabId) {
+  try { await chrome.storage.session.remove(areaKey(tabId)); } catch { /* אין מה לעשות */ }
+}
+
+async function sweepStaleAreaSelects() {
+  try {
+    const all = await chrome.storage.session.get(null);
+    const now = Date.now();
+    const dead = [];
+    for (const [key, expiresAt] of Object.entries(all || {})) {
+      if (!key.startsWith('wordflow_area_')) continue;
+      if (typeof expiresAt === 'number' && expiresAt > now) continue;
+      dead.push(key);
+      const tabId = Number(key.slice('wordflow_area_'.length));
+      if (!Number.isFinite(tabId)) continue;
+      console.error('[wordflow][area] בחירת האזור פגה בלי שהתקבל מלבן — בוטלה', tabId);
+      flashBadge(tabId, '!', '#dc2626', 3000);
+    }
+    if (dead.length) await chrome.storage.session.remove(dead);
+  } catch { /* אין storage.session */ }
+}
+
+async function completeAreaSelect(tab, rect) {
+  const user = await requireUser();
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const bytes = await cropScreenshot(dataUrl, rect);
+  await writeImageClip({
+    uid: user.uid,
+    title: `${tab.title || 'אזור נבחר'} (קטע)`,
+    bytes,
+    sourceUrl: tab.url,
+    captureMode: 'area',
+    contentType: 'image/png',
+  });
+  handleSuccess(tab.id);
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (pendingAreaSelect && message.type === 'wordflow-area-select-done') {
-    pendingAreaSelect.resolve(message.rect);
-    pendingAreaSelect = null;
-    return;
+  if (!message || !message.type) return undefined;
+  sweepStaleState();
+
+  if (message.type === 'wordflow-area-select-done') {
+    const tab = sender?.tab;
+    if (!tab || !tab.id) {
+      console.error('[wordflow][area] הודעת סיום הגיעה בלי לשונית שולחת');
+      return undefined;
+    }
+    clearAreaSelectPending(tab.id);
+    completeAreaSelect(tab, message.rect).catch((err) => handleFailure(tab.id, err));
+    return undefined;
   }
-  if (pendingAreaSelect && message.type === 'wordflow-area-select-cancelled') {
-    pendingAreaSelect.reject(new Error('בחירת האזור בוטלה'));
-    pendingAreaSelect = null;
-    return;
+  if (message.type === 'wordflow-area-select-cancelled') {
+    if (sender?.tab?.id) clearAreaSelectPending(sender.tab.id);
+    return undefined;
   }
 
   // הודעה מהפופאפ: סריקת הלשונית הפעילה (סוג הדף + רשימת קבצים + עבודה שרצה)
@@ -886,7 +1280,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!tab || !tab.id) throw new Error('לא נמצא טאב פעיל');
         const kind = detectTabKind(tab);
         const { job, lastSummary } = await resolveStoredJob(tab);
-        if (kind.isPdf) {
+        // forcePage: המשתמש ביקש מפורשות רשימת קבצים גם בלשונית שזוהתה כ-PDF.
+        if (kind.isPdf && !message.forcePage) {
           sendResponse({
             ok: true,
             tabId: tab.id,
@@ -919,11 +1314,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
           tabId = tab?.id;
         }
+        let cancelled = false;
         if (tabId) {
-          activeJobTabs.delete(tabId);
+          // ⚠️ ביטול אמיתי לפני המחיקה: הלולאה החיה בודקת את הדגל בכל איטרציה,
+          // אחרת היא ממשיכה לרוץ, כותבת את מצב העבודה חזרה, והמשתמש יכול
+          // להתחיל ריצה מקבילה שנייה (קליפים כפולים).
+          cancelled = activeJobTabs.has(tabId);
+          if (cancelled) cancelledJobTabs.add(tabId);
+          // activeJobTabs *לא* נמחק כאן בכוונה: רק ה-finally של הלולאה מוחק אותו,
+          // וכך ריצה חדשה לא יכולה להתחיל בזמן שהישנה עוד מסיימת פריט.
           await clearJob(tabId);
         }
-        sendResponse({ ok: true });
+        sendResponse({ ok: true, cancelled });
       } catch (err) {
         sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
       }
@@ -985,29 +1387,14 @@ async function cropScreenshot(dataUrl, rect) {
 }
 
 async function handleClipArea(tab) {
-  const user = await requireUser();
+  // כישלון מוקדם וברור אם אין משתמש — לפני שהמשתמש טורח לגרור.
+  await requireUser();
 
-  // הזרקת שכבת הבחירה לפני צילום המסך (הצילום קורה רק אחרי שהמשתמש גורר וממשחרר)
+  // הזרקת שכבת הבחירה. ⚠️ אין כאן await לתוצאה: הצילום, החיתוך וההעלאה קורים
+  // ב-handler של ההודעה, כדי שמוות של ה-service worker באמצע הגרירה לא יאבד כלום.
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     files: ['content/areaSelectOverlay.js'],
   });
-
-  const rect = await new Promise((resolve, reject) => {
-    pendingAreaSelect = { tabId: tab.id, resolve, reject };
-  });
-
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-  const bytes = await cropScreenshot(dataUrl, rect);
-
-  await writeImageClip({
-    uid: user.uid,
-    title: `${tab.title || 'אזור נבחר'} (קטע)`,
-    bytes,
-    sourceUrl: tab.url,
-    captureMode: 'area',
-    contentType: 'image/png',
-  });
-
-  handleSuccess(tab.id);
+  await markAreaSelectPending(tab.id);
 }

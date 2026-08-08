@@ -13,7 +13,7 @@ import {
 } from '../services/clipInboxService';
 import {
   getClipPreview,
-  getCachedClipBytes,
+  loadClipBytes,
   clearClipPreviewCache,
   makeImageThumbnailDataUrl,
   formatByteSize,
@@ -54,14 +54,17 @@ function ClipPreviewThumb({ user, clip, onOpen, onPreviewLoaded }) {
   }, [user, clip.id]);
 
   const hasImage = Boolean(preview?.thumbnailDataUrl);
+  // גם קליפ בלי תמונה (docx וכו') שווה פתיחה: השורה חותכת ל-140 תווים והחלון
+  // מציג את כל טעימת הטקסט.
+  const canOpen = hasImage || Boolean(preview?.textSnippet);
 
   return (
     <button
       type="button"
-      onClick={() => hasImage && onOpen?.(clip)}
-      disabled={!hasImage}
-      title={hasImage ? 'הצג בגדול' : ''}
-      className={`w-[72px] h-[96px] flex-shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden flex items-center justify-center ${hasImage ? 'cursor-zoom-in hover:border-blue-400' : 'cursor-default'}`}
+      onClick={() => canOpen && onOpen?.(clip)}
+      disabled={!canOpen}
+      title={canOpen ? 'הצג בגדול' : ''}
+      className={`w-[72px] h-[96px] flex-shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden flex items-center justify-center ${canOpen ? 'cursor-zoom-in hover:border-blue-400' : 'cursor-default'}`}
     >
       {loading ? (
         <span className="loading loading-spinner loading-xs"></span>
@@ -78,13 +81,16 @@ function ClipPreviewThumb({ user, clip, onOpen, onPreviewLoaded }) {
   );
 }
 
-// תצוגה מוגדלת. ל-PDF מרנדרים מחדש בגודל מלא מהבייטים שכבר בקאש — בלי הורדה
-// חוזרת. אם הבייטים כבר נופו מה-LRU נשארים עם הממוזערת.
-function ClipPreviewModal({ clip, preview, onClose, children }) {
+// תצוגה מוגדלת. ל-PDF מרנדרים מחדש בגודל מלא מהבייטים — מהקאש אם הם שם, אחרת
+// הורדה חוזרת (קאש הבייטים הוא LRU של 4, ומהקליפ החמישי ואילך הוא כבר נופה).
+function ClipPreviewModal({ user, clip, preview, onClose, children }) {
   const [page, setPage] = useState(1);
   const [bigUrl, setBigUrl] = useState('');
   const [rendering, setRendering] = useState(false);
+  const [bytesReady, setBytesReady] = useState(false);
   const pageCount = preview?.pageCount || 0;
+  // קליפ בלי תמונה כלל (docx) — אין מה להוריד, החלון מציג רק את טעימת הטקסט.
+  const renderable = Boolean(pageCount || preview?.thumbnailDataUrl);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
@@ -94,18 +100,22 @@ function ClipPreviewModal({ clip, preview, onClose, children }) {
 
   useEffect(() => {
     let alive = true;
-    const bytes = getCachedClipBytes(clip.id);
-    if (!bytes) { setBigUrl(''); return undefined; }
+    if (!renderable) { setBigUrl(''); setBytesReady(false); return undefined; }
     setRendering(true);
-    const job = pageCount
-      ? renderPdfPageToDataUrl(bytes, { page, maxWidth: 900 }).then((r) => r.dataUrl)
-      : makeImageThumbnailDataUrl(bytes, { maxWidth: 900, quality: 0.82 });
-    job
-      .then((dataUrl) => { if (alive) setBigUrl(dataUrl); })
-      .catch(() => { if (alive) setBigUrl(''); })
+    loadClipBytes(user, clip)
+      .then(async (bytes) => {
+        if (!alive) return;
+        if (!bytes) { setBytesReady(false); setBigUrl(''); return; }
+        setBytesReady(true);
+        const dataUrl = pageCount
+          ? (await renderPdfPageToDataUrl(bytes, { page, maxWidth: 900 })).dataUrl
+          : await makeImageThumbnailDataUrl(bytes, { maxWidth: 900, quality: 0.82 });
+        if (alive) setBigUrl(dataUrl);
+      })
+      .catch(() => { if (alive) { setBytesReady(false); setBigUrl(''); } })
       .finally(() => { if (alive) setRendering(false); });
     return () => { alive = false; };
-  }, [clip.id, page, pageCount]);
+  }, [user, clip.id, page, pageCount, renderable]);
 
   const shown = bigUrl || preview?.thumbnailDataUrl || '';
 
@@ -145,7 +155,22 @@ function ClipPreviewModal({ clip, preview, onClose, children }) {
             </div>
           ) : null}
 
-          {pageCount > 1 && (
+          {rendering && (
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="loading loading-spinner loading-xs"></span>
+              <span>טוען תצוגה מלאה…</span>
+            </div>
+          )}
+
+          {renderable && !rendering && !bytesReady && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+              לא הצלחתי לטעון את הקובץ בגודל מלא — מוצגת התצוגה המוקטנת.
+            </p>
+          )}
+
+          {/* דפדוף עמודים מותנה בבייטים בפועל: בלעדיהם החצים היו מזיזים את המספר
+              ומשאירים את אותה תמונה מטושטשת. */}
+          {pageCount > 1 && bytesReady && (
             <div className="flex items-center justify-center gap-3 text-sm text-slate-600 dark:text-slate-300">
               <button
                 type="button"
@@ -562,6 +587,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
 
       {previewClip && (
         <ClipPreviewModal
+          user={user}
           clip={previewClip}
           preview={previewByClipId[previewClip.id]}
           onClose={() => setPreviewClipId(null)}

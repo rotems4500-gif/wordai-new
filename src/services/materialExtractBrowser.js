@@ -154,6 +154,9 @@ const loadPdfjs = () => {
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
       return pdfjs;
     })();
+    // ⚠️ promise דחוי נשאר בקאש לנצח: כשל רשת יחיד בטעינת ה-chunk/worker היה
+    // הורג כל חילוץ ותצוגה מקדימה של PDF עד לרענון הדף. מאפסים כדי שינסה שוב.
+    pdfjsPromise.catch(() => { pdfjsPromise = null; });
   }
   return pdfjsPromise;
 };
@@ -482,7 +485,12 @@ const extractPptx = async (uint8) => {
  *        סרוק מוחזר כשגיאה מפורשת, כדי שלא ייבלע בשקט כמו קודם.
  */
 export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 12000, opts = {}) => {
-  const { ocr = false, onOcrProgress = null } = opts || {};
+  const options = opts || {};
+  const { ocr = false, onOcrProgress = null } = options;
+  // ⚠️ הבחנה בין "לא ביקשו" ל-"ביקשו לא": ברירת המחדל של `ocr` היא false אבל
+  // היא נוגעת ל-PDF סרוק בלבד. העלאת תמונה כחומר עזר קוראת בלי opts בכלל
+  // ומסתמכת על ה-OCR — רק `ocr:false` מפורש (תצוגה מקדימה) מבטל אותו.
+  const ocrExplicitlyOff = options.ocr === false;
   const ext = getExtension(fileName);
   try {
     let text = '';
@@ -519,6 +527,8 @@ export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 
       }
       text = res.text;
     } else if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext)) {
+      // מבקש שביטל OCR במפורש לא יחכה 90 שניות ל-tesseract.
+      if (ocrExplicitlyOff) return { ok: true, text: '', requiresOcr: true };
       text = await extractImageOcr(uint8);
     } else {
       return { ok: true, text: '' };

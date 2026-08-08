@@ -28,6 +28,12 @@ const rescanBtn = document.getElementById('rescan-btn');
 const jobBanner = document.getElementById('job-banner');
 const jobBannerText = document.getElementById('job-banner-text');
 const jobBannerDismiss = document.getElementById('job-banner-dismiss');
+const needsLoginNote = document.getElementById('needs-login-note');
+const pdfSendPageBtn = document.getElementById('pdf-send-page-btn');
+const pdfScanFilesBtn = document.getElementById('pdf-scan-files-btn');
+
+// דגל שה-background מרים כשקליפ נשלח בלי משתמש מחובר (background.js).
+const NEEDS_LOGIN_KEY = 'wordflow_needs_login';
 
 // סיומות שמסומנות אוטומטית — מסמכים שהאפליקציה יודעת לחלץ.
 const DOC_EXT = new Set(['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
@@ -37,6 +43,8 @@ const STATUS_ICON = { pending: '⏳', saved: '✓', login: '🔒', skipped: '⏭
 let scannedLinks = []; // [{url,title,ext,kind}]
 let rowEls = []; // [{checkbox, statusEl}]
 let currentTabId = null;
+let jobIsLive = false; // עבודה חיה ברקע על הלשונית הזו
+let activePort = null; // הפורט הפתוח (start או attach)
 
 function showError(message) {
   signedOutError.textContent = message;
@@ -159,14 +167,30 @@ function dominantReason(items) {
 }
 
 // ---------- סריקה ----------
+/** ניקוי הרשימה עצמה — חובה בכל כשל סריקה, אחרת נשארת רשימה ישנה מול tabId ישן. */
+function clearFileList() {
+  scannedLinks = [];
+  rowEls = [];
+  fileListEl.textContent = '';
+  fileListBlock.classList.add('hidden');
+  filesCountEl.textContent = 'נמצאו 0 קבצים';
+  selectAllCheckbox.checked = false;
+}
+
 function resetFilesUi() {
   filesSummaryEl.classList.add('hidden');
   filesSummaryEl.textContent = '';
   jobBanner.classList.add('hidden');
   jobBannerText.textContent = '';
   rescanBtn.classList.add('hidden');
+  rescanBtn.textContent = 'סרוק שוב את העמוד';
   selectAllCheckbox.disabled = false;
   downloadSelectedBtn.disabled = false;
+  jobIsLive = false;
+  if (activePort) {
+    try { activePort.disconnect(); } catch { /* כבר נותק */ }
+    activePort = null;
+  }
 }
 
 function showJobBanner(summary) {
@@ -184,16 +208,22 @@ function showJobBanner(summary) {
   jobBanner.classList.remove('hidden');
 }
 
-function runScan() {
+function runScan(forcePage = false) {
   showState('scanning');
   resetFilesUi();
-  chrome.runtime.sendMessage({ type: 'wordflow-popup-scan' }, (response) => {
+  chrome.runtime.sendMessage({ type: 'wordflow-popup-scan', forcePage }, (response) => {
     if (chrome.runtime.lastError) {
+      // ⚠️ חובה לנקות את הרשימה: אחרת נשארות שורות ישנות מול currentTabId ישן,
+      // וכפתור ההורדה המשוחרר יוריד מול רשימה שאינה של הדף הנוכחי.
+      clearFileList();
+      currentTabId = null;
       showState('page');
       showStatus(chrome.runtime.lastError.message, 'error');
       return;
     }
     if (!response || !response.ok) {
+      clearFileList();
+      currentTabId = null;
       showState('page');
       showStatus((response && response.error) || 'סריקת העמוד נכשלה', 'error');
       return;
@@ -214,9 +244,13 @@ function runScan() {
         url: it.url, title: it.title, ext: extFromUrl(it.url), kind: 'direct',
       })), job.items);
       lockList();
+      jobIsLive = true;
       downloadSelectedBtn.textContent = 'ההורדה רצה ברקע...';
+      rescanBtn.textContent = 'בטל וסרוק מחדש';
       rescanBtn.classList.remove('hidden');
       showState('page');
+      // ⚠️ בלי החיבור הזה הרשימה שנפתחה מחדש נשארת קפואה על "⏳" לנצח.
+      attachToLiveJob();
       return;
     }
 
@@ -250,32 +284,63 @@ function showSummary(saved, skipped, items) {
 }
 
 // ---------- הורדה דרך port ----------
-function startDownload(selected) {
-  lockList();
-  downloadSelectedBtn.textContent = 'מוריד...';
-  selected.forEach(({ index }) => applyRowStatus(index, 'pending'));
+/**
+ * מאזין משותף ל-start ול-attach. toRow ממפה אינדקס בעבודה לאינדקס שורה בתצוגה:
+ * ב-start הרשימה היא התת-קבוצה שנבחרה, וב-attach השורות מצוירות מהעבודה עצמה
+ * ולכן המיפוי הוא זהות.
+ */
+function bindJobPort(port, toRow) {
+  activePort = port;
+  port.onDisconnect.addListener(() => { if (activePort === port) activePort = null; });
 
-  const port = chrome.runtime.connect({ name: 'wordflow-files-job' });
+  const applyItems = (items) => {
+    items.forEach((it, i) => {
+      if (!it) return;
+      const rowIndex = toRow(i);
+      if (rowIndex !== undefined) applyRowStatus(rowIndex, it.status, it.reason);
+    });
+  };
 
   port.onMessage.addListener((msg) => {
     if (!msg) return;
-    if (msg.type === 'item') {
-      // msg.index הוא המיקום ברשימה שנשלחה (התת-קבוצה הנבחרת) — ממפים בחזרה לשורה.
-      const rowIndex = selected[msg.index]?.index;
+    if (msg.type === 'sync') {
+      applyItems(Array.isArray(msg.items) ? msg.items : []);
+      jobIsLive = !!msg.running;
+      if (msg.running) downloadSelectedBtn.textContent = 'ההורדה רצה ברקע...';
+    } else if (msg.type === 'gone') {
+      // העבודה נעלמה בין הסריקה לחיבור — פשוט סורקים מחדש.
+      runScan();
+    } else if (msg.type === 'item') {
+      const rowIndex = toRow(msg.index);
       if (rowIndex !== undefined) applyRowStatus(rowIndex, msg.status, msg.reason);
     } else if (msg.type === 'done') {
-      downloadSelectedBtn.textContent = 'ההורדה הסתיימה';
-      // items מגיעים באינדוקס של התת-קבוצה שנשלחה — אותו מיפוי כמו ב-'item'.
+      jobIsLive = false;
+      downloadSelectedBtn.textContent = msg.cancelled ? 'ההורדה בוטלה' : 'ההורדה הסתיימה';
       const items = Array.isArray(msg.items) ? msg.items : [];
-      items.forEach((it, i) => {
-        const rowIndex = selected[i]?.index;
-        if (rowIndex !== undefined) applyRowStatus(rowIndex, it.status, it.reason);
-      });
+      applyItems(items);
       showSummary(msg.saved || 0, (msg.total || 0) - (msg.saved || 0), items);
+      rescanBtn.textContent = 'סרוק שוב את העמוד';
       rescanBtn.classList.remove('hidden');
       if (msg.error) showStatus(msg.error, 'error');
     }
   });
+}
+
+function attachToLiveJob() {
+  if (currentTabId === null) return;
+  const port = chrome.runtime.connect({ name: 'wordflow-files-job' });
+  bindJobPort(port, (i) => (rowEls[i] ? i : undefined));
+  port.postMessage({ type: 'attach', tabId: currentTabId });
+}
+
+function startDownload(selected) {
+  lockList();
+  jobIsLive = true;
+  downloadSelectedBtn.textContent = 'מוריד...';
+  selected.forEach(({ index }) => applyRowStatus(index, 'pending'));
+
+  const port = chrome.runtime.connect({ name: 'wordflow-files-job' });
+  bindJobPort(port, (i) => selected[i]?.index);
 
   port.postMessage({
     type: 'start',
@@ -285,6 +350,10 @@ function startDownload(selected) {
 }
 
 downloadSelectedBtn.addEventListener('click', () => {
+  if (jobIsLive) {
+    showStatus('הורדה כבר רצה — "בטל וסרוק מחדש" כדי לעצור אותה', 'error');
+    return;
+  }
   const selected = [];
   rowEls.forEach((row, index) => {
     if (row.checkbox.checked) selected.push({ index, link: scannedLinks[index] });
@@ -293,15 +362,19 @@ downloadSelectedBtn.addEventListener('click', () => {
   startDownload(selected);
 });
 
-// מסלול המילוט: מוחק את מצב העבודה ומצייר מחדש את הרשימה המלאה של העמוד.
+// מסלול המילוט: מבטל עבודה חיה (דגל ביטול אמיתי ב-background), מוחק את מצבה
+// ומצייר מחדש את הרשימה המלאה של העמוד.
 rescanBtn.addEventListener('click', () => {
   rescanBtn.disabled = true;
-  chrome.runtime.sendMessage({ type: 'wordflow-popup-clear-job', tabId: currentTabId }, () => {
+  rescanBtn.textContent = jobIsLive ? 'מבטל...' : 'סורק...';
+  chrome.runtime.sendMessage({ type: 'wordflow-popup-clear-job', tabId: currentTabId }, (response) => {
     rescanBtn.disabled = false;
     if (chrome.runtime.lastError) {
+      rescanBtn.textContent = 'סרוק שוב את העמוד';
       showStatus(chrome.runtime.lastError.message, 'error');
       return;
     }
+    if (response && response.cancelled) showStatus('ההורדה בוטלה', 'success');
     runScan();
   });
 });
@@ -320,6 +393,9 @@ selectAllCheckbox.addEventListener('change', () => {
 async function renderSignedIn(user) {
   signedOutView.classList.add('hidden');
   signedInView.classList.remove('hidden');
+  needsLoginNote.classList.add('hidden');
+  // המשתמש מחובר — הדגל שה-background הרים כבר לא רלוונטי.
+  chrome.storage.local.remove(NEEDS_LOGIN_KEY).catch(() => {});
   userEmailEl.textContent = user.email || user.displayName || '';
 
   const settings = await getSettings();
@@ -330,9 +406,17 @@ async function renderSignedIn(user) {
   runScan();
 }
 
-function renderSignedOut() {
+async function renderSignedOut() {
   signedInView.classList.add('hidden');
   signedOutView.classList.remove('hidden');
+  // ⚠️ הדגל הזה נכתב ב-background בכל קליפ שנשלח בלי משתמש — עד היום אף אחד
+  // לא קרא אותו, והמשתמש לא ידע שהקליפ שלו נזרק.
+  try {
+    const store = await chrome.storage.local.get(NEEDS_LOGIN_KEY);
+    needsLoginNote.classList.toggle('hidden', !store?.[NEEDS_LOGIN_KEY]);
+  } catch {
+    needsLoginNote.classList.add('hidden');
+  }
 }
 
 async function init() {
@@ -340,7 +424,7 @@ async function init() {
   if (cached) {
     await renderSignedIn(cached);
   } else {
-    renderSignedOut();
+    await renderSignedOut();
   }
 }
 
@@ -362,7 +446,7 @@ signInBtn.addEventListener('click', async () => {
 
 signOutBtn.addEventListener('click', async () => {
   await signOutUser();
-  renderSignedOut();
+  await renderSignedOut();
 });
 
 function sendCurrentPage(btn, busyLabel, idleLabel) {
@@ -390,6 +474,16 @@ sendPageBtn.addEventListener('click', () => {
 // PDF בלשונית — background כבר מזהה זאת ב-handleClipPage ומעלה את הקובץ עצמו.
 sendPdfBtn.addEventListener('click', () => {
   sendCurrentPage(sendPdfBtn, 'שולח...', 'שלח PDF זה');
+});
+
+// ⚠️ מסלולי מילוט ממצב ה-PDF: זיהוי שגוי לא ישאיר את המשתמש עם כפתור אחד שנכשל.
+// (אותו handler בדיוק — handleClipPage כבר נופל חזרה לחילוץ טקסט כשאין PDF.)
+pdfSendPageBtn.addEventListener('click', () => {
+  sendCurrentPage(pdfSendPageBtn, 'שולח...', 'שלח את העמוד הנוכחי (טקסט)');
+});
+
+pdfScanFilesBtn.addEventListener('click', () => {
+  runScan(true);
 });
 
 destinationRadios.forEach((radio) => {

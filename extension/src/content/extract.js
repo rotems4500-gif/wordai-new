@@ -11,6 +11,12 @@ import { Readability } from '@mozilla/readability';
 // SPA). innerText מחזיר רק טקסט *מרונדר* — ריק כשהתוכן מוסתר ב-CSS או בתוך <template>,
 // ואז textContent הגולמי הוא הסיכוי האחרון. via נשמר כדי שהודעת הכשל תהיה אבחנתית.
 const MIN_USEFUL_CHARS = 40;
+// ⚠️ **הבאג שהחזיר קליפים כמעט ריקים**: "הראשון שעובר 40 תווים" נתן ל-Readability
+// ניצחון אוטומטי. בדפי Moodle/פורטל/SPA הוא מחזיר שבר של 50–200 תווים בזמן
+// ש-body.innerText מחזיר אלפים — והקליפ דווח כהצלחה. עכשיו Readability מנצח רק
+// כשהוא באמת מייצג את הדף: או ארוך מספיק בפני עצמו, או קרוב לתוצאה הטובה ביותר.
+const READABILITY_TRUST_CHARS = 500;
+const READABILITY_TRUST_RATIO = 0.6;
 
 function clean(value) {
   return String(value || '').replace(/[ \t ]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
@@ -36,10 +42,17 @@ window.__wordflowClipExtract = (function extractReadablePage() {
     console.error('[wordflow][extract] קריאת טקסט מהדף נכשלה:', err);
   }
 
-  // הראשון שעובר את הרף; אם אף אחד לא — הארוך ביותר, כדי לא לזרוק תוכן קצר לגיטימי.
-  const usable = attempts.find((a) => a.text.length >= MIN_USEFUL_CHARS)
-    || attempts.slice().sort((a, b) => b.text.length - a.text.length)[0]
+  // הארוך ביותר הוא ברירת המחדל; Readability מועדף עליו רק כשהוא אמין
+  // (ארוך בפני עצמו, או ≥60% מהטקסט הארוך ביותר) — הוא מנקה ניווט ופרסומות.
+  const longest = attempts.slice().sort((a, b) => b.text.length - a.text.length)[0]
     || { via: 'none', text: '' };
+  const maxLen = longest.text.length;
+  const readability = attempts.find((a) => a.via === 'readability');
+  const readabilityTrusted = !!readability
+    && readability.text.length >= MIN_USEFUL_CHARS
+    && (readability.text.length >= READABILITY_TRUST_CHARS
+      || readability.text.length >= maxLen * READABILITY_TRUST_RATIO);
+  const usable = readabilityTrusted ? readability : longest;
 
   return {
     title: usable.title || document.title || '',

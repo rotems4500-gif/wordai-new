@@ -15,7 +15,7 @@ import {
   deleteClipDoc,
 } from '../firebase/services';
 import { extractImageOcr, pureTokenRatio, extractMaterialTextFromBytes, renderPdfPageToDataUrl } from './materialExtractBrowser';
-import { makeImageThumbnailDataUrl } from './clipPreviewService';
+import { makeImageThumbnailDataUrl, isPdfClip } from './clipPreviewService';
 import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
@@ -108,7 +108,9 @@ async function buildClipThumbnail(clip, bytes) {
         quality: CLIP_THUMBNAIL_QUALITY,
       });
     }
-    if (/\.pdf$/i.test(String(clip.fileName || ''))) {
+    // אותו זיהוי כמו התצוגה המקדימה (שם **או** magic bytes) — בזיהוי לפי שם בלבד
+    // PDF בלי סיומת קיבל ממוזערת בתיבה ולא שמר אף אחת בחומר העזר.
+    if (isPdfClip(clip.fileName, bytes)) {
       const { dataUrl } = await renderPdfPageToDataUrl(bytes, {
         page: 1,
         maxWidth: CLIP_THUMBNAIL_MAX_WIDTH,
@@ -163,19 +165,28 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
   if (heldForReview) destination = 'inbox';
 
   if (destination === 'inbox') {
-    // מתמיד את הניתוב במסמך עצמו כדי ש-listInboxClips (וריסטארט של האפליקציה)
-    // יראו אותו בתיבה. הסטטוס נשאר pending — הבייטים ב-Storage שורדים לתצוגה.
-    if (heldForReview) {
-      await updateClipStatus(user, clip.id, { destination: 'inbox', heldForReview: true })
-        .catch(() => {});
+    // ⚠️ מעביר את הקליפ לסטטוס 'held' — **לא** משאיר אותו pending. חלון הקליטה
+    // הוא 10 מסמכים בסדר doc-id (= כרונולוגי), כך שעשרה קליפים מוחזקים היו
+    // ממלאים אותו לתמיד וקליפ חדש לא היה נקלט ולא מוכרז לעולם.
+    // הבייטים ב-Storage **לא** נמחקים — זה כל עניין ההחזקה: תצוגה וקליטה ידנית.
+    let holdPersisted = true;
+    try {
+      await updateClipStatus(user, clip.id, heldForReview
+        ? { status: 'held', destination: 'inbox', heldForReview: true }
+        : { status: 'held' });
+    } catch (err) {
+      // הכתיבה נכשלה → המסמך נשאר pending בענן. הסבב הבא ינסה שוב, ובינתיים
+      // listInboxClips סובל גם קליפ pending כזה כדי שלא ייעלם מהפאנל.
+      console.error('[clipInbox] hold write failed', clip.id, err);
+      holdPersisted = false;
     }
-    // נשאר pending — ClipInboxPanel מציג אותו עד שהמשתמש מנתב ידנית.
     return {
       clipId: clip.id,
       title: clipTitle(clip),
       domain: clip.domain || '',
       destination: 'inbox',
       heldForReview,
+      holdPersisted,
       lowConfidenceOcr: false,
       truncated: Boolean(clip.truncated),
       materialId: null,
@@ -301,7 +312,9 @@ export async function ingestPendingClips(user = currentUser) {
       try {
         const result = await ingestClip(user, clip);
         if (result.destination === 'inbox') {
-          // נשאר pending בכוונה — מוכרז פעם אחת, אחרת הפאנל וה-toast חוזרים כל סבב.
+          // מוכרז פעם אחת בלבד. גם אם כתיבת ה-'held' נכשלה לא מכריזים שוב (אחרת
+          // toast כל 5 שניות) — הכתיבה עצמה נוסה שוב בכל סבב, והפאנל מציג את
+          // הקליפ גם בלעדיה.
           if (!announcedInboxClipIds.has(clip.id)) {
             announcedInboxClipIds.add(clip.id);
             results.push(result);
@@ -353,14 +366,21 @@ export async function ingestPendingClips(user = currentUser) {
 
 // --- API לפאנל תיבת הדואר (ClipInboxPanel) ---
 
-// קליפים שממתינים בתיבה (destination==='inbox' נשארים pending בכוונה).
+// קליפים שממתינים בתיבה.
+// 'held' = הוחזק לסקירה (הסטטוס החדש). 'pending' עדיין נדרש בשני מקרים:
+// מסמכים שנכתבו לפני מעבר הסטטוס, וקליפ שכתיבת ההחזקה שלו נכשלה או שטרם רצה.
 export async function listInboxClips(user = currentUser) {
   if (!user?.uid) return [];
-  const clips = await fetchPendingClips(user, 25, ['pending', 'error']);
+  const clips = await fetchPendingClips(user, 25, ['pending', 'held', 'error']);
+  const gateOn = getClipRequireReview();
   return clips.filter((clip) => {
     if (clip.status === 'error') return true; // כשל קליטה — מוצג עם הסיבה, לניתוב חוזר
+    if (clip.status === 'held' || clip.heldForReview) return true;
     const dest = clip.destination || 'material';
-    return dest === 'inbox' || (dest === 'source' && !clip.projectId);
+    if (dest === 'inbox' || (dest === 'source' && !clip.projectId)) return true;
+    // שער הסקירה דלוק: כל קליפ שעדיין pending ייעצר כאן ממילא. מציגים אותו מיד,
+    // גם אם כתיבת ה-'held' נכשלה — אחרת הוא מוכרז פעם אחת ואז נעלם לתמיד.
+    return gateOn;
   });
 }
 
@@ -415,4 +435,7 @@ export function stopClipInboxPolling() {
     pollTimer = null;
   }
   currentUser = null;
+  // הסט חי ברמת המודול ושרד החלפת משתמש — קליפ של המשתמש הבא עם אותו id לא היה
+  // מוכרז לעולם. מתנקה גם כשהמכשיר עובר ל-producer.
+  announcedInboxClipIds.clear();
 }
