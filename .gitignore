@@ -83,3 +83,4 @@ dist-extension/
 extension/node_modules/
 wordflow-clipper-dev.pem
 pubkey.b64
+manifest.dev.xml

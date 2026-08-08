@@ -117,6 +117,15 @@ node tools/test-bench/nlg-bench/compare-api.mjs    # מקומי מול API על 
 
 מטלה אמיתית חדשה ⇒ תיקיית `case` חדשה (assignment.txt + case.json). ⚠️ **חובה `courseSubdir` ב-case.json** — בלעדיו ההרנס נופל לרשימת קבצים קשיחה וה-case סורק את הקורפוס של מישהו אחר. ⚠️ **נתיבים יחסיים בלבד** (`corpusRel` יחסי לשולחן העבודה, `courseSubdir` יחסי לו): עד 27.7.26 היה שם נתיב מוחלט עם שם המשתמש, ובמעבר לשתי מכונות זה נתן בנצ' אדום שנראה כמו נסיגת קוד בזמן שהקורפוס פשוט ישב תחת בית אחר. עקיפה: `WORDAI_BENCH_CORPUS`. cases קיימים: `media-law-2026` (94) · `mill-2026` (89). `compare-api.mjs` מריץ מודל API על **אותן ראיות בדיוק** ומודד באותם מדדים.
 
+### `src/addin/` — תוסף Word (Office.js taskpane)
+entry שני של vite (`taskpane.html` בשורש — חייב להישאר שם בגלל `base:'./'`), מתארח על אותו Firebase hosting (`/taskpane.html`), sideload דרך manifest.
+- [wordBridge.js](src/addin/wordBridge.js) — **כל** ה-`Word.run` כאן ורק כאן (קריאת snapshot/selection, הכנסות tracked עם תיקון RTL, `applyRoutingBatch`). שכבת ה-React רצה גם בדפדפן רגיל.
+- [wordRouting.js](src/addin/wordRouting.js) — "החלה חכמה": LLM ממפה תשובת צ'אט ליעדים (`body.search` ייחודי → כותרת/פסקה → דילוג). יעד דו-משמעי מדולג, לא מנוחש.
+- [addinAgents.js](src/addin/addinAgents.js) — whitelist מ-`AGENTS_CONFIG`; מכבד `taskpaneSkipApply`/`taskpaneSystemCtx` (fix מחזיר אבחון לצ'אט, sources לא מוחל אוטומטית).
+- [AddinSidebar.jsx](src/addin/AddinSidebar.jsx) / AddinApp / main.jsx — UI רזה; צ'אט דרך `chatWithActiveProvider` עם `directChat`, מפתחות ב-localStorage (`ai_provider_config` — אותו מסלול web).
+- manifest: `manifest.template.xml` + `scripts/make-manifest.mjs` (`npm run addin:manifest[:dev]`; prod נכשל אם יש בו localhost). dev: `npm run dev` + `npm run addin:start` (sideload ל-Word desktop). אייקונים ב-`public/addin/`.
+- ⚠️ `aiService.js` חייב להישאר בלי import של TipTap — החלת הצעות על העורך גרה ב-[aiSuggestionApply.js](src/services/aiSuggestionApply.js) (חולץ במיוחד כדי שה-taskpane לא יגרור ProseMirror). שער: `grep -i prosemirror` על chunks של taskpane אחרי build.
+
 ### `src/firebase/`
 - [config.js](src/firebase/config.js) — Firebase config keys.
 - [services.js](src/firebase/services.js) — auth (Google popup), שמירת מסמכים בענן.

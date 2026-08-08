@@ -30,7 +30,12 @@
     "desktop:release": "node scripts/make-latest-json.mjs",
     "dist:win": "tauri build",
     "build:extension": "cd extension && node build.mjs",
-    "build:extension:store": "cd extension && cross-env WORDFLOW_STORE_BUILD=1 node build.mjs"
+    "build:extension:store": "cd extension && cross-env WORDFLOW_STORE_BUILD=1 node build.mjs",
+    "addin:certs": "office-addin-dev-certs install",
+    "addin:manifest": "node scripts/make-manifest.mjs",
+    "addin:manifest:dev": "node scripts/make-manifest.mjs --dev",
+    "addin:start": "office-addin-debugging start manifest.dev.xml desktop",
+    "addin:stop": "office-addin-debugging stop manifest.dev.xml"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -94,7 +99,9 @@
     "autoprefixer": "^10.5.0",
     "cross-env": "^7.0.3",
     "daisyui": "^5.5.19",
+    "office-addin-debugging": "^6.1.2",
     "office-addin-dev-certs": "^1.11.8",
+    "office-addin-manifest": "^2.1.6",
     "postcss": "^8.5.9",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.8"

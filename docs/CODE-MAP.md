@@ -166,6 +166,15 @@
 
 גם: `tauri.conf.json`, `capabilities/default.json`
 
+### src/addin/ — תוסף Word (Office.js taskpane)
+entry שני של vite: `taskpane.html` (שורש הריפו) → `dist/taskpane.html` על אותו hosting. סקירה מלאה ב-CLAUDE.md.
+- **wordBridge.js** — כל ה-`Word.run` (snapshot, selection, הכנסות tracked+RTL, applyRoutingBatch). האינווריאנט: שום קובץ אחר לא נוגע ב-Word API.
+- **wordRouting.js** — buildAIRoutingMap: LLM→JSON יעדים, נורמליזציה (confidence≥0.55, cap 12, target≤255).
+- **addinAgents.js** — whitelist סוכנים מ-agentConfig (fix/humanize/academic/summary/continue/sources).
+- **AddinApp.jsx / AddinSidebar.jsx / main.jsx** — mount אחרי Office.onReady (סובלני לדפדפן רגיל), צ'אט+הגדרות.
+- שורש: `manifest.template.xml`, `scripts/make-manifest.mjs`, `public/addin/icon-*.png`, עמוד תמיכה `public/legal/addin-support.html`.
+- קשור: `src/services/aiSuggestionApply.js` — הזנב של TipTap שחולץ מ-aiService כדי שה-taskpane יישאר בלי ProseMirror.
+
 ### extension/ — Chrome MV3 (WordFlow Clipper)
 Browser extension for capturing web content to WordFlow. Build: `npm run build:extension` → `dist-extension/`.
 - **extension/manifest.json** — extension config (MV3, permissions, content scripts)

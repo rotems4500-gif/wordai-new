@@ -345,6 +345,16 @@ export default async () => defineConfig({
     // exclude מ-pre-bundle מונע בעיות עם ה-WASM assets/worker של onnxruntime.
     exclude: ['@huggingface/transformers'],
   },
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(process.cwd(), 'index.html'),
+        // entry של תוסף ה-Word. חייב לשבת בשורש הריפו (לא בתת-תיקייה) —
+        // base:'./' פותר נתיבי assets יחסית לעומק ה-HTML.
+        taskpane: path.resolve(process.cwd(), 'taskpane.html'),
+      },
+    },
+  },
   define: {
     global: 'globalThis',
     __APP_VERSION__: JSON.stringify(
