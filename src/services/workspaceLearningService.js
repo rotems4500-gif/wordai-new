@@ -5743,6 +5743,23 @@ async function getBrowserUploadedMaterials() {
   }
 }
 
+// גיבוי localStorage כשאין IndexedDB (דפדפנים ישנים/פרטיים). שתי חובות:
+// (1) להוריד גם contentText וגם thumbnailDataUrl — data URL של מאות KB מפוצץ את
+// המכסה מיד; (2) לכווץ בלולאה ולא לזרוק — QuotaExceededError כאן היה מפיל את
+// כל הפעולה (מחיקת חומר / שיוך לקורס) במקום להשפיל אותה בשקט.
+function writeBrowserMaterialsFallback(entries = []) {
+  let next = entries.map((item) => ({ ...item, contentText: '', thumbnailDataUrl: '' }));
+  while (next.length) {
+    try {
+      localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
+      return;
+    } catch {
+      next = next.slice(1);
+    }
+  }
+  try { localStorage.removeItem(BROWSER_MATERIALS_KEY); } catch { /* noop */ }
+}
+
 async function saveBrowserUploadedMaterialEntry(entry = {}) {
   const existing = await getBrowserUploadedMaterials();
   let next = [
@@ -5757,16 +5774,7 @@ async function saveBrowserUploadedMaterialEntry(entry = {}) {
   } catch {
     // Very old/private browsers may disable IndexedDB. Keep a bounded preview
     // fallback in localStorage instead of serializing every full document.
-    // גם התמונה יורדת: data URL של מאות KB ב-localStorage מפוצץ את המכסה מיד.
-    next = next.map((item) => ({ ...item, contentText: '', thumbnailDataUrl: '' }));
-    while (next.length) {
-      try {
-        localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next));
-        return;
-      } catch {
-        next = next.slice(1);
-      }
-    }
+    writeBrowserMaterialsFallback(next);
   }
 }
 
@@ -5783,7 +5791,7 @@ async function removeBrowserUploadedMaterialEntry(material = {}) {
     await replaceBrowserMaterialsInDb(next);
     localStorage.removeItem(BROWSER_MATERIALS_KEY);
   } catch {
-    localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next.map((item) => ({ ...item, contentText: '' }))));
+    writeBrowserMaterialsFallback(next);
   }
   syncPersistedAppSettings();
   return next;
@@ -5975,12 +5983,75 @@ export async function assignMaterialsToCourse(materialIds = [], courseId = '') {
       localStorage.removeItem(BROWSER_MATERIALS_KEY);
     } catch {
       // אותו fallback כמו בשמירה/מחיקה: localStorage בלי הטקסט המלא.
-      localStorage.setItem(BROWSER_MATERIALS_KEY, JSON.stringify(next.map((item) => ({ ...item, contentText: '' }))));
+      writeBrowserMaterialsFallback(next);
     }
     syncPersistedAppSettings();
   }
 
   return { ok: true, updated, skippedLocal: wanted.size };
+}
+
+/**
+ * העלאת חומרי קורס (PDF/מצגות/וורד/טקסט) — כתיבה כפולה, כמו קליטת קליפ:
+ *   1. saveHelperMaterial → הרשימה הגלויה (מסך הבית / FileMenu), חתומה ב-courseId.
+ *   2. addMaterialDocument → אינדקס הראיות (RAG) של שלד המטלה, חתום ב-courseId.
+ * בלי הכתיבה השנייה החומר "קיים" אבל לא משתתף בראיות; בלי הראשונה הוא לא
+ * נראה למשתמש (הלקח מהקליפים — clipInboxService).
+ *
+ * OCR לא רץ כאן (איטי); PDF סרוק נשמר ברשימה עם שגיאת חילוץ ו"לא לראיות".
+ *
+ * @param {File[]} files
+ * @param {{courseId:string, onProgress?:(done:number,total:number,name:string)=>void}} opts
+ * @returns {Promise<{ok:boolean, saved:number, indexed:number, failures:string[]}>}
+ */
+export async function saveCourseMaterialFiles(files, { courseId, onProgress = null } = {}) {
+  const list = Array.from(files || []);
+  const cleanCourseId = String(courseId || '').trim();
+  if (!list.length || !cleanCourseId) return { ok: false, saved: 0, indexed: 0, failures: ['אין קבצים או קורס'] };
+
+  const { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } = await import('./materialChunkStore');
+  await ensureMaterialStoreReady();
+
+  let saved = 0;
+  let indexed = 0;
+  const failures = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const file = list[i];
+    try { onProgress?.(i, list.length, file.name); } catch {}
+    try {
+      // כתיבה #1 — הרשימה הגלויה (מחלצת preview בעצמה; בדסקטופ שומרת גם את הקובץ).
+      await saveHelperMaterial(file, { uploadKind: 'course-material', courseId: cleanCourseId });
+      saved += 1;
+    } catch (err) {
+      failures.push(`${file.name}: ${String(err?.message || err)}`);
+      continue;
+    }
+    try {
+      // כתיבה #2 — אינדקס הראיות. חילוץ מלא (עד 200k תווים), בלי OCR.
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const extracted = await extractMaterialTextFromBytes(file.name, bytes, 200000);
+      if (extracted?.ok && String(extracted.text || '').trim()) {
+        const isSlides = /\.pptx?$/i.test(file.name);
+        const result = addMaterialDocument({
+          title: file.name.replace(/\.[^.]+$/, ''),
+          text: extracted.text,
+          source: 'course-upload',
+          courseId: cleanCourseId,
+          sourceKind: isSlides ? 'slides' : null,
+          cleanDigital: !extracted.viaOcr,
+          defer: true,
+        });
+        if (result?.added) indexed += 1;
+      } else if (extracted?.error) {
+        failures.push(`${file.name} (אינדוקס): ${extracted.error}`);
+      }
+    } catch (err) {
+      failures.push(`${file.name} (אינדוקס): ${String(err?.message || err)}`);
+    }
+  }
+  try { await commitMaterialStore(); } catch {}
+  try { onProgress?.(list.length, list.length, ''); } catch {}
+  return { ok: saved > 0, saved, indexed, failures };
 }
 
 export async function removeHelperMaterial(material = {}) {

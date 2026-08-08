@@ -17,7 +17,14 @@ import {
   COURSES_UPDATED_EVENT,
 } from '../services/courseStore';
 import { listLecturerProfiles, ensureLecturerProfilesReady } from '../services/lecturerProfileStore';
-import { readInstructionFile, getInstructionFileAcceptList } from '../services/workspaceLearningService';
+import {
+  readInstructionFile,
+  getInstructionFileAcceptList,
+  getHelperMaterialAcceptList,
+  loadProjectMaterials,
+  saveCourseMaterialFiles,
+  removeHelperMaterial,
+} from '../services/workspaceLearningService';
 import { showToast, showConfirm } from '../services/uiFeedback';
 
 const CARD_STYLE = {
@@ -89,6 +96,8 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
   const [lecturerNames, setLecturerNames] = useState([]);
   const [importing, setImporting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [courseMaterials, setCourseMaterials] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState('');
 
   const acceptList = useMemo(() => {
     try { return getInstructionFileAcceptList() || ''; } catch { return ''; }
@@ -137,6 +146,55 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
   }, [onClose]);
 
   const setField = (field, value) => setDraft((prev) => ({ ...prev, [field]: value }));
+
+  // חומרי הקורס: הרשימה הגלויה מסוננת לפי שיוך courseId ישיר.
+  const refreshCourseMaterials = useCallback(async (courseId) => {
+    if (!courseId) { setCourseMaterials([]); return; }
+    try {
+      const all = await loadProjectMaterials();
+      setCourseMaterials((Array.isArray(all) ? all : []).filter((m) => m.courseId === courseId));
+    } catch { setCourseMaterials([]); }
+  }, []);
+
+  useEffect(() => {
+    refreshCourseMaterials(creating ? '' : selectedId);
+  }, [selectedId, creating, refreshCourseMaterials]);
+
+  const handleMaterialFiles = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length || !selected) return;
+    setUploadProgress(`מעלה 0/${files.length}…`);
+    try {
+      const result = await saveCourseMaterialFiles(files, {
+        courseId: selected.id,
+        onProgress: (done, total, name) => setUploadProgress(done < total ? `מעלה ${done + 1}/${total}: ${name}` : ''),
+      });
+      if (result.saved) {
+        showToast(`${result.saved} קבצים נשמרו לקורס${result.indexed ? ` · ${result.indexed} נכנסו לאינדקס הראיות` : ''}`, { tone: 'success' });
+      }
+      if (result.failures.length) {
+        showToast(`חלק נכשלו: ${result.failures.slice(0, 2).join(' · ')}${result.failures.length > 2 ? '…' : ''}`, { tone: 'error' });
+      }
+    } catch (error) {
+      showToast(error?.message || 'ההעלאה נכשלה', { tone: 'error' });
+    } finally {
+      setUploadProgress('');
+      refreshCourseMaterials(selected.id);
+    }
+  };
+
+  const handleRemoveMaterial = async (material) => {
+    const ok = await showConfirm(`להסיר את "${material.title}" מחומרי העזר?`, { title: 'הסרת חומר', confirmLabel: 'הסר', tone: 'danger' });
+    if (!ok) return;
+    try {
+      const res = await removeHelperMaterial(material);
+      if (res?.ok === false) showToast(res.error || 'ההסרה נכשלה', { tone: 'error' });
+    } catch (error) {
+      showToast(error?.message || 'ההסרה נכשלה', { tone: 'error' });
+    }
+    refreshCourseMaterials(selected?.id || '');
+  };
 
   const handleSave = () => {
     const name = draft.name.trim();
@@ -386,6 +444,45 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
                   />
                   <div style={{ ...BODY_STYLE, marginTop: 4 }}>{draft.syllabusText.length.toLocaleString('he-IL')} תווים</div>
                 </div>
+
+                {!creating && selected ? (
+                  <div style={CARD_STYLE}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={TITLE_STYLE}>📎 חומרי הקורס ({courseMaterials.length})</div>
+                      <label style={{ ...PRIMARY_BTN_STYLE, display: 'inline-block', opacity: uploadProgress ? 0.6 : 1 }}>
+                        {uploadProgress || '📥 הוסף קבצים'}
+                        <input
+                          type="file"
+                          multiple
+                          accept={getHelperMaterialAcceptList()}
+                          style={{ display: 'none' }}
+                          disabled={Boolean(uploadProgress)}
+                          onChange={handleMaterialFiles}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ ...BODY_STYLE, marginBottom: 6 }}>
+                      PDF, מצגות, וורד וטקסט. הקבצים נשמרים כחומרי עזר של הקורס ונכנסים גם לאינדקס הראיות של שלד המטלה — רק לכתיבה בקורס הזה.
+                    </div>
+                    {!courseMaterials.length ? (
+                      <div style={EMPTY_STYLE}>עוד אין קבצים בקורס הזה.</div>
+                    ) : (
+                      courseMaterials.map((material) => (
+                        <div key={material.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderBottom: '1px solid var(--s-border)' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--s-text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {material.title}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>
+                              {String(material.type || '').toUpperCase()}{material.extractionStatus === 'success' || material.previewText ? '' : ' · בלי טקסט שחולץ'}
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => handleRemoveMaterial(material)} style={{ ...DANGER_BTN_STYLE, padding: '3px 8px', flexShrink: 0 }}>הסר</button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : null}
 
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button type="button" disabled={busy} onClick={handleSave} style={PRIMARY_BTN_STYLE}>
