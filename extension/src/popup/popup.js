@@ -1,6 +1,15 @@
 // popup.js — ה-UI של הפופאפ. נטען כ-IIFE (bundled ע"י esbuild), ללא type=module ב-HTML.
 import { signInWithGoogle, signOutUser, getCachedUser } from '../lib/auth.js';
 import { getSettings, setDefaultDestination } from '../lib/settings.js';
+import { CLIPPER_BUILD_LABEL } from '../lib/build.js';
+
+// מזהה ה-build מוצג תמיד, גם לפני התחברות — זו כל המטרה שלו: לוודא ש-reload
+// ב-chrome://extensions באמת טען את הקוד החדש.
+const buildLabelEl = document.getElementById('build-label');
+if (buildLabelEl) {
+  const manifestVersion = chrome.runtime.getManifest?.().version || '';
+  buildLabelEl.textContent = `WordFlow Clipper ${manifestVersion} · ${CLIPPER_BUILD_LABEL}`;
+}
 
 const signedOutView = document.getElementById('signed-out-view');
 const signedInView = document.getElementById('signed-in-view');

@@ -304,3 +304,15 @@ body {
   padding: 4px 0;
   align-self: flex-start;
 }
+
+/* מזהה build — קטן ומעומעם, אבל תמיד גלוי (גם במסך ההתחברות). */
+.wf-build {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
+  color: var(--wf-muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+  direction: ltr;
+}

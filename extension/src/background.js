@@ -1,6 +1,10 @@
 // background.js — Service worker MV3: תפריטי הקשר, אורקסטרציה של כל מצבי הקליפה, כתיבה ל-Firebase.
 import { getCachedUser, watchAuthState } from './lib/auth.js';
 import { writeTextClip, writeImageClip, writeFileClip } from './lib/clipWriter.js';
+import { CLIPPER_BUILD_LABEL } from './lib/build.js';
+
+// נרשם בכל טעינה של ה-SW — השורה הראשונה בקונסולה אומרת איזה build רץ.
+console.info(`[wordflow] Clipper ${chrome.runtime.getManifest?.().version || ''} · ${CLIPPER_BUILD_LABEL}`);
 
 // --- שמירת דגל "יש לפתוח את הפופאפ ולהתחבר" כשקליפ נשלח כשהמשתמש מנותק ---
 const NEEDS_LOGIN_KEY = 'wordflow_needs_login';
