@@ -20,7 +20,8 @@ import { TextStyle, FontFamily, FontSize, LineHeight } from "@tiptap/extension-t
 import { Subscript } from "@tiptap/extension-subscript";
 import { Superscript } from "@tiptap/extension-superscript";
 import { Wand2, Sparkles, CheckCheck, PaintBucket, Table2, Check, X, GraduationCap, Newspaper, Shield, Clipboard, ClipboardType, Copy, Scissors, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered, AlignRight, AlignCenter, AlignLeft, Eraser, UserCheck, Bot, Type, Pilcrow, BookOpen, Languages, Volume2, Link as LinkIcon, MessageSquarePlus, Plus, Paperclip } from "lucide-react";
-import { applyInlineAi, getApiKey, getProviderConfig } from "./services/aiService";
+import { getApiKey, getProviderConfig } from "./services/aiService";
+import { applyInlineAi } from "./services/aiSuggestionApply";
 import { getSynonymSuggestions, isHebrewWord } from "./services/synonymsService.js";
 import AddSynonymDialog from "./components/AddSynonymDialog.jsx";
 import EditorContextMenu from "./components/EditorContextMenu.jsx";

@@ -57,7 +57,8 @@ import { importDocumentDraft } from './services/documentDraftService';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
 import { AppStartupSplash, ConfettiCelebration, LiveGenerationMood } from './WordFlowAnimations';
-import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, savePersonalStyleProfile, fillCoverTemplateTokens, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, applyAiSuggestionBatchToRanges, applyAiSuggestionToRange, chatWithActiveProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from './services/aiService';
+import { getShortcutsConfig, getAssistantBehavior, getWordPreferences, saveWordPreferences, matchShortcut, getAgentDebugLogs, isAiRequestTimeoutError, getLatestAgentRunSummary, getWorkspaceAutomation, getProviderConfig, getToolLinksConfig, buildExternalToolUrl, hydrateAppSettingsFromDisk, hydrateProviderConfigFromDisk, syncPersistedAppSettings, getPersonalStyleProfile, savePersonalStyleProfile, fillCoverTemplateTokens, hasMeaningfulPersonalProfileData, getConfiguredProviderChoices, getOrderedRoleAgents, getRoleAgents, getProviderModelChoices, updateCurrentWorkspace, chatWithActiveProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock } from './services/aiService';
+import { applyAiSuggestionBatchToRanges, applyAiSuggestionToRange } from './services/aiSuggestionApply';
 import { AGENTS_CONFIG } from './agentConfig';
 import { isDesktopApp } from './platform';
 import { buildTemplateSkeleton, buildDocumentReviewActionPlan, generateDocumentFromPrompt, reviseDocumentWithFeedback, reviewDocumentRecommendations, saveDocumentHistory, learnFromDocumentDraft, saveHomeInstructions, readInstructionFile, getInstructionFileAcceptList } from './services/workspaceLearningService';
@@ -7997,7 +7998,7 @@ ${sidebarReviewContext}`
         }
         showToast('בודק איות ודקדוק...', { tone: 'info' });
         try {
-          const { applyInlineAi } = await import('./services/aiService');
+          const { applyInlineAi } = await import('./services/aiSuggestionApply');
           await applyInlineAi(editor, 'fix');
           showToast('הבדיקה הושלמה — אשר או דחה את התיקון בתפריט הצף.', { tone: 'success' });
         } catch (error) {
