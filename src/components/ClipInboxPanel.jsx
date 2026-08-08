@@ -8,8 +8,13 @@ import {
   setClipClientRole,
   getClipRequireReview,
   setClipRequireReview,
+  getClipAutoOcr,
+  setClipAutoOcr,
+  getActiveClipIngest,
   startClipInboxPolling,
   stopClipInboxPolling,
+  CLIP_PROGRESS_EVENT,
+  AUTO_OCR_MAX_PAGES,
 } from '../services/clipInboxService';
 import {
   getClipPreview,
@@ -23,6 +28,13 @@ import { listProjects } from '../services/projectService';
 import { showToast } from '../services/uiFeedback';
 
 // אייקון לפי סוג הקליפ — 'file' לא היה מטופל וקיבל את אייקון הטקסט.
+// טקסט חי לשורת "בעיבוד" — אותם שלבים כמו שורת המצב הגלובלית.
+const ingestPhaseLabel = ({ phase = '', page = 0, pages = 0 } = {}) => {
+  if (phase === 'ocr') return pages ? `מזהה טקסט: עמוד ${page || 1} מתוך ${pages}` : 'מזהה טקסט…';
+  if (phase === 'embed') return 'מוסיף לאינדקס הראיות…';
+  return 'מוריד ומחלץ טקסט…';
+};
+
 const clipIcon = (clip = {}) => {
   if (clip.kind === 'image') return '🖼️';
   if (clip.kind !== 'file') return '📄';
@@ -221,6 +233,9 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   const [busyClipId, setBusyClipId] = useState(null);
   const [clientRole, setClientRole] = useState(() => getClipClientRole());
   const [requireReview, setRequireReviewState] = useState(() => getClipRequireReview());
+  const [autoOcr, setAutoOcrState] = useState(() => getClipAutoOcr());
+  // הקליטה שרצה כרגע (אם רצה) — כדי שהפאנל לא ייראה ריק/תקוע בזמן OCR ארוך.
+  const [activeIngest, setActiveIngest] = useState(() => getActiveClipIngest());
   const [previewByClipId, setPreviewByClipId] = useState({});
   const [previewClipId, setPreviewClipId] = useState(null);
 
@@ -232,6 +247,24 @@ export default function ClipInboxPanel({ user, open, onClose }) {
     setClipRequireReview(checked);
     setRequireReviewState(checked);
   };
+
+  const handleAutoOcrToggle = (checked) => {
+    setClipAutoOcr(checked);
+    setAutoOcrState(checked);
+  };
+
+  // התקדמות הקליטה הפעילה. הפאנל נפתח לפעמים באמצע העבודה — ולכן גם קריאה
+  // ראשונית ל-getActiveClipIngest (אירוע שנשלח לפני ה-mount היה אבוד).
+  useEffect(() => {
+    if (!open) return undefined;
+    setActiveIngest(getActiveClipIngest());
+    const onProgress = (event) => {
+      const detail = event?.detail || {};
+      setActiveIngest(detail.phase === 'done' ? null : detail);
+    };
+    window.addEventListener(CLIP_PROGRESS_EVENT, onProgress);
+    return () => window.removeEventListener(CLIP_PROGRESS_EVENT, onProgress);
+  }, [open]);
 
   // הקאש מחזיק בייטים גולמיים (עד 4 קליפים) — משחררים כשהפאנל נסגר.
   useEffect(() => {
@@ -306,8 +339,12 @@ export default function ClipInboxPanel({ user, open, onClose }) {
     return () => window.removeEventListener(CLIP_INGESTED_EVENT, handleClipIngested);
   }, [open]);
 
+  // קליפ שנמצא כרגע בקליטה אוטומטית אסור לניתוב ידני — שתי הקליטות היו רצות
+  // במקביל על אותו קליפ (החלון המוגדל מציג את אותם כפתורים).
+  const isProcessing = (clip) => activeIngest?.clipId === clip?.id;
+
   const handleRouteMaterial = async (clip) => {
-    if (!user || busyClipId) return;
+    if (!user || busyClipId || isProcessing(clip)) return;
     setBusyClipId(clip.id);
     try {
       const result = await routeInboxClip(user, clip, {
@@ -331,7 +368,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
 
   const handleRouteSource = async (clip) => {
     const projectId = selectedProjectByClipId[clip.id];
-    if (!user || !projectId || busyClipId) return;
+    if (!user || !projectId || busyClipId || isProcessing(clip)) return;
     setBusyClipId(clip.id);
     try {
       await routeInboxClip(user, clip, {
@@ -354,7 +391,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   };
 
   const handleDiscard = async (clip) => {
-    if (!user) return;
+    if (!user || isProcessing(clip)) return;
     const confirmed = window.confirm('האם אתה בטוח שברצונך למחוק קליפ זה?');
     if (!confirmed) return;
 
@@ -383,7 +420,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
     <div className="flex items-center gap-2 flex-wrap">
       <button
         onClick={() => handleRouteMaterial(clip)}
-        disabled={busyClipId === clip.id}
+        disabled={busyClipId === clip.id || isProcessing(clip)}
         className="btn btn-sm btn-primary text-white disabled:opacity-50"
       >
         {busyClipId === clip.id ? (
@@ -401,7 +438,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
             [clip.id]: e.target.value || null,
           }))
         }
-        disabled={busyClipId === clip.id}
+        disabled={busyClipId === clip.id || isProcessing(clip)}
         className="select select-sm select-bordered dark:bg-slate-800 dark:border-slate-600 disabled:opacity-50"
       >
         <option value="">ללא פרויקט</option>
@@ -414,7 +451,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
 
       <button
         onClick={() => handleRouteSource(clip)}
-        disabled={busyClipId === clip.id || !selectedProjectByClipId[clip.id]}
+        disabled={busyClipId === clip.id || isProcessing(clip) || !selectedProjectByClipId[clip.id]}
         className="btn btn-sm btn-outline disabled:opacity-50"
       >
         {busyClipId === clip.id ? (
@@ -426,7 +463,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
 
       <button
         onClick={() => handleDiscard(clip)}
-        disabled={busyClipId === clip.id}
+        disabled={busyClipId === clip.id || isProcessing(clip)}
         className="btn btn-sm btn-ghost text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
       >
         מחק
@@ -435,6 +472,31 @@ export default function ClipInboxPanel({ user, open, onClose }) {
   );
 
   const previewClip = clips.find((c) => c.id === previewClipId) || null;
+  const processingClipId = activeIngest?.clipId || null;
+  const processingListed = Boolean(processingClipId && clips.some((c) => c.id === processingClipId));
+
+  // שורת "בעיבוד" — אותה צורה בין קליפ שמופיע ברשימה לקליפ שנקלט ברקע ולא מופיע
+  // בה בכלל. אין בה פעולות בכוונה: הקליפ נמצא כרגע בעבודה.
+  const renderProcessingRow = (info, key) => (
+    <div key={key} className="px-6 py-4 bg-blue-50/60 dark:bg-blue-900/15">
+      <div className="flex items-start gap-3">
+        <div className="w-[72px] h-[96px] flex-shrink-0 rounded-lg border border-blue-200 dark:border-blue-800 bg-white/60 dark:bg-slate-800 flex items-center justify-center">
+          <span className="loading loading-spinner loading-sm text-blue-500"></span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-semibold text-slate-900 dark:text-white truncate">
+            {info?.title || '(בלי שם)'}
+          </h3>
+          <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
+            בעיבוד · {ingestPhaseLabel(info)}
+          </p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+            אפשר להשאיר את החלון פתוח — העבודה ממשיכה ברקע.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div
@@ -466,13 +528,17 @@ export default function ClipInboxPanel({ user, open, onClose }) {
             <div className="flex items-center justify-center h-32">
               <span className="loading loading-spinner loading-md"></span>
             </div>
-          ) : clips.length === 0 ? (
+          ) : clips.length === 0 && !activeIngest ? (
             <div className="flex items-center justify-center h-32 text-slate-500 dark:text-slate-400 text-center px-4">
               <p>אין קליפים ממתינים. שלח משהו מהתוסף 📎</p>
             </div>
           ) : (
             <div className="divide-y divide-slate-200 dark:divide-slate-700">
-              {clips.map((clip) => (
+              {activeIngest && !processingListed ? renderProcessingRow(activeIngest, 'active-ingest') : null}
+              {clips.map((clip) => (clip.id === processingClipId ? renderProcessingRow(
+                { ...activeIngest, title: activeIngest?.title || clip.title },
+                clip.id,
+              ) : (
                 <div
                   key={clip.id}
                   className="px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition"
@@ -550,7 +616,7 @@ export default function ClipInboxPanel({ user, open, onClose }) {
                   {/* Actions */}
                   {renderClipActions(clip)}
                 </div>
-              ))}
+              )))}
             </div>
           )}
         </div>
@@ -581,6 +647,20 @@ export default function ClipInboxPanel({ user, open, onClose }) {
           </label>
           <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
             כשמסומן, כל קליפ ממתין כאן לאישור — בלי OCR ובלי קליטה אוטומטית.
+          </p>
+
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-600 dark:text-slate-300 mt-3">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={autoOcr}
+              onChange={(e) => handleAutoOcrToggle(e.target.checked)}
+            />
+            <span>הרץ OCR אוטומטית על קבצים סרוקים</span>
+          </label>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+            זיהוי טקסט עולה כ-8 שניות לעמוד. כשכבוי, הקובץ נקלט מיד ומופיע במסך הבית
+            עם כפתור "הרץ OCR עכשיו". בכל מקרה קובץ מעל {AUTO_OCR_MAX_PAGES} עמודים לא מתחיל לבד.
           </p>
         </div>
       </div>

@@ -19,7 +19,7 @@ import { makeImageThumbnailDataUrl, isPdfClip } from './clipPreviewService';
 import { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } from './materialChunkStore';
 import { ensureMaterialsEmbedded } from './evidenceMatchService';
 import { attachMaterialToProject, appendProjectMemory } from './projectService';
-import { saveClipAsHelperMaterial } from './workspaceLearningService';
+import { saveClipAsHelperMaterial, updateBrowserMaterialEntry, applyMaterialOcrText } from './workspaceLearningService';
 import { isDesktopApp } from '../platform';
 
 const POLL_INTERVAL_MS = 5000;
@@ -27,10 +27,20 @@ const CLIP_DEFAULT_DESTINATION_KEY = 'wordai_clip_default_destination';
 const CLIP_ROLE_KEY = 'wordai_clip_client_role';
 const CLIP_REQUIRE_REVIEW_KEY = 'wordai_clip_require_review';
 const CLIP_REVIEW_HINT_KEY = 'wordai_clip_review_hint_shown';
+const CLIP_AUTO_OCR_KEY = 'wordai_clip_auto_ocr';
 export const CLIP_INGESTED_EVENT = 'wordai-clip-ingested';
-// מדווח על התחלת OCR ארוך. בלי זה קליטת PDF סרוק נראית כמו תקיעה: OCR רץ
-// ~8 שניות לעמוד, וה-toast היחיד מגיע רק בסוף.
+// מדווח על התקדמות הקליטה עמוד-אחר-עמוד (חילוץ / OCR / הטמעה). בלי זה קליטת
+// PDF סרוק נראית כמו תקיעה: OCR רץ ~8 שניות לעמוד ואין שום סימן חיים בינתיים.
 export const CLIP_PROGRESS_EVENT = 'wordai-clip-progress';
+
+// תקרת עמודים ל-OCR אוטומטי. גם כשההגדרה דלוקה, קובץ ארוך מזה **לא** מתחיל
+// לבד: 60 עמודים × ~8 שניות = חמש דקות שהמשתמש לא ביקש. מעל התקרה הקליפ נקלט
+// כרגיל ומסומן pendingOcr, והמשתמש מריץ בלחיצה ממסך הבית.
+export const AUTO_OCR_MAX_PAGES = 15;
+
+// דגימת התקדמות: כל עמוד נשלח, אבל לא יותר מאירוע אחד ל-400ms — חוץ מהעמוד
+// הראשון והאחרון ומעברי שלב, שנשלחים תמיד (force).
+const PROGRESS_THROTTLE_MS = 400;
 
 // שער איכות ל-OCR: מתחת לרצפה לא זורקים (המשתמש בחר לגזור את התמונה במפורש) —
 // מסמנים low-confidence כדי שה-UI יציג אזהרה. אותה רצפה כמו GARBLE_FLOOR.
@@ -39,6 +49,8 @@ const OCR_QUALITY_FLOOR = 0.5;
 let pollTimer = null;
 let currentUser = null;
 let ingestInFlight = false;
+// קליטה ידנית (ניתוב מהפאנל / הרצת OCR מאוחרת) — הפולינג לא נכנס תוך כדי.
+let manualWorkInFlight = 0;
 // קליפ שיועד לתיבת הדואר נשאר pending בכוונה — ולכן כל סבב פולינג "קולט" אותו שוב.
 // בלי הסט הזה הפאנל נטען מחדש וה-toast חוזר כל 5 שניות. מוכרז פעם אחת בלבד.
 const announcedInboxClipIds = new Set();
@@ -84,6 +96,44 @@ export function setClipRequireReview(value) {
   try {
     if (value) localStorage.setItem(CLIP_REQUIRE_REVIEW_KEY, '1');
     else localStorage.removeItem(CLIP_REQUIRE_REVIEW_KEY);
+  } catch { /* noop */ }
+}
+
+// OCR אוטומטי על קבצים סרוקים/משובשים. דלוק כברירת מחדל (ההתנהגות הקיימת);
+// כשכבוי, הקליפ נקלט מיד עם מה שיש והמשתמש מריץ OCR מתי שנוח לו.
+export function getClipAutoOcr() {
+  try {
+    return localStorage.getItem(CLIP_AUTO_OCR_KEY) !== '0';
+  } catch { return true; }
+}
+
+export function setClipAutoOcr(value) {
+  try {
+    if (value) localStorage.removeItem(CLIP_AUTO_OCR_KEY);
+    else localStorage.setItem(CLIP_AUTO_OCR_KEY, '0');
+  } catch { /* noop */ }
+}
+
+// --- דיווח התקדמות ---
+// מצב הקליטה הפעילה חי ברמת המודול כדי שפאנל שנפתח באמצע העבודה יראה אותה מיד
+// (אירוע שנשלח לפני שהוא נטען היה אבוד).
+let activeIngest = null;
+let lastProgressAt = 0;
+
+export function getActiveClipIngest() {
+  return activeIngest;
+}
+
+function emitClipProgress(detail, { force = false } = {}) {
+  const now = Date.now();
+  const done = detail?.phase === 'done';
+  // 'done' בלי עבודה פעילה = רעש (הפולינג רץ כל 5 שניות גם כשאין קליפים).
+  if (done && !activeIngest) return;
+  if (!force && !done && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
+  lastProgressAt = now;
+  activeIngest = done ? null : { ...detail };
+  try {
+    window.dispatchEvent(new CustomEvent(CLIP_PROGRESS_EVENT, { detail: { ...detail } }));
   } catch { /* noop */ }
 }
 
@@ -198,29 +248,45 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
   let cleanDigital = true;
   let lowConfidenceOcr = false;
   let thumbnailDataUrl = '';
+  // OCR שנדחה: הקליפ נקלט עם מה שיש, הבייטים **לא** נמחקים, והמשתמש מריץ אחר כך.
+  let pendingOcr = false;
+  let ocrPages = 0;
+  const title = clipTitle(clip);
 
   // קליפ קובץ (PDF מצופה Chrome): אותו מחלץ של העלאת חומרים, כולל OCR ל-PDF סרוק.
   if (clip.kind === 'file') {
+    emitClipProgress({ clipId: clip.id, title, phase: 'extract' }, { force: true });
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
     thumbnailDataUrl = await buildClipThumbnail(clip, bytes);
+    const autoOcr = getClipAutoOcr();
     const res = await extractMaterialTextFromBytes(clip.fileName || 'clip.pdf', bytes, 200000, {
-      ocr: true,
-      // מדווח פעם אחת, בעמוד הראשון: משם והלאה זה רק ספירה ומספיק שהמשתמש יודע
-      // שזה רץ וכמה זמן זה ייקח.
+      ocr: autoOcr,
+      maxOcrPages: AUTO_OCR_MAX_PAGES,
+      // כל עמוד מדווח (בדגימה של 400ms). העמוד הראשון והאחרון תמיד.
       onOcrProgress: ({ page, pages }) => {
-        if (page !== 1) return;
-        window.dispatchEvent(new CustomEvent(CLIP_PROGRESS_EVENT, {
-          detail: { title: clipTitle(clip), pages, phase: 'ocr' },
-        }));
+        emitClipProgress(
+          { clipId: clip.id, title, phase: 'ocr', page, pages },
+          { force: page === 1 || page === pages },
+        );
       },
     });
-    if (!res.ok) throw new Error(res.error || 'חילוץ הקובץ נכשל');
-    text = res.text || '';
-    cleanDigital = !res.viaOcr;
-    lowConfidenceOcr = Boolean(res.viaOcr) && pureTokenRatio(text) < OCR_QUALITY_FLOOR;
+    if (!res.ok && res.scanned) {
+      // סרוק/משובש ו-OCR לא רץ (ההגדרה כבויה או מעל התקרה) — נקלט בכל זאת.
+      pendingOcr = true;
+      ocrPages = Number(res.pages) || 0;
+      text = res.text || '';
+      cleanDigital = false;
+    } else if (!res.ok) {
+      throw new Error(res.error || 'חילוץ הקובץ נכשל');
+    } else {
+      text = res.text || '';
+      cleanDigital = !res.viaOcr;
+      lowConfidenceOcr = Boolean(res.viaOcr) && pureTokenRatio(text) < OCR_QUALITY_FLOOR;
+    }
   }
 
   if (clip.kind === 'image') {
+    emitClipProgress({ clipId: clip.id, title, phase: 'ocr', page: 1, pages: 1 }, { force: true });
     const bytes = await downloadClipImageBytes(user, clip.storagePath);
     thumbnailDataUrl = await buildClipThumbnail(clip, bytes);
     text = await extractImageOcr(await upscaleForOcr(bytes));
@@ -231,17 +297,27 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
     lowConfidenceOcr = pureTokenRatio(text) < OCR_QUALITY_FLOOR;
   }
 
-  if (!String(text || '').trim()) {
-    throw new Error('קליפ ריק — אין טקסט לקליטה');
+  // קליפ עם OCR שנדחה מותר להיות ריק — הרשומה עצמה היא מה שמאפשר להריץ אחר כך.
+  // בכל שאר המקרים (וגם ביעד 'source', שאין לו רשומת חומר) ריק הוא כישלון.
+  if (!String(text || '').trim() && !(pendingOcr && destination === 'material')) {
+    throw new Error(pendingOcr
+      ? 'הקובץ סרוק ואין ממנו טקסט — הרץ OCR או נתב אותו כחומר עזר'
+      : 'קליפ ריק — אין טקסט לקליטה');
   }
+
+  // ⚠️ רק ליעד 'material' יש רשומת חומר, ולכן רק שם יש כפתור שיריץ OCR מאוחר.
+  // בלי הביטול הזה קליפ שנוּתב לזיכרון פרויקט היה משאיר בייטים בענן לנצח.
+  if (pendingOcr && destination !== 'material') pendingOcr = false;
 
   const result = {
     clipId: clip.id,
-    title: clipTitle(clip),
+    title,
     domain: clip.domain || '',
     destination,
     heldForReview: false,
     lowConfidenceOcr,
+    pendingOcr,
+    ocrPages,
     truncated: Boolean(clip.truncated),
     materialId: null,
     chunkCount: 0,
@@ -264,38 +340,53 @@ async function ingestClip(user, clip, { skipReviewGate = false } = {}) {
     const { deriveCourseIdForIngest } = await import('./activeCourseService');
     clipCourseId = deriveCourseIdForIngest(clip.projectId || null);
   } catch {}
-  const added = addMaterialDocument({
-    title: result.title,
-    text,
-    source: 'web-clip',
-    sourceUrl: clip.sourceUrl || null,
-    projectId: clip.projectId || null,
-    courseId: clipCourseId,
-    cleanDigital,
-    strength: 'full',
-    defer: true,
-  });
-  result.materialId = added?.materialId || null;
-  result.chunkCount = added?.added || 0;
-  if (clip.projectId && result.materialId) {
-    attachMaterialToProject(clip.projectId, result.materialId);
+  // ⚠️ עם OCR שנדחה **לא** מכניסים לאינדקס הראיות: הטקסט שיש (אם יש) הוא ג'יבריש
+  // של קידוד גופן שבור, וזה בדיוק מה שהרעיל את האחזור בעבר. הרשומה נשמרת ברשימת
+  // החומרים בלבד, מסומנת pendingOcr, ומצטרפת לאינדקס אחרי ההרצה הידנית.
+  if (!pendingOcr) {
+    const added = addMaterialDocument({
+      title: result.title,
+      text,
+      source: 'web-clip',
+      sourceUrl: clip.sourceUrl || null,
+      projectId: clip.projectId || null,
+      courseId: clipCourseId,
+      cleanDigital,
+      strength: 'full',
+      defer: true,
+    });
+    result.materialId = added?.materialId || null;
+    result.chunkCount = added?.added || 0;
+    if (clip.projectId && result.materialId) {
+      attachMaterialToProject(clip.projectId, result.materialId);
+    }
   }
   // ...וגם לרשימת חומרי הפרויקט — זו הרשימה שהמשתמש רואה במסך הבית.
   // כשל כאן לא מפיל את הקליטה: הראיה כבר באינדקס.
-  await saveClipAsHelperMaterial({
+  const saved = await saveClipAsHelperMaterial({
     title: result.title,
     text,
     sourceUrl: clip.sourceUrl || '',
     projectId: clip.projectId || '',
     courseId: clipCourseId || '',
     thumbnailDataUrl,
-  }).catch((err) => console.error('[clipInbox] saveClipAsHelperMaterial failed', err));
+    pendingOcr,
+    ocrPages,
+    // נתיב הבייטים נשמר **רק** כשה-OCR נדחה — זה מה שמאפשר להוריד אותם שוב.
+    storagePath: pendingOcr ? (clip.storagePath || '') : '',
+  }).catch((err) => {
+    console.error('[clipInbox] saveClipAsHelperMaterial failed', err);
+    return null;
+  });
+  result.helperMaterialId = saved?.entry?.id || null;
   return result;
 }
 
 // מעבד את כל הקליפים הממתינים. מחזיר את תוצאות הקליטה (לניצול ע"י toast).
 export async function ingestPendingClips(user = currentUser) {
-  if (!user?.uid || ingestInFlight) return [];
+  // ⚠️ שני שערי re-entrancy: הפולינג (5 שניות) מהיר בהרבה מקליטה עם OCR, וקליטה
+  // ידנית מהפאנל רצה במקביל. בלעדיהם אותו קליפ נקלט פעמיים.
+  if (!user?.uid || ingestInFlight || manualWorkInFlight > 0) return [];
   ingestInFlight = true;
   const results = [];
   try {
@@ -324,9 +415,14 @@ export async function ingestPendingClips(user = currentUser) {
         // רמז חד-פעמי על שער הסקירה — נתלה על הקליטה האוטומטית הראשונה בלבד.
         if (consumeReviewHint()) result.reviewHint = true;
         results.push(result);
-        if (result.destination === 'material') addedMaterials = true;
-        await updateClipStatus(user, clip.id, { status: 'processed' });
-        if (clip.storagePath) { // תמונה או קובץ — הבייטים כבר חולצו לטקסט
+        if (result.destination === 'material' && !result.pendingOcr) addedMaterials = true;
+        await updateClipStatus(user, clip.id, {
+          status: 'processed',
+          ...(result.pendingOcr ? { pendingOcr: true } : {}),
+        });
+        // ⚠️ עם OCR שנדחה הבייטים **נשארים** — בלעדיהם אין מה להריץ אחר כך.
+        // הם נמחקים בסוף runPendingClipOcr, בדיוק פעם אחת.
+        if (clip.storagePath && !result.pendingOcr) { // הבייטים כבר חולצו לטקסט
           await deleteClipImage(user, clip.storagePath);
         }
       } catch (err) {
@@ -348,11 +444,7 @@ export async function ingestPendingClips(user = currentUser) {
 
     if (addedMaterials) {
       commitMaterialStore();
-      // אותה לולאה כמו העלאת קבצים בשלד: ממשיכים עד שאין שאריות (מוגבל סבבים).
-      for (let i = 0; i < 25; i += 1) {
-        const { remaining, unavailable } = await ensureMaterialsEmbedded({ limit: 400 });
-        if (unavailable || !remaining) break;
-      }
+      await embedPendingMaterials(results[results.length - 1]?.title || '');
     }
 
     if (results.length) {
@@ -361,6 +453,19 @@ export async function ingestPendingClips(user = currentUser) {
     return results;
   } finally {
     ingestInFlight = false;
+    emitClipProgress({ phase: 'done' }, { force: true });
+  }
+}
+
+// הטמעה לאינדקס הסמנטי — השלב האחרון, ולפעמים הארוך. אותה לולאה כמו העלאת
+// קבצים בשלד (ממשיכים עד שאין שאריות, מוגבל סבבים), עכשיו עם דיווח התקדמות
+// כדי שהדקות האחרונות לא יהיו שקטות.
+async function embedPendingMaterials(title = '') {
+  for (let i = 0; i < 25; i += 1) {
+    emitClipProgress({ title, phase: 'embed', round: i + 1 }, { force: i === 0 });
+    const { remaining, unavailable } = await ensureMaterialsEmbedded({ limit: 400 });
+    if (unavailable || !remaining) break;
+    emitClipProgress({ title, phase: 'embed', round: i + 1, remaining });
   }
 }
 
@@ -386,24 +491,129 @@ export async function listInboxClips(user = currentUser) {
 
 // ניתוב ידני של קליפ מהתיבה: קולט עם destination/projectId שנבחרו עכשיו.
 export async function routeInboxClip(user, clip, { destination, projectId = null }) {
-  await ensureMaterialStoreReady(); // ר' ההערה ב-ingestPendingClips
-  const resolved = { ...clip, destination, projectId };
-  // המשתמש בחר במפורש מהתיבה — שער הסקירה כבר מוצה, אחרת הקליפ היה חוזר אליה.
-  const result = await ingestClip(user || currentUser, resolved, { skipReviewGate: true });
-  if (result.destination === 'material') {
+  manualWorkInFlight += 1;
+  try {
+    await ensureMaterialStoreReady(); // ר' ההערה ב-ingestPendingClips
+    const resolved = { ...clip, destination, projectId };
+    // המשתמש בחר במפורש מהתיבה — שער הסקירה כבר מוצה, אחרת הקליפ היה חוזר אליה.
+    const result = await ingestClip(user || currentUser, resolved, { skipReviewGate: true });
+    if (result.destination === 'material' && !result.pendingOcr) {
+      commitMaterialStore();
+      await embedPendingMaterials(result.title);
+    }
+    if (result.destination !== 'inbox') {
+      await updateClipStatus(user || currentUser, clip.id, {
+        status: 'processed',
+        ...(result.pendingOcr ? { pendingOcr: true } : {}),
+      });
+      // ר' ההערה ב-ingestPendingClips: OCR שנדחה שומר את הבייטים.
+      if (clip.storagePath && !result.pendingOcr) {
+        await deleteClipImage(user || currentUser, clip.storagePath);
+      }
+    }
+    return result;
+  } finally {
+    manualWorkInFlight -= 1;
+    emitClipProgress({ phase: 'done' }, { force: true });
+  }
+}
+
+/**
+ * הרצת OCR מאוחרת על חומר עזר שנקלט עם pendingOcr.
+ * מוריד שוב את הבייטים מ-Storage, מריץ OCR עם אותו דיווח התקדמות, מכניס את
+ * הטקסט לאינדקס הראיות, מכבה את הדגל — ורק אז מוחק את הבייטים.
+ *
+ * הבייטים כבר נמחקו (משתמש מחק, או קליטה כפולה)? מכבים את הדגל בכל מקרה,
+ * אחרת התג "נדרש OCR" נשאר על המסך לנצח.
+ *
+ * @param {object} user משתמש מחובר
+ * @param {{id:string, title?:string, file?:string, storagePath?:string, ocrPages?:number, projectId?:string, courseId?:string}} material
+ * @returns {Promise<{ok:boolean, chunkCount?:number, chars?:number, error?:string, bytesMissing?:boolean}>}
+ */
+export async function runPendingClipOcr(user, material = {}) {
+  const u = user || currentUser;
+  const materialId = String(material?.id || '').trim();
+  const storagePath = String(material?.storagePath || '').trim();
+  const title = String(material?.title || material?.file || 'קליפ').trim();
+  if (!materialId) return { ok: false, error: 'חסר מזהה חומר' };
+  if (!u?.uid) return { ok: false, error: 'צריך להתחבר לחשבון כדי להוריד את הקובץ' };
+
+  manualWorkInFlight += 1;
+  try {
+    if (!storagePath) {
+      await updateBrowserMaterialEntry(materialId, {
+        pendingOcr: false,
+        extractionStatus: 'failed',
+        extractionMessage: 'הקובץ המקורי כבר לא זמין — צריך לגזור אותו מחדש מהתוסף.',
+      }).catch(() => {});
+      return { ok: false, bytesMissing: true, error: 'הקובץ המקורי כבר לא זמין. גזור אותו מחדש מהתוסף.' };
+    }
+
+    emitClipProgress({ materialId, title, phase: 'extract' }, { force: true });
+    let bytes = null;
+    try {
+      bytes = await downloadClipImageBytes(u, storagePath);
+    } catch (err) {
+      console.error('[clipInbox] pending OCR download failed', storagePath, err);
+      await updateBrowserMaterialEntry(materialId, {
+        pendingOcr: false,
+        storagePath: '',
+        extractionStatus: 'failed',
+        extractionMessage: 'הקובץ המקורי נמחק מהענן — צריך לגזור אותו מחדש מהתוסף.',
+      }).catch(() => {});
+      return { ok: false, bytesMissing: true, error: 'הקובץ המקורי כבר לא בענן. גזור אותו מחדש מהתוסף כדי להריץ OCR.' };
+    }
+
+    // ⚠️ שם קובץ קשיח '.pdf' ולא material.file: רשומת קליפ נשמרת תמיד כ-"<כותרת>.txt",
+    // וסיומת txt הייתה שולחת בייטים של PDF ל-decodeText ומחזירה ג'יבריש בינארי.
+    // דחיית OCR קורית אך ורק בענף ה-PDF, ולכן הסיומת ידועה מראש.
+    // maxOcrPages לא מועבר: זו בקשה מפורשת של המשתמש, אין תקרה מלבד OCR_MAX_PAGES.
+    const res = await extractMaterialTextFromBytes('clip.pdf', bytes, 200000, {
+      ocr: true,
+      onOcrProgress: ({ page, pages }) => {
+        emitClipProgress(
+          { materialId, title, phase: 'ocr', page, pages },
+          { force: page === 1 || page === pages },
+        );
+      },
+    });
+    if (!res.ok || !String(res.text || '').trim()) {
+      return { ok: false, error: res.error || 'ה-OCR לא זיהה טקסט בקובץ' };
+    }
+    const text = res.text;
+
+    await ensureMaterialStoreReady();
+    const added = addMaterialDocument({
+      title,
+      text,
+      source: 'web-clip',
+      projectId: material?.projectId || null,
+      courseId: material?.courseId || null,
+      cleanDigital: false, // עבר OCR
+      strength: 'full',
+      defer: true,
+    });
+    if (material?.projectId && added?.materialId) {
+      attachMaterialToProject(material.projectId, added.materialId);
+    }
     commitMaterialStore();
-    for (let i = 0; i < 25; i += 1) {
-      const { remaining, unavailable } = await ensureMaterialsEmbedded({ limit: 400 });
-      if (unavailable || !remaining) break;
-    }
+
+    await applyMaterialOcrText(materialId, text, { ocrPages: res.ocrPages || res.pages || 0 });
+
+    await embedPendingMaterials(title);
+    // רק עכשיו — אחרי שהטקסט נשמר והוטמע — הבייטים כבר לא נחוצים.
+    await deleteClipImage(u, storagePath);
+
+    window.dispatchEvent(new CustomEvent(CLIP_INGESTED_EVENT, {
+      // fromPendingOcr — הרצה ידנית: הרשימות מתרעננות, אבל ה-toast של "קליפ חדש
+      // נקלט" לא רלוונטי (המשתמש עומד מול הכפתור ומקבל תשובה משם).
+      detail: { results: [{ materialId, title, destination: 'material', fromPendingOcr: true, chunkCount: added?.added || 0 }] },
+    }));
+    return { ok: true, chunkCount: added?.added || 0, chars: text.length };
+  } finally {
+    manualWorkInFlight -= 1;
+    emitClipProgress({ phase: 'done' }, { force: true });
   }
-  if (result.destination !== 'inbox') {
-    await updateClipStatus(user || currentUser, clip.id, { status: 'processed' });
-    if (clip.storagePath) { // תמונה או קובץ — הבייטים כבר חולצו לטקסט
-      await deleteClipImage(user || currentUser, clip.storagePath);
-    }
-  }
-  return result;
 }
 
 // מחיקת קליפ מהתיבה בלי לקלוט (כולל תמונה יתומה ב-Storage).
@@ -435,6 +645,7 @@ export function stopClipInboxPolling() {
     pollTimer = null;
   }
   currentUser = null;
+  emitClipProgress({ phase: 'done' }, { force: true });
   // הסט חי ברמת המודול ושרד החלפת משתמש — קליפ של המשתמש הבא עם אותו id לא היה
   // מוכרז לעולם. מתנקה גם כשהמכשיר עובר ל-producer.
   announcedInboxClipIds.clear();

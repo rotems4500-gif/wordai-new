@@ -67,7 +67,7 @@ import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/d
 import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEditor } from './services/stylesRegistry';
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
-import { showToast, showConfirm } from './services/uiFeedback';
+import { showToast, showConfirm, setStatusChip, clearStatusChip } from './services/uiFeedback';
 import { startClipInboxPolling, CLIP_INGESTED_EVENT, CLIP_PROGRESS_EVENT } from './services/clipInboxService';
 import { sendImageClipToDesktop } from './services/clipUploadService';
 import ClipInboxPanel from './components/ClipInboxPanel';
@@ -3828,7 +3828,8 @@ function App() {
           { tone: 'error' },
         );
       }
-      const results = all.filter((r) => !r.failed);
+      // fromPendingOcr = הרצת OCR ידנית ממסך הבית — מרעננת רשימות, בלי toast.
+      const results = all.filter((r) => !r.failed && !r.fromPendingOcr);
       if (!results.length) return;
       const labelOf = (r) => (r?.domain ? `מ-${r.domain}` : 'מהדפדפן');
       // ⚠️ מפרידים בין מוחזקים לנקלטים: אצווה מעורבת (או שני קליפים מוחזקים)
@@ -3843,26 +3844,48 @@ function App() {
           { tone: 'info' },
         );
       }
-      if (ingested.length) {
+      // OCR נדחה (הגדרה כבויה או קובץ מעל התקרה) — הקליפ נקלט, אבל בלי טקסט.
+      const deferred = ingested.filter((r) => r.pendingOcr);
+      if (deferred.length) {
+        showToast(
+          deferred.length === 1
+            ? `"${deferred[0].title}" נקלט בלי טקסט — נדרש OCR (${deferred[0].ocrPages || '?'} עמודים). אפשר להריץ ממסך הבית, ברשימת חומרי העזר.`
+            : `${deferred.length} קליפים נקלטו בלי טקסט וממתינים ל-OCR. אפשר להריץ ממסך הבית, ברשימת חומרי העזר.`,
+          { tone: 'warning', duration: 9000 },
+        );
+      }
+      // הקליפים שנקלטו עם טקסט בפועל — אלה שנדחו כבר קיבלו הודעה משלהם.
+      const withText = ingested.filter((r) => !r.pendingOcr);
+      if (withText.length) {
         // רמז חד-פעמי על שער הסקירה (clipInboxService מסמן אותו פעם אחת בלבד).
         const hint = ingested.some((r) => r.reviewHint)
           ? ' רוצה לאשר כל קליפ לפני שהוא נכנס? סמן "שאל אותי לפני שקליפ נכנס לעבודה" בתיבת הקליפים.'
           : '';
         showToast(
-          (ingested.length === 1
-            ? `קליפ חדש ${labelOf(ingested[0])} נקלט כחומר עזר${ingested[0].lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
-            : `${ingested.length} קליפים חדשים נקלטו מהדפדפן.`) + hint,
+          (withText.length === 1
+            ? `קליפ חדש ${labelOf(withText[0])} נקלט כחומר עזר${withText[0].lowConfidenceOcr ? ' (איכות OCR נמוכה)' : ''}.`
+            : `${withText.length} קליפים חדשים נקלטו מהדפדפן.`) + hint,
           { tone: 'info', ...(hint ? { duration: 9000 } : {}) },
         );
       }
     };
-    // OCR של PDF סרוק רץ ~8 שניות לעמוד. בלי החיווי הזה זה נראה כמו תקיעה.
+    // OCR של PDF סרוק רץ ~8 שניות לעמוד. toast חולף נעלם והמסך נראה תקוע —
+    // ולכן שורת מצב מתמשכת שמתעדכנת בכל עמוד ויורדת כשהקליטה נגמרת.
     const onProgress = (event) => {
-      const { title = '', pages = 0 } = event?.detail || {};
-      showToast(
-        `מזהה טקסט ב-"${title}" (${pages} עמודים). זה עשוי לקחת כמה דקות — השאר את הלשונית פתוחה.`,
-        { tone: 'info', duration: 8000 },
-      );
+      const { title = '', pages = 0, page = 0, phase = '' } = event?.detail || {};
+      if (phase === 'done') { clearStatusChip('clip-ingest'); return; }
+      const label = title ? `"${title}"` : 'הקליפ';
+      if (phase === 'ocr') {
+        setStatusChip('clip-ingest', pages
+          ? `מזהה טקסט ב-${label}: עמוד ${page || 1} מתוך ${pages}`
+          : `מזהה טקסט ב-${label}…`);
+        return;
+      }
+      if (phase === 'embed') {
+        setStatusChip('clip-ingest', `מוסיף את ${label} לאינדקס הראיות…`);
+        return;
+      }
+      setStatusChip('clip-ingest', `קולט את ${label}…`);
     };
     window.addEventListener(CLIP_INGESTED_EVENT, onIngested);
     window.addEventListener(CLIP_PROGRESS_EVENT, onProgress);

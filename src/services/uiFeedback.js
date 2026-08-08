@@ -141,6 +141,93 @@ export const showToast = (message, opts = {}) => {
   return remove;
 };
 
+// --- שורת מצב מתמשכת (status chip) ---
+// toast חולף לא מתאים לעבודה שנמשכת דקות (OCR של PDF סרוק): הוא נעלם אחרי
+// שניות והמסך נראה תקוע. הצ'יפ נשאר על המסך ומתעדכן במקום עד שקוראים לו לרדת.
+// מזוהה לפי id — קריאה חוזרת עם אותו id מעדכנת טקסט ולא מוסיפה שורה.
+
+let statusHost = null;
+const statusChips = new Map();
+
+const ensureStatusHost = () => {
+  if (typeof document === 'undefined') return null;
+  injectStyleOnce();
+  if (statusHost && document.body.contains(statusHost)) return statusHost;
+  statusHost = document.createElement('div');
+  statusHost.setAttribute('dir', 'rtl');
+  Object.assign(statusHost.style, {
+    position: 'fixed',
+    bottom: '20px',
+    right: '20px',
+    zIndex: '2147483599',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    alignItems: 'flex-end',
+    pointerEvents: 'none',
+    maxWidth: 'min(420px, 90vw)',
+  });
+  document.body.appendChild(statusHost);
+  return statusHost;
+};
+
+/**
+ * מציג/מעדכן שורת מצב מתמשכת. מחזיר פונקציית סגירה.
+ * @param {string} id מזהה יציב (למשל 'clip-ingest')
+ * @param {string} message
+ * @param {{tone?: 'info'|'success'|'warning'|'error'}} [opts]
+ */
+export const setStatusChip = (id, message, opts = {}) => {
+  const key = String(id || 'default');
+  const host = ensureStatusHost();
+  if (!host) return () => {};
+  const tone = TONE_STYLES[opts.tone] || TONE_STYLES.info;
+
+  let entry = statusChips.get(key);
+  if (!entry || !host.contains(entry.el)) {
+    const el = document.createElement('div');
+    el.className = 'wf-feedback-toast';
+    el.setAttribute('role', 'status');
+    Object.assign(el.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      background: 'rgba(15,23,42,0.94)',
+      color: 'white',
+      borderRadius: '999px',
+      padding: '9px 16px',
+      boxShadow: '0 10px 28px rgba(2,6,23,0.4)',
+      fontSize: '12.5px',
+      fontWeight: '600',
+      animation: 'wf-feedback-in 0.2s ease both',
+      maxWidth: '100%',
+    });
+    const spinner = document.createElement('span');
+    spinner.textContent = '⏳';
+    spinner.style.flexShrink = '0';
+    const textEl = document.createElement('span');
+    textEl.style.flex = '1';
+    el.appendChild(spinner);
+    el.appendChild(textEl);
+    host.appendChild(el);
+    entry = { el, textEl, spinner };
+    statusChips.set(key, entry);
+  }
+  entry.spinner.textContent = opts.tone && opts.tone !== 'info' ? tone.icon : '⏳';
+  entry.el.style.borderRight = `4px solid ${tone.accent}`;
+  entry.textEl.textContent = String(message ?? '');
+  return () => clearStatusChip(key);
+};
+
+export const clearStatusChip = (id) => {
+  const key = String(id || 'default');
+  const entry = statusChips.get(key);
+  if (!entry) return;
+  statusChips.delete(key);
+  entry.el.style.animation = 'wf-feedback-out 0.18s ease both';
+  setTimeout(() => entry.el.remove(), 180);
+};
+
 /**
  * דיאלוג אישור (מחליף window.confirm). מחזיר Promise<boolean>.
  * @param {string} message

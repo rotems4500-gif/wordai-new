@@ -897,6 +897,11 @@ export async function loadProjectMaterials() {
         // ⚠️ גם הרשימה הזו היא whitelist — בלי השורה הזו התמונה נשמרת אבל
         // אף פעם לא מגיעה למסך הבית.
         thumbnailDataUrl: String(item.thumbnailDataUrl || ''),
+        // OCR שנדחה (קליפ קובץ סרוק/משובש שלא הורץ אוטומטית): הבייטים נשמרים
+        // ב-Storage והמשתמש יכול להריץ מאוחר יותר. שלושת השדות חייבים לעבור גם כאן.
+        pendingOcr: item?.pendingOcr === true,
+        ocrPages: Math.max(0, Number(item?.ocrPages) || 0),
+        storagePath: String(item.storagePath || ''),
       };
     });
 }
@@ -5862,8 +5867,50 @@ function buildUploadedMaterialEntry(payload = {}) {
     // תמונת תצוגה (data URL, ~320px JPEG) — נוצרת בקליטת קליפ מהדפדפן.
     // ⚠️ הרשומה הזו היא whitelist: שדה שלא מופיע כאן נזרק בשקט.
     thumbnailDataUrl: String(payload?.thumbnailDataUrl || ''),
+    // OCR שנדחה — ר' ההערה באותה שלישייה ב-loadProjectMaterials (שני whitelists).
+    pendingOcr: payload?.pendingOcr === true,
+    ocrPages: Math.max(0, Number(payload?.ocrPages) || 0),
+    storagePath: String(payload?.storagePath || ''),
     uploadedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * עדכון נקודתי של רשומת חומר-דפדפן קיימת (IndexedDB) לפי id.
+ * נועד להרצת OCR מאוחרת על קליפ שנדחה: מעדכן את הטקסט ומכבה את pendingOcr,
+ * בלי לגעת בשאר השדות (thumbnail, שיוך לקורס/פרויקט וכו').
+ */
+export async function updateBrowserMaterialEntry(materialId, patch = {}) {
+  const cleanId = String(materialId || '').trim();
+  if (!cleanId) return { ok: false, error: 'חסר מזהה חומר' };
+  const entries = await getBrowserUploadedMaterials();
+  const current = entries.find((item) => String(item?.id || '').trim() === cleanId);
+  if (!current) return { ok: false, error: 'החומר לא נמצא ברשימת חומרי הדפדפן' };
+  const next = { ...current, ...patch };
+  await saveBrowserUploadedMaterialEntry(next);
+  syncPersistedAppSettings();
+  return { ok: true, entry: next };
+}
+
+/**
+ * כתיבת תוצאת OCR מאוחרת לרשומת חומר קיימת: מעדכן טקסט + סטטוס, ומכבה את
+ * pendingOcr ואת נתיב הבייטים (הם נמחקים מהענן מיד אחרי).
+ */
+export async function applyMaterialOcrText(materialId, text, { ocrPages = 0 } = {}) {
+  const body = String(text || '').trim();
+  if (!body) return { ok: false, error: 'אין טקסט לשמירה' };
+  return updateBrowserMaterialEntry(materialId, {
+    previewText: body.slice(0, MATERIAL_PREVIEW_MAX_LENGTH),
+    contentText: body.slice(0, MATERIAL_CONTENT_MAX_LENGTH),
+    previewChars: Math.min(body.length, MATERIAL_PREVIEW_MAX_LENGTH),
+    previewStatus: 'ready',
+    extractedChars: body.length,
+    extractionStatus: 'success',
+    extractionMessage: `הטקסט חולץ ב-OCR${ocrPages ? ` (${ocrPages} עמודים)` : ''}.`,
+    pendingOcr: false,
+    ocrPages: 0,
+    storagePath: '',
+  });
 }
 
 export async function saveHelperMaterial(file, options = {}) {
@@ -5918,9 +5965,21 @@ export async function saveHelperMaterial(file, options = {}) {
  *
  * אין קובץ מקור, ולכן גם בדסקטופ נשמרת רשומת דפדפן (IndexedDB) ולא קובץ מקומי.
  */
-export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', projectId = '', courseId = '', thumbnailDataUrl = '' } = {}) {
+export async function saveClipAsHelperMaterial({
+  title,
+  text,
+  sourceUrl = '',
+  projectId = '',
+  courseId = '',
+  thumbnailDataUrl = '',
+  pendingOcr = false,
+  ocrPages = 0,
+  storagePath = '',
+} = {}) {
   const body = String(text || '').trim();
-  if (!body) return { ok: false, error: 'קליפ ריק' };
+  // ⚠️ קליפ עם OCR שנדחה נשמר גם בלי טקסט — הרשומה היא בדיוק מה שמאפשר למשתמש
+  // ללחוץ "הרץ OCR עכשיו" אחר כך. בלי החריגה הזו הוא היה נעלם בשקט.
+  if (!body && !pendingOcr) return { ok: false, error: 'קליפ ריק' };
   const meta = getMaterialUploadMeta('web-clip');
   const safeTitle = String(title || '').trim() || 'קליפ מהאינטרנט';
   const entry = buildUploadedMaterialEntry({
@@ -5934,12 +5993,17 @@ export async function saveClipAsHelperMaterial({ title, text, sourceUrl = '', pr
     previewText: body.slice(0, MATERIAL_PREVIEW_MAX_LENGTH),
     contentText: body.slice(0, MATERIAL_CONTENT_MAX_LENGTH),
     previewChars: Math.min(body.length, MATERIAL_PREVIEW_MAX_LENGTH),
-    previewStatus: 'ready',
+    previewStatus: pendingOcr && !body ? 'empty' : 'ready',
     previewSource: sourceUrl ? `web-clip:${sourceUrl}` : 'web-clip',
     extractedChars: body.length,
-    extractionStatus: 'success',
-    extractionMessage: sourceUrl ? `נגזר מ-${sourceUrl}` : 'נגזר מדף אינטרנט',
+    extractionStatus: pendingOcr ? 'partial' : 'success',
+    extractionMessage: pendingOcr
+      ? `הטקסט לא חולץ — נדרש OCR (${Math.max(0, Number(ocrPages) || 0)} עמודים).`
+      : (sourceUrl ? `נגזר מ-${sourceUrl}` : 'נגזר מדף אינטרנט'),
     thumbnailDataUrl,
+    pendingOcr,
+    ocrPages,
+    storagePath,
     ...(projectId ? { projectId: String(projectId).trim() } : {}),
     ...(courseId ? { courseId: String(courseId).trim() } : {}),
   });

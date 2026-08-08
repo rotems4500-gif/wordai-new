@@ -480,13 +480,16 @@ const extractPptx = async (uint8) => {
 
 /**
  * uint8: Uint8Array. מחזיר { ok, text } או { ok:false, error }.
- * @param {{ocr?:boolean, onOcrProgress?:function}} opts
+ * @param {{ocr?:boolean, onOcrProgress?:function, maxOcrPages?:number}} opts
  *        ocr=true — מפעיל OCR על PDF סרוק (איטי: ~2-4 שניות לעמוד). בלעדיו קובץ
  *        סרוק מוחזר כשגיאה מפורשת, כדי שלא ייבלע בשקט כמו קודם.
+ *        maxOcrPages — תקרת עמודים שמעליה **לא** מריצים OCR גם כש-ocr:true.
+ *        התוצאה זהה למקרה "ביקשו בלי OCR" (ok:false, scanned:true) אבל עם
+ *        ocrDeferred:true, כדי שהקורא יוכל לדחות את ההרצה לבקשת המשתמש.
  */
 export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 12000, opts = {}) => {
   const options = opts || {};
-  const { ocr = false, onOcrProgress = null } = options;
+  const { ocr = false, onOcrProgress = null, maxOcrPages = 0 } = options;
   // ⚠️ הבחנה בין "לא ביקשו" ל-"ביקשו לא": ברירת המחדל של `ocr` היא false אבל
   // היא נוגעת ל-PDF סרוק בלבד. העלאת תמונה כחומר עזר קוראת בלי opts בכלל
   // ומסתמכת על ה-OCR — רק `ocr:false` מפורש (תצוגה מקדימה) מבטל אותו.
@@ -504,12 +507,22 @@ export const extractMaterialTextFromBytes = async (fileName, uint8, maxLength = 
       text = decodeText(uint8);
     } else if (ext === 'pdf') {
       const res = await extractPdf(uint8, maxLength);
-      if (res.scanned && !ocr) {
+      // מעל התקרה לא מתחילים OCR לבד — 60 עמודים × ~8 שניות זה חמש דקות שהמשתמש
+      // לא ביקש. מוחזר כמו "בלי OCR", עם דגל שמאפשר לקורא להציע הרצה ידנית.
+      const overOcrCap = maxOcrPages > 0 && res.pages > maxOcrPages;
+      if (res.scanned && (!ocr || overOcrCap)) {
         return {
           ok: false,
           scanned: true,
+          garbled: Boolean(res.garbled),
           pages: res.pages,
-          error: `ה-PDF סרוק (${res.pages} עמודים ללא שכבת טקסט) — אין ממה לחלץ. צריך גרסה טקסטואלית או OCR.`,
+          // הטקסט הגולמי מוחזר גם בכישלון: ב-PDF "garbled" יש שכבת טקסט (ג'יבריש)
+          // שאפשר להציג כטעימה, גם אם אסור להכניס אותה לאינדקס הראיות.
+          text: res.text || '',
+          ocrDeferred: Boolean(ocr && overOcrCap),
+          error: ocr && overOcrCap
+            ? `ה-PDF דורש OCR (${res.pages} עמודים) — מעל התקרה להרצה אוטומטית. אפשר להריץ ידנית.`
+            : `ה-PDF סרוק (${res.pages} עמודים ללא שכבת טקסט) — אין ממה לחלץ. צריך גרסה טקסטואלית או OCR.`,
         };
       }
       if (res.scanned) {

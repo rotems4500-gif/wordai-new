@@ -43,7 +43,9 @@ import {
 import { getTheme, toggleTheme, onThemeChange } from './theme';
 import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
-import { CLIP_INGESTED_EVENT } from './services/clipInboxService';
+// שורת המצב החיה של ה-OCR נשלטת מ-main.jsx (מאזין CLIP_PROGRESS_EVENT גלובלי) —
+// כאן רק מפעילים את ההרצה ומרעננים את הרשימה.
+import { CLIP_INGESTED_EVENT, runPendingClipOcr } from './services/clipInboxService';
 import { listCourses, COURSES_UPDATED_EVENT } from './services/courseStore';
 import {
   resolveActiveCourse,
@@ -562,6 +564,8 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     return typeof getHomeInstructionFileText === 'function' ? getHomeInstructionFileText() : '';
   });
   const [materials, setMaterials] = useState([]);
+  // חומר שמריצים עליו OCR מאוחר כרגע (קליפ שנקלט עם pendingOcr).
+  const [ocrMaterialId, setOcrMaterialId] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [materialsFilter, setMaterialsFilter] = useState('all');
   // סקופ קורס: הרשימה עצמה + הקורס הפעיל שנפתר (override ידני או ירושה מהפרויקט).
@@ -1471,6 +1475,38 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     }
     onProjectDocSeedConsumed();
   }, [projectDocSeed?.token]);
+
+  // הרצת OCR מאוחרת לקליפ שנקלט בלי טקסט. הבייטים עדיין ב-Storage (הם נשמרו
+  // בכוונה בקליטה); השירות מוריד אותם, מריץ, מעדכן את החומר ומוחק אותם.
+  const handleRunPendingOcr = async (event, item) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (ocrMaterialId) return;
+    if (!cloudUser?.uid) {
+      showToast('צריך להתחבר לחשבון כדי להוריד את הקובץ המקורי', { tone: 'warning' });
+      return;
+    }
+    setOcrMaterialId(item.id);
+    try {
+      const result = await runPendingClipOcr(cloudUser, item);
+      if (result?.ok) {
+        showToast(`הטקסט חולץ מ-"${item.title}" — ${result.chunkCount || 0} קטעים נוספו לאינדקס.`, { tone: 'success' });
+      } else {
+        showToast(result?.error || 'הרצת ה-OCR נכשלה', {
+          tone: result?.bytesMissing ? 'warning' : 'error',
+          duration: 8000,
+        });
+      }
+    } catch (error) {
+      showToast(error?.message || 'הרצת ה-OCR נכשלה', { tone: 'error' });
+    } finally {
+      setOcrMaterialId('');
+      // גם בכישלון: התג נוקה (או נשאר) והרשימה חייבת לשקף את המצב האמיתי.
+      if (typeof loadProjectMaterials === 'function') {
+        await loadProjectMaterials().then(setMaterials).catch(() => null);
+      }
+    }
+  };
 
   const handleDeleteMaterial = async (event, item) => {
     event?.preventDefault?.();
@@ -2422,13 +2458,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                            {group.items.map((item) => {
                              const extractionInfo = getMaterialExtractionStatusInfo(item);
                              const successTone = extractionInfo.status === 'success';
+                             // קליפ שנקלט בלי טקסט (סרוק/משובש, OCR נדחה) — הבייטים
+                             // שמורים בענן וההרצה זמינה בלחיצה.
+                             const pendingOcr = item?.pendingOcr === true;
+                             const ocrRunning = ocrMaterialId === item.id;
                              return (
                                <label
                                  key={item.id}
                                  title={`${item.title}\n${extractionInfo.message}`}
-                                 className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg mb-1 cursor-pointer transition-colors border ${successTone
-                                   ? 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-300/25'
-                                   : 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-300/25'}`}
+                                 className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg mb-1 cursor-pointer transition-colors border ${pendingOcr
+                                   ? 'bg-amber-500/10 hover:bg-amber-500/15 border-amber-300/30'
+                                   : successTone
+                                     ? 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-300/25'
+                                     : 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-300/25'}`}
                                >
                                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                                    <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={e => setSelectedIds(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} className="checkbox checkbox-xs border-indigo-300 rounded bg-white/20" />
@@ -2442,10 +2484,25 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                                    ) : null}
                                    <div className="flex min-w-0 flex-col overflow-hidden">
                                      <span className="text-white/90 text-xs truncate leading-tight w-full">{item.title}</span>
-                                     <span className={`text-[10px] truncate ${successTone ? 'text-emerald-100' : 'text-rose-100'}`}>{extractionInfo.label}</span>
+                                     <span className={`text-[10px] truncate ${pendingOcr ? 'text-amber-100' : successTone ? 'text-emerald-100' : 'text-rose-100'}`}>
+                                       {pendingOcr
+                                         ? `טקסט לא חולץ — נדרש OCR${item.ocrPages ? ` (${item.ocrPages} עמודים)` : ''}`
+                                         : extractionInfo.label}
+                                     </span>
                                    </div>
                                  </div>
                                  <div className="flex shrink-0 items-center gap-1">
+                                   {pendingOcr ? (
+                                     <button
+                                       type="button"
+                                       onClick={(event) => handleRunPendingOcr(event, item)}
+                                       disabled={Boolean(ocrMaterialId)}
+                                       title={`זיהוי טקסט אורך כ-8 שניות לעמוד${item.ocrPages ? ` (${item.ocrPages} עמודים)` : ''}`}
+                                       className="text-[9px] whitespace-nowrap rounded border border-amber-200/50 bg-amber-400/25 px-2 py-0.5 text-amber-50 transition-colors hover:bg-amber-400/40 disabled:opacity-50"
+                                     >
+                                       {ocrRunning ? 'מריץ OCR…' : 'הרץ OCR עכשיו'}
+                                     </button>
+                                   ) : null}
                                    {/* כשקורס פעיל — מסמנים במפורש מה נכלל רק בזכות הסינון הרך. */}
                                    {activeCourseId && isMaterialUnassignedToCourse(item) ? (
                                      <span className="text-white/35 text-[9px] whitespace-nowrap border border-white/10 bg-white/5 px-1.5 py-0.5 rounded">ללא קורס</span>
