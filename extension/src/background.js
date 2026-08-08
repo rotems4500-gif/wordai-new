@@ -212,9 +212,17 @@ function base64ToBytes(b64) {
 }
 
 /**
- * משיכת קובץ כלשהו מתוך הדף, עם אימות סוג. עוקב אחרי הפניות (Moodle
+ * משיכת קובץ כלשהו עם אימות סוג. עוקב אחרי הפניות (Moodle
  * /mod/resource/view.php מפנה ל-pluginfile), ולכן מחזיר גם את ה-URL הסופי.
- * מחזיר null כשאין גישה ללשונית.
+ *
+ * ⚠️ **פונקציה אחת, שני עולמות.** הגוף חייב להישאר חסר-closure כי הוא מוזרק
+ * ל-MAIN world דרך executeScript (Chrome ממיר אותו למחרוזת) — ובדיוק בגלל זה
+ * אפשר גם לקרוא לו **ישירות מה-service worker**, בלי הזרקה ובלי base64. כך כל
+ * האימות (מספרי קסם, content-type, זיהוי דף עטיפה, דירוג מועמדים, זיהוי
+ * התחברות מבני) חי בעותק אחד, ושני המסלולים מקבלים בדיוק את אותה הכרעה.
+ *
+ * opts.wantBytes=true → מסלול ה-SW: הבייטים נשארים בייטים (בלי בניית מחרוזת
+ * latin1 ובלי btoa), ורק ראש התגובה מפוענח — מספיק לניתוח HTML ולזיהוי התחברות.
  *
  * ⚠️ שני מקרים שהפילו קליטה של דף קורס אמיתי:
  * 1. **דף עטיפה של Moodle** — משאב עם display=auto/page/frame מחזיר HTML שבתוכו
@@ -224,187 +232,331 @@ function base64ToBytes(b64) {
  *    (drawer/בלוק) גם למשתמש מחובר. לכן שדה סיסמה לבדו אינו מספיק: נדרש גם
  *    טופס שה-action/id שלו הוא login, או שה-URL הסופי הוא נתיב התחברות.
  */
+async function probeFileTarget(target, opts) {
+  // כל העזרים חייבים לחיות כאן: הפונקציה מוזרקת לעולם של הדף בלי closure.
+  const wantBytes = !!(opts && opts.wantBytes);
+  // כמה בייטים מפענחים לטקסט במסלול ה-SW: ניתוח המועמדים חותך ב-400k ממילא.
+  const HEAD_BYTES = 400000;
+  const timing = { fetchMs: 0, hopMs: 0, encodeMs: 0, hops: 0 };
+  const now = () => Date.now();
+
+  const FILE_LIKE = /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|csv)(?:[?#]|$)|pluginfile\.php|forcedownload=1|[?&](?:type|format|mode|action)=[^&]*(?:pdf|doc|ppt|xls)|\/(?:download|getpdf|pdf)\b/i;
+
+  const decodeEntities = (t) => String(t || '')
+    .replace(/&#x2f;/gi, '/')
+    .replace(/&#0*47;/g, '/')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;|&#0*39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#0*38;|&amp;/gi, '&'); // אחרון: כדי לא לפרק ישויות מקוננות פעמיים
+
+  const latin1 = (buf) => {
+    let s = '';
+    for (let i = 0; i < buf.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    }
+    return s;
+  };
+
+  const grab = async (u) => {
+    const t0 = now();
+    const r = await fetch(u, { credentials: 'include' });
+    const finalUrl = r.url || u;
+    if (!r.ok) return { ok: false, status: r.status, finalUrl, fetchMs: now() - t0 };
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const fetchMs = now() - t0;
+    // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
+    const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
+    const isZip = buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+    // ⚠️ הצוואר של המסלול המוזרק: מחרוזת latin1 של הקובץ *כולו*. במסלול ה-SW
+    // בונים אותה רק כשמדובר ב-HTML, ורק את הראש — קובץ אמיתי לא נוגע בה בכלל.
+    const e0 = now();
+    let s = '';
+    if (!wantBytes) s = latin1(buf);
+    else if (!isPdf && !isZip) s = latin1(buf.subarray(0, HEAD_BYTES));
+    const encodeMs = now() - e0;
+    return {
+      ok: true,
+      isPdf,
+      isZip,
+      s,
+      bytes: wantBytes ? buf : null,
+      byteLength: buf.length,
+      finalUrl,
+      contentType: r.headers.get('content-type') || '',
+      disposition: r.headers.get('content-disposition') || '',
+      fetchMs,
+      encodeMs,
+    };
+  };
+
+  // ⚠️ לא לחפש "login"/"password" סתם בטקסט: בדף קורס של Moodle יש קישור
+  // "התחברות" בכל עמוד. גם שדה סיסמה לבדו לא מספיק (טופס מוסתר בערכת הנושא).
+  const isLoginPage = (head, finalUrl) => {
+    if (/\/login\/index\.php|\/auth\/login|\/login\/?(?:[?#]|$)|saml2?\/login|adfs\/ls|\/idp\/|\/sso\/|\/oauth2?\/authorize/i.test(finalUrl)) return true;
+    const hasPassword = /<input[^>]+type\s*=\s*["']?password/i.test(head)
+      || /<input[^>]+name\s*=\s*["']?(?:password|passwd|pwd)["'\s/>]/i.test(head);
+    if (!hasPassword) return false;
+    return /<form[^>]+(?:action\s*=\s*["']?[^"'>]*(?:login|auth|signin|sso)|id\s*=\s*["']?login)/i.test(head);
+  };
+
+  // ⚠️ **הבאג שהפיל 7/7 משאבים**: דף עטיפה של Moodle מלא ב-pluginfile.php
+  // שהם *תמונות* — אווטאר משתמש, תמונת קורס, נכסי ערכת נושא. "ה-pluginfile
+  // הראשון בגוף" קפץ תמיד לאווטאר, וכל משאב נדחה כ"תמונה". לכן: אוספים את
+  // **כל** המועמדים, מסננים את הכרום של הדף, מדרגים, ומנסים עד 3.
+  const DOC_EXT = /\.(pdf|docx?|pptx?|xlsx?)(?:[?#]|$)/i;
+  const IMG_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|avif|tiff?)(?:[?#]|$)/i;
+  // נתיבי "כרום" של Moodle תחת pluginfile — לעולם לא המשאב עצמו
+  const CHROME_PATH = /\/(?:user\/icon|user|course\/overviewfiles|theme|blocks)\//i;
+  const DOC_CT = /application\/pdf|wordprocessingml|presentationml|spreadsheetml/i;
+
+  const collectCandidates = (html, baseUrl) => {
+    const abs = (raw) => {
+      const v = decodeEntities(raw).trim().replace(/^["']|["']$/g, '');
+      if (!v || /^(?:#|javascript:|mailto:|data:|about:)/i.test(v)) return '';
+      try {
+        const u = new URL(v, baseUrl);
+        return /^https?:$/.test(u.protocol) ? u.href : '';
+      } catch { return ''; }
+    };
+
+    const out = [];
+    const add = (u, rank) => {
+      if (!u) return;
+      const isPlugin = /pluginfile\.php/i.test(u);
+      if (IMG_EXT.test(u)) return;                     // תמונה — לא משאב
+      if (isPlugin && CHROME_PATH.test(u)) return;     // אווטאר/תמונת קורס/ערכת נושא
+      const hit = out.find((c) => c.url === u);
+      if (hit) { if (rank < hit.rank) hit.rank = rank; return; }
+      out.push({ url: u, rank, seq: out.length });
+    };
+
+    // דרגה 1 — המטען האמיתי: mod_resource/content, סיומת מסמך, forcedownload
+    const payloadRank = (u) => (
+      /pluginfile\.php\/[^\s"']*\/mod_resource\/content\//i.test(u)
+      || DOC_EXT.test(u)
+      || /[?&]forcedownload=1/i.test(u) ? 1 : 0);
+
+    // כל ה-pluginfile בגוף (כולל בתוך JS) — מדורגים 1 או 4, לא "ראשון מנצח"
+    const pluginRe = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/gi;
+    for (const m of html.match(pluginRe) || []) {
+      const u = abs(m);
+      add(u, payloadRank(u) || 4);
+    }
+
+    // דרגה 2 — יעדים מבניים: object/iframe/embed, ואז <a href> שנראה כמו קובץ
+    for (const tag of html.match(/<(?:iframe|embed|object)\b[^>]*>/gi) || []) {
+      const attr = /\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+      const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+      if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
+    }
+    for (const tag of html.match(/<a\b[^>]*>/gi) || []) {
+      const attr = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+      const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
+      if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
+    }
+
+    // דרגה 3 — meta refresh
+    const meta = /<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/i.exec(html)
+      || /<meta[^>]*content\s*=\s*["'][^"']*url\s*=[^"']*["'][^>]*>/i.exec(html);
+    if (meta) {
+      const content = /content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(meta[0]);
+      const raw = content && (content[1] || content[2] || content[3] || '');
+      const target2 = raw && /url\s*=\s*(.+)$/i.exec(raw.trim());
+      if (target2) { const u = abs(target2[1]); add(u, payloadRank(u) || 3); }
+    }
+
+    return out.sort((a, b) => a.rank - b.rank || a.seq - b.seq).map((c) => c.url);
+  };
+
+  // ⚠️ content-type לבדו אינו הוכחה: שרתים (ובעיקר Moodle/EZproxy) מגישים דף
+  // שגיאה או דף ניווט עם `application/pdf`. בלי הבדיקה הזו ה-HTML נשמר כ-.pdf
+  // ומדווח "נשלח" — קובץ פגום שהאפליקציה לא תצליח לחלץ.
+  const looksLikeMarkup = (s) => /^\s*(?:<!doctype|<html|<\?xml|<head|<body|<)/i.test(String(s || '').slice(0, 200));
+
+  const pack = (res, extra) => {
+    const isDoc = res.isPdf || res.isZip
+      || (!!res.contentType && DOC_CT.test(res.contentType) && !looksLikeMarkup(res.s));
+    const e0 = now();
+    const data = (!wantBytes && isDoc) ? btoa(res.s) : '';
+    timing.encodeMs += now() - e0;
+    return Object.assign({
+      ok: true,
+      isPdf: res.isPdf,
+      isZip: res.isZip,
+      isDoc,
+      looksLikeLogin: !isDoc && isLoginPage(res.s.slice(0, 60000), res.finalUrl),
+      finalUrl: res.finalUrl,
+      contentType: res.contentType,
+      disposition: res.disposition,
+      byteLength: res.byteLength || 0,
+      data,
+      // מסלול ה-SW: הבייטים עוברים כמו שהם עד uploadBytes, בלי סיבוב base64.
+      bytes: (wantBytes && isDoc) ? res.bytes : null,
+      timing,
+    }, extra || {});
+  };
+
+  const first = await grab(target);
+  timing.fetchMs = first.fetchMs || 0;
+  timing.encodeMs += first.encodeMs || 0;
+  if (!first.ok) return { ok: false, status: first.status, finalUrl: first.finalUrl, timing };
+  // ✔️ קובץ מאומת כבר בתשובה הראשונה — אין קפיצה, אין ניתוח HTML.
+  if (first.isPdf || first.isZip) return pack(first);
+
+  // ⚠️ הקפיצה קודמת להכרעת ההתחברות, ובכוונה: ערכות נושא של Moodle מרנדרות
+  // טופס התחברות אמיתי במגירה גם למשתמש מחובר, ולכן isLoginPage לבדו עדיין
+  // היה חוסם. דף התחברות אמיתי לעולם אינו מכיל מועמד מסמך — אז אם נמצא קובץ
+  // מוטמע, הוא התשובה. **קפיצה אחת בלבד**: כל המועמדים נאספים מדף העטיפה
+  // הראשון, ותוצאת קפיצה לעולם אינה מייצרת מועמדים חדשים.
+  const firstLogin = isLoginPage(first.s.slice(0, 60000), first.finalUrl);
+  const candidates = collectCandidates(first.s.slice(0, 400000), first.finalUrl)
+    .filter((u) => u !== first.finalUrl && u !== target)
+    .slice(0, 3);
+  if (!candidates.length) return pack(first, { candidates: [] });
+
+  let lastRes = null;
+  let lastUrl = '';
+  for (const u of candidates) {
+    let res2 = null;
+    try { res2 = await grab(u); } catch { res2 = null; }
+    timing.hops += 1;
+    if (res2) {
+      timing.hopMs += res2.fetchMs || 0;
+      timing.encodeMs += res2.encodeMs || 0;
+    }
+    if (!res2 || !res2.ok) continue;
+    lastRes = res2;
+    lastUrl = u;
+    const ct = String(res2.contentType || '').toLowerCase();
+    if (res2.isPdf || res2.isZip
+      || (DOC_CT.test(ct) && !ct.includes('image/') && !looksLikeMarkup(res2.s))) {
+      return pack(res2, { wrapperUrl: u, viaWrapper: true, candidates });
+    }
+    // תמונה/HTML — ממשיכים למועמד הבא במקום להיכשל
+  }
+
+  // אף מועמד לא אימת קובץ. אם הדף הראשון היה באמת דף התחברות — זו הסיבה
+  // המדויקת יותר. אחרת מדווחים על היעד האחרון, שם רואים מארח חיצוני.
+  return firstLogin || !lastRes
+    ? pack(first, { candidates, wrapperUrl: candidates[0] })
+    : pack(lastRes, { candidates, wrapperUrl: lastUrl, viaWrapper: true });
+}
+
+/** מסלול ההזרקה (MAIN world) — ה-session, ה-Referer וכותרות האתר תקפים. */
 async function fetchFileViaTab(tabId, url) {
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      args: [url],
-      func: async (target) => {
-        // כל העזרים חייבים לחיות כאן: הפונקציה מוזרקת לעולם של הדף בלי closure.
-        const FILE_LIKE = /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|csv)(?:[?#]|$)|pluginfile\.php|forcedownload=1|[?&](?:type|format|mode|action)=[^&]*(?:pdf|doc|ppt|xls)|\/(?:download|getpdf|pdf)\b/i;
-
-        const decodeEntities = (t) => String(t || '')
-          .replace(/&#x2f;/gi, '/')
-          .replace(/&#0*47;/g, '/')
-          .replace(/&quot;/gi, '"')
-          .replace(/&apos;|&#0*39;/gi, "'")
-          .replace(/&lt;/gi, '<')
-          .replace(/&gt;/gi, '>')
-          .replace(/&#0*38;|&amp;/gi, '&'); // אחרון: כדי לא לפרק ישויות מקוננות פעמיים
-
-        const grab = async (u) => {
-          const r = await fetch(u, { credentials: 'include' });
-          const finalUrl = r.url || u;
-          if (!r.ok) return { ok: false, status: r.status, finalUrl };
-          const buf = new Uint8Array(await r.arrayBuffer());
-          let s = '';
-          for (let i = 0; i < buf.length; i += 0x8000) {
-            s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-          }
-          return {
-            ok: true,
-            // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
-            isPdf: buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46,
-            isZip: buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04,
-            s,
-            finalUrl,
-            contentType: r.headers.get('content-type') || '',
-            disposition: r.headers.get('content-disposition') || '',
-          };
-        };
-
-        // ⚠️ לא לחפש "login"/"password" סתם בטקסט: בדף קורס של Moodle יש קישור
-        // "התחברות" בכל עמוד. גם שדה סיסמה לבדו לא מספיק (טופס מוסתר בערכת הנושא).
-        const isLoginPage = (head, finalUrl) => {
-          if (/\/login\/index\.php|\/auth\/login|\/login\/?(?:[?#]|$)|saml2?\/login|adfs\/ls|\/idp\/|\/sso\/|\/oauth2?\/authorize/i.test(finalUrl)) return true;
-          const hasPassword = /<input[^>]+type\s*=\s*["']?password/i.test(head)
-            || /<input[^>]+name\s*=\s*["']?(?:password|passwd|pwd)["'\s/>]/i.test(head);
-          if (!hasPassword) return false;
-          return /<form[^>]+(?:action\s*=\s*["']?[^"'>]*(?:login|auth|signin|sso)|id\s*=\s*["']?login)/i.test(head);
-        };
-
-        // ⚠️ **הבאג שהפיל 7/7 משאבים**: דף עטיפה של Moodle מלא ב-pluginfile.php
-        // שהם *תמונות* — אווטאר משתמש, תמונת קורס, נכסי ערכת נושא. "ה-pluginfile
-        // הראשון בגוף" קפץ תמיד לאווטאר, וכל משאב נדחה כ"תמונה". לכן: אוספים את
-        // **כל** המועמדים, מסננים את הכרום של הדף, מדרגים, ומנסים עד 3.
-        const DOC_EXT = /\.(pdf|docx?|pptx?|xlsx?)(?:[?#]|$)/i;
-        const IMG_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|avif|tiff?)(?:[?#]|$)/i;
-        // נתיבי "כרום" של Moodle תחת pluginfile — לעולם לא המשאב עצמו
-        const CHROME_PATH = /\/(?:user\/icon|user|course\/overviewfiles|theme|blocks)\//i;
-        const DOC_CT = /application\/pdf|wordprocessingml|presentationml|spreadsheetml/i;
-
-        const collectCandidates = (html, baseUrl) => {
-          const abs = (raw) => {
-            const v = decodeEntities(raw).trim().replace(/^["']|["']$/g, '');
-            if (!v || /^(?:#|javascript:|mailto:|data:|about:)/i.test(v)) return '';
-            try {
-              const u = new URL(v, baseUrl);
-              return /^https?:$/.test(u.protocol) ? u.href : '';
-            } catch { return ''; }
-          };
-
-          const out = [];
-          const add = (u, rank) => {
-            if (!u) return;
-            const isPlugin = /pluginfile\.php/i.test(u);
-            if (IMG_EXT.test(u)) return;                     // תמונה — לא משאב
-            if (isPlugin && CHROME_PATH.test(u)) return;     // אווטאר/תמונת קורס/ערכת נושא
-            const hit = out.find((c) => c.url === u);
-            if (hit) { if (rank < hit.rank) hit.rank = rank; return; }
-            out.push({ url: u, rank, seq: out.length });
-          };
-
-          // דרגה 1 — המטען האמיתי: mod_resource/content, סיומת מסמך, forcedownload
-          const payloadRank = (u) => (
-            /pluginfile\.php\/[^\s"']*\/mod_resource\/content\//i.test(u)
-            || DOC_EXT.test(u)
-            || /[?&]forcedownload=1/i.test(u) ? 1 : 0);
-
-          // כל ה-pluginfile בגוף (כולל בתוך JS) — מדורגים 1 או 4, לא "ראשון מנצח"
-          const pluginRe = /(?:https?:\/\/)?[^\s"'<>()\\=]*pluginfile\.php\/[^\s"'<>()\\]*/gi;
-          for (const m of html.match(pluginRe) || []) {
-            const u = abs(m);
-            add(u, payloadRank(u) || 4);
-          }
-
-          // דרגה 2 — יעדים מבניים: object/iframe/embed, ואז <a href> שנראה כמו קובץ
-          for (const tag of html.match(/<(?:iframe|embed|object)\b[^>]*>/gi) || []) {
-            const attr = /\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
-            if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
-          }
-          for (const tag of html.match(/<a\b[^>]*>/gi) || []) {
-            const attr = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-            const u = attr && abs(attr[1] || attr[2] || attr[3] || '');
-            if (u && FILE_LIKE.test(u)) add(u, payloadRank(u) || 2);
-          }
-
-          // דרגה 3 — meta refresh
-          const meta = /<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/i.exec(html)
-            || /<meta[^>]*content\s*=\s*["'][^"']*url\s*=[^"']*["'][^>]*>/i.exec(html);
-          if (meta) {
-            const content = /content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(meta[0]);
-            const raw = content && (content[1] || content[2] || content[3] || '');
-            const target2 = raw && /url\s*=\s*(.+)$/i.exec(raw.trim());
-            if (target2) { const u = abs(target2[1]); add(u, payloadRank(u) || 3); }
-          }
-
-          return out.sort((a, b) => a.rank - b.rank || a.seq - b.seq).map((c) => c.url);
-        };
-
-        // ⚠️ content-type לבדו אינו הוכחה: שרתים (ובעיקר Moodle/EZproxy) מגישים דף
-        // שגיאה או דף ניווט עם `application/pdf`. בלי הבדיקה הזו ה-HTML נשמר כ-.pdf
-        // ומדווח "נשלח" — קובץ פגום שהאפליקציה לא תצליח לחלץ.
-        const looksLikeMarkup = (s) => /^\s*(?:<!doctype|<html|<\?xml|<head|<body|<)/i.test(String(s || '').slice(0, 200));
-
-        const pack = (res, extra) => {
-          const isDoc = res.isPdf || res.isZip
-            || (!!res.contentType && DOC_CT.test(res.contentType) && !looksLikeMarkup(res.s));
-          return Object.assign({
-            ok: true,
-            isPdf: res.isPdf,
-            isZip: res.isZip,
-            isDoc,
-            looksLikeLogin: !isDoc && isLoginPage(res.s.slice(0, 60000), res.finalUrl),
-            finalUrl: res.finalUrl,
-            contentType: res.contentType,
-            disposition: res.disposition,
-            data: isDoc ? btoa(res.s) : '',
-          }, extra || {});
-        };
-
-        const first = await grab(target);
-        if (!first.ok) return { ok: false, status: first.status, finalUrl: first.finalUrl };
-        if (first.isPdf || first.isZip) return pack(first);
-
-        // ⚠️ הקפיצה קודמת להכרעת ההתחברות, ובכוונה: ערכות נושא של Moodle מרנדרות
-        // טופס התחברות אמיתי במגירה גם למשתמש מחובר, ולכן isLoginPage לבדו עדיין
-        // היה חוסם. דף התחברות אמיתי לעולם אינו מכיל מועמד מסמך — אז אם נמצא קובץ
-        // מוטמע, הוא התשובה. **קפיצה אחת בלבד**: כל המועמדים נאספים מדף העטיפה
-        // הראשון, ותוצאת קפיצה לעולם אינה מייצרת מועמדים חדשים.
-        const firstLogin = isLoginPage(first.s.slice(0, 60000), first.finalUrl);
-        const candidates = collectCandidates(first.s.slice(0, 400000), first.finalUrl)
-          .filter((u) => u !== first.finalUrl && u !== target)
-          .slice(0, 3);
-        if (!candidates.length) return pack(first, { candidates: [] });
-
-        let lastRes = null;
-        let lastUrl = '';
-        for (const u of candidates) {
-          let res2 = null;
-          try { res2 = await grab(u); } catch { res2 = null; }
-          if (!res2 || !res2.ok) continue;
-          lastRes = res2;
-          lastUrl = u;
-          const ct = String(res2.contentType || '').toLowerCase();
-          if (res2.isPdf || res2.isZip
-            || (DOC_CT.test(ct) && !ct.includes('image/') && !looksLikeMarkup(res2.s))) {
-            return pack(res2, { wrapperUrl: u, viaWrapper: true, candidates });
-          }
-          // תמונה/HTML — ממשיכים למועמד הבא במקום להיכשל
-        }
-
-        // אף מועמד לא אימת קובץ. אם הדף הראשון היה באמת דף התחברות — זו הסיבה
-        // המדויקת יותר. אחרת מדווחים על היעד האחרון, שם רואים מארח חיצוני.
-        return firstLogin || !lastRes
-          ? pack(first, { candidates, wrapperUrl: candidates[0] })
-          : pack(lastRes, { candidates, wrapperUrl: lastUrl, viaWrapper: true });
-      },
+      args: [url, { wantBytes: false }],
+      func: probeFileTarget,
     });
     return res?.result || null;
   } catch {
     return null;
+  }
+}
+
+// ---------- מדידת זמנים (קבועה — כך מאבחנים את הדיווח הבא על איטיות) ----------
+const perf = (msg) => console.info(`[wordflow][perf] ${msg}`);
+const ms = (v) => `${Math.round(v || 0)}ms`;
+const shortLabel = (s) => {
+  const t = String(s || '').trim();
+  return t.length > 60 ? `${t.slice(0, 60)}…` : (t || '(ללא שם)');
+};
+const kb = (n) => (n ? (n < 1024 ? `${n}B` : `${Math.round(n / 1024)}KB`) : '?');
+
+/**
+ * משיכה עם אימות — **קודם מה-service worker, ורק בנפילה דרך הזרקה לדף**.
+ *
+ * ⚠️ זו ההאצה העיקרית: המסלול המוזרק בונה מחרוזת latin1 של הקובץ כולו, מקודד
+ * base64 (×1.37) ומעביר את המחרוזת ב-JSON חוצה-תהליכים — עשרות MB של עבודה
+ * לכל PDF. ב-SW הבייטים נשארים בייטים עד uploadBytes.
+ * fetch מה-SW מותר כי activeTab מעניק הרשאת מארח זמנית ללשונית הפעילה,
+ * ו-credentials:'include' נושא את עוגיות ה-session (חובה ל-Moodle).
+ * נופלים חזרה להזרקה בכל מקרה שאינו קובץ מאומת — יש נקודות קצה שדורשות את
+ * ה-Referer/הקשר הדף, ושם רק המסלול המוזרק עובד.
+ */
+async function probeFile(tabId, url, label = '') {
+  const t0 = Date.now();
+  let sw = null;
+  let swError = '';
+  try {
+    sw = await probeFileTarget(url, { wantBytes: true });
+  } catch (err) {
+    swError = String(err?.message || err);
+  }
+  const swMs = Date.now() - t0;
+
+  if (sw && sw.ok && sw.isDoc) {
+    logProbe(label, 'sw', swMs, sw);
+    return sw;
+  }
+
+  const swReason = swError ? `שגיאה: ${swError}`
+    : !sw ? 'ללא תשובה'
+      : !sw.ok ? `status ${sw.status || '?'}`
+        : 'לא קובץ מאומת';
+  const t1 = Date.now();
+  const main = await fetchFileViaTab(tabId, url);
+  const mainMs = Date.now() - t1;
+  logProbe(label, 'main', mainMs, main, `sw נדחה אחרי ${ms(swMs)} (${swReason})`);
+  // ה-SW הצליח לדבר עם השרת אבל לא היה שם קובץ, וההזרקה בכלל לא נגישה —
+  // התשובה של ה-SW עדיין מכילה את הסיבה המדויקת (התחברות/מועמדים).
+  return main || sw;
+}
+
+function logProbe(label, via, wallMs, probe, note = '') {
+  const t = probe?.timing || {};
+  // "העברה" = כל מה שלא נמדד בתוך הפונקציה: serialization של executeScript
+  // חוצה-תהליכים. במסלול ה-SW הוא אפס בהגדרה.
+  const inner = (t.fetchMs || 0) + (t.hopMs || 0) + (t.encodeMs || 0);
+  const transfer = Math.max(0, wallMs - inner);
+  perf([
+    `קובץ "${shortLabel(label)}" · מסלול ${via}`,
+    `משיכה ${ms(t.fetchMs)}`,
+    `קפיצות ${t.hops || 0}/${ms(t.hopMs)}`,
+    `קידוד ${ms(t.encodeMs)}`,
+    `העברה ${ms(transfer)}`,
+    `גודל ${kb(probe?.byteLength)}`,
+    `סה"כ ${ms(wallMs)}`,
+    note,
+  ].filter(Boolean).join(' · '));
+}
+
+// ---------- מקביליות ----------
+// ⚠️ קודם הלולאה הייתה סדרתית לחלוטין: 7 קבצים = סכום כל המשיכות + כל ההעלאות.
+// ארבעה במקביל מנצלים את זמן ההמתנה לרשת בלי להטביע את שרת ה-Moodle.
+const DOWNLOAD_CONCURRENCY = 4;
+
+/**
+ * סמפור **גלובלי אחד** לכל העבודה. תיקיית Moodle מרחיבה לקבצים פנימיים —
+ * הם נוטלים אישורים מאותו סמפור, ולכן הרחבה של תיקייה אינה מכפילה את העומס.
+ * פריט התיקייה עצמו לא מחזיק אישור בזמן ההרחבה (אחרת 4 תיקיות היו נועלות).
+ */
+function createSemaphore(limit) {
+  let active = 0;
+  const queue = [];
+  const pump = () => {
+    while (active < limit && queue.length) {
+      active += 1;
+      queue.shift()();
+    }
+  };
+  return {
+    acquire: () => new Promise((resolve) => { queue.push(resolve); pump(); }),
+    release: () => { active -= 1; pump(); },
+  };
+}
+
+async function withSlot(sem, fn) {
+  await sem.acquire();
+  try {
+    return await fn();
+  } finally {
+    sem.release();
   }
 }
 
@@ -581,7 +733,9 @@ async function saveProbedFile(user, link, probe, captureMode = 'page-files') {
   await writeFileClip({
     uid: user.uid,
     title: link.title || fileName,
-    bytes: base64ToBytes(probe.data),
+    // מסלול ה-SW מחזיר בייטים; המסלול המוזרק מחזיר base64 (אין ArrayBuffer
+    // חוצה-תהליכים ב-executeScript).
+    bytes: probe.bytes || base64ToBytes(probe.data),
     fileName,
     sourceUrl: probe.finalUrl || link.url,
     captureMode,
@@ -602,40 +756,54 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
   const user = await requireUser();
   const startUrl = tab.url;
   const pageHost = hostOf(startUrl || '');
+  const jobStartedAt = Date.now();
+  const sem = createSemaphore(DOWNLOAD_CONCURRENCY);
 
   let saved = 0;
   const skipped = [];
   let aborted = false;
   let cancelled = false;
 
-  for (let index = 0; index < links.length; index += 1) {
-    const link = links[index];
+  /** הצלחה בודדת — מקדמת את המונה ואת הבדג' גם כשמדובר בקובץ בתוך תיקייה. */
+  const noteSaved = () => {
+    saved += 1;
+    flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+  };
+
+  /**
+   * ⚠️ הרשאת activeTab נשללת ברגע שהלשונית מנווטת — לכן בודקים את ה-URL לפני
+   * כל פריט (גם כשהפריטים רצים במקביל) ועוצרים במקום להיכשל בשקט על השאר.
+   */
+  const guardTab = async () => {
+    if (aborted) return false;
+    try {
+      const current = await chrome.tabs.get(tab.id);
+      if (current?.url && startUrl && current.url !== startUrl) aborted = true;
+    } catch {
+      aborted = true; // הלשונית נסגרה
+    }
+    return !aborted;
+  };
+
+  const runOne = async (link, index) => {
     const emit = (status, extra = {}) => {
       onItem({ index, url: link.url, title: link.title || '', status, ...extra });
     };
 
-    if (shouldCancel()) { cancelled = true; break; }
-
-    if (!aborted) {
-      try {
-        const current = await chrome.tabs.get(tab.id);
-        if (current?.url && startUrl && current.url !== startUrl) aborted = true;
-      } catch {
-        aborted = true; // הלשונית נסגרה
-      }
-    }
-    if (aborted) {
+    if (shouldCancel()) { cancelled = true; return; }
+    if (!(await guardTab())) {
       skipped.push(`${link.title || link.url}: ${TAB_CHANGED_MSG}`);
       emit('error', { reason: TAB_CHANGED_MSG });
-      continue;
+      return;
     }
+    if (shouldCancel()) { cancelled = true; return; }
 
     try {
-      // תיקיית Moodle: כל הקבצים שבתוכה, לא רק הראשון.
+      // תיקיית Moodle: כל הקבצים שבתוכה, לא רק הראשון. הפריט הזה **אינו** מחזיק
+      // אישור סמפור בזמן ההרחבה — הקבצים הפנימיים נוטלים אישורים בעצמם.
       if (FOLDER_RESOURCE.test(link.url)) {
-        const folder = await downloadFolderFiles(tab, user, link, shouldCancel);
+        const folder = await downloadFolderFiles(tab, user, link, shouldCancel, sem, noteSaved);
         if (folder) {
-          saved += folder.saved;
           if (folder.saved) {
             emit('saved', {
               fileName: folder.total > 1 ? `${folder.saved} קבצים מהתיקייה` : folder.firstName,
@@ -646,17 +814,25 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
             skipped.push(`${link.title || link.url}: ${reason}`);
             emit('skipped', { reason });
           }
-          continue;
+          return;
         }
         // אין מועמדים בתיקייה — נופלים למסלול הרגיל (אולי זו בכלל לא תיקייה).
       }
 
-      const probe = await fetchFileViaTab(tab.id, link.url);
+      await sem.acquire();
+      let probe;
+      try {
+        if (shouldCancel()) { cancelled = true; return; }
+        probe = await probeFile(tab.id, link.url, link.title || link.url);
+      } finally {
+        sem.release();
+      }
+
       if (!probe) {
-        // executeScript נכשל — אין גישה ללשונית (chrome://, צופה PDF פנימי, דף שנסגר)
+        // גם ה-SW וגם ההזרקה נכשלו — אין גישה ללשונית (chrome://, צופה PDF פנימי)
         skipped.push(`${link.title || link.url}: ${NO_TAB_ACCESS_MSG}`);
         emit('skipped', { reason: NO_TAB_ACCESS_MSG });
-        continue;
+        return;
       }
       if (!probe.ok) {
         const reason = probe.status
@@ -664,7 +840,7 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
           : 'הקובץ לא נגיש';
         skipped.push(`${link.title || link.url}: ${reason}`);
         emit('skipped', { reason });
-        continue;
+        return;
       }
       if (probe.candidates && probe.candidates.length) {
         console.info(
@@ -686,14 +862,23 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
           skipped.push(`${link.title || link.url}: ${reason}`);
           emit('skipped', { reason });
         }
-        continue;
+        return;
       }
       if (probe.viaWrapper) {
         console.info('[wordflow][files] דף עטיפה — הקובץ נמשך מ-', probe.finalUrl);
       }
-      const fileName = await saveProbedFile(user, link, probe);
-      saved += 1;
-      flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+      // ⚠️ הבדיקה חייבת להיות **אחרי** נטילת אישור ההעלאה: המשיכות מהירות
+      // מהעלאות, ולכן כל הפריטים כבר עברו את שער הביטול הקודם בזמן שההעלאה
+      // הראשונה בכלל לא הסתיימה. בלי זה ביטול היה עדיין מזרים ל-Firebase את
+      // כל מה שהספיק להיבדק.
+      const up0 = Date.now();
+      const fileName = await withSlot(sem, () => {
+        if (shouldCancel()) { cancelled = true; return null; }
+        return saveProbedFile(user, link, probe);
+      });
+      if (fileName === null) return;
+      perf(`העלאה "${shortLabel(fileName)}" · ${ms(Date.now() - up0)} · ${kb(probe.byteLength)}`);
+      noteSaved();
       emit('saved', { fileName });
     } catch (err) {
       console.warn('[wordflow][files] דילוג על', link.url, err);
@@ -701,49 +886,63 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
       skipped.push(`${link.title || link.url}: ${reason}`);
       emit('error', { reason });
     }
-  }
+  };
 
+  // ⚠️ כל הפריטים מושקים יחד אבל *ממתינים* לסמפור — כך המקביליות חסומה ב-4,
+  // ה-index של כל פריט נשמר ב-closure (הפופאפ ממפה לפיו), וביטול עוצר את כל
+  // מי שעדיין לא נטל אישור.
+  await Promise.all(links.map((link, index) => runOne(link, index)));
+
+  perf(`סיכום עבודה · ${links.length} פריטים · נשמרו ${saved} · ${ms(Date.now() - jobStartedAt)} · מקביליות ${DOWNLOAD_CONCURRENCY}${cancelled ? ' · בוטלה' : ''}`);
   return { saved, skipped, cancelled };
 }
 
 /**
  * קליטת כל הקבצים שבתוך תיקיית Moodle אחת. מחזיר null כשאין מועמדים בכלל
  * (ואז הקורא ממשיך במסלול הרגיל של קפיצה בודדת).
+ * ⚠️ sem הוא **הסמפור של העבודה כולה** — קבצי התיקייה אינם ערוץ מקביליות שני.
  */
-async function downloadFolderFiles(tab, user, link, shouldCancel = () => false) {
-  const entries = await scanFolderCandidates(tab.id, link.url);
+async function downloadFolderFiles(tab, user, link, shouldCancel = () => false, sem = createSemaphore(DOWNLOAD_CONCURRENCY), onSaved = () => {}) {
+  const entries = await withSlot(sem, () => scanFolderCandidates(tab.id, link.url));
   if (!entries.length) return null;
 
   let saved = 0;
   let failed = 0;
-  let firstName = '';
   let lastReason = '';
+  // ⚠️ השמות נאספים לפי אינדקס ולא לפי סדר סיום — "הקובץ הראשון בתיקייה"
+  // חייב להישאר הראשון גם כשהשני הסתיים לפניו.
+  const names = new Array(entries.length).fill('');
 
-  for (const entry of entries) {
-    if (shouldCancel()) break;
+  await Promise.all(entries.map(async (entry, i) => {
+    if (shouldCancel()) return;
+    await sem.acquire();
     try {
-      const probe = await fetchFileViaTab(tab.id, entry.url);
+      if (shouldCancel()) return;
+      const probe = await probeFile(tab.id, entry.url, entry.title || entry.url);
       if (!probe || !probe.ok || (!probe.isPdf && !probe.isZip && !probe.isDoc)) {
         failed += 1;
         lastReason = probe && probe.looksLikeLogin ? LOGIN_MSG : 'לא נמצא קובץ בתוך התיקייה';
-        continue;
+        return;
       }
-      const name = await saveProbedFile(
+      const up0 = Date.now();
+      names[i] = await saveProbedFile(
         user,
         { url: entry.url, title: entry.title || link.title || '' },
         probe,
       );
-      if (!firstName) firstName = name;
+      perf(`העלאה "${shortLabel(names[i])}" · ${ms(Date.now() - up0)} · ${kb(probe.byteLength)}`);
       saved += 1;
-      flashBadge(tab.id, `${saved}`, '#2563eb', 2000);
+      onSaved();
     } catch (err) {
       failed += 1;
       lastReason = String(err?.message || err);
+    } finally {
+      sem.release();
     }
-  }
+  }));
 
   console.info('[wordflow][files] תיקייה', link.url, `→ נשמרו ${saved}/${entries.length}`);
-  return { saved, failed, total: entries.length, firstName, lastReason };
+  return { saved, failed, total: entries.length, firstName: names.find(Boolean) || '', lastReason };
 }
 
 async function handleClipAllFiles(tab) {
@@ -794,6 +993,26 @@ async function writeJob(tabId, job) {
   } catch (err) {
     console.warn('[wordflow][files] שמירת מצב העבודה נכשלה:', err);
   }
+}
+
+/**
+ * כותב מצב-עבודה מאחד. ⚠️ מאז שהפריטים רצים במקביל, שתי קריאות writeJob
+ * שנשלחות יחד יכולות לנחות בסדר הפוך — והכתיבה הישנה מוחקת את החדשה. הכותב
+ * הזה מסדר את הכתיבות בשרשרת ומאחד המתנות רצופות לכתיבה אחת של המצב העדכני.
+ */
+function makeJobWriter(tabId) {
+  let chain = Promise.resolve();
+  let pending = null;
+  return (job) => {
+    pending = job;
+    chain = chain.then(async () => {
+      if (!pending) return;
+      const snapshot = pending;
+      pending = null;
+      await writeJob(tabId, snapshot);
+    });
+    return chain;
+  };
 }
 
 async function clearJob(tabId) {
@@ -913,8 +1132,10 @@ async function runFilesJob(tabId, links) {
     await writeJob(tabId, job);
 
     const isCancelled = () => cancelledJobTabs.has(tabId);
+    const pushJob = makeJobWriter(tabId);
 
     const result = await downloadFiles(tab, links, async (item) => {
+      // ⚠️ הפריטים מסתיימים מחוץ לסדר — הכתיבה חייבת להישאר ממוענת לפי index.
       const entry = job.items[item.index];
       if (entry) {
         entry.status = item.status;
@@ -923,7 +1144,7 @@ async function runFilesJob(tabId, links) {
       }
       if (item.status === 'saved') job.saved += 1;
       // ⚠️ אחרי ביטול אסור לכתוב את מצב העבודה חזרה — זה מה שהחיה אותה בעבר.
-      if (!isCancelled()) await writeJob(tabId, job);
+      if (!isCancelled()) await pushJob(job);
       postToTab(tabId, { type: 'item', ...item });
     }, isCancelled);
 
