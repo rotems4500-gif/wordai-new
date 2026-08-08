@@ -1,5 +1,5 @@
 import React from 'react';
-import { APP_VERSION_LABEL } from './appVersion';
+import { APP_VERSION_LABEL, BUILD_LABEL } from './appVersion';
 import { Modal, Button } from './components/ui';
 import UserGuide from './UserGuide';
 
@@ -229,7 +229,7 @@ const GUIDE_CONTENT = {
     content: (
       <div className="text-center mt-5">
         <h2 className="text-2xl font-bold text-blue-700">WordFlow AI</h2>
-        <p className="mt-2.5 text-[15px]">גרסה: {APP_VERSION_LABEL || 'מקומית'}</p>
+        <p className="mt-2.5 text-[15px]">גרסה: {APP_VERSION_LABEL || 'מקומית'} · build {BUILD_LABEL}</p>
         <p className="mt-2.5 leading-relaxed">
           מערכת זו בנויה לסייע בעבודה אקדמית, כתיבה מקצועית וניהול מסמכים אינטליגנטי,
           תוך שילוב עמוק של מודלי בינה מלאכותית המתקדמים ביותר בשוק.

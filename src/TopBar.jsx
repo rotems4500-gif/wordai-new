@@ -2,6 +2,7 @@ import React from 'react';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
 import { isDesktopApp } from './platform';
 import { listCourses, COURSES_UPDATED_EVENT } from './services/courseStore';
+import { APP_VERSION_LABEL, BUILD_LABEL } from './appVersion';
 import {
   resolveActiveCourse,
   setActiveCourseOverride,
@@ -173,6 +174,13 @@ export default function TopBar({
           </>
         )}
         {!isWordMode && quickBtn('ph ph-gear', 'הגדרות', onOpenSettings)}
+        {/* מזהה build גלוי — כדי לדעת במבט אם הקוד שרץ הוא החדש (ר' appVersion.js). */}
+        <span
+          title={`WordFlow ${APP_VERSION_LABEL} · build ${BUILD_LABEL}`}
+          className="hidden select-none rounded-full bg-white/10 px-2 py-0.5 font-mono text-[11px] leading-5 text-white/70 sm:inline-block"
+        >
+          {BUILD_LABEL}
+        </span>
         <button onClick={onFocus} title="מצב מיקוד" className="hidden h-8 w-8 rounded-full hover:bg-white/20 sm:flex items-center justify-center transition">
           <i className="ph ph-arrows-out-simple text-lg text-amber-100"></i>
         </button>
