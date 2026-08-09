@@ -224,5 +224,99 @@ check('returns carry courseId', batchLecturer?.returns.every((r) => r.courseId =
 check('grade recorded on first return', batchLecturer?.returns.some((r) => r.grade === 88));
 check('titles preserved', batchLecturer?.returns.some((r) => r.assignmentTitle === 'עבודה ראשונה'));
 
+// ── 10. courseSyllabusImport — היוריסטיקה טהורה + כתיבה ל-courseStore ──
+// אין כאן שום קריאת מודל: extractCourseDraftHeuristically טהורה,
+// ו-createCourseFromDraft נוגעת רק ב-courseStore.
+console.log('\n[syllabusImport]');
+const { extractCourseDraftHeuristically, createCourseFromDraft, buildSyllabusTextFromDraft } =
+  await import('../../src/services/courseSyllabusImport.js');
+
+const SYL_A = [
+  'האוניברסיטה העברית בירושלים',
+  'הפקולטה למשפטים',
+  'שם הקורס: דיני תקשורת ומשפט',
+  'מרצה: ד"ר מיכל ברק',
+  "סמסטר ב' תשפ\"ו",
+  'נושאי הקורס:',
+  '1. מבוא לחופש הביטוי',
+  '2. לשון הרע ברשתות חברתיות',
+  '• אחריות פלטפורמות תוכן',
+].join('\n');
+
+const draftA = extractCourseDraftHeuristically({ rawText: SYL_A, fileName: 'syllabus.docx' });
+check('labeled course name', draftA.name === 'דיני תקשורת ומשפט', draftA.name);
+check('labeled lecturer', draftA.lecturerName === 'ד"ר מיכל ברק', draftA.lecturerName);
+check('term = semester + hebrew year', draftA.term.includes("סמסטר ב'") && draftA.term.includes('תשפ"ו'), draftA.term);
+check('topics from numbers+bullets', draftA.topics.length === 3 && draftA.topics[0] === 'מבוא לחופש הביטוי',
+  JSON.stringify(draftA.topics));
+check('raw text kept as syllabusText', draftA.syllabusText.includes('הפקולטה למשפטים'));
+
+// גרשיים עבריים (ד״ר), בלי תוויות מפורשות — שם הקורס הוא השורה המשמעותית
+// הראשונה שאינה כותרת מוסד.
+const SYL_B = [
+  'מכללת ספיר',
+  'תורת המשפט',
+  'ד״ר אבי לוין',
+  "סמסטר א' תשפ\"ה",
+  'שבוע 1: מהי נורמה משפטית',
+  'שבוע 2: הפוזיטיביזם המשפטי',
+  'שבוע 3: משפט טבע מול פוזיטיביזם',
+].join('\n');
+const draftB = extractCourseDraftHeuristically({ rawText: SYL_B, fileName: 'x.txt' });
+check('unlabeled name skips institution line', draftB.name === 'תורת המשפט', draftB.name);
+check('gershayim lecturer title', draftB.lecturerName === 'ד״ר אבי לוין', draftB.lecturerName);
+check('term with gershayim year', draftB.term.includes("סמסטר א'") && draftB.term.includes('תשפ"ה'), draftB.term);
+check('week-numbered topics stripped', draftB.topics.length === 3 && draftB.topics[0] === 'מהי נורמה משפטית',
+  JSON.stringify(draftB.topics));
+
+const draftC = extractCourseDraftHeuristically({ rawText: '', fileName: 'סילבוס - מבוא לסטטיסטיקה.docx' });
+check('filename fallback name', draftC.name === 'מבוא לסטטיסטיקה', draftC.name);
+check('empty text → no lecturer/term/topics',
+  !draftC.lecturerName && !draftC.term && draftC.topics.length === 0);
+
+const beforeCount = listCourses({ includeArchived: true }).length;
+const madeA = createCourseFromDraft(draftA);
+check('draft created a course', !!madeA.course?.id && madeA.existed === false);
+check('course fields from draft',
+  madeA.course.name === 'דיני תקשורת ומשפט' && madeA.course.lecturerName === 'ד"ר מיכל ברק' && !!madeA.course.term);
+check('topics appended to syllabusText',
+  madeA.course.syllabusText.includes('--- נושאים מרכזיים ---')
+  && madeA.course.syllabusText.includes('• מבוא לחופש הביטוי'),
+  madeA.course.syllabusText.slice(-160));
+check('course count grew by one', listCourses({ includeArchived: true }).length === beforeCount + 1);
+
+// אותו שם שוב, עם טיוטה חסרה — עדכון ולא כפילות, ובלי למחוק מרצה קיים.
+const madeAgain = createCourseFromDraft({
+  name: 'דיני תקשורת ומשפט', lecturerName: '', term: '',
+  syllabusText: 'גרסה מעודכנת של הסילבוס', topics: ['נושא חדש'],
+});
+check('same name updates, no duplicate',
+  madeAgain.course?.id === madeA.course.id && madeAgain.existed === true
+  && listCourses({ includeArchived: true }).length === beforeCount + 1);
+check('empty lecturerName does not clobber', madeAgain.course.lecturerName === 'ד"ר מיכל ברק',
+  madeAgain.course.lecturerName);
+check('syllabusText replaced by new draft',
+  madeAgain.course.syllabusText.includes('גרסה מעודכנת') && madeAgain.course.syllabusText.includes('• נושא חדש'));
+
+// חיתוך ל-20,000: הגוף נחתך, בלוק הנושאים תמיד שורד.
+const longDraft = {
+  name: 'קורס ארוך במיוחד',
+  lecturerName: 'פרופ\' דנה שגב',
+  term: 'סמסטר קיץ',
+  syllabusText: 'א'.repeat(25000),
+  topics: ['נושא ששורד את החיתוך'],
+};
+const builtLong = buildSyllabusTextFromDraft(longDraft);
+check('built syllabus respects 20k cap', builtLong.length <= 20000, `len=${builtLong.length}`);
+const madeLong = createCourseFromDraft(longDraft);
+check('stored syllabus within cap', madeLong.course.syllabusText.length <= 20000, `len=${madeLong.course.syllabusText.length}`);
+check('topics survive truncation', madeLong.course.syllabusText.includes('• נושא ששורד את החיתוך'));
+
+// עדכון קורס קיים לפי id מפורש (שינוי שם כלול).
+const renamed = createCourseFromDraft({ ...draftB, name: 'תורת המשפט — מעודכן' }, { existingCourseId: madeLong.course.id });
+check('existingCourseId updates in place',
+  renamed.course?.id === madeLong.course.id && renamed.course.name === 'תורת המשפט — מעודכן');
+check('unknown existingCourseId returns null', createCourseFromDraft(draftB, { existingCourseId: 'course-nope' }).course === null);
+
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
 process.exit(failed ? 1 : 0);

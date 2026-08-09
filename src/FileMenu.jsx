@@ -574,6 +574,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   spss: ['spss', 'syntax', 'statistics', 'analysis', 'tutor', 'data', 'סטטיסטיקה', 'תחביר', 'ניתוח', 'סטודיו spss'],
   appearance: ['appearance', 'theme', 'font', 'colors', 'ui', 'מראה'],
   debug: ['debug', 'logs', 'log', 'console', 'לוגים', 'ניפוי'],
+  courses: ['courses', 'course', 'lecturer', 'lecturers', 'syllabus', 'semester', 'קורסים', 'קורס', 'מרצה', 'מרצים', 'סילבוס', 'סמסטר', 'לקחים', 'חומרי קורס', 'ניהול קורסים'],
   personal: ['personal', 'profile', 'style', 'preferences', 'tone', 'סגנון אישי', 'פרופיל אישי', 'style engine', 'personal style engine', 'writing samples', 'blacklist', 'qualitative patterns', 'confidence', 'מנוע סגנון', 'מנוע הסגנון', 'דוגמאות כתיבה', 'רשימה שחורה', 'דפוסים'],
 };
 
@@ -586,7 +587,7 @@ const SETTINGS_TAB_GROUPS = [
   {
     title: 'הכתיבה שלי',
     desc: 'הפרופיל, הסגנון וברירות המחדל למסמך',
-    tabs: [['onboarding', '👤 פרופיל והגשה'], ['personal', '🧬 סגנון אישי'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
+    tabs: [['onboarding', '👤 פרופיל והגשה'], ['courses', '📚 קורסים'], ['personal', '🧬 סגנון אישי'], ['prompt', '📌 הנחיות קבועות'], ['writing', '✍️ ברירות מחדל']],
   },
   {
     title: 'תוכן וויזואל',
@@ -607,6 +608,7 @@ const SETTINGS_TAB_META = {
   skills: { icon: '🧠', title: 'סקילים', desc: 'איזה סקיל פועל אוטומטית, איזה נשאר ידני, ואיך כל אחד עובד.' },
   workspaceV2: { icon: '🧩', title: 'סביבות עבודה', desc: 'הצוותים שמופיעים במסך הבית — תפקיד, יעד ותוצר לכל סוכן.' },
   onboarding: { icon: '👤', title: 'פרופיל הכתיבה שלך', desc: 'הפרטים שמלמדים את WordAI לכתוב בדיוק כמוך.' },
+  courses: { icon: '📚', title: 'קורסים ומרצים', desc: 'הקורסים שלך — מרצה, סמסטר, סילבוס וחומרים — ומה שהמערכת למדה מכל מרצה.' },
   personal: { icon: '🧬', title: 'סגנון אישי', desc: 'מי אתה, איך אתה כותב, ומה מנוע הסגנון למד מהעבודות שלך.' },
   prompt: { icon: '📌', title: 'הנחיות קבועות', desc: 'הנחיות שמצורפות לכל ספקי ה-AI, וייצוא/ייבוא ההגדרות בין מכשירים.' },
   writing: { icon: '✍️', title: 'ברירות מחדל למסמך', desc: 'טיפוגרפיה, בדיקות, עריכה חכמה ושמירה אוטומטית.' },
@@ -4147,7 +4149,7 @@ const PROFILE_INPUT_STYLE = { width: '100%', padding: '9px 10px', border: '1px s
 const PROFILE_TEXTAREA_STYLE = { ...PROFILE_INPUT_STYLE, resize: 'vertical' };
 const PROFILE_SELECT_STYLE = { ...PROFILE_INPUT_STYLE, background: 'white' };
 
-function PersonalStyleSettings({ profile, setProfile }) {
+function PersonalStyleSettings({ profile, setProfile, onNavigate = null }) {
   const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
   const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
   const toggleStyle = (styleId) => setProfile((prev) => {
@@ -4171,8 +4173,6 @@ function PersonalStyleSettings({ profile, setProfile }) {
   // מנוע הסגנון (טאב מאוחד, למטה) מכסה כבר "העלה עבודות ללמוד סגנון" — כרטיסי הזהב/הלמידה
   // האוטומטית כאן מיותרים ברגע שיש לו chunks אמיתיים. engineHasChunks נבדק פעם אחת + על אירועי עדכון.
   const [engineHasChunks, setEngineHasChunks] = useState(false);
-  const [lecturerPanelOpen, setLecturerPanelOpen] = useState(false);
-  const [coursePanelOpen, setCoursePanelOpen] = useState(false);
   // הקורס הפעיל — תצוגה בלבד (מי מקבל את החומרים שיועלו כאן).
   const [activeCourseName, setActiveCourseName] = useState('');
   useEffect(() => {
@@ -4478,21 +4478,19 @@ function PersonalStyleSettings({ profile, setProfile }) {
         desc="שקיפות: ההרגלים שנמדדו מהעבודות שהעלית — פתיחים, מסגרות משפט ויעדים מבניים."
         defaultOpen={false}
       >
-        <PersonalTrainerPanel onOpenLecturerProfiles={() => setLecturerPanelOpen(true)} />
+        <PersonalTrainerPanel onOpenLecturerProfiles={onNavigate ? () => onNavigate('courses') : null} />
         <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             type="button"
-            onClick={() => setCoursePanelOpen(true)}
+            onClick={() => onNavigate?.('courses')}
             style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #93C5FD', background: 'white', color: '#1D4ED8', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
           >
-            📚 ניהול קורסים
+            📚 קורסים ומרצים ←
           </button>
           <span style={{ fontSize: 11, color: 'var(--s-muted)' }}>
-            שם הקורס, המרצה, ההנחיות הקבועות והסילבוס — במקום אחד.
+            שם הקורס, המרצה, ההנחיות הקבועות והסילבוס — בטאב "קורסים".
           </span>
         </div>
-        {lecturerPanelOpen ? <LecturerProfilePanel onClose={() => setLecturerPanelOpen(false)} /> : null}
-        {coursePanelOpen ? <CourseManagerPanel onClose={() => setCoursePanelOpen(false)} /> : null}
       </SettingsSection>
 
       <SettingsSection
@@ -7800,6 +7798,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
     const t = tab === 'agents' ? 'ai' : (tab || 'ai');
     if (t === 'assistant') return 'sidebar';
     if (t === 'debug') return 'developer';
+    if (t === 'course' || t === 'lecturer' || t === 'lecturers') return 'courses';
     return t;
   };
   const [activePanel, setActivePanel] = useState(initialSettingsTab ? 'settings' : 'main');
@@ -8437,7 +8436,16 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                       {settingsTab === 'writing'     && <WordDefaultsSettings prefs={wordPrefsState} setPrefs={setWordPrefsState} />}
                       {settingsTab === 'presentation' && <PresentationDefaultsSettings prefs={presentationPrefsState} setPrefs={setPresentationPrefsState} />}
                       {settingsTab === 'spss'        && <SpssDefaultsSettings prefs={spssPrefsState} setPrefs={setSpssPrefsState} />}
-                      {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} />}
+                      {settingsTab === 'personal'    && <PersonalStyleSettings profile={personalStyleState} setProfile={setPersonalStyleState} onNavigate={setSettingsTab} />}
+                      {settingsTab === 'courses'     && (
+                        <div className="flex flex-col gap-8">
+                          <CourseManagerPanel embedded />
+                          <div className="border-t border-slate-100 pt-7">
+                            <div className="text-[15px] font-extrabold text-slate-800 mb-3 flex items-center gap-2"><span>🎓</span>פרופילי מרצים ולקחים</div>
+                            <LecturerProfilePanel embedded />
+                          </div>
+                        </div>
+                      )}
                       {settingsTab === 'appearance'  && <AppearanceSettings />}
                     </div>
                   </div>

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { GeneratingOverlay } from './WordFlowAnimations';
 import ChefModeDialog from './ChefModeDialog';
 import ProjectsPanel from './components/ProjectsPanel';
+import CoursesPanel from './components/CoursesPanel';
+import ActiveCourseCard from './components/ActiveCourseCard';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import ProjectBrainstormPanel from './components/ProjectBrainstormPanel';
 import StyleEngineControls, { getStyleCreativityTemperature, getStyleDepth } from './components/StyleEngineControls';
@@ -2191,6 +2193,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
               />
             </div>
 
+            {/* הקורס הפעיל — חומרים ולקחי מרצה במבט אחד */}
+            {activeCourseInfo?.course && (
+              <div className="mb-6">
+              <ActiveCourseCard
+                course={activeCourseInfo.course}
+                materials={filteredMaterials}
+                onManage={() => onOpenSettings?.('courses')}
+                onClearCourse={() => clearActiveCourseOverride()}
+              />
+              </div>
+            )}
+
             {/* Advance Options Area */}
             <div className="bg-white/10 backdrop-blur-xl border border-white/30 rounded-2xl p-6">
               <button
@@ -2767,6 +2781,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
             </div>
             )}
           </div>
+
+          {/* קורסים */}
+          <CoursesPanel onOpenCourseSettings={() => onOpenSettings?.('courses')} />
 
           {/* פרויקטים */}
           <ProjectsPanel

@@ -340,7 +340,9 @@ function ManualFeedbackForm({ lecturers, defaultLecturerName = '', onDone, onCan
 }
 
 // ── הפאנל ─────────────────────────────────────────────────────────────────
-export default function LecturerProfilePanel({ onClose = () => {} }) {
+// embedded — מוטמע בתוך טאב ההגדרות "קורסים": בלי overlay, בלי כרטיס מודאלי ובלי כפתור ✕.
+// ⚠️ GradedReturnWizard נשאר מודאל fixed (zIndex 70) גם במצב embedded.
+export default function LecturerProfilePanel({ onClose = () => {}, embedded = false }) {
   const [loading, setLoading] = useState(true);
   const [lecturers, setLecturers] = useState([]);
   const [globalRules, setGlobalRules] = useState([]);
@@ -427,28 +429,8 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
     }
   };
 
-  return (
-    <div
-      dir="rtl"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,0.65)', padding: 16 }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 980,
-          maxWidth: '96vw',
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--s-surface, #fff)',
-          color: 'var(--s-text, #0F172A)',
-          border: '1px solid var(--s-border)',
-          borderRadius: 18,
-          boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
-          overflow: 'hidden',
-        }}
-      >
+  const body = (
+    <>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--s-border)' }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--s-text-strong)' }}>🧑‍🏫 פרופיל מרצים</div>
@@ -460,7 +442,9 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
             <button type="button" onClick={() => { setWizardMode('annotated'); setShowWizard(true); }} style={PRIMARY_BTN_STYLE}>📥 קליטת עבודה בדוקה</button>
             <button type="button" onClick={() => { setWizardMode('existing'); setShowWizard(true); }} style={BTN_STYLE}>🔍 אבחון קבצים קיימים</button>
-            <button type="button" onClick={onClose} style={{ ...BTN_STYLE, borderRadius: 999, padding: '4px 10px' }}>✕</button>
+            {embedded ? null : (
+              <button type="button" onClick={onClose} style={{ ...BTN_STYLE, borderRadius: 999, padding: '4px 10px' }}>✕</button>
+            )}
           </div>
         </div>
 
@@ -623,7 +607,6 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
             ) : null}
           </div>
         </div>
-      </div>
 
       {/* ⚠️ עטיפה עם stopPropagation: ה-overlay של הפאנל סוגר בלחיצה, ולחיצה בתוך
           האשף הייתה מבעבעת אליו וסוגרת גם את הפאנל שמתחתיו. */}
@@ -632,6 +615,55 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
           <GradedReturnWizard initialMode={wizardMode} onClose={() => { setShowWizard(false); read(); }} />
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div
+        dir="rtl"
+        style={{
+          width: '100%',
+          height: 620,
+          maxHeight: '70vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--s-surface, #fff)',
+          color: 'var(--s-text, #0F172A)',
+          border: '1px solid var(--s-border)',
+          borderRadius: 14,
+          overflow: 'hidden',
+        }}
+      >
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      dir="rtl"
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,0.65)', padding: 16 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 980,
+          maxWidth: '96vw',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--s-surface, #fff)',
+          color: 'var(--s-text, #0F172A)',
+          border: '1px solid var(--s-border)',
+          borderRadius: 18,
+          boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+          overflow: 'hidden',
+        }}
+      >
+        {body}
+      </div>
     </div>
   );
 }

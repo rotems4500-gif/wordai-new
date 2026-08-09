@@ -13,7 +13,7 @@ import { ensureOpenerProfile, getOpenerProfileStatus } from '../services/openerP
 import { ensureFrameProfile, getFrameProfileStatus } from '../services/styleFrameProfileService';
 import { ensureStyleTargetsReady, getStyleTargets, getStyleTargetsStatus, STYLE_TARGETS_UPDATED_EVENT } from '../services/styleTargetsStore';
 import { describeStyleTargets, STYLE_TARGET_LABELS, STYLE_TARGET_KEYS, MIN_TARGET_DOCS } from '../services/styleTargetsService';
-import { STYLE_SAMPLES_UPDATED_EVENT } from '../services/styleSampleStore';
+import { STYLE_SAMPLES_UPDATED_EVENT, ensureSampleStoreReady, getSampleStoreStats } from '../services/styleSampleStore';
 import {
   ensureStyleSelectProfile, describeStyleSelect, isStyleSelectEnabled, setStyleSelectEnabled,
 } from '../services/styleSelectService';
@@ -74,7 +74,7 @@ function fmt(n, digits = 1) {
 
 export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) {
   const [loading, setLoading] = useState(true);
-  const [state, setState] = useState({ opener: null, frame: null, targetsStatus: null, targets: null, lecturers: null });
+  const [state, setState] = useState({ opener: null, frame: null, targetsStatus: null, targets: null, lecturers: null, corpus: null });
   const [selectOn, setSelectOn] = useState(() => { try { return isStyleSelectEnabled(); } catch { return false; } });
   const [selectStatus, setSelectStatus] = useState(null);
 
@@ -86,15 +86,17 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
         Promise.resolve(ensureFrameProfile()).catch(() => null),
         Promise.resolve(ensureStyleTargetsReady()).catch(() => null),
         Promise.resolve(ensureLecturerProfilesReady()).catch(() => null),
+        Promise.resolve(ensureSampleStoreReady()).catch(() => null),
       ]);
     } catch {}
-    let opener = null; let frame = null; let targetsStatus = null; let targets = null; let lecturers = null;
+    let opener = null; let frame = null; let targetsStatus = null; let targets = null; let lecturers = null; let corpus = null;
+    try { corpus = getSampleStoreStats(); } catch {}
     try { opener = getOpenerProfileStatus(); } catch {}
     try { frame = getFrameProfileStatus(); } catch {}
     try { targetsStatus = getStyleTargetsStatus(); } catch {}
     try { targets = getStyleTargets(); } catch {}
     try { lecturers = getLecturerProfilesStatus(); } catch {}
-    setState({ opener, frame, targetsStatus, targets, lecturers });
+    setState({ opener, frame, targetsStatus, targets, lecturers, corpus });
     setLoading(false);
   }, []);
 
@@ -134,7 +136,9 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
     setSelectOn((prev) => { setStyleSelectEnabled(!prev); return !prev; });
   }, []);
 
-  const { opener, frame, targetsStatus, targets, lecturers } = state;
+  const { opener, frame, targetsStatus, targets, lecturers, corpus } = state;
+  const corpusDocs = Number(corpus?.docCount) || 0;
+  const corpusWords = Number(corpus?.totalWords) || 0;
 
   const openerEmpty = !opener?.ready || !(opener.personalWords > 0);
   const frameEmpty = !frame?.ready || !(frame.minedFrames > 0);
@@ -145,6 +149,24 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
       <div style={{ ...BODY_STYLE, marginBottom: 10 }}>
         כאן מוצג מה שהמנוע המקומי מדד מהעבודות שהעלית — תיאור בלבד של ההרגלים שזוהו.
         {loading ? <span style={{ marginInlineStart: 6, opacity: 0.7 }}>טוען…</span> : null}
+      </div>
+
+      {/* מצב הקורפוס — בלעדיו כל הסקשנים למטה אפורים בלי הסבר. */}
+      <div
+        style={{
+          ...CARD_STYLE,
+          background: corpusDocs ? 'var(--s-surface-2, #F8FAFC)' : '#FEF3C7',
+          borderColor: corpusDocs ? 'var(--s-border)' : '#FCD34D',
+        }}
+      >
+        <div style={TITLE_STYLE}>
+          📚 קורפוס הכתיבה שלך: {corpusDocs.toLocaleString('he-IL')} מסמכים · {corpusWords.toLocaleString('he-IL')} מילים
+        </div>
+        {corpusDocs ? null : (
+          <div style={BODY_STYLE}>
+            עדיין לא הועלו עבודות — העלה עבודות קודמות בסקשן "סגנון אישי" כדי שהמנוע ילמד ממך.
+          </div>
+        )}
       </div>
 
       <Section title="✍️ פתיחים" empty={openerEmpty}>

@@ -7,19 +7,22 @@
 //
 // עיצוב: אותן קונבנציות של LecturerProfilePanel (inline styles מעל משתני --s-*).
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   listCourses,
   createCourse,
   updateCourseMeta,
   archiveCourse,
   deleteCourse,
+  findCourseByName,
   COURSES_UPDATED_EVENT,
 } from '../services/courseStore';
+import { processCourseSyllabusImport, createCourseFromDraft } from '../services/courseSyllabusImport';
 import { listLecturerProfiles, ensureLecturerProfilesReady } from '../services/lecturerProfileStore';
 import {
   readInstructionFile,
   getInstructionFileAcceptList,
+  getSyllabusFileAcceptList,
   getHelperMaterialAcceptList,
   loadProjectMaterials,
   saveCourseMaterialFiles,
@@ -89,7 +92,8 @@ const draftFromCourse = (course) => ({
   syllabusText: course?.syllabusText || '',
 });
 
-export default function CourseManagerPanel({ onClose = () => {} }) {
+// embedded — מוטמע בתוך טאב ההגדרות "קורסים": בלי overlay, בלי כרטיס מודאלי ובלי כפתור ✕.
+export default function CourseManagerPanel({ onClose = () => {}, embedded = false }) {
   const [courses, setCourses] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [creating, setCreating] = useState(false);
@@ -99,6 +103,17 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
   const [busy, setBusy] = useState(false);
   const [courseMaterials, setCourseMaterials] = useState([]);
   const [uploadProgress, setUploadProgress] = useState('');
+
+  // ── אשף ייבוא סילבוס ──
+  // stage: '' סגור · 'draft' עריכת הטיוטה · 'materials' איסוף חומרים אחרי היצירה.
+  const [wizardStage, setWizardStage] = useState('');
+  const [wizardBusy, setWizardBusy] = useState('');
+  const [wizardDraft, setWizardDraft] = useState(null);
+  const [wizardStatus, setWizardStatus] = useState('');
+  const [wizardCourseId, setWizardCourseId] = useState('');
+  const [wizardChecked, setWizardChecked] = useState([]);
+  const wizardFileRef = useRef(null);
+  const wizardMaterialsRef = useRef(null);
   // מצב הענן נבדק פעם אחת בפתיחה — התחברות באמצע אינה תרחיש נפוץ כאן.
   const [cloudReady] = useState(() => {
     try { return isCourseCloudReady(); } catch { return false; }
@@ -106,6 +121,10 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
 
   const acceptList = useMemo(() => {
     try { return getInstructionFileAcceptList() || ''; } catch { return ''; }
+  }, []);
+
+  const syllabusAcceptList = useMemo(() => {
+    try { return getSyllabusFileAcceptList() || ''; } catch { return ''; }
   }, []);
 
   const read = useCallback(() => {
@@ -145,10 +164,11 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
   }, [selectedId, creating]);
 
   useEffect(() => {
+    if (embedded) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, embedded]);
 
   const setField = (field, value) => setDraft((prev) => ({ ...prev, [field]: value }));
 
@@ -289,6 +309,109 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
     }
   };
 
+  // ── אשף ייבוא סילבוס ──
+
+  const closeWizard = useCallback(() => {
+    setWizardStage('');
+    setWizardDraft(null);
+    setWizardStatus('');
+    setWizardCourseId('');
+    setWizardChecked([]);
+    setWizardBusy('');
+  }, []);
+
+  const setWizardField = (field, value) => setWizardDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+
+  const handleWizardFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setWizardBusy('מנתח סילבוס…');
+    try {
+      const res = await processCourseSyllabusImport({ file });
+      if (!res?.ok || res.status === 'empty' || !res.draft) {
+        showToast(res?.error || 'לא נמצא תוכן קריא בקובץ', { tone: 'error' });
+        return;
+      }
+      const draftIn = res.draft;
+      setWizardDraft({
+        name: draftIn.name || '',
+        lecturerName: draftIn.lecturerName || '',
+        term: draftIn.term || '',
+        topics: Array.isArray(draftIn.topics) ? draftIn.topics : [],
+        syllabusText: draftIn.syllabusText || '',
+        suggestedMaterials: Array.isArray(draftIn.suggestedMaterials) ? draftIn.suggestedMaterials : [],
+      });
+      setWizardStatus(res.status);
+      setWizardCourseId('');
+      setWizardChecked((Array.isArray(draftIn.suggestedMaterials) ? draftIn.suggestedMaterials : []).map(() => true));
+      setWizardStage('draft');
+    } catch (error) {
+      showToast(error?.message || 'ניתוח הסילבוס נכשל', { tone: 'error' });
+    } finally {
+      setWizardBusy('');
+    }
+  };
+
+  const handleWizardCreate = async () => {
+    if (!wizardDraft) return;
+    const name = String(wizardDraft.name || '').trim();
+    if (!name) { showToast('צריך שם קורס', { tone: 'error' }); return; }
+
+    let existingCourseId = null;
+    try {
+      const existing = findCourseByName(name);
+      if (existing) {
+        const ok = await showConfirm('קורס בשם זה כבר קיים — לעדכן אותו עם פרטי הסילבוס?', {
+          title: 'קורס קיים',
+          confirmLabel: 'עדכן',
+        });
+        if (!ok) return;
+        existingCourseId = existing.id;
+      }
+    } catch {}
+
+    setWizardBusy('יוצר קורס…');
+    try {
+      const { course } = createCourseFromDraft({ ...wizardDraft, name }, { existingCourseId });
+      if (!course) { showToast('לא הצלחתי ליצור את הקורס', { tone: 'error' }); return; }
+      read();
+      setCreating(false);
+      setSelectedId(course.id);
+      setWizardCourseId(course.id);
+      showToast(existingCourseId ? 'הקורס עודכן מהסילבוס' : 'הקורס נוצר מהסילבוס', { tone: 'success' });
+      if (wizardDraft.suggestedMaterials?.length) setWizardStage('materials');
+      else closeWizard();
+    } catch (error) {
+      showToast(error?.message || 'יצירת הקורס נכשלה', { tone: 'error' });
+    } finally {
+      setWizardBusy('');
+    }
+  };
+
+  const handleWizardMaterialFiles = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length || !wizardCourseId) return;
+    setWizardBusy(`מעלה 0/${files.length}…`);
+    try {
+      const result = await saveCourseMaterialFiles(files, {
+        courseId: wizardCourseId,
+        onProgress: (done, total, fileName) => setWizardBusy(done < total ? `מעלה ${done + 1}/${total}: ${fileName}` : ''),
+      });
+      if (result?.saved) showToast(`${result.saved} חומרים נוספו לקורס`, { tone: 'success' });
+      if (result?.failures?.length) {
+        showToast(`חלק נכשלו: ${result.failures.slice(0, 2).join(' · ')}${result.failures.length > 2 ? '…' : ''}`, { tone: 'error' });
+      }
+      refreshCourseMaterials(wizardCourseId);
+      closeWizard();
+    } catch (error) {
+      showToast(error?.message || 'ההעלאה נכשלה', { tone: 'error' });
+    } finally {
+      setWizardBusy('');
+    }
+  };
+
   const handleArchiveToggle = () => {
     if (!selected) return;
     const next = !selected.archivedAt;
@@ -311,28 +434,172 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
 
   const showForm = creating || Boolean(selected);
 
-  return (
-    <div
-      dir="rtl"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,0.65)', padding: 16 }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 900,
-          maxWidth: '96vw',
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--s-surface, #fff)',
-          color: 'var(--s-text, #0F172A)',
-          border: '1px solid var(--s-border)',
-          borderRadius: 18,
-          boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
-          overflow: 'hidden',
-        }}
-      >
+  const wizardView = !wizardStage || !wizardDraft ? null : (
+    <>
+      <div style={CARD_STYLE}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <div style={TITLE_STYLE}>✨ ייבוא קורס מסילבוס</div>
+          <button type="button" onClick={closeWizard} style={BTN_STYLE}>ביטול</button>
+        </div>
+        <div style={{ ...BODY_STYLE, marginTop: 2 }}>
+          {wizardStatus === 'processed'
+            ? '✨ חולץ עם AI'
+            : 'חולץ בזיהוי מקומי — בלי מפתח AI. אפשר לערוך ידנית'}
+        </div>
+      </div>
+
+      {wizardStage === 'draft' ? (
+        <>
+          <div style={CARD_STYLE}>
+            <div style={TITLE_STYLE}>פרטי הקורס</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <label style={BODY_STYLE}>
+                שם הקורס
+                <input
+                  value={wizardDraft.name}
+                  onChange={(e) => setWizardField('name', e.target.value)}
+                  placeholder="מבוא למשפט חוקתי"
+                  style={INPUT_STYLE}
+                />
+              </label>
+              <label style={BODY_STYLE}>
+                מרצה
+                <input
+                  list="wf-course-lecturer-names"
+                  value={wizardDraft.lecturerName}
+                  onChange={(e) => setWizardField('lecturerName', e.target.value)}
+                  placeholder="ד״ר ישראל ישראלי"
+                  style={INPUT_STYLE}
+                />
+                <datalist id="wf-course-lecturer-names">
+                  {lecturerNames.map((name) => <option key={name} value={name} />)}
+                </datalist>
+              </label>
+              <label style={BODY_STYLE}>
+                סמסטר
+                <input
+                  value={wizardDraft.term}
+                  onChange={(e) => setWizardField('term', e.target.value)}
+                  placeholder="סמסטר א׳ תשפ״ז"
+                  style={INPUT_STYLE}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div style={CARD_STYLE}>
+            <div style={TITLE_STYLE}>🏷️ נושאים ({wizardDraft.topics.length})</div>
+            {!wizardDraft.topics.length ? (
+              <div style={EMPTY_STYLE}>לא זוהו נושאים בסילבוס.</div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {wizardDraft.topics.map((topic, index) => (
+                  <span
+                    key={`${topic}-${index}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, background: '#EEF2FF', color: '#4338CA', padding: '3px 8px', borderRadius: 999 }}
+                  >
+                    {topic}
+                    <button
+                      type="button"
+                      title="הסר נושא"
+                      onClick={() => setWizardField('topics', wizardDraft.topics.filter((_, i) => i !== index))}
+                      style={{ border: 'none', background: 'transparent', color: '#4338CA', cursor: 'pointer', fontSize: 11, padding: 0, lineHeight: 1 }}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={CARD_STYLE}>
+            <div style={TITLE_STYLE}>📖 טקסט הסילבוס</div>
+            <textarea
+              value={wizardDraft.syllabusText}
+              onChange={(e) => setWizardField('syllabusText', e.target.value)}
+              rows={4}
+              style={{ ...INPUT_STYLE, resize: 'vertical' }}
+            />
+            <div style={{ ...BODY_STYLE, marginTop: 4 }}>
+              {String(wizardDraft.syllabusText || '').length.toLocaleString('he-IL')} תווים
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button type="button" disabled={Boolean(wizardBusy)} onClick={handleWizardCreate} style={PRIMARY_BTN_STYLE}>
+              {wizardBusy || 'צור קורס'}
+            </button>
+            <button type="button" onClick={closeWizard} style={BTN_STYLE}>ביטול</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={CARD_STYLE}>
+            <div style={TITLE_STYLE}>📎 חומרים שהסילבוס מזכיר</div>
+            <div style={{ ...BODY_STYLE, marginBottom: 6 }}>
+              אלה חומרים שהסילבוס מזכיר — בחר מהמחשב את הקבצים המתאימים
+            </div>
+            {wizardDraft.suggestedMaterials.map((item, index) => (
+              <label
+                key={`${item.label}-${index}`}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0', borderBottom: '1px solid var(--s-border)', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={wizardChecked[index] !== false}
+                  onChange={(e) => setWizardChecked((prev) => {
+                    const next = wizardDraft.suggestedMaterials.map((_, i) => (prev[i] !== false));
+                    next[index] = e.target.checked;
+                    return next;
+                  })}
+                  style={{ marginTop: 3, flexShrink: 0 }}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--s-text-strong)' }}>
+                    {item.label} <Chip tone="indigo">{item.type || 'אחר'}</Chip>
+                  </div>
+                  {item.reason ? <div style={{ fontSize: 10.5, color: 'var(--s-muted)' }}>{item.reason}</div> : null}
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <input
+            ref={wizardMaterialsRef}
+            type="file"
+            multiple
+            accept={getHelperMaterialAcceptList()}
+            style={{ display: 'none' }}
+            onChange={handleWizardMaterialFiles}
+          />
+
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              type="button"
+              disabled={Boolean(wizardBusy)}
+              onClick={() => wizardMaterialsRef.current?.click()}
+              style={{ ...PRIMARY_BTN_STYLE, opacity: wizardBusy ? 0.6 : 1 }}
+            >
+              {wizardBusy || '📎 העלה קבצים (הכל)'}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(wizardBusy)}
+              onClick={() => wizardMaterialsRef.current?.click()}
+              style={{ ...BTN_STYLE, opacity: wizardBusy ? 0.6 : 1 }}
+            >
+              העלה רק מה שסימנתי
+            </button>
+            <button type="button" onClick={closeWizard} style={BTN_STYLE}>דלג</button>
+          </div>
+        </>
+      )}
+    </>
+  );
+
+  const body = (
+    <>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--s-border)' }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--s-text-strong)' }}>📚 ניהול קורסים</div>
@@ -340,7 +607,9 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
               קורס מרכז את המרצה, הסמסטר, ההנחיות הקבועות והסילבוס. מה שנשמר כאן נכנס לכתיבה במסמכים ששויכו לקורס.
             </div>
           </div>
-          <button type="button" onClick={onClose} style={{ ...BTN_STYLE, borderRadius: 999, padding: '4px 10px', flexShrink: 0 }}>✕</button>
+          {embedded ? null : (
+            <button type="button" onClick={onClose} style={{ ...BTN_STYLE, borderRadius: 999, padding: '4px 10px', flexShrink: 0 }}>✕</button>
+          )}
         </div>
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -348,11 +617,26 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
           <div style={{ width: 250, flexShrink: 0, borderInlineStart: '1px solid var(--s-border)', overflowY: 'auto', padding: 10, background: 'var(--s-surface-2, #F8FAFC)' }}>
             <button
               type="button"
-              onClick={() => { setCreating(true); setSelectedId(''); }}
-              style={{ ...PRIMARY_BTN_STYLE, width: '100%', marginBottom: 8 }}
+              onClick={() => { closeWizard(); setCreating(true); setSelectedId(''); }}
+              style={{ ...PRIMARY_BTN_STYLE, width: '100%', marginBottom: 6 }}
             >
               ➕ קורס חדש
             </button>
+            <button
+              type="button"
+              disabled={Boolean(wizardBusy)}
+              onClick={() => wizardFileRef.current?.click()}
+              style={{ ...BTN_STYLE, width: '100%', marginBottom: 8, opacity: wizardBusy ? 0.6 : 1 }}
+            >
+              {wizardBusy === 'מנתח סילבוס…' ? 'מנתח סילבוס…' : '✨ ייבוא מסילבוס'}
+            </button>
+            <input
+              ref={wizardFileRef}
+              type="file"
+              accept={syllabusAcceptList}
+              style={{ display: 'none' }}
+              onChange={handleWizardFile}
+            />
 
             {!courses.length ? (
               <div style={EMPTY_STYLE}>עדיין אין קורסים. צור קורס ראשון כדי לשמור עליו הנחיות וסילבוס.</div>
@@ -364,7 +648,7 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
                 <button
                   key={course.id}
                   type="button"
-                  onClick={() => { setCreating(false); setSelectedId(course.id); }}
+                  onClick={() => { closeWizard(); setCreating(false); setSelectedId(course.id); }}
                   style={{
                     ...BTN_STYLE,
                     display: 'block',
@@ -393,7 +677,7 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
 
           {/* טופס עריכה */}
           <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 12 }}>
-            {!showForm ? (
+            {wizardView ? wizardView : !showForm ? (
               <div style={EMPTY_STYLE}>בחר קורס מהרשימה, או צור קורס חדש.</div>
             ) : (
               <>
@@ -545,6 +829,54 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
             )}
           </div>
         </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div
+        dir="rtl"
+        style={{
+          width: '100%',
+          height: 620,
+          maxHeight: '70vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--s-surface, #fff)',
+          color: 'var(--s-text, #0F172A)',
+          border: '1px solid var(--s-border)',
+          borderRadius: 14,
+          overflow: 'hidden',
+        }}
+      >
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      dir="rtl"
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,0.65)', padding: 16 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 900,
+          maxWidth: '96vw',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--s-surface, #fff)',
+          color: 'var(--s-text, #0F172A)',
+          border: '1px solid var(--s-border)',
+          borderRadius: 18,
+          boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+          overflow: 'hidden',
+        }}
+      >
+        {body}
       </div>
     </div>
   );

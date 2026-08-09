@@ -9019,7 +9019,7 @@ ${sidebarReviewContext}`
         onOpenClipInbox={() => setClipInboxOpen(true)}
         documentTitle={getDraftTitleFromFilePath(currentFilePath)}
         startScreenActive={showStartScreen}
-        onOpenSettings={() => { setFileMenuTargetTab('ai'); setFileMenuOpen(true); }}
+        onOpenSettings={(tab) => { setFileMenuTargetTab(typeof tab === 'string' && tab ? tab : 'ai'); setFileMenuOpen(true); }}
       />
       {isWordMode && isPhoneViewport && !showStartScreen && (
         <MobileToolbar

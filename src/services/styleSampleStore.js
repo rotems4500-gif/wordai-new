@@ -151,16 +151,53 @@ export function ensureSampleStoreReady() {
       // מיגרציה חד-פעמית: ה-blob הישן מ-localStorage. לא מוחקים אותו — נשאר גיבוי.
       loaded = readLegacyLocalStorage() || defaultBlob();
     }
-    // אם כבר בוצעו כתיבות לפני שה-hydrate הסתיים — הן מנצחות (cache הוא האמת).
-    // קריאה סינכרונית מוקדמת (getCache) מילאה cache מה-blob הישן בלבד — אותו כן דורסים.
+    // אם כבר בוצעו כתיבות לפני שה-hydrate הסתיים — ה-cache פעל על blob חלקי
+    // (legacy/ריק), ודריסה לכל כיוון מוחקת נתונים: העדפת loaded מאבדת את הכתיבה,
+    // העדפת cache (ההתנהגות הישנה) מחקה קורפוס שלם מ-IndexedDB בגלל gold-chunk
+    // בודד שנכתב מוקדם. לכן: איחוד לפי id/hash — הנטען כבסיס, פריטי ה-cache מעליו.
     if (!cacheDirty) cache = loaded;
+    else cache = mergeBlobsAfterLateHydrate(loaded, cache);
     hydrated = true;
-    if (loaded.documents.length || loaded.chunks.length) persist();
+    if (cache.documents.length || cache.chunks.length) persist();
     emitUpdated(); // ה-UI נטען לפני שה-hydrate הסתיים — מרענן אותו עם הנתונים האמיתיים.
     return cache;
   })();
 
   return hydratePromise;
+}
+
+// איחוד blob שנטען מ-IndexedDB עם cache שכבר נכתב אליו לפני סיום ה-hydrate.
+// מסמכים: לפי id ואז dedupe לפי hash תוכן (אותו מסמך שנוסף בשני הצדדים מקבל
+// counter שונה ב-id אך אותו hash). chunks: לפי id, ומסננים יתומים שמסמכם נפל
+// ב-dedupe — פרט ל-gold, שלעולם לא נזרק.
+function mergeBlobsAfterLateHydrate(loaded, current) {
+  const docById = new Map();
+  (loaded?.documents || []).forEach((d) => { if (d?.id) docById.set(d.id, d); });
+  (current?.documents || []).forEach((d) => { if (d?.id) docById.set(d.id, d); });
+  const seenHashes = new Set();
+  const documents = [];
+  for (const doc of docById.values()) {
+    const h = String(doc.hash || '');
+    if (h && seenHashes.has(h)) continue;
+    if (h) seenHashes.add(h);
+    documents.push(doc);
+  }
+  const docIds = new Set(documents.map((d) => d.id));
+  const chunkById = new Map();
+  (loaded?.chunks || []).forEach((c) => { if (c?.id) chunkById.set(c.id, c); });
+  (current?.chunks || []).forEach((c) => { if (c?.id) chunkById.set(c.id, c); });
+  const caps = normalizeCaps(current?.caps || loaded?.caps);
+  const chunks = enforceCaps(
+    [...chunkById.values()].filter((c) => c.isGold || !c.docId || docIds.has(c.docId)),
+    caps,
+  );
+  return {
+    schemaVersion: STYLE_SAMPLES_SCHEMA_VERSION,
+    updatedAt: nowTs(),
+    documents,
+    chunks,
+    caps,
+  };
 }
 
 // מחזיר את ה-cache; לפני hydrate — קריאה סינכרונית מה-blob הישן כדי שלא נחזיר ריק.

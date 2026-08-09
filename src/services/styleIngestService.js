@@ -8,6 +8,7 @@
 // עובד בדפדפן בלבד (localStorage + window). תוכנית: docs/style-engine-plan.md §5, §6.
 
 import {
+  AI_DOC_CONTEXT_EVENT,
   chatWithActiveProvider,
   getExternalAnalysisAvailability,
   getPersonalStyleProfile,
@@ -432,6 +433,37 @@ export function ingestText({ title, text, source = 'paste' } = {}) {
   // להצלחת הקליטה.
   if (result?.docId) addStyleTargetDoc(String(text || ''), { docId: result.docId }).catch(() => {});
   return result;
+}
+
+// ---------- לכידה פסיבית מקריאות AI ----------
+//
+// aiService משדר את טקסט המסמך שנשלח לספק חיצוני (AI_DOC_CONTEXT_EVENT) — כאן הוא
+// נקלט כדגימת סגנון. דרך ingestText ולא addDocumentSamples ישירות, כדי שהטקסט המלא
+// יזין גם את היעדים המבניים (addStyleTargetDoc) — מה שסוגר את פער ה-backfill שלהם.
+// שערים: הסכמת למידה (learningConsent), אורך מינימלי (נאכף גם בצד המשדר), hydrate
+// לפני כתיבה (מניעת דריסת קורפוס), ו-dedupe לפי hash תוכן (מובנה ב-addDocumentSamples).
+// throttle: בלי זה כל סבב צ'אט על אותו מסמך (שהשתנה במילה) הוא hash חדש —
+// והקורפוס מתמלא בכמעט-כפילויות שדוחקות עבודות אמיתיות מה-caps.
+const AI_CONTEXT_CAPTURE_MIN_CHARS = 1200;
+const AI_CONTEXT_CAPTURE_THROTTLE_MS = 15 * 60 * 1000;
+let lastAiContextCaptureAt = 0;
+if (typeof window !== 'undefined' && window.addEventListener) {
+  try {
+    window.addEventListener(AI_DOC_CONTEXT_EVENT, (event) => {
+      (async () => {
+        try {
+          const text = String(event?.detail?.text || '');
+          if (text.trim().length < AI_CONTEXT_CAPTURE_MIN_CHARS) return;
+          if (Date.now() - lastAiContextCaptureAt < AI_CONTEXT_CAPTURE_THROTTLE_MS) return;
+          const profile = getPersonalStyleProfile();
+          if (!profile || profile.learningConsent === false) return;
+          await ensureSampleStoreReady();
+          const result = ingestText({ title: 'מסמך שנשלח ל-AI', text, source: 'ai-context' });
+          if (result?.docId) lastAiContextCaptureAt = Date.now();
+        } catch {}
+      })();
+    });
+  } catch {}
 }
 
 // ---------- recomputeMetricsFromStore ----------

@@ -8617,8 +8617,27 @@ const applyWorkspaceContextEnforcement = (documentContext, options) => {
   return { documentContext: enforced.documentContext, options: nextOptions };
 };
 
+// לכידת סגנון פסיבית: טקסט המסמך שנשלח לספק חיצוני משודר כאירוע window, ומנוע
+// הסגנון (styleIngestService) מאזין וקולט אותו כדגימה. הכיוון הפוך בכוונה —
+// aiService אסור לו לייבא את styleIngestService (חוק no-cycle בראש אותו קובץ).
+// לא משודר עבור קריאות פנימיות של המנוע (suppressStyleEngine) — אחרת הקורפוס מזין את עצמו.
+export const AI_DOC_CONTEXT_EVENT = 'wordai-ai-doc-context';
+const AI_DOC_CONTEXT_MIN_CHARS = 1200; // רק טקסט מסמך ממשי, לא בלוק הקשר קצר
+const emitDocContextForStyleCapture = (documentContext, options = {}) => {
+  try {
+    if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
+    if (options.suppressStyleEngine === true || options.suppressPersonalStyle === true) return;
+    const text = String(documentContext || '');
+    if (text.trim().length < AI_DOC_CONTEXT_MIN_CHARS) return;
+    window.dispatchEvent(new CustomEvent(AI_DOC_CONTEXT_EVENT, {
+      detail: { text, agentLabel: String(options.agentLabel || '') },
+    }));
+  } catch {}
+};
+
 export const chatWithActiveProvider = async (userPrompt, documentContext = '', extraSystemPrompt = '', options = {}) => {
   ({ documentContext, options } = applyWorkspaceContextEnforcement(documentContext, options));
+  emitDocContextForStyleCapture(documentContext, options);
   const cfg = options.providerConfigOverride && typeof options.providerConfigOverride === 'object'
     ? normalizeProviderConfig(options.providerConfigOverride)
     : getProviderConfig();

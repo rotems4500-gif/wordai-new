@@ -130,6 +130,13 @@ export default function TopBar({
           >
             נקה בחירה
           </button>
+          <button
+            type="button"
+            onClick={() => { setCoursePickerOpen(false); onOpenSettings?.('courses'); }}
+            className="mt-1 w-full rounded border-t border-white/10 px-2 py-1.5 text-right text-[11px] text-white/70 transition hover:bg-white/10"
+          >
+            ⚙️ ניהול קורסים
+          </button>
         </div>
       ) : null}
     </div>

@@ -266,6 +266,9 @@ function applyFeedbackToSlots(p) {
 }
 
 async function loadOrBuild() {
+  // חובה לפני השוואת fingerprint: getChunks לפני hydrate מחזיר קורפוס ריק, שה-fingerprint
+  // שלו תואם בדיוק cache שנבנה מקורפוס ריק — והפרופיל הריק היה "ננעל" (opener :160 עושה זהה).
+  try { await ensureSampleStoreReady(); } catch {}
   if (isIdbAvailable()) {
     try {
       const cached = await idbGet(FRAME_PROFILE_CACHE_KEY);
