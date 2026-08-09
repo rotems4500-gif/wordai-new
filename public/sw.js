@@ -1,5 +1,5 @@
-const STATIC_CACHE = 'wordflow-static-v35';
-const RUNTIME_CACHE = 'wordflow-runtime-v35';
+const STATIC_CACHE = 'wordflow-static-v36';
+const RUNTIME_CACHE = 'wordflow-runtime-v36';
 
 // share_target (אנדרואיד): הקובץ המשותף נשמר כאן והאפליקציה אוספת אותו אחרי ההפניה.
 const SHARED_PENDING_KEY = '/__shared/pending';
