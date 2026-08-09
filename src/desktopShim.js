@@ -221,6 +221,8 @@ const saveLocalMaterial = async (payload = {}) => {
     // שיוך לתיקיית פרויקט/קורס (אופציונלי) — חומר בלי שיוך נשאר גלובלי.
     projectId: String(payload.projectId || '').trim(),
     courseId: String(payload.courseId || '').trim(),
+    // מיקום הקובץ המקורי בענן (Firebase Storage), למשיכה במכשיר אחר.
+    storagePath: String(payload.storagePath || '').trim(),
     uploadedAt: new Date().toISOString(),
   };
 

@@ -894,6 +894,7 @@ export async function loadProjectMaterials() {
         canPreviewText: canPreviewMaterialText(type) || Boolean(previewText),
         projectId: String(item.projectId || '').trim(),
         courseId: String(item.courseId || '').trim(),
+        storagePath: String(item.storagePath || '').trim(),
         // ⚠️ גם הרשימה הזו היא whitelist — בלי השורה הזו התמונה נשמרת אבל
         // אף פעם לא מגיעה למסך הבית.
         thumbnailDataUrl: String(item.thumbnailDataUrl || ''),
@@ -1493,6 +1494,16 @@ export async function readMaterialBytes(material = {}) {
   const file = String(material?.file || '').trim();
   if (!file) return { ok: false, reason: 'no-file' };
 
+  // הענן קודם כשיש storagePath: הוא המקור היחיד שקיים בכל המכשירים, והוא מה
+  // שמציל רשומות דפדפן (שנשמרו כטקסט בלבד) לצורך אבחון רטרואקטיבי.
+  if (material.storagePath) {
+    try {
+      const { fetchCourseMaterialBytes } = await import('./courseMaterialCloud');
+      const cloud = await fetchCourseMaterialBytes(material);
+      if (cloud.ok) return { ok: true, bytes: cloud.bytes };
+    } catch { /* ממשיכים למסלולים המקומיים */ }
+  }
+
   if (material.source === 'materials-local') {
     if (!window.desktopApp?.readLocalMaterial) return { ok: false, reason: 'desktop-only' };
     const payload = await window.desktopApp.readLocalMaterial(file);
@@ -1502,7 +1513,8 @@ export async function readMaterialBytes(material = {}) {
   }
 
   if (material.source === 'materials-browser') {
-    // נשמר רק הטקסט המחולץ — הערות Word/PDF כבר לא קיימות ברשומה.
+    // נשמר רק הטקסט המחולץ, ואין עותק בענן — הערות Word/PDF כבר לא קיימות.
+    // חומר שיעלה מעכשיו נשמר גם בענן ולכן ייקרא דרך הענף שלמעלה.
     return { ok: false, reason: 'text-only' };
   }
 
@@ -5897,6 +5909,7 @@ function buildUploadedMaterialEntry(payload = {}) {
     extractedChars: Math.max(0, Number(payload?.extractedChars) || 0),
     projectId: String(payload?.projectId || '').trim(),
     courseId: String(payload?.courseId || '').trim(),
+    storagePath: String(payload?.storagePath || '').trim(),
     extractionStatus: String(payload?.extractionStatus || '').trim(),
     extractionMessage: String(payload?.extractionMessage || '').trim(),
     extractionTruncated: payload?.extractionTruncated === true,
@@ -5974,6 +5987,8 @@ export async function saveHelperMaterial(file, options = {}) {
     // שיוך לפרויקט/קורס (אופציונלי): חומר בלי שיוך נשאר גלובלי כמו היום.
     ...(options.projectId ? { projectId: String(options.projectId).trim() } : {}),
     ...(options.courseId ? { courseId: String(options.courseId).trim() } : {}),
+    // מיקום הקובץ המקורי בענן — מאפשר משיכת המקור במכשיר אחר.
+    ...(options.storagePath ? { storagePath: String(options.storagePath).trim() } : {}),
   };
 
   if (window.desktopApp?.saveLocalMaterial) {
@@ -6104,23 +6119,55 @@ export async function assignMaterialsToCourse(materialIds = [], courseId = '') {
  * @param {{courseId:string, onProgress?:(done:number,total:number,name:string)=>void}} opts
  * @returns {Promise<{ok:boolean, saved:number, indexed:number, failures:string[]}>}
  */
-export async function saveCourseMaterialFiles(files, { courseId, onProgress = null } = {}) {
+export async function saveCourseMaterialFiles(files, { courseId, uploadToCloud = true, onProgress = null } = {}) {
   const list = Array.from(files || []);
   const cleanCourseId = String(courseId || '').trim();
-  if (!list.length || !cleanCourseId) return { ok: false, saved: 0, indexed: 0, failures: ['אין קבצים או קורס'] };
+  if (!list.length || !cleanCourseId) return { ok: false, saved: 0, indexed: 0, uploaded: 0, failures: ['אין קבצים או קורס'] };
 
   const { addMaterialDocument, commitMaterialStore, ensureMaterialStoreReady } = await import('./materialChunkStore');
   await ensureMaterialStoreReady();
 
+  // גשר הענן נטען דינמית: כך ה-harness ב-Node לא גורר את ה-SDK של firebase.
+  let cloud = null;
+  if (uploadToCloud) {
+    try {
+      const mod = await import('./courseMaterialCloud');
+      if (mod.isCourseCloudReady()) cloud = mod;
+    } catch { /* בלי ענן — שמירה מקומית בלבד, כמו קודם */ }
+  }
+
   let saved = 0;
   let indexed = 0;
+  let uploaded = 0;
   const failures = [];
   for (let i = 0; i < list.length; i += 1) {
     const file = list[i];
     try { onProgress?.(i, list.length, file.name); } catch {}
+
+    // הבייטים נקראים פעם אחת ומשרתים גם את הענן וגם את אינדקס הראיות.
+    let bytes = null;
+    try { bytes = new Uint8Array(await file.arrayBuffer()); } catch { bytes = null; }
+
+    // העלאה לענן **לפני** השמירה המקומית, כדי ש-storagePath ייכתב על הרשומה
+    // ויאפשר משיכת המקור במכשיר אחר (ואבחון רטרואקטיבי בדפדפן).
+    let storagePath = '';
+    if (cloud && bytes) {
+      try {
+        const up = await cloud.uploadCourseMaterialBytes({
+          materialId: `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          courseId: cleanCourseId,
+          fileName: file.name,
+          bytes,
+          title: file.name,
+        });
+        if (up.ok) { storagePath = up.storagePath; uploaded += 1; }
+        else if (up.reason === 'too-large') failures.push(`${file.name}: גדול מדי להעלאה לענן (נשמר מקומית)`);
+      } catch { /* כשל העלאה לא מונע שמירה מקומית */ }
+    }
+
     try {
       // כתיבה #1 — הרשימה הגלויה (מחלצת preview בעצמה; בדסקטופ שומרת גם את הקובץ).
-      await saveHelperMaterial(file, { uploadKind: 'course-material', courseId: cleanCourseId });
+      await saveHelperMaterial(file, { uploadKind: 'course-material', courseId: cleanCourseId, storagePath });
       saved += 1;
     } catch (err) {
       failures.push(`${file.name}: ${String(err?.message || err)}`);
@@ -6128,7 +6175,7 @@ export async function saveCourseMaterialFiles(files, { courseId, onProgress = nu
     }
     try {
       // כתיבה #2 — אינדקס הראיות. חילוץ מלא (עד 200k תווים), בלי OCR.
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!bytes) throw new Error('לא ניתן לקרוא את הקובץ');
       const extracted = await extractMaterialTextFromBytes(file.name, bytes, 200000);
       if (extracted?.ok && String(extracted.text || '').trim()) {
         const isSlides = /\.pptx?$/i.test(file.name);
@@ -6151,7 +6198,7 @@ export async function saveCourseMaterialFiles(files, { courseId, onProgress = nu
   }
   try { await commitMaterialStore(); } catch {}
   try { onProgress?.(list.length, list.length, ''); } catch {}
-  return { ok: saved > 0, saved, indexed, failures };
+  return { ok: saved > 0, saved, indexed, uploaded, cloudReady: Boolean(cloud), failures };
 }
 
 export async function removeHelperMaterial(material = {}) {

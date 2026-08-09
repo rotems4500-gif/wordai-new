@@ -26,6 +26,7 @@ import {
   removeHelperMaterial,
 } from '../services/workspaceLearningService';
 import { showToast, showConfirm } from '../services/uiFeedback';
+import { isCourseCloudReady, pullCourseMaterialsFromCloud, removeCourseMaterialFromCloud } from '../services/courseMaterialCloud';
 
 const CARD_STYLE = {
   border: '1px solid var(--s-border)',
@@ -98,6 +99,10 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
   const [busy, setBusy] = useState(false);
   const [courseMaterials, setCourseMaterials] = useState([]);
   const [uploadProgress, setUploadProgress] = useState('');
+  // מצב הענן נבדק פעם אחת בפתיחה — התחברות באמצע אינה תרחיש נפוץ כאן.
+  const [cloudReady] = useState(() => {
+    try { return isCourseCloudReady(); } catch { return false; }
+  });
 
   const acceptList = useMemo(() => {
     try { return getInstructionFileAcceptList() || ''; } catch { return ''; }
@@ -171,7 +176,10 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
         onProgress: (done, total, name) => setUploadProgress(done < total ? `מעלה ${done + 1}/${total}: ${name}` : ''),
       });
       if (result.saved) {
-        showToast(`${result.saved} קבצים נשמרו לקורס${result.indexed ? ` · ${result.indexed} נכנסו לאינדקס הראיות` : ''}`, { tone: 'success' });
+        const parts = [`${result.saved} קבצים נשמרו לקורס`];
+        if (result.indexed) parts.push(`${result.indexed} נכנסו לאינדקס הראיות`);
+        if (result.uploaded) parts.push(`${result.uploaded} הועלו לענן`);
+        showToast(parts.join(' · '), { tone: 'success' });
       }
       if (result.failures.length) {
         showToast(`חלק נכשלו: ${result.failures.slice(0, 2).join(' · ')}${result.failures.length > 2 ? '…' : ''}`, { tone: 'error' });
@@ -190,10 +198,31 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
     try {
       const res = await removeHelperMaterial(material);
       if (res?.ok === false) showToast(res.error || 'ההסרה נכשלה', { tone: 'error' });
+      // מחיקה מקבילה בענן — אחרת החומר יחזור בפעם הבאה שמושכים.
+      if (material.storagePath) { try { await removeCourseMaterialFromCloud(material); } catch {} }
     } catch (error) {
       showToast(error?.message || 'ההסרה נכשלה', { tone: 'error' });
     }
     refreshCourseMaterials(selected?.id || '');
+  };
+
+  const handlePullFromCloud = async () => {
+    if (!selected) return;
+    setUploadProgress('מושך מהענן…');
+    try {
+      const res = await pullCourseMaterialsFromCloud({
+        courseId: selected.id,
+        onProgress: (done, total, name) => setUploadProgress(done < total ? `מוריד ${done + 1}/${total}: ${name}` : ''),
+      });
+      if (!res.ok) showToast('צריך להתחבר לחשבון כדי למשוך מהענן', { tone: 'error' });
+      else if (res.pulled) showToast(`${res.pulled} קבצים נמשכו מהענן${res.skipped ? ` · ${res.skipped} כבר קיימים` : ''}`, { tone: 'success' });
+      else showToast(res.skipped ? 'כל הקבצים שבענן כבר קיימים במכשיר' : 'אין קבצים בענן לקורס הזה', { tone: 'info' });
+    } catch (error) {
+      showToast(error?.message || 'המשיכה נכשלה', { tone: 'error' });
+    } finally {
+      setUploadProgress('');
+      refreshCourseMaterials(selected.id);
+    }
   };
 
   const handleSave = () => {
@@ -449,20 +478,30 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
                   <div style={CARD_STYLE}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                       <div style={TITLE_STYLE}>📎 חומרי הקורס ({courseMaterials.length})</div>
-                      <label style={{ ...PRIMARY_BTN_STYLE, display: 'inline-block', opacity: uploadProgress ? 0.6 : 1 }}>
-                        {uploadProgress || '📥 הוסף קבצים'}
-                        <input
-                          type="file"
-                          multiple
-                          accept={getHelperMaterialAcceptList()}
-                          style={{ display: 'none' }}
-                          disabled={Boolean(uploadProgress)}
-                          onChange={handleMaterialFiles}
-                        />
-                      </label>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {cloudReady ? (
+                          <button type="button" onClick={handlePullFromCloud} disabled={Boolean(uploadProgress)} style={BTN_STYLE}>
+                            ☁️ משוך מהענן
+                          </button>
+                        ) : null}
+                        <label style={{ ...PRIMARY_BTN_STYLE, display: 'inline-block', opacity: uploadProgress ? 0.6 : 1 }}>
+                          {uploadProgress || '📥 הוסף קבצים'}
+                          <input
+                            type="file"
+                            multiple
+                            accept={getHelperMaterialAcceptList()}
+                            style={{ display: 'none' }}
+                            disabled={Boolean(uploadProgress)}
+                            onChange={handleMaterialFiles}
+                          />
+                        </label>
+                      </div>
                     </div>
                     <div style={{ ...BODY_STYLE, marginBottom: 6 }}>
                       PDF, מצגות, וורד וטקסט. הקבצים נשמרים כחומרי עזר של הקורס ונכנסים גם לאינדקס הראיות של שלד המטלה — רק לכתיבה בקורס הזה.
+                      {cloudReady
+                        ? ' הקובץ המקורי נשמר גם בחשבון שלך בענן, כך שהוא זמין בכל מכשיר.'
+                        : ' התחבר לחשבון כדי שהקבצים יישמרו גם בענן ויהיו זמינים בכל מכשיר.'}
                     </div>
                     {!courseMaterials.length ? (
                       <div style={EMPTY_STYLE}>עוד אין קבצים בקורס הזה.</div>
@@ -474,7 +513,9 @@ export default function CourseManagerPanel({ onClose = () => {} }) {
                               {material.title}
                             </div>
                             <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>
-                              {String(material.type || '').toUpperCase()}{material.extractionStatus === 'success' || material.previewText ? '' : ' · בלי טקסט שחולץ'}
+                              {String(material.type || '').toUpperCase()}
+                              {material.storagePath ? ' · ☁️ בענן' : ''}
+                              {material.extractionStatus === 'success' || material.previewText ? '' : ' · בלי טקסט שחולץ'}
                             </div>
                           </div>
                           <button type="button" onClick={() => handleRemoveMaterial(material)} style={{ ...DANGER_BTN_STYLE, padding: '3px 8px', flexShrink: 0 }}>הסר</button>

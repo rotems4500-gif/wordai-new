@@ -500,6 +500,74 @@ export async function createClipDoc(user, clipId, data = {}) {
     return clipId;
 }
 
+// --- חומרי קורס בענן: users/{uid}/courseMaterials + Storage users/{uid}/course-materials ---
+// ⚠️ מכוון לחומרים **של המשתמש**, ולא לאוסף courses/materials הגלובלי (קריאה בלבד
+// לפי firestore.rules). הכללים הקיימים ל-users/{uid}/** מכסים את שניהם — אין צורך
+// בפריסת rules חדשה.
+//
+// הקובץ המקורי נשמר בענן בכוונה: mammoth זורק הערות Word, ולכן טקסט שחולץ אינו
+// מספיק לאבחון רטרואקטיבי — רק הבייטים עצמם.
+
+/** המשתמש המחובר כרגע (או null) — לשירותים שאין להם גישה ל-state של React. */
+export function getCurrentCloudUser() {
+    const clients = ensureFirebaseClients();
+    return clients?.auth?.currentUser || null;
+}
+
+const cloudMaterialStoragePath = (uid, materialId, fileName) =>
+    `users/${uid}/course-materials/${materialId}/${String(fileName || "file").replace(/[\\/]+/g, "_")}`;
+
+/**
+ * מעלה קובץ חומר-קורס ל-Storage וכותב מסמך מטא ב-Firestore.
+ * @returns {Promise<{storagePath:string}>}
+ */
+export async function uploadCourseMaterial(user, { materialId, courseId = "", fileName, bytes, contentType = "application/octet-stream", meta = {} } = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients) throw new Error("הענן לא זמין.");
+    if (!user?.uid || !materialId || !bytes) throw new Error("חסר משתמש, מזהה חומר או תוכן.");
+
+    const storagePath = cloudMaterialStoragePath(user.uid, materialId, fileName);
+    await uploadBytes(ref(clients.storage, storagePath), bytes, { contentType });
+    await setDoc(doc(clients.db, "users", user.uid, "courseMaterials", materialId), {
+        ...meta,
+        materialId,
+        courseId,
+        fileName: String(fileName || ""),
+        storagePath,
+        sizeBytes: bytes.byteLength || bytes.length || 0,
+        updatedAt: serverTimestamp(),
+    }, { merge: true });
+    return { storagePath };
+}
+
+/** רשימת חומרי הקורס בענן (אופציונלית מסוננת לקורס). */
+export async function listCloudCourseMaterials(user, { courseId = "" } = {}) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid) return [];
+    const base = collection(clients.db, "users", user.uid, "courseMaterials");
+    const snapshot = courseId
+        ? await getDocs(query(base, where("courseId", "==", courseId), limit(500)))
+        : await getDocs(query(base, limit(500)));
+    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+/** הבייטים המקוריים של חומר מהענן. */
+export async function downloadCourseMaterialBytes(storagePath) {
+    const clients = ensureFirebaseClients();
+    if (!clients || !storagePath) throw new Error("חסר נתיב אחסון.");
+    const blob = await getBlob(ref(clients.storage, storagePath));
+    return new Uint8Array(await blob.arrayBuffer());
+}
+
+export async function deleteCloudCourseMaterial(user, materialId, storagePath = "") {
+    const clients = ensureFirebaseClients();
+    if (!clients || !user?.uid || !materialId) return;
+    if (storagePath) {
+        try { await deleteObject(ref(clients.storage, storagePath)); } catch { /* קובץ יתום — לא קריטי */ }
+    }
+    try { await deleteDoc(doc(clients.db, "users", user.uid, "courseMaterials", materialId)); } catch { /* noop */ }
+}
+
 export async function fetchCoursesForUser(user) {
     const clients = ensureFirebaseClients();
     if (!clients) return [];
