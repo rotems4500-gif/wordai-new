@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>התחברות - WordFlow AI</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      body { font-family: Rubik, Heebo, sans-serif; background: #f8fafc; margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+      .card { background: #fff; border-radius: 12px; box-shadow: 0 4px 16px rgba(15,23,42,.08); padding: 28px; max-width: 340px; text-align: center; }
+      button { background: #4f46e5; color: #fff; border: 0; border-radius: 8px; padding: 10px 20px; font-size: 15px; cursor: pointer; font-family: inherit; }
+      button:disabled { opacity: .5; }
+      #status { color: #64748b; font-size: 13px; margin-top: 14px; min-height: 20px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+      <h2>התחברות ל-WordFlow AI</h2>
+      <button id="startGoogleAuth">התחבר עם Google</button>
+      <div id="status">טוען...</div>
+    </div>
+    <script type="module" src="./src/addin/authDialogMain.js"></script>
+</body>
+</html>

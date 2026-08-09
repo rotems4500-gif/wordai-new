@@ -352,6 +352,8 @@ export default async () => defineConfig({
         // entry של תוסף ה-Word. חייב לשבת בשורש הריפו (לא בתת-תיקייה) —
         // base:'./' פותר נתיבי assets יחסית לעומק ה-HTML.
         taskpane: path.resolve(process.cwd(), 'taskpane.html'),
+        // דיאלוג התחברות Google של התוסף (Office Dialog API)
+        authDialog: path.resolve(process.cwd(), 'auth-dialog.html'),
       },
     },
   },

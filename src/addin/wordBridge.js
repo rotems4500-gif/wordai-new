@@ -128,6 +128,22 @@ export const buildDocumentSnapshot = async () => {
   return snapshot;
 };
 
+/** בחירה נוכחית + פסקת הסמן — הקלט ל-edit targets של הסיידבר */
+export const getSelectionContext = async () => {
+  requireWord();
+  let selectedText = '';
+  let blockText = '';
+  await Word.run(async (ctx) => {
+    const range = ctx.document.getSelection();
+    range.load('text');
+    range.paragraphs.load('items/text');
+    await ctx.sync();
+    selectedText = String(range.text || '').trim();
+    blockText = String(range.paragraphs.items?.[0]?.text || '').trim();
+  });
+  return { selectedText, blockText };
+};
+
 export const onSelectionChanged = (callback) => {
   if (!isWordAvailable()) return () => {};
   const handler = async () => {

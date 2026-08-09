@@ -11,7 +11,19 @@
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 </head>
 <body>
-    <div id="addin-root"></div>
+    <div id="addin-root" style="padding:16px;font-family:sans-serif;font-size:13px;color:#64748b">טוען את WordFlow AI...</div>
+    <script>
+      // רשת ביטחון: קריסה לפני/בזמן ה-mount מוצגת על המסך במקום חלונית ריקה
+      window.addEventListener('error', function (e) {
+        var el = document.getElementById('addin-root');
+        if (el) el.innerHTML = '<div dir="rtl" style="padding:16px;font-family:sans-serif;font-size:12px;color:#b91c1c;white-space:pre-wrap;text-align:right">שגיאת טעינה:\n' + (e.message || 'unknown') + '\n' + (e.filename || '') + ':' + (e.lineno || '') + '</div>';
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var el = document.getElementById('addin-root');
+        var msg = (e.reason && (e.reason.stack || e.reason.message)) || String(e.reason);
+        if (el) el.innerHTML = '<div dir="rtl" style="padding:16px;font-family:sans-serif;font-size:12px;color:#b91c1c;white-space:pre-wrap;text-align:right">שגיאת טעינה (promise):\n' + msg + '</div>';
+      });
+    </script>
     <script type="module" src="./src/addin/main.jsx"></script>
 </body>
 </html>
