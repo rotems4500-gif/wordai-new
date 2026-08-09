@@ -65,6 +65,22 @@ export async function getCachedUser() {
   return stored[CACHE_KEY] || null;
 }
 
+/**
+ * מחזיר id_token טרי לקריאות ה-REST של Firestore/Storage.
+ *
+ * ⚠️ המטמון ב-chrome.storage (getCachedUser) מחזיק רק uid/email — אין בו
+ * getIdToken. וכשה-service worker קם מחדש, `auth.currentUser` הוא null עד
+ * ש-IndexedDB נטען, ולכן חייבים להמתין ל-authStateReady לפני שמסיקים
+ * שהמשתמש מנותק (קיים ב-@firebase/auth 1.13.4).
+ */
+export async function getClipIdToken() {
+  const auth = getFirebaseAuth();
+  if (typeof auth.authStateReady === 'function') await auth.authStateReady();
+  const user = auth.currentUser;
+  if (!user) throw new Error('נדרשת התחברות מחדש');
+  return user.getIdToken();
+}
+
 /** מתחיל את זרימת ההתחברות עם Google, מחזיר {uid,email,displayName} בהצלחה. */
 export async function signInWithGoogle() {
   if (OAUTH_CLIENT_ID === 'REPLACE_WITH_CHROME_EXTENSION_OAUTH_CLIENT_ID') {
