@@ -1479,6 +1479,42 @@ export async function readInstructionFile(file, maxLength = 6000) {
   return String(rawText || '').trim().slice(0, resolvedMaxLength);
 }
 
+/**
+ * הבייטים המקוריים של חומר עזר — לסריקה רטרואקטיבית של משוב מרצה (הערות Word,
+ * annotations ב-PDF), שדורשת את הקובץ עצמו ולא את הטקסט שחולץ ממנו.
+ *
+ * ⚠️ רשומת דפדפן (`materials-browser`) שומרת **טקסט בלבד** — אין ממה לחלץ הערות.
+ * זה מוחזר כ-reason מפורש ולא כשגיאה, כדי שה-UI יידע להציע העלאה מחדש.
+ *
+ * @param {object} material פריט מ-loadProjectMaterials
+ * @returns {Promise<{ok:boolean, bytes?:Uint8Array, reason?:string}>}
+ */
+export async function readMaterialBytes(material = {}) {
+  const file = String(material?.file || '').trim();
+  if (!file) return { ok: false, reason: 'no-file' };
+
+  if (material.source === 'materials-local') {
+    if (!window.desktopApp?.readLocalMaterial) return { ok: false, reason: 'desktop-only' };
+    const payload = await window.desktopApp.readLocalMaterial(file);
+    if (!payload?.ok || !payload?.dataBase64) return { ok: false, reason: payload?.error || 'read-failed' };
+    const binary = atob(payload.dataBase64);
+    return { ok: true, bytes: Uint8Array.from(binary, (char) => char.charCodeAt(0)) };
+  }
+
+  if (material.source === 'materials-browser') {
+    // נשמר רק הטקסט המחולץ — הערות Word/PDF כבר לא קיימות ברשומה.
+    return { ok: false, reason: 'text-only' };
+  }
+
+  try {
+    const response = await fetch(resolveAppUrl(`project-materials/${encodeURIComponent(file)}`), { cache: 'no-store' });
+    if (!response.ok) return { ok: false, reason: `http-${response.status}` };
+    return { ok: true, bytes: new Uint8Array(await response.arrayBuffer()) };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err) };
+  }
+}
+
 async function loadMaterialPreview(material) {
   const cachedPreview = getStoredMaterialPreviewText(material, MATERIAL_CONTENT_MAX_LENGTH);
   if (cachedPreview) return cachedPreview;

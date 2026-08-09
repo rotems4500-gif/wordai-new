@@ -1,29 +1,39 @@
 // GradedReturnWizard.jsx — "קליטת עבודה בדוקה": אשף בן ארבעה שלבים שמכניס משוב
-// מרצה מעבודה שחזרה אל lecturerProfileStore, ומציע לזקק ממנו לקחים.
+// מרצה מעבודות שחזרו אל lecturerProfileStore, ומציע לזקק ממנו לקחים.
 //
 // ⚠️ האשף **קולט בלבד**. הוא לא מבטיח ציון ולא מנחש מה המרצה "יאהב" — כל אירוע
 // שנשמר הוא ציטוט של מה שנכתב בפועל בעבודה הבדוקה, והמשתמש רואה ומאשר כל אחד
 // לפני השמירה.
 //
-// שלושה מסלולי קליטה:
-//   annotated — docx עם הערות/שינויים מסומנים, או pdf עם הערות.
+// ארבעה מסלולי קליטה:
+//   annotated — docx עם הערות/שינויים מסומנים, או pdf עם הערות. **כמה קבצים יחד**.
 //   diff      — הגשה מקורית מול הגרסה שחזרה; ההפרש הוא המשוב.
 //   manual    — הדבקת טקסט המשוב.
+//   existing  — אבחון רטרואקטיבי של קבצים שכבר באפליקציה (חומרי עזר שהם בעצם
+//               עבודות בדוקות שההערות בהן מעולם לא נקראו).
+//
+// כל המסלולים מייצרים את אותה צורת "work" (ר' feedbackScanService), ושלבים 2–4
+// לא מבדילים ביניהם. שלב 3 רץ **פעם אחת** לכל האצווה, ושלב 4 מזקק פעם אחת.
 //
 // עיצוב: אותן קונבנציות של LecturerProfilePanel (inline styles מעל משתני --s-*),
 // כדי שהאשף ייראה זהה בין הפאנל לבין סטודיו השלד.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { extractDocxFeedback, docxFeedbackToEvents } from '../services/docxFeedbackExtract';
-import { extractPdfAnnotations, extractMaterialTextFromBytes } from '../services/materialExtractBrowser';
+import { extractMaterialTextFromBytes } from '../services/materialExtractBrowser';
 import { diffSubmissionVsReturned } from '../services/feedbackDiffService';
+import {
+  scanFilesForFeedback,
+  scanExistingMaterialsForFeedback,
+  eventsForAuthor,
+  ingestFeedbackBatch,
+} from '../services/feedbackScanService';
 import {
   ensureLecturerProfilesReady,
   listLecturerProfiles,
-  recordGradedReturn,
 } from '../services/lecturerProfileStore';
 import { distillLecturerRules, saveDistilledRules } from '../services/lecturerRulesService';
 import { listCourses, findCourseByName } from '../services/courseStore';
+import { resolveActiveCourse } from '../services/activeCourseService';
 import { showToast } from '../services/uiFeedback';
 
 const KIND_LABELS = {
@@ -46,13 +56,19 @@ const CATEGORY_LABELS = {
   other: 'אחר',
 };
 
+const SOURCE_LABELS = {
+  'docx-comments': 'הערות Word',
+  'pdf-annots': 'הערות PDF',
+  diff: 'השוואת גרסאות',
+  manual: 'משוב ידני',
+};
+
 const MODES = [
-  { id: 'annotated', label: '📝 קובץ מוחזר עם הערות', hint: 'docx עם הערות/עקוב-אחר-שינויים, או PDF עם הערות' },
+  { id: 'annotated', label: '📝 קובץ מוחזר עם הערות', hint: 'docx עם הערות/עקוב-אחר-שינויים, או PDF עם הערות · אפשר לבחור כמה עבודות יחד' },
   { id: 'diff', label: '🔀 השוואת גרסאות', hint: 'ההגשה המקורית מול הגרסה שהמרצה החזיר' },
   { id: 'manual', label: '✍️ משוב ידני', hint: 'הדבקת המשוב כטקסט חופשי' },
+  { id: 'existing', label: '🔍 אבחון קבצים קיימים', hint: 'מחפש הערות מרצה בקבצים שכבר העלית — עבודות בדוקות שנקלטו בעבר כחומר עזר.' },
 ];
-
-const SOURCE_BY_MODE = { annotated: 'docx-comments', diff: 'diff', manual: 'manual' };
 
 const STEP_TITLES = ['מקור המשוב', 'סקירת פריטי המשוב', 'שיוך ושמירה', 'זיקוק לקחים'];
 
@@ -92,6 +108,16 @@ const BTN_STYLE = {
 
 const PRIMARY_BTN_STYLE = { ...BTN_STYLE, borderColor: '#1D4ED8', background: '#DBEAFE', color: '#1D4ED8' };
 
+const CHIP_STYLE = {
+  fontSize: 10.5,
+  fontWeight: 800,
+  color: '#4338CA',
+  background: '#EEF2FF',
+  borderRadius: 999,
+  padding: '2px 7px',
+  whiteSpace: 'nowrap',
+};
+
 const WARN_BOX_STYLE = {
   border: '1px solid #FCD34D',
   background: '#FEF3C7',
@@ -107,8 +133,6 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 
 const bytesOf = async (file) => new Uint8Array(await file.arrayBuffer());
 
-const extOf = (name) => String(name || '').toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || '';
-
 /** פסקאות משוב חופשי → אירועי manual (אותו פיצול כמו addManualFeedback). */
 function manualTextToEvents(text) {
   return String(text || '')
@@ -116,6 +140,19 @@ function manualTextToEvents(text) {
     .map((p) => p.replace(/^[\s•·\-*\d.)\]]+/, '').trim())
     .filter((p) => p.length >= 4)
     .map((p) => ({ kind: 'manual', anchorExcerpt: '', feedbackText: p }));
+}
+
+/** work גולמי מהשירות → work עם שדות ה-UI (בחירה, ציון, מחבר-נבחר). */
+function prepWork(work) {
+  const events = Array.isArray(work.events) ? work.events : [];
+  return {
+    ...work,
+    events,
+    include: !work.weakOnly,
+    grade: (work.gradeSuggestion === 0 || work.gradeSuggestion) ? String(work.gradeSuggestion) : '',
+    lecturerAuthor: work.suspectedLecturer || '',
+    selected: new Set(events.map((_, i) => i)),
+  };
 }
 
 function StepDots({ step }) {
@@ -146,56 +183,95 @@ function StepDots({ step }) {
   );
 }
 
-function FilePick({ label, file, accept, onPick }) {
+function FilePick({ label, file, accept, onPick, multiple = false, files = null }) {
   const ref = useRef(null);
+  const shown = multiple
+    ? (files && files.length ? files.map((f) => f.name).join(' · ') : 'לא נבחרו קבצים')
+    : (file ? file.name : 'לא נבחר קובץ');
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{ ...BODY_STYLE, marginBottom: 3 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <button type="button" onClick={() => ref.current?.click()} style={BTN_STYLE}>בחר קובץ…</button>
-        <span style={{ ...BODY_STYLE, color: file ? 'var(--s-text-strong)' : 'var(--s-muted)' }}>
-          {file ? file.name : 'לא נבחר קובץ'}
+        <button type="button" onClick={() => ref.current?.click()} style={BTN_STYLE}>
+          {multiple ? 'בחר קבצים…' : 'בחר קובץ…'}
+        </button>
+        <span style={{ ...BODY_STYLE, color: (multiple ? files?.length : file) ? 'var(--s-text-strong)' : 'var(--s-muted)', wordBreak: 'break-word' }}>
+          {shown}
         </span>
         <input
           ref={ref}
           type="file"
           accept={accept}
+          multiple={multiple}
           style={{ display: 'none' }}
-          onChange={(e) => { onPick(e.target.files?.[0] || null); e.target.value = ''; }}
+          onChange={(e) => {
+            const picked = Array.from(e.target.files || []);
+            onPick(multiple ? picked : (picked[0] || null));
+            e.target.value = '';
+          }}
         />
       </div>
     </div>
   );
 }
 
-export default function GradedReturnWizard({ onClose = () => {}, initialFile = null }) {
+/** טבלת אירועים עם צ'קבוקס לכל פריט — משותפת לתצוגת עבודה יחידה ולכרטיס באצווה. */
+function EventList({ events, selected, onToggle, maxHeight = 300 }) {
+  return (
+    <div style={{ maxHeight, overflowY: 'auto' }}>
+      {events.map((ev, idx) => (
+        <label
+          key={`${ev.kind}-${idx}`}
+          style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: '1px solid var(--s-border)', padding: '6px 0', cursor: 'pointer' }}
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(idx)}
+            onChange={(e) => onToggle(idx, e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span style={{ ...CHIP_STYLE, marginTop: 1 }}>{KIND_LABELS[ev.kind] || ev.kind}</span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            {ev.anchorExcerpt ? (
+              <span style={{ ...BODY_STYLE, display: 'block', fontStyle: 'italic', opacity: 0.8 }}>״{ev.anchorExcerpt}״</span>
+            ) : null}
+            <span style={{ display: 'block', fontSize: 12, color: 'var(--s-text-strong)', lineHeight: 1.7 }}>
+              {ev.feedbackText || '(סימון בלבד — בלי טקסט)'}
+            </span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+export default function GradedReturnWizard({ onClose = () => {}, initialFile = null, initialMode = 'annotated' }) {
   const [step, setStep] = useState(1);
-  const [mode, setMode] = useState('annotated');
+  const [mode, setMode] = useState(initialMode || 'annotated');
   const [busy, setBusy] = useState('');
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
 
   const [lecturers, setLecturers] = useState([]);
 
   // שלב 1
-  const [mainFile, setMainFile] = useState(initialFile || null);
+  const [mainFiles, setMainFiles] = useState(initialFile ? [initialFile] : []);
   const [submittedFile, setSubmittedFile] = useState(null);
   const [returnedFile, setReturnedFile] = useState(null);
   const [manualText, setManualText] = useState('');
+  const [scanReport, setScanReport] = useState(null);
+  const [showSkipped, setShowSkipped] = useState(false);
 
-  // תוצרי החילוץ
-  const [docxResult, setDocxResult] = useState(null);
-  const [lecturerAuthor, setLecturerAuthor] = useState('');
-  const [rawEvents, setRawEvents] = useState([]);
-  const [diffStats, setDiffStats] = useState(null);
+  // תוצרי החילוץ — אצווה של עבודות בצורה אחידה
+  const [works, setWorks] = useState([]);
+  const [expanded, setExpanded] = useState(() => new Set());
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
   const [diffConfirmed, setDiffConfirmed] = useState(false);
+  const [diffStats, setDiffStats] = useState(null);
 
-  // שלב 2/3
-  const [selected, setSelected] = useState(() => new Set());
-  const [grade, setGrade] = useState('');
+  // שלב 3
   const [lecturerName, setLecturerName] = useState('');
   const [courseName, setCourseName] = useState('');
-  const [assignmentTitle, setAssignmentTitle] = useState('');
   const [date, setDate] = useState(todayIso());
 
   // שלב 4
@@ -220,90 +296,116 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const events = useMemo(() => {
-    if (mode === 'annotated' && docxResult) return docxFeedbackToEvents(docxResult, { lecturerAuthor });
-    return rawEvents;
-  }, [mode, docxResult, lecturerAuthor, rawEvents]);
-
-  // כל שינוי ברשימת האירועים (למשל החלפת המחבר שנחשב מרצה) מאפס את הבחירה להכל.
-  useEffect(() => {
-    setSelected(new Set(events.map((_, i) => i)));
-  }, [events]);
-
   // רשימת הקורסים המנוהלת (courseStore) + שמות הקורסים ה-legacy שנשמרו על המרצים.
   const courseOptions = useMemo(() => {
     let managed = [];
     try { managed = listCourses({ includeArchived: true }).map((c) => c.name); } catch {}
     const match = lecturers.find((l) => l.name === lecturerName);
     const legacy = match ? match.courses : lecturers.flatMap((l) => l.courses);
-    return [...new Set([...managed, ...legacy].filter(Boolean))];
+    return [...new Set([...managed, ...(legacy || [])].filter(Boolean))];
   }, [lecturers, lecturerName]);
 
-  const resetExtraction = () => {
-    setDocxResult(null);
-    setLecturerAuthor('');
-    setRawEvents([]);
-    setDiffStats(null);
+  const resetExtraction = useCallback(() => {
+    setWorks([]);
+    setExpanded(new Set());
     setNeedsConfirmation(false);
     setDiffConfirmed(false);
+    setDiffStats(null);
+    setScanReport(null);
+    setShowSkipped(false);
+    setProgress('');
     setError('');
-  };
+  }, []);
+
+  const updateWork = useCallback((key, patch) => {
+    setWorks((prev) => prev.map((w) => (w.key === key ? { ...w, ...(typeof patch === 'function' ? patch(w) : patch) } : w)));
+  }, []);
+
+  const toggleEvent = useCallback((key, idx, checked) => {
+    setWorks((prev) => prev.map((w) => {
+      if (w.key !== key) return w;
+      const next = new Set(w.selected);
+      if (checked) next.add(idx); else next.delete(idx);
+      return { ...w, selected: next };
+    }));
+  }, []);
+
+  const onScanProgress = useCallback((done, total, name) => {
+    setProgress(name ? `סורק ${Math.min(done + 1, total)}/${total}: ${name}` : '');
+  }, []);
 
   // ── שלב 1 → 2: חילוץ ────────────────────────────────────────────────────
   const runExtraction = useCallback(async () => {
     resetExtraction();
-    setError('');
 
     if (mode === 'manual') {
       const evts = manualTextToEvents(manualText);
       if (!evts.length) { setError('אין טקסט משוב לקליטה. הדבק לפחות שורה אחת.'); return; }
-      setRawEvents(evts);
+      setWorks([prepWork({
+        key: 'manual',
+        origin: 'upload',
+        materialId: '',
+        fileName: '',
+        title: '',
+        source: 'manual',
+        authors: [],
+        suspectedLecturer: '',
+        gradeSuggestion: null,
+        events: evts,
+        allEvents: evts,
+        raw: null,
+        weakOnly: false,
+      })]);
       setStep(2);
       return;
     }
 
     if (mode === 'annotated') {
-      if (!mainFile) { setError('בחר את הקובץ המוחזר.'); return; }
-      const ext = extOf(mainFile.name);
-      setBusy('קורא את הקובץ…');
+      if (!mainFiles.length) { setError('בחר לפחות קובץ מוחזר אחד.'); return; }
+      setBusy('סורק קבצים…');
       try {
-        const bytes = await bytesOf(mainFile);
-        if (ext === '.docx') {
-          const result = await extractDocxFeedback(bytes);
-          if (!result?.ok) { setError(result?.error || 'לא הצלחתי לקרוא את קובץ ה-docx.'); return; }
-          setDocxResult(result);
-          setLecturerAuthor(result.suspectedLecturer || '');
-          if (result.gradeSuggestion !== null && result.gradeSuggestion !== undefined) {
-            setGrade(String(result.gradeSuggestion));
-          }
-          if (result.suspectedLecturer && !lecturerName) setLecturerName(result.suspectedLecturer);
-          if (!assignmentTitle) setAssignmentTitle(mainFile.name.replace(/\.[^.]+$/, ''));
-          setStep(2);
-        } else if (ext === '.pdf') {
-          const result = await extractPdfAnnotations(bytes);
-          if (!result?.ok) { setError(result?.error || 'לא הצלחתי לקרוא את ה-PDF.'); return; }
-          const evts = (result.annotations || []).map((a) => ({
-            kind: a.kind,
-            anchorExcerpt: a.anchorExcerpt,
-            feedbackText: a.text,
-          }));
-          setRawEvents(evts);
-          if (!assignmentTitle) setAssignmentTitle(mainFile.name.replace(/\.[^.]+$/, ''));
-          const author = (result.annotations || []).map((a) => a.author).find(Boolean);
-          if (author && !lecturerName) setLecturerName(author);
-          setStep(2);
-        } else {
-          setError('המסלול הזה תומך ב-docx או ב-PDF בלבד. לקובץ אחר השתמש ב"השוואת גרסאות" או ב"משוב ידני".');
+        const { works: found, failures, empty } = await scanFilesForFeedback(mainFiles, { onProgress: onScanProgress });
+        setScanReport({ failures, empty, skipped: [], scanned: mainFiles.length });
+        if (!found.length) {
+          setError('לא נמצאו הערות, שינויים או סימונים בקבצים שנבחרו. נסה "השוואת גרסאות" מול ההגשה המקורית, או הדבק את המשוב ב"משוב ידני".');
+          return;
         }
+        setWorks(found.map(prepWork));
+        if (found.length === 1) setExpanded(new Set([found[0].key]));
+        setStep(2);
       } catch (err) {
-        setError(String(err?.message || err) || 'שגיאת קריאה');
+        setError(String(err?.message || err) || 'שגיאת סריקה');
       } finally {
         setBusy('');
+        setProgress('');
       }
       return;
     }
 
-    // diff
+    if (mode === 'existing') {
+      setBusy('סורק את החומרים הקיימים…');
+      try {
+        let courseId = '';
+        try { courseId = resolveActiveCourse().course?.id || ''; } catch {}
+        const { works: found, scanned, skipped } = await scanExistingMaterialsForFeedback({ courseId, onProgress: onScanProgress });
+        setScanReport({ failures: [], empty: [], skipped, scanned });
+        if (!found.length) {
+          setError('לא נמצאו הערות מרצה בקבצים הקיימים.');
+          return;
+        }
+        setWorks(found.map(prepWork));
+        if (found.length === 1) setExpanded(new Set([found[0].key]));
+        setStep(2);
+      } catch (err) {
+        setError(String(err?.message || err) || 'שגיאת סריקה');
+      } finally {
+        setBusy('');
+        setProgress('');
+      }
+      return;
+    }
+
+    // diff — זוג קבצים יחיד, נעטף כ-work אחד כדי ששאר הזרימה תישאר אחידה.
     if (!submittedFile || !returnedFile) { setError('צריך את שני הקבצים: ההגשה המקורית והגרסה שחזרה.'); return; }
     setBusy('משווה בין הגרסאות…');
     try {
@@ -316,29 +418,80 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
       if (!b?.ok) { setError(`לא הצלחתי לקרוא את "${returnedFile.name}": ${b?.error || 'שגיאה'}`); return; }
       const diff = diffSubmissionVsReturned(a.text, b.text);
       if (!diff?.ok) { setError(diff?.error || 'ההשוואה נכשלה.'); return; }
-      setRawEvents(diff.events || []);
+      const evts = diff.events || [];
       setDiffStats(diff.stats || null);
       setNeedsConfirmation(!!diff.needsConfirmation);
-      if (!assignmentTitle) setAssignmentTitle(returnedFile.name.replace(/\.[^.]+$/, ''));
+      setWorks([prepWork({
+        key: 'diff',
+        origin: 'upload',
+        materialId: '',
+        fileName: returnedFile.name,
+        title: returnedFile.name.replace(/\.[^.]+$/, ''),
+        source: 'diff',
+        authors: [],
+        suspectedLecturer: '',
+        gradeSuggestion: null,
+        events: evts,
+        allEvents: evts,
+        raw: null,
+        weakOnly: false,
+      })]);
+      setExpanded(new Set(['diff']));
       setStep(2);
     } catch (err) {
       setError(String(err?.message || err) || 'שגיאת השוואה');
     } finally {
       setBusy('');
     }
-  }, [mode, mainFile, submittedFile, returnedFile, manualText, lecturerName, assignmentTitle]);
+  }, [mode, mainFiles, submittedFile, returnedFile, manualText, resetExtraction, onScanProgress]);
 
-  const selectedEvents = useMemo(
-    () => events.filter((_, i) => selected.has(i)),
-    [events, selected],
+  // ── נגזרות שלב 2 ────────────────────────────────────────────────────────
+  const totalEvents = useMemo(() => works.reduce((sum, w) => sum + w.events.length, 0), [works]);
+
+  const readyWorks = useMemo(
+    () => works
+      // בעבודה יחידה אין צ'קבוקס "כלול" בתצוגה — היא תמיד נכללת (weakOnly מבטל
+      // סימון רק כשיש אצווה שצריך לסנן).
+      .filter((w) => w.include || works.length === 1)
+      .map((w) => ({ ...w, events: w.events.filter((_, i) => w.selected.has(i)) }))
+      .filter((w) => w.events.length),
+    [works],
   );
 
-  const noFindings = step === 2 && !events.length;
+  const readySelectedEvents = useMemo(
+    () => readyWorks.reduce((sum, w) => sum + w.events.length, 0),
+    [readyWorks],
+  );
+
+  const single = works.length === 1 ? works[0] : null;
+
+  const setAllEvents = useCallback((on) => {
+    setWorks((prev) => prev.map((w) => ({
+      ...w,
+      include: on ? true : w.include,
+      selected: on ? new Set(w.events.map((_, i) => i)) : new Set(),
+    })));
+  }, []);
+
+  const goToAssign = useCallback(() => {
+    setError('');
+    if (!lecturerName.trim()) {
+      // ברירת מחדל: המרצה שחוזר הכי הרבה פעמים בעבודות שנבחרו.
+      const counts = new Map();
+      for (const w of readyWorks) {
+        const name = String(w.lecturerAuthor || w.suspectedLecturer || '').trim();
+        if (name) counts.set(name, (counts.get(name) || 0) + 1);
+      }
+      const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (best) setLecturerName(best[0]);
+    }
+    setStep(3);
+  }, [lecturerName, readyWorks]);
 
   // ── שלב 3: שמירה ────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
     if (!lecturerName.trim()) { setError('צריך שם מרצה.'); return; }
-    if (!selectedEvents.length && !grade.trim()) { setError('לא נבחר שום פריט משוב ואין ציון — אין מה לשמור.'); return; }
+    if (!readyWorks.length) { setError('לא נבחר שום פריט משוב — אין מה לשמור.'); return; }
     setBusy('שומר…');
     setError('');
     try {
@@ -346,25 +499,27 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
       // לקורס עצמו ולא רק למחרוזת.
       let matchedCourseId = '';
       try { matchedCourseId = findCourseByName(courseName.trim())?.id || ''; } catch {}
-      const result = await recordGradedReturn(
-        lecturerName.trim(),
+      const result = await ingestFeedbackBatch(
+        readyWorks.map((w) => ({
+          ...w,
+          title: String(w.title || w.fileName || '').trim(),
+          grade: String(w.grade || '').trim() || null,
+        })),
         {
-          date: date ? new Date(date).toISOString() : new Date().toISOString(),
+          lecturerName: lecturerName.trim(),
           courseName: courseName.trim(),
           courseId: matchedCourseId,
-          assignmentTitle: assignmentTitle.trim(),
-          grade: grade.trim() || null,
-          // annotated מתפצל לפי סוג הקובץ בפועל — docxResult קיים רק במסלול ה-docx.
-          source: mode === 'annotated'
-            ? (docxResult ? 'docx-comments' : 'pdf-annots')
-            : (SOURCE_BY_MODE[mode] || 'manual'),
+          date: date ? new Date(date).toISOString() : new Date().toISOString(),
         },
-        selectedEvents,
       );
-      if (!result?.lecturer) { setError('השמירה נכשלה — לא נוצר פרופיל מרצה.'); return; }
-      setSavedLecturerId(result.lecturer.id);
-      setDoneNote(`נשמרו ${result.addedEvents.length} פריטי משוב אצל ${result.lecturer.name}.`);
-      showToast('העבודה הבדוקה נקלטה', { tone: 'success' });
+      if (!result?.ok) {
+        setError(result?.failures?.[0]?.reason || 'השמירה נכשלה — לא נוצר פרופיל מרצה.');
+        return;
+      }
+      setSavedLecturerId(result.lecturerId);
+      const failNote = result.failures?.length ? ` · ${result.failures.length} נכשלו` : '';
+      setDoneNote(`נשמרו ${result.saved} עבודות · ${result.totalEvents} פריטי משוב אצל ${lecturerName.trim()}.${failNote}`);
+      showToast('העבודות הבדוקות נקלטו', { tone: 'success' });
       try { setLecturers(listLecturerProfiles()); } catch {}
       setStep(4);
     } catch (err) {
@@ -372,7 +527,7 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
     } finally {
       setBusy('');
     }
-  }, [lecturerName, selectedEvents, grade, date, courseName, assignmentTitle, mode, docxResult]);
+  }, [lecturerName, readyWorks, courseName, date]);
 
   // ── שלב 4: זיקוק ────────────────────────────────────────────────────────
   const handleDistill = useCallback(async () => {
@@ -419,6 +574,8 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
     }
   }, [candidates, savedLecturerId, onClose]);
 
+  const canProceedFromReview = (!needsConfirmation || diffConfirmed) && readyWorks.length > 0;
+
   // ── רינדור ──────────────────────────────────────────────────────────────
   return (
     <div
@@ -456,7 +613,7 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
               {error}
             </div>
           ) : null}
-          {busy ? <div style={{ ...BODY_STYLE, marginBottom: 8 }}>⏳ {busy}</div> : null}
+          {busy ? <div style={{ ...BODY_STYLE, marginBottom: 8 }}>⏳ {progress || busy}</div> : null}
 
           {/* ── שלב 1 ── */}
           {step === 1 ? (
@@ -493,7 +650,13 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
               </div>
 
               {mode === 'annotated' ? (
-                <FilePick label="הקובץ שהמרצה החזיר (docx / pdf)" file={mainFile} accept=".docx,.pdf" onPick={setMainFile} />
+                <FilePick
+                  label="הקבצים שהמרצה החזיר (docx / pdf) — אפשר לבחור כמה עבודות יחד"
+                  files={mainFiles}
+                  multiple
+                  accept=".docx,.pdf"
+                  onPick={setMainFiles}
+                />
               ) : null}
 
               {mode === 'diff' ? (
@@ -515,6 +678,49 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
                   />
                 </label>
               ) : null}
+
+              {mode === 'existing' ? (
+                <div>
+                  <div style={{ ...BODY_STYLE, marginBottom: 6 }}>
+                    מחפש הערות מרצה בקבצים שכבר העלית — עבודות בדוקות שנקלטו בעבר כחומר עזר.
+                  </div>
+                  <button type="button" disabled={!!busy} onClick={runExtraction} style={PRIMARY_BTN_STYLE}>
+                    {busy ? 'סורק…' : 'סרוק את החומרים שכבר באפליקציה'}
+                  </button>
+                </div>
+              ) : null}
+
+              {scanReport ? (
+                <div style={{ ...BODY_STYLE, marginTop: 10, borderTop: '1px solid var(--s-border)', paddingTop: 8 }}>
+                  <div>נסרקו {scanReport.scanned} קבצים.</div>
+                  {scanReport.empty?.length ? (
+                    <div>בלי ממצאים: {scanReport.empty.join(' · ')}</div>
+                  ) : null}
+                  {scanReport.failures?.length ? (
+                    <div>נכשלו: {scanReport.failures.map((f) => `${f.name} (${f.reason})`).join(' · ')}</div>
+                  ) : null}
+                  {scanReport.skipped?.length ? (
+                    <div style={{ marginTop: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowSkipped((v) => !v)}
+                        style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}
+                      >
+                        {showSkipped ? '▲' : '▼'} דילגתי על {scanReport.skipped.length} קבצים
+                      </button>
+                      {showSkipped ? (
+                        <div style={{ marginTop: 4 }}>
+                          {scanReport.skipped.map((s, i) => (
+                            <div key={`${s.title}-${i}`} style={{ padding: '2px 0' }}>
+                              <span style={{ color: 'var(--s-text-strong)' }}>{s.title}</span> — {s.reason}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -532,87 +738,177 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
                 </div>
               ) : null}
 
-              {docxResult && docxResult.authors?.length ? (
-                <div style={CARD_STYLE}>
-                  <label style={BODY_STYLE}>
-                    מי המרצה?
-                    <select
-                      value={lecturerAuthor}
-                      onChange={(e) => setLecturerAuthor(e.target.value)}
-                      style={{ ...INPUT_STYLE, width: 'auto', minWidth: 220 }}
-                    >
-                      <option value="">כל המחברים</option>
-                      {docxResult.authors.map((a) => (
-                        <option key={a.name} value={a.name}>
-                          {a.name} · {a.count} סימונים{a.isCreator ? ' (יוצר הקובץ)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div style={{ ...BODY_STYLE, marginTop: 4 }}>
-                    רק הסימונים של המחבר שנבחר ייקלטו. "כל המחברים" כולל גם הדגשות בלי מחבר.
-                  </div>
+              <div style={{ ...CARD_STYLE, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ ...TITLE_STYLE, marginBottom: 0 }}>
+                  נמצאו {works.length} עבודות · {totalEvents} פריטי משוב
                 </div>
-              ) : null}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button type="button" onClick={() => setAllEvents(true)} style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}>סמן הכל</button>
+                  <button type="button" onClick={() => setAllEvents(false)} style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}>נקה הכל</button>
+                </div>
+              </div>
 
-              <div style={CARD_STYLE}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={TITLE_STYLE}>פריטי משוב שנמצאו · {events.length}</div>
-                  {events.length ? (
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" onClick={() => setSelected(new Set(events.map((_, i) => i)))} style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}>סמן הכל</button>
-                      <button type="button" onClick={() => setSelected(new Set())} style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}>נקה הכל</button>
+              {/* עבודה יחידה — התצוגה המפורטת הישנה */}
+              {single ? (
+                <>
+                  {single.source === 'docx-comments' && single.authors?.length ? (
+                    <div style={CARD_STYLE}>
+                      <label style={BODY_STYLE}>
+                        מי המרצה?
+                        <select
+                          value={single.lecturerAuthor}
+                          onChange={(e) => {
+                            const name = e.target.value;
+                            const evts = eventsForAuthor(single, name);
+                            updateWork(single.key, { lecturerAuthor: name, events: evts, selected: new Set(evts.map((_, i) => i)) });
+                          }}
+                          style={{ ...INPUT_STYLE, width: 'auto', minWidth: 220 }}
+                        >
+                          <option value="">כל המחברים</option>
+                          {single.authors.map((a) => (
+                            <option key={a.name} value={a.name}>
+                              {a.name} · {a.count} סימונים{a.isCreator ? ' (יוצר הקובץ)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div style={{ ...BODY_STYLE, marginTop: 4 }}>
+                        רק הסימונים של המחבר שנבחר ייקלטו. "כל המחברים" כולל גם הדגשות בלי מחבר.
+                      </div>
                     </div>
                   ) : null}
-                </div>
 
-                {noFindings ? (
-                  <div style={EMPTY_STYLE}>
-                    לא נמצאו הערות, שינויים או סימונים בקובץ. ייתכן שהמרצה כתב את המשוב במייל או בגוף הטקסט —
-                    נסה "השוואת גרסאות" מול ההגשה המקורית, או הדבק את המשוב ב"משוב ידני".
+                  <div style={CARD_STYLE}>
+                    <div style={TITLE_STYLE}>פריטי משוב שנמצאו · {single.events.length}</div>
+                    {!single.events.length ? (
+                      <div style={EMPTY_STYLE}>
+                        לא נמצאו הערות, שינויים או סימונים בקובץ. ייתכן שהמרצה כתב את המשוב במייל או בגוף הטקסט —
+                        נסה "השוואת גרסאות" מול ההגשה המקורית, או הדבק את המשוב ב"משוב ידני".
+                      </div>
+                    ) : (
+                      <EventList
+                        events={single.events}
+                        selected={single.selected}
+                        onToggle={(idx, checked) => toggleEvent(single.key, idx, checked)}
+                      />
+                    )}
                   </div>
-                ) : (
-                  <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                    {events.map((ev, idx) => (
-                      <label
-                        key={`${ev.kind}-${idx}`}
-                        style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: '1px solid var(--s-border)', padding: '6px 0', cursor: 'pointer' }}
-                      >
+
+                  <div style={{ ...CARD_STYLE, display: 'grid', gridTemplateColumns: '1fr 140px', gap: 8 }}>
+                    <label style={BODY_STYLE}>
+                      שם המטלה
+                      <input
+                        value={single.title}
+                        onChange={(e) => updateWork(single.key, { title: e.target.value })}
+                        placeholder="עבודת אמצע"
+                        style={INPUT_STYLE}
+                      />
+                    </label>
+                    <label style={BODY_STYLE}>
+                      ציון (אופציונלי)
+                      <input
+                        value={single.grade}
+                        onChange={(e) => updateWork(single.key, { grade: e.target.value })}
+                        placeholder="88"
+                        style={INPUT_STYLE}
+                      />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                works.map((w) => {
+                  const isOpen = expanded.has(w.key);
+                  const checkedCount = w.events.filter((_, i) => w.selected.has(i)).length;
+                  return (
+                    <div key={w.key} style={{ ...CARD_STYLE, opacity: w.include ? 1 : 0.65 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                         <input
                           type="checkbox"
-                          checked={selected.has(idx)}
-                          onChange={(e) => {
-                            setSelected((prev) => {
-                              const next = new Set(prev);
-                              if (e.target.checked) next.add(idx); else next.delete(idx);
-                              return next;
-                            });
-                          }}
-                          style={{ marginTop: 3 }}
+                          checked={w.include}
+                          onChange={(e) => updateWork(w.key, { include: e.target.checked })}
+                          style={{ marginTop: 8 }}
                         />
-                        <span style={{ fontSize: 10.5, fontWeight: 800, color: '#4338CA', background: '#EEF2FF', borderRadius: 999, padding: '2px 7px', whiteSpace: 'nowrap', marginTop: 1 }}>
-                          {KIND_LABELS[ev.kind] || ev.kind}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0 }}>
-                          {ev.anchorExcerpt ? (
-                            <span style={{ ...BODY_STYLE, display: 'block', fontStyle: 'italic', opacity: 0.8 }}>״{ev.anchorExcerpt}״</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                            <span style={CHIP_STYLE}>{SOURCE_LABELS[w.source] || w.source}</span>
+                            <span style={{ ...CHIP_STYLE, background: '#F1F5F9', color: '#475569' }}>
+                              {checkedCount}/{w.events.length} פריטים
+                            </span>
+                            {w.weakOnly ? (
+                              <span style={{ ...CHIP_STYLE, background: '#FEF3C7', color: '#92400E' }}>סימונים בלבד — אות חלש</span>
+                            ) : null}
+                            {w.origin === 'existing' ? (
+                              <span style={{ ...CHIP_STYLE, background: '#DCFCE7', color: '#166534' }}>קובץ קיים</span>
+                            ) : null}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8 }}>
+                            <input
+                              value={w.title}
+                              onChange={(e) => updateWork(w.key, { title: e.target.value })}
+                              placeholder="שם המטלה"
+                              style={INPUT_STYLE}
+                            />
+                            <input
+                              value={w.grade}
+                              onChange={(e) => updateWork(w.key, { grade: e.target.value })}
+                              placeholder="ציון"
+                              style={INPUT_STYLE}
+                            />
+                          </div>
+                          {w.source === 'docx-comments' && w.authors?.length ? (
+                            <label style={{ ...BODY_STYLE, display: 'block', marginTop: 6 }}>
+                              מי המרצה?
+                              <select
+                                value={w.lecturerAuthor}
+                                onChange={(e) => {
+                                  const name = e.target.value;
+                                  const evts = eventsForAuthor(w, name);
+                                  updateWork(w.key, { lecturerAuthor: name, events: evts, selected: new Set(evts.map((_, i) => i)) });
+                                }}
+                                style={{ ...INPUT_STYLE, width: 'auto', minWidth: 200 }}
+                              >
+                                <option value="">כל המחברים</option>
+                                {w.authors.map((a) => (
+                                  <option key={a.name} value={a.name}>
+                                    {a.name} · {a.count} סימונים{a.isCreator ? ' (יוצר הקובץ)' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
                           ) : null}
-                          <span style={{ display: 'block', fontSize: 12, color: 'var(--s-text-strong)', lineHeight: 1.7 }}>
-                            {ev.feedbackText || '(סימון בלבד — בלי טקסט)'}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div style={CARD_STYLE}>
-                <label style={BODY_STYLE}>
-                  ציון (אופציונלי)
-                  <input value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="88" style={{ ...INPUT_STYLE, width: 120 }} />
-                </label>
-              </div>
+                          <div style={{ marginTop: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => setExpanded((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(w.key)) next.delete(w.key); else next.add(w.key);
+                                return next;
+                              })}
+                              style={{ ...BTN_STYLE, padding: '3px 8px', fontSize: 10.5 }}
+                            >
+                              {isOpen ? '▲ הסתר פריטים' : '▼ הצג פריטים'}
+                            </button>
+                          </div>
+                          {isOpen ? (
+                            <div style={{ marginTop: 6 }}>
+                              {w.events.length ? (
+                                <EventList
+                                  events={w.events}
+                                  selected={w.selected}
+                                  onToggle={(idx, checked) => toggleEvent(w.key, idx, checked)}
+                                  maxHeight={220}
+                                />
+                              ) : (
+                                <div style={EMPTY_STYLE}>אין פריטים למחבר שנבחר.</div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </>
           ) : null}
 
@@ -648,20 +944,12 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
                   </datalist>
                 </label>
                 <label style={BODY_STYLE}>
-                  שם המטלה
-                  <input value={assignmentTitle} onChange={(e) => setAssignmentTitle(e.target.value)} placeholder="עבודת אמצע" style={INPUT_STYLE} />
-                </label>
-                <label style={BODY_STYLE}>
                   תאריך
                   <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={INPUT_STYLE} />
                 </label>
-                <label style={BODY_STYLE}>
-                  ציון (אופציונלי)
-                  <input value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="88" style={INPUT_STYLE} />
-                </label>
               </div>
               <div style={{ ...BODY_STYLE, marginTop: 8 }}>
-                ייקלטו {selectedEvents.length} פריטי משוב מתוך {events.length}.
+                ייקלטו {readyWorks.length} עבודות · {readySelectedEvents} פריטי משוב. שמות המטלות והציונים נקבעו בשלב הקודם.
               </div>
             </div>
           ) : null}
@@ -746,7 +1034,7 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button type="button" onClick={onClose} style={BTN_STYLE}>ביטול</button>
-              {step === 1 ? (
+              {step === 1 && mode !== 'existing' ? (
                 <button type="button" disabled={!!busy} onClick={runExtraction} style={PRIMARY_BTN_STYLE}>
                   {busy ? 'קורא…' : 'המשך'}
                 </button>
@@ -754,12 +1042,9 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
               {step === 2 ? (
                 <button
                   type="button"
-                  disabled={(needsConfirmation && !diffConfirmed) || (!selectedEvents.length && !grade.trim())}
-                  onClick={() => { setError(''); setStep(3); }}
-                  style={{
-                    ...PRIMARY_BTN_STYLE,
-                    opacity: (needsConfirmation && !diffConfirmed) || (!selectedEvents.length && !grade.trim()) ? 0.5 : 1,
-                  }}
+                  disabled={!canProceedFromReview}
+                  onClick={goToAssign}
+                  style={{ ...PRIMARY_BTN_STYLE, opacity: canProceedFromReview ? 1 : 0.5 }}
                 >
                   המשך
                 </button>

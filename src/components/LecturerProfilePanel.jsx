@@ -347,6 +347,8 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
   const [selectedId, setSelectedId] = useState('');
   const [showManual, setShowManual] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  // 'annotated' = העלאת עבודות בדוקות · 'existing' = אבחון רטרואקטיבי של קבצים קיימים
+  const [wizardMode, setWizardMode] = useState('annotated');
   const [mergeTargetId, setMergeTargetId] = useState('');
 
   const read = useCallback(() => {
@@ -456,7 +458,8 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-            <button type="button" onClick={() => setShowWizard(true)} style={PRIMARY_BTN_STYLE}>📥 קליטת עבודה בדוקה</button>
+            <button type="button" onClick={() => { setWizardMode('annotated'); setShowWizard(true); }} style={PRIMARY_BTN_STYLE}>📥 קליטת עבודה בדוקה</button>
+            <button type="button" onClick={() => { setWizardMode('existing'); setShowWizard(true); }} style={BTN_STYLE}>🔍 אבחון קבצים קיימים</button>
             <button type="button" onClick={onClose} style={{ ...BTN_STYLE, borderRadius: 999, padding: '4px 10px' }}>✕</button>
           </div>
         </div>
@@ -626,7 +629,7 @@ export default function LecturerProfilePanel({ onClose = () => {} }) {
           האשף הייתה מבעבעת אליו וסוגרת גם את הפאנל שמתחתיו. */}
       {showWizard ? (
         <div onClick={(e) => e.stopPropagation()}>
-          <GradedReturnWizard onClose={() => { setShowWizard(false); read(); }} />
+          <GradedReturnWizard initialMode={wizardMode} onClose={() => { setShowWizard(false); read(); }} />
         </div>
       ) : null}
     </div>

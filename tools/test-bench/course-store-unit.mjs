@@ -23,10 +23,16 @@ if (typeof globalThis.addEventListener !== 'function') {
   globalThis.dispatchEvent = () => true;
 }
 
+import { DOMParser as XmlDomParser } from '@xmldom/xmldom';
+import JSZip from 'jszip';
+
+globalThis.DOMParser = XmlDomParser;
+
 const { listCourses, getCourseById, createCourse, updateCourseMeta, archiveCourse, deleteCourse, findCourseByName, buildCourseContextBlock, bootstrapCoursesFromLegacy } = await import('../../src/services/courseStore.js');
+const { scanFilesForFeedback, ingestFeedbackBatch, eventsForAuthor } = await import('../../src/services/feedbackScanService.js');
 const { resolveActiveCourse, setActiveCourseOverride, clearActiveCourseOverride, matchesCourseFilter, buildProjectCourseMap, deriveCourseIdForIngest } = await import('../../src/services/activeCourseService.js');
 const { getMaterialChunks, addMaterialDocument } = await import('../../src/services/materialChunkStore.js');
-const { getActiveRulesFor, upsertRule, recordGradedReturn, __resetLecturerProfilesForTests } = await import('../../src/services/lecturerProfileStore.js');
+const { getActiveRulesFor, upsertRule, recordGradedReturn, getLecturerProfile, listLecturerProfiles, __resetLecturerProfilesForTests } = await import('../../src/services/lecturerProfileStore.js');
 const { getProject } = await import('../../src/services/projectService.js');
 const { saveDocumentHistory, getSavedDocsHistory } = await import('../../src/services/workspaceLearningService.js');
 
@@ -146,6 +152,77 @@ saveDocumentHistory({ title: 'עבודה', content: '<p>תוכן ראשון של
 saveDocumentHistory({ title: 'עבודה', content: '<p>שמירה חוזרת בלי courseId מפורש</p>', filePath: 'C:/docs/work.docx' });
 const entry = getSavedDocsHistory().find((e) => e.filePath === 'C:/docs/work.docx');
 check('courseId sticky across resave', entry?.courseId === c1.id, `got ${entry?.courseId}`);
+
+// ── 9. סריקת אצווה: כמה עבודות בבת אחת + קליטה מרוכזת ──
+console.log('\n[batch-scan]');
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+
+const buildDocxFixture = async ({ comments = [], highlightOnly = false }) => {
+  const zip = new JSZip();
+  const body = highlightOnly
+    ? `<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>משפט שסומן במרקר בלבד</w:t></w:r></w:p>`
+    : comments.map((c, i) => `
+      <w:p>
+        <w:commentRangeStart w:id="${i + 1}"/>
+        <w:r><w:t>${c.anchor}</w:t></w:r>
+        <w:commentRangeEnd w:id="${i + 1}"/>
+        <w:r><w:commentReference w:id="${i + 1}"/></w:r>
+      </w:p>`).join('');
+  zip.file('word/document.xml', `<?xml version="1.0"?><w:document ${W_NS}><w:body>${body}</w:body></w:document>`);
+  if (!highlightOnly) {
+    zip.file('word/comments.xml', `<?xml version="1.0"?><w:comments ${W_NS}>${comments.map((c, i) =>
+      `<w:comment w:id="${i + 1}" w:author="${c.author}"><w:p><w:r><w:t>${c.text}</w:t></w:r></w:p></w:comment>`).join('')}</w:comments>`);
+  }
+  zip.file('docProps/core.xml', `<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>הסטודנט</dc:creator></cp:coreProperties>`);
+  return zip.generateAsync({ type: 'uint8array' });
+};
+
+const workA = await buildDocxFixture({ comments: [
+  { anchor: 'הטענה הראשונה במאמר', text: 'חסר עימוד בהפניה', author: 'ד״ר יעל כהן' },
+  { anchor: 'הטענה השנייה', text: 'הניתוח שטחי — העמיקי', author: 'ד״ר יעל כהן' },
+] });
+const workB = await buildDocxFixture({ comments: [
+  { anchor: 'פסקת הסיכום', text: 'שוב חסר עימוד בהפניות', author: 'ד״ר יעל כהן' },
+] });
+const workWeak = await buildDocxFixture({ highlightOnly: true });
+
+const files = [
+  new File([workA], 'עבודה ראשונה.docx'),
+  new File([workB], 'עבודה שנייה.docx'),
+  new File([workWeak], 'סימונים בלבד.docx'),
+  new File([new Uint8Array([1, 2, 3])], 'לא נתמך.txt'),
+];
+const progressCalls = [];
+const scan = await scanFilesForFeedback(files, { onProgress: (d, t, n) => progressCalls.push(`${d}/${t}`) });
+check('batch scan found 3 works', scan.works.length === 3, `got ${scan.works.length}`);
+check('unsupported file reported as failure', scan.failures.some((f) => f.name === 'לא נתמך.txt'));
+check('progress reported', progressCalls.length >= 4, progressCalls.join(','));
+const wA = scan.works.find((w) => w.fileName.includes('ראשונה'));
+check('title derived from filename', wA?.title === 'עבודה ראשונה');
+check('lecturer inferred per work', wA?.suspectedLecturer.includes('יעל כהן'), wA?.suspectedLecturer);
+check('two events in first work', wA?.events.length === 2, `got ${wA?.events.length}`);
+const weak = scan.works.find((w) => w.fileName.includes('סימונים'));
+check('highlight-only flagged weakOnly', weak?.weakOnly === true);
+check('eventsForAuthor re-filters', eventsForAuthor(wA, 'מישהו אחר').length === 0
+  && eventsForAuthor(wA, 'ד״ר יעל כהן').length === 2);
+
+__resetLecturerProfilesForTests();
+const selected = scan.works
+  .filter((w) => !w.weakOnly)
+  .map((w, i) => ({ ...w, grade: i === 0 ? 88 : null }));
+const batch = await ingestFeedbackBatch(selected, {
+  lecturerName: 'ד"ר יעל כהן', courseName: 'דיני חוקה', courseId: c1.id,
+});
+// המסמכים חתומים ב-ד״ר (גרשיים עבריים) והקליטה ב-ד"ר (גרש ישר) — אותו מרצה.
+check('batch ingest saved both works', batch.saved === 2, `saved=${batch.saved}`);
+check('gershayim and straight-quote titles unify', listLecturerProfiles().length === 1,
+  JSON.stringify(listLecturerProfiles().map((l) => l.name)));
+check('batch events counted', batch.totalEvents === 3, `events=${batch.totalEvents}`);
+const batchLecturer = getLecturerProfile(batch.lecturerId);
+check('one lecturer, two returns', batchLecturer?.returns.length === 2);
+check('returns carry courseId', batchLecturer?.returns.every((r) => r.courseId === c1.id));
+check('grade recorded on first return', batchLecturer?.returns.some((r) => r.grade === 88));
+check('titles preserved', batchLecturer?.returns.some((r) => r.assignmentTitle === 'עבודה ראשונה'));
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
 process.exit(failed ? 1 : 0);
