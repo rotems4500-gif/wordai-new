@@ -57,10 +57,16 @@ export async function writeTextClip({ uid, title, text, sourceUrl, captureMode }
  * כותב קליפ קובץ (PDF וכו'): מעלה ל-Storage וכותב מסמך kind='file'.
  * החילוץ עצמו נעשה באפליקציה (extractMaterialTextFromBytes), כמו OCR לתמונות —
  * התוסף נשאר רזה ולא גורר pdf.js.
+ *
+ * ⚠️ **הסדר קדוש**: uploadBytes תמיד לפני setDoc. clipInboxService באפליקציה
+ * קורא את מסמך ה-Firestore ואז מוריד את storagePath — מסמך שנראה לפני שהבלוב
+ * קיים הוא קליפ שבור. deferDoc משנה רק **מי ממתין** ל-ack, לא את הסדר:
+ * מוחזר `{clipId, docWrite}` וההמתנה עוברת לקורא (מחוץ לסמפור ההעלאה).
+ * בלי deferDoc ההתנהגות זהה לקודם — מוחזר clipId אחרי ששני השלבים הסתיימו.
  * @param {{uid:string, title:string, bytes:Uint8Array|ArrayBuffer, fileName:string,
- *          sourceUrl:string, captureMode:string, contentType?:string}} params
+ *          sourceUrl:string, captureMode:string, contentType?:string, deferDoc?:boolean}} params
  */
-export async function writeFileClip({ uid, title, bytes, fileName, sourceUrl, captureMode, contentType = 'application/pdf' }) {
+export async function writeFileClip({ uid, title, bytes, fileName, sourceUrl, captureMode, contentType = 'application/pdf', deferDoc = false }) {
   const settings = await getSettings();
   const clipId = makeClipId();
   const safeName = String(fileName || 'clip.pdf').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'clip.pdf';
@@ -70,7 +76,7 @@ export async function writeFileClip({ uid, title, bytes, fileName, sourceUrl, ca
   await uploadBytes(ref(storage, storagePath), bytes, { contentType });
 
   const db = getDb();
-  await setDoc(doc(db, 'users', uid, 'clips', clipId), {
+  const docWrite = setDoc(doc(db, 'users', uid, 'clips', clipId), {
     kind: 'file',
     status: 'pending',
     captureMode,
@@ -86,8 +92,10 @@ export async function writeFileClip({ uid, title, bytes, fileName, sourceUrl, ca
     truncated: false,
     errorMessage: null,
     processedAt: null,
-  });
+  }).then(() => clipId);
 
+  if (deferDoc) return { clipId, docWrite };
+  await docWrite;
   return clipId;
 }
 

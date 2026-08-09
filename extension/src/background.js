@@ -237,7 +237,9 @@ async function probeFileTarget(target, opts) {
   const wantBytes = !!(opts && opts.wantBytes);
   // כמה בייטים מפענחים לטקסט במסלול ה-SW: ניתוח המועמדים חותך ב-400k ממילא.
   const HEAD_BYTES = 400000;
-  const timing = { fetchMs: 0, hopMs: 0, encodeMs: 0, hops: 0 };
+  // כמה בייטים מספיקים כדי להכריע "קובץ / לא קובץ" מהזרם (מספרי קסם + ראש HTML).
+  const CLASSIFY_BYTES = 1024;
+  const timing = { fetchMs: 0, hopMs: 0, encodeMs: 0, hops: 0, bytes: 0 };
   const now = () => Date.now();
 
   const FILE_LIKE = /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|csv)(?:[?#]|$)|pluginfile\.php|forcedownload=1|[?&](?:type|format|mode|action)=[^&]*(?:pdf|doc|ppt|xls)|\/(?:download|getpdf|pdf)\b/i;
@@ -259,12 +261,61 @@ async function probeFileTarget(target, opts) {
     return s;
   };
 
+  const concatChunks = (chunks, total) => {
+    if (chunks.length === 1 && chunks[0].length === total) return chunks[0];
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  };
+
+  /**
+   * ⚠️ **הצוואר שנמדד**: קודם הגוף כולו נצרך ב-arrayBuffer *לפני* שמישהו סיווג
+   * אותו, ולכן ניסיון SW שנדחה עלה הורדה מלאה — ואז המסלול המוזרק הוריד שוב.
+   * עכשיו במסלול ה-SW קוראים מהזרם, מכריעים על ~1KB הראשון (מספרי קסם +
+   * content-type + "האם זה HTML"), וממשיכים לנקז רק כשזה נראה קובץ אמיתי.
+   * כשזה **לא** קובץ עדיין ממשיכים עד HEAD_BYTES — ניתוח דף העטיפה וזיהוי
+   * ההתחברות צריכים את ראש ה-HTML — ואז עוצרים במקום לגרור גוף ענק.
+   * r.body יכול להיות null (תשובות מסוימות) — שם נופלים חזרה ל-arrayBuffer.
+   */
+  const drain = async (r) => {
+    const contentType = r.headers.get('content-type') || '';
+    if (!wantBytes || !r.body || typeof r.body.getReader !== 'function') {
+      return { buf: new Uint8Array(await r.arrayBuffer()), truncated: false };
+    }
+    const reader = r.body.getReader();
+    const chunks = [];
+    let total = 0;
+    let verdict = null; // null = טרם הוכרע · true = נראה קובץ · false = לא קובץ
+    let cap = 0;
+    let truncated = false;
+    for (;;) {
+      const step = await reader.read();
+      if (step.value && step.value.length) { chunks.push(step.value); total += step.value.length; }
+      if (verdict === null && (total >= CLASSIFY_BYTES || step.done)) {
+        const head = concatChunks(chunks, total);
+        const pdfHead = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+        const zipHead = head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04;
+        verdict = pdfHead || zipHead
+          || (!!contentType && DOC_CT.test(contentType) && !looksLikeMarkup(latin1(head.subarray(0, 200))));
+        cap = verdict ? Infinity : HEAD_BYTES;
+      }
+      if (step.done) break;
+      if (verdict !== null && total >= cap) {
+        truncated = true;
+        try { await reader.cancel(); } catch { /* הזרם כבר נסגר */ }
+        break;
+      }
+    }
+    return { buf: concatChunks(chunks, total), truncated };
+  };
+
   const grab = async (u) => {
     const t0 = now();
     const r = await fetch(u, { credentials: 'include' });
     const finalUrl = r.url || u;
     if (!r.ok) return { ok: false, status: r.status, finalUrl, fetchMs: now() - t0 };
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const { buf, truncated } = await drain(r);
     const fetchMs = now() - t0;
     // docx/pptx/xlsx הם ZIP — מספר הקסם PK\x03\x04
     const isPdf = buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
@@ -283,6 +334,8 @@ async function probeFileTarget(target, opts) {
       s,
       bytes: wantBytes ? buf : null,
       byteLength: buf.length,
+      // הזרם נקטע כי כבר היה ברור שזה לא קובץ — byteLength הוא מה ש*באמת* עלה.
+      truncated,
       finalUrl,
       contentType: r.headers.get('content-type') || '',
       disposition: r.headers.get('content-disposition') || '',
@@ -309,7 +362,12 @@ async function probeFileTarget(target, opts) {
   const IMG_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|avif|tiff?)(?:[?#]|$)/i;
   // נתיבי "כרום" של Moodle תחת pluginfile — לעולם לא המשאב עצמו
   const CHROME_PATH = /\/(?:user\/icon|user|course\/overviewfiles|theme|blocks)\//i;
-  const DOC_CT = /application\/pdf|wordprocessingml|presentationml|spreadsheetml/i;
+  // ⚠️ הרשימה חייבת לכסות את *כל* מה ש-scanLinks.js אוסף ומה ש-CONTENT_TYPE_EXT
+  // יודע לתרגם לסיומת. כשהיא הייתה צרה (pdf/docx/pptx/xlsx בלבד), קובץ
+  // txt/rtf/csv הורד במלואו ב-SW, נדחה, הורד **שוב** בהזרקה עם base64, נדחה שוב
+  // ודווח "לא נתמך". שער ה-looksLikeMarkup עדיין חל — text/plain לא מכניס
+  // דף שגיאה של HTML.
+  const DOC_CT = /application\/pdf|wordprocessingml|presentationml|spreadsheetml|msword|ms-powerpoint|ms-excel|opendocument|(?:application|text)\/rtf|text\/plain|text\/csv|text\/tab-separated-values/i;
 
   const collectCandidates = (html, baseUrl) => {
     const abs = (raw) => {
@@ -391,6 +449,7 @@ async function probeFileTarget(target, opts) {
       contentType: res.contentType,
       disposition: res.disposition,
       byteLength: res.byteLength || 0,
+      truncated: !!res.truncated,
       data,
       // מסלול ה-SW: הבייטים עוברים כמו שהם עד uploadBytes, בלי סיבוב base64.
       bytes: (wantBytes && isDoc) ? res.bytes : null,
@@ -401,6 +460,7 @@ async function probeFileTarget(target, opts) {
   const first = await grab(target);
   timing.fetchMs = first.fetchMs || 0;
   timing.encodeMs += first.encodeMs || 0;
+  timing.bytes += first.byteLength || 0;
   if (!first.ok) return { ok: false, status: first.status, finalUrl: first.finalUrl, timing };
   // ✔️ קובץ מאומת כבר בתשובה הראשונה — אין קפיצה, אין ניתוח HTML.
   if (first.isPdf || first.isZip) return pack(first);
@@ -425,6 +485,7 @@ async function probeFileTarget(target, opts) {
     if (res2) {
       timing.hopMs += res2.fetchMs || 0;
       timing.encodeMs += res2.encodeMs || 0;
+      timing.bytes += res2.byteLength || 0;
     }
     if (!res2 || !res2.ok) continue;
     lastRes = res2;
@@ -468,6 +529,22 @@ const shortLabel = (s) => {
 };
 const kb = (n) => (n ? (n < 1024 ? `${n}B` : `${Math.round(n / 1024)}KB`) : '?');
 
+// ---------- מטמון מקור למסלול ה-SW ----------
+/**
+ * origin → 'ok' | 'dead'. נקבע בהכרעה הראשונה לכל מקור, וכש-'dead' מדלגים על
+ * ניסיון ה-SW לגמרי. ⚠️ בזיכרון בלבד ובכוונה: מוות של ה-service worker מאפס
+ * אותו, וזה בסדר — מקור שהחלים ייבדק מחדש.
+ */
+const swOriginVerdict = new Map();
+
+const originOf = (url) => { try { return new URL(url).origin; } catch { return ''; } };
+
+function noteSwVerdict(origin, verdict) {
+  if (!origin || swOriginVerdict.get(origin) === verdict) return;
+  swOriginVerdict.set(origin, verdict);
+  perf(`מסלול SW · ${origin} → ${verdict === 'ok' ? 'עובד' : 'מת (הקבצים הבאים עוברים ישר להזרקה)'}`);
+}
+
 /**
  * משיכה עם אימות — **קודם מה-service worker, ורק בנפילה דרך הזרקה לדף**.
  *
@@ -480,29 +557,48 @@ const kb = (n) => (n ? (n < 1024 ? `${n}B` : `${Math.round(n / 1024)}KB`) : '?')
  * ה-Referer/הקשר הדף, ושם רק המסלול המוזרק עובד.
  */
 async function probeFile(tabId, url, label = '') {
+  const origin = originOf(url);
+  // 7 קבצים מאותו Moodle = 7 פעמים אותו כישלון SW. אחרי ההכרעה הראשונה
+  // מדלגים על הניסיון לגמרי והולכים ישר להזרקה.
+  const skipSw = swOriginVerdict.get(origin) === 'dead';
+
   const t0 = Date.now();
   let sw = null;
   let swError = '';
-  try {
-    sw = await probeFileTarget(url, { wantBytes: true });
-  } catch (err) {
-    swError = String(err?.message || err);
+  if (!skipSw) {
+    try {
+      sw = await probeFileTarget(url, { wantBytes: true });
+    } catch (err) {
+      swError = String(err?.message || err);
+    }
   }
-  const swMs = Date.now() - t0;
+  const swMs = skipSw ? 0 : Date.now() - t0;
 
   if (sw && sw.ok && sw.isDoc) {
+    noteSwVerdict(origin, 'ok');
     logProbe(label, 'sw', swMs, sw);
     return sw;
   }
 
-  const swReason = swError ? `שגיאה: ${swError}`
-    : !sw ? 'ללא תשובה'
-      : !sw.ok ? `status ${sw.status || '?'}`
-        : 'לא קובץ מאומת';
+  const swBytes = sw?.timing?.bytes || 0;
+  const swReason = skipSw ? 'דולג לפי מטמון המקור'
+    : swError ? `שגיאה: ${swError}`
+      : !sw ? 'ללא תשובה'
+        : !sw.ok ? `status ${sw.status || '?'}`
+          : 'לא קובץ מאומת';
   const t1 = Date.now();
   const main = await fetchFileViaTab(tabId, url);
   const mainMs = Date.now() - t1;
-  logProbe(label, 'main', mainMs, main, `sw נדחה אחרי ${ms(swMs)} (${swReason})`);
+  // 'dead' רק כשזה כשל *יכולת* של ה-SW: הוא זרק/נחסם, או שההזרקה הצליחה
+  // במקום שבו הוא נכשל. "זה פשוט לא קובץ" אינו כשל של המסלול.
+  if (!skipSw && (swError || (main && main.isDoc))) noteSwVerdict(origin, 'dead');
+  logProbe(
+    label,
+    'main',
+    mainMs,
+    main,
+    skipSw ? 'sw דולג (מטמון מקור: מת)' : `sw נדחה אחרי ${ms(swMs)} ובעלות ${swBytes ? kb(swBytes) : '0B'} (${swReason})`,
+  );
   // ה-SW הצליח לדבר עם השרת אבל לא היה שם קובץ, וההזרקה בכלל לא נגישה —
   // התשובה של ה-SW עדיין מכילה את הסיבה המדויקת (התחברות/מועמדים).
   return main || sw;
@@ -521,6 +617,8 @@ function logProbe(label, via, wallMs, probe, note = '') {
     `קידוד ${ms(t.encodeMs)}`,
     `העברה ${ms(transfer)}`,
     `גודל ${kb(probe?.byteLength)}`,
+    // כמה בייטים באמת נמשכו (כולל קפיצות) — כך רואים שניסיון שנדחה עולה KB בודדים.
+    `נקראו ${kb(t.bytes)}${probe?.truncated ? ' (נקטע)' : ''}`,
     `סה"כ ${ms(wallMs)}`,
     note,
   ].filter(Boolean).join(' · '));
@@ -530,11 +628,16 @@ function logProbe(label, via, wallMs, probe, note = '') {
 // ⚠️ קודם הלולאה הייתה סדרתית לחלוטין: 7 קבצים = סכום כל המשיכות + כל ההעלאות.
 // ארבעה במקביל מנצלים את זמן ההמתנה לרשת בלי להטביע את שרת ה-Moodle.
 const DOWNLOAD_CONCURRENCY = 4;
+// ⚠️ **סמפור נפרד להעלאה.** קודם ההורדות וההעלאות חלקו מאגר אחד של 4 —
+// שני כיוונים הפוכים של אותו קו שחסמו זה את זה וחצו את התקרה. עכשיו הן
+// חופפות: בזמן ש-4 קבצים נמשכים, עד 3 כבר עולים ל-Storage.
+const UPLOAD_CONCURRENCY = 3;
 
 /**
- * סמפור **גלובלי אחד** לכל העבודה. תיקיית Moodle מרחיבה לקבצים פנימיים —
- * הם נוטלים אישורים מאותו סמפור, ולכן הרחבה של תיקייה אינה מכפילה את העומס.
- * פריט התיקייה עצמו לא מחזיק אישור בזמן ההרחבה (אחרת 4 תיקיות היו נועלות).
+ * שני סמפורים **גלובליים לעבודה** — אחד להורדה ואחד להעלאה. תיקיית Moodle
+ * מרחיבה לקבצים פנימיים, והם נוטלים אישורים מאותם שני סמפורים, ולכן הרחבה
+ * של תיקייה אינה מכפילה את העומס. פריט התיקייה עצמו משחרר את אישור ההורדה
+ * לפני שהילדים נוטלים אישור (אחרת 4 תיקיות היו נועלות את המאגר).
  */
 function createSemaphore(limit) {
   let active = 0;
@@ -721,7 +824,11 @@ async function scanFolderCandidates(tabId, url) {
   }
 }
 
-/** כתיבת קליפ אחד מתוך probe מאומת. מחזיר את שם הקובץ שנשמר. */
+/**
+ * כתיבת קליפ אחד מתוך probe מאומת. מחזיר `{fileName, docWrite}` — `docWrite`
+ * הוא כתיבת מסמך ה-Firestore שכבר יצאה לדרך (**אחרי** שההעלאה הסתיימה).
+ * הקורא משחרר את אישור ההעלאה ואז ממתין לה, כדי שה-RTT של ה-ack לא יחזיק סלוט.
+ */
 async function saveProbedFile(user, link, probe, captureMode = 'page-files') {
   const fileName = resolveFileName(link, probe);
   // ⚠️ בעבר נכתב תמיד application/octet-stream לכל מה שאינו PDF — docx/pptx איבדו
@@ -730,7 +837,7 @@ async function saveProbedFile(user, link, probe, captureMode = 'page-files') {
   const contentType = declared && !/^(?:text\/html|application\/xhtml)/i.test(declared)
     ? declared
     : (probe.isPdf ? 'application/pdf' : 'application/octet-stream');
-  await writeFileClip({
+  const { docWrite } = await writeFileClip({
     uid: user.uid,
     title: link.title || fileName,
     // מסלול ה-SW מחזיר בייטים; המסלול המוזרק מחזיר base64 (אין ArrayBuffer
@@ -740,8 +847,9 @@ async function saveProbedFile(user, link, probe, captureMode = 'page-files') {
     sourceUrl: probe.finalUrl || link.url,
     captureMode,
     contentType,
+    deferDoc: true,
   });
-  return fileName;
+  return { fileName, docWrite };
 }
 
 /**
@@ -757,7 +865,8 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
   const startUrl = tab.url;
   const pageHost = hostOf(startUrl || '');
   const jobStartedAt = Date.now();
-  const sem = createSemaphore(DOWNLOAD_CONCURRENCY);
+  const downloadSem = createSemaphore(DOWNLOAD_CONCURRENCY);
+  const uploadSem = createSemaphore(UPLOAD_CONCURRENCY);
 
   let saved = 0;
   const skipped = [];
@@ -802,7 +911,7 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
       // תיקיית Moodle: כל הקבצים שבתוכה, לא רק הראשון. הפריט הזה **אינו** מחזיק
       // אישור סמפור בזמן ההרחבה — הקבצים הפנימיים נוטלים אישורים בעצמם.
       if (FOLDER_RESOURCE.test(link.url)) {
-        const folder = await downloadFolderFiles(tab, user, link, shouldCancel, sem, noteSaved);
+        const folder = await downloadFolderFiles(tab, user, link, shouldCancel, { downloadSem, uploadSem }, noteSaved);
         if (folder) {
           if (folder.saved) {
             emit('saved', {
@@ -819,13 +928,13 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
         // אין מועמדים בתיקייה — נופלים למסלול הרגיל (אולי זו בכלל לא תיקייה).
       }
 
-      await sem.acquire();
+      await downloadSem.acquire();
       let probe;
       try {
         if (shouldCancel()) { cancelled = true; return; }
         probe = await probeFile(tab.id, link.url, link.title || link.url);
       } finally {
-        sem.release();
+        downloadSem.release();
       }
 
       if (!probe) {
@@ -872,11 +981,17 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
       // הראשונה בכלל לא הסתיימה. בלי זה ביטול היה עדיין מזרים ל-Firebase את
       // כל מה שהספיק להיבדק.
       const up0 = Date.now();
-      const fileName = await withSlot(sem, () => {
+      const out = await withSlot(uploadSem, () => {
         if (shouldCancel()) { cancelled = true; return null; }
         return saveProbedFile(user, link, probe);
       });
-      if (fileName === null) return;
+      if (out === null) return;
+      // ⚠️ אישור ה-Firestore הוא RTT נוסף שבו אף בייט לא זז — הוא מסתדר
+      // **מחוץ** לאישור ההעלאה. הסדר עצמו לא משתנה: uploadBytes תמיד לפני
+      // setDoc, כי clipInboxService באפליקציה קורא את המסמך ואז מוריד את
+      // storagePath. כישלון בכתיבת המסמך עדיין נזרק כאן ומדווח כשגיאת פריט.
+      const fileName = typeof out === 'string' ? out : (out && out.fileName) || '';
+      if (out && out.docWrite) await out.docWrite;
       perf(`העלאה "${shortLabel(fileName)}" · ${ms(Date.now() - up0)} · ${kb(probe.byteLength)}`);
       noteSaved();
       emit('saved', { fileName });
@@ -893,17 +1008,19 @@ async function downloadFiles(tab, links, onItem = () => {}, shouldCancel = () =>
   // מי שעדיין לא נטל אישור.
   await Promise.all(links.map((link, index) => runOne(link, index)));
 
-  perf(`סיכום עבודה · ${links.length} פריטים · נשמרו ${saved} · ${ms(Date.now() - jobStartedAt)} · מקביליות ${DOWNLOAD_CONCURRENCY}${cancelled ? ' · בוטלה' : ''}`);
+  perf(`סיכום עבודה · ${links.length} פריטים · נשמרו ${saved} · ${ms(Date.now() - jobStartedAt)} · מקביליות הורדה ${DOWNLOAD_CONCURRENCY}/העלאה ${UPLOAD_CONCURRENCY}${cancelled ? ' · בוטלה' : ''}`);
   return { saved, skipped, cancelled };
 }
 
 /**
  * קליטת כל הקבצים שבתוך תיקיית Moodle אחת. מחזיר null כשאין מועמדים בכלל
  * (ואז הקורא ממשיך במסלול הרגיל של קפיצה בודדת).
- * ⚠️ sem הוא **הסמפור של העבודה כולה** — קבצי התיקייה אינם ערוץ מקביליות שני.
+ * ⚠️ pools הם **הסמפורים של העבודה כולה** — קבצי התיקייה אינם ערוץ מקביליות שני.
  */
-async function downloadFolderFiles(tab, user, link, shouldCancel = () => false, sem = createSemaphore(DOWNLOAD_CONCURRENCY), onSaved = () => {}) {
-  const entries = await withSlot(sem, () => scanFolderCandidates(tab.id, link.url));
+async function downloadFolderFiles(tab, user, link, shouldCancel = () => false, pools = null, onSaved = () => {}) {
+  const downloadSem = (pools && pools.downloadSem) || createSemaphore(DOWNLOAD_CONCURRENCY);
+  const uploadSem = (pools && pools.uploadSem) || createSemaphore(UPLOAD_CONCURRENCY);
+  const entries = await withSlot(downloadSem, () => scanFolderCandidates(tab.id, link.url));
   if (!entries.length) return null;
 
   let saved = 0;
@@ -915,29 +1032,35 @@ async function downloadFolderFiles(tab, user, link, shouldCancel = () => false, 
 
   await Promise.all(entries.map(async (entry, i) => {
     if (shouldCancel()) return;
-    await sem.acquire();
     try {
-      if (shouldCancel()) return;
-      const probe = await probeFile(tab.id, entry.url, entry.title || entry.url);
+      let probe;
+      await downloadSem.acquire();
+      try {
+        if (shouldCancel()) return;
+        probe = await probeFile(tab.id, entry.url, entry.title || entry.url);
+      } finally {
+        downloadSem.release();
+      }
       if (!probe || !probe.ok || (!probe.isPdf && !probe.isZip && !probe.isDoc)) {
         failed += 1;
         lastReason = probe && probe.looksLikeLogin ? LOGIN_MSG : 'לא נמצא קובץ בתוך התיקייה';
         return;
       }
       const up0 = Date.now();
-      names[i] = await saveProbedFile(
-        user,
-        { url: entry.url, title: entry.title || link.title || '' },
-        probe,
-      );
+      const out = await withSlot(uploadSem, () => {
+        if (shouldCancel()) return null;
+        return saveProbedFile(user, { url: entry.url, title: entry.title || link.title || '' }, probe);
+      });
+      if (out === null) return;
+      names[i] = typeof out === 'string' ? out : (out && out.fileName) || '';
+      // אישור ה-Firestore מחוץ לאישור ההעלאה — ר' ההערה ב-downloadFiles.
+      if (out && out.docWrite) await out.docWrite;
       perf(`העלאה "${shortLabel(names[i])}" · ${ms(Date.now() - up0)} · ${kb(probe.byteLength)}`);
       saved += 1;
       onSaved();
     } catch (err) {
       failed += 1;
       lastReason = String(err?.message || err);
-    } finally {
-      sem.release();
     }
   }));
 
