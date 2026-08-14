@@ -23,6 +23,9 @@ import {
   recomputeConfidence,
   extractQualitativePatterns,
   parsePatternExtractionResult,
+  normalizeExternalSchemaJson,
+  buildDeepProfileExtractionPrompt,
+  mergeStructuralSignature,
   mergeQualitativePatterns,
   selectRepresentativeExcerpts,
   mineSignatureNgrams,
@@ -31,6 +34,7 @@ import {
   canonicalPatternKey,
   filterRejectedPatterns,
   deriveAutoBlacklist,
+  AI_CLICHE_BLACKLIST,
   seedStyleEngineFromLegacyProfile,
   deriveManualDefaultsFromMetrics,
   GENRES,
@@ -59,7 +63,7 @@ import {
   STYLE_EMBEDDING_MODEL_ID,
   STYLE_EMBEDDING_DIM,
 } from './styleEmbeddingService';
-import { clearDeltas } from './styleDeltaService';
+import { clearDeltas, assessDocOwnership } from './styleDeltaService';
 import {
   getEmbeddedChunkIds,
   putVectors,
@@ -77,6 +81,9 @@ const STYLE_UPDATED_EVENT = 'wordai-personal-style-updated';
 const PATTERN_EXTRACTION_MAX_CHARS = 5000;
 const PATTERN_EXTRACTION_MAX_COUNT = 6;
 const CAP_BLACKLIST_USER = 50;
+// אותו cap שאוכף normalizeStyleEngine על blacklist.auto (CAP_BLACKLIST=50 ב-styleProfileService).
+// משוכפל כאן כי הוא לא מיוצא; חריגה ממנו הייתה נחתכת שם בשקט ממילא.
+const CAP_BLACKLIST_AUTO = 50;
 
 // E1 — חילוץ multi-batch: כל באטצ' ~5000 תווים, עד 8 באטצ'ים.
 const PATTERN_BATCH_MAX_CHARS = 5000;
@@ -466,6 +473,147 @@ if (typeof window !== 'undefined' && window.addEventListener) {
   } catch {}
 }
 
+// ---------- קליטת עבודות שהוגשו ומסמכים שהושלמו ----------
+//
+// שני מקורות שהיו עד כה בלתי-נראים למנוע:
+//   1. עבודות בדוקות שחוזרות מהמרצה — גוף הטקסט הוא כתיבה אקדמית 100% של המשתמש.
+//   2. מסמכים שנכתבו באפליקציה מאפס — ה-delta tracker רואה רק פלט AI שנערך.
+// שניהם נקלטים כמסמכי קורפוס רגילים (לא gold): עבודה שלמה = עשרות chunks, ו-gold
+// לעולם אינו מפונה. תג ה-source הוא שמבדיל אותם ב-UI.
+
+// אורך מינימלי למסמך שנחשב "הושלם" (זהה לסף הלכידה הפסיבית).
+const FINISHED_DOC_MIN_CHARS = 1200;
+// throttle פר-מסמך: מסמך נקלט לכל היותר פעם ב-24 שעות, ולא שוב אם התוכן לא השתנה.
+const FINISHED_CAPTURE_STORAGE_KEY = 'wordai_style_finished_capture_v1';
+const FINISHED_CAPTURE_THROTTLE_MS = 24 * 60 * 60 * 1000;
+
+// hash דטרמיניסטי מקומי (djb2 מעל טקסט מנורמל) — mirror של styleSampleStore.hashText,
+// שאינו מיוצא. משמש רק לזיהוי "אותו תוכן בדיוק" ב-throttle.
+function localHashText(text = '') {
+  const normalized = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  let h = 5381;
+  for (let i = 0; i < normalized.length; i += 1) {
+    h = ((h << 5) + h + normalized.charCodeAt(i)) | 0;
+  }
+  return `hash_${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function readFinishedCaptureMap() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FINISHED_CAPTURE_STORAGE_KEY) || '');
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeFinishedCaptureMap(map) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(FINISHED_CAPTURE_STORAGE_KEY, JSON.stringify(isPlainObject(map) ? map : {}));
+  } catch {}
+}
+
+/**
+ * קולט גוף של עבודה שהוגשה (חולץ מקובץ בדוק שחזר מהמרצה) כמסמך קורפוס.
+ * dedupe לפי hash תוכן קיים ב-addDocumentSamples — סריקה חוזרת של אותה עבודה מדולגת.
+ * @param {{title?:string, text:string}} args
+ * @returns {Promise<{docId:(string|null), added:number, skipped:boolean}|{skipped:string}>}
+ */
+export async function ingestGradedSubmission({ title, text } = {}) {
+  const profile = getPersonalStyleProfile();
+  if (profile?.learningConsent === false) return { skipped: 'consent' };
+  const raw = String(text || '');
+  if (raw.trim().length < AI_CONTEXT_CAPTURE_MIN_CHARS) return { skipped: 'too-short' };
+
+  await ensureSampleStoreReady();
+  return ingestText({
+    title: String(title || '').trim() || 'עבודה בדוקה',
+    text: raw,
+    source: 'graded-submission',
+  });
+}
+
+/**
+ * קולט מסמך שנראה "גמור" מתוך העורך — אחרי שקט עריכה. כל השערים כאן ולא בקורא.
+ * @param {{docId:string, text:string, title?:string}} args
+ * @returns {Promise<{captured:boolean, reason:string}>}
+ */
+export async function maybeCaptureFinishedDocument({ docId, text, title } = {}) {
+  try {
+    const profile = getPersonalStyleProfile();
+    if (profile?.learningConsent === false) return { captured: false, reason: 'consent' };
+
+    const engine = normalizeStyleEngine(profile?.styleEngine);
+    if (engine.enabled !== true) return { captured: false, reason: 'engine-off' };
+
+    const raw = String(text || '');
+    if (raw.trim().length < FINISHED_DOC_MIN_CHARS) return { captured: false, reason: 'too-short' };
+
+    const id = String(docId || '').trim();
+    const hash = localHashText(raw);
+    const map = readFinishedCaptureMap();
+    const prev = isPlainObject(map[id]) ? map[id] : null;
+    if (prev && id) {
+      if (prev.lastHash === hash) return { captured: false, reason: 'unchanged' };
+      if (Date.now() - (Number(prev.lastAt) || 0) < FINISHED_CAPTURE_THROTTLE_MS) {
+        return { captured: false, reason: 'throttled' };
+      }
+    }
+
+    // בעלות: מסמך שהוא עדיין פלט AI בתולי (או ברובו) לא נכנס לקורפוס.
+    const ownership = assessDocOwnership({ docId: id, currentText: raw });
+    if (!ownership?.eligible) return { captured: false, reason: String(ownership?.reason || 'mostly-ai') };
+
+    await ensureSampleStoreReady();
+    const result = ingestText({
+      title: String(title || '').trim() || 'מסמך שנכתב באפליקציה',
+      text: raw,
+      source: 'finished-doc',
+    });
+
+    // מעדכנים throttle רק על קליטה אמיתית — dedupe hash (skipped) לא "צורך" 24 שעות.
+    if (result?.docId) {
+      if (id) {
+        map[id] = { lastAt: Date.now(), lastHash: hash };
+        writeFinishedCaptureMap(map);
+      }
+      return { captured: true, reason: 'ok' };
+    }
+    if (result?.skipped) return { captured: false, reason: 'deduped' };
+    return { captured: false, reason: 'not-ingested' };
+  } catch {
+    return { captured: false, reason: 'error' };
+  }
+}
+
+/**
+ * שומר משוב חופשי שהמשתמש כתב בבקשת רוויזיה ("קצר מדי", "יותר פורמלי").
+ * תיעוד בלבד — בלי LLM ובלי סינתזה לפרופיל (1-2 דגימות מטות יותר משהן מלמדות).
+ * @param {string} feedbackText
+ * @returns {boolean} true אם נרשם
+ */
+export function recordRevisionFeedback(feedbackText) {
+  try {
+    const t = String(feedbackText || '').trim();
+    if (!t) return false;
+    const { profile, engine } = loadEngine();
+    if (profile?.learningConsent === false) return false;
+
+    const clipped = t.slice(0, 200);
+    const notes = Array.isArray(engine.revisionFeedbackNotes) ? engine.revisionFeedbackNotes.slice() : [];
+    if (notes.some((n) => String(n?.text || '') === clipped)) return false;
+
+    notes.push({ text: clipped, at: Date.now() });
+    engine.revisionFeedbackNotes = notes.slice(-12);
+    saveEngine(profile, engine);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- recomputeMetricsFromStore ----------
 
 /**
@@ -674,6 +822,74 @@ export async function computeChunkEmbeddings({ onProgress = null, force = false 
   };
 }
 
+// ---------- getRepresentativeExcerpts ----------
+
+const REPRESENTATIVE_EXCERPTS_MAX = 8;
+const REPRESENTATIVE_EXCERPTS_MAX_CHARS = 6000;
+
+/**
+ * מחזיר את הקטעים המייצגים ביותר של המשתמש, לשימוש כ-excerpts בפרומפט (מקומי או
+ * להדבקה חיצונית). מקור ראשון: engine.representativeChunkIds — נבחרו כבר ע"י שכבת
+ * ה-embeddings (centroid + MMR לגיוון). fallback כשאין embeddings: דגימת stride על
+ * כל הקורפוס, באותה רוח של buildPatternBatches — פריסה על כל המסמכים, לא רק ההתחלה.
+ * לעולם לא זורק; קורפוס ריק → [].
+ * @param {{max?:number, maxChars?:number}} opts
+ * @returns {string[]}
+ */
+export function getRepresentativeExcerpts({ max = REPRESENTATIVE_EXCERPTS_MAX, maxChars = REPRESENTATIVE_EXCERPTS_MAX_CHARS } = {}) {
+  const capCount = Math.max(1, Number(max) || REPRESENTATIVE_EXCERPTS_MAX);
+  const capChars = Math.max(1, Number(maxChars) || REPRESENTATIVE_EXCERPTS_MAX_CHARS);
+  try {
+    const chunks = (getChunks() || []).filter(isPlainObject);
+    if (!chunks.length) return [];
+
+    const picked = [];
+    const seen = new Set();
+    const push = (text) => {
+      const s = String(text || '').trim();
+      if (!s || seen.has(s)) return;
+      seen.add(s);
+      picked.push(s);
+    };
+
+    // 1 — מייצגים שכבר נבחרו סמנטית (embeddings). מתעלמים ממזהים שנמחקו מאז.
+    try {
+      const byId = new Map();
+      for (const c of chunks) byId.set(String(c.id), String(c.text || ''));
+      const { engine } = loadEngine();
+      const ids = Array.isArray(engine?.representativeChunkIds) ? engine.representativeChunkIds : [];
+      for (const id of ids) {
+        if (picked.length >= capCount) break;
+        push(byId.get(String(id)));
+      }
+    } catch {
+      // אין engine/embeddings — נופלים ל-stride
+    }
+
+    // 2 — fallback: דגימה בפריסה אחידה על כל הקורפוס.
+    if (!picked.length) {
+      const list = chunks.map((c) => String(c.text || '').trim()).filter(Boolean);
+      const stride = Math.max(1, Math.ceil(list.length / capCount));
+      for (let i = 0; i < list.length && picked.length < capCount; i += stride) push(list[i]);
+      // אם ה-dedupe הותיר פחות מהמכסה — משלימים מההתחלה.
+      for (let i = 0; i < list.length && picked.length < capCount; i += 1) push(list[i]);
+    }
+
+    // 3 — תקרת תווים כוללת: מורידים מהסוף עד שנכנסים.
+    const out = [];
+    let total = 0;
+    for (const text of picked) {
+      if (!out.length && text.length > capChars) { out.push(text.slice(0, capChars)); break; }
+      if (total + text.length > capChars) break;
+      out.push(text);
+      total += text.length;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 // ---------- runLocalPatternBatches ----------
 
 /**
@@ -701,7 +917,9 @@ async function runLocalPatternBatches() {
   const results = [];
   for (const batch of batches) {
     try {
-      const res = await extractQualitativePatterns(batch, invokeModel);
+      // deep:true — המסלול המקומי מבקש את אותו בלוק עמוק שהמסלול החיצוני קיבל עד היום
+      // (structuralSignature + avoidedPhrases). המיזוג עצמו ב-finishQualitativeMerge.
+      const res = await extractQualitativePatterns(batch, invokeModel, { deep: true });
       if (isPlainObject(res)) results.push(res);
     } catch {
       // batch נכשל — ממשיכים
@@ -757,6 +975,299 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
   return { skipped: false, engine: saved };
 }
 
+// ---------- אימות avoidedPhrases מול הקורפוס האמיתי ----------
+
+// למה זה קיים: avoidedPhrases מגיע מטענה של מודל ("הכותב נמנע מ-X") שאף אחד לא בדק מול
+// מה שהכותב באמת כותב. במדידה על הקורפוס האמיתי המודל הכריז שהמשתמש נמנע מ"כפי ש",
+// "לכן", "כמו כן", "על כן" — בזמן ש"כפי ש" הוא מילת הקישור הרביעית בשכיחותה אצלו,
+// ובמקביל "ניתן לראות כי" נכרה כדפוס חתימה (docFraction 0.364) בעוד "כפי שניתן לראות"
+// ישב ב-blacklist. כלומר הפרומפט אמר למודל בו-זמנית "זו החתימה שלך" ו"לעולם אל תכתוב את זה".
+// לכן כל ביטוי נכנס עובר אימות מול הקורפוס לפני שהוא נחסם, וחתימה מנצחת הימנעות.
+
+// ספי האימות. הרציונל: הופעה בודדת במסמך בודד יכולה להיות ציטוט ממקור או מקריות, ולכן
+// אינה מוכיחה הרגל. שני מסמכים שונים = ההרגל חוזר על פני עבודות (אותה לוגיקה של
+// docFraction בכריית החתימות), ושלוש הופעות באותו מסמך = שימוש מכוון ולא החלקה.
+const AVOIDED_VERIFY_MIN_DOCS = 2;
+const AVOIDED_VERIFY_MIN_HITS = 3;
+
+// אותיות "מילה" לצורך גבולות התאמה — עברית + לטינית + גרש/גרשיים שבתוך מילה.
+const WORDISH_CHAR_RE = /[A-Za-z\u0590-\u05FF\uFB1D-\uFB4F]/;
+// תחיליות בנות אות אחת שמתחברות למילה בעברית (ו/ש/ה/ב/כ/ל/מ) — מותר שיקדמו להתאמה.
+const HEB_ONE_LETTER_PREFIX = new Set(['ו', 'ש', 'ה', 'ב', 'כ', 'ל', 'מ']);
+
+// נרמול אחיד לצד הקורפוס ולצד הביטוי: כיווץ רווחים, איחוד תווי מרכאות/גרש, lowercase.
+// ⚠️ בלי \b בשום מקום — הוא שבור לעברית (גוצ'א מתועד בריפו).
+const normalizeForMatch = (value) => String(value || '')
+  .replace(/[״“”]/g, '"')
+  .replace(/[׳’]/g, "'")
+  .replace(/\s+/g, ' ')
+  .toLowerCase()
+  .trim();
+
+/**
+ * האם ההתאמה באינדקס i היא מילה שלמה (ולא שבר של מילה ארוכה יותר).
+ * אחרי ההתאמה אסורה אות (כי → כיצד ⇒ נפסל). לפניה מותר או תו שאינו אות, או תחילית
+ * בת אות אחת שלפניה תו שאינו אות (וכי / שכן) — כך שהחיפוש נשאר תת-מחרוזתי אבל לא תמים.
+ */
+function isWholeWordHit(hay, idx, len) {
+  const after = hay[idx + len];
+  if (after && WORDISH_CHAR_RE.test(after)) return false;
+  const before = hay[idx - 1];
+  if (!before || !WORDISH_CHAR_RE.test(before)) return true;
+  if (!HEB_ONE_LETTER_PREFIX.has(before)) return false;
+  const before2 = hay[idx - 2];
+  return !before2 || !WORDISH_CHAR_RE.test(before2);
+}
+
+/**
+ * בונה **פעם אחת** אינדקס חיפוש מהקורפוס: טקסט מנורמל אחד לכל מסמך.
+ * ⚠️ חובה לבנות מחוץ ללולאת הביטויים — הקורפוס הוא ~646 קטעים / ~266k תווים, ובנייה
+ * מחדש לכל ביטוי הייתה סריקה כפולת-עשרות. לעולם לא זורק; כשל → null (= "לא ידוע").
+ * @returns {Array<string>|null} טקסט מנורמל פר-מסמך
+ */
+function buildCorpusMatchIndex() {
+  try {
+    const chunks = (getChunks() || []).filter(isPlainObject);
+    if (!chunks.length) return null;
+    const byDoc = new Map();
+    for (const c of chunks) {
+      const text = String(c?.text || '');
+      if (!text.trim()) continue;
+      // קטע gold ללא docId נחשב מסמך עצמאי (id הקטע) — לא לאחד הכול לדלי אחד.
+      const key = String(c?.docId || `chunk:${c?.id || ''}`);
+      const prev = byDoc.get(key);
+      byDoc.set(key, prev ? `${prev} ${text}` : text);
+    }
+    const out = [];
+    for (const text of byDoc.values()) {
+      const norm = normalizeForMatch(text);
+      if (norm) out.push(norm);
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * סופר הופעות של ביטוי בקורפוס: כמה מסמכים שונים מכילים אותו וכמה הופעות בסך הכול.
+ * @param {Array<string>|null} index תוצר buildCorpusMatchIndex
+ * @param {string} phrase
+ * @returns {{docs:number, hits:number}}
+ */
+function countPhraseInCorpus(index, phrase) {
+  const needle = normalizeForMatch(phrase);
+  if (!Array.isArray(index) || !needle) return { docs: 0, hits: 0 };
+  let docs = 0;
+  let hits = 0;
+  for (const doc of index) {
+    let inThisDoc = 0;
+    let from = 0;
+    for (;;) {
+      const idx = doc.indexOf(needle, from);
+      if (idx < 0) break;
+      if (isWholeWordHit(doc, idx, needle.length)) inThisDoc += 1;
+      from = idx + 1;
+    }
+    if (inThisDoc > 0) { docs += 1; hits += inThisDoc; }
+  }
+  return { docs, hits };
+}
+
+// מסיר תחילית בת אות אחת מאסימון, כדי ש"שניתן" ו"ניתן" ייחשבו לאותו גרעין בהשוואת
+// חפיפה מול דפוסי חתימה. רק לצורך ההשוואה — לא נוגע בטקסט שנשמר.
+const stripHebPrefix = (token) => (
+  token.length > 2 && HEB_ONE_LETTER_PREFIX.has(token[0]) ? token.slice(1) : token
+);
+
+const coreTokens = (value) => normalizeForMatch(value)
+  .replace(/["'()[\]{}.,;:!?־–—-]/g, ' ')
+  .split(' ')
+  .map((t) => stripHebPrefix(t.trim()))
+  .filter((t) => t.length > 1);
+
+/**
+ * גרעיני החתימה שנלמדו — הביטוי שבמרכאות אם יש, אחרת ה-label המלא.
+ * @param {object} engine
+ * @returns {Array<{label:string, core:string}>}
+ */
+function collectSignatureCores(engine) {
+  const patterns = Array.isArray(engine?.qualitativePatterns) ? engine.qualitativePatterns : [];
+  const out = [];
+  for (const p of patterns) {
+    if (!isPlainObject(p)) continue;
+    const label = normalizeForMatch(p.label);
+    if (!label) continue;
+    const quoted = label.match(/"([^"]{2,})"/);
+    out.push({ label, core: quoted ? normalizeForMatch(quoted[1]) : label });
+  }
+  return out;
+}
+
+/**
+ * חתימה מנצחת הימנעות: ביטוי שהוא חלק מדפוס חתימה שנלמד לא ייחסם לעולם.
+ * שלוש בדיקות, מהזולה ליקרה:
+ *  1. ה-label מכיל את הביטוי (תופס "מילות קישור מועדפות: ... כפי ש ...").
+ *  2. הכלה דו-כיוונית מול הגרעין המצוטט.
+ *  3. רצף של ≥2 אסימוני-גרעין משותפים — כך ש"כפי שניתן לראות" מזוהה מול חתימת
+ *     "ניתן לראות כי" (הבדל של תחילית בלבד), שהיא בדיוק ההתנגשות שנמדדה.
+ */
+function overlapsSignature(phrase, cores) {
+  const norm = normalizeForMatch(phrase);
+  if (!norm || !Array.isArray(cores) || !cores.length) return false;
+  const phraseTokens = coreTokens(norm);
+  for (const { label, core } of cores) {
+    if (label.includes(norm)) return true;
+    if (core && (core.includes(norm) || norm.includes(core))) return true;
+    if (phraseTokens.length >= 2) {
+      const coreToks = coreTokens(core);
+      for (let i = 0; i + 1 < phraseTokens.length; i += 1) {
+        const pair = `${phraseTokens[i]} ${phraseTokens[i + 1]}`;
+        for (let j = 0; j + 1 < coreToks.length; j += 1) {
+          if (pair === `${coreToks[j]} ${coreToks[j + 1]}`) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// ---------- foldDeepSignals ----------
+
+/**
+ * A5/A6/A7 — מקפל את שני האותות העמוקים (חתימה מבנית + ניסוחים נמנעים) אל תוך המנוע.
+ * מופרד מ-finishQualitativeMerge כדי שגם הדבקה חיצונית שאין בה דפוסים כלל — ולכן היא
+ * לא עוברת בזנב המיזוג המלא — עדיין תתרום את מה שכן נמצא בה. משנה את engine במקום.
+ * @param {object} engine
+ * @param {Array<{structuralSignature?:object, avoidedPhrases?:Array}>} deepResults
+ * @returns {{structuralKeysLearned:number, avoidedPhrasesAdded:number, avoidedPhrasesRejected:number}}
+ */
+function foldDeepSignals(engine, deepResults) {
+  const list = (Array.isArray(deepResults) ? deepResults : []).filter(isPlainObject);
+  // חתימה מבנית: קיפול פר-מפתח. ערך קיים ולא-ריק מנצח (mergeStructuralSignature), כך
+  // שחתימה שנלמדה קודם לא נדרסת ע"י באטצ' חלש יותר.
+  engine.structuralSignature = list.reduce(
+    (acc, r) => mergeStructuralSignature(acc, r?.structuralSignature),
+    engine.structuralSignature || {},
+  );
+
+  // avoidedPhrases: מחרוזות ליטרליות שהמודל זיהה שהכותב *נמנע* מהן → blacklist.auto.
+  // ⚠️ deriveAutoBlacklist דורס את auto לגמרי (הוא גוזר מ-AI_CLICHE_BLACKLIST בלבד), ולכן
+  // המיזוג חייב לקרות *אחריו*. שימור הישן נעשה סלקטיבית: פריטים שאינם קלישאות מהרשימה
+  // הקבועה (כלומר ביטויים שנלמדו בהרצה קודמת) שורדים; קלישאות שה-derive הסיר במכוון
+  // ("זה בעצם הרגל של המשתמש") לא חוזרות מהדלת האחורית. removed של המשתמש חוסם תמיד.
+  const clicheSet = new Set((Array.isArray(AI_CLICHE_BLACKLIST) ? AI_CLICHE_BLACKLIST : []).map((c) => String(c || '').trim()));
+  const prevAuto = Array.isArray(engine.blacklist?.auto) ? engine.blacklist.auto : [];
+  const learnedBefore = prevAuto.map((p) => String(p || '').trim()).filter((p) => p && !clicheSet.has(p));
+  const removedSet = new Set(
+    (Array.isArray(engine.blacklist?.removed) ? engine.blacklist.removed : []).map((p) => String(p || '').trim()).filter(Boolean),
+  );
+  const incomingAvoided = [];
+  for (const r of list) {
+    const phrases = Array.isArray(r?.avoidedPhrases) ? r.avoidedPhrases : [];
+    for (const phrase of phrases) {
+      const s = String(phrase || '').trim();
+      if (s) incomingAvoided.push(s);
+    }
+  }
+  // ⚠️ אימות מול הקורפוס לפני חסימה (ראו הבלוק "אימות avoidedPhrases" למעלה). ביטוי
+  // שהמשתמש באמת כותב, או שהוא חלק מדפוס חתימה שנלמד, נזרק מרשימת החסימה — טענת המודל
+  // "הוא נמנע מזה" הוכחה כשגויה. חל גם על learnedBefore, אחרת blacklist מורעל מהרצה
+  // קודמת (לכן / כמו כן / כפי ש) שורד לנצח ולא מתרפא לעולם.
+  // האינדקס נבנה **פעם אחת** כאן, מחוץ ללולאה. אינדקס null (אין קורפוס / כשל) ⇒ אין
+  // אימות ⇒ התנהגות קודמת נשמרת לכל ביטוי. לעולם לא מפיל את הצינור.
+  const corpusIndex = buildCorpusMatchIndex();
+  const signatureCores = collectSignatureCores(engine);
+  let avoidedPhrasesRejected = 0;
+  const verifyCache = new Map();
+  const isUserVoice = (phrase) => {
+    const key = normalizeForMatch(phrase);
+    if (!key) return false;
+    if (verifyCache.has(key)) return verifyCache.get(key);
+    let verdict = false;
+    try {
+      // חתימה מנצחת הימנעות — נבדק גם כשאין קורפוס זמין.
+      if (overlapsSignature(phrase, signatureCores)) verdict = true;
+      else if (corpusIndex) {
+        const { docs, hits } = countPhraseInCorpus(corpusIndex, phrase);
+        verdict = docs >= AVOIDED_VERIFY_MIN_DOCS || hits >= AVOIDED_VERIFY_MIN_HITS;
+      }
+    } catch {
+      verdict = false; // כשל אימות ⇒ התנהגות קודמת (הביטוי נחסם), לא שבירה
+    }
+    verifyCache.set(key, verdict);
+    return verdict;
+  };
+  const verifiedLearnedBefore = learnedBefore.filter((p) => {
+    if (!isUserVoice(p)) return true;
+    avoidedPhrasesRejected += 1;
+    return false;
+  });
+  const verifiedIncoming = incomingAvoided.filter((p) => {
+    if (!isUserVoice(p)) return true;
+    avoidedPhrasesRejected += 1;
+    return false;
+  });
+
+  const knownBefore = new Set(prevAuto.map((p) => String(p || '').trim()).filter(Boolean));
+  const mergedAuto = [];
+  const seenAuto = new Set();
+  let avoidedPhrasesAdded = 0;
+  // ⚠️ סדר מכוון: ביטויים שנלמדו מהכותב קודמים לקלישאות הגנריות. buildStyleEngineInjectionBlock
+  // מזריק רק את 20 הראשונות מ-auto+user, ו-AI_CLICHE_BLACKLIST לבדה ארוכה מזה — כלומר בסדר
+  // ההפוך שום ביטוי אישי לא היה מגיע לפרומפט אף פעם. הקלישאות הגנריות נתפסות ממילא בגלאי.
+  for (const item of [...verifiedLearnedBefore, ...verifiedIncoming, ...deriveAutoBlacklist(engine)]) {
+    const s = String(item || '').trim();
+    if (!s || seenAuto.has(s) || removedSet.has(s)) continue;
+    seenAuto.add(s);
+    mergedAuto.push(s);
+    if (!knownBefore.has(s) && !clicheSet.has(s)) avoidedPhrasesAdded += 1;
+    if (mergedAuto.length >= CAP_BLACKLIST_AUTO) break;
+  }
+  engine.blacklist = { ...engine.blacklist, auto: mergedAuto };
+
+  return {
+    structuralKeysLearned: Object.values(engine.structuralSignature || {})
+      .filter((v) => String(v || '').trim()).length,
+    avoidedPhrasesAdded,
+    avoidedPhrasesRejected,
+  };
+}
+
+// ---------- סינון negativeSpace: סגנון בלבד, לא מדיניות תוכן ----------
+
+// למה זה קיים: negativeSpace מוזרק לכל פרומפט כ-כללי "לעולם לא" — איסור מוחלט. כששואלים
+// מודל "ממה הכותב נמנע" הוא נודד מרטוריקה למדיניות תוכן, ואז חוק ציטוט נכנס בדלת האחורית
+// כאילו היה הרגל סגנוני. במדידה על הקורפוס האמיתי נכנסו כך "ציטוטים ישירים ממקורות
+// (העדפה לפרפרזה)" ו"הבעת דעה אישית ללא ביסוס" — כלומר האפליקציה אמרה למודל האקדמי
+// לעולם לא לצטט מקור ישירות. זה שינוי התנהגות תוכן, לא סגנון.
+// הסוכן השני מהדק את ניסוח הפרומפט; זה השכבה השנייה שחייבת להחזיק גם כשמודל מתעלם ממנו.
+const NEGATIVE_SPACE_CONTENT_TERMS = [
+  'ציטוט', 'ציטט', 'מצטט', 'מקור', 'מקורות', 'פרפרזה', 'ביבליוגרפ', 'הפניה', 'הפניות',
+  'מראה מקום', 'ביסוס', 'ראיה', 'ראיות', 'נתונים', 'ממצא', 'דעה אישית', 'עמדה אישית',
+];
+
+/**
+ * מסנן מ-negativeSpace פריטים שהם כלל תוכן/מקורות ולא הרגל סגנוני.
+ * לעולם לא זורק; קלט לא-מערך → []. ה-dedupe/cap (CAP_NEGATIVE=12) נשאר ב-normalizeStyleEngine.
+ * @param {Array} items
+ * @returns {Array<string>}
+ */
+function filterContentRulesFromNegativeSpace(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list.filter((item) => {
+    try {
+      // הפריטים הם מחרוזות, אבל buildStyleEngineDescription יודע גם {label} — תומכים בשניהם.
+      const text = typeof item === 'string' ? item : String(item?.label || '');
+      const norm = normalizeForMatch(text);
+      if (!norm) return true;
+      return !NEGATIVE_SPACE_CONTENT_TERMS.some((term) => norm.includes(term));
+    } catch {
+      return true; // כשל סינון ⇒ שומרים את הפריט, לא מפילים את המיזוג
+    }
+  });
+}
+
 // ---------- finishQualitativeMerge ----------
 
 /**
@@ -767,13 +1278,20 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
  * @param {object} profile
  * @param {object} engine
  * @param {Array<{patterns:Array, negativeSpace:Array}>} batchResults
- * @param {{extraMeta?:object, populationNgramFreq?:object}} opts
+ * @param {{extraMeta?:object, populationNgramFreq?:object, deepOnlyResults?:Array}} opts
  *   populationNgramFreq — טבלת n-gram אוכלוסייתית (ref.ngramFreq) לניגוד-חתימה בכרייה.
+ *   deepOnlyResults — תוצאות parse בלי דפוסים אך עם אות עמוק (structuralSignature/avoidedPhrases).
+ *   ⚠️ הן *לא* נכנסות ל-batchCount ולא לקונצנזוס: תוצאה בלי דפוסים הייתה מדללת את מונה
+ *   הבאטצ'ים ומורידה את משקל הדפוסים שכן נמצאו. הן תורמות רק לקיפול העמוק שלמטה.
  * @returns {object} savedEngine
  */
-function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {}, populationNgramFreq = null } = {}) {
+function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {}, populationNgramFreq = null, deepOnlyResults = [] } = {}) {
   const results = (Array.isArray(batchResults) ? batchResults : []).filter(isPlainObject);
   const batchCount = results.length;
+  const deepResults = [
+    ...results,
+    ...(Array.isArray(deepOnlyResults) ? deepOnlyResults : []).filter(isPlainObject),
+  ];
 
   const consensus = consensusMergePatterns(results, { batchCount });
 
@@ -807,20 +1325,25 @@ function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {},
     engine.rejectedPatternKeys,
   );
   // negativeSpace: מיזוג + dedupe/cap מטופל ב-normalizeStyleEngine.
-  engine.negativeSpace = [
+  // הסינון חל גם על מה שכבר שמור, כדי שכלל תוכן שנקלט בהרצה קודמת יתרפא ולא ישרוד לנצח.
+  engine.negativeSpace = filterContentRulesFromNegativeSpace([
     ...(Array.isArray(engine.negativeSpace) ? engine.negativeSpace : []),
     ...(Array.isArray(consensus.negativeSpace) ? consensus.negativeSpace : []),
-  ];
-  engine.blacklist = {
-    ...engine.blacklist,
-    auto: deriveAutoBlacklist(engine),
-  };
+  ]);
+  const { structuralKeysLearned, avoidedPhrasesAdded, avoidedPhrasesRejected } = foldDeepSignals(engine, deepResults);
   engine.qualitativePatternsStale = false;
   engine.lastAnalysisAt = Date.now();
   engine.extractionMeta = {
     batches: batchCount,
     crossValidated: consensus.crossValidated,
     minedSignatures: minedPatterns.length + minedFormulas.length,
+    // כמה מ-5 מפתחות החתימה המבנית מלאים בפועל, וכמה ביטויי-הימנעות חדשים נוספו.
+    structuralKeysLearned,
+    avoidedPhrasesAdded,
+    // ⚠️ כמה ביטויים נדחו באימות מול הקורפוס. extractionMeta ב-normalizeStyleEngine הוא
+    // allow-list קשיח — המפתח הזה **לא** ברשימה ולכן נמחק בשקט בכל שמירה. הוא נכון
+    // בזיכרון עד ה-save; להתמדה צריך להוסיף avoidedPhrasesRejected ל-allow-list שם.
+    avoidedPhrasesRejected,
     at: Date.now(),
     llmBatchesFailed: 0,
     ...(isPlainObject(extraMeta) ? extraMeta : {}),
@@ -832,19 +1355,12 @@ function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {},
 
 // ---------- מסלול הדבקה חיצוני (external paste pipeline) ----------
 
-// פענוח JSON גמיש: מסיר גדרות ```json``` ואז JSON.parse; נפילה ללכידת האובייקט
-// הראשון {...}. לעולם לא זורק — כשל → null.
-function decodeLooseJson(raw) {
-  const stripped = String(raw || '')
-    .replace(/```(?:json)?\s*/gi, '')
-    .replace(/```/g, '')
-    .trim();
-  if (!stripped) return null;
-  try { return JSON.parse(stripped); } catch { /* fallthrough */ }
-  const match = stripped.match(/\{[\s\S]*\}/);
-  if (match) { try { return JSON.parse(match[0]); } catch { return null; } }
-  return null;
-}
+// פענוח JSON גמיש. עד 12.8.26 ישבה כאן גרסה מצומצמת (fences + JSON.parse + לכידת
+// {...} ראשון) שנפלה על גרשיים חכמים, פסיק עוקב ומפתח-על עוטף — ואז המטא נזרק בשקט
+// והמשתמש קיבל "לא זוהה JSON תקין". עכשיו מקור-אמת אחד עם מסלול הדפוסים.
+// normalizeExternalSchemaJson מחזיר את הסכימה בשמות הקנוניים גם כשהמודל קינן
+// אותה תחת מפתח-על או תרגם את המפתחות לעברית.
+const decodeLooseJson = (raw) => normalizeExternalSchemaJson(raw);
 
 /**
  * קולט פלטי-JSON שהמשתמש הדביק מספק חיצוני, ומזין אותם לאותו pipeline של דפוסים.
@@ -861,12 +1377,21 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
     .filter((r) => r.trim());
 
   // 1 — parse סלחני-type לכל הדבקה. תוצאות עם דפוסים בלבד → externalResults.
+  // הדבקה בלי דפוסים אך עם אות עמוק (חתימה מבנית / ניסוחים נמנעים) לא נזרקת: היא נכנסת
+  // ל-deepExternalOnly ותורמת רק לקיפול העמוק, בלי לדלל את מונה הבאטצ'ים של הקונצנזוס.
   const externalResults = [];
+  const deepExternalOnly = [];
   for (const raw of list) {
     const parsed = parsePatternExtractionResult(raw, { lenientTypes: true });
-    if (parsed && Array.isArray(parsed.patterns) && parsed.patterns.length > 0) {
+    if (!isPlainObject(parsed)) continue;
+    if (Array.isArray(parsed.patterns) && parsed.patterns.length > 0) {
       externalResults.push(parsed);
+      continue;
     }
+    const hasStructure = Object.values(parsed.structuralSignature || {})
+      .some((v) => String(v || '').trim());
+    const hasAvoided = Array.isArray(parsed.avoidedPhrases) && parsed.avoidedPhrases.length > 0;
+    if (hasStructure || hasAvoided) deepExternalOnly.push(parsed);
   }
 
   // 2 — פענוח מטא (style/coverPageDefaults/profileSummary) מראש: פלט לגיטימי עם
@@ -880,8 +1405,8 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
     }
   }
 
-  // early-fail רק אם גם אין דפוסים באף הדבקה וגם אין מטא באף הדבקה.
-  if (!externalResults.length && !metaJsons.length) {
+  // early-fail רק אם אין באף הדבקה דפוסים, מטא, ואות עמוק.
+  if (!externalResults.length && !metaJsons.length && !deepExternalOnly.length) {
     return { ok: false, error: 'לא זוהה JSON תקין באף פלט' };
   }
 
@@ -906,12 +1431,21 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
     return patch;
   };
 
-  // מטא בלבד (אין דפוסים באף הדבקה) — לא קוראים ל-finishQualitativeMerge עם מערך ריק (F2).
+  // מטא בלבד (אין דפוסים באף הדבקה) — לא קוראים ל-finishQualitativeMerge עם מערך ריק (F2):
+  // הוא היה מסמן qualitativePatternsStale=false ו-lastAnalysisAt כאילו רץ ניתוח מלא.
+  // אבל אות עמוק שכן נמצא בהדבקות האלה כן נקלט — דרך foldDeepSignals בלבד.
   if (!externalResults.length) {
+    let deepEngine = null;
+    if (deepExternalOnly.length) {
+      try {
+        foldDeepSignals(engine, deepExternalOnly);
+        deepEngine = saveEngine(profile, engine);
+      } catch { /* noop — מטא עדיין מוחל למטה */ }
+    }
     const metaPatch = applyMeta();
     return {
       ok: true,
-      engine: null,
+      engine: deepEngine,
       metaPatch,
       externalBatches: 0,
       totalBatches: 0,
@@ -941,6 +1475,7 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
   const savedEngine = finishQualitativeMerge(profile, engine, allResults, {
     extraMeta: { externalBatches: externalResults.length, llmBatchesFailed: localFailed },
     populationNgramFreq: popNgramFreq,
+    deepOnlyResults: deepExternalOnly,
   });
 
   // 5 — החלת המטא (אחרי שמירת ה-engine).
@@ -1092,10 +1627,82 @@ export async function deriveProfileFactsFromSamples() {
   return { patch, filled };
 }
 
+// השוואת ערכי-פרופיל (סקלר או רשימה) לצורך זיהוי "מה באמת התמלא".
+const sameProfileValue = (a, b) => {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    try { return JSON.stringify(a || []) === JSON.stringify(b || []); } catch { return false; }
+  }
+  return String(a ?? '').trim() === String(b ?? '').trim();
+};
+
+/**
+ * A4/B4 — חילוץ הפרופיל העמוק (profileSummary + style + coverPageDefaults) מהקטעים
+ * המייצגים של המשתמש, באותה סכימה בדיוק שהמסלול החיצוני מבקש. עד היום הבלוק הזה
+ * הגיע רק כשהמשתמש הדביק פלט מצ'אטבוט חיצוני; כאן הוא נגזר בתוך האפליקציה.
+ *
+ * מדיניות המיזוג היא בדיוק זו של המסלול החיצוני (mergeExternalStyleExtractionIntoProfile):
+ * מילוי-רק-אם-ריק לסקלרים, איחוד+cap לרשימות, append להערות/תקציר. לא מומצאת כאן מדיניות
+ * חדשה. baseProfile מאפשר להזין פרופיל "טרי + patch שטרם נשמר" כדי שהמיזוג לא ידרוס
+ * שדות שנגזרו רגע לפני (זהות מקומית / patch חיצוני).
+ *
+ * קריאת LLM אחת בלבד לכל ריצה. בלי ספק מוגדר — no-op שקט (reason:'no-provider').
+ * לעולם לא זורק.
+ * @param {{baseProfile?:object|null}} [opts]
+ * @returns {Promise<{patch:object, filled:string[], reason?:string}>}
+ */
+export async function deriveStyleProfileFromSamples({ baseProfile = null } = {}) {
+  let providerAvailable = false;
+  try { providerAvailable = Boolean(getExternalAnalysisAvailability()?.hasLocalProvider); } catch { providerAvailable = false; }
+  if (!providerAvailable) return { patch: {}, filled: [], reason: 'no-provider' };
+
+  let live = null;
+  try { live = isPlainObject(baseProfile) ? baseProfile : getPersonalStyleProfile(); } catch { live = null; }
+  if (!isPlainObject(live)) live = {};
+
+  const excerpts = getRepresentativeExcerpts({ max: 8, maxChars: 6000 });
+  if (!excerpts.length) return { patch: {}, filled: [], reason: 'no-text' };
+
+  let prompt = '';
+  try { prompt = String(buildDeepProfileExtractionPrompt({ profile: live, excerpts }) || ''); } catch { prompt = ''; }
+  if (!prompt.trim()) return { patch: {}, filled: [], reason: 'no-text' };
+
+  let raw = '';
+  try {
+    raw = await chatWithActiveProvider(prompt, '', '', {
+      ...buildStyleLlmOptions('Style Deep Profile', `style-deep-${Date.now()}`, { cheap: true, cheapExclude: CHEAP_EXTRACTION_EXCLUDE }),
+    });
+  } catch {
+    return { patch: {}, filled: [], reason: 'llm-failed' };
+  }
+
+  const parsed = decodeLooseJson(raw);
+  if (!isPlainObject(parsed)) return { patch: {}, filled: [], reason: 'unparsable' };
+
+  let patch = {};
+  let baseline = {};
+  try {
+    patch = mergeExternalStyleExtractionIntoProfile(parsed, live) || {};
+    // מיזוג "ריק" על אותו בסיס — כדי לא לדווח כ"התמלא" שדות שהמיזוג ממלא מברירת מחדל
+    // קשיחה (defaultDocumentStyle:'academic' וכו') ולא מהמודל.
+    baseline = mergeExternalStyleExtractionIntoProfile({}, live) || {};
+  } catch {
+    return { patch: {}, filled: [], reason: 'merge-failed' };
+  }
+  if (!isPlainObject(patch)) return { patch: {}, filled: [], reason: 'merge-failed' };
+
+  const filled = Object.keys(patch).filter((field) => (
+    isEmptyProfileValue(live[field])
+    && !isEmptyProfileValue(patch[field])
+    && !sameProfileValue(patch[field], baseline[field])
+  ));
+
+  return { patch, filled, reason: '' };
+}
+
 /**
  * ניתוח סגנון מאוחד: בוחר בין מסלול מקומי, חיצוני, או משולב לפי הקלט.
  * @param {{externalRawTexts?:string[], onProgress?:function, applyMetaPatch?:boolean}} opts
- * @returns {Promise<{ok:boolean, mode?:string, engine?:object|null, metaPatch?:object|null, profileFactsFilled?:string[], crossValidated?:boolean, externalBatches?:number, error?:string}>}
+ * @returns {Promise<{ok:boolean, mode?:string, engine?:object|null, metaPatch?:object|null, profileFactsFilled?:string[], deepProfileFilled?:string[], crossValidated?:boolean, externalBatches?:number, error?:string}>}
  */
 export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgress, applyMetaPatch = true } = {}) {
   const pastes = (Array.isArray(externalRawTexts) ? externalRawTexts : [])
@@ -1121,6 +1728,22 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
     } catch {
       // חילוץ הזהות הוא bonus — כישלון בו לא מפיל את הניתוח.
     }
+
+    // B5 — הפרופיל העמוק רץ *אחרי* פרטי הזהות ומקבל אותם כבסיס (baseProfile), כך
+    // שמדיניות מילוי-רק-אם-ריק מותירה את הזהות המדויקת (הצרה) מנצחת על הגזירה הרחבה.
+    let deepProfileFilled = [];
+    try {
+      emit('לומד פרופיל סגנון מעמיק...');
+      const base = { ...getPersonalStyleProfile(), ...patch };
+      const deep = await deriveStyleProfileFromSamples({ baseProfile: base });
+      if (isPlainObject(deep?.patch) && Object.keys(deep.patch).length) {
+        patch = { ...patch, ...deep.patch };
+        deepProfileFilled = Array.isArray(deep.filled) ? deep.filled : [];
+      }
+    } catch {
+      // גם זה bonus — כישלון לא מפיל את הניתוח.
+    }
+
     const metaPatch = Object.keys(patch).length ? patch : null;
     if (metaPatch && applyMetaPatch) {
       const fresh = getPersonalStyleProfile();
@@ -1136,6 +1759,7 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
       engine: res.engine || null,
       metaPatch,
       profileFactsFilled,
+      deepProfileFilled,
       crossValidated: Boolean(res.engine?.extractionMeta?.crossValidated),
       externalBatches: 0,
       // F5 — מיפוי קוד ה-skip הגולמי להודעה עברית ידידותית.
@@ -1159,11 +1783,40 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
     if (!res.ok) {
       return { ok: false, mode, engine: null, metaPatch: null, crossValidated: false, externalBatches: 0, error: res.error };
     }
+
+    // B5 — במסלול המשולב מוסיפים גם גזירה מקומית עמוקה, אבל *אחרי* שהמטא החיצוני הוחל:
+    // הניתוח החיצוני ראה את המסמכים המלאים, ולכן הוא צריך לנצח. הבסיס למיזוג הוא הפרופיל
+    // הטרי + ה-metaPatch החיצוני (גם כש-applyMetaPatch=false, כדי לא לדרוס אותו), ומדיניות
+    // מילוי-רק-אם-ריק עושה את השאר.
+    let metaPatch = res.metaPatch;
+    let deepProfileFilled = [];
+    if (includeLocalLlm) {
+      try {
+        emit('לומד פרופיל סגנון מעמיק...');
+        const base = { ...getPersonalStyleProfile(), ...(isPlainObject(metaPatch) ? metaPatch : {}) };
+        const deep = await deriveStyleProfileFromSamples({ baseProfile: base });
+        if (isPlainObject(deep?.patch) && Object.keys(deep.patch).length) {
+          metaPatch = { ...(isPlainObject(metaPatch) ? metaPatch : {}), ...deep.patch };
+          deepProfileFilled = Array.isArray(deep.filled) ? deep.filled : [];
+          if (applyMetaPatch) {
+            const fresh = getPersonalStyleProfile();
+            savePersonalStyleProfile({ ...fresh, ...deep.patch });
+            if (typeof window !== 'undefined') {
+              try { window.dispatchEvent(new CustomEvent(STYLE_UPDATED_EVENT)); } catch { /* noop */ }
+            }
+          }
+        }
+      } catch {
+        // bonus — כישלון לא מפיל את המסלול המשולב.
+      }
+    }
+
     return {
       ok: true,
       mode,
       engine: res.engine,
-      metaPatch: res.metaPatch,
+      metaPatch,
+      deepProfileFilled,
       crossValidated: Boolean(res.crossValidated),
       externalBatches: res.externalBatches,
       error: '',

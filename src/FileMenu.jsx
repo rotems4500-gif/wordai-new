@@ -2692,8 +2692,125 @@ function WordDefaultsSettings({ prefs, setPrefs }) {
   );
 }
 
+const SKILL_UPLOAD_ACCEPT = '.md,.markdown,.txt';
+const DEFAULT_MAX_CUSTOM_SKILLS = 20;
+
+/* שכבת הסקילים המותאמים (skillFileImport + getCustomSkills/addCustomSkill/removeCustomSkill)
+   נטענת בעצלתיים ולא כ-import סטטי: כך טאב ההגדרות ממשיך לעבוד — במצב קריאה בלבד —
+   גם אם המודול או אחד הייצואים חסרים, במקום להשאיר את חלון ההגדרות ריק. */
+async function loadCustomSkillsApi() {
+  const api = {
+    getCustomSkills: null,
+    addCustomSkill: null,
+    removeCustomSkill: null,
+    importSkillFile: null,
+    max: DEFAULT_MAX_CUSTOM_SKILLS,
+  };
+  try {
+    const aiModule = await import('./services/aiService');
+    if (typeof aiModule.getCustomSkills === 'function') api.getCustomSkills = aiModule.getCustomSkills;
+    if (typeof aiModule.addCustomSkill === 'function') api.addCustomSkill = aiModule.addCustomSkill;
+    if (typeof aiModule.removeCustomSkill === 'function') api.removeCustomSkill = aiModule.removeCustomSkill;
+    if (Number.isFinite(Number(aiModule.MAX_CUSTOM_SKILLS))) api.max = Number(aiModule.MAX_CUSTOM_SKILLS);
+  } catch { /* השירות עדיין לא זמין — נמשיך במצב קריאה בלבד */ }
+  try {
+    const importModule = await import('./services/skillFileImport');
+    if (typeof importModule.importSkillFile === 'function') api.importSkillFile = importModule.importSkillFile;
+    if (Number.isFinite(Number(importModule.MAX_CUSTOM_SKILLS))) api.max = Number(importModule.MAX_CUSTOM_SKILLS);
+  } catch { /* כנ"ל */ }
+  api.ready = Boolean(api.importSkillFile && api.getCustomSkills && api.addCustomSkill && api.removeCustomSkill);
+  return api;
+}
+
 function SkillsSettings({ skillsState, setSkillsState }) {
-  const skills = getSkillCatalog();
+  const catalog = getSkillCatalog();
+  const skills = catalog.filter((skill) => !skill.custom);
+  const skillFileInputRef = React.useRef(null);
+  const [customSkills, setCustomSkills] = React.useState([]);
+  const [skillsApi, setSkillsApi] = React.useState(null);
+  const [uploadBusy, setUploadBusy] = React.useState(false);
+  const [uploadError, setUploadError] = React.useState('');
+  const [uploadNotice, setUploadNotice] = React.useState('');
+
+  const readCustomSkills = React.useCallback((api) => {
+    try {
+      const list = api?.getCustomSkills ? api.getCustomSkills() : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const api = await loadCustomSkillsApi();
+      if (cancelled) return;
+      setSkillsApi(api);
+      setCustomSkills(readCustomSkills(api));
+    })();
+    return () => { cancelled = true; };
+  }, [readCustomSkills]);
+
+  const maxCustomSkills = skillsApi?.max || DEFAULT_MAX_CUSTOM_SKILLS;
+  const uploadAvailable = Boolean(skillsApi?.importSkillFile && skillsApi?.addCustomSkill);
+  const atCapacity = customSkills.length >= maxCustomSkills;
+  const uploadDisabled = uploadBusy || atCapacity || !uploadAvailable;
+  const selectableSkills = [...skills, ...customSkills.filter((item) => !skills.some((builtin) => builtin.id === item.id))];
+
+  const handleSkillFileChange = async (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    setUploadBusy(true);
+    setUploadError('');
+    setUploadNotice('');
+    try {
+      if (!uploadAvailable) throw new Error('רכיב ייבוא הסקילים לא זמין כרגע. נסה לרענן את האפליקציה.');
+      const result = await skillsApi.importSkillFile(file);
+      if (!result || result.ok !== true || !result.skill) {
+        setUploadError(String(result?.error || 'לא הצלחתי לקרוא את קובץ הסקיל.'));
+        return;
+      }
+      const saved = await skillsApi.addCustomSkill(result.skill);
+      if (saved && saved.ok === false) {
+        setUploadError(String(saved.error || 'לא הצלחתי לשמור את הסקיל.'));
+        return;
+      }
+      setCustomSkills(Array.isArray(saved?.skills) ? saved.skills : readCustomSkills(skillsApi));
+      const label = result.skill.label || result.skill.id || 'הסקיל';
+      setUploadNotice(saved?.replaced ? `הסקיל "${label}" עודכן מהקובץ החדש.` : `הסקיל "${label}" נוסף לרשימה.`);
+    } catch (error) {
+      setUploadError(error instanceof Error && error.message ? error.message : 'העלאת הסקיל נכשלה.');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
+  const handleRemoveCustomSkill = async (skill) => {
+    const label = skill.label || skill.id;
+    setUploadError('');
+    setUploadNotice('');
+    const confirmed = await showConfirm(
+      `למחוק את הסקיל "${label}"?\nאפשר להעלות את הקובץ שוב בכל רגע.`,
+      { title: 'מחיקת סקיל', confirmLabel: 'מחק', tone: 'danger' },
+    );
+    if (!confirmed) return;
+    try {
+      const removed = skillsApi?.removeCustomSkill ? await skillsApi.removeCustomSkill(skill.id) : false;
+      // השירות מחזיר {ok, removed, skills}; מקבלים גם boolean למקרה שהחוזה ישתנה.
+      const removeOk = removed === true || removed?.ok === true || removed?.removed === true;
+      if (!removeOk) {
+        setUploadError('לא הצלחתי למחוק את הסקיל.');
+        return;
+      }
+      setCustomSkills(Array.isArray(removed?.skills) ? removed.skills : readCustomSkills(skillsApi));
+      setUploadNotice(`הסקיל "${label}" נמחק.`);
+    } catch (error) {
+      setUploadError(error instanceof Error && error.message ? error.message : 'מחיקת הסקיל נכשלה.');
+    }
+  };
+
   const updateMode = (skillId, mode) => setSkillsState((prev) => ({
     ...prev,
     skills: {
@@ -2741,7 +2858,7 @@ function SkillsSettings({ skillsState, setSkillsState }) {
               onChange={(e) => setSkillsState((prev) => ({ ...prev, defaultSkillId: e.target.value }))}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white' }}
             >
-              {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
+              {selectableSkills.map((skill) => <option key={skill.id} value={skill.id}>{skill.custom ? `${skill.label} (משלך)` : skill.label}</option>)}
             </select>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', alignSelf: 'end', marginBottom: 8 }}>
@@ -2756,7 +2873,110 @@ function SkillsSettings({ skillsState, setSkillsState }) {
         <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>טיפ: אם אתה רוצה שליטה גבוהה, השאר את הסקילים על מצב ידני והפעל אותם דרך / בחלונית ה-AI.</div>
       </div>
 
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white', marginBottom: 12 }}>
+        <input
+          ref={skillFileInputRef}
+          type="file"
+          accept={SKILL_UPLOAD_ACCEPT}
+          style={{ display: 'none' }}
+          onChange={handleSkillFileChange}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)', marginBottom: 4 }}>הסקילים שלך</div>
+            <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>
+              קובץ Markdown עם חזית YAML: <code>name</code> ו-<code>description</code>, ואחריהם גוף ההנחיות.
+              <br />
+              לעריכת סקיל קיים — מעלים את הקובץ המעודכן שוב, והוא יחליף את הקודם.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => skillFileInputRef.current?.click()}
+            disabled={uploadDisabled}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: '1px solid #93C5FD',
+              background: uploadDisabled ? 'var(--s-surface-2)' : 'white',
+              color: uploadDisabled ? 'var(--s-muted)' : '#1D4ED8',
+              cursor: uploadDisabled ? 'not-allowed' : 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+          >
+            {uploadBusy ? 'מעלה...' : '⬆️ העלה סקיל משלך'}
+          </button>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--s-muted)' }}>
+          {customSkills.length} מתוך {maxCustomSkills} סקילים משלך
+          {atCapacity ? ` — הגעת למכסה. מחק סקיל קיים כדי להעלות חדש (מקסימום ${maxCustomSkills}).` : ''}
+        </div>
+        {!uploadAvailable ? (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#92400E', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '8px 10px' }}>
+            רכיב ייבוא הסקילים לא נטען. נסה לרענן את האפליקציה.
+          </div>
+        ) : null}
+        {uploadError ? (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#B91C1C', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap' }}>
+            {uploadError}
+          </div>
+        ) : null}
+        {uploadNotice ? (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#166534', background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 8, padding: '8px 10px' }}>
+            {uploadNotice}
+          </div>
+        ) : null}
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {customSkills.map((skill) => {
+          const mode = skillsState.skills?.[skill.id]?.mode || 'manual';
+          return (
+            <div key={`custom-${skill.id}`} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '14px', background: 'white' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--s-text-strong)' }}>{skill.label || skill.id}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: '#1D4ED8', background: '#DBEAFE', border: '1px solid #93C5FD', borderRadius: 999, padding: '2px 8px' }}>משלך</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--s-muted)', lineHeight: 1.6 }}>{skill.description || 'ללא תיאור'}</div>
+                  {skill.usageHint ? <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>מתאים במיוחד ל: {skill.usageHint}</div> : null}
+                  {(skill.keywords || []).length ? (
+                    <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4 }}>טריגרים קיימים: {(skill.keywords || []).slice(0, 5).join(' • ')}</div>
+                  ) : null}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={mode}
+                    onChange={(e) => updateMode(skill.id, e.target.value)}
+                    style={{ width: 138, padding: '8px 10px', border: '1px solid #C8C6C4', borderRadius: 6, fontSize: 12, background: 'white', flexShrink: 0 }}
+                  >
+                    <option value="manual">ידני בלבד</option>
+                    <option value="auto">אוטומטי כשמתאים</option>
+                    <option value="off">כבוי</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveCustomSkill(skill)}
+                    title="מחק סקיל"
+                    style={{ border: '1px solid #FCA5A5', background: 'white', color: '#B91C1C', borderRadius: 8, padding: '8px 10px', fontSize: 11, cursor: 'pointer' }}
+                  >
+                    🗑️ מחק
+                  </button>
+                </div>
+              </div>
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ fontSize: 11, color: 'var(--s-muted)', cursor: 'pointer' }}>הצג את גוף ההנחיות</summary>
+                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--s-text)', background: 'var(--s-surface-2)', border: '1px solid var(--s-border)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto' }}>
+                  {skill.prompt || 'הקובץ לא כלל גוף הנחיות.'}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 10, color: 'var(--s-muted)' }}>ההנחיות לא ניתנות לעריכה כאן — כדי לשנות אותן, העלה את הקובץ המעודכן שוב.</div>
+              </details>
+            </div>
+          );
+        })}
         {skills.map((skill) => {
           const mode = skillsState.skills?.[skill.id]?.mode || 'manual';
           const customInstruction = String(skillsState.skills?.[skill.id]?.customInstruction || '');

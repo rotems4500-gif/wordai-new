@@ -1,0 +1,11 @@
+{
+  "version": "1.4.0",
+  "notes": "למידה ממשובי מרצים (פרופילי מרצים, קליטת עבודות בדוקות, לקחים) + הפרדה בין קורסים (ישות קורס, חומרים פר-קורס, סינון ראיות והקשר)",
+  "pub_date": "2026-08-08T21:59:27Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaUJLSW51Rm9jWjNRRmlTZ1l3T3VxeXArV0ExSTdtUW4rZ1I4ZVp6MFg0VEhqS0tjMHNzc1pnTVk2UTgwdHdTbk1uYlJxYXFxQlpBT3hzZWJPUkRjNHQ5MXlqOFdGblFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MjI2MzQzCWZpbGU6V29yZEZsb3cgQUlfMS40LjBfeDY0LXNldHVwLmV4ZQpBQTU0aVFmaUQrcEROWXlZVVNaeUQwRlV0UEJTQjE1YU9OYytuRGRZclFJRkZpbFU3MFF3Y3kvTEdKaDVENEFkYkxoRGIxNVJpYWtwdVlJZlduVmZCUT09Cg==",
+      "url": "https://github.com/rotems4500-gif/wordai-new/releases/download/v1.4.0/WordFlow-AI_1.4.0_x64-setup.exe"
+    }
+  }
+}

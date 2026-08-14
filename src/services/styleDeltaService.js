@@ -710,3 +710,128 @@ export async function synthesizeProfileUpdate({ invokeModel = null } = {}) {
 export function clearDeltas() {
   writeDeltaStore(defaultBlob());
 }
+
+// ---------- recordSuggestionOutcome ----------
+
+// מספר מילים מינימלי בטקסט שהמשתמש העדיף כדי שיהיה שווה לשמור כ-gold chunk.
+const SUGGESTION_GOLD_MIN_WORDS = 40;
+
+// מיפוי פעולה → שם המונה ב-editCounters (הסכמה ב-normalizeStyleEngine).
+const SUGGESTION_COUNTER_KEYS = {
+  accept: 'aiSuggestionAccepted',
+  reject: 'aiSuggestionRejected',
+  dismiss: 'aiSuggestionDismissed',
+};
+
+/**
+ * רושם תוצאה של הצעת AI ממוקדת (אשר / דחה / נסגר בלי הוספה).
+ *
+ * accept/dismiss — מונה בלבד. טקסט AI שאושר *לעולם* לא נכנס לקורפוס (לולאת משוב:
+ * המנוע היה לומד מהפלט של עצמו). dismiss = המשתמש סגר בלי להחיל — אות דחייה חלש.
+ *
+ * reject עם שני הטקסטים — סיגנל אמיתי: המשתמש ראה ניסוח של ה-AI והעדיף את שלו.
+ * ה-diff נעשה בכיוון AI→משתמש (classifyEdits(replacementText, originalText)), כך
+ * שה-signals מתארים מה המשתמש מעדיף. דלתא קטנה → counters; דלתא גדולה על טקסט
+ * מספיק ארוך → gold chunk (dedupe מובנה ב-addGoldChunk).
+ *
+ * לעולם לא זורק.
+ * @param {{action:('accept'|'reject'|'dismiss'), originalText?:string, replacementText?:string, docId?:string}} args
+ * @returns {{recorded:boolean, classification?:string}|null}
+ */
+export function recordSuggestionOutcome({ action, originalText = '', replacementText = '', docId = '' } = {}) {
+  try {
+    if (typeof window === 'undefined') return { recorded: false };
+    const counterKey = SUGGESTION_COUNTER_KEYS[String(action || '').trim()];
+    if (!counterKey) return { recorded: false };
+
+    const profile = getPersonalStyleProfile();
+    if (!profile) return { recorded: false };
+    if (profile.learningConsent === false) return { recorded: false };
+    if (profile.styleEngine?.enabled !== true) return { recorded: false };
+
+    const styleEngine = normalizeStyleEngine(profile.styleEngine);
+    const ec = styleEngine.editCounters;
+    ec[counterKey] = (Number(ec[counterKey]) || 0) + 1;
+    ec.totalEditsObserved += 1;
+
+    let classification;
+    const original = String(originalText || '');
+    const replacement = String(replacementText || '');
+
+    if (action === 'reject' && original.trim() && replacement.trim()) {
+      const result = classifyEdits(replacement, original);
+      classification = result.classification;
+      const { changeRatio, signals } = result;
+
+      if (changeRatio < STYLE_EDIT_RATIO_THRESHOLD) {
+        // אות סגנון — אותו מיזוג בדיוק כמו diffAfterEdit (הספים ב-synthesize נשמרים).
+        ec.shortenedSentence += signals.shortenedSentence;
+        ec.removedConnector += signals.removedConnector;
+        ec.replacedWord = mergeReplacedWords(ec.replacedWord, signals.replacedWords);
+        ec.replacementPairs = mergeReplacementPairs(ec.replacementPairs, signals.replacementPairs);
+        ec.addedParenthetical += signals.addedParenthetical;
+        ec.commaAdded = (Number(ec.commaAdded) || 0) + signals.commaAdded;
+        ec.commaRemoved = (Number(ec.commaRemoved) || 0) + signals.commaRemoved;
+        ec.dashAdded = (Number(ec.dashAdded) || 0) + signals.dashAdded;
+        ec.dashRemoved = (Number(ec.dashRemoved) || 0) + signals.dashRemoved;
+        ec.editsSinceSynthesis += 1;
+      } else if (matchWords(original).length >= SUGGESTION_GOLD_MIN_WORDS) {
+        // דלתא גדולה — הטקסט של המשתמש הוא הסטנדרט; נשמר כ-gold (dedupe בתוך הפונקציה).
+        try {
+          addGoldChunk({ text: original, docId: String(docId || '') || null, title: 'gold-reject' });
+        } catch {}
+      }
+    }
+
+    styleEngine.editCounters = ec;
+    try {
+      savePersonalStyleProfile({ ...profile, styleEngine });
+      dispatchProfileUpdated('style-suggestion-outcome');
+    } catch {}
+
+    return { recorded: true, classification };
+  } catch {
+    return null;
+  }
+}
+
+// ---------- assessDocOwnership ----------
+
+// סף חפיפה שמעליו הטקסט הנוכחי נחשב "עדיין הפלט של ה-AI".
+const OWNERSHIP_PRISTINE_JACCARD = 0.9;
+
+/**
+ * מכריע דטרמיניסטית אם מסמך "שייך" למשתמש מספיק כדי להיקלט לקורפוס הסגנון.
+ * קורא רק את store ה-deltas — בלי LLM, בלי כתיבה.
+ *
+ * @param {{docId:string, currentText:string}} args
+ * @returns {{eligible:boolean, reason:string}}
+ */
+export function assessDocOwnership({ docId, currentText } = {}) {
+  try {
+    if (typeof window === 'undefined') return { eligible: false, reason: 'error' };
+    const id = String(docId || '').trim();
+    const current = String(currentText || '');
+    if (!id) return { eligible: true, reason: 'no-ai-generation' };
+
+    const blob = readDeltaStore();
+    const entries = blob.pending.filter((p) => p.docId === id);
+    // אף פלט AI לא נרשם למסמך הזה — המשתמש כתב אותו בעצמו.
+    if (!entries.length) return { eligible: true, reason: 'no-ai-generation' };
+
+    // snapshot ממתין שהטקסט הנוכחי עדיין זהה לו (או כמעט) — פלט AI בתולי.
+    const pristine = entries.some((p) => !p.diffedAt
+      && (p.generatedText === current || wordJaccard(p.generatedText, current) >= OWNERSHIP_PRISTINE_JACCARD));
+    if (pristine) return { eligible: false, reason: 'ai-pristine' };
+
+    // הרשומה האחרונה למסמך — אם עברה diff עם דלתא גדולה, המשתמש שכתב אותו מספיק.
+    const last = entries[entries.length - 1];
+    if (last?.diffedAt && Number(last.changeRatio) >= STYLE_EDIT_RATIO_THRESHOLD) {
+      return { eligible: true, reason: 'heavily-reworked' };
+    }
+
+    return { eligible: false, reason: 'mostly-ai' };
+  } catch {
+    return { eligible: false, reason: 'error' };
+  }
+}

@@ -84,6 +84,9 @@ function walkDocument(doc, commentsById) {
   const revisions = [];
   const highlights = [];
   const fullTextParts = [];
+  // ריצות גולמיות פר-פסקה, בסדר המסמך, **כולל ריצות שנמחקו** (שאינן ב-fullText).
+  // זה מה שמאפשר לשחזר אחר-כך את גוף ההגשה של הסטודנט (buildSubmittedBodyText).
+  const paragraphRuns = [];
 
   // ריצות הערה יכולות לחצות פסקאות — המצב חי מחוץ ללולאת הפסקאות.
   const openRanges = new Map(); // commentId -> { anchorParts: [] }
@@ -94,6 +97,7 @@ function walkDocument(doc, commentsById) {
     let paraHadCommentRef = new Set();
     const paraDeletes = [];
     const paraInserts = [];
+    const paraRuns = [];
 
     for (const node of Array.from(p.getElementsByTagNameNS(W_NS, '*'))) {
       const name = node.localName;
@@ -124,6 +128,12 @@ function walkDocument(doc, commentsById) {
         const delAncestor = hasAncestor(node, 'del', p);
         const runText = textOf(node);
         if (!runText) continue;
+        // הריצה נרשמת תמיד — גם כשהיא מחוקה (ולכן אינה נכנסת ל-fullText).
+        paraRuns.push({
+          text: runText,
+          insAuthor: insAncestor ? collapse(attr(insAncestor, 'author')) : null,
+          delAuthor: delAncestor ? collapse(attr(delAncestor, 'author')) : null,
+        });
         if (delAncestor) {
           paraDeletes.push({ author: collapse(attr(delAncestor, 'author')), text: runText });
         } else if (insAncestor) {
@@ -144,6 +154,8 @@ function walkDocument(doc, commentsById) {
 
     const paraText = collapse(paraParts.join(' '));
     if (paraText) fullTextParts.push(paraText);
+    // פסקה בלי אף ריצת טקסט (תמונה/מפריד) לא נרשמת — היא גם לא תורמת כלום לגוף.
+    if (paraRuns.length) paragraphRuns.push(paraRuns);
 
     // הערת commentReference בלי range — עוגן = הפסקה כולה.
     for (const ref of byTag(p, 'commentReference')) {
@@ -205,7 +217,7 @@ function walkDocument(doc, commentsById) {
     });
   }
 
-  return { comments, revisions, highlights, fullText: fullTextParts.join('\n') };
+  return { comments, revisions, highlights, fullText: fullTextParts.join('\n'), paragraphRuns };
 }
 
 /** רחרוח ציון בקצוות המסמך. הצעה בלבד — המשתמש מאשר. בלי \b. */
@@ -268,7 +280,7 @@ export async function extractDocxFeedback(uint8) {
     const commentsById = parseCommentsXml(commentsXml ? parseXml(commentsXml) : null);
     const creator = parseCreator(coreXml);
 
-    const { comments, revisions, highlights, fullText } = walkDocument(docTree, commentsById);
+    const { comments, revisions, highlights, fullText, paragraphRuns } = walkDocument(docTree, commentsById);
     const { authors, suspectedLecturer } = inferAuthors({ comments, revisions }, creator);
 
     return {
@@ -281,11 +293,50 @@ export async function extractDocxFeedback(uint8) {
       suspectedLecturer,
       gradeSuggestion: sniffGrade(fullText),
       fullText,
+      paragraphRuns,
     };
   } catch (err) {
     const detail = [err?.name, err?.message].filter(Boolean).join(': ');
     return { ok: false, error: detail || String(err) || 'שגיאת חילוץ משוב' };
   }
+}
+
+/**
+ * האם ריצה בודדת שייכת לגוף שהסטודנט הגיש?
+ * · ריצה רגילה (בלי ins/del) — כן.
+ * · הוספה של מישהו שאינו המרצה — כן (הסטודנט כתב עם עקוב-אחר-שינויים פעיל).
+ * · הוספה של המרצה — לא (זו כתיבה של המרצה, לא של המשתמש).
+ * · מחיקה של המרצה — כן: הטקסט הזה **היה** בהגשה המקורית.
+ * · מחיקה של מישהו אחר — לא (הסטודנט עצמו הסיר אותה).
+ * בלי מרצה מזוהה נוקטים בזהירות: כל ההוספות נזרקות (אי אפשר לייחס אותן).
+ */
+function runBelongsToSubmission(run, lecturerAuthor) {
+  const ins = String(run?.insAuthor || '').trim();
+  const del = String(run?.delAuthor || '').trim();
+  if (!ins && !del) return true;
+  if (!lecturerAuthor) return !ins;
+  if (ins === lecturerAuthor) return false;
+  if (ins) return true;
+  return del === lecturerAuthor;
+}
+
+/** משחזר את גוף ההגשה המקורי של הסטודנט: בלי הוספות המרצה, עם הטקסט שהמרצה מחק. */
+export function buildSubmittedBodyText(result, { lecturerAuthor = '' } = {}) {
+  const paragraphs = Array.isArray(result?.paragraphRuns) ? result.paragraphRuns : [];
+  if (!paragraphs.length) return '';
+  // השוואת מחברים: trim בלבד — מחרוזות המחבר של Word רגישות-רישיות כמו שהן.
+  const wanted = String(lecturerAuthor || '').trim();
+  const out = [];
+  for (const runs of paragraphs) {
+    if (!Array.isArray(runs) || !runs.length) continue;
+    const kept = runs
+      .filter((r) => r && runBelongsToSubmission(r, wanted))
+      .map((r) => String(r.text || ''));
+    const paraText = collapse(kept.join(' '));
+    if (paraText) out.push(paraText);
+  }
+  // הערות Word יושבות ב-comments.xml ולעולם אינן מזהמות את גוף המסמך — אין מה לסנן.
+  return out.join('\n');
 }
 
 /**

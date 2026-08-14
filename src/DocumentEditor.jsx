@@ -28,6 +28,7 @@ import EditorContextMenu from "./components/EditorContextMenu.jsx";
 import Ruler from "./components/Ruler.jsx";
 import { showToast } from "./services/uiFeedback";
 import { tagStyleSample } from "./services/styleAuthenticityService";
+import { recordSuggestionOutcome } from "./services/styleDeltaService";
 import { AiSuggestionMark } from "./extensions/AiSuggestionMark";
 import { PageBreak } from "./extensions/PageBreak";
 import { FindHighlight } from "./extensions/FindHighlight";
@@ -1173,8 +1174,16 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
             <button
               onClick={() => {
                 const suggestion = getActiveAiSuggestion();
+                const attrs = suggestion?.attrs || editor.getAttributes("aiSuggestion");
+                // הטקסט של ה-AI נקרא לפני ה-chain — אחריו הסימון כבר לא קיים.
+                const replacementText = suggestion?.union
+                  ? editor.state.doc.textBetween(suggestion.union.from, suggestion.union.to, ' ')
+                  : '';
                 if (!suggestion?.ranges?.length) {
                   editor.chain().focus().unsetMark("aiSuggestion").run();
+                  try {
+                    recordSuggestionOutcome({ action: 'accept', originalText: attrs?.originalText || '', replacementText: '' });
+                  } catch {}
                   return;
                 }
 
@@ -1184,6 +1193,9 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
                 });
                 const cursorPos = suggestion.union?.to ?? suggestion.ranges[suggestion.ranges.length - 1]?.to ?? editor.state.selection.to;
                 chain.setTextSelection({ from: cursorPos, to: cursorPos }).run();
+                try {
+                  recordSuggestionOutcome({ action: 'accept', originalText: attrs?.originalText || '', replacementText });
+                } catch {}
               }}
               className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full bg-green-50 text-green-700 hover:bg-green-100"
               title="אשר שינוי AI"
@@ -1196,6 +1208,10 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
                 const attrs = suggestion?.attrs || editor.getAttributes("aiSuggestion");
                 const unionRange = suggestion?.union || getStoredAiSuggestionRange(attrs) || getAiSuggestionRange();
                 const insertAt = unionRange?.from ?? editor.state.selection.from;
+                // חייב להיקרא לפני deleteSelection — אחריו טקסט ה-AI כבר נמחק.
+                const replacementText = unionRange
+                  ? editor.state.doc.textBetween(unionRange.from, unionRange.to, ' ')
+                  : '';
                 if (unionRange) {
                   editor.chain().focus().setTextSelection(unionRange).deleteSelection().run();
                 }
@@ -1218,6 +1234,10 @@ export default function DocumentEditor({ onReady, onWordCountChange, onCommand =
                 } else {
                   editor.chain().focus().unsetMark("aiSuggestion").run();
                 }
+
+                try {
+                  recordSuggestionOutcome({ action: 'reject', originalText: attrs?.originalText || '', replacementText });
+                } catch {}
               }}
               className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-full bg-red-50 text-red-700 hover:bg-red-100"
               title="דחה שינוי AI"

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { chatWithActiveProvider, matchShortcut, shouldUseWorkspaceAutomation, applyStyleJudgeToText } from './services/aiService';
 import { scoreTextAuthenticity, formatAuthenticityResultText } from './services/styleAuthenticityService';
 import { getStyleDepth } from './components/StyleEngineControls';
+import { recordSuggestionOutcome } from './services/styleDeltaService';
 
 const MAX_WAND_CONTEXT = 1200;
 
@@ -85,6 +86,8 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
   const popupRef = useRef(null);
   const triggerRef = useRef(null);
   const inputRef = useRef(null);
+  // האם התוצאה הנוכחית הוכנסה למסמך — משמש לזיהוי "דחייה משתמעת" בסגירת החלון.
+  const insertedRef = useRef(false);
 
   // סגור בלחיצה מחוץ לחלון
   useEffect(() => {
@@ -123,9 +126,16 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
   // פוקוס על input בפתיחה + ניקוי timeout תקין
   useEffect(() => {
     if (open) {
+      insertedRef.current = false;
       const t = setTimeout(() => inputRef.current?.focus(), 80);
       return () => clearTimeout(t);
     } else {
+      // דחייה משתמעת: החלון נסגר כשיש תוצאת AI שלא הוכנסה למסמך — סימן שהמשתמש ויתר עליה.
+      // מדווח רק על טקסט להוספה; דוח "בדיקת סגנון" (reportMode) הוא תצוגה בלבד ובכוונה
+      // הציון שלו אינו מוזן למנוע הסגנון.
+      if (result && !reportMode && !insertedRef.current) {
+        try { recordSuggestionOutcome({ action: 'dismiss' }); } catch {}
+      }
       setResult('');
       setInput('');
       setLoading(false);
@@ -158,6 +168,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
     setReportMode(false);
     setLoading(true);
     setResult('');
+    insertedRef.current = false;
     try {
       let res = await chatWithActiveProvider(request.prompt, request.context, '', {
         skipAutomation: true,
@@ -267,7 +278,7 @@ export default function MagicWand({ sidebarOpen, documentContext, selectedText, 
                 <>
                   <div style={{ fontSize: 12, color: '#323130', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: 8, direction: 'rtl' }}>{result}</div>
                   {onInsert && !reportMode && (
-                    <button onClick={() => { onInsert(result); setOpen(false); }}
+                    <button onClick={() => { insertedRef.current = true; onInsert(result); setOpen(false); }}
                       style={{ fontSize: 11, padding: '5px 14px', background: '#2B579A', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
                       + הוסף למסמך
                     </button>

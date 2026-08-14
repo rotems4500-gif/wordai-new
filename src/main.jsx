@@ -67,6 +67,7 @@ import { normalizeImportedFootnotes } from './services/footnoteHtml';
 import { loadPersistedDocumentLayout, persistDocumentLayout } from './services/documentLayout';
 import { getCustomStyles, saveCustomStyles, buildStyleFromEditor, applyStyleToEditor } from './services/stylesRegistry';
 import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffStyleAfterEdit, shouldAutoSynthesize as shouldAutoSynthesizeStyle, synthesizeProfileUpdate as synthesizeStyleProfileUpdate } from './services/styleDeltaService';
+import { maybeCaptureFinishedDocument, recordRevisionFeedback } from './services/styleIngestService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm, setStatusChip, clearStatusChip } from './services/uiFeedback';
 import { startClipInboxPolling, CLIP_INGESTED_EVENT, CLIP_PROGRESS_EVENT } from './services/clipInboxService';
@@ -5313,6 +5314,18 @@ function App() {
     }, 60);
   }, []);
 
+  // ריענון snapshot אחרי הכנסת AI ממוקדת — סמנטיקת ההחלפה ב-styleDeltaService הופכת את זה
+  // לנכון (snapshot ממתין שלא עבר diff מוחלף, ולא נצבר), ו-diff הרגיל מכסה את עריכות ההמשך.
+  const refreshStyleSnapshotAfterAiInsert = React.useCallback(() => {
+    try {
+      if (getPersonalStyleProfile()?.styleEngine?.enabled !== true) return;
+      snapshotStyleGeneration({
+        docId: activeDocumentSessionIdRef.current,
+        generatedText: String(editor?.getText?.() || ''),
+      });
+    } catch {}
+  }, [editor]);
+
   const handleApplyAssistantEdit = React.useCallback(({ replacementText, target, agentType = 'assistant-sidebar-edit' } = {}) => {
     if (!editor) {
       return { ok: false, message: 'העורך לא זמין כרגע לעריכה.' };
@@ -5351,13 +5364,14 @@ function App() {
     }
 
     flashAppliedSuggestion(result.suggestionId);
+    refreshStyleSnapshotAfterAiInsert();
 
     return {
       ok: true,
       message: 'העריכה הוחלה במסמך כהצעת AI. אפשר לאשר או לדחות מתוך המסמך.',
       suggestionId: result.suggestionId || '',
     };
-  }, [editor, flashAppliedSuggestion]);
+  }, [editor, flashAppliedSuggestion, refreshStyleSnapshotAfterAiInsert]);
 
   const consolidateAssistantEditBatchEntries = React.useCallback((entries = []) => {
     const merged = new Map();
@@ -5451,6 +5465,7 @@ function App() {
     }
 
     flashAppliedSuggestion(applied.find((entry) => entry?.suggestionId)?.suggestionId);
+    refreshStyleSnapshotAfterAiInsert();
 
     return {
       ok: true,
@@ -5460,7 +5475,7 @@ function App() {
       appliedCount: applied.length,
       applied,
     };
-  }, [consolidateAssistantEditBatchEntries, editor, flashAppliedSuggestion]);
+  }, [consolidateAssistantEditBatchEntries, editor, flashAppliedSuggestion, refreshStyleSnapshotAfterAiInsert]);
 
   const insertAssistantTextAtActivePosition = React.useCallback((text = '', agentType = 'assistant-sidebar-insert') => {
     if (!editor) {
@@ -5482,6 +5497,7 @@ function App() {
       });
       if (result) {
         triggerDocumentArrival('warning');
+        refreshStyleSnapshotAfterAiInsert();
         return { ok: true, fallbackInserted: true, message: 'לא נמצא מיפוי ייחודי, אז החלפתי את הטקסט המסומן כהצעת AI.' };
       }
     }
@@ -5505,6 +5521,7 @@ function App() {
 
     editor.chain().focus().insertContentAt(Math.max(1, Math.min(insertPos, doc.content.size)), insertionHtml).run();
     triggerDocumentArrival('warning');
+    refreshStyleSnapshotAfterAiInsert();
     return {
       ok: true,
       fallbackInserted: true,
@@ -5512,7 +5529,7 @@ function App() {
         ? 'לא נמצא מיפוי ייחודי, אז הכנסתי את התשובה ליד הפסקה הפעילה.'
         : 'לא נמצא מיפוי ייחודי, אז הכנסתי את התשובה במיקום הסמן או בסוף המסמך.',
     };
-  }, [editor, getCurrentEditTarget, triggerDocumentArrival]);
+  }, [editor, getCurrentEditTarget, refreshStyleSnapshotAfterAiInsert, triggerDocumentArrival]);
 
   // Helper משותף לכל הזרימות: מריץ את סוכן נספח ה-AI על טקסט נתון ומחזיר {ok, appendixHtml, guidanceText}.
   const generateAiAppendixHtml = React.useCallback(async ({ contextText = '', providerId = '', providerModel = '' } = {}) => {
@@ -6612,6 +6629,16 @@ ${sidebarReviewContext}`
         lastLiveGenerationShellRef.current = { runId: '', html: '' };
         editor.commands.setContent(revisedHtml);
         triggerDocumentArrival(usedFallback ? 'warning' : 'success');
+        // רוויזיה לפי משוב = פלט AI חדש: מרעננים snapshot כדי שה-delta ימדוד את העריכות
+        // על הנוסח החדש ולא על הקודם (snapshotGeneration מחליף snapshot ממתין לאותו docId).
+        try {
+          snapshotStyleGeneration({
+            docId: activeDocumentSessionIdRef.current,
+            generatedText: String(editor.getText?.() || ''),
+          });
+        } catch {}
+        // המשוב החופשי שהמשתמש כתב ("קצר מדי", "יותר פורמלי") נשמר כתיעוד העדפה — בלי LLM.
+        try { recordRevisionFeedback(String(payload.feedback || '')); } catch {}
       }
 
       persistLocalCache(revisedHtml);
@@ -7369,6 +7396,28 @@ ${sidebarReviewContext}`
     return () => window.clearTimeout(timer);
   }, [editor, lastEditorContentActivityAt]);
 
+  // Personal Style Engine: קליטת מסמך "גמור" לקורפוס הסגנון. 90 שניות של שקט עריכה זה
+  // סימן לגמירוּת ולא להפסקה בכתיבה — ה-debounce הקצר (3 שניות) שייך ל-delta, לא לכאן.
+  // כל השערים (הסכמה/מנוע/אורך/throttle 24 שעות/בעלות על הטקסט) יושבים בתוך השירות.
+  // במכוון לא מחובר ל-persistDocumentToCloud — שמירה אינה עדות לגמירוּת.
+  React.useEffect(() => {
+    if (!editor || !lastEditorContentActivityAt) return undefined;
+
+    const scheduledActivityAt = lastEditorContentActivityAt;
+    const timer = window.setTimeout(() => {
+      if (scheduledActivityAt !== lastEditorContentActivityAt) return;
+      try {
+        maybeCaptureFinishedDocument({
+          docId: activeDocumentSessionIdRef.current,
+          text: String(editor.getText?.() || ''),
+          title: currentFilePathRef.current || 'המסמך הפעיל',
+        }).catch(() => {});
+      } catch {}
+    }, 90000);
+
+    return () => window.clearTimeout(timer);
+  }, [editor, lastEditorContentActivityAt]);
+
   const cloudStatusLabel = React.useMemo(() => {
     if (!cloudAvailable) return 'Firebase לא מוגדר';
     if (!cloudAuthReady) return 'בודק התחברות לענן...';
@@ -8000,6 +8049,7 @@ ${sidebarReviewContext}`
         try {
           const { applyInlineAi } = await import('./services/aiSuggestionApply');
           await applyInlineAi(editor, 'fix');
+          refreshStyleSnapshotAfterAiInsert();
           showToast('הבדיקה הושלמה — אשר או דחה את התיקון בתפריט הצף.', { tone: 'success' });
         } catch (error) {
           showToast(`בדיקת האיות נכשלה: ${error?.message || 'שגיאה'}`, { tone: 'error' });
@@ -9412,7 +9462,9 @@ ${sidebarReviewContext}`
                   });
                 }}
                 onInsert={(text) => {
-                  if (editor) editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
+                  if (!editor) return;
+                  editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
+                  refreshStyleSnapshotAfterAiInsert();
                 }}
                 onAppendAiAppendix={handleAppendAiAppendix}
                 onStreamStart={handleStreamStart}
@@ -10129,7 +10181,9 @@ ${sidebarReviewContext}`
           selectionContext={selectionContext}
           shortcuts={shortcuts}
           onInsert={(text) => {
-            if (editor) editor.chain().focus().insertContent(text).run();
+            if (!editor) return;
+            editor.chain().focus().insertContent(text).run();
+            refreshStyleSnapshotAfterAiInsert();
           }}
         />}
 

@@ -8,6 +8,9 @@ import { chat as v3Chat } from "../v3/api/client";
 import { streamOpenAICompatible as v3StreamOpenAICompatible } from "../v3/api/streaming";
 import { deriveGateQuery } from "../v3/orchestration/retrievalGate";
 import { deriveResearchTopicQuery } from "./sourceQueryBuilder";
+// ⚠️ skillFileImport טהור (מייבא סטטית רק את lexicalRelevance) — אין כאן מעגל.
+// הוא מצדו טוען את workspaceLearningService רק ב-import דינמי, בדיוק בגלל זה.
+import { MAX_CUSTOM_SKILLS, SKILL_FILE_MAX_CHARS } from "./skillFileImport";
 import { ApiError, ErrorCodes as V3ErrorCodes } from "../v3/api/errors";
 import { getRetryDecision as getV3RetryDecision } from "../v3/api/retryPolicy";
 import { attachSourceLock, createRunScope } from "../v3/orchestration/runScope";
@@ -888,7 +891,10 @@ function getLightSystemResearchAgents() {
 export const DEFAULT_ROLE_AGENTS = getDefaultRoleAgents();
 
 const KNOWN_PROVIDER_IDS = ['gemini', 'openai', 'claude', 'groq', 'perplexity', 'scholar', 'ollama', 'custom'];
-const KNOWN_SKILL_IDS = SKILL_LIBRARY.map((skill) => skill.id);
+// מזהי הסקילים **המובנים** בלבד. הם שמורים: סקיל מותאם שמנסה לתפוס מזהה כזה
+// נדחה בייבוא (ר' addCustomSkill) — מובנה תמיד מנצח.
+// לרשימה האפקטיבית (מובנים + מותאמים) יש getKnownSkillIds().
+const BUILTIN_SKILL_IDS = SKILL_LIBRARY.map((skill) => skill.id);
 const PROVIDER_TAG_PATTERNS = [
   { provider: 'gemini', regex: /(^|\s)@(?:gemini|גימיני)(?::([^\s@]+))?/gi },
   { provider: 'claude', regex: /(^|\s)@(?:claude|קלוד)(?::([^\s@]+))?/gi },
@@ -912,6 +918,7 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_shortcuts',
   'wordai_assistant_behavior',
   'wordai_skills_config',
+  'wordai_custom_skills',
   'wordai_word_preferences',
   'wordai_presentation_preferences',
   'wordai_spss_preferences',
@@ -1480,13 +1487,120 @@ const normalizeSkillKeywords = (value = []) => {
   return [...new Set(raw.split(/[\n,•]+/).map((item) => item.trim()).filter(Boolean))].slice(0, 20);
 };
 
-export const getSkillCatalog = () => SKILL_LIBRARY.map((skill) => ({ ...skill }));
+// ── סקילים מותאמים אישית (קבצי SKILL.md שהמשתמש מעלה) ──
+// האחסון: מפתח יחיד `wordai_custom_skills` = מערך רשומות **בדיוק בצורת SKILL_LIBRARY**
+// (+ `custom:true`, `addedAt`), כדי שכל שאר הצנרת — resolveSkillForRequest,
+// buildSkillSystemPrompt, קטלוג ה-UI — לא תצטרך שום טיפול מיוחד.
+// מדיניות התנגשות מזהים: **דחייה**. מזהה של סקיל מובנה שמור; getCustomSkills מסנן
+// כזה החוצה גם אם הסתנן לאחסון, ו-addCustomSkill מחזיר שגיאה בעברית.
+export { MAX_CUSTOM_SKILLS, SKILL_FILE_MAX_CHARS };
+
+const CUSTOM_SKILLS_STORAGE_KEY = 'wordai_custom_skills';
+
+const normalizeCustomSkill = (raw = {}) => {
+  const id = String(raw?.id || '').trim().toLowerCase().slice(0, 60);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return null;
+  if (BUILTIN_SKILL_IDS.includes(id)) return null;
+  const prompt = normalizeSkillText(raw?.prompt || '', SKILL_FILE_MAX_CHARS);
+  if (!prompt) return null;
+  const addedAt = Number(raw?.addedAt);
+  return {
+    id,
+    label: normalizeSkillText(raw?.label || id, 80),
+    description: normalizeSkillText(raw?.description || '', 600),
+    usageHint: normalizeSkillText(raw?.usageHint || '', 160),
+    prompt,
+    keywords: normalizeSkillKeywords(raw?.keywords || []),
+    custom: true,
+    addedAt: Number.isFinite(addedAt) && addedAt > 0 ? addedAt : Date.now(),
+  };
+};
+
+const normalizeCustomSkillList = (list = []) => {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  list.forEach((item) => {
+    const skill = normalizeCustomSkill(item);
+    if (!skill || seen.has(skill.id)) return;
+    seen.add(skill.id);
+    out.push(skill);
+  });
+  return out.slice(0, MAX_CUSTOM_SKILLS);
+};
+
+export const getCustomSkills = () => normalizeCustomSkillList(readJsonFromStorage(CUSTOM_SKILLS_STORAGE_KEY, []));
+
+export const saveCustomSkills = (list = []) => {
+  const next = normalizeCustomSkillList(list);
+  try {
+    localStorage.setItem(CUSTOM_SKILLS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    return getCustomSkills();
+  }
+  syncPersistedAppSettings();
+  return next;
+};
+
+/**
+ * הוספת סקיל מותאם (בדרך כלל תוצר של importSkillFile).
+ * לעולם לא זורק — כישלון חוזר כ-{ok:false, error:'<עברית>'}.
+ *
+ * @returns {{ok:boolean, error:string, replaced:boolean, skill:object|null, skills:object[]}}
+ */
+export const addCustomSkill = (skill = {}) => {
+  const current = getCustomSkills();
+  const fail = (error) => ({ ok: false, error, replaced: false, skill: null, skills: current });
+
+  const rawId = String(skill?.id || '').trim().toLowerCase();
+  if (rawId && BUILTIN_SKILL_IDS.includes(rawId)) {
+    return fail(`המזהה "${rawId}" שמור לסקיל מובנה. שנה את השדה name בקובץ ונסה שוב.`);
+  }
+
+  const normalized = normalizeCustomSkill(skill);
+  if (!normalized) return fail('הסקיל אינו תקין — חסר מזהה חוקי או גוף הנחיה.');
+
+  const index = current.findIndex((item) => item.id === normalized.id);
+  const replaced = index >= 0;
+  if (!replaced && current.length >= MAX_CUSTOM_SKILLS) {
+    return fail(`אפשר לשמור עד ${MAX_CUSTOM_SKILLS} סקילים מותאמים. מחק סקיל קיים לפני הוספה.`);
+  }
+
+  // החלפה שומרת על addedAt המקורי — הסדר ברשימה לא קופץ בייבוא חוזר.
+  const next = replaced
+    ? current.map((item, i) => (i === index ? { ...normalized, addedAt: item.addedAt } : item))
+    : [...current, normalized];
+
+  const skills = saveCustomSkills(next);
+  return { ok: true, error: '', replaced, skill: normalized, skills };
+};
+
+/** @returns {{ok:boolean, removed:boolean, skills:object[]}} */
+export const removeCustomSkill = (id = '') => {
+  const target = String(id || '').trim().toLowerCase();
+  const current = getCustomSkills();
+  if (!target || !current.some((item) => item.id === target)) {
+    return { ok: false, removed: false, skills: current };
+  }
+  const skills = saveCustomSkills(current.filter((item) => item.id !== target));
+  return { ok: true, removed: true, skills };
+};
+
+/** הספרייה האפקטיבית: מובנים תחילה, ואחריהם המותאמים. זו הרשימה שכל הצנרת קוראת. */
+export const getEffectiveSkillLibrary = () => [
+  ...SKILL_LIBRARY.map((skill) => ({ ...skill })),
+  ...getCustomSkills(),
+];
+
+const getKnownSkillIds = () => getEffectiveSkillLibrary().map((skill) => skill.id);
+
+export const getSkillCatalog = () => getEffectiveSkillLibrary();
 
 export const getSkillsConfig = () => {
   const stored = readJsonFromStorage('wordai_skills_config', {});
   const skills = {};
 
-  SKILL_LIBRARY.forEach((skill) => {
+  getEffectiveSkillLibrary().forEach((skill) => {
     skills[skill.id] = {
       mode: normalizeSkillMode(stored.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode || 'manual'),
       customInstruction: normalizeSkillText(stored.skills?.[skill.id]?.customInstruction || ''),
@@ -1494,7 +1608,7 @@ export const getSkillsConfig = () => {
     };
   });
 
-  const defaultSkillId = KNOWN_SKILL_IDS.includes(String(stored.defaultSkillId || ''))
+  const defaultSkillId = getKnownSkillIds().includes(String(stored.defaultSkillId || ''))
     ? String(stored.defaultSkillId)
     : DEFAULT_SKILLS_CONFIG.defaultSkillId;
 
@@ -1510,14 +1624,14 @@ export const getSkillsConfig = () => {
 export const saveSkillsConfig = (config = {}) => {
   const current = getSkillsConfig();
   const next = {
-    defaultSkillId: KNOWN_SKILL_IDS.includes(String(config.defaultSkillId || current.defaultSkillId || ''))
+    defaultSkillId: getKnownSkillIds().includes(String(config.defaultSkillId || current.defaultSkillId || ''))
       ? String(config.defaultSkillId || current.defaultSkillId)
       : DEFAULT_SKILLS_CONFIG.defaultSkillId,
     autoApplyDefault: config.autoApplyDefault === true,
     skills: {},
   };
 
-  SKILL_LIBRARY.forEach((skill) => {
+  getEffectiveSkillLibrary().forEach((skill) => {
     next.skills[skill.id] = {
       mode: normalizeSkillMode(config.skills?.[skill.id]?.mode || current.skills?.[skill.id]?.mode || DEFAULT_SKILLS_CONFIG.skills?.[skill.id]?.mode),
       customInstruction: normalizeSkillText(config.skills?.[skill.id]?.customInstruction || current.skills?.[skill.id]?.customInstruction || ''),
@@ -3151,16 +3265,19 @@ const getSkillMatchScore = (skill = {}, text = '', skillConfig = {}) => {
 const resolveSkillForRequest = ({ userPrompt = '', documentContext = '', skillId = '', autoUseDefault = true } = {}) => {
   const config = getSkillsConfig();
   const explicitSkillId = String(skillId || '').trim();
+  // מובנים + מותאמים, נקרא פעם אחת לכל בקשה (getCustomSkills נוגע ב-localStorage).
+  const library = getEffectiveSkillLibrary();
+  const knownSkillIds = library.map((item) => item.id);
 
-  if (explicitSkillId && explicitSkillId !== 'none' && KNOWN_SKILL_IDS.includes(explicitSkillId)) {
-    const skill = SKILL_LIBRARY.find((item) => item.id === explicitSkillId);
+  if (explicitSkillId && explicitSkillId !== 'none' && knownSkillIds.includes(explicitSkillId)) {
+    const skill = library.find((item) => item.id === explicitSkillId);
     const mode = config.skills?.[explicitSkillId]?.mode || 'manual';
     if (skill && mode !== 'off') return { skill, reason: 'manual' };
   }
 
   const promptText = String(userPrompt || '');
   const contextText = String(documentContext || '');
-  const autoCandidate = SKILL_LIBRARY
+  const autoCandidate = library
     .map((skill) => {
       const skillConfig = config.skills?.[skill.id] || {};
       if ((skillConfig.mode || 'manual') !== 'auto') return { skill, score: 0 };
@@ -3175,8 +3292,8 @@ const resolveSkillForRequest = ({ userPrompt = '', documentContext = '', skillId
     return { skill: autoCandidate.skill, reason: 'auto' };
   }
 
-  if (autoUseDefault && config.autoApplyDefault && KNOWN_SKILL_IDS.includes(String(config.defaultSkillId || ''))) {
-    const skill = SKILL_LIBRARY.find((item) => item.id === config.defaultSkillId);
+  if (autoUseDefault && config.autoApplyDefault && knownSkillIds.includes(String(config.defaultSkillId || ''))) {
+    const skill = library.find((item) => item.id === config.defaultSkillId);
     const mode = config.skills?.[config.defaultSkillId]?.mode || 'manual';
     if (skill && mode !== 'off') return { skill, reason: 'default' };
   }
@@ -5455,7 +5572,7 @@ const extractRequestedSkills = (packet = {}, skillsConfig = getSkillsConfig()) =
   });
 
   return [...new Set([...explicit, ...getSuggestedSkillIdsFromPacket(packet, skillsConfig)])]
-    .filter((skillId) => KNOWN_SKILL_IDS.includes(skillId))
+    .filter((skillId) => getKnownSkillIds().includes(skillId))
     .filter((skillId) => (skillsConfig.skills?.[skillId]?.mode || 'manual') !== 'off');
 };
 
@@ -9986,7 +10103,7 @@ ${isGeneralWritingScope
 
           const suggestedSkillIds = extractRequestedSkills(effectiveParsedReply, skillsConfig);
           if (suggestedSkillIds.length) {
-            const suggestedSkillLabels = suggestedSkillIds.map((skillId) => SKILL_LIBRARY.find((item) => item.id === skillId)?.label || skillId);
+            const suggestedSkillLabels = suggestedSkillIds.map((skillId) => getEffectiveSkillLibrary().find((item) => item.id === skillId)?.label || skillId);
             batonNotes.push(`כללים/סקילים ממליצים להמשך על: ${suggestedSkillLabels.join(', ')}`);
           }
 

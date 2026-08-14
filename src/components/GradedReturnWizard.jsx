@@ -21,6 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { extractMaterialTextFromBytes } from '../services/materialExtractBrowser';
 import { diffSubmissionVsReturned } from '../services/feedbackDiffService';
+import { buildSubmittedBodyText } from '../services/docxFeedbackExtract';
 import {
   scanFilesForFeedback,
   scanExistingMaterialsForFeedback,
@@ -431,6 +432,8 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
         authors: [],
         suspectedLecturer: '',
         gradeSuggestion: null,
+        // הקובץ המוגש עצמו — האות הנקי ביותר לכתיבה של המשתמש (בלי אף תו של המרצה).
+        submittedText: a.text,
         events: evts,
         allEvents: evts,
         raw: null,
@@ -517,6 +520,27 @@ export default function GradedReturnWizard({ onClose = () => {}, initialFile = n
         return;
       }
       setSavedLecturerId(result.lecturerId);
+
+      // הגוף שהמשתמש עצמו הגיש הוא כתיבה אקדמית 100% שלו — נקלט לקורפוס הסגנון.
+      // fire-and-forget מוחלט: כל שער (הסכמה, אורך מינימלי, dedupe לפי hash) יושב
+      // בתוך ingestGradedSubmission, וכישלון כאן לעולם לא מפיל את קליטת המשוב.
+      // import דינמי — styleIngestService גורר את מנוע הסגנון כולו, ואין סיבה
+      // שהאשף ייטען איתו.
+      try {
+        const { ingestGradedSubmission } = await import('../services/styleIngestService');
+        for (const w of readyWorks) {
+          // עדיפות ראשונה: הקובץ המוגש עצמו (מסלול diff). אחרת — שחזור מ-docx
+          // לפי המחבר שהמשתמש אישר בשלב 2 (מחרוזת המחבר של Word, לא שם הפרופיל).
+          const text = w.submittedText
+            || (w.source === 'docx-comments' && w.raw
+              ? buildSubmittedBodyText(w.raw, {
+                lecturerAuthor: String(w.lecturerAuthor || w.suspectedLecturer || '').trim(),
+              })
+              : '');
+          if (text) ingestGradedSubmission({ title: w.title || w.fileName, text }).catch(() => {});
+        }
+      } catch {}
+
       const failNote = result.failures?.length ? ` · ${result.failures.length} נכשלו` : '';
       setDoneNote(`נשמרו ${result.saved} עבודות · ${result.totalEvents} פריטי משוב אצל ${lecturerName.trim()}.${failNote}`);
       showToast('העבודות הבדוקות נקלטו', { tone: 'success' });

@@ -23,7 +23,14 @@ const baseName = (fileName) => String(fileName || '').replace(/\.[^.]+$/, '').tr
 
 const makeKey = (prefix, name, index) => `${prefix}:${index}:${String(name || '').slice(0, 40)}`;
 
-/** annotations של PDF → אירועי משוב + רשימת מחברים משוערת. */
+/**
+ * annotations של PDF → אירועי משוב + רשימת מחברים משוערת.
+ *
+ * ⚠️ עבודות PDF מוחזרות **אינן** נקלטות לקורפוס הסגנון (v1): ב-PDF אין הפרדה
+ * מבנית בין גוף ההגשה לבין ה-FreeText שהמרצה הוסיף מעליו, ולכן אי אפשר לשחזר
+ * את הטקסט של המשתמש בלי לזהם אותו בכתיבה של המרצה. רק docx (paragraphRuns
+ * עם ins/del פר-מחבר) והשוואת-גרסאות (הקובץ המוגש עצמו) מזינים סגנון.
+ */
 function pdfResultToWork(result, { fileName, key, origin, materialId = '' }) {
   const annots = Array.isArray(result?.annotations) ? result.annotations : [];
   if (!annots.length) return null;
@@ -64,7 +71,10 @@ function pdfResultToWork(result, { fileName, key, origin, materialId = '' }) {
   };
 }
 
-/** תוצאת docx → work. שומר את ה-raw כדי לאפשר סינון-מחדש לפי מחבר ב-UI. */
+/**
+ * תוצאת docx → work. שומר את ה-raw כדי לאפשר סינון-מחדש לפי מחבר ב-UI —
+ * ודרכו עובר גם paragraphRuns, שממנו משחזרים את גוף ההגשה (buildSubmittedBodyText).
+ */
 function docxResultToWork(result, { fileName, key, origin, materialId = '' }) {
   const findings = (result.comments?.length || 0) + (result.revisions?.length || 0) + (result.highlights?.length || 0);
   if (!findings) return null;

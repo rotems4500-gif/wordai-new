@@ -545,16 +545,24 @@ export function setDocumentGenre(docId, genre) {
 // ---------- addGoldChunk ----------
 
 /**
- * מוסיף chunk gold יחיד (עבור delta >20% ב-Phase 5). gold לעולם לא מפונה.
+ * מוסיף chunk gold יחיד (עבור delta >20% ב-Phase 5). gold לעולם לא מפונה — ולכן
+ * חובה dedupe תוכן: אותה דחייה/עריכה שנרשמת פעמיים לא תיצור שני chunks זהים.
  * @param {{text:string, docId?:(string|null), title?:string}} args
- * @returns {(string|null)} chunkId
+ * @returns {(string|null)} chunkId (קיים או חדש)
  */
 export function addGoldChunk({ text, docId = null, title = 'gold' } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return null;
 
   const blob = readSampleStore();
-  const fullHash = hashText(raw);
+  const fullHash = hashText(raw.trim());
+
+  // dedupe תוכן: gold קיים עם אותו hash → מחזירים את המזהה שלו בלי כתיבה.
+  // gold ישן (legacy) נשמר בלי שדה hash — משווים עצלנית מעל הטקסט השמור.
+  const existingGold = blob.chunks.find((c) => c?.isGold === true
+    && (c.hash ? c.hash === fullHash : hashText(String(c.text || '')) === fullHash));
+  if (existingGold) return existingGold.id;
+
   const short = hash8(fullHash);
   const now = nowTs();
 
@@ -566,6 +574,7 @@ export function addGoldChunk({ text, docId = null, title = 'gold' } = {}) {
     id: chunkId,
     docId: docId ? String(docId) : null,
     text: raw.trim(),
+    hash: fullHash,
     wordCount: countWords(raw),
     isGold: true,
     metricsLite: deriveMetricsLite(raw),

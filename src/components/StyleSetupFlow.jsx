@@ -19,6 +19,9 @@ import {
   setStyleEngineEnabled,
   getStyleOverview,
 } from '../services/styleIngestService';
+// ייבוא namespace נוסף (ולא named) עבור getRepresentativeExcerpts: הפונקציה נוספה לשירות
+// במקביל, ו-named import של export חסר מפיל את ה-build. כאן היעדרותה מדרדרת ל-[] בשקט.
+import * as styleIngestModule from '../services/styleIngestService';
 import { getSampleStoreStats } from '../services/styleSampleStore';
 import {
   buildExternalPatternAnalysisPrompt,
@@ -28,6 +31,10 @@ import {
   CONFIDENCE_LABELS,
 } from '../services/styleProfileService';
 import { getExternalAnalysisProviderHint } from '../services/aiService';
+
+// האם ההדבקה בכלל נראית כמו JSON — משמש רק כדי לבחור הודעת שגיאה מדויקת
+// ("נקרא אבל אין שדות מוכרים" מול "לא JSON בכלל"). לא שער קליטה.
+const isJsonLike = (text) => /[{[][\s\S]*[}\]]/.test(String(text || ''));
 
 // סוגי קבצים לעבודות עבר — זהה ל-PAST_WORKS_ACCEPT ב-ProfileOnboarding.jsx.
 const PAST_WORKS_ACCEPT = '.docx,.pdf,.txt,.md,.rtf,.html';
@@ -48,6 +55,11 @@ const EXTERNAL_PROVIDER_OPTIONS = [
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'custom', label: 'ספק אחר / מותאם' },
 ];
+
+// C2 — ספקים שהממשק שלהם לא תומך בהעלאת קבצים (ר' EXTERNAL_ANALYSIS_PROVIDER_HINTS
+// ב-aiService: "אם אין העלאת קבצים... הדבק קטעים מייצגים"). כשאחד מהם נבחר, ה-toggle
+// של "כלול קטעים מייצגים" נדלק אוטומטית — כל עוד המשתמש לא נגע בו ידנית.
+const NO_FILE_UPLOAD_PROVIDERS = new Set(['groq', 'perplexity', 'ollama', 'lmstudio']);
 
 // תוויות עבריות לשדות שהמילוי האוטומטי (deriveProfileFactsFromSamples) יכול למלא.
 const AUTO_FILLED_FIELD_LABELS = {
@@ -206,15 +218,22 @@ export default function StyleSetupFlow({
   const [copyState, setCopyState] = useState('');
   const [pasteRaw, setPasteRaw] = useState('');
   const [pasteError, setPasteError] = useState('');
-  const [pastedOutputs, setPastedOutputs] = useState([]); // [{ id, raw, patternsCount }]
+  const [pastedOutputs, setPastedOutputs] = useState([]); // [{ id, raw, patternsCount, structuralCount, avoidedCount }]
 
-  const promptText = useMemo(() => {
-    try {
-      return buildExternalPatternAnalysisPrompt({ profile }) || '';
-    } catch {
-      return '';
-    }
-  }, [profile]);
+  // C1 — סקירת המנוע (metrics שכבר נמדדו) נכנסת לפרומפט החיצוני, כדי שהמודל החיצוני
+  // לא ינחש מחדש מספרים שכבר יש לנו. אותו accessor שמשמש את writingReport.
+  const [styleEngine, setStyleEngine] = useState(() => {
+    try { return getStyleOverview(); } catch { return null; }
+  });
+
+  // C2 — "כלול קטעים מייצגים בתוך הפרומפט". ברירת המחדל כבויה (עדיף לצרף קבצים), ונדלקת
+  // אוטומטית רק לספקים בלי העלאת קבצים — ורק כל עוד המשתמש לא נגע ב-checkbox בעצמו.
+  const [includeExcerpts, setIncludeExcerpts] = useState(false);
+  const excerptsToggleTouchedRef = useRef(false);
+  const [excerpts, setExcerpts] = useState([]);
+  const [excerptsLoading, setExcerptsLoading] = useState(false);
+
+  const providerLacksFileUpload = NO_FILE_UPLOAD_PROVIDERS.has(externalProviderId);
 
   // F6 — רמז ספציפי-ספק (טקסט עברי מ-aiService) מתחת ל-select לפי הספק הנבחר.
   const providerHint = useMemo(() => {
@@ -254,6 +273,63 @@ export default function StyleSetupFlow({
 
   const docCount = docStats?.docCount || 0;
   const canAnalyze = docCount > 0 || pastedOutputs.length > 0;
+
+  // C2 — אין קורפוס ⇒ אין מה לצרף לפרומפט, ה-checkbox מושבת.
+  const excerptsAvailable = docCount > 0;
+
+  // C2 — ברירת מחדל אוטומטית לפי הספק. flips רק כשהמשתמש עוד לא נגע ב-checkbox
+  // (excerptsToggleTouchedRef), כדי שבחירה ידנית לא תידרס במעבר בין ספקים.
+  useEffect(() => {
+    if (excerptsToggleTouchedRef.current) return;
+    setIncludeExcerpts(providerLacksFileUpload && excerptsAvailable);
+  }, [providerLacksFileUpload, excerptsAvailable]);
+
+  // C2 — שליפת הקטעים המייצגים. הפונקציה עשויה להיות סינכרונית או async, ועשויה גם לא
+  // להתקיים כלל (גרסת שירות ישנה) — כל שלושת המקרים מדרדרים ל-[] בלי לרוקן את הכרטיס.
+  useEffect(() => {
+    if (!includeExcerpts || !excerptsAvailable) {
+      setExcerpts([]);
+      setExcerptsLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setExcerptsLoading(true);
+    (async () => {
+      let out = [];
+      try {
+        const fn = styleIngestModule?.getRepresentativeExcerpts;
+        if (typeof fn === 'function') out = await fn({ max: 6, maxChars: 5000 });
+      } catch (err) {
+        console.error('StyleSetupFlow: getRepresentativeExcerpts failed', err);
+        out = [];
+      }
+      if (cancelled) return;
+      setExcerpts(Array.isArray(out) ? out.map((e) => String(e || '').trim()).filter(Boolean) : []);
+      setExcerptsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [includeExcerpts, excerptsAvailable, docStats]);
+
+  // C1+C2 — הפרומפט נבנה עם המדדים שכבר נמדדו ועם הקטעים (כשהוקטע ה-toggle דלוק).
+  // memo כדי שהטקסט לא ייבנה מחדש בכל רינדור (הוא ארוך — עד אלפי תווים).
+  const promptText = useMemo(() => {
+    try {
+      return buildExternalPatternAnalysisPrompt({
+        profile,
+        engine: styleEngine,
+        excerpts: includeExcerpts ? excerpts : [],
+      }) || '';
+    } catch (err) {
+      console.error('StyleSetupFlow: buildExternalPatternAnalysisPrompt failed', err);
+      return '';
+    }
+  }, [profile, styleEngine, includeExcerpts, excerpts]);
+
+  // C2 — גודל הפרומפט מוצג חי, כדי שתוספת הקטעים לא תפתיע (חלון הקשר של הספק).
+  const promptCharsLabel = useMemo(
+    () => `~${(promptText.length || 0).toLocaleString('en-US')}`,
+    [promptText],
+  );
 
   // ============================ Phase 1 handlers ============================
 
@@ -305,6 +381,8 @@ export default function StyleSetupFlow({
       }
       const stats = getSampleStoreStats();
       setDocStats(stats);
+      // C1 — רענון המדדים אחרי קליטה, כדי שהפרומפט החיצוני יישא את המספרים המעודכנים.
+      try { setStyleEngine(getStyleOverview()); } catch { /* noop */ }
       // F3.2 — משתמש שהעלה ומדלג (בלי "נתח והמשך") עדיין מקבל מנוע פעיל (כמו בזרימה הישנה).
       if ((stats?.docCount || 0) > 0) {
         try { setStyleEngineEnabled(true); } catch (err) {
@@ -367,18 +445,36 @@ export default function StyleSetupFlow({
       // תקין עם type לא-סטנדרטי לא יידחה כאן ולא יגיע כלל למסלול הלניאנטי.
       const parsed = parsePatternExtractionResult(raw, { lenientTypes: true });
       const count = parsed?.patterns?.length || 0;
-      if (count <= 0) {
-        setPasteError('לא זוהה JSON תקין — ודא שהדבקת את כל התשובה מה-AI.');
+      // C4 — parsePatternExtractionResult מחזיר עכשיו גם structuralSignature (5 מפתחות,
+      // לעולם לא null) ו-avoidedPhrases. פלט "מטא בלבד" (0 דפוסים אבל חתימה מבנית או
+      // ניסוחים נמנעים) נשמר בשירות, ולכן הוא מתקבל גם כאן. הדחייה נשארת רק כשלא נקלט כלום.
+      const structuralCount = Object.values(parsed?.structuralSignature || {})
+        .filter((v) => String(v || '').trim()).length;
+      const negativeCount = parsed?.negativeSpace?.length || 0;
+      const avoidedCount = parsed?.avoidedPhrases?.length || 0;
+      // ⚠️ עד 12.8.26 השער הזה התעלם מ-hasMeta ודחה פלט "מטא בלבד" (profileSummary/
+      // style/coverPageDefaults) בהודעת "לא נקלט כלום" — בזמן ש-applyExternalPatternAnalyses
+      // דווקא ממזג אותו לפרופיל. זה בדיוק המקרה של פלט פרופיל ההיכרות.
+      const hasMeta = parsed?.hasMeta === true;
+      if (count <= 0 && structuralCount <= 0 && avoidedCount <= 0 && negativeCount <= 0 && !hasMeta) {
+        // הודעה שמבדילה בין "לא JSON בכלל" ל-"JSON תקין בלי שדות מוכרים" — בלי ההבחנה
+        // הזאת המשתמש מדביק שוב ושוב את אותו פלט תקין ולא מבין מה חסר.
+        // ההודעה מציגה את המפתחות שכן נמצאו בפלט — בלי זה המשתמש מדביק שוב ושוב
+        // את אותו JSON תקין בלי דרך לדעת מה בדיוק לא הותאם.
+        const foundKeys = (parsed?.topKeys || []).slice(0, 8).join(', ');
+        setPasteError(isJsonLike(raw)
+          ? `ה-JSON נקרא, אבל אין בו אף שדה מוכר. נמצאו: ${foundKeys || '—'}. מצופה patterns / structuralSignature / avoidedPhrases / style / coverPageDefaults. ודא שהרצת את הפרומפט שמוצג כאן, והעתק את כל הפלט.`
+          : 'לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא, מהסוגר הפותח ועד הסוגר הסוגר).');
         return;
       }
       setPastedOutputs((prev) => [
         ...prev,
-        { id: `ext_${Date.now()}_${prev.length}`, raw, patternsCount: count },
+        { id: `ext_${Date.now()}_${prev.length}`, raw, patternsCount: count, structuralCount, avoidedCount, hasMeta },
       ]);
       setPasteRaw('');
     } catch (err) {
       console.error('StyleSetupFlow: parsePatternExtractionResult failed', err);
-      setPasteError('לא זוהה JSON תקין — ודא שהדבקת את כל התשובה מה-AI.');
+      setPasteError('לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא).');
     }
   }, [pasteRaw]);
 
@@ -736,8 +832,12 @@ export default function StyleSetupFlow({
             {stageCfg.showExternal && (
             <div className={T.card}>
               <div className={T.title}>🧠 ניתוח דרך AI חיצוני</div>
-              <p className={`${T.subtitle} mt-1 mb-3`}>
+              <p className={`${T.subtitle} mt-1`}>
                 פתח את הספק שבחרת, צרף 2-3 עבודות שכתבת, הדבק את הפרומפט ושלח. את התשובה הדבק כאן:
+              </p>
+              {/* C3 — הפרומפט התעמק: מעבר לדפוסי משפט הוא מחלץ גם את מבנה העבודה וניסוחים נמנעים. */}
+              <p className={`${T.muted} mt-1 mb-3`}>
+                הניתוח לומד גם את מבנה העבודה (פתיחה, מיקום התזה, סיום) וניסוחים שאתה נמנע מהם.
               </p>
 
               <label className={T.label}>ספק חיצוני</label>
@@ -751,8 +851,30 @@ export default function StyleSetupFlow({
                 ))}
               </select>
               {providerHint && (
-                <p className={`${T.muted} mb-3`}>{providerHint}</p>
+                <p className={`${T.muted} mb-2`}>{providerHint}</p>
               )}
+
+              {/* C2 — צירוף קטעים מייצגים לתוך הפרומפט עצמו (לספקים בלי העלאת קבצים). */}
+              <label className={`flex items-start gap-2 mb-1 cursor-pointer ${!excerptsAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={includeExcerpts}
+                  disabled={!excerptsAvailable}
+                  onChange={(e) => {
+                    excerptsToggleTouchedRef.current = true;
+                    setIncludeExcerpts(e.target.checked);
+                  }}
+                  className="mt-0.5 shrink-0"
+                />
+                <span className="text-[12.5px] font-semibold leading-snug">
+                  כלול קטעים מייצגים מהעבודות בתוך הפרומפט
+                </span>
+              </label>
+              <p className={`${providerLacksFileUpload ? T.hintBox : T.muted} mb-3`}>
+                {!excerptsAvailable
+                  ? 'אין עדיין קטעים — העלה עבודה קודם'
+                  : 'שימושי כשהספק לא תומך בהעלאת קבצים — הקטעים נבחרו אוטומטית לפי מגוון.'}
+              </p>
 
               <label className={T.label}>הפרומפט להעתקה</label>
               <textarea
@@ -762,6 +884,12 @@ export default function StyleSetupFlow({
                 value={promptText}
                 className={`${T.textareaReadonly} mb-1`}
               />
+              <p className={`${T.muted} mb-1`}>
+                הפרומפט: {promptCharsLabel} תווים
+                {includeExcerpts && excerptsLoading ? ' · מכין קטעים מייצגים...' : ''}
+                {includeExcerpts && !excerptsLoading && excerpts.length > 0 ? ` · כולל ${excerpts.length} קטעים` : ''}
+                {includeExcerpts && !excerptsLoading && excerpts.length === 0 && excerptsAvailable ? ' · לא נמצאו קטעים לצירוף' : ''}
+              </p>
               <div className="flex items-center justify-between gap-2 mb-3">
                 <button type="button" onClick={handleCopyPrompt} className={T.buttonSecondary}>
                   📋 העתק פרומפט
@@ -788,8 +916,17 @@ export default function StyleSetupFlow({
               {pastedOutputs.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
                   {pastedOutputs.map((o, idx) => (
-                    <span key={o.id} className={T.chip}>
-                      פלט #{idx + 1} · {o.patternsCount} דפוסים ✓
+                    <span
+                      key={o.id}
+                      className={T.chip}
+                      title={`פלט #${idx + 1}: ${o.patternsCount} דפוסים${o.structuralCount ? ` · חתימה מבנית (${o.structuralCount} שדות)` : ''}${o.avoidedCount ? ` · ${o.avoidedCount} ניסוחים נמנעים` : ''}${o.hasMeta ? ' · פרטי פרופיל וברירות מחדל לעמוד שער' : ''}`}
+                    >
+                      {/* C4 — הצ'יפ משקף גם את מה שהתווסף לסכימה: חתימה מבנית וניסוחים נמנעים. */}
+                      פלט #{idx + 1} · {o.patternsCount} דפוסים
+                      {o.structuralCount > 0 ? ' · מבנה ✓' : ''}
+                      {o.avoidedCount > 0 ? ` · ${o.avoidedCount} ניסוחים נמנעים` : ''}
+                      {o.hasMeta ? ' · פרופיל ✓' : ''}
+                      {' ✓'}
                       <button
                         type="button"
                         onClick={() => handleRemovePastedOutput(o.id)}

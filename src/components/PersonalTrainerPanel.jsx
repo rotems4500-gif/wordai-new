@@ -13,7 +13,9 @@ import { ensureOpenerProfile, getOpenerProfileStatus } from '../services/openerP
 import { ensureFrameProfile, getFrameProfileStatus } from '../services/styleFrameProfileService';
 import { ensureStyleTargetsReady, getStyleTargets, getStyleTargetsStatus, STYLE_TARGETS_UPDATED_EVENT } from '../services/styleTargetsStore';
 import { describeStyleTargets, STYLE_TARGET_LABELS, STYLE_TARGET_KEYS, MIN_TARGET_DOCS } from '../services/styleTargetsService';
-import { STYLE_SAMPLES_UPDATED_EVENT, ensureSampleStoreReady, getSampleStoreStats } from '../services/styleSampleStore';
+import { STYLE_SAMPLES_UPDATED_EVENT, ensureSampleStoreReady, getSampleStoreStats, getSampleDocuments } from '../services/styleSampleStore';
+import { getDeltaAggregate } from '../services/styleDeltaService';
+import { getPersonalStyleProfile } from '../services/aiService';
 import {
   ensureStyleSelectProfile, describeStyleSelect, isStyleSelectEnabled, setStyleSelectEnabled,
 } from '../services/styleSelectService';
@@ -23,6 +25,19 @@ import {
 
 // מנוהל ע"י פאנל המשוב על מסגרות המשפט.
 const FRAME_FEEDBACK_UPDATED_EVENT = 'wordai-frame-feedback-updated';
+// נורה ע"י savePersonalStyleProfile / styleDeltaService (dispatchProfileUpdated) — מוני
+// ההצעות והעריכות משתנים בלעדיו בלי שהפאנל יידע.
+const PERSONAL_STYLE_UPDATED_EVENT = 'wordai-personal-style-updated';
+
+// תוויות המקורות שמסמך יכול להיכנס מהם לקורפוס (styleSampleStore.source).
+const SAMPLE_SOURCE_LABELS = {
+  upload: 'העלאה',
+  paste: 'הדבקה',
+  'ai-context': 'טקסט שנשלח ל-AI',
+  'graded-submission': 'עבודות בדוקות',
+  'finished-doc': 'מסמכים שהושלמו באפליקציה',
+};
+const SAMPLE_SOURCE_ORDER = ['upload', 'paste', 'ai-context', 'graded-submission', 'finished-doc'];
 
 const INTENT_LABELS = {
   intro: 'פתיחה',
@@ -74,7 +89,10 @@ function fmt(n, digits = 1) {
 
 export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) {
   const [loading, setLoading] = useState(true);
-  const [state, setState] = useState({ opener: null, frame: null, targetsStatus: null, targets: null, lecturers: null, corpus: null });
+  const [state, setState] = useState({
+    opener: null, frame: null, targetsStatus: null, targets: null, lecturers: null, corpus: null,
+    sourceCounts: null, suggestionStats: null, deltaAgg: null, revisionNotesCount: 0,
+  });
   const [selectOn, setSelectOn] = useState(() => { try { return isStyleSelectEnabled(); } catch { return false; } });
   const [selectStatus, setSelectStatus] = useState(null);
 
@@ -90,13 +108,38 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
       ]);
     } catch {}
     let opener = null; let frame = null; let targetsStatus = null; let targets = null; let lecturers = null; let corpus = null;
+    let sourceCounts = null; let suggestionStats = null; let deltaAgg = null; let revisionNotesCount = 0;
     try { corpus = getSampleStoreStats(); } catch {}
     try { opener = getOpenerProfileStatus(); } catch {}
     try { frame = getFrameProfileStatus(); } catch {}
     try { targetsStatus = getStyleTargetsStatus(); } catch {}
     try { targets = getStyleTargets(); } catch {}
     try { lecturers = getLecturerProfilesStatus(); } catch {}
-    setState({ opener, frame, targetsStatus, targets, lecturers, corpus });
+    // פילוח הקורפוס לפי המקור שממנו המסמך נכנס (העלאה / הדבקה / נשלח ל-AI / עבודה בדוקה / הושלם באפליקציה).
+    try {
+      const counts = {};
+      for (const doc of (getSampleDocuments() || [])) {
+        const key = String(doc?.source || 'upload');
+        counts[key] = (counts[key] || 0) + 1;
+      }
+      sourceCounts = counts;
+    } catch {}
+    // מוני ההצעות + הערות הרוויזיה יושבים על פרופיל הסגנון האישי, לא על שירות ייעודי.
+    try {
+      const engine = getPersonalStyleProfile()?.styleEngine;
+      const ec = engine?.editCounters || {};
+      suggestionStats = {
+        accepted: Number(ec.aiSuggestionAccepted) || 0,
+        rejected: Number(ec.aiSuggestionRejected) || 0,
+        dismissed: Number(ec.aiSuggestionDismissed) || 0,
+      };
+      revisionNotesCount = Array.isArray(engine?.revisionFeedbackNotes) ? engine.revisionFeedbackNotes.length : 0;
+    } catch {}
+    try { deltaAgg = getDeltaAggregate(); } catch {}
+    setState({
+      opener, frame, targetsStatus, targets, lecturers, corpus,
+      sourceCounts, suggestionStats, deltaAgg, revisionNotesCount,
+    });
     setLoading(false);
   }, []);
 
@@ -109,6 +152,7 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
       window.addEventListener(STYLE_TARGETS_UPDATED_EVENT, run);
       window.addEventListener(FRAME_FEEDBACK_UPDATED_EVENT, run);
       window.addEventListener(LECTURER_PROFILES_UPDATED_EVENT, run);
+      window.addEventListener(PERSONAL_STYLE_UPDATED_EVENT, run);
     }
     return () => {
       alive = false;
@@ -117,6 +161,7 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
         window.removeEventListener(STYLE_TARGETS_UPDATED_EVENT, run);
         window.removeEventListener(FRAME_FEEDBACK_UPDATED_EVENT, run);
         window.removeEventListener(LECTURER_PROFILES_UPDATED_EVENT, run);
+        window.removeEventListener(PERSONAL_STYLE_UPDATED_EVENT, run);
       }
     };
   }, [load]);
@@ -136,13 +181,23 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
     setSelectOn((prev) => { setStyleSelectEnabled(!prev); return !prev; });
   }, []);
 
-  const { opener, frame, targetsStatus, targets, lecturers, corpus } = state;
+  const { opener, frame, targetsStatus, targets, lecturers, corpus, sourceCounts, suggestionStats, deltaAgg, revisionNotesCount } = state;
   const corpusDocs = Number(corpus?.docCount) || 0;
   const corpusWords = Number(corpus?.totalWords) || 0;
 
   const openerEmpty = !opener?.ready || !(opener.personalWords > 0);
   const frameEmpty = !frame?.ready || !(frame.minedFrames > 0);
   const targetsEmpty = !targets;
+
+  // "למידה מהשימוש" — נתונים שנצברים מהעבודה השוטפת ולא מהעלאת קורפוס.
+  const suggestionTotal = (suggestionStats?.accepted || 0) + (suggestionStats?.rejected || 0) + (suggestionStats?.dismissed || 0);
+  const styleEdits = Number(deltaAgg?.styleEdits) || 0;
+  const contentEdits = Number(deltaAgg?.contentEdits) || 0;
+  const sourceRows = SAMPLE_SOURCE_ORDER
+    .map((k) => [k, Number(sourceCounts?.[k]) || 0])
+    .filter(([, n]) => n > 0);
+  const notesCount = Number(revisionNotesCount) || 0;
+  const hasUsageData = suggestionTotal > 0 || styleEdits > 0 || contentEdits > 0 || sourceRows.length > 0 || notesCount > 0;
 
   return (
     <div dir="rtl" style={{ display: 'block' }}>
@@ -199,6 +254,33 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
           ))}
         </div>
       </Section>
+
+      {hasUsageData ? (
+        <Section title="🔄 למידה מהשימוש">
+          {suggestionTotal > 0 ? (
+            <div>
+              הצעות AI: אושרו {suggestionStats.accepted} · נדחו {suggestionStats.rejected} · נסגרו בלי שימוש {suggestionStats.dismissed}
+            </div>
+          ) : null}
+          {(styleEdits > 0 || contentEdits > 0) ? (
+            <div style={{ marginTop: 3 }}>
+              עריכות שנותחו: {styleEdits} סגנון · {contentEdits} תוכן
+              <span style={{ opacity: 0.75 }}> — תיקונים ידניים שלך על טקסט שנכתב במנוע.</span>
+            </div>
+          ) : null}
+          {sourceRows.length ? (
+            <div style={{ marginTop: 6 }}>
+              מסמכים בקורפוס לפי מקור:
+              {sourceRows.map(([k, n]) => (
+                <div key={k}>• {SAMPLE_SOURCE_LABELS[k] || k}: {n}</div>
+              ))}
+            </div>
+          ) : null}
+          {notesCount > 0 ? (
+            <div style={{ marginTop: 6 }}>הערות רוויזיה שנשמרו: {notesCount}</div>
+          ) : null}
+        </Section>
+      ) : null}
 
       <div style={CARD_STYLE}>
         <div style={TITLE_STYLE}>🧑‍🏫 לקחים ממרצים</div>

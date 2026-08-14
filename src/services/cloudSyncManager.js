@@ -61,6 +61,12 @@ const CLOUD_PROFILE_APP_SETTING_KEYS = [
   "wordai_shortcuts",
   "wordai_assistant_behavior",
   "wordai_skills_config",
+  // ⚠️ סקילים שהמשתמש העלה — הכי כבד ברשימה. כל המפתחות כאן מצטרפים למסמך
+  // Firestore **אחד** עם תקרת 1MB (אותה סיבה שטקסט הסגנון הגולמי מוחרג מהסנכרון,
+  // ר' styleSampleStore.js:6-8). החשבון: MAX_CUSTOM_SKILLS=20 × SKILL_FILE_MAX_CHARS=8000
+  // ≈ 160KB, ועברית ב-UTF-8 היא 2 בייט לתו ⇒ ~320KB במקרה הגרוע. נכנס, אבל זה
+  // כבר שליש מהתקרה — מי שמעלה את אחת התקרות (ב-skillFileImport.js) חייב לחשב מחדש.
+  "wordai_custom_skills",
   "wordai_word_preferences",
   "wordai_personal_style",
   "wordai_workspace_automation",

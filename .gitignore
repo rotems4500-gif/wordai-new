@@ -72,6 +72,7 @@ tools/test-bench/lab-results/
 # onnxruntime-web WASM — נגזר מ-node_modules ע"י scripts/copy-ort-wasm.mjs
 public/ort/
 tools/test-bench/.scaffolde2e-scratch/
+tools/test-bench/.styleprobe-scratch/
 tools/test-bench/.verify-scratch/
 
 # tesseract self-hosted — נגזר מ-node_modules ע"י scripts/copy-tesseract.mjs

@@ -120,16 +120,98 @@ const stdDev = (arr) => {
   return Math.sqrt(variance);
 };
 
+// ---------- סינון טקסט לא-אוטוריאלי (פרוזה בלבד) ----------
+//
+// נמדד על הקורפוס האמיתי של המשתמש (33 עבודות, 10.8.26): המדידה כאן, שרצה על
+// הטקסט הגולמי, אמרה **43,622 מילים · avgSentenceWords 14 · avgParagraphWords
+// 29.97 · oneWordSentenceRate 0.20**. styleTargetsService — שמסנן לבלוקי פרוזה —
+// מדד על אותו קורפוס בדיוק **28,903 מילים · sentLen 17.1 · paraSents 2.65**.
+// הפער, 14,719 מילים (34% מהקורפוס), הוא עמודי שער, ביבליוגרפיה, כותרות סעיפים
+// והצהרת השימוש בבינה מלאכותית שהמוסד מחייב. כלומר שליש מהמדידה — וגם מהכרייה —
+// לא נכתב על ידי המשתמש, והמספרים המוטים האלה נשלחו גם בתוך הפרומפט החיצוני
+// ("~14 מילים" במקום 17.1).
+//
+// ⚠️ הכללים כאן הם **העתק** של extractProseBlocks ב-styleTargetsService.js — שם
+// מקור-האמת, ומשם המספרים המאומתים. לא מייבאים משם: styleTargetsService מייבא
+// *מכאן* וייבוא הפוך הוא מעגל בזמן טעינה. **שינוי בכלל אחד מחייב שינוי בשני.**
+// ההבדל המכוון היחיד: טוקניזציה ב-matchWords המקומי במקום tokenizeForStyle —
+// אותה הגדרת מילה, בלי לגרור לכאן את styleFingerprintService.
+const MIN_PROSE_BLOCK_WORDS = 8;
+
+// טקסט שאינו של המשתמש **גם כשהוא פרוזה תקנית**. הרשימה קטנה ומכוונת: כל דפוס
+// כאן חייב להיות ניסוח קבוע שמוכתב מבחוץ, לא נושא שהמשתמש נוטה לכתוב עליו.
+// המאומת בקורפוס: הצהרת השימוש ב-AI — היא שהפיקה את ביטוי-החתימה מספר 1
+// ("באופן + תואר", משקל 0.95, docFraction 0.818) ואת "עבודה זו" (0.78).
+// להרחבה: להוסיף כאן שורה, ורק אחרי שראו את הבלוק בפועל בקורפוס.
+const NON_AUTHORIAL_BLOCK_PATTERNS = [
+  /נעזרתי\s+בבינה\s+מלאכותית/,
+  /הצהרה\s+על\s+שימוש\s+בבינה\s+מלאכותית/,
+  /שימוש\s+בבינה\s+מלאכותית\s+ב(?:הכנת|עבודה|כתיבת)/,
+  /במהלך\s+הכנת\s+עבודה\s+זו\s+נעזרתי/,
+  // שורות שער — "תווית: ערך" בתחילת בלוק.
+  /^\s*(?:שם\s+הקורס|מספר\s+הקורס|שם\s+המרצה|שם\s+המנחה|מגיש[יה]?\s+העבודה|מגישים|שם\s+הסטודנט(?:ית)?|תעודת\s+זהות|ת\.?\s?ז\.?|תאריך\s+הגשה|מועד\s+הגשה)\s*:/,
+  // כותרות מבניות שלעיתים מגיעות עם נקודה בסוף ולכן שורדות את מבחן הפיסוק.
+  /^\s*(?:רשימה\s+ביבליוגרפית|ביבליוגרפיה|רשימת\s+מקורות|מקורות|תוכן\s+עניינים)\s*\.?\s*$/,
+];
+
+const isNonAuthorialBlock = (block) =>
+  NON_AUTHORIAL_BLOCK_PATTERNS.some((re) => re.test(block));
+
+/**
+ * בלוקי הפרוזה האוטוריאלית של טקסט (אחרי stripToText).
+ *
+ * הפיצול על `\n+` ולא על `\n{2,}` הוא בכוונה, מאותה סיבה כמו במקור:
+ * mammoth מפריד בשורה אחת ומחלצים אחרים בשתיים.
+ *
+ * @param {string} text
+ * @param {{requireTerminalEnd?:boolean}} opts
+ *   requireTerminalEnd=false — כלל מקל לכרייה: ה-chunk store חותך פסקה ארוכה כל
+ *   ~160 מילים ולא תמיד בגבול משפט, ולכן בלוק שנחתך באמצע משפט עדיין נחשב פרוזה
+ *   אם יש בו לפחות גבול משפט אחד. המדידה משתמשת בכלל המחמיר (=המקור).
+ * @returns {string[]}
+ */
+export function extractAuthorialProseBlocks(text, { requireTerminalEnd = true } = {}) {
+  return String(text || '')
+    .split(/\n+/)
+    .map((b) => b.trim())
+    .filter(Boolean)
+    .filter((b) => !isNonAuthorialBlock(b))
+    .filter((b) => (requireTerminalEnd ? /[.!?]\s*$/.test(b) : /[.!?]/.test(b)))
+    .filter((b) => matchWords(b).length >= MIN_PROSE_BLOCK_WORDS);
+}
+
+/**
+ * הטקסט האוטוריאלי כמחרוזת אחת, בלוק לפסקה.
+ * אם לא נמצא ולו בלוק פרוזה אחד — חילוץ חריג (טקסט בלי סימני סיום בסוף שורה,
+ * למשל OCR או PDF שנשבר) — נופלים חזרה לטקסט המלא בניכוי ה-boilerplate בלבד.
+ * החזרת null במקרה הזה הייתה מאפסת פרופיל של משתמש קיים, וזה מחיר גבוה מדי
+ * לעומת מדידה פחות נקייה על מסמך שממילא אינו פרוזה.
+ */
+const authorialProseText = (clean) => {
+  const blocks = extractAuthorialProseBlocks(clean);
+  if (blocks.length) return blocks.join('\n\n');
+  return String(clean || '')
+    .split(/\n+/)
+    .map((b) => b.trim())
+    .filter(Boolean)
+    .filter((b) => !isNonAuthorialBlock(b))
+    .join('\n\n');
+};
+
 // ---------- computeLocalMetrics ----------
 
 /**
  * מחשב מדדי סגנון מקומיים (חינם, עברית-aware) מטקסט יחיד.
+ * מודד **פרוזה אוטוריאלית בלבד** (ר' הבלוק שמעל) — שער, ביבליוגרפיה, כותרות
+ * והצהרות מוסד אינם כתיבה של המשתמש ואינם נספרים.
  * מחזיר null אם פחות מ-25 מילים (מקביל ל-guard של styleAuthenticityService).
  * @param {string} text
  * @returns {object|null}
  */
 export function computeLocalMetrics(text) {
-  const clean = stripToText(text);
+  const raw = stripToText(text);
+  if (!raw) return null;
+  const clean = authorialProseText(raw);
   if (!clean) return null;
 
   const allWords = matchWords(clean);
@@ -218,6 +300,12 @@ export function computeLocalMetrics(text) {
   const connectorFrequencyCapped = Object.fromEntries(
     Object.entries(connectorFrequency).sort((a, b) => b[1] - a[1]).slice(0, 15),
   );
+  // ⚠️ connectorFrequency נחתך ל-15 המובילים, ולכן היעדר מילה ממנו **אינו** אומר
+  // שהמשתמש לא כותב אותה — רק שהיא לא נכנסה לרשימה. נמדד (10.8.26): בגלל זה
+  // computeConnectorContrasts הורה 'העדף "בנוסף" (לא "כמו כן")' לכותב שכן כותב
+  // "כמו כן". connectorsUsed הוא הרשימה המלאה והלא-חתוכה של מה שנמדד בפועל
+  // (מחרוזות בלבד, ~30 לכל היותר) — הוא זה שמבדיל אפס-אמיתי מנפילה-מהחיתוך.
+  const connectorsUsed = Object.keys(connectorFrequency);
 
   // Type-Token Ratio על 800 מילים ראשונות (מילים ≥2 תווים), למניעת הטיית אורך.
   const ttrWords = allWords
@@ -265,6 +353,7 @@ export function computeLocalMetrics(text) {
     parenthesesDensity,
     punctuationDensity,
     connectorFrequency: connectorFrequencyCapped,
+    connectorsUsed,
     typeTokenRatio,
     openerRepetitionRate,
     avgParagraphWords,
@@ -353,6 +442,10 @@ export function aggregateDocumentMetrics(perDocMetricsList) {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 15),
   );
+  // איחוד לא-חתוך של מילות הקישור שנמדדו בפועל בכל המסמכים (ר' ההערה ב-computeLocalMetrics).
+  const connectorsUsed = Array.from(new Set(
+    list.flatMap((m) => (Array.isArray(m.connectorsUsed) ? m.connectorsUsed : Object.keys(m.connectorFrequency || {}))),
+  ));
 
   const metrics = {
     wordCount: totalWordCount,
@@ -367,6 +460,7 @@ export function aggregateDocumentMetrics(perDocMetricsList) {
     parenthesesDensity: round(wm('parenthesesDensity'), 2),
     punctuationDensity,
     connectorFrequency,
+    connectorsUsed,
     typeTokenRatio: round(wm('typeTokenRatio'), 3),
     openerRepetitionRate: round(wm('openerRepetitionRate'), 3),
     avgParagraphWords: round(wm('avgParagraphWords'), 2),
@@ -647,6 +741,38 @@ const DEFAULT_EDIT_COUNTERS = () => ({
 const CAP_PATTERNS = 30;
 const CAP_BLACKLIST = 50;
 const CAP_NEGATIVE = 12;
+// A2/A5 — avoidedPhrases: מחרוזות ליטרליות שמזינות את blacklist.auto.
+const CAP_AVOIDED_PHRASES = 20;
+const CAP_AVOIDED_PHRASE_LEN = 80;
+// A2/A6 — structuralSignature: חתימה מבנית ברמת העבודה כולה (לא ברמת המשפט).
+// 5 מפתחות קבועים, כל ערך משפט קצר; מפתח לא ידוע = '' (אף פעם לא null).
+const STRUCTURAL_SIGNATURE_KEYS = ['opening', 'closing', 'thesisPlacement', 'sectionFlow', 'firstPersonUsage'];
+const CAP_STRUCTURAL_VALUE_LEN = 200;
+
+const EMPTY_STRUCTURAL_SIGNATURE = () => ({
+  opening: '',
+  closing: '',
+  thesisPlacement: '',
+  sectionFlow: '',
+  firstPersonUsage: '',
+});
+
+/**
+ * מנרמל structuralSignature לאובייקט בעל בדיוק 5 המפתחות הידועים, כל ערך מחרוזת
+ * מקוצצת ל-200 תווים. קלט לא-תקין/חסר → כל הערכים ''. לעולם לא מחזיר null.
+ * @param {any} raw
+ * @returns {{opening:string, closing:string, thesisPlacement:string, sectionFlow:string, firstPersonUsage:string}}
+ */
+const normalizeStructuralSignature = (raw) => {
+  const src = isPlainObject(raw) ? raw : {};
+  const out = EMPTY_STRUCTURAL_SIGNATURE();
+  STRUCTURAL_SIGNATURE_KEYS.forEach((k) => {
+    const v = src[k];
+    if (typeof v !== 'string' && typeof v !== 'number') return;
+    out[k] = String(v).trim().slice(0, CAP_STRUCTURAL_VALUE_LEN);
+  });
+  return out;
+};
 
 const cleanStringArray = (arr, cap) => {
   if (!Array.isArray(arr)) return [];
@@ -706,6 +832,21 @@ const normalizeQualityHistory = (arr) => {
   }
   // שומר את האחרונות (cap 20).
   return out.slice(-CAP_QUALITY_HISTORY);
+};
+
+// הערות רוויזיה שהמשתמש כתב בחופשי ("קצר מדי", "יותר משפטי") — { text≤200, at }.
+// אין סינתזה אוטומטית מהן (החלטה מכוונת: 1-2 דגימות מטות פרופיל). cap 12, שומר את האחרונות.
+const CAP_REVISION_FEEDBACK = 12;
+const normalizeRevisionFeedbackNotes = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const item of arr) {
+    if (!isPlainObject(item)) continue;
+    const text = String(item.text || '').trim().slice(0, 200);
+    if (!text) continue;
+    out.push({ text, at: Math.max(0, Math.round(toNum(item.at, 0))) });
+  }
+  return out.slice(-CAP_REVISION_FEEDBACK);
 };
 
 /**
@@ -784,6 +925,11 @@ export function normalizeStyleEngine(raw) {
     dashRemoved: Math.max(0, Math.round(toNum(ecSrc.dashRemoved, 0))),
     totalEditsObserved: Math.max(0, Math.round(toNum(ecSrc.totalEditsObserved, 0))),
     editsSinceSynthesis: Math.max(0, Math.round(toNum(ecSrc.editsSinceSynthesis, 0))),
+    // תוצאות הצעות AI (אשר/דחה/נסגר בלי הוספה) — ראה recordSuggestionOutcome ב-styleDeltaService.
+    // מונים בלבד; טקסט AI שאושר לעולם אינו נכנס לקורפוס (לולאת משוב).
+    aiSuggestionAccepted: Math.max(0, Math.round(toNum(ecSrc.aiSuggestionAccepted, 0))),
+    aiSuggestionRejected: Math.max(0, Math.round(toNum(ecSrc.aiSuggestionRejected, 0))),
+    aiSuggestionDismissed: Math.max(0, Math.round(toNum(ecSrc.aiSuggestionDismissed, 0))),
   };
 
   const qualitativePatterns = (Array.isArray(src.qualitativePatterns) ? src.qualitativePatterns : [])
@@ -829,6 +975,11 @@ export function normalizeStyleEngine(raw) {
     genreProfiles,
     qualitativePatterns,
     negativeSpace: cleanStringArray(src.negativeSpace, CAP_NEGATIVE),
+    // A6 — חתימה מבנית ברמת העבודה (איך פותח/מסיים/ממקם תזה/משרשר סעיפים/גוף ראשון).
+    // ברירת מחדל: 5 מפתחות עם '' — לא null, כדי שקוראים לא יצטרכו שומרים. הנרמול
+    // הזה מפיל שדות לא-מוכרים, ולכן בלי הכניסה הזו השדה היה נמחק בכל round-trip.
+    // avoidedPhrases *לא* יושב כאן במכוון — הוא מוזן לתוך blacklist.auto.
+    structuralSignature: normalizeStructuralSignature(src.structuralSignature),
     // קיורציה — מפתחות קנוניים של דפוסים שהמשתמש דחה ("לא אני"): מסוננים מרכזית
     // ב-runQualitativeAnalysis כדי לשרוד ניתוח מחדש. cap 60.
     rejectedPatternKeys: cleanStringArray(src.rejectedPatternKeys, 60),
@@ -848,6 +999,8 @@ export function normalizeStyleEngine(raw) {
     // feedback-loop: היסטוריית איכות פלט מתגלגלת (cap 20). default [] סופג ישנים
     // ללא bump ל-schemaVersion. משפיע על confidence דרך qualityAdjustment.
     qualityHistory: normalizeQualityHistory(src.qualityHistory),
+    // משוב חופשי מרוויזיות ("תקצר", "יותר פורמלי") — תיעוד בלבד, cap 12. ראה recordRevisionFeedback.
+    revisionFeedbackNotes: normalizeRevisionFeedbackNotes(src.revisionFeedbackNotes),
     embeddingMeta: isPlainObject(src.embeddingMeta)
       ? {
           available: src.embeddingMeta.available === true,
@@ -859,6 +1012,9 @@ export function normalizeStyleEngine(raw) {
           at: Math.max(0, Math.round(toNum(src.embeddingMeta.at, 0))),
         }
       : {},
+    // ⚠️ רשימת-היתר: מפתח שלא רשום כאן נמחק בכל שמירה (saveEngine מנרמל לפני persist).
+    // externalBatches/structuralKeysLearned/avoidedPhrasesAdded נכתבו ב-finishQualitativeMerge
+    // ולא שרדו — כל מפתח extractionMeta חדש חייב להתווסף גם כאן.
     extractionMeta: isPlainObject(src.extractionMeta)
       ? {
           batches: Math.max(0, Math.round(toNum(src.extractionMeta.batches, 0))),
@@ -867,6 +1023,11 @@ export function normalizeStyleEngine(raw) {
           at: Math.max(0, Math.round(toNum(src.extractionMeta.at, 0))),
           llmBatchesFailed: Math.max(0, Math.round(toNum(src.extractionMeta.llmBatchesFailed, 0))),
           genreClassificationFailed: src.extractionMeta.genreClassificationFailed === true,
+          externalBatches: Math.max(0, Math.round(toNum(src.extractionMeta.externalBatches, 0))),
+          structuralKeysLearned: Math.max(0, Math.min(5, Math.round(toNum(src.extractionMeta.structuralKeysLearned, 0)))),
+          avoidedPhrasesAdded: Math.max(0, Math.round(toNum(src.extractionMeta.avoidedPhrasesAdded, 0))),
+          // כמה ביטויים נדחו מהרשימה השחורה כי הקורפוס מראה שהכותב דווקא משתמש בהם.
+          avoidedPhrasesRejected: Math.max(0, Math.round(toNum(src.extractionMeta.avoidedPhrasesRejected, 0))),
         }
       : {},
   };
@@ -1133,9 +1294,23 @@ export function computeConnectorContrasts(metrics) {
     const runnerUp = present[1];
     const qualifies = runnerUp ? top.f >= 2 * runnerUp.f : top.f > 0.1;
     if (!qualifies) return;
-    // "over": שאר המילים בקבוצה שקיימות בלקסיקון (STYLE_CONNECTORS) — כלומר יכלו
-    // להימדד — פרט למוביל עצמו (בין אם נמדדו בפועל ובין אם freq=0 אצל המשתמש).
-    const over = group.filter((w) => w !== top.w && STYLE_CONNECTORS.includes(w));
+    // "over" = רק מילות קישור שהמשתמש באמת כמעט לא כותב.
+    // ⚠️ עד 10.8.26 זה כלל כל מילה בקבוצה שקיימת בלקסיקון — גם כזו שהמשתמש כותב
+    // בפועל. נמדד על קורפוס אמיתי: הבלוק הורה 'העדף "בנוסף" (לא "כמו כן")' לכותב
+    // שכותב "כמו כן", בדיוק כמו הרשימה השחורה שאסרה עליו את מילות הקישור שלו עצמו.
+    // ⚠️ אסור להסתמך על היעדר מ-connectorFrequency: הוא חתוך ל-15 המובילים.
+    // connectorsUsed הוא הרשימה המלאה, ולכן הוא זה שקובע "בשימוש" מול "לא בשימוש";
+    // אם הוא חסר (פרופיל ישן) — נופלים לסף יחסי ולא מניחים אפס.
+    const MINOR_CONNECTOR_RATIO = 0.25;
+    const usedList = isPlainObject(metrics) && Array.isArray(metrics.connectorsUsed)
+      ? metrics.connectorsUsed
+      : null;
+    const used = usedList ? new Set(usedList) : null;
+    const over = group.filter((w) => {
+      if (w === top.w || !STYLE_CONNECTORS.includes(w)) return false;
+      if (used) return !used.has(w);
+      return toNum(freq[w], 0) <= top.f * MINOR_CONNECTOR_RATIO;
+    });
     if (!over.length) return;
     contrasts.push({
       prefer: top.w,
@@ -1183,6 +1358,30 @@ const roundDisplay = (value, digits = 0) => {
   return Math.round(n * factor) / factor;
 };
 
+// A8 — סקשן החתימה המבנית בבלוק ההזרקה. תקציב קשיח כדי לא לפרוץ את ~350 המילים
+// של הבלוק כולו: ~40 מילים לכל הסקשן, ~12 לערך בודד.
+const STRUCTURE_SECTION_WORD_BUDGET = 40;
+const STRUCTURE_VALUE_WORD_CAP = 12;
+// תוויות שם-עצם (לא "פותח ב") — הערכים עצמם כבר מנוסחים כפעולה, ותווית פועל
+// יוצרת כפילות מגושמת ("פותח ב: פותח בהגדרת מונח").
+const STRUCTURAL_SIGNATURE_LABELS = {
+  opening: 'פתיחה',
+  closing: 'סיום',
+  thesisPlacement: 'מיקום התזה',
+  sectionFlow: 'שרשור סעיפים',
+  firstPersonUsage: 'גוף ראשון',
+};
+
+const countWords = (text) => String(text || '').trim().split(/\s+/).filter(Boolean).length;
+
+// חיתוך לפי מילים (לא תווים) — שומר על משפט קריא בעברית. 0/שלילי → ''.
+const truncateWords = (text, maxWords) => {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length || maxWords <= 0) return '';
+  if (words.length <= maxWords) return words.join(' ');
+  return `${words.slice(0, maxWords).join(' ')}…`;
+};
+
 // ספי-רצפה ל-std בחישוב zPop של עוגני-המדד (כשאין std-קורפוס אמין לאוכלוסייה).
 const METRIC_POP_STD_FLOOR = {
   avgSentenceWords: 3,
@@ -1197,6 +1396,20 @@ const POP_DISTINCTIVE_Z = 0.8;
  * האם להזריק עוגן-מדד: כן אם אין נתוני-אוכלוסייה למדד (graceful), או שהמשתמש חורג
  * מהנורמה האוכלוסייתית (zPop ≥ סף). מדד "רגיל" (קרוב לאוכלוסייה) מושמט — הוא לא מלמד
  * את המודל דבר ורק מדלל את הבלוק.
+ *
+ * ⚠️ תוקף ההשוואה אחרי סינון הפרוזה (10.8.26) — **נבדק, והוא נשמר; השער לא שונה.**
+ * נכס-הייחוס נבנה ב-tools/style-reference-build/lib.mjs, שהוא פורט של
+ * computeLocalMetrics **לפני** הסינון — כלומר צד האוכלוסייה לא סונן ברמת הבלוק,
+ * וצד המשתמש כן. אלא שקורפוס-הייחוס כבר מסונן ברמת ה**מסמך**: ויקיפדיה + מקורות
+ * אקדמיים, בלי עמודי שער, בלי הצהרות מוסד, ועם הדחייה המפורשת של טקסט לא-פרוזאי
+ * (<3 סימני סיום ל-100 מילים) ושל חילוץ מפורק (>0.25 משפטי מילה-שתיים). כלומר
+ * הצד ה"מזוהם" היה צד המשתמש בלבד, והסינון מקרב את שתי ההגדרות ולא מרחיק אותן.
+ * האישור המספרי: avgSentenceWords באוכלוסייה = 17.106 (std 4.07), והמשתמש עובר
+ * מ-14 (z=0.76) ל-17.1 (z≈0.00) — כלומר אחרי הסינון הוא **נוחת על ממוצע
+ * האוכלוסייה**, מה שלא היה קורה אילו הסינון היה מטה את המדידה. שתי ההכרעות
+ * ממילא זהות (שתיהן מתחת ל-0.8 ⇒ לא מוזרק), וכך גם ב-avgParagraphWords
+ * (29.97 ⇒ z=0.53 מול ~45 ⇒ z=0.22). לרענון מלא: לבנות מחדש את נכס-הייחוס אחרי
+ * שהפורט ב-lib.mjs יסונכרן עם הסינון כאן.
  * @param {object} reference  נכס-הייחוס (או {}/null)
  * @param {string} key
  * @param {number} userVal
@@ -1218,11 +1431,14 @@ const shouldInjectMetricAnchor = (reference, key, userVal, genreName) => {
 /**
  * בונה בלוק הזרקה עברי רזה (~≤350 מילים) מהפרופיל, או '' אם אין מה להזריק.
  * @param {object} styleEngine
- * @param {{seed?:number, chunkBlock?:string, genre?:string, reference?:object}} opts
+ * @param {{seed?:number, chunkBlock?:string, genre?:string, reference?:object, patternCount?:number, includeStructure?:boolean}} opts
  *   reference — נכס-ייחוס האוכלוסייה (מקורא async), אחרת נלקח מהמטמון הסינכרוני.
+ *   includeStructure — ברירת מחדל true. הנחיית מבנה ברמת הסעיף/העבודה (פתיחה,
+ *   מיקום תזה, סיום, שרשור סעיפים) הגיונית רק ביצירת מסמך שלם; בשכתוב פסקה בודדת
+ *   או משפט היא רעש שמושך את המודל לכתוב פתיח/סיכום שלא ביקשו ממנו — שם העבר false.
  * @returns {string}
  */
-export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null, reference = null, patternCount = 5 } = {}) {
+export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlock = '', genre = null, reference = null, patternCount = 5, includeStructure = true } = {}) {
   if (!isPlainObject(styleEngine) || styleEngine.enabled === false) return '';
 
   // E3 — כשיש ז'אנר תואם עם תת-פרופיל מדדים → משתמשים ב-metrics/metricsSpread שלו
@@ -1308,6 +1524,21 @@ export function buildStyleEngineInjectionBlock(styleEngine, { seed = 0, chunkBlo
     }
 
     if (anchors.length) lines.push(...anchors);
+  }
+
+  // 1ב. חתימה מבנית (A8) — רק ערכים לא-ריקים, תקציב ~40 מילים לכל הסקשן.
+  if (includeStructure) {
+    const sig = normalizeStructuralSignature(styleEngine.structuralSignature);
+    const structBits = [];
+    let budget = STRUCTURE_SECTION_WORD_BUDGET;
+    STRUCTURAL_SIGNATURE_KEYS.forEach((k) => {
+      if (budget <= 0) return;
+      const value = truncateWords(sig[k], Math.min(budget, STRUCTURE_VALUE_WORD_CAP));
+      if (!value) return;
+      structBits.push(`${STRUCTURAL_SIGNATURE_LABELS[k]}: ${value}`);
+      budget -= countWords(value) + 2; // +2 ≈ התווית עצמה
+    });
+    if (structBits.length) lines.push(`מבנה אופייני: ${structBits.join(' · ')}.`);
   }
 
   // 2. דפוסים ברוטציה. patternCount ברירת-מחדל 5 (הזרקה שוטפת); הייצוא ל-AI חיצוני
@@ -1416,8 +1647,12 @@ export function deriveAutoBlacklist(styleEngine) {
 
 // ---------- buildPatternExtractionPrompt ----------
 
+// 8 סוגי דפוסים. שלושת האחרונים (citation/argument_move/transition) נוספו כדי לתפוס
+// את מה שחמשת הראשונים החמיצו: איך הכותב מייחס טענות, איך הוא בונה טיעון, ואיך הוא
+// עובר בין רעיונות. הרחבה בלבד — סוגים ותיקים ממשיכים לעבור כרגיל.
 const VALID_PATTERN_TYPES = new Set([
   'signature_phrase', 'structure', 'lexical_habit', 'punctuation', 'register',
+  'citation', 'argument_move', 'transition',
 ]);
 
 // תוויות עבריות לסוגי דפוסים — מקור-אמת יחיד (משמש גם ב-StyleProfilePanel וגם
@@ -1428,6 +1663,9 @@ export const PATTERN_TYPE_LABELS = {
   lexical_habit: 'הרגל מילולי',
   punctuation: 'פיסוק',
   register: 'רגיסטר',
+  citation: 'ציטוט והפניה',
+  argument_move: 'מהלך טיעון',
+  transition: 'מעבר',
 };
 
 // תוויות רמת-ודאות — מקור-אמת יחיד (נצרך ב-StyleSetupFlow / StyleProfilePanel).
@@ -1442,15 +1680,56 @@ const PATTERN_SCHEMA_INSTRUCTIONS = [
   '',
   'לכל דפוס החזר:',
   '- label: תיאור קצר בעברית של הדפוס',
-  '- type: אחד מ- signature_phrase | structure | lexical_habit | punctuation | register',
+  '- type: אחד מ- signature_phrase | structure | lexical_habit | punctuation | register | citation | argument_move | transition',
   '- weight: מספר 0-1 (עד כמה הדפוס דומיננטי אצלו)',
   '- evidence: ציטוט ראיה מילולי אחד מהטקסט (חובה)',
   '',
-  'בנוסף, זהה negativeSpace — מה הכותב הזה לעולם *לא* עושה',
-  '(שאלות רטוריות? הומור? סימני קריאה? משפטים בני מילה אחת? מטפורות?).',
+  'שלושת הסוגים החדשים — התייחס אליהם במפורש:',
+  '- citation — איך הכותב מביא מקורות ומייחס טענות: ציטוט ישיר מול פרפרזה, "כפי שטוען X" מול "(X, 2020)", ואיפה הוא ממקם את ההפניה במשפט (בתחילתו, באמצעו או בסופו).',
+  '- argument_move — איך הוא בונה טיעון: פותח בטענה או בהקשר, איך הוא מודה בטענת-נגד, ואיך הוא מפריך אותה.',
+  '- transition — איך הוא עובר בין רעיונות ובין פסקאות (מילת קישור? משפט-גשר? חזרה על מונח מהפסקה הקודמת?).',
+  // ⚠️ נמדד על קורפוס אמיתי (10.8.26): citation ו-argument_move חזרו יפה, אבל
+  // transition חזר 0 — המודל בלע את המעברים לתוך תיאור מבנה כללי במקום לתייג אותם.
+  // התיקון: דוגמה קונקרטית + איסור מפורש לקפל מעברים לתוך structure.
+  '  חובה לבדוק את **התפר בין פסקה לפסקה** ולא רק את מבנה הסעיף. דוגמה לדפוס transition תקין:',
+  '  "פותח פסקה בחזרה על המונח שסגר את הפסקה הקודמת" · "מקשר פסקאות ב\'לצד זאת\' בתחילת משפט".',
+  '  אם ההרגל הוא על מעבר בין רעיונות — תייג אותו transition, לא structure.',
+  '',
+  // negativeSpace הופך בהמשך ל"לעולם לא" מוחלט בכל פרומפט. נמדד (10.8.26):
+  // המודל החזיר "ציטוטים ישירים ממקורות (העדפה לפרפרזה)" — כלל **תוכן** שהיה
+  // מדכא ציטוט ישיר בכתיבה אקדמית. לכן ההנחיה מוגבלת מפורשות לרובד הסגנוני.
+  'בנוסף, זהה negativeSpace — אילו **אמצעים סגנוניים-רטוריים** נעדרים מהכתיבה שלו',
+  '(שאלות רטוריות? הומור או אירוניה? סימני קריאה? משפטים בני מילה אחת? מטפורות ודימויים? פנייה ישירה לקורא? סוגריים? קיצורים דיבוריים?).',
+  'אך ורק צורת ניסוח — **אסור** להחזיר כאן כללים על ציטוט והפניה, על בחירת מקורות,',
+  'על ראיות, על עומק הניתוח או על תוכן: אלה החלטות מחקר ולא הרגלי סגנון, וכלל כזה',
+  'ייאכף כאיסור מוחלט ויפגע בכתיבה. אם אין היעדרות סגנונית ברורה — החזר [] ריק.',
   '',
   'החזר JSON בלבד, ללא טקסט נוסף וללא הסברים:',
   '{ "patterns": [ { "label": "...", "type": "...", "weight": 0.0, "evidence": "..." } ], "negativeSpace": [ "..." ] }',
+];
+
+// A2 — בלוק "עומק" משותף לפרומפט הפנימי (opts.deep) ולחיצוני. שני מפתחות עליונים
+// נוספים: structuralSignature (ארכיטקטורה ברמת העבודה) ו-avoidedPhrases (מחרוזות
+// ליטרליות שמזינות את ה-blacklist). avoidedPhrases שונה מ-negativeSpace: השני הוא
+// התנהגות ("שאלות רטוריות"), הראשון הוא ניסוחים מדויקים שהכותב נמנע מהם.
+const DEEP_SCHEMA_INSTRUCTIONS = [
+  'בנוסף לדפוסים, זהה שני דברים ברמה גבוהה יותר:',
+  '',
+  '1. structuralSignature — הארכיטקטורה של העבודה כולה (לא של משפט בודד):',
+  '- opening: איך הוא פותח עבודה (בשאלה? בהקשר היסטורי? בהגדרת מונח? בציטוט?).',
+  '- closing: איך הוא מסיים (סיכום? השלכות? הסתייגות? שאלה פתוחה?).',
+  '- thesisPlacement: איפה הוא ממקם את טענת התזה (בפסקה הראשונה? בסוף המבוא? מפוזרת?).',
+  '- sectionFlow: איך הוא משרשר סעיפים זה לזה (כותרות ממוספרות? פסקת מעבר? הכרזה מראש על המבנה?).',
+  '- firstPersonUsage: איך הוא מתייחס לעצמו ("אני טוען" / "העבודה תטען" / סביל בלבד).',
+  'כל ערך — משפט קצר אחד בעברית. שדה שלא ניתן ללמוד מהטקסט — החזר "".',
+  '',
+  '2. avoidedPhrases — ניסוחים מדויקים שכותבים אקדמיים אחרים משתמשים בהם והכותב הזה',
+  'נמנע מהם בעקביות (למשל "חשוב לציין", "בעידן המודרני"). מחרוזות ליטרליות בלבד,',
+  'לא תיאור התנהגות — תיאורי התנהגות שייכים ל-negativeSpace.',
+  '',
+  'אל תמציא — שדה לא ידוע החזר "" או [].',
+  'הוסף לפלט גם:',
+  '"structuralSignature": {"opening":"","closing":"","thesisPlacement":"","sectionFlow":"","firstPersonUsage":""}, "avoidedPhrases": []',
 ];
 
 // סכימת style/coverPageDefaults לפרומפט החיצוני — ליטרל מילולי המועתק מ-aiService.js
@@ -1459,10 +1738,14 @@ const EXTERNAL_STYLE_SCHEMA_LINE = '{"profileSummary":"","style":{"defaultAudien
 
 /**
  * בונה את פרומפט חילוץ הדפוסים האיכותניים (עברי, §6 שלב 2).
+ * opts.deep=true מוסיף את בלוק ה-structuralSignature/avoidedPhrases (A2) — כבוי
+ * כברירת מחדל כדי לשמור זהות-ביטים לפרומפט הקיים במסלולי הבאטץ' הישנים.
  * @param {string[]} excerpts
+ * @param {{deep?:boolean}} opts
  * @returns {string}
  */
-export function buildPatternExtractionPrompt(excerpts) {
+export function buildPatternExtractionPrompt(excerpts, opts = {}) {
+  const deep = isPlainObject(opts) && opts.deep === true;
   const joined = (Array.isArray(excerpts) ? excerpts : [])
     .map((e) => String(e || '').trim())
     .filter(Boolean)
@@ -1474,6 +1757,9 @@ export function buildPatternExtractionPrompt(excerpts) {
     'אלא ההרגלים הספציפיים שמזהים דווקא אותו.',
     '',
     ...PATTERN_SCHEMA_INSTRUCTIONS,
+    ...(deep ? ['', ...DEEP_SCHEMA_INSTRUCTIONS, '',
+      'מבנה הפלט הסופי: החזר JSON יחיד בלבד, ללא טקסט נוסף, במבנה:',
+      '{ "patterns": [...], "negativeSpace": [...], "structuralSignature": {...}, "avoidedPhrases": [...] }'] : []),
     '',
     'הקטעים:',
     joined,
@@ -1481,13 +1767,42 @@ export function buildPatternExtractionPrompt(excerpts) {
 }
 
 /**
- * פרומפט לספק AI חיצוני (ChatGPT/Claude/Gemini): המשתמש מצרף את עבודותיו לשיחה,
- * מריץ את הפרומפט, ומדביק את פלט ה-JSON חזרה. משתמש באותם כללי סכימה כמו הפרומפט
- * הפנימי + סקשן מטא (style/coverPageDefaults) כדי לחלץ גם ברירות מחדל אישיות.
- * @param {{profile?:object}} opts
+ * בונה את בלוק "המדדים שכבר נמדדו" לפרומפט החיצוני. המטרה: לא לבזבז את הקשב של
+ * המודל החיצוני על מה שכבר חישבנו מקומית — הוא נדרש להתמקד במה שמספרים לא מראים.
+ * מחזיר '' כשאין metrics (ואז הבלוק נשמט לגמרי).
+ * @param {object|null} engine
  * @returns {string}
  */
-export function buildExternalPatternAnalysisPrompt({ profile = {} } = {}) {
+const buildMeasuredMetricsBlock = (engine) => {
+  const metrics = isPlainObject(engine) && isPlainObject(engine.metrics) ? engine.metrics : null;
+  if (!metrics) return '';
+  const bits = [];
+  const avgSent = roundDisplay(metrics.avgSentenceWords, 0);
+  if (avgSent) bits.push(`- אורך משפט ממוצע: ~${avgSent} מילים`);
+  const commas = roundDisplay(metrics.avgCommasPerSentence, 1);
+  if (commas !== null && commas > 0) bits.push(`- פסיקים למשפט: ~${commas}`);
+  const avgPara = roundDisplay(metrics.avgParagraphWords, 0);
+  if (avgPara) bits.push(`- אורך פסקה ממוצע: ~${avgPara} מילים`);
+  const parenD = roundDisplay(metrics.parenthesesDensity, 1);
+  if (parenD !== null && parenD > 0) bits.push(`- צפיפות סוגריים: ~${parenD} ל-100 מילים`);
+  if (!bits.length) return '';
+  return [
+    'מדדים שכבר נמדדו מהעבודות שלי (אל תנחש אותם מחדש — התמקד במה שמספרים לא מראים):',
+    ...bits,
+  ].join('\n');
+};
+
+/**
+ * פרומפט לספק AI חיצוני (ChatGPT/Claude/Gemini): המשתמש מצרף את עבודותיו לשיחה,
+ * מריץ את הפרומפט, ומדביק את פלט ה-JSON חזרה. משתמש באותם כללי סכימה כמו הפרומפט
+ * הפנימי + בלוק העומק (A2) + סקשן מטא (style/coverPageDefaults) כדי לחלץ גם
+ * ברירות מחדל אישיות.
+ * @param {{profile?:object, engine?:object|null, excerpts?:string[]}} opts
+ *   engine — כשיש בו metrics מוזרק בלוק "כבר נמדד" (אחרת נשמט לגמרי).
+ *   excerpts — fallback לספקים בלי העלאת קבצים: הקטעים מודבקים לתוך הפרומפט.
+ * @returns {string}
+ */
+export function buildExternalPatternAnalysisPrompt({ profile = {}, engine = null, excerpts = [] } = {}) {
   const p = isPlainObject(profile) ? profile : {};
   const lecturersRaw = Array.isArray(p.lecturerNames)
     ? p.lecturerNames.map((n) => String(n || '').trim()).filter(Boolean).join(', ')
@@ -1503,18 +1818,77 @@ export function buildExternalPatternAnalysisPrompt({ profile = {} } = {}) {
     coursesRaw ? `- קורסים ידועים: ${coursesRaw}` : '',
   ].filter(Boolean).join('\n');
 
+  const metricsBlock = buildMeasuredMetricsBlock(engine);
+  const joinedExcerpts = (Array.isArray(excerpts) ? excerpts : [])
+    .map((e) => String(e || '').trim())
+    .filter(Boolean)
+    .join('\n---\n');
+
   return [
     'צירפתי לשיחה הזו עבודות שכתבתי. נתח את סגנון הכתיבה האישי שלי לפי ההנחיות הבאות.',
     '',
+    metricsBlock ? `${metricsBlock}\n` : '',
     ...PATTERN_SCHEMA_INSTRUCTIONS,
+    '',
+    ...DEEP_SCHEMA_INSTRUCTIONS,
     '',
     'בנוסף, חלץ מהעבודות ומעמוד השער (אם צורף) ברירות מחדל אישיות, לפי הסכימה הבאה:',
     EXTERNAL_STYLE_SCHEMA_LINE,
     knownContext ? `הקשר שכבר ידוע:\n${knownContext}` : '',
     '',
     'מבנה הפלט הסופי: החזר JSON יחיד בלבד, ללא טקסט נוסף, כל הערכים בעברית, במבנה:',
-    '{ "patterns": [...], "negativeSpace": [...], "profileSummary": "", "style": {...}, "coverPageDefaults": {...} }',
+    '{ "patterns": [...], "negativeSpace": [...], "structuralSignature": {...}, "avoidedPhrases": [...], "profileSummary": "", "style": {...}, "coverPageDefaults": {...} }',
     'אל תמציא — אם שדה לא ידוע החזר "" או [].',
+    joinedExcerpts ? `\nקטעים מייצגים מהעבודות שלי:\n${joinedExcerpts}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * A4 — פרומפט לחילוץ בלוק המטא (profileSummary/style/coverPageDefaults) על ידי
+ * ה-LLM המקומי של האפליקציה. עד היום רק המסלול החיצוני קיבל את הבלוק הזה; כאן
+ * אותה סכימה בדיוק (EXTERNAL_STYLE_SCHEMA_LINE — מקור-אמת יחיד, כדי ששני
+ * המסלולים לא יסטו) עם שערי אנטי-הזיה קשיחים.
+ * @param {{profile?:object, excerpts?:string[]}} opts
+ * @returns {string}
+ */
+export function buildDeepProfileExtractionPrompt({ profile = {}, excerpts = [] } = {}) {
+  const p = isPlainObject(profile) ? profile : {};
+  const lecturersRaw = Array.isArray(p.lecturerNames)
+    ? p.lecturerNames.map((n) => String(n || '').trim()).filter(Boolean).join(', ')
+    : String(p.lecturerName || '').trim();
+  const coursesRaw = Array.isArray(p.currentCourses)
+    ? p.currentCourses.map((c) => String(c || '').trim()).filter(Boolean).join(', ')
+    : String(p.currentCourses || '').trim();
+  const knownContext = [
+    p.displayName ? `- שם משתמש ידוע: ${String(p.displayName).trim()}` : '',
+    p.institutionName ? `- מוסד/מרכז אקדמי ידוע: ${String(p.institutionName).trim()}` : '',
+    p.studyTrack ? `- חוג/מסלול ידוע: ${String(p.studyTrack).trim()}` : '',
+    lecturersRaw ? `- מרצים/מנחים ידועים: ${lecturersRaw}` : '',
+    coursesRaw ? `- קורסים ידועים: ${coursesRaw}` : '',
+  ].filter(Boolean).join('\n');
+
+  const joined = (Array.isArray(excerpts) ? excerpts : [])
+    .map((e) => String(e || '').trim())
+    .filter(Boolean)
+    .join('\n---\n');
+
+  return [
+    'לפניך קטעים אמיתיים מתוך עבודות שהמשתמש כתב (כולל עמוד שער ופסקאות פתיחה, אם יש).',
+    'חלץ מהם תקציר פרופיל, העדפות סגנון וברירות מחדל לעמוד שער — אך ורק מה שנתמך בטקסט.',
+    'החזר JSON יחיד בלבד, בלי טקסט מסביב, כל הערכים בעברית, בדיוק במבנה:',
+    EXTERNAL_STYLE_SCHEMA_LINE,
+    '',
+    'כללים מחייבים:',
+    '- אל תמציא ואל תנחש. שדה שלא מופיע/לא נתמך בטקסט — החזר "" או [].',
+    '- profileSummary = 2-3 משפטים על מי הכותב ומה הוא כותב, מהטקסט בלבד.',
+    '- manualVocabulary/manualPhrases = מילים וצירופים שהכותב עצמו משתמש בהם בפועל, לא המלצות.',
+    '- preferredConnectors/preferredSentenceOpeners = רק כאלה שמופיעים בטקסט יותר מפעם אחת.',
+    '- coverPageDefaults = רק מה שמופיע במפורש בעמוד השער; אל תשלים מוסד/קורס מהידע הכללי שלך.',
+    '- displayName = שם הכותב/המגיש בלבד, לא שם המרצה.',
+    knownContext ? `\nהקשר שכבר ידוע (אל תגזור אותו מחדש, השאר "" אם אין תוספת):\n${knownContext}` : '',
+    '',
+    'הקטעים:',
+    joined,
   ].filter(Boolean).join('\n');
 }
 
@@ -1593,58 +1967,282 @@ const stripJsonFences = (raw) => String(raw || '')
   .replace(/```/g, '')
   .trim();
 
+// ⚠️ נמדד (12.8.26) על פלטים אמיתיים מ-ChatGPT/Claude בעברית: ההדבקה נפלה ל"לא נקלט
+// כלום" בשישה מצבים שכולם JSON לגיטימי לחלוטין מבחינת המשתמש — גרשיים חכמים (עורך
+// RTL/וורד ממיר " ל-" "), פסיק עוקב, עטיפה במפתח-על ("styleAnalysis": {...}), מערך
+// דפוסים כשורש, שני אובייקטים בטקסט, ותווי כיווניות. ה-decoder כאן מכסה את כולם.
+// סדר קריטי: ניקוי תווים בלתי־נראים → ניסיון parse נאיבי → תיקונים → מועמדים.
+const INVISIBLE_CHARS_RE = /[\uFEFF\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+const stripSmartQuotes = (text) => String(text || '')
+  // גרשיים "חכמים" סביב מפתחות/ערכים — רק כשה-parse הרגיל כבר נכשל, כדי לא לגעת
+  // בפלט תקין שיש בו מרכאות טיפוגרפיות *בתוך* ערך עברי.
+  .replace(/[“”„‟″]/g, '"')
+  .replace(/[‘’‚‛′]/g, "'");
+
+const stripTrailingCommas = (text) => String(text || '').replace(/,\s*([}\]])/g, '$1');
+
+const tryParseJson = (text) => {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  try { return JSON.parse(t); } catch { /* fallthrough */ }
+  try { return JSON.parse(stripTrailingCommas(t)); } catch { /* fallthrough */ }
+  try { return JSON.parse(stripTrailingCommas(stripSmartQuotes(t))); } catch { /* fallthrough */ }
+  return null;
+};
+
+// מועמדי JSON בתוך טקסט חופשי: כל מרווח {...} / [...] מהפתיחה ה-i-ית עד הסגירה
+// האחרונה התואמת. מוחזרים מהארוך לקצר, כי הפלט המלא עדיף על תת-אובייקט שנתפס במקרה.
+const jsonCandidates = (text) => {
+  const t = String(text || '');
+  const out = [];
+  for (const [open, close] of [['{', '}'], ['[', ']']]) {
+    let from = 0;
+    while (out.length < 12) {
+      const start = t.indexOf(open, from);
+      if (start < 0) break;
+      const end = t.lastIndexOf(close);
+      if (end > start) out.push(t.slice(start, end + 1));
+      from = start + 1;
+    }
+  }
+  return out.sort((a, b) => b.length - a.length);
+};
+
 /**
- * פענוח סובלני של פלט ה-LLM. לעולם לא זורק — נכשל → {patterns:[], negativeSpace:[]}.
+ * פענוח סובלני של פלט JSON שהודבק בידי המשתמש. מחזיר אובייקט/מערך או null.
+ * מקור-אמת יחיד: משמש גם את parsePatternExtractionResult וגם את חילוץ המטא
+ * ב-styleIngestService, כדי ששני המסלולים לא יסטו ביכולת הסליחה שלהם.
+ * @param {string} raw
+ * @returns {object|Array|null}
+ */
+export function decodeLooseJsonText(raw) {
+  const stripped = stripJsonFences(String(raw || '').replace(INVISIBLE_CHARS_RE, ''));
+  if (!stripped) return null;
+  const direct = tryParseJson(stripped);
+  if (direct && typeof direct === 'object') return direct;
+  for (const candidate of jsonCandidates(stripped)) {
+    const parsed = tryParseJson(candidate);
+    if (parsed && typeof parsed === 'object') return parsed;
+  }
+  return null;
+}
+
+// מפתח-על עוטף ("styleAnalysis": {...}, "result": {...}) — מחפשים לעומק אחד את
+// האובייקט שבאמת נושא את הסכימה, במקום להחזיר מבנה ריק.
+const SCHEMA_KEYS = ['patterns', 'negativeSpace', 'structuralSignature', 'avoidedPhrases',
+  'profileSummary', 'style', 'coverPageDefaults'];
+const hasSchemaKey = (obj) => isPlainObject(obj) && SCHEMA_KEYS.some((k) => obj[k] !== undefined);
+
+const unwrapSchemaObject = (parsed) => {
+  if (!isPlainObject(parsed)) return parsed;
+  if (hasSchemaKey(parsed)) return parsed;
+  for (const value of Object.values(parsed)) {
+    if (hasSchemaKey(value)) return value;
+  }
+  return parsed;
+};
+
+// ⚠️ נמדד (12.8.26): גם אחרי שהפענוח נעשה סלחני, פלטים אמיתיים עדיין הגיעו עם
+// **שמות מפתח אחרים** — המודל תרגם את הסכימה לעברית ("דפוסים"), קינן אותה תחת
+// מפתח-על בעומק 2 ("analysis":{"styleProfile":{...}}), או החזיר קמל/סנייק שונה.
+// לכן הקצירה כאן היא לפי alias + סריקה לעומק, ולא לפי מפתח מדויק בשורש.
+const KEY_ALIASES = {
+  patterns: [/^patterns?$/i, /^stylepatterns?$/i, /^patternlist$/i, /^habits?$/i,
+    /^writingpatterns?$/i, /^personalpatterns?$/i, /דפוס/],
+  negativeSpace: [/^negative_?space$/i, /^negatives?$/i, /^absent/i, /נעדר/, /חסר/],
+  structuralSignature: [/^structural_?signature$/i, /^structure$/i, /^architecture$/i,
+    /^documentstructure$/i, /חתימה/, /מבנה/],
+  avoidedPhrases: [/^avoided_?phrases?$/i, /^avoided$/i, /^phrases_?avoided$/i, /נמנע/],
+  profileSummary: [/^profile_?summary$/i, /^summary$/i, /^about$/i, /תקציר/, /פרופיל/],
+  style: [/^style$/i, /^stylepreferences$/i, /^preferences$/i, /העדפ/, /סגנון/],
+  coverPageDefaults: [/^cover_?page_?defaults?$/i, /^coverpage$/i, /שער/],
+};
+
+const matchesAlias = (key, field) => KEY_ALIASES[field].some((re) => re.test(String(key || '').trim()));
+
+// פריט דפוס "נראה נכון" — מספיק שיש בו תווית כלשהי. משמש לזיהוי מערך דפוסים
+// שנשמר תחת מפתח שלא הכרנו בכלל.
+const looksLikePatternItem = (item) => {
+  if (typeof item === 'string') return item.trim().length >= 3;
+  if (!isPlainObject(item)) return false;
+  return ['label', 'name', 'title', 'pattern', 'habit', 'דפוס']
+    .some((k) => String(item[k] || '').trim());
+};
+
+/**
+ * סריקה לעומק אחרי חלקי הסכימה. עומק/מספר צמתים חסומים כדי שפלט ענק לא יתקע
+ * את הדפדפן. הערך הראשון שנמצא לכל שדה מנצח (סריקה BFS — הרדוד קודם).
+ * @param {any} root
+ * @returns {{patterns:any, negativeSpace:any, structuralSignature:any, avoidedPhrases:any, profileSummary:any, style:any, coverPageDefaults:any}}
+ */
+const harvestSchemaParts = (root) => {
+  const found = {
+    patterns: undefined, negativeSpace: undefined, structuralSignature: undefined,
+    avoidedPhrases: undefined, profileSummary: undefined, style: undefined, coverPageDefaults: undefined,
+  };
+  let fallbackPatterns;
+  const queue = [{ node: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length && visited < 400) {
+    const { node, depth } = queue.shift();
+    visited += 1;
+    if (Array.isArray(node)) {
+      if (fallbackPatterns === undefined && node.length && node.every(looksLikePatternItem)) {
+        fallbackPatterns = node;
+      }
+      if (depth < 4) node.slice(0, 40).forEach((child) => queue.push({ node: child, depth: depth + 1 }));
+      continue;
+    }
+    if (!isPlainObject(node)) continue;
+    for (const [key, value] of Object.entries(node)) {
+      if (value === null || value === undefined) continue;
+      if (found.patterns === undefined && Array.isArray(value) && matchesAlias(key, 'patterns')) found.patterns = value;
+      else if (found.negativeSpace === undefined && Array.isArray(value) && matchesAlias(key, 'negativeSpace')) found.negativeSpace = value;
+      else if (found.avoidedPhrases === undefined && Array.isArray(value) && matchesAlias(key, 'avoidedPhrases')) found.avoidedPhrases = value;
+      else if (found.structuralSignature === undefined && isPlainObject(value) && matchesAlias(key, 'structuralSignature')) found.structuralSignature = value;
+      else if (found.coverPageDefaults === undefined && isPlainObject(value) && matchesAlias(key, 'coverPageDefaults')) found.coverPageDefaults = value;
+      else if (found.style === undefined && isPlainObject(value) && matchesAlias(key, 'style')) found.style = value;
+      else if (found.profileSummary === undefined && typeof value === 'string' && matchesAlias(key, 'profileSummary')) found.profileSummary = value;
+      if (depth < 4 && (isPlainObject(value) || Array.isArray(value))) queue.push({ node: value, depth: depth + 1 });
+    }
+  }
+  if (found.patterns === undefined && fallbackPatterns !== undefined) found.patterns = fallbackPatterns;
+  return found;
+};
+
+/**
+ * מפענח הדבקה חיצונית ומחזיר אובייקט בשמות הסכימה הקנוניים (patterns/style/
+ * coverPageDefaults/...), גם כשהמודל קינן או תרגם את המפתחות. משמש את מסלול
+ * המטא ב-styleIngestService, כדי שגם הוא ייהנה מאותה סלחנות. נכשל → null.
+ * @param {string} raw
+ * @returns {object|null}
+ */
+export function normalizeExternalSchemaJson(raw) {
+  const decoded = decodeLooseJsonText(raw);
+  if (!decoded) return null;
+  const base = Array.isArray(decoded) ? { patterns: decoded } : unwrapSchemaObject(decoded);
+  if (!isPlainObject(base)) return null;
+  const out = { ...base };
+  for (const [k, v] of Object.entries(harvestSchemaParts(base))) {
+    if (out[k] === undefined && v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+// מפתחות פנימיים של פריט דפוס — כולל שמות עבריים, כי מודל שתרגם את הסכימה
+// מתרגם גם אותם.
+const pickField = (item, keys) => {
+  for (const k of keys) {
+    const v = item[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+};
+
+// weight: מספר, מחרוזת ("0.7"), אחוזים ("85%" / 85), או חסר לגמרי. עד היום כל אלה
+// חוץ מהראשונים הפילו את הדפוס בשקט — והמשתמש ראה "לא נקלט כלום" על פלט תקין.
+const parsePatternWeight = (raw) => {
+  if (raw === null || raw === undefined || raw === '') return 0.6; // ברירת מחדל שמרנית
+  const str = String(raw).trim();
+  const num = Number(str.replace('%', '').replace(',', '.'));
+  if (!Number.isFinite(num)) return 0.6;
+  if (num > 1) return clamp(num / 100, 0, 1); // 85 / "85%" → 0.85
+  return clamp(num, 0, 1);
+};
+
+/**
+ * פענוח סובלני של פלט ה-LLM. לעולם לא זורק — נכשל → מבנה ריק מלא (לא null),
+ * כדי שקוראים לא יצטרכו שומרים.
  * lenientTypes:true — type לא-חוקי ממופה ל-'lexical_habit' במקום שהדפוס יופל (משמש
  * רק במסלול ההדבקה החיצונית; המסלול הפנימי נשאר קפדני).
  * @param {string} raw
  * @param {{lenientTypes?:boolean}} opts
- * @returns {{patterns:Array<object>, negativeSpace:string[]}}
+ * @returns {{patterns:Array<object>, negativeSpace:string[], structuralSignature:object, avoidedPhrases:string[]}}
  */
 export function parsePatternExtractionResult(raw, { lenientTypes = false } = {}) {
-  const empty = { patterns: [], negativeSpace: [] };
-  if (raw === null || raw === undefined) return empty;
+  const empty = () => ({
+    patterns: [],
+    negativeSpace: [],
+    structuralSignature: EMPTY_STRUCTURAL_SIGNATURE(),
+    avoidedPhrases: [],
+  });
+  if (raw === null || raw === undefined) return empty();
 
-  const stripped = stripJsonFences(raw);
-  if (!stripped) return empty;
-
-  let parsed = null;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    // fallback: לכידת האובייקט הראשון {...}.
-    const match = stripped.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { parsed = JSON.parse(match[0]); } catch { parsed = null; }
+  let decoded = decodeLooseJsonText(raw);
+  if (!decoded) return empty();
+  // מערך כשורש = רשימת דפוסים (מודלים מחזירים את זה כשהפרומפט מדגיש "patterns").
+  // רק במסלול הלניאנטי — המסלול הפנימי נשאר צר בכוונה.
+  if (Array.isArray(decoded)) decoded = lenientTypes ? { patterns: decoded } : null;
+  let parsed = unwrapSchemaObject(decoded);
+  if (!isPlainObject(parsed)) return empty();
+  // מסלול חיצוני: קצירה לפי alias + עומק. אם השורש כבר נושא את השדה — הוא מנצח,
+  // והקצירה רק משלימה מה שחסר, כך שפלט תקין מתנהג בדיוק כמו קודם.
+  const topKeys = Object.keys(parsed).slice(0, 20);
+  if (lenientTypes) {
+    const harvested = harvestSchemaParts(parsed);
+    parsed = { ...parsed };
+    for (const [k, v] of Object.entries(harvested)) {
+      if (parsed[k] === undefined && v !== undefined) parsed[k] = v;
     }
   }
-  if (!isPlainObject(parsed)) return empty;
 
   const rawPatterns = Array.isArray(parsed.patterns) ? parsed.patterns : [];
   const patterns = [];
-  for (const item of rawPatterns) {
+  for (const rawItem of rawPatterns) {
+    // פריט כמחרוזת ("פותח פסקאות במונח מהפסקה הקודמת") — מודלים מחזירים את זה
+    // כשהפרומפט מבקש "רשימת דפוסים". התווית היא המחרוזת עצמה.
+    const item = typeof rawItem === 'string' ? { label: rawItem } : rawItem;
     if (!isPlainObject(item)) continue;
-    const label = String(item.label || '').trim();
+    // שמות שדה חלופיים שמודלים מחזירים בפועל (name/title, description/example) —
+    // רק בהדבקה החיצונית, שם אין לנו שליטה על הפרומפט שהמשתמש הריץ.
+    const label = String(
+      item.label || (lenientTypes ? pickField(item, ['name', 'title', 'pattern', 'habit', 'דפוס', 'תיאור']) : '') || '',
+    ).trim();
     if (!label) continue;
-    let type = String(item.type || '').trim();
+    let type = String(item.type || (lenientTypes ? pickField(item, ['category', 'kind', 'סוג']) : '') || '').trim();
     if (!VALID_PATTERN_TYPES.has(type)) {
       if (lenientTypes) type = 'lexical_habit';
       else continue;
     }
-    const weightNum = Number(item.weight);
-    if (!Number.isFinite(weightNum)) continue;
-    const evidence = String(item.evidence || '').trim();
+    let weight;
+    if (lenientTypes) {
+      weight = parsePatternWeight(item.weight ?? item.strength ?? item.confidence);
+    } else {
+      const weightNum = Number(item.weight);
+      if (!Number.isFinite(weightNum)) continue;
+      weight = clamp(round(weightNum, 3), 0, 1);
+    }
+    const evidence = String(
+      item.evidence || (lenientTypes ? (item.example || item.quote || item.description) : '') || '',
+    ).trim();
     patterns.push({
       label,
       type,
-      weight: clamp(round(weightNum, 3), 0, 1),
+      weight: clamp(round(weight, 3), 0, 1),
       evidence,
     });
   }
 
   const negativeSpace = cleanStringArray(parsed.negativeSpace, CAP_NEGATIVE);
+  const structuralSignature = normalizeStructuralSignature(parsed.structuralSignature);
+  // avoidedPhrases — מחרוזות ליטרליות שמזינות את blacklist.auto (המיזוג עצמו נעשה
+  // אצל הקורא). trim + dedupe + חיתוך לאורך ביטוי סביר.
+  const avoidedPhrases = cleanStringArray(
+    (Array.isArray(parsed.avoidedPhrases) ? parsed.avoidedPhrases : [])
+      .map((v) => String(v || '').trim().slice(0, CAP_AVOIDED_PHRASE_LEN)),
+    CAP_AVOIDED_PHRASES,
+  );
 
-  return { patterns, negativeSpace };
+  // hasMeta — פלט "מטא בלבד" (profileSummary/style/coverPageDefaults, בלי דפוסים) הוא
+  // תקין לגמרי: applyExternalPatternAnalyses ממזג אותו לפרופיל. הדגל מפורסם כאן כדי
+  // ששער ה-UI לא ידחה אותו כ"לא נקלט כלום" בזמן שהשירות דווקא כן קולט אותו.
+  const hasMeta = isPlainObject(parsed.style)
+    || isPlainObject(parsed.coverPageDefaults)
+    || (typeof parsed.profileSummary === 'string' && parsed.profileSummary.trim().length > 0);
+
+  // topKeys — לדיאגנוסטיקה בלבד (הודעת השגיאה ב-UI מציגה מה כן נמצא בפלט).
+  return { patterns, negativeSpace, structuralSignature, avoidedPhrases, hasMeta, topKeys };
 }
 
 // ---------- extractQualitativePatterns ----------
@@ -1726,16 +2324,22 @@ const canonicalizePatternLabel = (pattern) => {
  * מפענח סובלנית, ומקצה id יציב לכל דפוס (qp_<hash of label>).
  * @param {string[]} excerpts
  * @param {(prompt:string)=>Promise<string>} invokeModel
- * @returns {Promise<{patterns:Array<object>, negativeSpace:string[]}>}
+ * @param {{deep?:boolean}} [opts] deep=true מוסיף את הבלוק העמוק (structuralSignature/avoidedPhrases)
+ *   כדי שהמסלול המקומי יחלץ בדיוק כמו המסלול החיצוני.
+ * @returns {Promise<{patterns:Array<object>, negativeSpace:string[],
+ *   structuralSignature:object, avoidedPhrases:string[]}>}
  */
-export async function extractQualitativePatterns(excerpts, invokeModel) {
-  if (typeof invokeModel !== 'function') return { patterns: [], negativeSpace: [] };
-  const prompt = buildPatternExtractionPrompt(excerpts);
+export async function extractQualitativePatterns(excerpts, invokeModel, opts = {}) {
+  const empty = () => ({
+    patterns: [], negativeSpace: [], structuralSignature: EMPTY_STRUCTURAL_SIGNATURE(), avoidedPhrases: [],
+  });
+  if (typeof invokeModel !== 'function') return empty();
+  const prompt = buildPatternExtractionPrompt(excerpts, { deep: opts?.deep === true });
   let raw = '';
   try {
     raw = await invokeModel(prompt);
   } catch {
-    return { patterns: [], negativeSpace: [] };
+    return empty();
   }
   const parsed = parsePatternExtractionResult(raw);
   const patterns = parsed.patterns.map((rawP) => {
@@ -1749,7 +2353,32 @@ export async function extractQualitativePatterns(excerpts, invokeModel) {
       ...(p.evidence ? { evidence: p.evidence } : {}),
     };
   });
-  return { patterns, negativeSpace: parsed.negativeSpace };
+  return {
+    patterns,
+    negativeSpace: parsed.negativeSpace,
+    structuralSignature: parsed.structuralSignature,
+    avoidedPhrases: parsed.avoidedPhrases,
+  };
+}
+
+// ---------- mergeStructuralSignature ----------
+
+/**
+ * A7 — מיזוג פר-מפתח של חתימות מבניות מכמה באטצ'ים/הדבקות. לכל אחד מ-5 המפתחות:
+ * ערך קיים ולא-ריק מנצח; רק כשהקיים ריק נלקח הערך הנכנס. בקיפול על כמה מועמדים
+ * המנצח הוא הראשון שאינו ריק. מחזיר אובייקט חדש, לעולם לא זורק.
+ * @param {any} existing
+ * @param {any} incoming
+ * @returns {{opening:string, closing:string, thesisPlacement:string, sectionFlow:string, firstPersonUsage:string}}
+ */
+export function mergeStructuralSignature(existing, incoming) {
+  const base = normalizeStructuralSignature(existing);
+  const next = normalizeStructuralSignature(incoming);
+  const out = EMPTY_STRUCTURAL_SIGNATURE();
+  STRUCTURAL_SIGNATURE_KEYS.forEach((k) => {
+    out[k] = base[k] || next[k] || '';
+  });
+  return out;
 }
 
 // ---------- mergeQualitativePatterns ----------
@@ -1949,6 +2578,76 @@ const matchUnigramFamily = (token) => {
 const UNIGRAM_MIN_DOC_FRACTION = 0.35;
 const UNIGRAM_MIN_FREQ_PER_100 = 0.08;
 
+// ---------- Defect 2 — שערי פיזור-מסמכים ואנטי-נושא ----------
+//
+// נמדד (33 עבודות, 10.8.26): השער היה `docIds.size < thresholdDocs && count <
+// minCount` — כלומר **או**. ביטוי שחזר 8 פעמים בתוך עבודה אחת עבר כ"חתימה
+// אישית", והוזרק לכל פרומפט: "כלפי שילוב דת ומדינה" (משקל 0.64, docFraction
+// 0.091 — נושא של עבודה יחידה), ומ-mineStructuralFormulas גם 'נוהג לפתוח פסקאות
+// ב: "עמדות כלפי שילוב דת"' — שהוא כותרת של עבודה. זהו בדיוק כשל הדליפה שבגללו
+// mineFramesFromCorpus כובה לצמיתות. מכאן: פיזור בין מסמכים הוא **תנאי חובה**,
+// ו-minCount הוא דרישה **נוספת** ולא חלופה.
+const MIN_SIGNATURE_DOCS = 2;      // רצפה מוחלטת — גם בקורפוס זעיר
+const MIN_STRUCTURAL_DOCS = 2;
+// מילת תוכן שמופיעה בפחות מכך מהמסמכים היא מונח נושאי, לא הרגל ניסוח.
+const TOPIC_TOKEN_MIN_DOC_FRACTION = 0.25;
+const TOPIC_GATE_MIN_DOCS = 4;     // מתחת לזה השער כבוי (fail-open)
+
+// ביטוי תפעולי של מסמך — לא ניסוח. מועתק מ-PROCEDURAL_OPENER ב-styleOpenerService.js.
+const PROCEDURAL_PHRASE_RE = /(?:הצהרת\s*AI|אני\s*מצהיר|נעזרתי\s*ב|בסיוע\s*מודל|בינה\s*מלאכות|שם\s*הקורס|מספר\s*הקורס|תעודת\s*זהות|מגיש[יה]?\s*העבודה|רשימה\s*ביבליוגרפית|הוגש\s*ל)/i;
+
+/**
+ * האם הביטוי נושא **תוכן** ולא ניסוח.
+ *
+ * מותאם מ-isContentBearing ב-styleOpenerService.js (שורות 42-67) — אותה הכרעה
+ * בדיוק, שם על פתיחי פסקה וכאן על n-gram כרוי. לא מייבאים משם: styleOpenerService
+ * מייבא מ-styleSampleStore/styleProfileService, וייבוא הפוך הוא מעגל.
+ *
+ * @param {string} label
+ * @param {{docFractionOf?:(t:string)=>number, uniqueDocCount?:number,
+ *          allowQuotes?:boolean, allowDigits?:boolean, allowLatin?:boolean}} opts
+ *   שלושת ה-allow* נועדו לתוויות שמקורן ב-LLM. תווית כרויה **היא** הביטוי עצמו,
+ *   ולכן ספרה/לטינית/גרשיים בתוכה הן נתון או שם פרטי; תווית של LLM היא *תיאור*
+ *   של הרגל, ובה אותם תווים לגיטימיים ("מציין שנת פרסום בסוגריים (2019)",
+ *   "מפנה בסגנון APA"). שער חוסם מדי שם היה מוחק בדיוק את סוגי הדפוסים
+ *   citation/argument_move/transition שהמדידה מצאה שחסרים לגמרי.
+ */
+function isTopicBearingPhrase(label, {
+  docFractionOf = null, uniqueDocCount = 0,
+  allowQuotes = false, allowDigits = false, allowLatin = false,
+} = {}) {
+  const s = String(label || '').trim();
+  if (!s) return true;
+  if (PROCEDURAL_PHRASE_RE.test(s)) return true;
+  if (!allowDigits && /\d/.test(s)) return true;       // מספרים = נתון ספציפי
+  if (!allowLatin && /[A-Za-z]{3,}/.test(s)) return true; // שם כלי/מוסד לועזי
+  if (!allowQuotes && /["'״׳]/.test(s)) return true;   // ציטוט או שם בגרשיים
+  // אות עברית בודדת כמילה = ראשי תיבות של שם פרטי בשורת ביבליוגרפיה ("קמה ע").
+  if (/(?:^|\s)[֐-׿](?:\s|$)/.test(s)) return true;
+  // הכרעה סטטיסטית — התחליף המקומי ל-containsRareToken: מילת תוכן (לא stopword
+  // ולא מרקר פורמלי) שמופיעה בקומץ מסמכים היא מונח נושאי. fail-open בקורפוס קטן.
+  if (typeof docFractionOf === 'function' && uniqueDocCount >= TOPIC_GATE_MIN_DOCS) {
+    const contentTokens = matchWords(s.toLowerCase())
+      .map((t) => stripHebPrefix(t))
+      .filter((t) => t && !STYLE_STOP_WORDS.has(t) && !FORMULAIC_MARKERS.has(t));
+    if (contentTokens.some((t) => docFractionOf(t) < TOPIC_TOKEN_MIN_DOC_FRACTION)) return true;
+  }
+  return false;
+}
+
+/** אינדקס תדירות-מסמכים לכל טוקן (מנורמל תחילית) — הבסיס לשער הסטטיסטי. */
+const buildTokenDocFraction = (prepared, uniqueDocCount) => {
+  const tokenDocs = new Map();
+  prepared.forEach(({ tokens, docId }) => {
+    new Set((tokens || []).map((t) => stripHebPrefix(String(t).toLowerCase()))).forEach((t) => {
+      let set = tokenDocs.get(t);
+      if (!set) { set = new Set(); tokenDocs.set(t, set); }
+      set.add(docId);
+    });
+  });
+  return (t) => (tokenDocs.get(t)?.size || 0) / (uniqueDocCount || 1);
+};
+
 const isFormulaicNgram = (canonTokens) =>
   (Array.isArray(canonTokens) ? canonTokens : []).some((t) => {
     const lw = String(t || '').toLowerCase();
@@ -1991,9 +2690,14 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
   const prepared = (Array.isArray(chunks) ? chunks : [])
     .filter(isPlainObject)
     .map((c) => ({
-      text: stripToText(c.text || ''),
+      // Defect 1 — אותו סינון שמוחל במדידה: בלי זה ההצהרה המוסדית על שימוש
+      // בבינה מלאכותית היא ביטוי-החתימה מספר 1 של המשתמש (0.95 / docFraction
+      // 0.818), וגם "עבודה זו" (0.78) מגיע ממנה. כלל מקל (requireTerminalEnd
+      // false) כי chunk נחתך לפי מכסת מילים ולא בהכרח בגבול משפט.
+      text: extractAuthorialProseBlocks(stripToText(c.text || ''), { requireTerminalEnd: false }).join('\n\n'),
       docId: String(c.docId || '_orphan'),
     }))
+    .filter((c) => c.text)
     .map((c) => ({ ...c, tokens: matchWords(c.text) }))
     .filter((c) => c.tokens.length >= 2);
   if (!prepared.length) return [];
@@ -2015,6 +2719,8 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
 
   const uniqueDocCount = new Set(prepared.map((c) => c.docId)).size || 1;
   const totalWords = prepared.reduce((s, c) => s + c.tokens.length, 0) || 1;
+  const docFractionOf = buildTokenDocFraction(prepared, uniqueDocCount);
+  const topicOpts = { docFractionOf, uniqueDocCount };
 
   const isStop = (t) => STYLE_STOP_WORDS.has(t.toLowerCase());
   const hasDigit = (t) => /[0-9]/.test(t);
@@ -2049,22 +2755,29 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     }
   });
 
-  const thresholdDocs = Math.ceil(minDocFraction * uniqueDocCount);
+  // Defect 2 — פיזור בין מסמכים הוא תנאי חובה, עם רצפה מוחלטת של 2 מסמכים.
+  const thresholdDocs = Math.max(MIN_SIGNATURE_DOCS, Math.ceil(minDocFraction * uniqueDocCount));
   const qualifying = [];
   entries.forEach((e, key) => {
-    if (e.docIds.size < thresholdDocs && e.count < minCount) return;
+    // היה `docIds.size < thresholdDocs && count < minCount` (כלומר OR): ביטוי
+    // שחזר ≥8 פעמים בעבודה **אחת** נחשב חתימה אישית. עכשיו שתי הדרישות ביחד.
+    if (e.docIds.size < thresholdDocs) return;
+    if (e.count < minCount) return;
     // Fix 1: מסננים n-gram שאין בו אף מרקר פורמלי — צירוף-שם נושאי טהור (למשל "גוש דן").
     if (!isFormulaicNgram(e.canonTokens)) return;
     // label = surface הכי שכיח (שובר-שוויון לקסיקוגרפי — דטרמיניסטי).
     const surfaces = [...e.surfaceCounts.entries()]
       .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const label = surfaces[0][0];
+    // Defect 2 — ביטוי שנושא מונח נושאי אינו הרגל סגנון.
+    if (isTopicBearingPhrase(label, topicOpts)) return;
     qualifying.push({
       key,
       n: e.n,
       count: e.count,
       docCount: e.docIds.size,
       canonTokens: e.canonTokens,
-      label: surfaces[0][0],
+      label,
     });
   });
 
@@ -2126,6 +2839,8 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     const docFraction = e.docIds.size / uniqueDocCount;
     const freqPer100 = (e.count / totalWords) * 100;
     if (docFraction < UNIGRAM_MIN_DOC_FRACTION || freqPer100 < UNIGRAM_MIN_FREQ_PER_100) return;
+    // Defect 2 — רצפת פיזור מוחלטת: docFraction לבדו מספיק בקורפוס של 2-3 מסמכים.
+    if (e.docIds.size < MIN_SIGNATURE_DOCS) return;
     // evidence — לפי הצורה השכיחה ביותר במשפחה (דטרמיניסטי).
     const topSurface = [...e.surfaces.entries()]
       .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0][0];
@@ -2159,7 +2874,8 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
       baofen.variants.set(surface, (baofen.variants.get(surface) || 0) + 1);
     }
   });
-  if (baofen.count > 0 && (baofen.docIds.size >= thresholdDocs || baofen.count >= minCount)) {
+  // Defect 2 — היה OR מפורש. עכשיו שני התנאים ביחד (ר' ההערה בשער ה-n-gram).
+  if (baofen.count > 0 && baofen.docIds.size >= thresholdDocs && baofen.count >= minCount) {
     const topVariant = [...baofen.variants.entries()]
       .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0][0];
     const docFraction = baofen.docIds.size / uniqueDocCount;
@@ -2187,6 +2903,9 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
     (b._count * (b._sigMult || 1)) - (a._count * (a._sigMult || 1))
     || (a._key < b._key ? -1 : a._key > b._key ? 1 : 0));
   return patterns
+    // Defect 2 — דפוס בלי ראיה לא נפלט. נמדד: "יותר כך" (משקל 0.64) הוזרק עם
+    // evidence: undefined — כלומר n-gram מרוסק שאיש לא יכול לאמת.
+    .filter((p) => String(p.evidence || '').trim())
     .slice(0, Math.max(0, top))
     .map(({ _count, _key, _sigMult, ...p }) => p);
 }
@@ -2205,7 +2924,12 @@ export function mineSignatureNgrams(chunks, { minDocFraction = 0.3, minCount = 8
 export function mineStructuralFormulas(chunks, { top = 6 } = {}) {
   const docs = (Array.isArray(chunks) ? chunks : [])
     .filter(isPlainObject)
-    .map((c) => ({ text: stripToText(c.text || ''), docId: String(c.docId || '_orphan') }))
+    // Defect 1 — פרוזה אוטוריאלית בלבד: שורת שער או שורת ביבליוגרפיה שנחשבה
+    // "פסקה" תרמה כאן פתיח פסקה מזויף.
+    .map((c) => ({
+      text: extractAuthorialProseBlocks(stripToText(c.text || ''), { requireTerminalEnd: false }).join('\n\n'),
+      docId: String(c.docId || '_orphan'),
+    }))
     .filter((c) => c.text);
   if (!docs.length) return [];
 
@@ -2231,6 +2955,7 @@ export function mineStructuralFormulas(chunks, { top = 6 } = {}) {
     if (!prepared.length) return [];
 
     const uniqueDocCount = new Set(prepared.map((c) => c.docId)).size || 1;
+    const docFractionOf = buildTokenDocFraction(prepared, uniqueDocCount);
     const isStop = (t) => STYLE_STOP_WORDS.has(t.toLowerCase());
     const hasDigit = (t) => /[0-9]/.test(t);
     const canonicalize = (gram) => {
@@ -2264,10 +2989,17 @@ export function mineStructuralFormulas(chunks, { top = 6 } = {}) {
     const qualifying = [];
     entries.forEach((e, key) => {
       const docFraction = e.docIds.size / uniqueDocCount;
-      if (docFraction < 0.25 && e.count < 5) return;
+      // Defect 2 — היה `docFraction < 0.25 && count < 5` (OR): כותרת של עבודה
+      // אחת שחזרה בפתיחי הפסקאות שלה יצרה 'נוהג לפתוח פסקאות ב: "עמדות כלפי
+      // שילוב דת"'. עכשיו פיזור בין מסמכים חובה, וגם ספירה, וגם רצפה של 2.
+      if (e.docIds.size < MIN_STRUCTURAL_DOCS) return;
+      if (docFraction < 0.25) return;
+      if (e.count < 5) return;
       if (!isFormulaicNgram(e.canonTokens)) return;
       const surfaces = [...e.surfaceCounts.entries()]
         .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      const label = surfaces[0][0];
+      if (isTopicBearingPhrase(label, { docFractionOf, uniqueDocCount })) return;
       qualifying.push({
         key,
         n: e.n,
@@ -2275,7 +3007,7 @@ export function mineStructuralFormulas(chunks, { top = 6 } = {}) {
         docCount: e.docIds.size,
         docFraction,
         canonTokens: e.canonTokens,
-        label: surfaces[0][0],
+        label,
       });
     });
 
@@ -2327,6 +3059,8 @@ export function mineStructuralFormulas(chunks, { top = 6 } = {}) {
   }));
 
   return [...openerPatterns, ...closerPatterns]
+    // Defect 2 — נוסחה בלי ראיה לא נפלטת (ר' אותה הערה ב-mineSignatureNgrams).
+    .filter((p) => String(p.evidence || '').trim())
     .sort((a, b) => b._count - a._count)
     .slice(0, Math.max(0, top))
     .map(({ _count, ...p }) => p);
@@ -2344,10 +3078,56 @@ const jaccardSets = (a, b) => {
   return union > 0 ? inter / union : 0;
 };
 
+// ---------- Defect 3 — חזרה בין באטצ'ים מחזקת ביטחון, ואינה תנאי הישרדות ----------
+//
+// נמדד על הרצה אמיתית (33 עבודות, 8 באטצ'ים, llmBatchesFailed=0, 10.8.26): מתוך
+// 12 הדפוסים הסופיים **11 היו mined דטרמיניסטיים**, והיחיד מה-LLM ששרד היה זבל
+// ('ביטוי חוזר: "כוכבית"' עם ראיה מטבלת SWOT). שלושת הסוגים החדשים —
+// citation / argument_move / transition — החזירו **0 כל אחד**, למרות שהפרומפט
+// מבקש אותם והמודל ענה. הסיבה מבנית ולא איכותית: כל באטץ' הוא פרוסה של ~5,000
+// תווים ממסמכים **אחרים**, המודל מנסח את אותו הרגל אחרת בכל פרוסה,
+// canonicalPatternKey לא מתלכד, והפילטר מחק את כל שכבת ה-LLM.
+//
+// לכן: קלאסטר שנצפה ב-≥2 באטצ'ים מקבל את הטיפול הקיים (boost + crossValidated);
+// קלאסטר של באטץ' יחיד שורד ב**משקל מופחת** ורק אם עבר שערי איכות. התקרה
+// מונעת מהם להציף — הדפוסים הדטרמיניסטיים נשארים ground truth (ההגנה עצמה
+// יושבת ב-mergeQualitativePatterns: MINED_RESERVED).
+const CONSENSUS_SINGLE_BATCH_MULT = 0.6;   // היה 0.5 למחוקים-ממילא; 0.6 = "נכנס אך חלש"
+const CONSENSUS_SINGLE_BATCH_CAP = 6;      // מקסימום ניצולי-באטץ'-יחיד בפלט
+
+// תצפית גנרית על עברית אקדמית אינה הרגל אישי. הפרומפט כבר אוסר על זה במפורש —
+// זהו השער שמאכף אותו בפועל על ניצולי באטץ' יחיד.
+const GENERIC_STYLE_OBSERVATION_RE = /(?:משפטים\s+(?:ארוכים|מורכבים)|שפה\s+(?:פורמלית|אקדמית|רהוטה)|כתיבה\s+(?:פורמלית|אקדמית|מובנית|בהירה)|מונחים\s+(?:מקצועיים|אקדמיים)|אוצר\s+מילים\s+עשיר|מבנה\s+(?:לוגי|מסודר|ברור)|עברית\s+תקנית|פיסוק\s+תקין|טון\s+(?:אובייקטיבי|ענייני|נייטרלי))/;
+
+// ארטיפקטים של חילוץ/פריסה — לא סגנון. נמדד: 'ביטוי חוזר: "כוכבית"' (הדפוס
+// היחיד מה-LLM ששרד את הקונצנזוס הישן) נשען על תו תבליט בטבלת SWOT.
+const LAYOUT_ARTIFACT_RE = /(?:כוכבית|תבליט|בולט(?:ים)?\s|טבלה|עמודה|שורת\s+טבלה|קו\s+תחתון|רווח\s+כפול|מספור\s+אוטומטי)/;
+
+/**
+ * שער איכות לדפוס שמקורו ב-LLM.
+ * ראיה ריקה, תצפית גנרית, ארטיפקט פריסה או ביטוי תפעולי — לא נכנסים.
+ *
+ * ⚠️ השער מוחל על **כל** דפוסי הקונצנזוס ולא רק על ניצולי באטץ' יחיד, ובכוונה:
+ * הדפוס היחיד מה-LLM ששרד את הקונצנזוס הישן בהרצה האמיתית היה
+ * 'ביטוי חוזר: "כוכבית"' — והוא שרד דווקא מפני שנצפה בכמה באטצ'ים. חזרה
+ * מאשרת שהמודל עקבי, לא שהתצפית מועילה.
+ */
+const passesPatternQualityGate = (p) => {
+  if (!String(p.evidence || '').trim()) return false;
+  const label = String(p.label || '');
+  if (GENERIC_STYLE_OBSERVATION_RE.test(label)) return false;
+  if (LAYOUT_ARTIFACT_RE.test(label)) return false;
+  return !isTopicBearingPhrase(label, { allowQuotes: true, allowDigits: true, allowLatin: true });
+};
+
 /**
  * ממזג תוצאות חילוץ מכמה באטצ'ים לקונצנזוס. מקבץ patterns לפי דמיון-label (Jaccard≥0.5).
- * batchCount ≤2 → כל דפוס singleton במשקל*0.5, crossValidated=false.
- * batchCount ≥3 → קלאסטרים שהופיעו ב-≥threshold באטצ'ים מקבלים boost; היתר במשקל*0.5.
+ * batchCount ≤1 → אין מידע חוצה-באטצ'ים כלל: כל דפוס נכנס במשקל*0.5 (התנהגות
+ *   קודמת) אך רק אם עבר את שער האיכות; crossValidated=false.
+ * batchCount ≥2 → קלאסטר שנצפה ב-≥threshold באטצ'ים מקבל boost; קלאסטר של באטץ'
+ *   יחיד שורד במשקל*CONSENSUS_SINGLE_BATCH_MULT, בכפוף לשער האיכות ולתקרה.
+ * crossValidated = לפחות קלאסטר אחד הופיע בשני באטצ'ים או יותר (ולא "רצנו יותר
+ * מבאטץ' אחד" — שזה מה שהשדה סימן קודם).
  * @param {Array<{patterns:Array, negativeSpace:Array}>} batchResults
  * @param {{batchCount?:number}} opts
  * @returns {{patterns:Array<object>, negativeSpace:string[], crossValidated:boolean}}
@@ -2395,44 +3175,58 @@ export function consensusMergePatterns(batchResults, { batchCount } = {}) {
     target.batches.add(it.batch);
   });
 
-  const crossValidated = bc >= 3;
-  const threshold = crossValidated ? Math.max(2, Math.ceil(bc * 0.2)) : Infinity;
+  // Defect 3 — שני מסלולים במקום מסלול-הישרדות אחד.
+  const bcSafe = Math.max(1, bc);
+  // סף "אושר בכמה באטצ'ים". נשמר כפי שהיה (max(2, 20% מהבאטצ'ים)) — רק שכעת אי-
+  // עמידה בו אינה מחיקה אלא הפחתת משקל.
+  const confirmBar = Math.max(2, Math.ceil(bcSafe * 0.2));
+  // ⚠️ Fix 3 הישן הפיל כל קלאסטר מתחת ל-max(2, 30% מהבאטצ'ים) בגלל churn בין
+  // הרצות. ה-churn אמיתי — ולכן הוא מטופל כאן בהפחתת משקל ובתקרה, ולא בהשמדה
+  // של כל שכבת ה-LLM (ר' המדידה שבראש הסקשן: 11/12 mined, 0 citation/transition).
 
-  const patterns = clusters
-    .map((cl) => {
-      const membersByWeight = [...cl.members].sort(
-        (a, b) => b.weight - a.weight || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0),
-      );
-      const rep = membersByWeight[0];
-      const batchesSeen = cl.batches.size;
-      let weight;
-      if (crossValidated && batchesSeen >= threshold) {
-        weight = Math.min(0.95, rep.weight + 0.1 * (batchesSeen - 1));
-      } else {
-        weight = rep.weight * 0.5;
-      }
-      const evidence = (membersByWeight.find((m) => m.evidence) || {}).evidence || '';
-      return {
+  const scored = clusters.map((cl) => {
+    const membersByWeight = [...cl.members].sort(
+      (a, b) => b.weight - a.weight || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0),
+    );
+    const rep = membersByWeight[0];
+    const batchesSeen = cl.batches.size;
+    const confirmed = bcSafe >= 2 && batchesSeen >= confirmBar;
+    const weight = confirmed
+      ? Math.min(0.95, rep.weight + 0.1 * (batchesSeen - 1))
+      : rep.weight * (bcSafe >= 2 ? CONSENSUS_SINGLE_BATCH_MULT : 0.5);
+    const evidence = (membersByWeight.find((m) => m.evidence) || {}).evidence || '';
+    return {
+      pattern: {
         id: rep.id || patternIdForLabel(rep.label),
         label: rep.label,
         type: rep.type,
         weight: round(clamp(weight, 0, 1), 3),
         ...(evidence ? { evidence: evidence.slice(0, 140) } : {}),
         evidenceCount: batchesSeen,
-      };
-    })
-    // Fix 3: מפילים קלאסטרים חלשי-עדות (churn). הספק ביקש להפיל singletons בלבד, אך מדידת
-    // שער היציבות הראתה ש-churn שורד גם ב-2/8 באטצ'ים: דפוסי-LLM מבניים/רטוריים חוצים את
-    // סף ה-2-באטצ'ים בהרצה אחת ולא באחרת → פער בגודל הסט → Jaccard נמוך. לכן מפילים כל
-    // קלאסטר שנצפה בפחות מ-dropBar באטצ'ים. הביטויים ה"ידועים" (ניתן לראות כי / מהווה /
-    // באופן) מגיעים דטרמיניסטית מ-mineSignatureNgrams — לא דרך הקונצנזוס — ולכן אינם נפגעים.
-    .filter((p) => {
-      if (bc < 4) return true;
-      const dropBar = Math.max(2, Math.ceil(bc * 0.3));
-      return p.evidenceCount >= dropBar;
-    });
+        ...(confirmed ? { crossValidated: true } : {}),
+      },
+      confirmed,
+    };
+  });
 
-  patterns.sort((a, b) => b.weight - a.weight || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+  const byWeightThenLabel = (a, b) =>
+    b.weight - a.weight || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+
+  const confirmedPatterns = scored
+    .filter((s) => s.confirmed)
+    .map((s) => s.pattern)
+    .filter(passesPatternQualityGate);
+  // ניצולי באטץ' יחיד: אותו שער איכות, ואז תקרה — החלשים נופלים ראשונים.
+  const singleCap = bcSafe >= 2 ? CONSENSUS_SINGLE_BATCH_CAP : CAP_PATTERNS;
+  const singlePatterns = scored
+    .filter((s) => !s.confirmed)
+    .map((s) => s.pattern)
+    .filter(passesPatternQualityGate)
+    .sort(byWeightThenLabel)
+    .slice(0, singleCap);
+
+  const patterns = [...confirmedPatterns, ...singlePatterns];
+  patterns.sort(byWeightThenLabel);
 
   // negativeSpace: dedupe לפי Jaccard≥0.5, שומר את הניסוח הקצר יותר.
   const negClusters = [];
@@ -2449,6 +3243,12 @@ export function consensusMergePatterns(batchResults, { batchCount } = {}) {
       else if (str.length < target.rep.length) target.rep = str;
     });
   });
+
+  // Defect 3 — המשמעות: "לפחות דפוס אחד אושר בשני באטצ'ים או יותר". קודם השדה
+  // היה `bc >= 3`, כלומר "רצנו מספיק באטצ'ים" — הוא דיווח אימות-צולב גם כשאף
+  // דפוס לא חזר על עצמו אפילו פעם אחת. הוא מזין בונוס ודאות ב-recomputeConfidence,
+  // ולכן הדיווח השגוי ניפח את הציון.
+  const crossValidated = bcSafe >= 2 && scored.some((s) => s.confirmed);
 
   return {
     patterns: patterns.slice(0, CAP_PATTERNS),
