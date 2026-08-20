@@ -38,10 +38,13 @@ export const buildProviderRequest = ({
   const resolvedThinkingBudget = Number.isFinite(thinkingBudget)
     ? thinkingBudget
     : (purpose === 'plan' || purpose === 'cheap' ? 0 : null);
-  const geminiThinkingConfig = Number.isFinite(resolvedThinkingBudget)
-    && /^gemini-2\.5/i.test(String(model || ''))
-    && !/-pro/i.test(String(model || ''))
-    ? { thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(resolvedThinkingBudget)) } }
+  // 2.5: budget:0 מכבה חשיבה; 3.x: budget נבלע — המינימום הנתמך הוא thinkingLevel:'low' (נמדד).
+  const geminiThinkingConfig = Number.isFinite(resolvedThinkingBudget) && !/-pro/i.test(String(model || ''))
+    ? (/^gemini-2\.5/i.test(String(model || ''))
+      ? { thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(resolvedThinkingBudget)) } }
+      : /^gemini-3/i.test(String(model || ''))
+        ? { thinkingConfig: { thinkingLevel: 'low' } }
+        : null)
     : null;
   switch (provider) {
     case 'claude': {

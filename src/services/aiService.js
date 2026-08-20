@@ -10942,14 +10942,20 @@ ${isGeneralWritingScope
           : { model: resolvedModel };
         if (Number.isFinite(options.temperature)) geminiModelConfig.generationConfig = { temperature: options.temperature };
         // קריאות מכניות (תקן/סכם/טבלה/judge) לא צריכות חשיבה — טוקני thinking מחויבים
-        // במחיר output. נתמך רק ב-2.5 שאינו pro (pro לא יורד מתחת ל-128).
-        if (Number.isFinite(options.thinkingBudget)
-          && /^gemini-2\.5/i.test(resolvedModel)
-          && !/-pro/i.test(resolvedModel)) {
-          geminiModelConfig.generationConfig = {
-            ...(geminiModelConfig.generationConfig || {}),
-            thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(options.thinkingBudget)) },
-          };
+        // במחיר output. משפחת 2.5 (לא-pro): thinkingBudget:0 מכבה לגמרי. משפחת 3.x (נמדד
+        // על 3.7-flash): budget נבלע בשקט ו-minimal/none נדחים — המינימום הוא thinkingLevel:'low'.
+        if (Number.isFinite(options.thinkingBudget) && !/-pro/i.test(resolvedModel)) {
+          if (/^gemini-2\.5/i.test(resolvedModel)) {
+            geminiModelConfig.generationConfig = {
+              ...(geminiModelConfig.generationConfig || {}),
+              thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(options.thinkingBudget)) },
+            };
+          } else if (/^gemini-3/i.test(resolvedModel)) {
+            geminiModelConfig.generationConfig = {
+              ...(geminiModelConfig.generationConfig || {}),
+              thinkingConfig: { thinkingLevel: 'low' },
+            };
+          }
         }
         const mdl = genAI.getGenerativeModel(geminiModelConfig);
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
@@ -11950,7 +11956,8 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
 // בדיקת תקינות ספק — שולח הודעה קצרה ובודק תשובה
 // ═══════════════════════════════════════
 const PROVIDER_MODEL_OPTIONS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  // 3.7-flash = ה-workhorse החדש (מחיר היכרות עד 31.12.26); 1.5 המתות הוסרו.
+  gemini: ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-2.5-pro'],
   openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
   claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],

@@ -8,6 +8,7 @@
 
 // התאמה לפי prefix — הערך הראשון שמתאים מנצח. maxOutput = תקרת הספק בפועל.
 const MODEL_LIMIT_TABLE = [
+  { match: /^gemini-3/i, maxOutput: 65536, defaults: { chat: 8192, draft: 32768, merge: 16384, plan: 1024, cheap: 512 } },
   { match: /^gemini-2\.5/i, maxOutput: 65536, defaults: { chat: 8192, draft: 32768, merge: 16384, plan: 1024, cheap: 512 } },
   { match: /^gemini/i, maxOutput: 8192, defaults: { chat: 8192, draft: 8192, merge: 8192, plan: 1024, cheap: 512 } },
   { match: /^claude-(?:opus|sonnet|fable|mythos)/i, maxOutput: 32000, defaults: { chat: 8192, draft: 24000, merge: 12000, plan: 1024, cheap: 512 } },

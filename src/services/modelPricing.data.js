@@ -33,6 +33,42 @@ export const MODEL_PRICING = [
   },
   {
     provider: 'gemini',
+    model: 'gemini-3.7-flash',
+    inputPerM: 0.75,
+    outputPerM: 3.75,
+    kind: 'text',
+    tier: 'בינוני',
+    recommendation: 'הדור החדש — חכם משמעותית מ-2.5-flash בתוספת מתונה. מחיר היכרות עד 31.12.2026 (אחריו $1.5/$7.5). מומלץ לכתיבה איכותית. בונוס: grounding על 3.x — 5,000 חיפושים חינם בחודש ואז $14/1,000 (לעומת $35 ב-2.5).',
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3.5-flash',
+    inputPerM: 1.50,
+    outputPerM: 9.00,
+    kind: 'text',
+    tier: 'יקר',
+    recommendation: 'דור 3.5 — יקר מ-3.7-flash החדש ולרוב אין סיבה להעדיף אותו.',
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3.5-flash-lite',
+    inputPerM: 0.30,
+    outputPerM: 2.50,
+    kind: 'text',
+    tier: 'זול',
+    recommendation: 'lite מדור 3.5 במחיר של 2.5-flash — חלופה מודרנית למשימות מכניות.',
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3.1-pro-preview',
+    inputPerM: 2.00,
+    outputPerM: 12.00,
+    kind: 'text',
+    tier: 'יקר',
+    recommendation: 'ה-pro החדש — לניסוח עמוק/ניתוח כבד בלבד; יקר מ-2.5-pro.',
+  },
+  {
+    provider: 'gemini',
     model: 'gemini-2.5-flash-lite',
     inputPerM: 0.10,
     outputPerM: 0.40,
@@ -136,21 +172,30 @@ export const MODEL_PRICING = [
   // ── וידאו ─────────────────────────────────────────────────────────────────
   {
     provider: 'gemini',
-    model: 'veo-3.0-generate-001',
+    model: 'gemini-3-pro-image',
+    kind: 'image',
+    unit: 'תמונה',
+    pricePerUnit: 0.134,
+    tier: 'בינוני',
+    recommendation: 'Nano Banana Pro — האיכותי ביותר לתרשימים עם טקסט עברי מדויק.',
+  },
+  {
+    provider: 'gemini',
+    model: 'veo-3.1-generate-preview',
     kind: 'video',
     unit: 'שנייה',
     pricePerUnit: 0.40,
     tier: 'יקר',
-    recommendation: 'וידאו קצר עם סאונד — יקר; להשתמש במשורה.',
+    recommendation: 'וידאו קצר עם סאונד (720p-1080p) — יקר; להשתמש במשורה.',
   },
   {
     provider: 'gemini',
-    model: 'veo-3.0-fast-generate-001',
+    model: 'veo-3.1-fast-generate-preview',
     kind: 'video',
     unit: 'שנייה',
     pricePerUnit: 0.15,
     tier: 'בינוני',
-    recommendation: 'גרסה מהירה וזולה יותר של Veo 3.',
+    recommendation: 'ברירת המחדל לווידאו — גרסה מהירה וזולה יותר של Veo 3.1.',
   },
 ];
 
@@ -158,7 +203,7 @@ export const GROUNDING_PRICING = {
   provider: 'gemini',
   pricePer1000: 35,
   freePerDay: 1500,
-  note: 'חיפוש Google בתוך קריאה (grounding) מחויב בנפרד — ~12.9 אגורות לקריאה מעוגנת. זה היה גורם העלות המרכזי באפליקציה.',
+  note: 'חיפוש Google בתוך קריאה (grounding) מחויב בנפרד — ~12.9 אגורות לקריאה מעוגנת על מודלי 2.5. זה היה גורם העלות המרכזי באפליקציה. על מודלי 3.x התנאים טובים בהרבה: 5,000 חיפושים חינם בחודש ואז $14/1,000.',
 };
 
 /**

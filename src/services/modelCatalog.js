@@ -3,7 +3,7 @@
 
 // ── presets פר ספק ──────────────────────────────────────────────────────────
 export const IMAGE_MODEL_PRESETS = {
-  gemini: ['imagen-3.0-generate-002', 'imagen-4.0-generate-001', 'gemini-2.5-flash-image'],
+  gemini: ['gemini-2.5-flash-image', 'gemini-3-pro-image', 'imagen-3.0-generate-002', 'imagen-4.0-generate-001'],
   openai: ['gpt-image-1'],
   stability: ['stable-diffusion-xl-1024-v1-0'],
   xai: ['grok-2-image'],
@@ -36,10 +36,14 @@ export function classifyModelKind(providerId, modelId) {
   if (!id) return 'text';
   if (IMAGEN_RE.test(id)) return 'image';
   if (VEO_RE.test(id)) return 'video';
+  // nano-banana-pro-preview: מודל תמונה בלי המילה image במזהה (נמדד ברשימת המפתח 8.2026).
+  if (/nano-banana/i.test(id)) return 'image';
   if (IMAGE_TOKEN_RE.test(id)) return 'image';
   // מסלולי fal-ai (flux) אינם מכילים את המילה image במזהה.
   if (String(providerId || '') === 'flux' || /^fal-ai\//i.test(id)) return 'image';
   if (STABLE_DIFFUSION_RE.test(id)) return 'image';
+  // אודיו/מוזיקה (lyria) ו-TTS מפרסמים generateContent אבל אינם צ'אט ואינם מדיה נתמכת.
+  if (/^lyria-/i.test(id) || /-tts(-|$)/i.test(id)) return 'other';
   return 'text';
 }
 
