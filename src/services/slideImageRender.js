@@ -86,6 +86,9 @@ export const renderSlideToPng = async (slide, themeId, index = null, { pixelRati
       style: { transform: 'none', margin: '0' },
     });
     // timeout כדי שייצוא לא ייתקע אם הרסטר נכשל — נופלים ל-native לשקף הזה.
+    // ה-promise המפסיד בתחרות עלול לדחות מאוחר יותר ללא מאזין ⇒ unhandled rejection
+    // שמרעיש בקונסול ומסתיר שגיאות אמיתיות. בולעים אותו במפורש.
+    png.catch(() => {});
     return await Promise.race([
       png,
       new Promise((_, reject) => setTimeout(() => reject(new Error('slide raster timeout')), 20000)),

@@ -15,7 +15,7 @@ import {
 } from './presentation/deckModel';
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
 import {
-  generateSlideImage, generateSlideInfographic, generateSlideBackground,
+  generateSlideImage, generateSlideInfographic, generateSlideBackground, restructureSlideAsInfographic,
   generateMissingDeckImages, generateDeckTheme,
 } from './services/deckMediaService';
 import { buildPptxBase64 } from './services/pptxExport';
@@ -110,6 +110,8 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
   const [themeId, setThemeId] = useState(prefs.defaultThemeId || 'premium');
   const [density, setDensity] = useState(prefs.defaultDensity || 'balanced');
   const [imageIntensity, setImageIntensity] = useState(prefs.defaultImageIntensity || 'high');
+  const [autoImages, setAutoImages] = useState(prefs.defaultAutoImages === true);
+  const [autoInfographics, setAutoInfographics] = useState(prefs.defaultAutoInfographics === true);
 
   const fromDocument = source === 'document';
   const fromUpload = source === 'upload';
@@ -125,6 +127,8 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
         defaultDensity: density,
         defaultSlideCount: slideAuto ? 'auto' : resolvedSlideCount,
         defaultImageIntensity: imageIntensity,
+        defaultAutoImages: autoImages,
+        defaultAutoInfographics: autoInfographics,
         defaultAudience: audience.trim(),
         defaultGoal: goal.trim(),
       });
@@ -132,7 +136,7 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
     onGenerate({
       source, topic: topic.trim(), audience: audience.trim(), goal: goal.trim(),
       slideCount: slideAuto ? 'auto' : resolvedSlideCount,
-      themeId, density, imageIntensity,
+      themeId, density, imageIntensity, autoImages, autoInfographics,
     });
   };
 
@@ -189,6 +193,34 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
           <select value={imageIntensity} onChange={(e) => setImageIntensity(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 outline-none focus:border-cyan-400">
             <option value="high">גבוה</option><option value="medium">בינוני</option><option value="low">נמוך</option>
           </select></label>
+      </div>
+
+      {/* ── מדיה אוטומטית אחרי הבנייה ── */}
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+        <label className="flex cursor-pointer flex-col gap-1">
+          <span className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={autoImages}
+              onChange={(e) => setAutoImages(e.target.checked)}
+              className="h-4 w-4 flex-none cursor-pointer accent-cyan-500"
+            />
+            <span className="text-sm font-bold text-slate-200">🖼️ צור תמונות אוטומטית אחרי הבנייה</span>
+          </span>
+          <span className="pr-6 text-[11px] leading-5 text-slate-500">כל שקופית שמסומנת כזקוקה לתמונה תקבל תמונה מחוללת. עולה כסף — כ-4 סנט לתמונה.</span>
+        </label>
+        <label className="flex cursor-pointer flex-col gap-1">
+          <span className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={autoInfographics}
+              onChange={(e) => setAutoInfographics(e.target.checked)}
+              className="h-4 w-4 flex-none cursor-pointer accent-cyan-500"
+            />
+            <span className="text-sm font-bold text-slate-200">📊 המר שקופיות מתאימות לאינפוגרפיקה</span>
+          </span>
+          <span className="pr-6 text-[11px] leading-5 text-slate-500">שקופיות עם סדרת מספרים יומרו לגרף מדויק (חינם); השאר למבנה ויזואלי.</span>
+        </label>
       </div>
 
       <div className="flex flex-col gap-2">
@@ -566,6 +598,22 @@ export default function PresentationStudio({
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const themePanelRef = useRef(null);
 
+  // ── היסטוריית ביטול/ביצוע-שוב ברמת ה-deck (Ctrl+Z / Ctrl+Shift+Z) ──
+  const historyRef = useRef({ past: [], future: [] });
+  const titleSnapshotRef = useRef(null);
+  // דוחף מצב-דק קודם להיסטוריה בלי לשנות את הדק הנוכחי (לעריכות רציפות כמו הקלדת שם).
+  const pushHistorySnapshot = (snapshot) => {
+    if (!snapshot) return;
+    historyRef.current.past.push(snapshot);
+    if (historyRef.current.past.length > 50) historyRef.current.past.shift();
+    historyRef.current.future = [];
+    bumpHistory((n) => n + 1);
+  };
+  const [, bumpHistory] = useState(0);
+
+  // בקשת מדיה אוטומטית מטופס היצירה — נצרכת ב-useEffect כשה-deck מופיע.
+  const autoMediaRef = useRef(null);
+
   // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
   const [imageStyle, setImageStyle] = useState('photo');
   const [mediaBusy, setMediaBusy] = useState('');      // מזהה הפעולה הרצה כרגע
@@ -584,15 +632,60 @@ export default function PresentationStudio({
   const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
   const selectedThumbRef = useRef(null);
 
+  // כל שינוי deck עובר כאן — דוחף את המצב הקודם להיסטוריה ומאפס את ה-redo.
+  const commitDeck = (nextDeck) => {
+    if (!nextDeck) return;
+    const h = historyRef.current;
+    if (deck) {
+      h.past.push(deck);
+      if (h.past.length > 50) h.past.shift();
+    }
+    h.future = [];
+    bumpHistory((v) => v + 1);
+    onDeckChange(nextDeck);
+  };
+  const undo = () => {
+    const h = historyRef.current;
+    if (!h.past.length) return;
+    const prev = h.past.pop();
+    if (deck) h.future.push(deck);
+    bumpHistory((v) => v + 1);
+    onDeckChange(prev);
+  };
+  const redo = () => {
+    const h = historyRef.current;
+    if (!h.future.length) return;
+    const next = h.future.pop();
+    if (deck) h.past.push(deck);
+    bumpHistory((v) => v + 1);
+    onDeckChange(next);
+  };
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
+
+  // טופס היצירה קורא לזה במקום ל-onGenerate ישירות — כדי לזכור בקשת מדיה אוטומטית.
+  const handleCreateSubmit = (payload) => {
+    autoMediaRef.current = (payload?.autoImages || payload?.autoInfographics)
+      ? { autoImages: Boolean(payload.autoImages), autoInfographics: Boolean(payload.autoInfographics) }
+      : null;
+    onGenerate(payload);
+  };
+
   // ניווט שקופיות בחיצים (כל עוד לא מקלידים בשדה). RTL: ימינה=הקודם, שמאלה=הבא.
   useEffect(() => {
     if (!deck) return undefined;
     const onKey = (e) => {
       if (presenting || pickerOpen || exportOpen || themePanelOpen) return;
-      if (e.altKey || e.ctrlKey || e.metaKey) return;
       const t = e.target;
       const tag = t?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+      // ביטול / ביצוע-שוב
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const key = String(e.key || '').toLowerCase();
+        if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+        if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); return; }
+      }
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
       const list = deck.slides || [];
       const idx = list.findIndex((s) => s.id === selectedId);
       let next = null;
@@ -626,6 +719,63 @@ export default function PresentationStudio({
     selectedThumbRef.current?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
 
+  // ── מדיה אוטומטית: רץ פעם אחת כשה-deck מופיע, רק אם הטופס ביקש זאת ──
+  // (הפעולה נדרשת כאן ולא בנתיב היצירה, כי onGenerate מגיע כ-prop מבחוץ.)
+  useEffect(() => {
+    if (!deck) return undefined;
+    const req = autoMediaRef.current;
+    if (!req || (!req.autoImages && !req.autoInfographics)) return undefined;
+    autoMediaRef.current = null;
+    let cancelled = false;
+    (async () => {
+      setMediaBusy('auto');
+      setMediaError('');
+      setMediaResult('');
+      setMediaProgress('');
+      let working = deck;
+      let imagesMade = 0;
+      let chartsMade = 0;
+      try {
+        if (req.autoImages) {
+          const res = await generateMissingDeckImages(deck, activeTheme, {
+            style: 'photo',
+            onProgress: ({ index, total }) => { if (!cancelled) setMediaProgress(`יוצר תמונה ${index} מתוך ${total}…`); },
+          });
+          (res?.slides || []).forEach((r) => {
+            working = updateSlide(working, r.slideId, { image: r.image });
+            imagesMade += 1;
+          });
+        }
+        if (req.autoInfographics && !cancelled) {
+          const targets = (working.slides || []).filter((s) => s?.visual === 'chart');
+          for (let i = 0; i < targets.length; i += 1) {
+            if (cancelled) break;
+            setMediaProgress(`ממיר שקופית ${i + 1} מתוך ${targets.length} לאינפוגרפיקה…`);
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const image = await generateSlideInfographic(targets[i], activeTheme, { force: 'chart' });
+              working = updateSlide(working, targets[i].id, { image });
+              chartsMade += 1;
+            } catch { /* שקופית בלי נתונים מספריים — מדלגים בשקט */ }
+          }
+        }
+        if (!cancelled) {
+          if (imagesMade || chartsMade) commitDeck(working);
+          const parts = [];
+          if (req.autoImages) parts.push(`${imagesMade} תמונות`);
+          if (req.autoInfographics) parts.push(`${chartsMade} אינפוגרפיקות`);
+          setMediaResult(parts.length ? `נוצרו אוטומטית: ${parts.join(' · ')}` : '');
+        }
+      } catch (e) {
+        if (!cancelled) setMediaError(e?.message || 'יצירת המדיה האוטומטית נכשלה');
+      } finally {
+        if (!cancelled) { setMediaBusy(''); setMediaProgress(''); }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deck]);
+
   // אם אין deck — טופס יצירה
   if (!deck) {
     return (
@@ -643,13 +793,13 @@ export default function PresentationStudio({
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
                 <div className="text-sm font-semibold">בונה את המצגת...</div>
               </div>
-            : <CreateForm onGenerate={onGenerate} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
+            : <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
         </div>
       </div>
     );
   }
 
-  const patchSlide = (patch) => onDeckChange(updateSlide(deck, selected.id, patch));
+  const patchSlide = (patch) => commitDeck(updateSlide(deck, selected.id, patch));
 
   // ── פעולות מדיה ב-AI ─────────────────────────────────────────────
   const pendingImageCount = slides.filter((s) => s?.image?.pending && (s.image.query || s.image.alt)).length;
@@ -685,9 +835,22 @@ export default function PresentationStudio({
     patchSlide(withVisibleImageLayout(image, 'image-right'));
   });
 
+  // אינפוגרפיקה בשני מסלולים, שניהם עם עברית אמיתית:
+  //   1. יש סדרת מספרים ⇒ גרף QuickChart מדויק (חינם, התוויות מרונדרות מטקסט אמיתי).
+  //   2. אחרת ⇒ המרה לפריסה מובנית מקורית (שלבים/ציר זמן/השוואה/מספרים).
+  // ⚠️ בכוונה *לא* דיאגרמה ממודל תמונות: נמדד שהוא משבש עברית בתוך התמונה
+  // (אותיות שנראות עבריות אך חסרות פשר), ומצגת עם ג'יבריש היא כשל מוצר.
   const handleGenerateInfographic = () => runMedia('infographic', async () => {
-    const image = await generateSlideInfographic(selected, activeTheme, {});
-    patchSlide(withVisibleImageLayout(image, 'image-full'));
+    try {
+      const image = await generateSlideInfographic(selected, activeTheme, { force: 'chart' });
+      patchSlide(withVisibleImageLayout(image, 'image-full'));
+      return;
+    } catch {
+      // אין נתונים מספריים לגרף — ממשיכים למבנה ויזואלי מקורי.
+    }
+    const patch = await restructureSlideAsInfographic(selected, {});
+    patchSlide(patch);
+    setMediaResult('התוכן הומר למבנה ויזואלי עם טקסט אמיתי (ניתן לעריכה).');
   });
 
   const handleGenerateBackground = () => runMedia('bg', async () => {
@@ -702,7 +865,7 @@ export default function PresentationStudio({
     });
     // מקפלים את כל התוצאות ל-deck אחד ומעדכנים פעם אחת בלבד.
     const nextDeck = (res.slides || []).reduce((acc, r) => updateSlide(acc, r.slideId, { image: r.image }), deck);
-    if (res.slides?.length) onDeckChange(nextDeck);
+    if (res.slides?.length) commitDeck(nextDeck);
     const failCount = res.failures?.length || 0;
     setMediaResult(`נוצרו ${res.slides?.length || 0} תמונות${failCount ? ` · ${failCount} נכשלו` : ''}`);
   });
@@ -713,7 +876,7 @@ export default function PresentationStudio({
     setThemeError('');
     try {
       const t = await generateDeckTheme(themePrompt.trim());
-      onDeckChange({ ...deck, customTheme: t });
+      commitDeck({ ...deck, customTheme: t });
       setThemePrompt('');
       setThemePanelOpen(false);
     } catch (e) {
@@ -725,7 +888,7 @@ export default function PresentationStudio({
 
   const handleAddSlide = () => {
     const next = addSlideAfter(deck, selected.id, createSlide({ layout: 'title-bullets', title: 'שקופית חדשה' }));
-    onDeckChange(next);
+    commitDeck(next);
     const newIdx = next.slides.findIndex((s) => s.id === selected.id) + 1;
     setSelectedId(next.slides[newIdx]?.id || selectedId);
   };
@@ -733,10 +896,10 @@ export default function PresentationStudio({
     if (slides.length <= 1) return;
     const idx = selectedIndex;
     const next = removeSlide(deck, selected.id);
-    onDeckChange(next);
+    commitDeck(next);
     setSelectedId(next.slides[Math.max(0, idx - 1)]?.id || '');
   };
-  const handleMove = (dir) => onDeckChange(moveSlide(deck, selected.id, dir));
+  const handleMove = (dir) => commitDeck(moveSlide(deck, selected.id, dir));
 
   const handleExport = async (profile = 'auto') => {
     setExportOpen(false);
@@ -776,7 +939,19 @@ export default function PresentationStudio({
     <div className="flex min-h-full flex-1 flex-col overflow-hidden bg-slate-950" dir="rtl">
       {/* סרגל עליון */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
-        <input value={deck.title} onChange={(e) => onDeckChange({ ...deck, title: e.target.value })} className="rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-white outline-none focus:bg-slate-800" />
+        {/* שם המצגת: עריכה שוטפת בלי היסטוריה, ורשומת undo אחת בעזיבת השדה —
+            אחרת כל תו הופך לצעד undo נפרד. */}
+        <input
+          value={deck.title}
+          onFocus={() => { titleSnapshotRef.current = deck; }}
+          onChange={(e) => onDeckChange({ ...deck, title: e.target.value })}
+          onBlur={() => {
+            const before = titleSnapshotRef.current;
+            titleSnapshotRef.current = null;
+            if (before && before.title !== deck.title) pushHistorySnapshot(before);
+          }}
+          className="rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-white outline-none focus:bg-slate-800"
+        />
         <div className="relative" ref={themePanelRef}>
           <button
             type="button"
@@ -812,7 +987,7 @@ export default function PresentationStudio({
                     </span>
                     <button
                       type="button"
-                      onClick={() => onDeckChange({ ...deck, customTheme: null })}
+                      onClick={() => commitDeck({ ...deck, customTheme: null })}
                       className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-cyan-400 hover:text-cyan-300"
                     >↺ חזור לערכה רגילה</button>
                   </div>
@@ -820,7 +995,7 @@ export default function PresentationStudio({
               </div>
               <ThemeFamilyPicker
                 value={deck.themeId}
-                onSelect={(id) => { onDeckChange({ ...deck, themeId: id, customTheme: null }); setThemePanelOpen(false); }}
+                onSelect={(id) => { commitDeck({ ...deck, themeId: id, customTheme: null }); setThemePanelOpen(false); }}
                 small
               />
             </div>
@@ -837,6 +1012,22 @@ export default function PresentationStudio({
         )}
         {mediaResult && <span className="text-[11px] font-semibold text-emerald-400">{mediaResult}</span>}
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={undo}
+          disabled={!canUndo}
+          title="בטל (Ctrl+Z)"
+          aria-label="בטל"
+          className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-30"
+        >↶</button>
+        <button
+          type="button"
+          onClick={redo}
+          disabled={!canRedo}
+          title="בצע שוב (Ctrl+Shift+Z)"
+          aria-label="בצע שוב"
+          className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-30"
+        >↷</button>
         <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
         <div className="relative">

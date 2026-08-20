@@ -111,6 +111,28 @@ const resolveImages = async (deck) => {
   return map;
 };
 
+// תקציב-זמן קשיח לשלב הצריבה. renderSlideToPng כבר מגביל שקף בודד ל-20s, אבל
+// שלבים שקודמים לו (document.fonts.ready, פענוח תמונות) יכולים להיתקע ללא הגבלה —
+// למשל בחלון/טאב חבוי שבו rAF אינו יורה. בלי התקציב הזה הייצוא נתקע בשקט לנצח;
+// איתו הוא מידרדר לשקפים ללא צריבה + אזהרה בעברית.
+const RASTER_PHASE_BUDGET_MS = 90000;
+const withRasterBudget = async (promise, label, warnings) => {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          warnings.push(`${label} דילג על צריבת העיצוב (חריגת זמן) — הייצוא הושלם בלי הרקעים המעוצבים`);
+          resolve({ map: new Map(), failures: [] });
+        }, RASTER_PHASE_BUDGET_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 /**
  * buildPptxBase64 — מחזיר { base64, warnings }.
  *   base64   — ה-pptx כ-base64 string
@@ -162,7 +184,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     });
   // JPEG q0.92 — בלתי-מובחן מ-PNG בתצוגה אך קטן פי ~6 (דק faithful ירד מ~27MB ל~4MB)
   const { map: pngMap, failures: imgFailures } = imageModeSlides.length
-    ? await renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null })
+    ? await withRasterBudget(renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null }), 'ייצוא התמונות', warnings)
     : { map: new Map(), failures: [] };
   // שקף image שצריבתו נכשלה → יוצא native (fallback). מתריעים למשתמש.
   imgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא במצב פשוט (צריבת עיצוב נכשלה)`));
@@ -177,7 +199,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     .filter(({ slide }) => modeFor(slide) === 'native')
     .concat(failedImageSlides);
   const { map: bgMap, failures: bgFailures } = nativeModeSlides.length
-    ? await renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null })
+    ? await withRasterBudget(renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null }), 'צריבת הרקעים', warnings)
     : { map: new Map(), failures: [] };
   // רקע native שצריבתו נכשלה → יוצא בצבע אחיד (fallback). מתריעים למשתמש.
   bgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא עם רקע אחיד (צריבת רקע נכשלה)`));

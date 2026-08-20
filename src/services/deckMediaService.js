@@ -94,8 +94,9 @@ const buildInfographicPrompt = (slide = {}, theme = {}) => {
     'Create a clean, professional infographic diagram on a plain light background.',
     'Flat vector style, bold simple shapes, clear hierarchy, generous spacing.',
     colors.accent ? `Use ${colors.accent} as the primary accent color${colors.accent2 ? ` and ${colors.accent2} as secondary` : ''}.` : '',
-    'All labels must be in clear, correctly spelled Hebrew, written right-to-left.',
-    'Keep labels short (1-3 words each). Do not invent data that is not listed.',
+    // ⚠️ נמדד: מודלי תמונה משבשים עברית בתוך תמונה — אותיות שנראות עבריות אבל חסרות פשר.
+    // לכן המסלול הזה מבקש ויזואל ללא טקסט כלל; טקסט אמיתי מגיע מפריסה מובנית (restructureSlideAsInfographic).
+    'Do NOT render any text, letters, numbers or labels inside the image — icons and shapes only.',
     `Title: ${slide?.title || ''}`,
     `Content to visualize: ${slideTextSummary(slide)}`,
   ].filter(Boolean).join('\n');
@@ -227,6 +228,73 @@ export const generateSlideInfographic = async (slide, theme, { force = '', model
     attribution: 'אינפוגרפיקה שנוצרה ב-AI',
     prompt,
   });
+};
+
+/**
+ * restructureSlideAsInfographic — הופך את תוכן השקופית לפריסה מובנית מקורית
+ * (שלבים / ציר זמן / השוואה / מספרים) במקום תמונה מחוללת.
+ *
+ * ⚠️ למה לא מודל תמונות: נמדד בפועל שמודלי התמונה משבשים עברית בתוך התמונה
+ * ("העילקהר", "מה ליפום שמים") — אותיות שנראות עבריות אבל חסרות פשר. פריסה
+ * מקורית מרנדרת טקסט אמיתי בצבעי הערכה, נשארת עריכה, ומיוצאת נייטיב ל-PPTX.
+ * @returns {Promise<object>} patch לשקופית
+ */
+export const restructureSlideAsInfographic = async (slide, { signal } = {}) => {
+  const content = slideTextSummary(slide);
+  if (!content) throw new Error('אין מספיק תוכן בשקופית כדי לבנות אינפוגרפיקה.');
+  const raw = await chatWithActiveProvider(
+    [
+      'הפוך את תוכן השקופית למבנה ויזואלי. בחר את הפריסה שהכי מתאימה לתוכן והחזר JSON תקין בלבד:',
+      '{"layout":"steps|timeline|comparison|stat","title":"כותרת קצרה","kicker":"תווית קצרה (אופציונלי)",',
+      ' "steps":[{"title":"שם השלב","body":"משפט קצר"}],',
+      ' "columns":[{"heading":"צד א","bullets":["נקודה"]},{"heading":"צד ב","bullets":["נקודה"]}],',
+      ' "stats":[{"value":"45%","label":"תיאור קצר","caption":"הקשר"}]}',
+      'כללים: steps = תהליך/שלבים (3-5). timeline = כרונולוגיה. comparison = בדיוק 2 עמודות. stat = 2-4 מספרים בולטים.',
+      'החזר רק את השדה שמתאים לפריסה שבחרת. טקסט בעברית, קצר וחד. אל תמציא מספרים שלא מופיעים בתוכן.',
+      '',
+      `תוכן השקופית: ${content}`,
+    ].join('\n'),
+    '',
+    'אתה מעצב מצגות שממיר טקסט למבנה ויזואלי. JSON בלבד.',
+    {
+      skipAutomation: true,
+      skipMultiModel: true,
+      directChat: true,
+      skipSkillSelection: true,
+      strictFormatting: true,
+      omitPersonalStyleStructureHints: true,
+      forceSuppressResearchRouting: true,
+      thinkingBudget: 0,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  const parsed = extractJson(typeof raw === 'string' ? raw : raw?.text || '');
+  const layout = ['steps', 'timeline', 'comparison', 'stat'].includes(parsed?.layout) ? parsed.layout : '';
+  if (!layout) throw new Error('לא הצלחתי לבנות מבנה ויזואלי מהתוכן הזה. נסה "תמונה" במקום.');
+  const patch = { layout, title: String(parsed.title || slide?.title || '').trim() };
+  if (parsed.kicker) patch.kicker = String(parsed.kicker).trim().slice(0, 40);
+  if (layout === 'steps' || layout === 'timeline') {
+    const steps = (Array.isArray(parsed.steps) ? parsed.steps : [])
+      .map((s) => ({ title: String(s?.title || '').trim(), body: String(s?.body || '').trim() }))
+      .filter((s) => s.title || s.body).slice(0, 6);
+    if (steps.length < 2) throw new Error('לא נמצאו מספיק שלבים לבניית אינפוגרפיקה.');
+    patch.steps = steps;
+  } else if (layout === 'comparison') {
+    const columns = (Array.isArray(parsed.columns) ? parsed.columns : [])
+      .map((c) => ({ heading: String(c?.heading || '').trim(), bullets: (Array.isArray(c?.bullets) ? c.bullets : []).map((b) => String(b || '').trim()).filter(Boolean) }))
+      .filter((c) => c.heading || c.bullets.length).slice(0, 2);
+    if (columns.length < 2) throw new Error('לא נמצאו שני צדדים להשוואה.');
+    patch.columns = columns;
+  } else {
+    const stats = (Array.isArray(parsed.stats) ? parsed.stats : [])
+      .map((s) => ({ value: String(s?.value ?? '').trim(), label: String(s?.label || '').trim(), caption: String(s?.caption || '').trim() }))
+      .filter((s) => s.value || s.label).slice(0, 4);
+    if (!stats.length) throw new Error('לא נמצאו מספרים בולטים בתוכן.');
+    patch.stats = stats;
+  }
+  // ויזואל מובנה מחליף תמונה קודמת — אחרת נשארת תמונה יתומה מהפריסה הקודמת.
+  patch.image = null;
+  return patch;
 };
 
 /**
