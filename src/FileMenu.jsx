@@ -122,6 +122,7 @@ import {
   QUICKCHART_NOTE,
 } from './services/modelPricing.data';
 import { getUsageSummary, getUsageCostBreakdown, getUsageLimits, setUsageLimits } from './services/usageTelemetryService';
+import { testMediaGenConnection, runMediaGenSmokeTest } from './services/imageService';
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
@@ -882,6 +883,85 @@ function ApiTestButton({ providerId, providerConfig }) {
   );
 }
 
+// ─── בדיקת חיבור ליצירת תמונות/וידאו ───
+// שני מסלולים בכוונה: בדיקה חינמית (מפתח + זמינות המודל בחשבון) שתופסת את רוב
+// התקלות, ויצירה אמיתית שעולה סנטים ולכן דורשת לחיצה נפרדת עם מחיר גלוי.
+function MediaGenTestButton({ kind = 'image', provider, model, apiKey }) {
+  const [status, setStatus] = useState(null); // null | 'checking' | 'smoke' | 'ok' | 'fail'
+  const [resultText, setResultText] = useState('');
+  const [warningText, setWarningText] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const isVideo = kind === 'video';
+
+  const runFreeCheck = async () => {
+    setStatus('checking');
+    setResultText('');
+    setWarningText('');
+    setPreviewUrl('');
+    try {
+      const res = await testMediaGenConnection({ kind, provider, model, key: apiKey });
+      setStatus(res.ok ? 'ok' : 'fail');
+      setResultText(res.message || '');
+      setWarningText(res.warning || '');
+    } catch (error) {
+      setStatus('fail');
+      setResultText(String(error?.message || error).slice(0, 200));
+    }
+  };
+
+  const runSmokeTest = async () => {
+    setStatus('smoke');
+    setResultText('יוצר תמונת בדיקה…');
+    setWarningText('');
+    setPreviewUrl('');
+    try {
+      const res = await runMediaGenSmokeTest({ provider, model });
+      setStatus('ok');
+      setPreviewUrl(res.dataUrl || '');
+      setResultText(`נוצרה תמונת בדיקה ✅${res.model ? ` (${res.model})` : ''}`);
+    } catch (error) {
+      setStatus('fail');
+      setResultText(`היצירה נכשלה: ${String(error?.message || error).slice(0, 220)}`);
+    }
+  };
+
+  const buttonStyle = {
+    padding: '6px 12px', border: '1px solid var(--s-border)', borderRadius: 6,
+    background: 'var(--s-surface-2)', color: 'var(--s-text)', fontSize: 11.5, fontWeight: 700,
+    cursor: status === 'checking' || status === 'smoke' ? 'default' : 'pointer',
+    opacity: status === 'checking' || status === 'smoke' ? 0.6 : 1,
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button type="button" onClick={runFreeCheck} disabled={status === 'checking' || status === 'smoke'} style={buttonStyle}>
+          {status === 'checking' ? '⏳ בודק…' : '🔌 בדוק חיבור (חינם)'}
+        </button>
+        {!isVideo && (
+          <button type="button" onClick={runSmokeTest} disabled={status === 'checking' || status === 'smoke'} style={buttonStyle}>
+            {status === 'smoke' ? '⏳ יוצר…' : '🖼️ צור תמונת בדיקה (~$0.04)'}
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 3, lineHeight: 1.6 }}>
+        הבדיקה החינמית מוודאת שהמפתח תקף ושהמודל באמת מוגש לו{isVideo ? '' : '; יצירת תמונת בדיקה מחייבת את החשבון בסנטים בודדים'}.
+      </div>
+      {resultText && (
+        <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.6, direction: 'rtl', color: status === 'ok' ? '#065F46' : status === 'fail' ? '#991B1B' : 'var(--s-muted)' }}>
+          {status === 'ok' ? '✅ ' : status === 'fail' ? '❌ ' : ''}{resultText}
+        </div>
+      )}
+      {warningText && (
+        <div style={{ marginTop: 3, fontSize: 10.5, lineHeight: 1.6, direction: 'rtl', color: '#B45309' }}>{warningText}</div>
+      )}
+      {previewUrl && (
+        <img src={previewUrl} alt="תמונת בדיקה" style={{ marginTop: 6, width: 110, height: 110, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--s-border)' }} />
+      )}
+    </div>
+  );
+}
+
 // ─── קטע ספק ───
 const isProviderConfigured = (config, providerId) => {
   const provider = config?.[providerId] || {};
@@ -1021,6 +1101,7 @@ function MediaVisualsSettings({ config, setConfig }) {
           onChange={(v) => update('imageGen', 'model', v)}
           options={[...new Set([...getMediaModelChoices('image', config.imageGen?.provider || 'gemini', config), ...IMAGE_GEN_MODEL_SUGGESTIONS])]}
           hint="Nano Banana (gemini-*-image) הכי טוב לתרשימים עם טקסט עברי; imagen לאיורים. אפשר גם להקליד ידנית." />
+        <MediaGenTestButton kind="image" provider={config.imageGen?.provider || 'gemini'} model={config.imageGen?.model} apiKey={config.imageGen?.key} />
       </ProviderSection>
 
       <ProviderSection title="יצירת וידאו AI (Veo)" icon="🎬" active={false} allowActivate={false}
@@ -1039,6 +1120,7 @@ function MediaVisualsSettings({ config, setConfig }) {
           onChange={(v) => update('videoGen', 'model', v)}
           options={getMediaModelChoices('video', 'gemini', config)}
           hint="fast זול משמעותית. הרשימה מתעדכנת מכפתור 'רענן רשימת מודלים' בטאב מנועי AI." />
+        <MediaGenTestButton kind="video" provider={config.videoGen?.provider || 'gemini'} model={config.videoGen?.model} apiKey={config.videoGen?.key} />
       </ProviderSection>
 
       <ProviderSection title="גרפים מנתוני SPSS" icon="📈" active={false} allowActivate={false}
@@ -1501,6 +1583,7 @@ function AiSettings({ config, setConfig }) {
           onChange={(v) => update('imageGen', 'key', v)} hint="Gemini/OpenAI: ריק = מפתח הטקסט הרגיל. Stability/xAI/FLUX: חובה מפתח ייעודי." />
         <FieldRow label="מודל יצירת תמונות" placeholder="imagen-3.0-generate-002" value={config.imageGen?.model}
           onChange={(v) => update('imageGen', 'model', v)} options={IMAGE_GEN_MODEL_SUGGESTIONS} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1 · Stability: stable-diffusion-xl-1024-v1-0 · xAI: grok-2-image · FLUX: fal-ai/flux/schnell" />
+        <MediaGenTestButton kind="image" provider={config.imageGen?.provider || 'gemini'} model={config.imageGen?.model} apiKey={config.imageGen?.key} />
       </ProviderSection>
 
       <ProviderSection title="יצירת וידאו AI (Veo)" icon="🎬" active={false} allowActivate={false}
@@ -1518,6 +1601,7 @@ function AiSettings({ config, setConfig }) {
         <ModelPickerRow label="מודל" placeholder="veo-3.0-fast-generate-001" value={config.videoGen?.model}
           onChange={(v) => update('videoGen', 'model', v)} options={getMediaModelChoices('video', config.videoGen?.provider || 'gemini', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית. וידאו עולה ~$0.15-0.40 לשנייה" />
+        <MediaGenTestButton kind="video" provider={config.videoGen?.provider || 'gemini'} model={config.videoGen?.model} apiKey={config.videoGen?.key} />
       </ProviderSection>
 
       {(() => {

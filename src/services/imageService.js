@@ -285,6 +285,75 @@ export const generateAiImage = async (prompt, { signal, featureId = '', provider
   return finish(await generateGeminiImage(cleanPrompt, key, gen.model, signal, aspectRatio));
 };
 
+// ── בדיקת חיבור ליצירת מדיה ──────────────────────────────────────────────────
+// שתי רמות בכוונה: בדיקה חינמית (מפתח תקף + המודל באמת מוגש למפתח הזה) לעומת
+// יצירה אמיתית שעולה כסף. הבדיקה החינמית תופסת בדיוק את המקרה שנצפה בפועל —
+// מפתח AI Studio תקין שאינו מגיש imagen-* וה-:predict מחזיר 404.
+const listRemoteModelIds = async ({ provider, key, signal }) => {
+  if (provider === 'gemini') {
+    const { body } = await httpRequest({ url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1000`, method: 'GET', signal });
+    const data = JSON.parse(body || '{}');
+    return (Array.isArray(data.models) ? data.models : []).map((entry) => String(entry?.name || '').replace(/^models\//, '')).filter(Boolean);
+  }
+  if (provider === 'openai' || provider === 'xai') {
+    const url = provider === 'openai' ? 'https://api.openai.com/v1/models' : 'https://api.x.ai/v1/models';
+    const { body } = await httpRequest({ url, method: 'GET', headers: { Authorization: `Bearer ${key}` }, signal });
+    const data = JSON.parse(body || '{}');
+    return (Array.isArray(data.data) ? data.data : []).map((entry) => String(entry?.id || '')).filter(Boolean);
+  }
+  if (provider === 'stability') {
+    // אין endpoint לרשימת מנועים בכל החשבונות — פרטי החשבון מאמתים את המפתח.
+    await httpRequest({ url: 'https://api.stability.ai/v1/user/account', method: 'GET', headers: { Authorization: `Bearer ${key}` }, signal });
+    return [];
+  }
+  return [];
+};
+
+/**
+ * testMediaGenConnection — בדיקה חינמית: המפתח תקף, והמודל המבוקש מוגש לו.
+ * @returns {Promise<{ok:boolean, message:string, models?:string[], warning?:string}>}
+ */
+export const testMediaGenConnection = async ({ kind = 'image', provider = '', model = '', key = '', signal } = {}) => {
+  const cfg = getProviderConfig();
+  const section = kind === 'video' ? (cfg.videoGen || {}) : (cfg.imageGen || {});
+  const activeProvider = String(provider || section.provider || 'gemini').trim();
+  const activeModel = String(model || section.model || '').trim();
+  const activeKey = String(key || '').trim() || resolveImageGenKey({ ...section, provider: activeProvider }, cfg);
+  if (!activeKey) return { ok: false, message: 'לא הוגדר מפתח — הזן מפתח או השאר ריק כדי להשתמש במפתח הראשי של הספק.' };
+  if (activeProvider === 'flux') {
+    return { ok: true, message: 'המפתח נשמר. ל-fal.ai אין בדיקה חינמית — השתמש ב"צור תמונת בדיקה" כדי לוודא בפועל.', models: [] };
+  }
+  try {
+    const models = await listRemoteModelIds({ provider: activeProvider, key: activeKey, signal });
+    if (!models.length) return { ok: true, message: 'המפתח תקף ✅', models: [] };
+    const served = activeModel && models.some((id) => id === activeModel || id.startsWith(`${activeModel}-`));
+    if (activeModel && !served) {
+      const family = kind === 'video' ? /^veo-/i : /(imagen|image|dall-e|grok-2-image|stable-diffusion)/i;
+      const alternatives = models.filter((id) => family.test(id)).slice(0, 4);
+      return {
+        ok: false,
+        message: `המפתח תקף, אבל המודל "${activeModel}" לא מוגש לו — יצירה תיכשל (404).`,
+        warning: alternatives.length ? `מודלים זמינים אצלך: ${alternatives.join(', ')}` : 'לא נמצאו מודלים מתאימים למפתח הזה.',
+        models,
+      };
+    }
+    return { ok: true, message: `המפתח תקף והמודל זמין ✅ (${models.length} מודלים בחשבון)`, models };
+  } catch (error) {
+    return { ok: false, message: `הבדיקה נכשלה: ${String(error?.message || error).slice(0, 200)}` };
+  }
+};
+
+/**
+ * runMediaGenSmokeTest — יצירה אמיתית קטנה. **עולה כסף** (סנטים בודדים) ולכן
+ * נקראת רק מלחיצה מפורשת של המשתמש אחרי אזהרת מחיר.
+ */
+export const runMediaGenSmokeTest = async ({ provider = '', model = '', signal } = {}) => {
+  const result = await generateAiImage('A small blue circle centered on a plain white background', {
+    provider, model, signal, aspectRatio: '1:1',
+  });
+  return { ok: true, dataUrl: result.dataUrl, model: result.model || model };
+};
+
 /**
  * fetchImageAsDataUrl — מוריד תמונה מ-URL ומחזיר dataUrl (לצורך הטמעה ב-PPTX).
  */

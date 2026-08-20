@@ -108,3 +108,15 @@ if (process.env.WORDAI_PROBE_VEO === '1') {
   console.log('\n(Veo מדולג — הפעל עם WORDAI_PROBE_VEO=1)');
 }
 console.log('\nסיום probe.');
+
+console.log('\n── 5) בדיקת חיבור (חינם) ──');
+const { testMediaGenConnection } = await import('../../src/services/imageService.js');
+for (const probe of [
+  { label: 'imagen (לא מוגש למפתח)', kind: 'image', provider: 'gemini', model: 'imagen-3.0-generate-002' },
+  { label: 'nano-banana', kind: 'image', provider: 'gemini', model: 'gemini-2.5-flash-image' },
+  { label: 'veo-3.1-fast', kind: 'video', provider: 'gemini', model: 'veo-3.1-fast-generate-preview' },
+  { label: 'מודל מומצא', kind: 'image', provider: 'gemini', model: 'imagen-99-does-not-exist' },
+]) {
+  const res = await testMediaGenConnection(probe);
+  console.log(`  ${res.ok ? '✓' : '✗'} ${probe.label}: ${res.message}${res.warning ? ` | ${res.warning}` : ''}`);
+}
