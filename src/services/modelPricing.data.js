@@ -206,19 +206,100 @@ export const GROUNDING_PRICING = {
   note: 'חיפוש Google בתוך קריאה (grounding) מחויב בנפרד — ~12.9 אגורות לקריאה מעוגנת על מודלי 2.5. זה היה גורם העלות המרכזי באפליקציה. על מודלי 3.x התנאים טובים בהרבה: 5,000 חיפושים חינם בחודש ואז $14/1,000.',
 };
 
+// תנאי ה-grounding לפי משפחת מודל: 3.x מקבל מכסה חינם חודשית ומחיר נמוך בהרבה.
+export const GROUNDING_TIERS = [
+  { match: /^gemini-3/i, pricePer1000: 14, freePerMonth: 5000, label: 'Gemini 3.x' },
+  { match: /^gemini/i, pricePer1000: 35, freePerMonth: 0, label: 'Gemini 2.5' },
+];
+export const resolveGroundingTier = (model = '') =>
+  GROUNDING_TIERS.find((tier) => tier.match.test(String(model || ''))) || GROUNDING_TIERS[GROUNDING_TIERS.length - 1];
+
+// ── תמחור למודל לא-מוכר ─────────────────────────────────────────────────────
+// מודל חדש/מותאם שלא ברשימה עדיין עולה כסף — אומדן לפי משפחה עדיף על אפס שקרי.
+// כל התאמה כאן מסומנת estimated:true כדי שה-UI יסמן "אומדן" ולא יתחזה לוודאות.
+const PRICING_FAMILY_FALLBACKS = [
+  { match: /^gemini-3[^-]*-?pro/i, inputPerM: 2.00, outputPerM: 12.00 },
+  { match: /^gemini-3.*lite/i, inputPerM: 0.30, outputPerM: 2.50 },
+  { match: /^gemini-3/i, inputPerM: 0.75, outputPerM: 3.75 },
+  { match: /^gemini-2\.5-pro/i, inputPerM: 1.25, outputPerM: 10.00 },
+  { match: /^gemini/i, inputPerM: 0.30, outputPerM: 2.50 },
+  { match: /^(gpt-5|o\d)/i, inputPerM: 1.25, outputPerM: 10.00 },
+  { match: /mini|lite|small|haiku|flash/i, inputPerM: 0.30, outputPerM: 1.50 },
+  { match: /^claude/i, inputPerM: 3.00, outputPerM: 15.00 },
+  { match: /^(sonar|pplx)/i, inputPerM: 3.00, outputPerM: 15.00 },
+  { match: /^(llama|mixtral|qwen|gemma|deepseek|mistral)/i, inputPerM: 0.59, outputPerM: 0.79 },
+];
+const PROVIDER_FALLBACK_RATES = {
+  gemini: { inputPerM: 0.30, outputPerM: 2.50 },
+  openai: { inputPerM: 2.50, outputPerM: 10.00 },
+  claude: { inputPerM: 3.00, outputPerM: 15.00 },
+  groq: { inputPerM: 0.59, outputPerM: 0.79 },
+  perplexity: { inputPerM: 3.00, outputPerM: 15.00 },
+  // ollama/local רצים על המחשב — אפס עלות API אמיתית.
+  ollama: { inputPerM: 0, outputPerM: 0, local: true },
+  custom: { inputPerM: 1.00, outputPerM: 3.00 },
+};
+
 /**
- * הערכת עלות קריאה בודדת בדולרים. מודל לא מוכר ⇒ 0 (לא מנחשים).
+ * resolvePricingEntry — מחזיר תעריף לכל צמד ספק/מודל, גם כשאינו ברשימה המדויקת.
+ * @returns {{inputPerM:number, outputPerM:number, estimated:boolean, local:boolean, entry:object|null}}
  */
-export function estimateCallCostUSD({ model, provider, inputTokens = 0, outputTokens = 0, grounded = false } = {}) {
-  const wantedModel = String(model || '');
-  const wantedProvider = String(provider || '');
-  const entry = MODEL_PRICING.find((it) => it.model === wantedModel
-    && (!wantedProvider || it.provider === wantedProvider));
-  if (!entry) return 0;
-  const inPerM = Number(entry.inputPerM) || 0;
-  const outPerM = Number(entry.outputPerM) || 0;
-  const tokensCost = ((Number(inputTokens) || 0) * inPerM + (Number(outputTokens) || 0) * outPerM) / 1e6;
-  return tokensCost + (grounded ? 0.035 : 0);
+export function resolvePricingEntry(provider = '', model = '') {
+  const wantedModel = String(model || '').trim();
+  const wantedProvider = String(provider || '').trim();
+  const exact = MODEL_PRICING.find((it) => it.model === wantedModel && (!wantedProvider || it.provider === wantedProvider))
+    || MODEL_PRICING.find((it) => it.model === wantedModel);
+  if (exact) {
+    return {
+      inputPerM: Number(exact.inputPerM) || 0,
+      outputPerM: Number(exact.outputPerM) || 0,
+      estimated: false,
+      local: false,
+      entry: exact,
+    };
+  }
+  if (wantedProvider === 'ollama') return { inputPerM: 0, outputPerM: 0, estimated: false, local: true, entry: null };
+  const family = PRICING_FAMILY_FALLBACKS.find((it) => it.match.test(wantedModel));
+  if (family) return { inputPerM: family.inputPerM, outputPerM: family.outputPerM, estimated: true, local: false, entry: null };
+  const byProvider = PROVIDER_FALLBACK_RATES[wantedProvider] || PROVIDER_FALLBACK_RATES.custom;
+  return {
+    inputPerM: byProvider.inputPerM,
+    outputPerM: byProvider.outputPerM,
+    estimated: true,
+    local: Boolean(byProvider.local),
+    entry: null,
+  };
+}
+
+/**
+ * estimateBucketCostUSD — עלות רשומת שימוש מצטברת (מה שהטלמטריה סופרת), כולל
+ * טוקני חשיבה (מחויבים כפלט) ו-grounding לפי משפחת המודל ומכסת החינם החודשית.
+ * @param {number} freeGroundingRemaining כמה קריאות מעוגנות עדיין בתוך המכסה החינמית.
+ */
+export function estimateBucketCostUSD(provider = '', model = '', bucket = {}, freeGroundingRemaining = 0) {
+  const rate = resolvePricingEntry(provider, model);
+  const input = Number(bucket.inputTokens) || 0;
+  // חשיבה מחויבת במחיר פלט — ר' הערת usageTelemetryService.
+  const billedOutput = (Number(bucket.outputTokens) || 0) + (Number(bucket.thinkingTokens) || 0);
+  const tokensCost = (input * rate.inputPerM + billedOutput * rate.outputPerM) / 1e6;
+  const grounded = Number(bucket.groundedCalls) || 0;
+  const tier = resolveGroundingTier(model);
+  const billableGrounded = Math.max(0, grounded - Math.max(0, Number(freeGroundingRemaining) || 0));
+  const groundingCost = (billableGrounded * tier.pricePer1000) / 1000;
+  return { totalUsd: tokensCost + groundingCost, tokensUsd: tokensCost, groundingUsd: groundingCost, rate, tier };
+}
+
+/**
+ * הערכת עלות קריאה בודדת בדולרים (מודל לא-מוכר ⇒ אומדן משפחתי, לא אפס).
+ */
+export function estimateCallCostUSD({ model, provider, inputTokens = 0, outputTokens = 0, thinkingTokens = 0, grounded = false } = {}) {
+  const { totalUsd } = estimateBucketCostUSD(provider, model, {
+    inputTokens,
+    outputTokens,
+    thinkingTokens,
+    groundedCalls: grounded ? 1 : 0,
+  }, 0);
+  return totalUsd;
 }
 
 export const QUICKCHART_NOTE = 'גרפים מנתונים: מנוע QuickChart — חינם לחלוטין, בלי מודל AI בכלל.';

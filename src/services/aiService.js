@@ -85,7 +85,9 @@ export const DEFAULT_PROVIDER_CONFIG = {
   activeProviders: ['gemini'],
   multiModelEnabled: false,
   // models: מודלים נוספים שהמשתמש הצמיד לאותו מפתח (מוצגים בבוררי המודלים לצד model).
-  gemini:     { key: '', model: 'gemini-2.5-flash', models: [] },
+  // ברירת המחדל 3.7-flash: חכם משמעותית מ-2.5-flash, ומכסת ה-grounding שלו (5,000 חיפושים
+  // חינם בחודש ואז $14/1k מול $35/1k) הופכת אותו לזול יותר בפועל בשימוש רגיל.
+  gemini:     { key: '', model: 'gemini-3.7-flash', models: [] },
   openai:     { key: '', model: 'gpt-4o', models: [] },
   claude:     { key: '', model: 'claude-sonnet-4-6', models: [] },
   groq:       { key: '', model: 'llama-3.3-70b-versatile', models: [] },
@@ -3006,11 +3008,32 @@ const normalizeProviderConfig = (config = {}) => {
   return merged;
 };
 
+// מיגרציה חד-פעמית של ברירת המחדל: מי שמעולם לא בחר מודל ידנית (ולכן שמור אצלו בדיוק
+// ברירת המחדל הישנה) מקבל את 3.7-flash. מי שבחר מודל אחר — לא נוגעים. רץ פעם אחת בלבד.
+const GEMINI_DEFAULT_MIGRATION_KEY = 'wordai_gemini_default_migrated_v1';
+const LEGACY_DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const migrateLegacyGeminiDefault = (stored = {}) => {
+  try {
+    if (localStorage.getItem(GEMINI_DEFAULT_MIGRATION_KEY)) return stored;
+    localStorage.setItem(GEMINI_DEFAULT_MIGRATION_KEY, String(Date.now()));
+    const currentModel = String(stored?.gemini?.model || '').trim();
+    if (currentModel !== LEGACY_DEFAULT_GEMINI_MODEL) return stored;
+    const migrated = {
+      ...stored,
+      gemini: { ...(stored.gemini || {}), model: DEFAULT_PROVIDER_CONFIG.gemini.model },
+    };
+    localStorage.setItem('ai_provider_config', JSON.stringify(migrated));
+    return migrated;
+  } catch {
+    return stored;
+  }
+};
+
 export const getProviderConfig = () => {
   if (providerConfigCache) return providerConfigCache;
   try {
     const stored = JSON.parse(localStorage.getItem('ai_provider_config') || '{}');
-    providerConfigCache = normalizeProviderConfig(stored);
+    providerConfigCache = normalizeProviderConfig(migrateLegacyGeminiDefault(stored));
     return providerConfigCache;
   } catch {
     providerConfigCache = normalizeProviderConfig({});
@@ -8252,7 +8275,7 @@ export const getModelNameForProvider = (provider, cfg, override = '') => {
 
   switch (provider) {
     case 'gemini':
-      return normalizeProviderModelName('gemini', cfg.gemini.model || 'gemini-2.5-flash');
+      return normalizeProviderModelName('gemini', cfg.gemini.model || DEFAULT_PROVIDER_CONFIG.gemini.model);
     case 'openai':
       return normalizeProviderModelName('openai', cfg.openai.model || 'gpt-4o');
     case 'claude':
@@ -11957,7 +11980,7 @@ export const streamWithActiveProvider = async (userPrompt, documentContext = '',
 // ═══════════════════════════════════════
 const PROVIDER_MODEL_OPTIONS = {
   // 3.7-flash = ה-workhorse החדש (מחיר היכרות עד 31.12.26); 1.5 המתות הוסרו.
-  gemini: ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-2.5-pro'],
+  gemini: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-2.5-pro'],
   openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
   claude: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7'],
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],

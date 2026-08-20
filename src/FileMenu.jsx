@@ -121,7 +121,7 @@ import {
   USD_TO_ILS_APPROX,
   QUICKCHART_NOTE,
 } from './services/modelPricing.data';
-import { getUsageSummary } from './services/usageTelemetryService';
+import { getUsageSummary, getUsageCostBreakdown, getUsageLimits, setUsageLimits } from './services/usageTelemetryService';
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
@@ -767,6 +767,58 @@ function FieldRow({ label, type = 'text', placeholder, value, onChange, hint, op
   );
 }
 
+// ─── בורר מודל גלוי ───
+// datalist מסתיר את הרשימה עד שלוחצים/מקלידים — ואז מודלים חדשים שהתגלו מהמפתח
+// פשוט לא נראים. כאן הרשימה פתוחה ב-select, עם מסלול "אחר" להקלדה ידנית.
+function ModelPickerRow({ label = 'מודל', value, onChange, options = [], hint, placeholder = '', badge = '' }) {
+  const normalizedOptions = [...new Set((Array.isArray(options) ? options : [])
+    .map((option) => String(option || '').trim())
+    .filter(Boolean))];
+  const currentValue = String(value || '').trim();
+  const isKnown = !currentValue || normalizedOptions.includes(currentValue);
+  const [manual, setManual] = useState(!isKnown);
+  const selectStyle = {
+    width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4,
+    fontSize: 12, direction: 'ltr', fontFamily: 'monospace', background: 'var(--s-surface-2)', color: 'var(--s-text)',
+  };
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, fontWeight: 500 }}>
+        <span>{label}</span>
+        {badge ? <span style={{ fontSize: 9.5, padding: '1px 6px', borderRadius: 999, background: 'var(--s-surface-2)', border: '1px solid var(--s-border)' }}>{badge}</span> : null}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={() => setManual((prev) => !prev)}
+          style={{ fontSize: 10, padding: '1px 7px', borderRadius: 999, border: '1px solid var(--s-border)', background: 'transparent', color: 'var(--s-muted)', cursor: 'pointer' }}
+        >
+          {manual ? '⌄ בחר מרשימה' : '✎ הקלד ידנית'}
+        </button>
+      </label>
+      {manual ? (
+        <input
+          type="text"
+          value={currentValue}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ ...selectStyle, background: 'transparent' }}
+        />
+      ) : (
+        <select value={currentValue} onChange={(e) => onChange(e.target.value)} style={selectStyle}>
+          {!currentValue && <option value="">— בחר מודל —</option>}
+          {normalizedOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      )}
+      {!manual && normalizedOptions.length > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 2 }}>{normalizedOptions.length} מודלים ברשימה</div>
+      )}
+      {hint && <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 2 }}>{hint}</div>}
+    </div>
+  );
+}
+
 // ─── כפתור בדיקת תקינות API ───
 function ApiTestButton({ providerId, providerConfig }) {
   const [status, setStatus] = useState(null); // null | 'loading' | 'ok' | 'fail'
@@ -947,6 +999,46 @@ function MediaVisualsSettings({ config, setConfig }) {
           onChange={(v) => update('pexels', 'key', v)} hint="מפתח חינמי מ-pexels.com/api" />
         <FieldRow label="מפתח Unsplash (Access Key)" type="password" placeholder="your_unsplash_access_key" value={config.unsplash?.key}
           onChange={(v) => update('unsplash', 'key', v)} hint="Access Key מ-unsplash.com/developers" />
+      </ProviderSection>
+
+      <ProviderSection title="יצירת תמונות AI" icon="🎨" active={false} allowActivate={false}
+        configured={Boolean(String(config.imageGen?.key || '').trim() || String(config.gemini?.key || '').trim() || String(config.openai?.key || '').trim())}
+        onActivate={() => {}}
+        description="יצירת תמונות ותרשימים ב-AI (גם ממצב '🖼️ תמונה' בחלונית ה-AI). אותן הגדרות מופיעות גם בטאב 'מנועי AI' — שינוי כאן משנה שם.">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת תמונות</label>
+          <select value={config.imageGen?.provider || 'gemini'} onChange={(e) => update('imageGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="gemini">Google Gemini (Imagen / Nano Banana)</option>
+            <option value="openai">OpenAI (gpt-image)</option>
+            <option value="stability">Stability AI (Stable Diffusion)</option>
+            <option value="xai">xAI (Grok Image)</option>
+            <option value="flux">FLUX דרך fal.ai</option>
+          </select>
+        </div>
+        <FieldRow label="מפתח API" type="password" placeholder="ריק = המפתח הרגיל של אותו ספק" value={config.imageGen?.key || ''}
+          onChange={(v) => update('imageGen', 'key', v)} hint="ל-Gemini ול-OpenAI אפשר להשאיר ריק — ישתמש במפתח הצ'אט שכבר הגדרת." />
+        <ModelPickerRow label="מודל" placeholder="gemini-2.5-flash-image" value={config.imageGen?.model || ''}
+          onChange={(v) => update('imageGen', 'model', v)}
+          options={[...new Set([...getMediaModelChoices('image', config.imageGen?.provider || 'gemini', config), ...IMAGE_GEN_MODEL_SUGGESTIONS])]}
+          hint="Nano Banana (gemini-*-image) הכי טוב לתרשימים עם טקסט עברי; imagen לאיורים. אפשר גם להקליד ידנית." />
+      </ProviderSection>
+
+      <ProviderSection title="יצירת וידאו AI (Veo)" icon="🎬" active={false} allowActivate={false}
+        configured={Boolean(String(config.videoGen?.key || '').trim() || String(config.gemini?.key || '').trim())}
+        onActivate={() => {}}
+        description="יצירת סרטונים קצרים ממצב '🎬 וידאו' בחלונית ה-AI. יקר יחסית — ~$0.15-0.40 לשנייה.">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק וידאו</label>
+          <select value={config.videoGen?.provider || 'gemini'} onChange={(e) => update('videoGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="gemini">Google Gemini (Veo)</option>
+          </select>
+        </div>
+        <FieldRow label="מפתח API" type="password" placeholder="ריק = המפתח הרגיל של Gemini" value={config.videoGen?.key || ''}
+          onChange={(v) => update('videoGen', 'key', v)} hint="ריק = משתמש במפתח ה-Gemini שכבר הגדרת." />
+        <ModelPickerRow label="מודל" placeholder="veo-3.1-fast-generate-preview" value={config.videoGen?.model || ''}
+          onChange={(v) => update('videoGen', 'model', v)}
+          options={getMediaModelChoices('video', 'gemini', config)}
+          hint="fast זול משמעותית. הרשימה מתעדכנת מכפתור 'רענן רשימת מודלים' בטאב מנועי AI." />
       </ProviderSection>
 
       <ProviderSection title="גרפים מנתוני SPSS" icon="📈" active={false} allowActivate={false}
@@ -1194,13 +1286,14 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API חינמי ב: aistudio.google.com/app/apikey">
         <FieldRow label="מפתח API" type="password" placeholder="AIza..." value={config.gemini?.key}
           onChange={v => update('gemini', 'key', v)} hint="מתחיל ב-AIza" />
-        <FieldRow
+        <ModelPickerRow
           label="מודל"
-          placeholder="gemini-2.5-flash"
+          placeholder="gemini-3.7-flash"
           value={config.gemini?.model}
           onChange={v => update('gemini', 'model', v)}
           options={[...new Set([...getProviderModelChoices('gemini', config), ...getCachedGeminiModels('text')])]}
-          hint="אפשר לבחור מהרשימה או להקליד ידנית"
+          badge={getCachedGeminiModels('text').length ? 'כולל מודלים שהתגלו מהמפתח' : ''}
+          hint="ברירת המחדל gemini-3.7-flash. לחיצה על 'רענן רשימת מודלים' למטה מוסיפה לרשימה כל מודל שהמפתח שלך מגיש."
         />
         <div style={{ marginBottom: 10 }}>
           <button
@@ -1240,7 +1333,7 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API ב: platform.openai.com/api-keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-..." value={config.openai?.key}
           onChange={v => update('openai', 'key', v)} hint="מתחיל ב-sk-" />
-        <FieldRow
+        <ModelPickerRow
           label="מודל"
           placeholder="gpt-4o"
           value={config.openai?.model}
@@ -1263,7 +1356,7 @@ function AiSettings({ config, setConfig }) {
         description="קבל מפתח API ב: console.anthropic.com/settings/keys">
         <FieldRow label="מפתח API" type="password" placeholder="sk-ant-..." value={config.claude?.key}
           onChange={v => update('claude', 'key', v)} hint="מתחיל ב-sk-ant-" />
-        <FieldRow
+        <ModelPickerRow
           label="מודל"
           placeholder="claude-sonnet-4-6"
           value={config.claude?.model}
@@ -1286,7 +1379,7 @@ function AiSettings({ config, setConfig }) {
         description="מהיר מאוד ובחינם! קבל מפתח API ב: console.groq.com — לא דורש כרטיס אשראי">
         <FieldRow label="מפתח API" type="password" placeholder="gsk_..." value={config.groq?.key}
           onChange={v => update('groq', 'key', v)} hint="מתחיל ב-gsk_" />
-        <FieldRow
+        <ModelPickerRow
           label="מודל"
           placeholder="llama-3.3-70b-versatile"
           value={config.groq?.model}
@@ -1302,7 +1395,7 @@ function AiSettings({ config, setConfig }) {
         description="AI עם גישה לאינטרנט בזמן אמת. מפתח ב: perplexity.ai/settings/api">
         <FieldRow label="מפתח API" type="password" placeholder="pplx-..." value={config.perplexity?.key}
           onChange={v => update('perplexity', 'key', v)} hint="מתחיל ב-pplx-" />
-        <FieldRow
+        <ModelPickerRow
           label="מודל"
           placeholder="sonar-pro"
           value={config.perplexity?.model}
@@ -1422,7 +1515,7 @@ function AiSettings({ config, setConfig }) {
         </div>
         <FieldRow label="מפתח API" type="password" placeholder="leave empty to reuse text key" value={config.videoGen?.key}
           onChange={(v) => update('videoGen', 'key', v)} hint="ריק = המפתח הרגיל של Gemini" />
-        <FieldRow label="מודל" placeholder="veo-3.0-fast-generate-001" value={config.videoGen?.model}
+        <ModelPickerRow label="מודל" placeholder="veo-3.0-fast-generate-001" value={config.videoGen?.model}
           onChange={(v) => update('videoGen', 'model', v)} options={getMediaModelChoices('video', config.videoGen?.provider || 'gemini', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית. וידאו עולה ~$0.15-0.40 לשנייה" />
       </ProviderSection>
@@ -1797,6 +1890,9 @@ const PRICING_PROVIDER_LABELS = {
   claude: 'Claude (Anthropic)',
   groq: 'Groq',
   perplexity: 'Perplexity',
+  ollama: 'Ollama',
+  custom: 'מנוע מותאם',
+  unknown: 'לא מזוהה',
 };
 
 const PRICING_TABLE_CELL = { padding: '6px 8px', borderBottom: '1px solid var(--s-border)', verticalAlign: 'top' };
@@ -1805,19 +1901,31 @@ const PRICING_MODEL_CELL = { ...PRICING_TABLE_CELL, direction: 'ltr', fontFamily
 const formatUsageNumber = (value) => (Number(value) || 0).toLocaleString('he-IL');
 
 function PricingSettings() {
+  const [limits, setLimitsState] = useState(() => getUsageLimits());
+  const [budgetDraft, setBudgetDraft] = useState(() => String(getUsageLimits().monthlyBudgetIls || ''));
   const usage = getUsageSummary();
   const total = usage.total || {};
   const providerOrder = [...new Set(MODEL_PRICING.map((entry) => entry.provider))];
-  const estimatedUsd = Object.entries(usage.byModel || {}).reduce((sum, [key, bucket]) => {
-    const modelId = String(key).split('/').slice(1).join('/');
-    const entry = MODEL_PRICING.find((it) => it.model === modelId);
-    const inPerM = Number(entry?.inputPerM) || 0;
-    const outPerM = Number(entry?.outputPerM) || 0;
-    // טוקני חשיבה מחויבים כמחיר פלט — לכן הם נכנסים לצד ה-output.
-    const billedOutput = (Number(bucket.outputTokens) || 0) + (Number(bucket.thinkingTokens) || 0);
-    const tokensCost = ((Number(bucket.inputTokens) || 0) * inPerM + billedOutput * outPerM) / 1e6;
-    return sum + tokensCost + (Number(bucket.groundedCalls) || 0) * 0.035;
-  }, 0);
+  // אומדן חוצה-ספקים: כולל מודלים שאינם ברשימת המחירים (אומדן משפחתי) ואת מכסת
+  // ה-grounding החינמית של 3.x. ר' getUsageCostBreakdown.
+  const breakdown = getUsageCostBreakdown();
+  const estimatedUsd = breakdown.totalUsd;
+  const applyLimits = (patch) => {
+    const next = setUsageLimits(patch);
+    setLimitsState(next);
+    return next;
+  };
+  const groundingPct = breakdown.grounding.freeLimit > 0
+    ? Math.min(100, Math.round((breakdown.grounding.freeUsed / breakdown.grounding.freeLimit) * 100))
+    : 0;
+  const budgetPct = Number(limits.monthlyBudgetIls) > 0
+    ? Math.min(100, Math.round((breakdown.totalIls / Number(limits.monthlyBudgetIls)) * 100))
+    : 0;
+  const meterBar = (pct, danger) => (
+    <div style={{ height: 7, borderRadius: 999, background: 'var(--s-surface-2)', overflow: 'hidden', marginTop: 5 }}>
+      <div style={{ width: `${pct}%`, height: '100%', borderRadius: 999, background: danger ? '#DC2626' : pct >= 80 ? '#D97706' : '#059669' }} />
+    </div>
+  );
 
   return (
     <div dir="rtl">
@@ -1836,22 +1944,107 @@ function PricingSettings() {
         {QUICKCHART_NOTE}
       </div>
 
-      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>השימוש שלך החודש</div>
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>החיוב המשוער שלך החודש</div>
         {(Number(total.calls) || 0) === 0 ? (
           <div style={{ fontSize: 11.5, color: 'var(--s-muted)', lineHeight: 1.7 }}>עדיין אין נתונים החודש — המדידה התחילה עכשיו</div>
         ) : (
-          <div style={{ fontSize: 11.5, color: 'var(--s-text)', lineHeight: 1.8 }}>
-            <div>קריאות: {formatUsageNumber(total.calls)} · מתוכן מעוגנות-חיפוש: {formatUsageNumber(total.groundedCalls)}</div>
-            <div>
-              טוקני קלט: {formatUsageNumber(total.inputTokens)} · טוקני פלט: {formatUsageNumber(total.outputTokens)}
-              {(Number(total.thinkingTokens) || 0) > 0 ? ` (מתוכם חשיבה: ${formatUsageNumber(total.thinkingTokens)})` : ''}
+          <>
+            <div style={{ fontSize: 11.5, color: 'var(--s-text)', lineHeight: 1.8 }}>
+              <div>קריאות: {formatUsageNumber(total.calls)} · מתוכן מעוגנות-חיפוש: {formatUsageNumber(total.groundedCalls)}</div>
+              <div>
+                טוקני קלט: {formatUsageNumber(total.inputTokens)} · טוקני פלט: {formatUsageNumber(total.outputTokens)}
+                {(Number(total.thinkingTokens) || 0) > 0 ? ` (מתוכם חשיבה: ${formatUsageNumber(total.thinkingTokens)})` : ''}
+              </div>
+              <div style={{ fontWeight: 800, marginTop: 5, fontSize: 13 }}>
+                סה״כ כל הספקים: ${estimatedUsd.toFixed(2)} ≈ ₪{breakdown.totalIls.toFixed(2)}
+              </div>
             </div>
-            <div style={{ fontWeight: 700, marginTop: 4 }}>
-              אומדן: ${estimatedUsd.toFixed(2)} ≈ ₪{(estimatedUsd * USD_TO_ILS_APPROX).toFixed(2)}
+            {breakdown.providers.length > 0 && (
+              <div style={{ marginTop: 8, overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, color: 'var(--s-text)', direction: 'rtl' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--s-muted)', fontSize: 10.5 }}>
+                      <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>ספק</th>
+                      <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>קריאות</th>
+                      <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>טוקנים (קלט/פלט)</th>
+                      <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>עלות</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakdown.providers.map((row) => (
+                      <tr key={row.provider}>
+                        <td style={PRICING_TABLE_CELL}>
+                          {PRICING_PROVIDER_LABELS[row.provider] || row.provider}
+                          {row.local ? <span style={{ fontSize: 9.5, color: '#059669', marginRight: 4 }}>{' '}(מקומי — חינם)</span> : null}
+                          {row.estimated && !row.local ? <span style={{ fontSize: 9.5, color: 'var(--s-muted)', marginRight: 4 }}>(אומדן)</span> : null}
+                        </td>
+                        <td style={PRICING_TABLE_CELL}>{formatUsageNumber(row.calls)}</td>
+                        <td style={PRICING_TABLE_CELL}>{formatUsageNumber(row.inputTokens)} / {formatUsageNumber(row.outputTokens + row.thinkingTokens)}</td>
+                        <td style={{ ...PRICING_TABLE_CELL, fontWeight: 700 }}>₪{(row.totalUsd * USD_TO_ILS_APPROX).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {breakdown.hasEstimatedRates && (
+                  <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 5, lineHeight: 1.6 }}>
+                    "אומדן" = מודל שאינו בטבלת המחירים; חושב לפי תעריף אופייני למשפחה שלו.
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 8 }}>מכסה והתראות</div>
+
+        {breakdown.grounding.freeLimit > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--s-text)' }}>
+              חיפושים חינם (Gemini 3.x): {formatUsageNumber(breakdown.grounding.freeUsed)} מתוך {formatUsageNumber(breakdown.grounding.freeLimit)} — נותרו {formatUsageNumber(breakdown.grounding.freeRemaining)}
             </div>
+            {meterBar(groundingPct, groundingPct >= 100)}
           </div>
         )}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--s-text-strong)', marginBottom: 8 }}>
+          <input type="checkbox" checked={limits.enabled !== false} onChange={(e) => applyLimits({ enabled: e.target.checked })} />
+          התרע לי כשמתקרבים למכסה או לתקציב
+        </label>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--s-text)' }}>תקציב חודשי (₪):</span>
+          <input
+            type="number"
+            min="0"
+            value={budgetDraft}
+            onChange={(e) => setBudgetDraft(e.target.value)}
+            onBlur={() => applyLimits({ monthlyBudgetIls: Number(budgetDraft) || 0 })}
+            placeholder="0 = בלי תקציב"
+            style={{ width: 110, padding: '6px 9px', border: '1px solid var(--s-border)', borderRadius: 6, fontSize: 12, direction: 'ltr', background: 'var(--s-surface-2)', color: 'var(--s-text)' }}
+          />
+          <span style={{ fontSize: 11.5, color: 'var(--s-text)' }}>התראה מ-</span>
+          <select
+            value={limits.warnAtPercent}
+            onChange={(e) => applyLimits({ warnAtPercent: Number(e.target.value) })}
+            style={{ padding: '6px 9px', border: '1px solid var(--s-border)', borderRadius: 6, fontSize: 12, background: 'var(--s-surface-2)', color: 'var(--s-text)' }}
+          >
+            {[50, 70, 80, 90].map((pct) => <option key={pct} value={pct}>{pct}%</option>)}
+          </select>
+        </div>
+        {Number(limits.monthlyBudgetIls) > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--s-text)' }}>
+              נוצל: ₪{breakdown.totalIls.toFixed(2)} מתוך ₪{Number(limits.monthlyBudgetIls).toFixed(0)} ({budgetPct}%)
+            </div>
+            {meterBar(budgetPct, budgetPct >= 100)}
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 8, lineHeight: 1.6 }}>
+          המדידה סופרת רק קריאות שהאפליקציה הזו שלחה. שימוש באותו מפתח מכלי אחר לא נספר — זו התראה מקדימה, לא תחליף לחשבון של Google.
+        </div>
       </div>
 
       {providerOrder.map((providerId) => (

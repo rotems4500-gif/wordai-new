@@ -54,7 +54,8 @@ const {
   shouldUseInternetBackedSourceWork,
 } = await import('../../src/services/aiService.js');
 const { classifyModelKind, classifyGeminiApiEntry } = await import('../../src/services/modelCatalog.js');
-const { recordModelUsage, getUsageSummary, resetUsageTelemetry } = await import('../../src/services/usageTelemetryService.js');
+const { recordModelUsage, getUsageSummary, resetUsageTelemetry, getUsageCostBreakdown, getUsageLimits, setUsageLimits, evaluateUsageAlerts } = await import('../../src/services/usageTelemetryService.js');
+const { resolvePricingEntry, estimateBucketCostUSD } = await import('../../src/services/modelPricing.data.js');
 
 let passed = 0;
 let failed = 0;
@@ -152,6 +153,55 @@ eq('outputTokens', summary.total.outputTokens, 55);
 eq('thinkingTokens', summary.total.thinkingTokens, 25);
 eq('cachedTokens', summary.total.cachedTokens, 10);
 eq('groundedCalls', summary.total.groundedCalls, 1);
+
+// ── G. עלות חוצה-ספקים + מכסת grounding + התראות ────────────────────────────
+console.log('\n[G] cost breakdown + quota alerts');
+const near = (label, actual, expected, tolerance = 1e-6) =>
+  check(label, Math.abs(Number(actual) - Number(expected)) <= tolerance, `got ${actual}, want ~${expected}`);
+
+// תעריף מדויק לעומת אומדן משפחתי למודל שאינו ברשימה.
+eq('known model → not estimated', resolvePricingEntry('gemini', 'gemini-2.5-flash').estimated, false);
+eq('unknown gemini-3 → family estimate input', resolvePricingEntry('gemini', 'gemini-3.9-flash-preview').inputPerM, 0.75);
+eq('unknown gemini-3 → estimated flag', resolvePricingEntry('gemini', 'gemini-3.9-flash-preview').estimated, true);
+eq('ollama → local, zero cost', resolvePricingEntry('ollama', 'llama3.2').local, true);
+
+// חשיבה מחויבת כפלט: 1M קלט + 1M פלט + 1M חשיבה על 2.5-flash = 0.30 + 2×2.50.
+near('thinking billed as output',
+  estimateBucketCostUSD('gemini', 'gemini-2.5-flash', { inputTokens: 1e6, outputTokens: 1e6, thinkingTokens: 1e6 }, 0).totalUsd,
+  0.30 + 5.00, 1e-9);
+
+// grounding לפי משפחה: 2.5 = $35/1k, 3.x = $14/1k, ומכסה חינמית מקזזת.
+near('2.5 grounding $35/1k', estimateBucketCostUSD('gemini', 'gemini-2.5-flash', { groundedCalls: 1000 }, 0).groundingUsd, 35, 1e-9);
+near('3.x grounding $14/1k', estimateBucketCostUSD('gemini', 'gemini-3.7-flash', { groundedCalls: 1000 }, 0).groundingUsd, 14, 1e-9);
+near('free quota offsets grounding', estimateBucketCostUSD('gemini', 'gemini-3.7-flash', { groundedCalls: 1000 }, 1000).groundingUsd, 0, 1e-9);
+
+// פילוח חוצה-ספקים: gemini + claude + ollama(מקומי) באותו חודש.
+resetUsageTelemetry();
+recordModelUsage({ provider: 'gemini', model: 'gemini-3.7-flash', inputTokens: 1e6, outputTokens: 1e6, grounded: true });
+recordModelUsage({ provider: 'claude', model: 'claude-sonnet-4-6', inputTokens: 1e6, outputTokens: 1e6 });
+recordModelUsage({ provider: 'ollama', model: 'llama3.2', inputTokens: 5e6, outputTokens: 5e6 });
+const bd = getUsageCostBreakdown();
+eq('breakdown covers 3 providers', bd.providers.length, 3);
+const ollamaRow = bd.providers.find((row) => row.provider === 'ollama');
+near('ollama costs nothing', ollamaRow.totalUsd, 0, 1e-9);
+const claudeRow = bd.providers.find((row) => row.provider === 'claude');
+near('claude cost = 3 + 15', claudeRow.totalUsd, 18, 1e-9);
+const geminiRow = bd.providers.find((row) => row.provider === 'gemini');
+// 0.75 + 3.75 טוקנים; ה-grounding היחיד נבלע במכסה החינמית.
+near('gemini cost excludes free grounding', geminiRow.totalUsd, 4.5, 1e-9);
+near('total = sum of providers', bd.totalUsd, 22.5, 1e-9);
+check('free grounding counted', bd.grounding.freeUsed === 1 && bd.grounding.freeLimit === 5000, JSON.stringify(bd.grounding));
+
+// התראת תקציב: תקציב ₪10 מול חיוב של ~₪83 ⇒ סף חצוי, ומשודר פעם אחת בלבד.
+setUsageLimits({ enabled: true, monthlyBudgetIls: 10, warnAtPercent: 80 });
+const firstAlert = evaluateUsageAlerts({ force: true });
+check('budget alert fires', Boolean(firstAlert?.alerts?.some((a) => a.id === 'budget-exceeded')), JSON.stringify(firstAlert?.alerts || []));
+const secondAlert = evaluateUsageAlerts();
+eq('alert not repeated in same month', secondAlert, null);
+setUsageLimits({ enabled: false });
+eq('disabled → no alerts', evaluateUsageAlerts({ force: true }), null);
+setUsageLimits({ enabled: true, monthlyBudgetIls: 0 });
+resetUsageTelemetry();
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
 process.exit(failed ? 1 : 0);

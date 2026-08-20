@@ -38,6 +38,13 @@ const ALLOWED_HTTPS_HOSTS: &[&str] = &[
     "images.unsplash.com",
     "plus.unsplash.com",
     "oaidalleapiprodscus.blob.core.windows.net",
+    // ספקי יצירת תמונות שנחשפים בהגדרות — בלעדיהם הענפים האלה ב-imageService
+    // נכשלו בדסקטופ ב-"Host לא מורשה" בזמן שה-UI הציע אותם.
+    "api.stability.ai",
+    "fal.run",
+    "queue.fal.run",
+    "fal.media",
+    "v3.fal.media",
 ];
 
 // loopback מקומי מאושר ל-Ollama / LM Studio

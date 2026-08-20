@@ -70,6 +70,7 @@ import { snapshotGeneration as snapshotStyleGeneration, diffAfterEdit as diffSty
 import { maybeCaptureFinishedDocument, recordRevisionFeedback } from './services/styleIngestService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 import { showToast, showConfirm, setStatusChip, clearStatusChip } from './services/uiFeedback';
+import { USAGE_ALERT_EVENT, evaluateUsageAlerts } from './services/usageTelemetryService';
 import { startClipInboxPolling, CLIP_INGESTED_EVENT, CLIP_PROGRESS_EVENT } from './services/clipInboxService';
 import { sendImageClipToDesktop } from './services/clipUploadService';
 import ClipInboxPanel from './components/ClipInboxPanel';
@@ -3897,6 +3898,20 @@ function App() {
       window.removeEventListener(CLIP_PROGRESS_EVENT, onProgress);
     };
   }, [cloudUser]);
+  // התראות מכסה/תקציב: usageTelemetryService משדר אירוע פעם אחת לסף בחודש
+  // (מכסת החיפושים החינמית של Gemini 3.x, ותקציב ₪ שהמשתמש הגדיר בטאב "תמחור").
+  React.useEffect(() => {
+    const onUsageAlert = (event) => {
+      const alerts = event?.detail?.alerts || [];
+      for (const alert of alerts) {
+        showToast(alert.message, { tone: alert.level === 'error' ? 'error' : 'warning', duration: 11000 });
+      }
+    };
+    window.addEventListener(USAGE_ALERT_EVENT, onUsageAlert);
+    // בדיקה גם בעלייה — משתמש שחצה סף בסשן קודם רואה את ההתראה פעם אחת.
+    try { evaluateUsageAlerts(); } catch { /* התראה לעולם לא שוברת עלייה */ }
+    return () => window.removeEventListener(USAGE_ALERT_EVENT, onUsageAlert);
+  }, []);
   // share_target של אנדרואיד: שיתוף תמונה לאפליקציה מגיע כ-POST ל-./share-target,
   // ה-service worker שומר את הקובץ ב-cache ומפנה לכאן עם ?shared=1. אוספים אותו
   // ושולחים לקליפים בדיוק כמו כפתור המצלמה. PWA/אתר בלבד — בדסקטופ אין share_target.
