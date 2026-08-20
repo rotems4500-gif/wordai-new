@@ -11,6 +11,7 @@ import { buildProviderRequest, performProviderRequest } from './request';
 import { getRetryDecision, wait } from './retryPolicy';
 import { timeoutError } from './errors';
 import { getPassiveLedger } from './ledger';
+import { recordModelUsage } from '../../services/usageTelemetryService';
 
 const DEFAULT_TIMEOUT_MS = 45000;
 
@@ -41,6 +42,7 @@ export const chat = async ({
   temperature = null,
   bodyExtras = null,
   tools = null,
+  thinkingBudget = null,
   signal = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   extractWebResults = null,
@@ -52,7 +54,7 @@ export const chat = async ({
   // ה-ledger הפסיבי תמיד מקבל record() של תוצאות (לכידת usage/שגיאות).
   const recordLedger = ledger || getPassiveLedger();
   const request = buildProviderRequest({
-    provider, model, messages, baseUrl, apiKey, maxTokens, purpose, temperature, bodyExtras, tools,
+    provider, model, messages, baseUrl, apiKey, maxTokens, purpose, temperature, bodyExtras, tools, thinkingBudget,
   });
 
   let attempt = 0;
@@ -83,6 +85,15 @@ export const chat = async ({
         timeoutError({ provider, model, timeoutMs }),
       );
       recordLedger.record({ kind, provider, model, usage: result.usage, durationMs: Date.now() - startedAt });
+      recordModelUsage({
+        provider,
+        model,
+        inputTokens: result.usage?.inputTokens,
+        outputTokens: result.usage?.outputTokens,
+        thinkingTokens: result.usage?.thinkingTokens,
+        cachedTokens: result.usage?.cachedTokens,
+        grounded: Boolean(tools),
+      });
       return result;
     } catch (error) {
       recordLedger.record({ kind, provider, model, errorCode: error?.code || 'UNKNOWN', durationMs: Date.now() - startedAt });

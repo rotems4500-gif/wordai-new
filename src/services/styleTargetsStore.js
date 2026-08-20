@@ -141,7 +141,9 @@ export async function addStyleTargetDoc(text, { docId = null } = {}) {
   const record = measureStyleTargets(text);
   if (!record) return cache.targets;   // אין פסקאות פרוזה — לא מסמך כתיבה
 
-  const id = docId || `d${cache.records.length + 1}`;
+  // מזהה אוטומטי חייב להיות ייחודי לאורך זמן: `d${length+1}` חוזר על עצמו אחרי
+  // מחיקה ומוחק בשקט רשומה אחרת שכבר נושאת את המזהה הזה.
+  const id = docId || `d${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const records = cache.records.filter((r) => r.docId !== id);
   records.push({ ...record, docId: id });
 
@@ -161,7 +163,13 @@ export async function removeStyleTargetDoc(docId) {
   await ensureStyleTargetsReady();
   const records = cache.records.filter((r) => r.docId !== docId);
   if (records.length === cache.records.length) return cache.targets;
-  cache = { ...cache, records, targets: aggregateStyleTargets(records), updatedAt: new Date().toISOString() };
+  // כמו במסלול ההוספה — aggregateStyleTargets בלי derivedAt מאבד את חותמת הגזירה.
+  cache = {
+    ...cache,
+    records,
+    targets: aggregateStyleTargets(records, { derivedAt: new Date().toISOString() }),
+    updatedAt: new Date().toISOString(),
+  };
   await persist();
   emitUpdated();
   return cache.targets;

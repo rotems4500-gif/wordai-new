@@ -108,7 +108,20 @@ import {
   createWorkspaceV2Template,
   deleteWorkspaceV2Template,
   resetWorkspaceV2Templates,
+  refreshGeminiModelCatalog,
+  getCachedGeminiModels,
+  getMediaModelChoices,
 } from "./services/aiService";
+import { IMAGE_GEN_MODEL_SUGGESTIONS } from './services/modelCatalog';
+import {
+  MODEL_PRICING,
+  GROUNDING_PRICING,
+  PRICING_AS_OF,
+  formatHebrewWordsPerMillion,
+  USD_TO_ILS_APPROX,
+  QUICKCHART_NOTE,
+} from './services/modelPricing.data';
+import { getUsageSummary } from './services/usageTelemetryService';
 import { loadProjectMaterials, saveHelperMaterial, syncLearnedStyleFromWorkspace, buildGoldenExampleFromWorkspace, probePersonalStyleInfluence, MATERIAL_UPLOAD_PRESETS, getMaterialUploadMeta, readInstructionFile, getHelperMaterialAcceptList } from "./services/workspaceLearningService";
 import { getMaterialExtractionStatusInfo } from "./services/workspaceLearningService";
 
@@ -562,6 +575,7 @@ const SETTINGS_TAB_SEARCH_KEYWORDS = {
   updates: ['updates', 'updater', 'version', 'release', 'עדכונים', 'גרסה'],
   security: ['security', 'encryption', 'encrypt', 'e2ee', 'passphrase', 'password', 'recovery', 'privacy', 'keys', 'api keys', 'cloud encryption', 'אבטחה', 'הצפנה', 'סיסמה', 'סיסמא', 'שחזור', 'פרטיות', 'מפתחות', 'הצפנת ענן'],
   ai: ['ai', 'api', 'provider', 'model', 'key', 'engine', 'gemini', 'openai', 'claude', 'copyleaks', 'detector', 'detection', 'ai detector', 'ספק', 'מודל', 'מפתח', 'זיהוי ai', 'בדיקת ai'],
+  pricing: ['pricing', 'price', 'cost', 'billing', 'tokens', 'grounding', 'usage', 'תמחור', 'מחיר', 'מחירים', 'עלות', 'עלויות', 'טוקנים', 'חיוב', 'שימוש'],
   media: ['media', 'images', 'image', 'photo', 'stock', 'pexels', 'unsplash', 'imagen', 'gpt-image', 'chart', 'charts', 'graph', 'quickchart', 'תמונות', 'תמונה', 'גרף', 'גרפים', 'תרשים', 'spss', 'ויזואל'],
   sidebar: ['sidebar', 'taskpane', 'chat panel', 'modes', 'provider', 'model', 'חלונית', 'צאט', 'צ׳אט', 'מצבים', 'ספק', 'מודל'],
   prompt: ['prompt', 'instructions', 'system', 'template', 'הנחיות'],
@@ -582,7 +596,7 @@ const SETTINGS_TAB_GROUPS = [
   {
     title: 'AI ומנועים',
     desc: 'מפתחות, מודלים והעוזר החכם',
-    tabs: [['ai', '🤖 מנועי AI'], ['sidebar', '💬 עוזר וצ׳אט'], ['skills', '🧠 סקילים'], ['workspaceV2', '🧩 סביבות עבודה']],
+    tabs: [['ai', '🤖 מנועי AI'], ['pricing', '💰 תמחור'], ['sidebar', '💬 עוזר וצ׳אט'], ['skills', '🧠 סקילים'], ['workspaceV2', '🧩 סביבות עבודה']],
   },
   {
     title: 'הכתיבה שלי',
@@ -604,6 +618,7 @@ const SETTINGS_TAB_GROUPS = [
 // כותרת + תיאור לכל טאב (לכותרת העמוד מעל התוכן) — מתוך עיצוב "הגדרות" (linen).
 const SETTINGS_TAB_META = {
   ai: { icon: '🤖', title: 'מנועי AI', desc: 'מפתחות ומודלים לכל ספק. אפשר לשמור כמה מנועים במקביל ולבחור ברירת מחדל אחת.' },
+  pricing: { icon: '💰', title: 'תמחור', desc: 'כמה עולה כל מודל ומתי להשתמש בו' },
   sidebar: { icon: '💬', title: 'העוזר והצ׳אט', desc: 'איך העוזר החכם מתנהג ומה קורה בחלונית הצד.' },
   skills: { icon: '🧠', title: 'סקילים', desc: 'איזה סקיל פועל אוטומטית, איזה נשאר ידני, ואיך כל אחד עובד.' },
   workspaceV2: { icon: '🧩', title: 'סביבות עבודה', desc: 'הצוותים שמופיעים במסך הבית — תפקיד, יעד ותוצר לכל סוכן.' },
@@ -648,11 +663,6 @@ const SETTINGS_TAB_SEARCH_INDEX = [
     ]).join(' '),
   },
 ];
-
-const mergeUniqueStrings = (values = []) => [...new Set((Array.isArray(values) ? values : [values])
-  .flatMap((item) => (Array.isArray(item) ? item : [item]))
-  .map((item) => String(item || '').trim())
-  .filter(Boolean))];
 
 const getLecturerNamesFromProfile = (profile = {}) => {
   const lecturerNames = [...new Set(normalizeDelimitedList(profile.lecturerNames))];
@@ -700,73 +710,6 @@ const buildComparablePersonalStyleProfile = (profile = {}) => {
   const normalizedProfile = mergePersonalStyleForSave(profile);
   const { last_updated: _lastUpdated, ...comparableProfile } = normalizedProfile || {};
   return comparableProfile;
-};
-
-const STYLE_TRAINING_QUESTIONS = [
-  {
-    id: 'tone',
-    title: 'איזה ניסוח מרגיש יותר אתה?',
-    options: [
-      { id: 'formal', label: 'אפשרות א', text: 'בהתאם לממצאים, ניתן להסיק כי יש חשיבות להמשך בחינה מדויקת של הנושא.', insight: 'מעדיף ניסוח רשמי, נקי ומדויק.', avoid: 'סלנג או קלילות מוגזמת' },
-      { id: 'natural', label: 'אפשרות ב', text: 'מהממצאים די ברור שכדאי להמשיך לבדוק את הנושא בצורה מסודרת.', insight: 'מעדיף שפה טבעית, ישירה ונגישה.', avoid: 'ניסוח כבד ומרוחק מדי' },
-    ],
-  },
-  {
-    id: 'depth',
-    title: 'איזו רמת פירוט מתאימה יותר?',
-    options: [
-      { id: 'concise', label: 'אפשרות א', text: 'לסיכום, ההצעה תחסוך זמן ותשפר את רצף העבודה.', insight: 'מעדיף ניסוח תמציתי ומהיר לקריאה.', avoid: 'הרחבות ארוכות שלא מוסיפות ערך' },
-      { id: 'rich', label: 'אפשרות ב', text: 'לסיכום, ההצעה צפויה לחסוך זמן, לשפר את רצף העבודה וליצור חוויית שימוש מדויקת וברורה יותר לאורך התהליך.', insight: 'מעדיף עומק והשלמת רעיונות לפני סיום.', avoid: 'משפטים קצרים מדי בלי הקשר' },
-    ],
-  },
-  {
-    id: 'structure',
-    title: 'איזה מבנה קריאה נוח יותר עבורך?',
-    options: [
-      { id: 'structured', label: 'אפשרות א', text: 'המסמך יכלול: מטרה, שלבים, סיכונים והמלצה סופית.', insight: 'מעדיף מבנה מאורגן עם נקודות וכותרות ברורות.', avoid: 'פסקאות זורמות בלי היררכיה' },
-      { id: 'flowing', label: 'אפשרות ב', text: 'המסמך ייפתח בהסבר קצר, ימשיך לניתוח מרכזי ויסתיים בהמלצה טבעית ורציפה.', insight: 'מעדיף זרימה טבעית ופחות רשימות נוקשות.', avoid: 'עודף כותרות ונקודות טכניות' },
-    ],
-  },
-  {
-    id: 'assertiveness',
-    title: 'איזה סיום נשמע לך נכון יותר?',
-    options: [
-      { id: 'soft', label: 'אפשרות א', text: 'נראה שכדאי לשקול את ההצעה הזו בזהירות ובהתאם לצורך.', insight: 'מעדיף טון זהיר, מאוזן ולא תוקפני.', avoid: 'קביעות חדות מדי' },
-      { id: 'direct', label: 'אפשרות ב', text: 'ההצעה הזו היא הכיוון הנכון וצריך לקדם אותה כבר עכשיו.', insight: 'מעדיף טון החלטי, חד ובטוח.', avoid: 'זהירות יתר וניסוח מהוסס' },
-    ],
-  },
-  {
-    id: 'linguistic_register',
-    title: 'איזו רמה לשונית נשמעת לך נכון יותר?',
-    options: [
-      { id: 'academic', label: 'אקדמי', text: 'ניתוח הממצאים מעיד על מגמה ברורה הדורשת התייחסות מעמיקה בספרות המקצועית.', insight: 'מעדיף שפה אקדמית, מינוח מקצועי ומדויק.', avoid: 'שפה יומיומית ומינוח לא מקצועי' },
-      { id: 'standard', label: 'תקנית', text: 'הממצאים מראים מגמה ברורה שחשוב להתייחס אליה בצורה מסודרת.', insight: 'מעדיף שפה תקנית, תקינה ומאוזנת.', avoid: 'ז\'רגון אקדמי כבד מדי' },
-      { id: 'conversational', label: 'שיחתית', text: 'רואים בבירור מגמה מעניינת — שווה לחשוב על זה ולדון בה.', insight: 'מעדיף שפה שיחתית, נגישה וקרובה לקורא.', avoid: 'ניסוח רשמי מדי שמרחיק את הקורא' },
-    ],
-  },
-];
-
-const buildLearningGameProfilePatch = (answers = {}) => {
-  const selectedOptions = STYLE_TRAINING_QUESTIONS
-    .map((question) => question.options.find((option) => option.id === answers[question.id]))
-    .filter(Boolean);
-
-  const insights = mergeUniqueStrings(selectedOptions.map((option) => option.insight)).slice(0, 8);
-  const preferredTrainingExamples = selectedOptions.map((option) => option.text).slice(0, 4);
-  const dislikedStylePatterns = mergeUniqueStrings(selectedOptions.map((option) => option.avoid)).slice(0, 8);
-  const linguisticInsight = answers['linguistic_register']
-    ? (STYLE_TRAINING_QUESTIONS.find(q => q.id === 'linguistic_register')?.options.find(o => o.id === answers['linguistic_register'])?.insight || '')
-    : '';
-
-  return {
-    learningGameAnswers: answers,
-   learningGamesCompletedAt: Object.keys(answers).filter(k => answers[k]).length >= STYLE_TRAINING_QUESTIONS.length ? new Date().toISOString() : '',
-    learningGameInsights: insights,
-   styleTrainingSummary: [...insights, ...(linguisticInsight ? [linguisticInsight] : [])].join(' '),
-   linguisticRegisterPreference: answers['linguistic_register'] || '',
-    preferredTrainingExamples,
-    dislikedStylePatterns,
-  };
 };
 
 const linkifyText = (text = '') => {
@@ -1033,6 +976,7 @@ function AiSettings({ config, setConfig }) {
   const [showCustomHelp, setShowCustomHelp] = useState(false);
   const [openedGuideProviderId] = useState('');
   const [quickKeyPopup, setQuickKeyPopup] = useState(null); // { providerId, label, keyField, baseUrlField? }
+  const [modelRefreshState, setModelRefreshState] = useState(null); // null | {loading:true} | {ok, counts, error?}
   const update = (provider, field, value) =>
     setConfig(prev => ({ ...prev, [provider]: { ...prev[provider], [field]: value } }));
   const updateFeatureOverride = (featureId, patch) =>
@@ -1255,8 +1199,38 @@ function AiSettings({ config, setConfig }) {
           placeholder="gemini-2.5-flash"
           value={config.gemini?.model}
           onChange={v => update('gemini', 'model', v)}
-          options={getProviderModelChoices('gemini', config)}
+          options={[...new Set([...getProviderModelChoices('gemini', config), ...getCachedGeminiModels('text')])]}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
+        <div style={{ marginBottom: 10 }}>
+          <button
+            type="button"
+            onClick={async () => {
+              setModelRefreshState({ loading: true });
+              const res = await refreshGeminiModelCatalog();
+              setModelRefreshState(res);
+            }}
+            disabled={modelRefreshState?.loading === true}
+            style={{ fontSize: 11, padding: '4px 10px', background: 'white', color: 'var(--s-text)', border: '1px solid var(--s-border)', borderRadius: 6, cursor: modelRefreshState?.loading ? 'wait' : 'pointer' }}
+          >
+            🔄 רענן רשימת מודלים מהמפתח
+          </button>
+          {modelRefreshState && (
+            <div style={{ fontSize: 10, color: 'var(--s-muted)', marginTop: 4, lineHeight: 1.6, direction: 'rtl' }}>
+              {modelRefreshState.loading
+                ? 'טוען…'
+                : modelRefreshState.ok
+                  ? `נמצאו ${modelRefreshState.counts.text} מודלי צ׳אט, ${modelRefreshState.counts.image} תמונה, ${modelRefreshState.counts.video} וידאו`
+                  : `שגיאה: ${modelRefreshState.error}`}
+            </div>
+          )}
+        </div>
+        <FieldRow
+          label="מודלים נוספים"
+          placeholder="gemini-2.5-pro, gemini-2.5-flash-lite"
+          value={(config.gemini?.models || []).join(', ')}
+          onChange={v => update('gemini', 'models', String(v).split(',').map(s => s.trim()).filter(Boolean))}
+          hint="מופרדים בפסיק; יופיעו בבורר המודלים בחלונית ה-AI"
         />
         <ApiTestButton providerId="gemini" providerConfig={{ key: config.gemini?.key, model: config.gemini?.model }} />
       </ProviderSection>
@@ -1274,6 +1248,13 @@ function AiSettings({ config, setConfig }) {
           options={getProviderModelChoices('openai', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
         />
+        <FieldRow
+          label="מודלים נוספים"
+          placeholder="gpt-4o, gpt-4o-mini"
+          value={(config.openai?.models || []).join(', ')}
+          onChange={v => update('openai', 'models', String(v).split(',').map(s => s.trim()).filter(Boolean))}
+          hint="מופרדים בפסיק; יופיעו בבורר המודלים בחלונית ה-AI"
+        />
         <ApiTestButton providerId="openai" providerConfig={{ key: config.openai?.key, model: config.openai?.model }} />
       </ProviderSection>
 
@@ -1289,6 +1270,13 @@ function AiSettings({ config, setConfig }) {
           onChange={v => update('claude', 'model', v)}
           options={getProviderModelChoices('claude', config)}
           hint="אפשר לבחור מהרשימה או להקליד ידנית"
+        />
+        <FieldRow
+          label="מודלים נוספים"
+          placeholder="claude-sonnet-4-6, claude-haiku-4-5"
+          value={(config.claude?.models || []).join(', ')}
+          onChange={v => update('claude', 'models', String(v).split(',').map(s => s.trim()).filter(Boolean))}
+          hint="מופרדים בפסיק; יופיעו בבורר המודלים בחלונית ה-AI"
         />
         <ApiTestButton providerId="claude" providerConfig={{ key: config.claude?.key, model: config.claude?.model }} />
       </ProviderSection>
@@ -1419,7 +1407,24 @@ function AiSettings({ config, setConfig }) {
         <FieldRow label="מפתח ליצירת תמונות (אופציונלי ל-Gemini/OpenAI — חובה לשאר)" type="password" placeholder="leave empty to reuse text key" value={config.imageGen?.key}
           onChange={(v) => update('imageGen', 'key', v)} hint="Gemini/OpenAI: ריק = מפתח הטקסט הרגיל. Stability/xAI/FLUX: חובה מפתח ייעודי." />
         <FieldRow label="מודל יצירת תמונות" placeholder="imagen-3.0-generate-002" value={config.imageGen?.model}
-          onChange={(v) => update('imageGen', 'model', v)} options={['imagen-3.0-generate-002', 'gpt-image-1', 'stable-diffusion-xl-1024-v1-0', 'grok-2-image', 'fal-ai/flux/schnell', 'fal-ai/flux/dev']} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1 · Stability: stable-diffusion-xl-1024-v1-0 · xAI: grok-2-image · FLUX: fal-ai/flux/schnell" />
+          onChange={(v) => update('imageGen', 'model', v)} options={IMAGE_GEN_MODEL_SUGGESTIONS} hint="Gemini: imagen-3.0-generate-002 · OpenAI: gpt-image-1 · Stability: stable-diffusion-xl-1024-v1-0 · xAI: grok-2-image · FLUX: fal-ai/flux/schnell" />
+      </ProviderSection>
+
+      <ProviderSection title="יצירת וידאו AI (Veo)" icon="🎬" active={false} allowActivate={false}
+        configured={Boolean(String(config.videoGen?.key || '').trim()) || (config.videoGen?.provider || 'gemini') === 'gemini'}
+        onActivate={() => {}}
+        description="יצירת קטעי וידאו קצרים ב-AI (Veo של Gemini). וידאו הוא הפריט היקר ביותר — לשימוש נקודתי.">
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: 'var(--s-muted)', display: 'block', marginBottom: 3, fontWeight: 500 }}>ספק יצירת וידאו</label>
+          <select value={config.videoGen?.provider || 'gemini'} onChange={(e) => update('videoGen', 'provider', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: '1px solid #C8C6C4', borderRadius: 4, fontSize: 12 }}>
+            <option value="gemini">Gemini (Veo)</option>
+          </select>
+        </div>
+        <FieldRow label="מפתח API" type="password" placeholder="leave empty to reuse text key" value={config.videoGen?.key}
+          onChange={(v) => update('videoGen', 'key', v)} hint="ריק = המפתח הרגיל של Gemini" />
+        <FieldRow label="מודל" placeholder="veo-3.0-fast-generate-001" value={config.videoGen?.model}
+          onChange={(v) => update('videoGen', 'model', v)} options={getMediaModelChoices('video', config.videoGen?.provider || 'gemini', config)}
+          hint="אפשר לבחור מהרשימה או להקליד ידנית. וידאו עולה ~$0.15-0.40 לשנייה" />
       </ProviderSection>
 
       {(() => {
@@ -1754,7 +1759,7 @@ function AiSettings({ config, setConfig }) {
                               placeholder="ברירת מחדל של הספק"
                               value={im.genModel || ''}
                               onChange={(v) => updateFeatureImage(id, { genModel: v })}
-                              options={['imagen-3.0-generate-002', 'gpt-image-1', 'stable-diffusion-xl-1024-v1-0', 'grok-2-image', 'fal-ai/flux/schnell', 'fal-ai/flux/dev']}
+                              options={IMAGE_GEN_MODEL_SUGGESTIONS}
                             />
                             <FieldRow
                               label={genNeedsKey ? 'מפתח API לתמונות (חובה)' : 'מפתח API לתמונות (אופציונלי)'}
@@ -1775,6 +1780,125 @@ function AiSettings({ config, setConfig }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── תמחור מודלים ───
+const PRICING_TIER_STYLE = {
+  'זול': { background: '#DCFCE7', color: '#166534', borderColor: '#86EFAC' },
+  'בינוני': { background: '#FEF3C7', color: '#92400E', borderColor: '#FCD34D' },
+  'יקר': { background: '#FEE2E2', color: '#991B1B', borderColor: '#FCA5A5' },
+};
+
+const PRICING_PROVIDER_LABELS = {
+  gemini: 'Google Gemini',
+  openai: 'OpenAI',
+  claude: 'Claude (Anthropic)',
+  groq: 'Groq',
+  perplexity: 'Perplexity',
+};
+
+const PRICING_TABLE_CELL = { padding: '6px 8px', borderBottom: '1px solid var(--s-border)', verticalAlign: 'top' };
+const PRICING_MODEL_CELL = { ...PRICING_TABLE_CELL, direction: 'ltr', fontFamily: 'monospace', fontSize: 11, textAlign: 'left', whiteSpace: 'nowrap' };
+
+const formatUsageNumber = (value) => (Number(value) || 0).toLocaleString('he-IL');
+
+function PricingSettings() {
+  const usage = getUsageSummary();
+  const total = usage.total || {};
+  const providerOrder = [...new Set(MODEL_PRICING.map((entry) => entry.provider))];
+  const estimatedUsd = Object.entries(usage.byModel || {}).reduce((sum, [key, bucket]) => {
+    const modelId = String(key).split('/').slice(1).join('/');
+    const entry = MODEL_PRICING.find((it) => it.model === modelId);
+    const inPerM = Number(entry?.inputPerM) || 0;
+    const outPerM = Number(entry?.outputPerM) || 0;
+    // טוקני חשיבה מחויבים כמחיר פלט — לכן הם נכנסים לצד ה-output.
+    const billedOutput = (Number(bucket.outputTokens) || 0) + (Number(bucket.thinkingTokens) || 0);
+    const tokensCost = ((Number(bucket.inputTokens) || 0) * inPerM + billedOutput * outPerM) / 1e6;
+    return sum + tokensCost + (Number(bucket.groundedCalls) || 0) * 0.035;
+  }, 0);
+
+  return (
+    <div dir="rtl">
+      <p style={{ fontSize: 12, color: 'var(--s-muted)', marginBottom: 14, lineHeight: 1.7 }}>
+        המחירים נכונים ל-{PRICING_AS_OF} · {formatHebrewWordsPerMillion()}
+      </p>
+
+      <div style={{ border: '2px solid #FCA5A5', borderRadius: 12, padding: '12px 14px', background: '#FEF2F2', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: '#991B1B', marginBottom: 4 }}>🌐 חיפוש Google בתוך קריאה (Grounding)</div>
+        <div style={{ fontSize: 11.5, color: '#7F1D1D', lineHeight: 1.7 }}>
+          {GROUNDING_PRICING.note} ${GROUNDING_PRICING.pricePer1000} לכל 1,000 קריאות.
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '10px 12px', background: 'var(--s-surface-2)', color: 'var(--s-muted)', fontSize: 11, lineHeight: 1.7, marginBottom: 14 }}>
+        {QUICKCHART_NOTE}
+      </div>
+
+      <div style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 6 }}>השימוש שלך החודש</div>
+        {(Number(total.calls) || 0) === 0 ? (
+          <div style={{ fontSize: 11.5, color: 'var(--s-muted)', lineHeight: 1.7 }}>עדיין אין נתונים החודש — המדידה התחילה עכשיו</div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--s-text)', lineHeight: 1.8 }}>
+            <div>קריאות: {formatUsageNumber(total.calls)} · מתוכן מעוגנות-חיפוש: {formatUsageNumber(total.groundedCalls)}</div>
+            <div>
+              טוקני קלט: {formatUsageNumber(total.inputTokens)} · טוקני פלט: {formatUsageNumber(total.outputTokens)}
+              {(Number(total.thinkingTokens) || 0) > 0 ? ` (מתוכם חשיבה: ${formatUsageNumber(total.thinkingTokens)})` : ''}
+            </div>
+            <div style={{ fontWeight: 700, marginTop: 4 }}>
+              אומדן: ${estimatedUsd.toFixed(2)} ≈ ₪{(estimatedUsd * USD_TO_ILS_APPROX).toFixed(2)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {providerOrder.map((providerId) => (
+        <div key={providerId} style={{ border: '1px solid var(--s-border)', borderRadius: 12, padding: '12px 14px', background: 'var(--s-surface)', marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--s-text-strong)', marginBottom: 8 }}>{PRICING_PROVIDER_LABELS[providerId] || providerId}</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, color: 'var(--s-text)', direction: 'rtl' }}>
+              <thead>
+                <tr style={{ color: 'var(--s-muted)', fontSize: 11 }}>
+                  <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>מודל</th>
+                  <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>קלט ל-1M</th>
+                  <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>פלט ל-1M</th>
+                  <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>≈ ₪</th>
+                  <th style={{ ...PRICING_TABLE_CELL, textAlign: 'right' }}>מתי להשתמש</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MODEL_PRICING.filter((entry) => entry.provider === providerId).map((entry) => {
+                  const tierStyle = PRICING_TIER_STYLE[entry.tier] || PRICING_TIER_STYLE['בינוני'];
+                  const isPerUnit = Number(entry.pricePerUnit) > 0;
+                  const ils = isPerUnit
+                    ? `₪${(Number(entry.pricePerUnit) * USD_TO_ILS_APPROX).toFixed(2)}`
+                    : `₪${(Number(entry.outputPerM || 0) * USD_TO_ILS_APPROX).toFixed(0)}`;
+                  return (
+                    <tr key={`${entry.provider}/${entry.model}`}>
+                      <td style={PRICING_MODEL_CELL}>{entry.model}</td>
+                      {isPerUnit ? (
+                        <td colSpan={2} style={PRICING_TABLE_CELL}>${entry.pricePerUnit} ל{entry.unit}</td>
+                      ) : (
+                        <>
+                          <td style={PRICING_TABLE_CELL}>${Number(entry.inputPerM || 0).toFixed(2)}</td>
+                          <td style={PRICING_TABLE_CELL}>${Number(entry.outputPerM || 0).toFixed(2)}</td>
+                        </>
+                      )}
+                      <td style={PRICING_TABLE_CELL}>{ils}{isPerUnit ? '' : ' (פלט)'}</td>
+                      <td style={{ ...PRICING_TABLE_CELL, lineHeight: 1.6 }}>
+                        <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 999, border: '1px solid', marginLeft: 6, whiteSpace: 'nowrap', ...tierStyle }}>{entry.tier}</span>
+                        {entry.recommendation}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3881,228 +4005,28 @@ function GuideSettings({ activeTab = 'guide', onNavigate = () => {} }) {
   );
 }
 
-function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onOpenSecuritySettings = () => {}, onDismiss = () => {}, onSubmitExternalAnalysis = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
+function OnboardingTabContainer({ profile, setProfile, persistProfile = null, setProviderConfig = () => {}, onOpenAiSettings = () => {}, onOpenPersonalStyle = () => {}, onOpenSecuritySettings = () => {}, onDismiss = () => {}, externalAnalysisBusy = false, providerConfig = getProviderConfig() }) {
   const persistProfileState = persistProfile || setProfile;
   const updateField = (field, value) => setProfile(prev => applyManualProfileScalarFieldUpdate(prev, field, value));
   const updateList = (field, value) => setProfile(prev => applyProfileListFieldUpdate(prev, field, value));
   const [syllabusImport, setSyllabusImport] = useState({ status: 'idle', fileName: '', message: '', summary: '' });
-  const markOnboardingComplete = () => persistProfileState((prev) => (
-    prev.onboardingCompletedAt
-      ? prev
-      : {
-          ...prev,
-          onboardingCompletedAt: new Date().toISOString(),
-          onboardingDismissedAt: '',
-          onboardingSnoozedUntil: '',
-          onboardingVersion: prev.onboardingVersion || 1,
-        }
-  ));
-  const toggleStyle = (styleId) => setProfile((prev) => {
-    const current = Array.isArray(prev.preferredHomeStyleIds) ? prev.preferredHomeStyleIds : [];
-    const next = current.includes(styleId)
-      ? current.filter((item) => item !== styleId)
-      : [...current, styleId].slice(0, 4);
-    return { ...prev, preferredHomeStyleIds: next.length ? next : [styleId] };
-  });
-
-  const trainingAnswers = profile.learningGameAnswers || {};
-  const inferredExternalProviderId = deriveExternalAnalysisProviderId(providerConfig);
-  const selectedExternalProviderId = String(profile.externalStyleAnalysisProvider || inferredExternalProviderId || providerConfig?.active || 'gemini').trim() || 'gemini';
-  const [quickSetupProviderId, setQuickSetupProviderId] = useState(selectedExternalProviderId);
-  const resolvedQuickSetupProviderId = String(quickSetupProviderId || selectedExternalProviderId || 'gemini').trim() || 'gemini';
+  const markOnboardingComplete = () => {
+    persistProfileState((prev) => (
+      prev.onboardingCompletedAt
+        ? prev
+        : {
+            ...prev,
+            onboardingCompletedAt: new Date().toISOString(),
+            onboardingDismissedAt: '',
+            onboardingSnoozedUntil: '',
+            onboardingVersion: 2, // v2 — הוסר שלב משחק האימון (12→11 שלבים)
+          }
+    ));
+    // סיום = סוגרים את האשף. ה-persist למעלה כבר עדכן את onboardingCompletedAt (סינכרוני
+    // דרך personalStyleStateRef), כך ש-maybePostponeOnboardingSession שבנתיב הסגירה לא ידחה שוב.
+    onDismiss();
+  };
   const externalAnalysisAvailability = getExternalAnalysisAvailability('', providerConfig);
-  const openRouterBaseUrl = normalizeProviderIdentity('https://openrouter.ai/api/v1');
-  const CUSTOM_PROVIDER_PRESETS = {
-    deepseek: {
-      label: 'DeepSeek',
-      name: 'DeepSeek',
-      baseUrl: 'https://api.deepseek.com/v1',
-      model: 'deepseek-chat',
-      placeholder: 'sk-...',
-      helpText: 'הדבקה כאן תגדיר אוטומטית את DeepSeek בתוך Custom עם ה-endpoint והמודל הראשוני.',
-      acceptsKey: true,
-    },
-    mistral: {
-      label: 'Mistral',
-      name: 'Mistral AI',
-      baseUrl: 'https://api.mistral.ai/v1',
-      model: 'mistral-large-latest',
-      placeholder: 'API key',
-      helpText: 'הדבקה כאן תגדיר אוטומטית את Mistral בתוך Custom עם ה-endpoint והמודל הראשוני.',
-      acceptsKey: true,
-    },
-    together: {
-      label: 'Together.ai',
-      name: 'Together.ai',
-      baseUrl: 'https://api.together.xyz/v1',
-      model: 'meta-llama/Llama-3-70b-chat-hf',
-      placeholder: 'API key',
-      helpText: 'הדבקה כאן תגדיר אוטומטית את Together.ai בתוך Custom עם ה-endpoint והמודל הראשוני.',
-      acceptsKey: true,
-    },
-    openrouter: {
-      label: 'OpenRouter',
-      name: 'OpenRouter',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'openrouter/auto',
-      placeholder: 'sk-or-v1-...',
-      helpText: 'הדבקה כאן תגדיר אוטומטית את OpenRouter בתוך Custom עם ה-endpoint והמודל הראשוני.',
-      acceptsKey: true,
-    },
-    xai: {
-      label: 'xAI (Grok)',
-      name: 'xAI (Grok)',
-      baseUrl: 'https://api.x.ai/v1',
-      model: 'grok-3-mini-beta',
-      placeholder: 'API key',
-      helpText: 'הדבקה כאן תגדיר אוטומטית את xAI בתוך Custom עם ה-endpoint והמודל הראשוני.',
-      acceptsKey: true,
-    },
-    lmstudio: {
-      label: 'LM Studio',
-      name: 'LM Studio (מקומי)',
-      baseUrl: 'http://localhost:1234/v1',
-      model: 'loaded-model',
-      placeholder: 'לא נדרש מפתח',
-      helpText: 'ל-LM Studio לא נדרש מפתח. הבחירה כאן לא דורסת custom קיים; כדי להגדיר חיבור חדש פתח את מסך ה-AI ושמור שם את הכתובת והמודל.',
-      acceptsKey: false,
-    },
-  };
-  const customProviderMatchesPreset = (cfg, preset) => matchesMappedCustomPreset(cfg, preset);
-  const isModelCompatibleWithCustomPreset = (presetId, modelValue = '') => {
-    const cleanModel = String(modelValue || '').trim().toLowerCase();
-    if (!cleanModel) return false;
-    switch (presetId) {
-      case 'deepseek':
-        return cleanModel.startsWith('deepseek');
-      case 'mistral':
-        return cleanModel.includes('mistral');
-      case 'together':
-          return /(llama|qwen|mixtral|mistral|gemma|deepseek|dbrx|wizardlm|nous)/.test(cleanModel);
-      case 'openrouter':
-      case 'lmstudio':
-        return true;
-      case 'xai':
-        return cleanModel.startsWith('grok');
-      default:
-        return false;
-    }
-  };
-  const prioritizeQuickSetupRuntimeProvider = (cfg, providerId) => {
-    const normalizedProviderId = String(providerId || '').trim();
-    if (!normalizedProviderId) return cfg;
-
-    const runtimeProviderId = CUSTOM_PROVIDER_PRESETS[normalizedProviderId] || normalizedProviderId === 'custom'
-      ? 'custom'
-      : normalizedProviderId;
-    const currentProviders = Array.isArray(cfg?.activeProviders) && cfg.activeProviders.length
-      ? cfg.activeProviders
-      : [cfg?.active];
-
-    return {
-      ...cfg,
-      active: runtimeProviderId,
-      activeProviders: [
-        runtimeProviderId,
-        ...Array.from(new Set(currentProviders.filter(Boolean))).filter((providerItemId) => providerItemId !== runtimeProviderId),
-      ],
-    };
-  };
-  const syncQuickSetupRuntimeProvider = (providerId, configUpdater = null) => {
-    const normalizedProviderId = String(providerId || '').trim();
-    if (!normalizedProviderId) return;
-
-    setProviderConfig((prev) => {
-      const nextConfig = typeof configUpdater === 'function' ? configUpdater(prev) : prev;
-      return prioritizeQuickSetupRuntimeProvider(nextConfig, normalizedProviderId);
-    });
-    setProfile((prev) => {
-      if (String(prev.externalStyleAnalysisProvider || '').trim() === normalizedProviderId) return prev;
-      return {
-        ...prev,
-        externalStyleAnalysisProvider: normalizedProviderId,
-      };
-    });
-  };
-  const customPreset = CUSTOM_PROVIDER_PRESETS[resolvedQuickSetupProviderId] || null;
-
-  const updateQuickProviderKey = (value) => {
-    const nextValue = String(value || '');
-    if (customPreset?.acceptsKey) {
-      const applyCustomPresetConfig = (prev) => ({
-        ...prev,
-        custom: {
-          ...prev.custom,
-          name: customPreset.name,
-          baseUrl: customPreset.baseUrl,
-          model: customProviderMatchesPreset(prev, customPreset) && isModelCompatibleWithCustomPreset(resolvedQuickSetupProviderId, prev.custom?.model)
-            ? (prev.custom?.model || customPreset.model)
-            : customPreset.model,
-          key: nextValue,
-        },
-      });
-
-      if (nextValue.trim()) {
-        syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyCustomPresetConfig);
-      } else {
-        setProviderConfig(applyCustomPresetConfig);
-      }
-      return;
-    }
-
-    if (resolvedQuickSetupProviderId === 'custom') {
-      const applyCustomKey = (prev) => ({
-        ...prev,
-        custom: {
-          ...prev.custom,
-          key: nextValue,
-        },
-      });
-
-      if (nextValue.trim()) {
-        syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyCustomKey);
-      } else {
-        setProviderConfig(applyCustomKey);
-      }
-      return;
-    }
-
-    if (!['gemini', 'openai', 'claude', 'groq', 'perplexity', 'scholar'].includes(resolvedQuickSetupProviderId)) return;
-    const applyBuiltinProviderKey = (prev) => ({
-      ...prev,
-      [resolvedQuickSetupProviderId]: {
-        ...prev[resolvedQuickSetupProviderId],
-        key: nextValue,
-      },
-    });
-
-    if (nextValue.trim()) {
-      syncQuickSetupRuntimeProvider(resolvedQuickSetupProviderId, applyBuiltinProviderKey);
-    } else {
-      setProviderConfig(applyBuiltinProviderKey);
-    }
-  };
-
-  const selectLearningOption = (questionId, optionId) => {
-    setProfile((prev) => ({
-      ...prev,
-      ...buildLearningGameProfilePatch({ ...(prev.learningGameAnswers || {}), [questionId]: optionId })
-    }));
-  };
-
-  const resetLearningGame = async () => {
-    if (!(await showConfirm('האם אתה בטוח שברצונך לאפס את הלמידה?', { title: 'איפוס למידה', confirmLabel: 'אפס', tone: 'danger' }))) return;
-    setProfile((prev) => ({
-      ...prev,
-      learningGameAnswers: {},
-      learningGameInsights: [],
-      learningGamesCompletedAt: '',
-      styleTrainingSummary: '',
-      preferredTrainingExamples: [],
-      dislikedStylePatterns: [],
-    }));
-  };
-
 
   const formatSyllabusImportError = (error) => {
     const code = String(error?.message || '').trim();
@@ -4175,29 +4099,6 @@ function OnboardingTabContainer({ profile, setProfile, persistProfile = null, se
       profile={profile}
       updateField={updateField}
       updateList={updateList}
-      onQuickProviderChange={(value) => {
-        setQuickSetupProviderId(value);
-
-        if (value === 'ollama') {
-          syncQuickSetupRuntimeProvider(value);
-          return;
-        }
-
-        if (value === 'lmstudio') {
-          const lmStudioPreset = CUSTOM_PROVIDER_PRESETS.lmstudio;
-          if (customProviderMatchesPreset(providerConfig, lmStudioPreset)) {
-            syncQuickSetupRuntimeProvider(value);
-          }
-          return;
-        }
-      }}
-      onQuickProviderKeyChange={updateQuickProviderKey}
-      STYLE_TRAINING_QUESTIONS={STYLE_TRAINING_QUESTIONS}
-      STYLE_PRESET_OPTIONS={STYLE_PRESET_OPTIONS}
-      trainingAnswers={trainingAnswers}
-      selectLearningOption={selectLearningOption}
-      toggleStyle={toggleStyle}
-      resetLearningGame={resetLearningGame}
       onOpenAiSettings={onOpenAiSettings}
       onOpenPersonalStyle={onOpenPersonalStyle}
       onOpenSecuritySettings={onOpenSecuritySettings}
@@ -8088,9 +7989,13 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
   const postponeIncompleteOnboarding = () => {
     persistPersonalStyleDraft((prev) => {
       if (String(prev?.onboardingCompletedAt || '').trim()) return prev;
+      // נטישה ראשונה → snooze של 24 שעות. נטישה שנייה ואילך (כבר יש snooze מפעם קודמת) →
+      // onboardingDismissedAt קבוע: בלי זה המשתמש מקבל את האשף מחדש כל יום לנצח.
+      // כניסה ידנית דרך מסך הבית / ההגדרות עדיין פתוחה תמיד.
+      const wasPostponedBefore = String(prev?.onboardingSnoozedUntil || '').trim() !== '';
       return {
         ...prev,
-        onboardingDismissedAt: '',
+        onboardingDismissedAt: wasPostponedBefore ? new Date().toISOString() : '',
         onboardingSnoozedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       };
     });
@@ -8570,7 +8475,6 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                    onOpenPersonalStyle={() => setSettingsTab('personal')}
                    onOpenSecuritySettings={() => setSettingsTab('security')}
                    onDismiss={closeSettingsPanel}
-                   onSubmitExternalAnalysis={() => runExternalAnalysisProcessing({ source: 'manual' })}
                  />
                </div>
              ) : (
@@ -8618,6 +8522,7 @@ export default function FileMenu({ onClose, onCommand, shortcuts, onShortcutsCha
                     <div className="wf-settings-pane bg-white rounded-3xl p-5 sm:p-8 border border-slate-200 shadow-sm dark:bg-[#0f1d2e] dark:border-white/10 dark:shadow-black/30">
                       {settingsTab === 'guide'       && <GuideSettings activeTab={settingsTab} onNavigate={setSettingsTab} />}
                       {settingsTab === 'ai'          && <AiSettings config={config} setConfig={setConfig} />}
+                      {settingsTab === 'pricing'     && <PricingSettings />}
                       {settingsTab === 'media'       && <MediaVisualsSettings config={config} setConfig={setConfig} />}
                       {settingsTab === 'sidebar'     && (
                         <div className="flex flex-col gap-8">

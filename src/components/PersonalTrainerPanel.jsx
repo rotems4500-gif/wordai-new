@@ -177,9 +177,13 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
     return () => { alive = false; };
   }, [selectOn]);
 
+  // תופעת לוואי לא נכנסת לתוך ה-updater — תחת StrictMode הוא רץ פעמיים
+  // וההגדרה הייתה נכתבת פעמיים. מחשבים את הערך פעם אחת ומחוצה לו.
   const toggleSelect = useCallback(() => {
-    setSelectOn((prev) => { setStyleSelectEnabled(!prev); return !prev; });
-  }, []);
+    const next = !selectOn;
+    setStyleSelectEnabled(next);
+    setSelectOn(next);
+  }, [selectOn]);
 
   const { opener, frame, targetsStatus, targets, lecturers, corpus, sourceCounts, suggestionStats, deltaAgg, revisionNotesCount } = state;
   const corpusDocs = Number(corpus?.docCount) || 0;
@@ -188,6 +192,7 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
   const openerEmpty = !opener?.ready || !(opener.personalWords > 0);
   const frameEmpty = !frame?.ready || !(frame.minedFrames > 0);
   const targetsEmpty = !targets;
+  const measuredTargetDocs = Number(targetsStatus?.docCount) || 0;
 
   // "למידה מהשימוש" — נתונים שנצברים מהעבודה השוטפת ולא מהעלאת קורפוס.
   const suggestionTotal = (suggestionStats?.accepted || 0) + (suggestionStats?.rejected || 0) + (suggestionStats?.dismissed || 0);
@@ -237,7 +242,7 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
       </Section>
 
       <Section title="🧩 מסגרות משפט" empty={frameEmpty}>
-        נכרו {frame?.minedFrames || 0} מסגרות משפט מ-{frame?.distinctDocs || 0} עבודות.
+        זוהו {frame?.minedFrames || 0} מסגרות משפט פעילות (מסגרות דקדוק שנמצאו בכתיבה שלך) מ-{frame?.distinctDocs || 0} עבודות.
         <div style={{ marginTop: 4 }}>
           רשומות משוב שנאספו: {frame?.feedbackEntries || 0}
           <span style={{ opacity: 0.75 }}> — אישורים ודחיות שלך על ניסוחים.</span>
@@ -340,7 +345,15 @@ export default function PersonalTrainerPanel({ onOpenLecturerProfiles = null }) 
       {targetsEmpty ? (
         <div style={{ ...BODY_STYLE, marginTop: -4 }}>
           נדרשות לפחות {MIN_TARGET_DOCS} עבודות כדי לגזור יעדים מבניים
-          (נמדדו עד כה: {targetsStatus?.docCount || 0}).
+          (נמדדו עד כה: {measuredTargetDocs}).
+          {/* הפער מול "הקורפוס" למעלה מבלבל: הטקסט המקורי של מסמכים ישנים לא נשמר,
+              ולכן אי אפשר למדוד אותם רטרואקטיבית. אומרים את זה במפורש. */}
+          {corpusDocs > 0 ? (
+            <div style={{ marginTop: 3, opacity: 0.85 }}>
+              היעדים המבניים נמדדים רק ממסמכים שנקלטים מעתה ואילך; העלאה מחדש של עבודות
+              קיימות תמדוד גם אותן.
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -1982,12 +1982,57 @@ const stripSmartQuotes = (text) => String(text || '')
 
 const stripTrailingCommas = (text) => String(text || '').replace(/,\s*([}\]])/g, '$1');
 
+// ארטיפקטים של ציטוטי Gemini — "[span_3](start_span)…[span_3](end_span)" מוזרקים בתוך
+// ערכים (שם מוסד, ת"ז...) ומזהמים את הפרופיל. מוסרים מהטקסט הגולמי לפני הפענוח.
+const GEMINI_SPAN_RE = /\[span_\d+\]\((?:start|end)_span\)/g;
+
+// גרשיים כפולים לא-מבורחים בתוך ערך — נמדד על פלט Gemini אמיתי (14.8.26): ערך שהכיל
+// ציטוט פנימי ("ציטוט: ...") הפיל את JSON.parse על הקובץ כולו והמשתמש קיבל "לא נקלט
+// כלום". היוריסטיקה: בתוך מחרוזת, גרש שאחריו (אחרי רווחים) , : } ] או סוף-קלט הוא סוגר
+// אמיתי; כל גרש אחר (ד"ר, ציטוט פנימי) מבורח. רץ רק כשה-parse הרגיל כבר נכשל.
+const escapeInnerQuotes = (text) => {
+  const t = String(text || '');
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < t.length; i += 1) {
+    const ch = t[i];
+    if (!inStr) {
+      if (ch === '"') inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') { out += ch + (t[i + 1] || ''); i += 1; continue; }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < t.length && /\s/.test(t[j])) j += 1;
+      const nxt = t[j];
+      if (nxt === ',' || nxt === '}' || nxt === ']' || nxt === ':' || nxt === undefined) {
+        inStr = false;
+        out += ch;
+      } else {
+        out += '\\"';
+      }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+};
+
 const tryParseJson = (text) => {
   const t = String(text || '').trim();
   if (!t) return null;
   try { return JSON.parse(t); } catch { /* fallthrough */ }
   try { return JSON.parse(stripTrailingCommas(t)); } catch { /* fallthrough */ }
   try { return JSON.parse(stripTrailingCommas(stripSmartQuotes(t))); } catch { /* fallthrough */ }
+  // גרשיים לא-מבורחים בתוך ערכים (ציטוט פנימי, ד"ר) — תיקון סורק, רק אחרי שהניסיונות
+  // הרגילים נכשלו כדי לא לגעת ב-JSON תקין.
+  try { return JSON.parse(stripTrailingCommas(escapeInnerQuotes(stripSmartQuotes(t)))); } catch { /* fallthrough */ }
+  // סגנון dict של פייתון — מרכאות בודדות בלבד ('{...}'). מנסים רק כשאין אף מרכאה
+  // כפולה בטקסט (אחרת נהרוס ערכים), וגרש בתוך ערך עברי (צ'אט) פשוט ייכשל parse → null.
+  if (!t.includes('"')) {
+    try { return JSON.parse(stripTrailingCommas(t.replace(/'/g, '"'))); } catch { /* fallthrough */ }
+  }
   return null;
 };
 
@@ -2017,7 +2062,7 @@ const jsonCandidates = (text) => {
  * @returns {object|Array|null}
  */
 export function decodeLooseJsonText(raw) {
-  const stripped = stripJsonFences(String(raw || '').replace(INVISIBLE_CHARS_RE, ''));
+  const stripped = stripJsonFences(String(raw || '').replace(INVISIBLE_CHARS_RE, '').replace(GEMINI_SPAN_RE, ''));
   if (!stripped) return null;
   const direct = tryParseJson(stripped);
   if (direct && typeof direct === 'object') return direct;
@@ -2130,6 +2175,42 @@ export function normalizeExternalSchemaJson(raw) {
   return out;
 }
 
+// ---------- שדות פרופיל "נוספים" בפלט חיצוני ----------
+// מודלים מוסיפים מעצמם שדות שהפרומפט לא ביקש (avoidRules, קהל יעד, אוצר מילים...).
+// הרשימה כאן מזהה אותם כדי ש: (1) שער ה-UI לא ידחה פלט שיש בו רק אותם, (2) מסלול
+// המטא ב-styleIngestService יקלוט אותו. המיפוי בפועל לפרופיל נעשה ב-aiService
+// (normalizeExternalStyleExtraction) — כאן רק זיהוי.
+const EXTERNAL_PROFILE_KEY_RES = [
+  /^(institution|study_?track|course|lecturer|display_?name|student|submission|declaration)/i,
+  /^(user_?background|writer|writing_?goals?|primary_?goal|audience|target_?audience|default_?audience)/i,
+  /^(format|paragraph|custom_?style|recommended|notes?|key_?findings)/i,
+  /^(manual_?vocabulary|key_?terms|vocabulary|manual_?phrases|signature_?phrases)/i,
+  /^(preferred_?|tone|sentence_?length|paragraph_?length|document_?style|connectors|openers)/i,
+  /^(avoid|things_?to_?avoid|dont_?use|always|rules|favorite|greeting|sign_?off|closing|golden_?example|example_?paragraph)/i,
+  /קהל|טון|רקע|מטר|אוצר|ביטוי|חוק|להימנע|פתיח|סיומ|דוגמ|הערות|המלצ/,
+];
+// מפתחות סכימת הדפוסים עצמה אינם "שדות נוספים" — בלעדיהם פלט דפוסים רגיל היה נחשב
+// בטעות גם כפלט-מטא ומפעיל מיזוג פרופיל מיותר.
+const CORE_SCHEMA_KEY_RE = /^(patterns?|negative_?space|structural_?signature|avoided_?phrases?)$/i;
+const isExternalProfileKey = (key) => {
+  const k = String(key || '').trim();
+  return !CORE_SCHEMA_KEY_RE.test(k) && EXTERNAL_PROFILE_KEY_RES.some((re) => re.test(k));
+};
+const hasNonEmptyValue = (v) => (Array.isArray(v) ? v.length > 0 : (isPlainObject(v) ? Object.keys(v).length > 0 : String(v ?? '').trim().length > 0));
+
+/**
+ * האם הפלט נושא שדות פרופיל מוכרים (בשורש או תחת style) מעבר לסכימת הדפוסים —
+ * משמש את שער ההדבקה ואת שער המטא, כדי ששדות "בונוס" לא ילכו לאיבוד.
+ * @param {object} parsed
+ * @returns {boolean}
+ */
+export function hasExternalProfileFields(parsed) {
+  if (!isPlainObject(parsed)) return false;
+  const scopes = [parsed, isPlainObject(parsed.style) ? parsed.style : null].filter(Boolean);
+  return scopes.some((scope) => Object.entries(scope)
+    .some(([key, value]) => isExternalProfileKey(key) && hasNonEmptyValue(value)));
+}
+
 // מפתחות פנימיים של פריט דפוס — כולל שמות עבריים, כי מודל שתרגם את הסכימה
 // מתרגם גם אותם.
 const pickField = (item, keys) => {
@@ -2239,7 +2320,10 @@ export function parsePatternExtractionResult(raw, { lenientTypes = false } = {})
   // ששער ה-UI לא ידחה אותו כ"לא נקלט כלום" בזמן שהשירות דווקא כן קולט אותו.
   const hasMeta = isPlainObject(parsed.style)
     || isPlainObject(parsed.coverPageDefaults)
-    || (typeof parsed.profileSummary === 'string' && parsed.profileSummary.trim().length > 0);
+    || (typeof parsed.profileSummary === 'string' && parsed.profileSummary.trim().length > 0)
+    // שדות פרופיל "בונוס" שהמודל הוסיף מעצמו (avoidRules, קהל יעד, אוצר מילים...) —
+    // פלט שיש בו רק אותם תקין: mergeExternalStyleExtractionIntoProfile יודע לקלוט אותם.
+    || hasExternalProfileFields(parsed);
 
   // topKeys — לדיאגנוסטיקה בלבד (הודעת השגיאה ב-UI מציגה מה כן נמצא בפלט).
   return { patterns, negativeSpace, structuralSignature, avoidedPhrases, hasMeta, topKeys };

@@ -13,7 +13,10 @@ import { buildSourcesQueryOverride as buildSourcesQueryOverridePure, isSourcesNe
 import { startRunScope, getActiveRunScope, endRunScope, setScopeTopic } from "./v3/orchestration/runScope";
 import { detectSourceCheckRequest, runChatSourceCheck, formatSourceCheckContext } from "./services/chatSourceCheck";
 import { classifyChatScope } from "./services/chatScope";
-import { resolveStrongGeneralModelForProvider, parseAiAppendixResponse, buildPersonalStyleVoiceBlock, applyStyleJudgeToText } from "./services/aiService";
+import { parseAiAppendixResponse, buildPersonalStyleVoiceBlock, applyStyleJudgeToText, getMediaModelChoices } from "./services/aiService";
+import { generateAiImage } from "./services/imageService";
+import { generateVeoVideo } from "./services/videoService";
+import { detectMediaIntent, generateChartFromText, buildDiagramImagePrompt } from "./services/mediaIntentService";
 import { isV3FlagEnabled } from "./v3/flags";
 import { searchArticleLibrary, formatArticleLibraryReply, addArticleToMaterials, primeArticleMaterialsIndex, downloadArticlePdf } from "./services/articleLibraryService";
 import ArticleResultsList from "./components/articleLibrary/ArticleResultsList";
@@ -208,9 +211,36 @@ const PROMPT_HISTORY_LIMIT = 100;
 const COMPOSER_MODES = [
   { id: 'chat', label: 'צ׳אט', icon: '💬' },
   { id: 'edit', label: 'עריכה מובנית', icon: '🧩' },
+  { id: 'image', label: '🖼️ תמונה', icon: '🖼️' },
+  { id: 'video', label: '🎬 וידאו', icon: '🎬' },
 ];
+const COMPOSER_MODE_IDS = new Set(COMPOSER_MODES.map((modeOption) => modeOption.id));
 
-const normalizeComposerMode = (value = '') => (String(value || '').trim() === 'edit' ? 'edit' : 'chat');
+const normalizeComposerMode = (value = '') => {
+  const normalized = String(value || '').trim();
+  return COMPOSER_MODE_IDS.has(normalized) ? normalized : 'chat';
+};
+
+// בייטים של מדיה שנוצרה לא נכנסים להודעות (הן נשמרות ל-localStorage) — רק ל-runtime map.
+const mediaBase64ToBytes = (base64 = '') => {
+  const binary = atob(String(base64 || ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
+// data-URL ענק נכשל ב-fetch/רינדור (תקדים PresentationStudio) — objectURL מ-Blob במקום.
+const mediaBase64ToObjectUrl = (base64 = '', mime = 'application/octet-stream') => {
+  try {
+    return URL.createObjectURL(new Blob([mediaBase64ToBytes(base64)], { type: mime || 'application/octet-stream' }));
+  } catch {
+    return '';
+  }
+};
+const dataUrlToBase64Parts = (dataUrl = '') => {
+  const match = String(dataUrl || '').match(/^data:([^;,]+)?(?:;base64)?,(.*)$/s);
+  if (!match) return { mime: '', base64: '' };
+  return { mime: match[1] || 'image/png', base64: match[2] || '' };
+};
 
 const buildSidebarConversationHistory = (entries = []) => (Array.isArray(entries) ? entries : [])
   .filter((entry) => entry && (entry.role === 'user' || entry.role === 'assistant'))
@@ -265,6 +295,20 @@ const hasRecentNumberedReviewContext = (entries = []) => buildSidebarConversatio
 const buildDocumentPersistenceIds = (...documentIds) => {
   const uniqueIds = [...new Set(documentIds.map((value) => String(value || '').trim()).filter(Boolean))];
   return uniqueIds.length ? uniqueIds : [''];
+};
+
+// חלון הקשר ממוקד סביב הבחירה (אותה תבנית כמו buildFocusedContext ב-MagicWand):
+// כשעובדים על קטע נבחר בצ'אט אין צורך לשלוח את כל תצלום המסמך — רק סביבה קרובה.
+const FOCUSED_SELECTION_WINDOW_CHARS = 1200;
+const buildFocusedSelectionDocContext = (fullCtx = '', selection = '') => {
+  const ctx = String(fullCtx || '');
+  const sel = String(selection || '').trim();
+  if (!ctx || !sel) return ctx;
+  const anchor = ctx.indexOf(sel.slice(0, 200));
+  if (anchor < 0) return ctx.slice(0, 4000);
+  const start = Math.max(0, anchor - FOCUSED_SELECTION_WINDOW_CHARS);
+  const end = Math.min(ctx.length, anchor + sel.length + FOCUSED_SELECTION_WINDOW_CHARS);
+  return `${start > 0 ? '…' : ''}${ctx.slice(start, end)}${end < ctx.length ? '…' : ''}`;
 };
 
 const normalizeSidebarDocumentSnapshot = (value = '') => {
@@ -1012,7 +1056,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onReviseDocument = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onInsertGeneratedImage = null, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onReviseDocument = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
@@ -1105,6 +1149,19 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     const initialAutomation = getWorkspaceAutomation();
     return getAgentDebugLogs({ workspaceId: initialAutomation.activeWorkspaceId, includeUnscoped: false }).slice(-60).reverse();
   });
+  // מתג חיפוש ברשת: auto = ההחלטה האוטומטית (regex על פרומפט המשתמש), on = תמיד,
+  // off = לעולם לא. קריאה מעוגנת-חיפוש מחויבת בנפרד (~$0.035) — המתג נותן שליטה ושקיפות.
+  const [webSearchMode, setWebSearchMode] = useState(() => {
+    try {
+      const stored = localStorage.getItem('wordai_sidebar_web_search_mode');
+      return stored === 'on' || stored === 'off' ? stored : 'auto';
+    } catch { return 'auto'; }
+  });
+  const cycleWebSearchMode = () => setWebSearchMode((prev) => {
+    const next = prev === 'auto' ? 'on' : prev === 'on' ? 'off' : 'auto';
+    try { localStorage.setItem('wordai_sidebar_web_search_mode', next); } catch { /* noop */ }
+    return next;
+  });
   const [selectedProviderId, setSelectedProviderId] = useState(() => getAppMemory().sidebarProviderId || 'default');
   const [selectedProviderModel, setSelectedProviderModel] = useState(() => String(getAppMemory().sidebarProviderModel || '').trim());
   const [selectedAgentId, setSelectedAgentId] = useState(() => getAppMemory().lastSelectedAgentId || '');
@@ -1119,6 +1176,21 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     });
   }, []);
   const [composerMode, setComposerMode] = useState(() => normalizeComposerMode(getAppMemory().sidebarComposerMode || 'chat'));
+  // ── מצבי מדיה (תמונה/וידאו) ──
+  // בייטים/objectURL של מדיה חיים כאן ולא על ההודעות — הודעות נשמרות ל-localStorage.
+  const mediaRuntimeRef = useRef({});
+  const mediaAbortRef = useRef(null);
+  const [mediaRuntimeTick, setMediaRuntimeTick] = useState(0);
+  const [mediaProgressText, setMediaProgressText] = useState('');
+  const [selectedImageModel, setSelectedImageModel] = useState(() => {
+    try { return localStorage.getItem('wordai_sidebar_image_model') || ''; } catch { return ''; }
+  });
+  const [selectedVideoModel, setSelectedVideoModel] = useState(() => {
+    try { return localStorage.getItem('wordai_sidebar_video_model') || ''; } catch { return ''; }
+  });
+  // נתב הכוונה: auto = סיווג דטרמיניסטי (גרף נתונים → QuickChart חינם; תרשים → מודל
+  // שחזק בטקסט-בתמונה; אחרת תמונה). המשתמש יכול לכפות ידנית.
+  const [mediaIntentChoice, setMediaIntentChoice] = useState('auto');
   const [resolvedSkillLabel, setResolvedSkillLabel] = useState(() => getAppMemory().lastResolvedSkillLabel || '');
   const [requestSnapshot, setRequestSnapshot] = useState(null);
   const [mentionMenu, setMentionMenu] = useState(() => ({ ...EMPTY_MENTION_MENU }));
@@ -1140,6 +1212,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
   // לפני שאפקט הטעינה רץ (אותו דפוס כמו pendingChatPersistenceLoadRef להודעות).
   const reviewLedgerLoadedScopeRef = useRef(`${getWorkspaceAutomation().activeWorkspaceId}::${documentPersistenceScopeKey}`);
   const isEditComposerMode = composerMode === 'edit';
+  const isMediaComposerMode = composerMode === 'image' || composerMode === 'video';
   const activeEditTarget = editTarget?.active || null;
 
   const rawDocumentContext = typeof documentContext === 'function' ? documentContext() : (documentContext || '');
@@ -1315,11 +1388,23 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     ...(mode === 'sidebar' ? [{ key: 'compact', icon: compactMode ? '⤢' : '⤡', title: compactMode ? 'הרחב חלונית' : 'כווץ חלונית', onClick: onToggleCompact }] : []),
     { key: 'close', icon: '✕', title: 'סגור', onClick: onClose },
   ];
-  const composerModeLabel = isEditComposerMode ? 'מצב עריכה' : 'מצב צ׳אט';
+  const composerModeLabel = isEditComposerMode
+    ? 'מצב עריכה'
+    : composerMode === 'image'
+      ? 'מצב תמונה'
+      : composerMode === 'video'
+        ? 'מצב וידאו'
+        : 'מצב צ׳אט';
   const composerModeHelpText = isEditComposerMode
-      ? 'עבודה ישירה על הטקסט הנבחר, הפסקה הפעילה או סעיף שמוזכר במפורש בבקשה. בברירת מחדל אין כאן סוכן או סקיל קבועים; לזימון מפורש השתמש ב-@agent או /skill בתחילת הבקשה.'
-    : 'שיחה רציפה עם הקשר קצר מההודעות האחרונות ומהמסמך הפעיל.';
-  const shouldPreserveFullDocumentContext = Boolean(documentSnapshot.fullPromptContext || documentSnapshot.html);
+    ? 'עבודה ישירה על הטקסט הנבחר, הפסקה הפעילה או סעיף שמוזכר במפורש בבקשה. בברירת מחדל אין כאן סוכן או סקיל קבועים; לזימון מפורש השתמש ב-@agent או /skill בתחילת הבקשה.'
+    : composerMode === 'image'
+      ? 'תאר מה ליצור. גרף מנתונים נבנה ב-QuickChart (חינם); תרשים/תמונה — במודל תמונות. התוצאה מופיעה בשיחה ומשם "הוסף למסמך".'
+      : composerMode === 'video'
+        ? 'תאר את הסרטון (Veo). היצירה אורכת 1-3 דקות ועולה ~$0.15-0.40 לשנייה — נסח בקפידה.'
+        : 'שיחה רציפה עם הקשר קצר מההודעות האחרונות ומהמסמך הפעיל.';
+  // מסמך מלא (עוקף את cap ה-8000 של aiService) רק במצב עריכה, שבו יעד העריכה יכול להיות
+  // בכל מקום במסמך. בצ'אט רגיל זה שלח 16k-32k תווים על כל הודעה — עיקר עלות ה-input.
+  const shouldPreserveFullDocumentContext = isEditComposerMode && Boolean(documentSnapshot.fullPromptContext || documentSnapshot.html);
   const missingEditTargetMessage = 'לא זוהה יעד עריכה זמין. בחר טקסט, מקם את הסמן בפסקה שברצונך לערוך, או הפנה לסעיף בבקשה.';
   const getPromptResolutionTargets = (resolution) => (
     Array.isArray(resolution)
@@ -2086,11 +2171,20 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           style={selectStyle}
           title="ספק לשיחה במסך הזה"
         >
-          <option value="default" style={{ color: '#1F2937' }}>אוטומטי (חזק לצ'אט כללי)</option>
+          <option value="default" style={{ color: '#1F2937' }}>אוטומטי</option>
           {configuredProviderChoices.map((provider) => (
             <option key={provider.id} value={provider.id} style={{ color: '#1F2937' }}>{provider.label}</option>
           ))}
         </select>
+        <button
+          type="button"
+          onClick={cycleWebSearchMode}
+          disabled={isSettingsLocked}
+          style={{ ...selectStyle, cursor: 'pointer', maxWidth: 170 }}
+          title="חיפוש Google בתוך התשובה מחויב בנפרד (~13 אג׳ לקריאה). אוטו = רק כשהבקשה דורשת מקורות/מידע עדכני."
+        >
+          {webSearchMode === 'on' ? '🌐 חיפוש: פועל' : webSearchMode === 'off' ? '🚫 חיפוש: כבוי' : '🌐 חיפוש: אוטו'}
+        </button>
         {activeProviderChoice && providerModelChoices.length > 1 && (
           <select
             value={resolvedSelectedProviderModel}
@@ -3665,8 +3759,13 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       })()
       : '';
     const followUpSourceGroundingContext = buildFollowUpSourceGroundingContext(messages, requestPrompt);
+    // יש בחירה במצב צ'אט ⇒ חלון ממוקד סביבה (תבנית MagicWand) במקום תצלום מסמך מלא.
+    // במצב עריכה נשאר המסמך המלא — יעד העריכה יכול להפנות לכל מקום בו.
+    const selectionScopedDocCtx = selectedText && !isEditComposerMode
+      ? buildFocusedSelectionDocContext(docCtx, selectedText)
+      : docCtx;
     const baseContext = selectedText
-      ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
+      ? `טקסט נבחר: "${selectedText}"\n\nפסקה נוכחית: "${currentBlockText}"\n\n${selectionScopedDocCtx ? `תצלום מסמך:\n${selectionScopedDocCtx}` : ''}`
       : currentBlockText
         ? `פסקה נוכחית: "${currentBlockText}"\n\n${docCtx ? `תצלום מסמך:\n${docCtx}` : ''}`
         : (docCtx ? `מסמך פעיל:\n${docCtx}` : '');
@@ -3724,6 +3823,140 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       return [...prev, nextMessage];
     });
   };
+
+  // ───────── יצירת מדיה (תמונה/גרף/וידאו) מהקומפוזר ─────────
+  const registerMediaRuntime = (mediaId, patch) => {
+    mediaRuntimeRef.current[mediaId] = { ...(mediaRuntimeRef.current[mediaId] || {}), ...patch };
+    setMediaRuntimeTick((tick) => tick + 1);
+  };
+
+  // שמירה ל-cache הדיסק של הדסקטופ; בדפדפן אין — המדיה נשארת ephemeral להפעלה הזו.
+  const persistMediaToCache = async (base64, fileName) => {
+    if (!base64 || typeof window === 'undefined' || typeof window.desktopApp?.saveMediaCacheFile !== 'function') return '';
+    try { return await window.desktopApp.saveMediaCacheFile(fileName, base64); } catch { return ''; }
+  };
+
+  const inferImageProviderForModel = (modelId = '') => {
+    const id = String(modelId || '').toLowerCase();
+    if (!id) return '';
+    if (id.startsWith('imagen') || id.startsWith('gemini')) return 'gemini';
+    if (id.startsWith('gpt-image') || id.startsWith('dall-e')) return 'openai';
+    if (id.startsWith('grok')) return 'xai';
+    if (id.startsWith('fal-ai/')) return 'flux';
+    if (id.includes('stable-diffusion')) return 'stability';
+    return '';
+  };
+
+  const runMediaGeneration = async (kind, txt, originalText) => {
+    const cleanPrompt = String(txt || '').trim();
+    setTab('chat');
+    if (!cleanPrompt) {
+      appendAssistantMessage(kind === 'video' ? 'כתוב תיאור קצר של הסרטון ליצירה.' : 'כתוב תיאור קצר של התמונה או הגרף ליצירה.');
+      return;
+    }
+    setMessages((prev) => [...prev, { role: 'user', content: originalText || cleanPrompt, composerMode }]);
+    setLoading(true);
+    const controller = new AbortController();
+    mediaAbortRef.current = controller;
+    const mediaId = `media-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    try {
+      if (kind === 'video') {
+        setMediaProgressText('מתניע יצירת וידאו (Veo)…');
+        const result = await generateVeoVideo(cleanPrompt, {
+          model: selectedVideoModel,
+          signal: controller.signal,
+          onProgress: ({ phase, elapsedSec }) => setMediaProgressText(
+            phase === 'downloading'
+              ? 'מוריד את הסרטון…'
+              : phase === 'generating'
+                ? `יוצר סרטון… ${elapsedSec || 0} שניות (בדרך כלל 1-3 דקות)`
+                : 'מתניע יצירת וידאו (Veo)…',
+          ),
+        });
+        if (result.base64) {
+          registerMediaRuntime(mediaId, {
+            base64: result.base64,
+            mime: result.mime,
+            objectUrl: mediaBase64ToObjectUrl(result.base64, result.mime),
+          });
+          const rel = await persistMediaToCache(result.base64, `video-${Date.now()}.mp4`);
+          appendAssistantMessage('🎬 הסרטון מוכן.', {
+            composerMode,
+            media: { id: mediaId, type: 'video', mime: result.mime, rel, model: result.model, prompt: cleanPrompt, ephemeral: !rel },
+          }, { dedupeConsecutive: false });
+        } else {
+          appendAssistantMessage('🎬 הסרטון נוצר, אבל הורדה אוטומטית לא זמינה בדפדפן — פתח אותו בקישור (באפליקציית הדסקטופ ההורדה אוטומטית).', {
+            composerMode,
+            media: { id: mediaId, type: 'video-link', uri: result.uri, model: result.model, prompt: cleanPrompt },
+          }, { dedupeConsecutive: false });
+        }
+        return;
+      }
+      const intent = mediaIntentChoice === 'auto' ? detectMediaIntent(cleanPrompt) : mediaIntentChoice;
+      if (intent === 'chart') {
+        setMediaProgressText('בונה גרף מהנתונים (QuickChart — ללא עלות מודל תמונה)…');
+        const chart = await generateChartFromText(cleanPrompt, { signal: controller.signal });
+        const { mime, base64 } = dataUrlToBase64Parts(chart.dataUrl);
+        registerMediaRuntime(mediaId, { dataUrl: chart.dataUrl, base64, mime });
+        const rel = await persistMediaToCache(base64, `chart-${Date.now()}.png`);
+        appendAssistantMessage(`📊 ${chart.title || 'הגרף מוכן'} — נוצר ב-QuickChart (חינם, בלי מודל תמונה).`, {
+          composerMode,
+          media: { id: mediaId, type: 'image', mime: mime || 'image/png', rel, model: 'quickchart', prompt: cleanPrompt, ephemeral: !rel },
+        }, { dedupeConsecutive: false });
+        return;
+      }
+      const isDiagram = intent === 'diagram';
+      // תרשים בלי בחירת מודל ידנית → nano-banana (חזק בטקסט עברי בתוך תמונה).
+      const effectiveModel = selectedImageModel || (isDiagram ? 'gemini-2.5-flash-image' : '');
+      setMediaProgressText(isDiagram ? 'מצייר תרשים…' : 'יוצר תמונה…');
+      const result = await generateAiImage(isDiagram ? buildDiagramImagePrompt(cleanPrompt) : cleanPrompt, {
+        signal: controller.signal,
+        model: effectiveModel,
+        provider: inferImageProviderForModel(effectiveModel),
+      });
+      const { mime, base64 } = dataUrlToBase64Parts(result.dataUrl);
+      registerMediaRuntime(mediaId, { dataUrl: result.dataUrl, base64, mime });
+      const rel = await persistMediaToCache(base64, `image-${Date.now()}.png`);
+      appendAssistantMessage(isDiagram ? '🖼️ התרשים מוכן.' : '🖼️ התמונה מוכנה.', {
+        composerMode,
+        media: { id: mediaId, type: 'image', mime: mime || 'image/png', rel, model: result.model || effectiveModel || 'imagen', prompt: cleanPrompt, ephemeral: !rel },
+      }, { dedupeConsecutive: false });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        appendAssistantMessage('היצירה בוטלה.', { composerMode }, { dedupeConsecutive: false });
+      } else {
+        appendAssistantMessage('❌ ' + (error?.message || 'יצירת המדיה נכשלה'), { error: true, composerMode }, { dedupeConsecutive: false });
+      }
+    } finally {
+      setLoading(false);
+      setMediaProgressText('');
+      mediaAbortRef.current = null;
+    }
+  };
+
+  // טעינה עצלה אחרי restart: הודעת מדיה עם rel אבל בלי בייטים ב-runtime → קריאה מה-cache.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.desktopApp?.readMediaCacheFile !== 'function') return;
+    for (const msg of messages) {
+      const media = msg?.media;
+      if (!media?.id || !media?.rel) continue;
+      const runtime = mediaRuntimeRef.current[media.id];
+      if (runtime && (runtime.objectUrl || runtime.dataUrl || runtime.loading || runtime.loadFailed)) continue;
+      mediaRuntimeRef.current[media.id] = { ...(runtime || {}), loading: true };
+      window.desktopApp.readMediaCacheFile(media.rel)
+        .then((res) => {
+          const base64 = typeof res === 'string' ? res : (res?.dataBase64 || res?.data || '');
+          if (!base64) throw new Error('empty');
+          registerMediaRuntime(media.id, {
+            base64,
+            mime: media.mime || 'application/octet-stream',
+            objectUrl: mediaBase64ToObjectUrl(base64, media.mime),
+            loading: false,
+          });
+        })
+        .catch(() => registerMediaRuntime(media.id, { loading: false, loadFailed: true }));
+    }
+  }, [messages]);
 
   // ───────── ספריית מאמרים: הוספת כרטיס לחומרי העזר ─────────
   // מחמם את חנות החומרים פעם אחת, כדי שכרטיסים ששוחזרו מ-localStorage יידעו
@@ -4035,6 +4268,11 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       } finally {
         setLoading(false);
       }
+      return;
+    }
+    // מצבי מדיה: יצירה ישירה (תמונה/גרף/וידאו) — בלי צנרת הצ'אט, בלי הקשר מסמך.
+    if (isMediaComposerMode) {
+      await runMediaGeneration(composerMode, txt, originalText);
       return;
     }
     let manualSkillId = isEditComposerMode ? '' : (selectedSkillId === 'none' ? '' : selectedSkillId);
@@ -4387,10 +4625,9 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
       isEditComposerMode,
     });
     const isGeneralChatScope = chatScopeResult.scope === 'general-knowledge' || chatScopeResult.scope === 'general-writing';
-    // מודל חזק כברירת מחדל לצ'אט כללי כשהמשתמש לא נעל מודל (שדרוג בתוך אותו ספק בלבד).
-    const generalScopeModelOverride = (isGeneralChatScope && !explicitProviderModel && !hasPinnedProviderPreference)
-      ? resolveStrongGeneralModelForProvider(activeProviderChoice?.id || providerConfig?.active || 'gemini', providerConfig)
-      : '';
+    // בעבר צ'אט כללי שודרג כאן בשקט למודל "חזק" (gemini-2.5-pro, פי ~8 במחיר) — בוטל:
+    // המודל המוגדר של הספק (flash) הוא ברירת המחדל; pro רק בבחירה ידנית בבורר המודלים.
+    const generalScopeModelOverride = '';
     const holeFillSourceQueryOverride = effectiveDirectAgentMeta.id === 'holeFill'
       ? buildHoleFillSourceQueryOverride(txt)
       : '';
@@ -4469,7 +4706,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         skillId: manualSkillId,
         autoUseDefaultSkill: lecturerDirectAgentRequest ? false : (disabledSkillRequested ? false : (isEditComposerMode ? false : !manualSkillId)),
         skipSkillSelection: lecturerDirectAgentRequest,
-        forceSuppressResearchRouting: lecturerDirectAgentRequest,
+        // מתג "חיפוש: כבוי" הוא הצהרה מפורשת של המשתמש — עוקף כל היוריסטיקה.
+        forceSuppressResearchRouting: lecturerDirectAgentRequest || webSearchMode === 'off',
         directChat: true,
         conversationHistory,
         includeAppMemory: !isEditComposerMode,
@@ -4478,7 +4716,8 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
         modelOverride: explicitProviderModel || generalScopeModelOverride,
         strictProviderOverride: hasStrictRuntimeProviderOverride,
         chatScope: chatScopeResult.scope,
-        forceInternetInfo: isGeneralChatScope && chatScopeResult.isTimeSensitive,
+        forceInternetInfo: webSearchMode === 'on'
+          || (webSearchMode === 'auto' && isGeneralChatScope && chatScopeResult.isTimeSensitive),
         runScope: sidebarRunScope,
         sourceQueryOverride: sourcesQueryOverride || holeFillSourceQueryOverride,
         sourceQuerySource: sourcesQueryOverride ? 'taskpaneSourcesContext' : (holeFillSourceQueryOverride ? 'holeFillContext' : ''),
@@ -4902,8 +5141,136 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
             );
           })}
         </div>
+        {isMediaComposerMode && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {composerMode === 'image' && (
+              <select
+                value={mediaIntentChoice}
+                onChange={(e) => setMediaIntentChoice(e.target.value)}
+                disabled={loading}
+                style={{ fontSize: 11, padding: '4px 6px', borderRadius: 8, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#1F2937', maxWidth: 130 }}
+                title="גרף נתונים נבנה ב-QuickChart בחינם; תרשים/תמונה במודל תמונות"
+              >
+                <option value="auto">🤖 זיהוי אוטומטי</option>
+                <option value="chart">📊 גרף נתונים (חינם)</option>
+                <option value="diagram">🗺️ תרשים/דיאגרמה</option>
+                <option value="image">🖼️ תמונה</option>
+              </select>
+            )}
+            <select
+              value={composerMode === 'video' ? selectedVideoModel : selectedImageModel}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (composerMode === 'video') {
+                  setSelectedVideoModel(value);
+                  try { localStorage.setItem('wordai_sidebar_video_model', value); } catch { /* noop */ }
+                } else {
+                  setSelectedImageModel(value);
+                  try { localStorage.setItem('wordai_sidebar_image_model', value); } catch { /* noop */ }
+                }
+              }}
+              disabled={loading}
+              style={{ fontSize: 11, padding: '4px 6px', borderRadius: 8, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#1F2937', direction: 'ltr', maxWidth: 200 }}
+              title={composerMode === 'video' ? 'מודל הווידאו' : 'מודל התמונות (ריק = לפי ההגדרות)'}
+            >
+              <option value="">{composerMode === 'video' ? 'מודל ברירת מחדל' : 'מודל לפי ההגדרות'}</option>
+              {getMediaModelChoices(composerMode === 'video' ? 'video' : 'image', 'gemini').map((modelId) => (
+                <option key={modelId} value={modelId}>{modelId}</option>
+              ))}
+            </select>
+            {loading && mediaProgressText && (
+              <>
+                <span style={{ fontSize: 11, color: isModern ? 'rgba(255,255,255,0.8)' : '#4B5563' }}>{mediaProgressText}</span>
+                <button
+                  type="button"
+                  onClick={() => { try { mediaAbortRef.current?.abort(); } catch { /* noop */ } }}
+                  style={{ fontSize: 11, padding: '3px 9px', borderRadius: 8, border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#B91C1C', cursor: 'pointer' }}
+                >
+                  ביטול
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <div style={{ fontSize: 11, color: isModern ? 'rgba(255,255,255,0.66)' : '#6B7280' }}>
           {composerModeHelpText}
+        </div>
+      </div>
+    );
+  };
+
+  // ───────── רינדור מדיה שנוצרה בהודעה ─────────
+  const renderGeneratedMediaRows = (msg, variant = 'light') => {
+    const media = msg?.media;
+    if (!media?.id) return null;
+    const dark = variant === 'dark';
+    const runtime = mediaRuntimeRef.current[media.id] || {};
+    const src = runtime.objectUrl || runtime.dataUrl || '';
+    const modelLabel = String(media.model || '').trim();
+    const actionButtonStyle = {
+      padding: '6px 11px', borderRadius: 8, border: dark ? '1px solid rgba(148,163,184,0.35)' : '1px solid #CBD5E1',
+      background: dark ? 'rgba(30,41,59,0.6)' : '#F8FAFC', color: dark ? '#E2E8F0' : '#0F172A',
+      fontSize: 11.5, fontWeight: 700, cursor: 'pointer',
+    };
+    const saveGeneratedMedia = async () => {
+      const fileName = media.type === 'video' ? `wordflow-video-${Date.now()}.mp4` : `wordflow-image-${Date.now()}.png`;
+      if (typeof window !== 'undefined' && typeof window.desktopApp?.saveBinaryFile === 'function' && runtime.base64) {
+        const res = await window.desktopApp.saveBinaryFile(fileName, mediaBase64ToBytes(runtime.base64));
+        if (res?.ok) showToast('נשמר ✅', { tone: 'success' });
+        else if (!res?.canceled) showToast(res?.error || 'השמירה נכשלה', { tone: 'error' });
+        return;
+      }
+      if (src) {
+        const anchor = document.createElement('a');
+        anchor.href = src;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+    };
+    if (media.type === 'video-link') {
+      return (
+        <div style={{ marginTop: 6 }}>
+          <button type="button" style={actionButtonStyle} onClick={() => { try { window.open(media.uri, '_blank', 'noopener'); } catch { /* noop */ } }}>
+            🔗 פתח קישור לסרטון
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }} data-media-tick={mediaRuntimeTick}>
+        {src ? (
+          media.type === 'video'
+            ? <video controls src={src} style={{ maxWidth: '100%', borderRadius: 10, border: dark ? '1px solid rgba(148,163,184,0.3)' : '1px solid #E2E8F0' }} />
+            : <img src={src} alt={media.prompt || 'מדיה שנוצרה'} style={{ maxWidth: '100%', borderRadius: 10, border: dark ? '1px solid rgba(148,163,184,0.3)' : '1px solid #E2E8F0' }} />
+        ) : (
+          <div style={{ fontSize: 11, color: dark ? 'rgba(226,232,240,0.7)' : '#64748B', padding: '8px 10px', borderRadius: 8, background: dark ? 'rgba(30,41,59,0.5)' : '#F1F5F9' }}>
+            {runtime.loading
+              ? 'טוען מדיה מה-cache…'
+              : media.ephemeral
+                ? 'המדיה לא נשמרה (יצירה בדפדפן) — צור מחדש או השתמש באפליקציית הדסקטופ.'
+                : 'המדיה לא נטענה מה-cache.'}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {media.type === 'image' && src && typeof onInsertGeneratedImage === 'function' && (
+            <button
+              type="button"
+              style={{ ...actionButtonStyle, background: '#4F46E5', border: 0, color: '#FFFFFF' }}
+              onClick={() => onInsertGeneratedImage(runtime.base64 ? `data:${runtime.mime || media.mime || 'image/png'};base64,${runtime.base64}` : src)}
+            >
+              📄 הוסף למסמך
+            </button>
+          )}
+          {src && (
+            <button type="button" style={actionButtonStyle} onClick={() => { saveGeneratedMedia().catch(() => {}); }}>
+              💾 שמור כקובץ
+            </button>
+          )}
+          {modelLabel && (
+            <span style={{ fontSize: 10.5, color: dark ? 'rgba(226,232,240,0.6)' : '#94A3B8', direction: 'ltr' }}>{modelLabel}</span>
+          )}
         </div>
       </div>
     );
@@ -5196,6 +5563,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                       </div>
                       {renderReviewFindingRows(msg, 'light')}
                       {renderArticleResultRows(msg, 'light')}
+                      {renderGeneratedMediaRows(msg, 'light')}
                       {msg.documentActionMessage && (
                         <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, fontSize: 11, lineHeight: 1.5, ...documentActionTone }}>
                           {msg.documentActionMessage}
@@ -6129,6 +6497,7 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
                 
                 {renderReviewFindingRows(msg, 'dark')}
                 {renderArticleResultRows(msg, 'dark')}
+                {renderGeneratedMediaRows(msg, 'dark')}
                 {msg.documentActionMessage && (
                   <div
                     style={{

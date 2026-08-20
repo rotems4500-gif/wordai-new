@@ -73,7 +73,11 @@ const ENTRY = process.env.WORDAI_VERIFY_ENTRY === 'unit'
                         ? 'tools/test-bench/style-learning-loop-unit.mjs'
                         : process.env.WORDAI_VERIFY_ENTRY === 'styleprobe'
                           ? 'tools/test-bench/style-real-corpus-probe.mjs'
-                          : 'tools/test-bench/source-pipeline-harness.mjs';
+                          : process.env.WORDAI_VERIFY_ENTRY === 'mediagen'
+                            ? 'tools/test-bench/media-gen-unit.mjs'
+                            : process.env.WORDAI_VERIFY_ENTRY === 'medialive'
+                              ? 'tools/test-bench/media-gen-live.mjs'
+                              : 'tools/test-bench/source-pipeline-harness.mjs';
 // LAB build → own dir so it never clobbers the retrieval harness output.
 const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
   : process.env.WORDAI_VERIFY_ENTRY === 'assign' ? 'out-assign'
@@ -100,7 +104,9 @@ const OUT_DIR = process.env.WORDAI_VERIFY_ENTRY === 'lab' ? 'out-lab'
                                             : process.env.WORDAI_VERIFY_ENTRY === 'lprof' ? 'out-lprof'
                                               : process.env.WORDAI_VERIFY_ENTRY === 'courses' ? 'out-courses'
                                                 : process.env.WORDAI_VERIFY_ENTRY === 'stylelearn' ? 'out-stylelearn'
-                                                  : process.env.WORDAI_VERIFY_ENTRY === 'styleprobe' ? 'out-styleprobe' : 'out-sf';
+                                                  : process.env.WORDAI_VERIFY_ENTRY === 'styleprobe' ? 'out-styleprobe'
+                                                    : process.env.WORDAI_VERIFY_ENTRY === 'mediagen' ? 'out-mediagen'
+                                                      : process.env.WORDAI_VERIFY_ENTRY === 'medialive' ? 'out-medialive' : 'out-sf';
 export default defineConfig({
   root: PROJECT, configFile: false, logLevel: 'warn',
   resolve: { alias: {

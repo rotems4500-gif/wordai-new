@@ -456,9 +456,14 @@ export function addDocumentSamples({ title, text, source = 'upload', isGold = fa
   // E3: ז'אנר אופציונלי — מסווג פעם אחת בעת הקליטה (או null עד לסיווג post-hoc).
   const docGenre = genre ? String(genre).trim() || null : null;
 
+  // קידומת ה-hash היא 32 ביט בלבד; התנגשות בין שני מסמכים הייתה מייצרת מזהי
+  // chunk זהים לשני מסמכים שונים. מוסיפים חתימה שנייה של (כותרת + אורך הטקסט).
+  // חל על chunks חדשים בלבד — מזהים קיימים לא משתנים.
+  const shortAux = hash8(hashText(`${String(title || '')}|${raw.length}`));
+
   const pieces = chunkText(raw);
   const newChunks = pieces.map((chunk, index) => ({
-    id: `ck_${short}_${index}`,
+    id: `ck_${short}${shortAux}_${index}`,
     docId,
     text: chunk,
     wordCount: countWords(chunk),
@@ -540,6 +545,35 @@ export function setDocumentGenre(docId, genre) {
     chunks: blob.chunks.map((c) => (String(c?.docId || '') === id ? { ...c, genre: nextGenre } : c)),
   });
   return { updated: true };
+}
+
+/**
+ * גרסת אצווה של setDocumentGenre: מחילה ז'אנר לכמה מסמכים ב-writeBlob אחד — ולכן
+ * אירוע עדכון אחד במקום אחד-פר-מסמך (שגרר טעינת-פאנל ואינבלידציית frame-profile לכל מסמך).
+ * @param {Object<string,(string|null)>} genreByDocId
+ * @returns {{updated:number}}
+ */
+export function setDocumentGenres(genreByDocId = {}) {
+  const genreById = new Map(
+    Object.entries(genreByDocId || {})
+      .map(([id, g]) => [String(id || '').trim(), g ? String(g).trim() || null : null])
+      .filter(([id]) => id),
+  );
+  if (!genreById.size) return { updated: 0 };
+  const blob = readSampleStore();
+  let updated = 0;
+  const documents = blob.documents.map((d) => {
+    if (!genreById.has(d.id)) return d;
+    updated += 1;
+    return { ...d, genre: genreById.get(d.id) };
+  });
+  if (!updated) return { updated: 0 };
+  const chunks = blob.chunks.map((c) => {
+    const id = String(c?.docId || '');
+    return genreById.has(id) ? { ...c, genre: genreById.get(id) } : c;
+  });
+  writeBlob({ ...blob, documents, chunks });
+  return { updated };
 }
 
 // ---------- addGoldChunk ----------

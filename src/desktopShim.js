@@ -189,6 +189,20 @@ const readMaterialsIndex = async () => {
 const writeMaterialsIndex = async (entries) =>
   invoke('write_app_file', { rel: MATERIALS_INDEX, contents: JSON.stringify(entries, null, 2) });
 
+// ── media cache — קבצי מדיה שנוצרו ב-AI (תמונות/וידאו): cache באפליקציה, לא ב-localStorage.
+const MEDIA_CACHE_DIR = 'media-gen';
+const sanitizeMediaFileName = (name = '') => String(name || '').replace(/[^\w.\-]+/g, '_').slice(0, 120) || `media-${Date.now()}`;
+
+async function saveMediaCacheFile(fileName, dataBase64) {
+  const rel = `${MEDIA_CACHE_DIR}/${sanitizeMediaFileName(fileName)}`;
+  await invoke('write_app_file_base64', { rel, dataBase64 });
+  return rel;
+}
+
+async function readMediaCacheFile(rel) {
+  return invoke('read_app_file_base64', { rel: String(rel || '') });
+}
+
 const saveLocalMaterial = async (payload = {}) => {
   const safeName = sanitizeFileName(payload.name);
   const write = await invoke('write_app_file_base64', {
@@ -393,6 +407,8 @@ export function installDesktopShim() {
     fetchPageText,
     fetchPdfBinary,
     saveBinaryFile,
+    saveMediaCacheFile,
+    readMediaCacheFile,
     googleOAuth,
 
     openDocumentDialog,

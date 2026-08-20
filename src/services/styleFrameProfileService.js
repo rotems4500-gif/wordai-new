@@ -38,6 +38,7 @@ const corpusFingerprint = (chunks) => {
 let profile = null;
 let buildPromise = null;
 let carriedFeedback = null;
+let invalidationGen = 0; // עולה בכל אירוע שינוי-קורפוס; ר' ensureFrameProfile
 
 /**
  * הליטרל הפותח של frame: רצף המחרוזות המילוליות עד ה-placeholder הראשון,
@@ -289,7 +290,16 @@ async function loadOrBuild() {
 export async function ensureFrameProfile() {
   if (profile) return profile;
   if (!buildPromise) {
-    buildPromise = loadOrBuild().then((p) => { profile = p; buildPromise = null; return p; });
+    // דור אינבלידציה: אם הקורפוס השתנה בזמן שהבנייה באוויר, התוצאה (שנבנתה מהמצב הישן)
+    // נזרקת ונבנה מחדש — בלי זה ההצבה כאן הייתה דורסת את ה-`profile = null` של האירוע
+    // והפרופיל הישן היה נתקע עד שינוי הקורפוס הבא.
+    const genAtStart = invalidationGen;
+    buildPromise = loadOrBuild().then((p) => {
+      buildPromise = null;
+      if (genAtStart !== invalidationGen) return ensureFrameProfile();
+      profile = p;
+      return p;
+    });
   }
   return buildPromise;
 }
@@ -329,6 +339,6 @@ export function getFrameProfileStatus() {
 // קורפוס השתנה (העלאת מסמך, תיוג gold) → הפרופיל ייבנה מחדש בקריאה הבאה.
 if (typeof window !== 'undefined' && window.addEventListener) {
   try {
-    window.addEventListener(STYLE_SAMPLES_UPDATED_EVENT, () => { profile = null; });
+    window.addEventListener(STYLE_SAMPLES_UPDATED_EVENT, () => { profile = null; invalidationGen += 1; });
   } catch {}
 }

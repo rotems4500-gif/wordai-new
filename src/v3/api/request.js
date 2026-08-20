@@ -30,8 +30,19 @@ const messagesToGeminiShape = (messages = []) => {
 export const buildProviderRequest = ({
   provider, model, messages, baseUrl = '', apiKey = '',
   maxTokens = 0, purpose = 'chat', temperature = null, bodyExtras = null, tools = null,
+  thinkingBudget = null,
 }) => {
   const resolvedMax = resolveMaxTokens({ model, requested: maxTokens, purpose });
+  // קריאות plan/cheap הן מכניות — חשיבה דינמית של Gemini 2.5 מחויבת במחיר output
+  // ואינה תורמת שם. ברירת מחדל 0 אלא אם הוזרק תקציב מפורש. pro לא יורד מתחת ל-128 — מדלגים.
+  const resolvedThinkingBudget = Number.isFinite(thinkingBudget)
+    ? thinkingBudget
+    : (purpose === 'plan' || purpose === 'cheap' ? 0 : null);
+  const geminiThinkingConfig = Number.isFinite(resolvedThinkingBudget)
+    && /^gemini-2\.5/i.test(String(model || ''))
+    && !/-pro/i.test(String(model || ''))
+    ? { thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(resolvedThinkingBudget)) } }
+    : null;
   switch (provider) {
     case 'claude': {
       const { system, messages: claudeMessages } = messagesToClaudeShape(messages);
@@ -64,6 +75,7 @@ export const buildProviderRequest = ({
           generationConfig: {
             maxOutputTokens: resolvedMax,
             ...(temperature !== null ? { temperature } : {}),
+            ...(geminiThinkingConfig || {}),
           },
           ...(tools ? { tools } : {}),
           ...(bodyExtras || {}),

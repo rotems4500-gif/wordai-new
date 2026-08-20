@@ -20,7 +20,11 @@ const callCheapTranslateModel = async ({ prompt, cfg }) => {
   const geminiKey = String(cfg?.gemini?.key || '').trim();
   if (!geminiKey) return ''; // אין מודל זול זמין — fail-open בשכבה שמעל
   const genAI = new GoogleGenerativeAI(geminiKey);
-  const mdl = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  // קריאה מכנית — בלי טוקני חשיבה.
+  const mdl = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+  });
   const result = await mdl.generateContent(prompt);
   return result.response.text();
 };

@@ -9466,6 +9466,7 @@ ${sidebarReviewContext}`
                   editor.chain().focus().insertContent(`\n\n${text}\n\n`).run();
                   refreshStyleSnapshotAfterAiInsert();
                 }}
+                onInsertGeneratedImage={(src) => { if (editor && src) editor.chain().focus().setImage({ src }).run(); }}
                 onAppendAiAppendix={handleAppendAiAppendix}
                 onStreamStart={handleStreamStart}
                 onStreamChunk={handleStreamChunk}

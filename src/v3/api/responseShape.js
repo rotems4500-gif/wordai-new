@@ -37,6 +37,9 @@ export const buildChatResult = ({
   usage: {
     inputTokens: toCount(usage?.inputTokens ?? usage?.prompt_tokens ?? usage?.input_tokens ?? usage?.promptTokenCount),
     outputTokens: toCount(usage?.outputTokens ?? usage?.completion_tokens ?? usage?.output_tokens ?? usage?.candidatesTokenCount),
+    // thinking מחויב במחיר output; cached מוזל ~75%. נשמרים בנפרד לטלמטריה.
+    thinkingTokens: toCount(usage?.thinkingTokens ?? usage?.thoughtsTokenCount),
+    cachedTokens: toCount(usage?.cachedTokens ?? usage?.cachedContentTokenCount ?? usage?.cache_read_input_tokens),
   },
   provider,
   model,
@@ -82,7 +85,11 @@ export const parseGeminiPayload = (data = {}, { provider = 'gemini', model = '' 
     rawFinishReason: candidate.finishReason || '',
     usage: data.usageMetadata ? {
       inputTokens: data.usageMetadata.promptTokenCount,
-      outputTokens: data.usageMetadata.candidatesTokenCount,
+      // thoughtsTokenCount מחויב במחיר output — בלעדיו ה-ledger מדווח חסר שיטתית.
+      outputTokens: (Number(data.usageMetadata.candidatesTokenCount) || 0)
+        + (Number(data.usageMetadata.thoughtsTokenCount) || 0),
+      thinkingTokens: data.usageMetadata.thoughtsTokenCount,
+      cachedTokens: data.usageMetadata.cachedContentTokenCount,
     } : null,
     raw: data,
   });

@@ -4628,6 +4628,16 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
       requestOptions.styleDeepJitter = true;
       requestOptions.styleDeepBaseTemp = Number.isFinite(temperature) ? temperature : null;
     }
+    // ── פיצול כתיבה↔סגנון (לחיצה אחת, שתי קריאות) ──
+    // קריאת הכתיבה רצה בלי בלוק הסגנון האישי (רק הוראות+חומרים — בלי תחרות הוראות),
+    // והסגנון מוזרק במעבר השכתוב הייעודי (rewriteDocumentStyle) שרץ ממילא אחרי ההאנשה.
+    // נמדד: ציון הסגנון הוא ~99% בחירת מילים — שכתוב ממוקד מזיז אותו יותר מהזרקה בזמן
+    // כתיבה, והקריאה הראשונה נאמנה יותר למטלה ולראיות. מותנה בכך שמעבר-הסגנון באמת ירוץ:
+    // returnMeta (הצינור המלא) + לא-fast + מנוע הסגנון פעיל. אחרת הכול נשאר כמו קודם.
+    const splitStyleRewrite = returnMeta
+      && resolvedStyleDepth !== 'fast'
+      && Boolean(getPersonalStyleProfile()?.styleEngine?.enabled);
+    if (splitStyleRewrite) requestOptions.suppressPersonalStyle = true;
     // כשהמשתמש מבקש מסמך *עם מקורות* — מדליקים אחזור-אמת לפני הכתיבה (retrieve-then-write):
     // chatWithActiveProvider ישלוף מקורות מאומתים, ינעל את ה-allowedUrls, ויכתוב מקורקע עליהם בלבד,
     // במקום לתת למודל להמציא ציטוטים. בלי זה יצירת-מסמך לא עשתה שום grounding (הבקשה נחשבה
@@ -4784,8 +4794,13 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
         // ניקוד סגנון הוא best-effort — לא נוגע בפלט המסמך.
       }
 
-      // Stage A: אם הציון נמוך והמנוע פעיל — שכתוב פסקאות לכיוון הסגנון (אי-הרסני-מבנית).
-      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && resolvedStyleDepth !== 'fast') {
+      // Stage A: שכתוב פסקאות לכיוון הסגנון (אי-הרסני-מבנית; שומר ציטוטים/עובדות + restyleGate).
+      // במצב פיצול הטיוטה נכתבה *בלי* סגנון — המעבר חייב לרוץ גם אם הניקוד נכשל/גבוה-מדומה;
+      // במצב רגיל (סגנון הוזרק בכתיבה) נשאר משכתבים רק כשהציון נמוך.
+      const styleRewritePassDue = splitStyleRewrite
+        ? (!styleScore || !Number.isFinite(styleScore?.score) || styleScore.score < 75)
+        : (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75);
+      if (styleRewritePassDue && resolvedStyleDepth !== 'fast') {
         try {
           const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth: resolvedStyleDepth, target: 75, requestText: prompt });
           if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
@@ -4811,7 +4826,7 @@ export async function generateDocumentFromPrompt({ prompt, templateId = 'blank',
     }
 
     return returnMeta
-      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', title, styleScore, styleRewriteSuggested, styleRewriteApplied, humanizeInfo }
+      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', title, styleScore, styleRewriteSuggested, styleRewriteApplied, styleSplitApplied: splitStyleRewrite, humanizeInfo }
       : humanizedResponse;
   } catch (error) {
     logAgentDebugEvent({
@@ -5130,6 +5145,12 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
       // אחזור דוגמאות סגנון לפי נושא המסמך + המשוב — לא לפי הפרומפט הגנרי "שפר את המסמך".
       styleRequestTextOverride: [originalPrompt, cleanFeedback].filter(Boolean).join('\n'),
     };
+    // פיצול כתיבה↔סגנון — אותו כלל כמו ביצירה-מאפס (ר' generateDocumentFromPrompt):
+    // קריאת העריכה בלי בלוק הסגנון; הסגנון מוזרק במעבר rewriteDocumentStyle שאחריה.
+    const splitStyleRewrite = returnMeta
+      && resolvedStyleDepth !== 'fast'
+      && Boolean(getPersonalStyleProfile()?.styleEngine?.enabled);
+    if (splitStyleRewrite) requestOptions.suppressPersonalStyle = true;
     // כמו ביצירת מסמך: אם המשוב/הבקשה דורשים מקורות — retrieve-then-write (grounding אמיתי),
     // כדי שלא יומצאו ציטוטים בעריכה. לא מפעילים כשיש נעילת-URL מדויקת.
     // includeSources מפורש (מהבורר) מנצח; ה-regex נשאר כ-fallback לזיהוי אוטומטי.
@@ -5234,7 +5255,11 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
         // ניקוד סגנון הוא best-effort.
       }
 
-      if (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75 && resolvedStyleDepth !== 'fast') {
+      // במצב פיצול המסמך עודכן בלי סגנון — מעבר הסגנון חייב לרוץ גם כשהניקוד נכשל.
+      const styleRewritePassDue = splitStyleRewrite
+        ? (!styleScore || !Number.isFinite(styleScore?.score) || styleScore.score < 75)
+        : (styleScore && Number.isFinite(styleScore.score) && styleScore.score < 75);
+      if (styleRewritePassDue && resolvedStyleDepth !== 'fast') {
         try {
           const rewriteResult = await rewriteDocumentStyle(styleFinalHtml, { runId, styleDepth: resolvedStyleDepth, target: 75, requestText: styleRequestText });
           if (rewriteResult && rewriteResult.improved && rewriteResult.html) {
@@ -5258,7 +5283,7 @@ export async function reviseDocumentWithFeedback({ existingHtml = '', feedback =
     }
 
     return returnMeta
-      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', styleScore, styleRewriteSuggested, styleRewriteApplied, humanizeInfo }
+      ? { html: styleFinalHtml, usedFallback: false, runId, errorMessage: '', styleScore, styleRewriteSuggested, styleRewriteApplied, styleSplitApplied: splitStyleRewrite, humanizeInfo }
       : humanizedRevision;
   } catch (error) {
     const revisionErrorMessage = error?.message || 'שגיאה לא ידועה';

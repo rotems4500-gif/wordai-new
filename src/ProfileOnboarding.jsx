@@ -6,14 +6,18 @@ import { ensureSampleStoreReady } from './services/styleSampleStore';
 import { getExternalAnalysisAvailability } from './services/aiService';
 import { deriveManualDefaultsFromMetrics, summarizeStyleLearning } from './services/styleProfileService';
 import StyleSetupFlow from './components/StyleSetupFlow';
+import { ONBOARDING_AI_PROVIDERS } from './components/onboardingProviders';
 
-const ONBOARDING_AI_PROVIDERS = [
-  ['gemini', 'Gemini'], ['openai', 'OpenAI'], ['claude', 'Claude'], ['groq', 'Groq'],
-  ['perplexity', 'Perplexity'], ['deepseek', 'DeepSeek'], ['mistral', 'Mistral'],
-  ['together', 'Together.ai'], ['openrouter', 'OpenRouter'], ['xai', 'xAI (Grok)'],
-  ['ollama', 'Ollama'], ['lmstudio', 'LM Studio'], ['custom', 'מותאם'],
-];
+// מספר שלבי האשף. היה 12 עד שהוסר משחק הסגנון הישן (שלב 8) — כל המספור נגזר מכאן.
+const TOTAL_STEPS = 11;
+const ONBOARDING_STEP_NUMBERS = Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1);
+// שלבים שבהם StyleSetupFlow מציג כפתורי המשך/דילוג משלו — כפתור "המשך" של הפוטר מוסתר בהם
+// כדי שלא יהיו שתי דרכים סותרות להתקדם באותו מסך.
+const SELF_ADVANCING_STEPS = new Set([4, 10]);
 const ONBOARDING_LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'custom']);
+// ספקים שמותר לקדם ל-active — חייבים להיות מתוך KNOWN_PROVIDER_IDS של aiService,
+// אחרת normalizeProviderConfig מחזיר את active ל-gemini בשקט.
+const ONBOARDING_PROMOTABLE_PROVIDERS = new Set(['gemini', 'openai', 'claude', 'groq', 'perplexity', 'ollama', 'custom']);
 
 function SyllabusListTextarea({ value, onCommit, commitLockRef, onUnlock = () => {}, disabled = false, ...props }) {
   const input = useDelimitedListInput(value, (nextValue) => {
@@ -38,10 +42,6 @@ export default function ProfileOnboarding({
   profile,
   updateField,
   updateList,
-  STYLE_TRAINING_QUESTIONS,
-  trainingAnswers,
-  selectLearningOption,
-  resetLearningGame,
   onOpenAiSettings = () => {},
   onOpenSecuritySettings = () => {},
   onOpenPersonalStyle = () => {},
@@ -53,6 +53,7 @@ export default function ProfileOnboarding({
   setProviderConfig = () => {},
 }) {
   const [step, setStep] = useState(1);
+  const [maxVisitedStep, setMaxVisitedStep] = useState(1); // השלב הרחוק ביותר שהמשתמש כבר הגיע אליו — קובע לאילו נקודות מותר לקפוץ
   const [animating, setAnimating] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [styleDerived, setStyleDerived] = useState(null);
@@ -63,12 +64,39 @@ export default function ProfileOnboarding({
     ONBOARDING_AI_PROVIDERS.filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).map(([id]) => id),
   );
   const toggleAiProvider = (id) => setSelectedAiProviders((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
-  const setProviderField = (id, field, value) => setProviderConfig((prev) => ({ ...(prev || {}), [id]: { ...((prev || {})[id] || {}), [field]: value } }));
+  const setProviderField = (id, field, value) => setProviderConfig((prev) => {
+    const next = { ...(prev || {}), [id]: { ...((prev || {})[id] || {}), [field]: value } };
+    // קידום ספק לפעיל: אם לספק הפעיל הנוכחי אין מפתח/כתובת ולספק שהוזן עכשיו יש —
+    // הוא הופך ל-active. בלי זה משתמש שהזין רק מפתח OpenAI נשאר על gemini בלי מפתח בכלל.
+    const activeId = String(next.active || 'gemini');
+    const hasCred = (p) => Boolean(String(p?.key || '').trim() || String(p?.baseUrl || '').trim());
+    if (ONBOARDING_PROMOTABLE_PROVIDERS.has(id) && String(value || '').trim() && id !== activeId && !hasCred(next[activeId])) {
+      next.active = id;
+      next.activeProviders = [id];
+    }
+    return next;
+  });
   const syllabusFileInputRef = useRef(null);
   const previousSyllabusImportBusyRef = useRef(false);
+  // שלב החידוד = שאלות בלבד: הניתוח רץ אוטומטית ב-mount (autoStart), וה-ref מוודא
+  // שניווט הלוך-חזור (10→9→10) לא מריץ את כל ה-pipeline מחדש. קליטת עבודות ופלט
+  // JSON חיה בשלב 4 — לא כאן.
+  const refineAnalysisRanRef = useRef(false);
+  useEffect(() => {
+    if (step === 10) refineAnalysisRanRef.current = true;
+  }, [step]);
+  const stepTimerRef = useRef(null); // טיימר מעבר השלבים — נשמר כדי לנקות אותו ולא להשאיר setTimeout תלוי באוויר
 
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  // ניקוי הטיימר של מעבר השלבים כשהרכיב יורד מהמסך
+  useEffect(() => () => {
+    if (stepTimerRef.current) {
+      clearTimeout(stepTimerRef.current);
+      stepTimerRef.current = null;
+    }
   }, []);
 
   const nextStep = () => {
@@ -80,10 +108,13 @@ export default function ProfileOnboarding({
   };
 
   const goToStep = (targetStep) => {
-    const safeStep = Math.max(1, Math.min(12, Number(targetStep) || 1));
+    const safeStep = Math.max(1, Math.min(TOTAL_STEPS, Number(targetStep) || 1));
     if (safeStep === step || animating) return;
+    setMaxVisitedStep((prev) => Math.max(prev, safeStep));
     setAnimating(true);
-    setTimeout(() => {
+    if (stepTimerRef.current) clearTimeout(stepTimerRef.current); // לא להשאיר טיימר קודם רץ
+    stepTimerRef.current = setTimeout(() => {
+      stepTimerRef.current = null;
       setStep(safeStep);
       setAnimating(false);
     }, 250);
@@ -108,6 +139,8 @@ export default function ProfileOnboarding({
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join(' · ');
+  // שער סיום: אי אפשר לסגור אונבורדינג בלי שם תצוגה (נקלט בשלב 2)
+  const completionBlocked = step === TOTAL_STEPS && !String(profile?.displayName || '').trim();
   const configuredAiProviderCount = ONBOARDING_AI_PROVIDERS
     .filter(([id]) => providerConfig?.[id]?.key || providerConfig?.[id]?.baseUrl).length;
   const providerSummary = configuredAiProviderCount > 0
@@ -236,21 +269,21 @@ export default function ProfileOnboarding({
   // ממלא רק שדות ריקים (isEmptyProfileValue) — לא דורס ערכים שהמשתמש כבר הזין.
   // אם אין baseline (המשתמש דילג) — יוצא בשקט והשלבים נשארים ריקים (graceful).
   useEffect(() => {
-    if (step !== 6 && step !== 8) return;
+    if (step !== 6) return; // בעבר גם שלב 8 (משחק האימון) — הוסר; ה-derive משרת רק את שלב הטון/אורך
     let ov;
     try { ov = getStyleOverview(); } catch { return; }
     if (!ov?.stats?.docCount) return;
     const d = deriveManualDefaultsFromMetrics(ov);
     setStyleDerived(d);
-    if (step === 6) {
-      // מסמנים filled רק כשבאמת מילאנו שדה ריק — כדי שהבאנר "מילאנו לפי הכתיבה שלך"
-      // לא יופיע כשהערך כבר היה מוגדר (מ-session קודם / הזנה ידנית).
-      let length = false;
-      let tone = false;
-      if (isEmptyProfileValue(profile?.lengthPreference) && d.lengthPreference) { updateField('lengthPreference', d.lengthPreference); length = true; }
-      if (isEmptyProfileValue(profile?.tonePreference) && d.tonePreference) { updateField('tonePreference', d.tonePreference); tone = true; }
-      setStyleFilled({ tone, length });
-    }
+    // מסמנים filled רק כשבאמת מילאנו שדה ריק — כדי שהבאנר "מילאנו לפי הכתיבה שלך"
+    // לא יופיע כשהערך כבר היה מוגדר (מ-session קודם / הזנה ידנית).
+    let length = false;
+    let tone = false;
+    if (isEmptyProfileValue(profile?.lengthPreference) && d.lengthPreference) { updateField('lengthPreference', d.lengthPreference); length = true; }
+    if (isEmptyProfileValue(profile?.tonePreference) && d.tonePreference) { updateField('tonePreference', d.tonePreference); tone = true; }
+    // רק מדליקים — ביקור חוזר בשלב מוצא את השדות כבר מלאים (כי מילאנו אותם בעצמנו)
+    // וכיבוי כאן היה מוחק את הבאנר "מילאנו לפי הכתיבה שלך" מעצמו.
+    if (tone || length) setStyleFilled((prev) => ({ tone: prev.tone || tone, length: prev.length || length }));
   }, [step]);
 
   const stepIcons = {
@@ -261,11 +294,10 @@ export default function ProfileOnboarding({
     5: '👥',
     6: '🎯',
     7: '⚖️',
-    8: '🎨',
-    9: '📝',
-    10: '🔌',
-    11: '🖋️',
-    12: '✨',
+    8: '📝',
+    9: '🔌',
+    10: '🖋️',
+    11: '✨',
   };
 
   const stepTitles = {
@@ -274,13 +306,12 @@ export default function ProfileOnboarding({
     3: 'קורסים',
     4: 'העבודות שלך',
     5: 'קהל ומטרות',
-    6: 'קהל יעד',
+    6: 'טון ואורך',
     7: 'חוקים',
-    8: 'סגנון',
-    9: 'ניסוח',
-    10: 'חיבור AI',
-    11: 'חידוד הסגנון',
-    12: 'סיום',
+    8: 'ניסוח',
+    9: 'חיבור AI',
+    10: 'חידוד הסגנון',
+    11: 'סיום',
   };
 
   // תווית ודאות עברית לפי level (משמש גם בפאנל החי וגם במסך הסיום).
@@ -351,57 +382,52 @@ export default function ProfileOnboarding({
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
         }}
       >
-        {/* Modern Progress Bar */}
-        <div className="relative px-4 py-6">
-          {/* Progress Track */}
-          <div className="relative mb-4">
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-full h-2 bg-white/20 rounded-full backdrop-blur-sm">
-                <div 
-                  className="h-full bg-gradient-to-r from-[#efab4d] via-[#e0a04a] to-[#cba24f] rounded-full shadow-lg transition-all duration-1000 ease-out"
-                  style={{
-                    width: `${(step / 12) * 100}%`,
-                    boxShadow: '0 0 20px rgba(239, 171, 77, 0.4)'
-                  }}
-                ></div>
-              </div>
+        {/* פס התקדמות דק + שורת מיקום + נקודות ניווט (החליף את שורת הנקודות המתויגות) */}
+        <div className="px-4 pt-5 pb-4">
+          <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[#efab4d] transition-all duration-700 ease-out"
+              style={{ width: `${(step / TOTAL_STEPS) * 100}%`, boxShadow: '0 0 14px rgba(239, 171, 77, 0.45)' }}
+            />
+          </div>
+
+          <div className="mt-2.5 flex items-center justify-between gap-3">
+            <div className="text-[12.5px] font-semibold text-[#ddcfb9]">
+              <span className="ml-1.5">{stepIcons[step]}</span>
+              שלב {step} מתוך {TOTAL_STEPS} · {stepTitles[step]}
             </div>
-            
-            {/* Step Indicators */}
-            <div className="relative flex justify-between">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((s) => (
-                <div key={s} className="flex flex-col items-center">
+            <div className="flex items-center gap-1.5">
+              {ONBOARDING_STEP_NUMBERS.map((s) => {
+                // ניווט חופשי אחורה ולשלבים שכבר ביקרנו בהם, ועוד שלב אחד קדימה — בלי קפיצות רחוקות
+                const reachable = s <= Math.max(maxVisitedStep, step + 1);
+                const dotDisabled = animating || !reachable;
+                const dotTone = s === step
+                  ? 'bg-[#efab4d]'
+                  : s < step
+                    ? 'bg-[#efab4d]/50'
+                    : 'bg-white/20';
+                return (
                   <button
+                    key={s}
                     type="button"
-                    onClick={() => goToStep(s)}
+                    onClick={dotDisabled ? undefined : () => goToStep(s)}
                     aria-label={`עבור לשלב ${s}: ${stepTitles[s]}`}
-                    className={`relative z-10 w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm transition-all duration-700 border-2 ${
-                      s <= step
-                        ? 'bg-gradient-to-br from-[#efab4d] to-[#e0a04a] text-[#251f1c] border-[#f4ecde]/30 shadow-xl transform scale-110'
-                        : 'bg-white/10 text-[#d8c6ac] border-white/20 backdrop-blur-sm'
+                    aria-current={s === step ? 'step' : undefined}
+                    disabled={dotDisabled}
+                    className={`h-2.5 w-2.5 rounded-full transition-all duration-300 ${dotTone} ${
+                      reachable ? 'hover:scale-125' : 'opacity-40 cursor-not-allowed'
                     }`}
-                    style={{
-                      boxShadow: s <= step ? '0 10px 25px rgba(239, 171, 77, 0.32)' : 'none',
-                      animationDelay: `${s * 0.1}s`,
-                      cursor: animating ? 'default' : 'pointer'
-                    }}
-                    disabled={animating}
-                  >
-                    <span className="text-base">{stepIcons[s]}</span>
-                  </button>
-                  <div className={`mt-2 text-xs font-medium transition-all duration-500 ${
-                    s <= step ? 'text-white' : 'text-white/60'
-                  }`}>
-                    {stepTitles[s]}
-                  </div>
-                </div>
-              ))}
+                    style={{ cursor: dotDisabled ? 'default' : 'pointer' }}
+                  />
+                );
+              })}
             </div>
           </div>
         </div>
 
         {/* Content Area — דו-פאנל: טופס + פאנל פרופיל חי (עיצוב המוקאפ) */}
-        <div className={`px-4 pb-4 ${[1, 4, 11, 12].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
+        {/* 9 (חיבור AI) נוסף לרשימה — הפאנל החי מוסתר בו, ובלי זה נשארה עמודה ריקה */}
+        <div className={`px-4 pb-4 ${[1, 4, 9, 10, 11].includes(step) ? '' : 'lg:grid lg:grid-cols-[1fr_300px] lg:gap-4 lg:items-start'}`}>
           <div 
             className={`bg-[#1a1512]/55 backdrop-blur-md rounded-2xl p-4 border border-[#efab4d]/12 shadow-xl transition-all duration-700 ${
               animating 
@@ -431,7 +457,7 @@ export default function ProfileOnboarding({
               </div>
             )}
             {step === 2 && (
-              <div className="space-y-3 animate-in slide-in-from-right-5 duration-700">
+              <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
                     👤 פרטים אישיים
@@ -745,7 +771,7 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('writingGoals', e.target.value)}
                       placeholder="למה אתה כותב? כתיבה שיווקית, עבודות אקדמיות, דוחות מקצועיים, תוכן למדיה חברתית..."
                       rows={2}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
                   </div>
                   
@@ -758,7 +784,7 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('defaultAudience', e.target.value)}
                       placeholder="מי קורא את מה שאתה כותב? סטודנטים, עמיתים, לקוחות, הקהל הרחב..."
                       rows={2}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
                   </div>
                   
@@ -771,14 +797,14 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('formatPreferences', e.target.value)}
                       placeholder="איך אתה אוהב לעצב טקסטים? קצר ולעניין, פסקאות ארוכות, עם כותרות משנה, רשימות..."
                       rows={2}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
                   </div>
                 </div>
               </div>
             )}
 
-                        {step === 6 && (
+            {step === 6 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -838,7 +864,7 @@ export default function ProfileOnboarding({
                     <select
                       value={profile.lengthPreference || 'default'}
                       onChange={(e) => updateField('lengthPreference', e.target.value)}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10 cursor-pointer"
                     >
                       <option value="short" className="bg-slate-800 text-white">קצר ולעניין - ישר ולנקודה</option>
                       <option value="default" className="bg-slate-800 text-white">ממוצע - עם מעט רקע והסבר</option>
@@ -862,7 +888,6 @@ export default function ProfileOnboarding({
 
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="group">
                     <label className="block text-sm font-medium text-white mb-1 group-hover:text-red-300 transition-colors" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.8)' }}>
                       ממה להימנע לחלוטין? 🚫
@@ -885,9 +910,8 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('alwaysRules', e.target.value)}
                       placeholder="למשל: כתוב תמיד בלשון נקבה, תמיד תסיים במשפט מניע לפעולה, הוסף סימן קריאה בכותרת..."
                       rows={2}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
-                  </div>
                   </div>
                   </div>
 
@@ -900,7 +924,7 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('favoritePhrases', e.target.value)}
                       placeholder="מילים שאתה משתמש בהן הרבה (למשל: 'סופר מעניין', 'בגדול', 'קלאסי'...)"
                       rows={2}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
                   </div>
                 </div>
@@ -908,85 +932,6 @@ export default function ProfileOnboarding({
             )}
 
             {step === 8 && (
-              <div className="space-y-3 animate-in slide-in-from-bottom-5 duration-700">
-                <div className="text-center mb-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-base font-bold text-white" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
-                      🎨 למד את הסגנון שלי
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={resetLearningGame}
-                      className="px-4 py-2 rounded-xl bg-white/5 backdrop-blur-sm border border-[#efab4d]/20 text-white text-sm font-semibold hover:bg-white/10 transition-all duration-300 shadow-lg"
-                    >
-                      🔄 איפוס
-                    </button>
-                  </div>
-                  <p className="text-white text-sm leading-relaxed" style={{ textShadow: '1px 1px 4px rgba(0,0,0,0.7)' }}>
-                    בחר את הניסוחים שמתאימים לך כדי שאלמד את הסגנון האישי שלך
-                  </p>
-                </div>
-
-                {styleBaselineReady && styleExemplars.length > 0 && (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4" dir="rtl">
-                    <div className="text-sm font-bold text-[#f4ecde] mb-2">ככה אתה כותב:</div>
-                    <div className="space-y-2">
-                      {styleExemplars.slice(0, 3).map((sentence, i) => (
-                        <blockquote
-                          key={i}
-                          className="border-r-2 border-[#efab4d]/40 pr-3 text-[13px] leading-relaxed text-[#ddcfb9]"
-                        >
-                          {String(sentence || '').trim()}
-                        </blockquote>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
-                  {STYLE_TRAINING_QUESTIONS.map((question, index) => (
-                    <div 
-                      key={question.id} 
-                      className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-5 shadow-lg hover:bg-white/15 transition-all duration-300"
-                      style={{ animationDelay: `${index * 0.1}s` }}
-                    >
-                      <div className="text-base font-bold text-white mb-4 drop-shadow-sm">
-                        {question.title}
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {question.options.map((option) => {
-                          const selected = trainingAnswers[question.id] === option.id;
-                          return (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => selectLearningOption(question.id, option.id)}
-                              className={`text-right p-4 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${
-                                selected
-                                  ? 'border-yellow-300 bg-yellow-400/20 text-white shadow-lg shadow-yellow-400/25'
-                                  : 'border-white/30 bg-white/10 text-white/90 hover:border-white/50 hover:bg-white/20'
-                              }`}
-                            >
-                              <div className="text-sm font-bold mb-1 text-shadow-sm">{option.label}</div>
-                              <div className="text-xs leading-relaxed opacity-90">{option.text}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                
-                <div className="bg-gradient-to-r from-white/10 to-white/20 backdrop-blur-md border border-white/30 rounded-2xl p-4 shadow-xl">
-                  <div className="text-sm font-bold text-white mb-1">💡 מה למדתי עד עכשיו:</div>
-                  <div className="text-sm text-white/80 leading-relaxed">
-                    {profile.styleTrainingSummary || 'עדיין אין מספיק בחירות כדי ללמוד את הסגנון שלך.'}
-                  </div>
-                </div>
-              </div>
-            )}
-
-                        {step === 9 && (
               <div className="space-y-3 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -1031,7 +976,7 @@ export default function ProfileOnboarding({
                       <select
                         value={profile.emojiPreference || 'moderate'}
                         onChange={(e) => updateField('emojiPreference', e.target.value)}
-                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                        className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10 cursor-pointer"
                       >
                         <option value="none" className="bg-slate-800 text-white">ללא אימוג'י בכלל</option>
                         <option value="rare" className="bg-slate-800 text-white">מעט מאוד (רק בסוף)</option>
@@ -1046,7 +991,7 @@ export default function ProfileOnboarding({
                       <select
                         value={profile.listPreference || 'bullets'}
                         onChange={(e) => updateField('listPreference', e.target.value)}
-                        className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25 cursor-pointer"
+                        className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10 cursor-pointer"
                       >
                         <option value="bullets" className="bg-slate-800 text-white">עדיפות לנקודות (Bullets •)</option>
                         <option value="numbers" className="bg-slate-800 text-white">עדיפות למספרים (1,2,3)</option>
@@ -1064,14 +1009,14 @@ export default function ProfileOnboarding({
                       onChange={(e) => updateField('goldenExample', e.target.value)}
                       placeholder="טקסט קצר שכתבת (מייל, פוסט, או סיכום). אני אלמד לנתח בדיוק אותו..."
                       rows={4}
-                      className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/25"
+                      className="w-full px-4 py-2 bg-white/5 border border-[#efab4d]/20 rounded-xl text-white placeholder-[#8f7e69] resize-none outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all duration-300 hover:bg-white/10"
                     />
                   </div>
                 </div>
               </div>
             )}
 
-            {step === 10 && (
+            {step === 9 && (
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <h2 className="text-base font-bold text-white mb-3" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.8)' }}>
@@ -1161,26 +1106,25 @@ export default function ProfileOnboarding({
               </div>
             )}
 
-            {step === 11 && (
+            {step === 10 && (
               <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <StyleSetupFlow
                   variant="onboarding"
                   stage="refine"
                   profile={profile}
-                  providerConfig={providerConfig}
                   onProfileMetaPatch={handleStyleMetaPatch}
                   onIngestReport={handleIngestReport}
                   onComplete={() => nextStep()}
                   onSkip={() => nextStep()}
-                  autoStart
+                  autoStart={!refineAnalysisRanRef.current}
                   refinementNotes={profile.styleRefinementNotes || ''}
                   onRefinementNotesChange={(text) => updateField('styleRefinementNotes', text)}
                 />
               </div>
             )}
 
-            {step === 12 && (
-              <div className="space-y-4 animate-in slide-in-from-top-5 duration-700">
+            {step === 11 && (
+              <div className="space-y-4 animate-in slide-in-from-left-5 duration-700">
                 <div className="text-center mb-4">
                   <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 text-white rounded-full flex items-center justify-center text-5xl mb-4 mx-auto animate-bounce shadow-2xl shadow-green-400/50">
                     ✨
@@ -1274,7 +1218,7 @@ export default function ProfileOnboarding({
           </div>
 
           {/* פאנל הפרופיל החי — מוסתר בשלבי פתיח/עבודות/חיבור/חידוד-סגנון/סיום */}
-          {![1, 4, 10, 11, 12].includes(step) && (
+          {![1, 4, 9, 10, 11].includes(step) && (
             <aside className="hidden lg:block lg:sticky lg:top-2 rounded-2xl border border-[#efab4d]/16 p-5 shadow-xl" style={{ background: 'rgba(26,21,18,0.55)', boxShadow: '0 20px 44px rgba(10,7,5,0.4)' }}>
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2.5">
@@ -1327,15 +1271,29 @@ export default function ProfileOnboarding({
             אמשיך אחר כך
           </button>
           
-          <button
-            onClick={step === 12 ? onComplete : nextStep}
-            className="group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 bg-gradient-to-r from-[#efab4d] to-[#e0a04a] text-[#251f1c] hover:from-[#f0b65f] hover:to-[#e6a851] shadow-lg hover:shadow-2xl transform hover:scale-105 border border-[#f4ecde]/25"
-            style={{ boxShadow: '0 10px 30px rgba(239, 171, 77, 0.32)' }}
-          >
-            <span className="flex items-center gap-2">
-              {step === 12 ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
-            </span>
-          </button>
+          {/* בשלבי StyleSetupFlow (4 העלאה, 10 חידוד) הכפתורים של הזרימה עצמה מקדמים —
+              כפתור "המשך" כפול כאן רק מבלבל. placeholder שומר על פריסת justify-between. */}
+          {SELF_ADVANCING_STEPS.has(step) ? <div className="w-[96px]" /> : (
+          <div className="flex flex-col items-center gap-2">
+            <button
+              onClick={step === TOTAL_STEPS ? onComplete : nextStep}
+              disabled={completionBlocked}
+              className={`group relative px-4 py-4 rounded-2xl text-base font-bold transition-all duration-300 bg-gradient-to-r from-[#efab4d] to-[#e0a04a] text-[#251f1c] shadow-lg border border-[#f4ecde]/25 ${
+                completionBlocked
+                  ? 'opacity-40 cursor-not-allowed'
+                  : 'hover:from-[#f0b65f] hover:to-[#e6a851] hover:shadow-2xl transform hover:scale-105'
+              }`}
+              style={{ boxShadow: completionBlocked ? 'none' : '0 10px 30px rgba(239, 171, 77, 0.32)' }}
+            >
+              <span className="flex items-center gap-2">
+                {step === TOTAL_STEPS ? (profile.onboardingCompletedAt ? 'הושלם ✓' : 'סיום ✨') : 'המשך →'}
+              </span>
+            </button>
+            {completionBlocked && (
+              <div className="text-[12px] font-medium text-[#f0b65f]">חסר שם — חזור לשלב 2 כדי להשלים</div>
+            )}
+          </div>
+          )}
         </div>
       </div>
     </div>

@@ -2,6 +2,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { AGENTS_CONFIG } from "../agentConfig";
 import { analyzeQuery as analyzeArticleQuery, extractDomainFromUrl as extractArticleDomainFromUrl, isUniversallyBlockedSourceDomain, normalizeText as normalizeArticleText, normalizeUrl as normalizeArticleUrl, setCustomBlockedSourceDomains, getCustomBlockedSourceDomains } from "./articleSourceValidation";
 import { requestJsonOverHttp, proxyDesktopHttpRequest } from "./httpTransport";
+import { recordModelUsage } from "./usageTelemetryService";
+import { classifyModelKind, isTextModelChoice, classifyGeminiApiEntry, IMAGE_MODEL_PRESETS, VIDEO_MODEL_PRESETS } from "./modelCatalog";
 import { isV3FlagEnabled } from "../v3/flags";
 import { getPassiveLedger } from "../v3/api/ledger";
 import { chat as v3Chat } from "../v3/api/client";
@@ -82,19 +84,21 @@ export const DEFAULT_PROVIDER_CONFIG = {
   active: 'gemini',
   activeProviders: ['gemini'],
   multiModelEnabled: false,
-  gemini:     { key: '', model: 'gemini-2.5-flash' },
-  openai:     { key: '', model: 'gpt-4o' },
-  claude:     { key: '', model: 'claude-sonnet-4-6' },
-  groq:       { key: '', model: 'llama-3.3-70b-versatile' },
-  ollama:     { baseUrl: 'http://localhost:11434/v1', model: 'llama3.2' },
-  perplexity: { key: '', model: 'sonar-pro' },
-  custom:     { name: '', baseUrl: '', key: '', model: '' },
+  // models: מודלים נוספים שהמשתמש הצמיד לאותו מפתח (מוצגים בבוררי המודלים לצד model).
+  gemini:     { key: '', model: 'gemini-2.5-flash', models: [] },
+  openai:     { key: '', model: 'gpt-4o', models: [] },
+  claude:     { key: '', model: 'claude-sonnet-4-6', models: [] },
+  groq:       { key: '', model: 'llama-3.3-70b-versatile', models: [] },
+  ollama:     { baseUrl: 'http://localhost:11434/v1', model: 'llama3.2', models: [] },
+  perplexity: { key: '', model: 'sonar-pro', models: [] },
+  custom:     { name: '', baseUrl: '', key: '', model: '', models: [] },
   scholar:    { key: '', provider: 'serpapi' },
   // מקורות תמונה למצגות
   imageProvider: 'pexels', // ספק תמונות הסטוק הפעיל: 'pexels' | 'unsplash'
   pexels:     { key: '' },
   unsplash:   { key: '' },
   imageGen:   { provider: 'gemini', key: '', model: 'imagen-3.0-generate-002' }, // יצירת תמונות AI
+  videoGen:   { provider: 'gemini', key: '', model: 'veo-3.1-fast-generate-preview' }, // יצירת וידאו AI (Veo); מפתח ריק = מפתח Gemini הרגיל
   // מנוע גרפים אמיתי (QuickChart) — מרנדר תרשימים מדויקים מנתוני SPSS/מצגות
   chartEngine: { provider: 'quickchart', key: '', baseUrl: 'https://quickchart.io', fallbackToAi: true },
   // API ייעודי לפי פיצ'ר — provider+model+key נפרדים ל-SPSS ולמצגות.
@@ -362,7 +366,9 @@ export const DEFAULT_WORKSPACE_AUTOMATION = {
   retryEnabled: true,
   maxRetries: 2,
   timeoutEnabled: true,
-  requestTimeoutMs: 45000,
+  // prompts גדולים על מודלים איטיים חורגים מ-45s — timeout קצר גרם ל-retry שמחויב
+  // כפול (ה-input כבר חויב בקריאה שנקטעה).
+  requestTimeoutMs: 120000,
   showProgress: true,
   appendAgentNotesToOutput: false,
   agentNotesInstruction: '',
@@ -553,7 +559,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45000,
+      requestTimeoutMs: 120000,
       showProgress: true,
       appendAgentNotesToOutput: false,
       agentNotesInstruction: '',
@@ -578,7 +584,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45000,
+      requestTimeoutMs: 120000,
       showProgress: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
@@ -603,7 +609,7 @@ export const DEFAULT_WORKSPACES_LIBRARY = {
       retryEnabled: true,
       maxRetries: 2,
       timeoutEnabled: true,
-      requestTimeoutMs: 45000,
+      requestTimeoutMs: 120000,
       showProgress: true,
       appendAgentNotesToOutput: true,
       agentNotesInstruction: getResearchWorkspaceNotesInstruction(),
@@ -2861,6 +2867,7 @@ export const FEATURE_OVERRIDE_IDS = ['spss', 'presentations'];
 // ספקי תמונות זמינים ל-override לפי פיצ'ר
 export const IMAGE_STOCK_PROVIDER_IDS = ['pexels', 'unsplash'];
 export const IMAGE_GEN_PROVIDER_IDS = ['gemini', 'openai', 'stability', 'xai', 'flux'];
+export const VIDEO_GEN_PROVIDER_IDS = ['gemini'];
 
 const normalizeFeatureImage = (raw = {}) => {
   const img = raw && typeof raw === 'object' ? raw : {};
@@ -2942,6 +2949,21 @@ export const getFeatureImageConfig = (featureId, baseConfig = null) => {
   return normalizeProviderConfig(next);
 };
 
+// רשימת מודלים מוצמדים פר ספק: trim, נורמליזציית כינויים, dedupe, ורק מודלי טקסט.
+const normalizeModelIdList = (providerId = '', list = []) => {
+  if (!Array.isArray(list) || !list.length) return [];
+  const seen = new Set();
+  const out = [];
+  for (const value of list) {
+    const normalized = normalizeProviderModelName(providerId, String(value || '').trim());
+    if (!normalized || seen.has(normalized)) continue;
+    if (!isTextModelChoice(providerId, normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out.slice(0, 12);
+};
+
 const normalizeProviderConfig = (config = {}) => {
   const safeActive = KNOWN_PROVIDER_IDS.includes(config?.active) ? config.active : DEFAULT_PROVIDER_CONFIG.active;
   const merged = {
@@ -2958,6 +2980,7 @@ const normalizeProviderConfig = (config = {}) => {
     pexels:     { ...DEFAULT_PROVIDER_CONFIG.pexels,     ...(config?.pexels || {}) },
     unsplash:   { ...DEFAULT_PROVIDER_CONFIG.unsplash,   ...(config?.unsplash || {}) },
     imageGen:   { ...DEFAULT_PROVIDER_CONFIG.imageGen,   ...(config?.imageGen || {}) },
+    videoGen:   { ...DEFAULT_PROVIDER_CONFIG.videoGen,   ...(config?.videoGen || {}) },
     copyleaks:  { ...DEFAULT_PROVIDER_CONFIG.copyleaks,  ...(config?.copyleaks || {}) },
     toolLinks: getToolLinksConfig({ ...DEFAULT_PROVIDER_CONFIG, ...(config || {}) }),
     featureOverrides: normalizeFeatureOverrides(config?.featureOverrides),
@@ -2973,6 +2996,13 @@ const normalizeProviderConfig = (config = {}) => {
   merged.multiModelEnabled = Boolean(merged.multiModelEnabled);
   merged.imageProvider = ['pexels', 'unsplash'].includes(merged.imageProvider) ? merged.imageProvider : 'pexels';
   merged.imageGen.provider = IMAGE_GEN_PROVIDER_IDS.includes(merged.imageGen.provider) ? merged.imageGen.provider : 'gemini';
+  merged.videoGen.provider = VIDEO_GEN_PROVIDER_IDS.includes(merged.videoGen.provider) ? merged.videoGen.provider : 'gemini';
+  merged.videoGen.key = String(merged.videoGen.key || '').trim();
+  merged.videoGen.model = String(merged.videoGen.model || DEFAULT_PROVIDER_CONFIG.videoGen.model).trim();
+  // מודלים מוצמדים: trim+dedupe, ורק מודלי טקסט — imagen/veo מוצמד לא ידלוף לבורר הצ'אט.
+  for (const providerId of ['gemini', 'openai', 'claude', 'groq', 'ollama', 'perplexity', 'custom']) {
+    merged[providerId].models = normalizeModelIdList(providerId, merged[providerId].models);
+  }
   return merged;
 };
 
@@ -3080,6 +3110,14 @@ const mergeProviderSettings = (providerId = '', diskValue = {}, localValue = {})
   if ('baseUrl' in merged) merged.baseUrl = pickStoredString(localValue, 'baseUrl', diskValue?.baseUrl);
   if ('name' in merged) merged.name = pickStoredString(localValue, 'name', diskValue?.name);
   if ('model' in merged) merged.model = normalizeProviderModelName(providerId, pickStoredString(localValue, 'model', diskValue?.model));
+  // models (מוצמדים): union של דיסק+מקומי — הצמדה ממכשיר אחד לא נמחקת ע"י השני.
+  // הנורמליזציה (dedupe, רק-טקסט) רצה אחר כך ב-normalizeProviderConfig.
+  if ('models' in merged || Array.isArray(diskValue?.models) || Array.isArray(localValue?.models)) {
+    merged.models = [...new Set([
+      ...(Array.isArray(diskValue?.models) ? diskValue.models : []),
+      ...(Array.isArray(localValue?.models) ? localValue.models : []),
+    ])];
+  }
 
   return merged;
 };
@@ -3495,19 +3533,22 @@ const shouldUseStrictSourceGrounding = ({ userPrompt = '', documentContext = '',
   }
 };
 
-const shouldUseInternetBackedSourceWork = ({ userPrompt = '', extraSystemPrompt = '' } = {}) => {
-  const combined = [userPrompt, extraSystemPrompt]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
-  if (!combined) return false;
-  if (NON_SOURCE_REQUEST_PATTERN.test(combined)) return false;
-  if (isSourceReuseOrIntegrationRequest(combined)) return false;
-  if (SOURCE_TRANSFORM_REQUEST_PATTERN.test(combined)) return false;
-  return FACT_CHECK_REQUEST_PATTERN.test(combined)
-    || needsInternetBackedCurrentInfo(combined)
-    || hasSourceRetrievalFollowOnWork(combined)
-    || SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(combined);
+// טוקן מקורות מפורש: בלעדיו "סכם את המסמך"/"כתוב מבוא" לא מדליקים חיפוש בתשלום.
+// מקור(?:ות)?(?!י) — לא לתפוס "מקורי/מקורית" (פסקה מקורית ≠ בקשת מקור).
+const EXPLICIT_SOURCE_TOKEN_PATTERN = /(מקור(?:ות)?(?!י)|ציטוט|אסמכתא|ביבליוגרפ|citation|reference|bibliograph|doi|scholar|sources?)/i;
+
+export const shouldUseInternetBackedSourceWork = ({ userPrompt = '' } = {}) => {
+  // בכוונה נבדק רק פרומפט המשתמש: extraSystemPrompt נושא בלוקי רקע (פרויקט/קורס/סגנון)
+  // שמכילים כמעט תמיד "עבודה…מקורות" — בדיקתם הדליקה googleSearch בתשלום על כל תור בפרויקט.
+  const text = String(userPrompt || '').trim();
+  if (!text) return false;
+  if (NON_SOURCE_REQUEST_PATTERN.test(text)) return false;
+  if (isSourceReuseOrIntegrationRequest(text)) return false;
+  if (SOURCE_TRANSFORM_REQUEST_PATTERN.test(text)) return false;
+  return FACT_CHECK_REQUEST_PATTERN.test(text)
+    || needsInternetBackedCurrentInfo(text)
+    || hasSourceRetrievalFollowOnWork(text)
+    || (SOURCE_REQUEST_WITH_DELIVERABLE_PATTERN.test(text) && EXPLICIT_SOURCE_TOKEN_PATTERN.test(text));
 };
 
 const isExplicitGroundedWebResultsRequest = ({ userPrompt = '', extraSystemPrompt = '', skillId = '' } = {}) => {
@@ -4017,8 +4058,13 @@ const normalizeRetrievalPlanEntry = (entry = {}) => {
 const callCheapModelText = async ({ prompt = '', cfg = null, maxTokens = 300 } = {}) => {
   if (String(cfg?.gemini?.key || '').trim()) {
     const genAI = new GoogleGenerativeAI(cfg.gemini.key);
-    const mdl = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // קריאה מכנית — חשיבה דינמית רק מייקרת (thinking מחויב במחיר output).
+    const mdl = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: { maxOutputTokens: Math.max(64, Number(maxTokens) || 300), thinkingConfig: { thinkingBudget: 0 } },
+    });
     const result = await mdl.generateContent(prompt);
+    recordModelUsage({ provider: 'gemini', model: 'gemini-2.5-flash', usageMetadata: result.response?.usageMetadata });
     return result.response.text();
   }
   if (String(cfg?.perplexity?.key || '').trim()) {
@@ -7229,6 +7275,11 @@ const extractSyllabusProfileHeuristically = ({ rawText = '', fileName = '' } = {
   });
 };
 
+// ערך חופשי מפלט חיצוני — מחרוזת או מערך (מודלים מחזירים רשימות לשדות "כללים"). מערך → שורות.
+const externalFreeText = (value) => (Array.isArray(value)
+  ? value.map((v) => String(v || '').trim()).filter(Boolean).join('\n')
+  : String(value || '').trim());
+
 const normalizeExternalStyleExtraction = (parsed = {}, currentProfile = {}) => {
   const style = parsed?.style && typeof parsed.style === 'object' ? parsed.style : {};
   const cover = parsed?.coverPageDefaults && typeof parsed.coverPageDefaults === 'object' ? parsed.coverPageDefaults : {};
@@ -7275,6 +7326,20 @@ const normalizeExternalStyleExtraction = (parsed = {}, currentProfile = {}) => {
     tonePreferences: uniqueExternalStrings([currentProfile.tonePreferences || [], style.tonePreferences, parsed.tonePreferences, style.tone, parsed.tone], 6),
     sentenceLengthPreference: String(currentProfile.sentenceLengthPreference || '').trim() || normalizeExternalSentenceLength(pickExternalText(style.sentenceLengthPreference, parsed.sentenceLengthPreference)),
     paragraphLengthPreference: String(currentProfile.paragraphLengthPreference || '').trim() || normalizeExternalParagraphLength(pickExternalText(style.paragraphLengthPreference, parsed.paragraphLengthPreference)),
+    // שדות "בונוס" — מודלים מוסיפים אותם מעצמם גם כשהפרומפט לא ביקש. מילוי-רק-אם-ריק
+    // (או מיזוג-בלי-כפילויות בשדות הבלוק), עם שמות חלופיים באנגלית ובעברית.
+    avoidRules: mergeExternalBlockText(currentProfile.avoidRules,
+      externalFreeText(style.avoidRules ?? parsed.avoidRules ?? style.avoid ?? parsed.avoid ?? style.thingsToAvoid ?? parsed.thingsToAvoid ?? parsed['להימנע'])),
+    alwaysRules: mergeExternalBlockText(currentProfile.alwaysRules,
+      externalFreeText(style.alwaysRules ?? parsed.alwaysRules ?? style.alwaysDo ?? parsed.alwaysDo ?? style.rules ?? parsed.rules ?? parsed['חוקים'])),
+    favoritePhrases: mergeExternalBlockText(currentProfile.favoritePhrases,
+      externalFreeText(style.favoritePhrases ?? parsed.favoritePhrases ?? style.favoriteExpressions ?? parsed.favoriteExpressions ?? parsed['ביטויים'])),
+    greetingStyle: String(currentProfile.greetingStyle || '').trim()
+      || pickExternalText(style.greetingStyle, parsed.greetingStyle, style.openingStyle, parsed.openingStyle),
+    signOffStyle: String(currentProfile.signOffStyle || '').trim()
+      || pickExternalText(style.signOffStyle, parsed.signOffStyle, style.closingStyle, parsed.closingStyle),
+    goldenExample: String(currentProfile.goldenExample || '').trim()
+      || pickExternalText(style.goldenExample, parsed.goldenExample, style.exampleParagraph, parsed.exampleParagraph),
     defaultDocumentStyle: extractedDefaultStyle || String(currentProfile.defaultDocumentStyle || '').trim() || 'academic',
     preferredHomeStyleIds: preferredHomeStyleIds.length ? preferredHomeStyleIds : (Array.isArray(currentProfile.preferredHomeStyleIds) ? currentProfile.preferredHomeStyleIds : ['academic']),
     preferredDocumentTypes: uniqueExternalStrings([currentProfile.preferredDocumentTypes || [], assignmentType], 6),
@@ -8101,7 +8166,8 @@ export const rememberConversationTurn = ({ userPrompt = '', reply = '', agentLab
   return saveAppMemory({ ...current, recentChats, memoryNotes });
 };
 
-const MAX_CONVERSATION_HISTORY_PROMPT_TURNS = 24;
+// 12 תורות מספיקים לרצף שיחה; 24 הכפילו את ה-input בכל תור.
+const MAX_CONVERSATION_HISTORY_PROMPT_TURNS = 12;
 const MAX_CONVERSATION_HISTORY_PROMPT_CHARS = 9000;
 
 const normalizeConversationHistoryForPrompt = (value = []) => {
@@ -8159,7 +8225,7 @@ const buildAppMemoryInstructions = (memory = getAppMemory()) => {
   return parts.join('\n');
 };
 
-const getModelNameForProvider = (provider, cfg, override = '') => {
+export const getModelNameForProvider = (provider, cfg, override = '') => {
   const normalizedOverride = normalizeProviderModelName(provider, override);
   const isClearlyCrossProviderOverride = (() => {
     if (!normalizedOverride) return false;
@@ -8178,7 +8244,11 @@ const getModelNameForProvider = (provider, cfg, override = '') => {
     return Boolean(matcher && matcher.test(value));
   })();
 
-  if (normalizedOverride && !isClearlyCrossProviderOverride) return normalizedOverride;
+  // מודל מדיה (imagen-*/veo-*/…-image) אינו מודל צ'אט — override כזה (מ-@tag או בורר ישן
+  // ששרד) היה נשלח ל-:generateContent ונכשל/מתנהג לא צפוי. נופלים למודל המוגדר.
+  const isMediaModelOverride = Boolean(normalizedOverride) && classifyModelKind(provider, normalizedOverride) !== 'text';
+
+  if (normalizedOverride && !isClearlyCrossProviderOverride && !isMediaModelOverride) return normalizedOverride;
 
   switch (provider) {
     case 'gemini':
@@ -9020,7 +9090,6 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
       }) || holeFillAgentRequest || (sourceFocusedWorkflowAgent && assignmentSourceQuotaRoute.route === 'groundedWeb')));
   const internetBackedSourceWorkRequired = !suppressResearchRouting && (options.forceInternetInfo === true || sourceGroundingRequired || groundedWebResultsRequired || shouldUseInternetBackedSourceWork({
     userPrompt: cleanUserPrompt,
-    extraSystemPrompt,
   }));
   const sourceAutoRouteEnabled = !suppressResearchRouting && assistantBehavior.autoRouteSourceRequests !== false;
   const requestedProvider = activeProvider;
@@ -9732,7 +9801,8 @@ export const chatWithActiveProvider = async (userPrompt, documentContext = '', e
 ${isGeneralWritingScope
   ? 'זו בקשת כתיבה עצמאית. הפק את התוצר המבוקש (מייל, הודעה, פוסט וכו\') ישירות, מוכן לשימוש, בלי הקדמות ובלי מטא-הערות. אל תעטוף ב-HTML אלא אם התבקש במפורש.'
   : 'זו שאלת ידע/עזרה כללית. ענה לגופה ישירות ובצורה עניינית. אל תניח שהשאלה מתייחסת למסמך כלשהו, ואל תמציא הקשר שלא נמסר. אל תעטוף ב-HTML אלא אם התבקש.'}
-אם אינך יודע או אין ודאות — אמור זאת במפורש במקום להמציא עובדות, מקורות, ציטוטים או קישורים.${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${personalStylePrompt ? `\n\nכתוב בקול האישי של המשתמש לפי ההעדפות הבאות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}`;
+אם אינך יודע או אין ודאות — אמור זאת במפורש במקום להמציא עובדות, מקורות, ציטוטים או קישורים.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${personalStylePrompt ? `\n\nכתוב בקול האישי של המשתמש לפי ההעדפות הבאות:\n${personalStylePrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}`;
+  // ^ קבועים קודם, משתנים והיסטוריה בסוף — prefix יציב ל-implicit caching (ר' הערה במקבילה של מסמך).
   const documentScopeSysPrompt = `אתה העוזר החכם של מעבד התמלילים "WordFlow AI".
 התאריך היום הוא ${getCurrentDateHebrew()} (${getCurrentDateIso()}). כל תאריך מוקדם מהיום הוא בעבר — למשל 1.1.2026 או 1.1.26 כבר עברו אם היום מאוחר מהם. אל תסרב למשימה בטענה שתאריך הוא "עתידי" בלי לוודא מול התאריך של היום.
 ענה תמיד בעברית, קצר, ברור ומעשי.
@@ -9742,7 +9812,10 @@ ${isGeneralWritingScope
 אם המשתמש מבקש תוכן חדש שמיועד למסמך, כתוב רק את התוכן עצמו כדי שיהיה קל להוסיף למסמך.
 עדיפות ראשונה: מה שהמשתמש ביקש מפורשות ומה שמופיע בחומרי העזר — ההגדרות המובנות (תבנית, מסלול, קהל יעד) הן רקע עוזר בלבד ולא מחליפות את המטלה.
 כשמחזירים מסמך מלא, טיוטה, או תוכן שמיועד במפורש להדבקה למסמך, השתמש ב-HTML מעוצב עם h1, h2, h3, p, ul, ol, strong, em לפי ההקשר. אם המשתמש לא ביקש מסמך מובנה או תוכן להדבקה, אל תכפה היררכיית כותרות או מבנה HTML מיותר.
-כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${singleCallSearchDirectivePrompt ? `\n\nחיפוש מקורות בתוך הכתיבה (קריאה אחת):\n${singleCallSearchDirectivePrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}`;
+כאשר צריך לבצע הפרדת עמודים, החזר בדיוק את קטע ה-HTML הבא בלבד בשורה נפרדת: <div data-type="page-break"></div>.${extraSystemPrompt ? `\n\nהנחיית תפקיד:\n${extraSystemPrompt}` : ''}${skillPrompt ? `\n\nסקיל נבחר:\n${skillPrompt}` : ''}${sharedInstructions ? `\n\nהנחיות משותפות לפרויקט:\n${sharedInstructions}` : ''}${workspaceAutomationPrompt ? `\n\nתיאום צוות AI:\n${workspaceAutomationPrompt}` : ''}${appMemoryPrompt ? `\n\nזיכרון אפליקציה וסוכן:\n${appMemoryPrompt}` : ''}${promptDocumentContext ? `\n\nהקשר מהמסמך:\n${promptDocumentContext}` : ''}${responseModePrompt ? `\n\nכללי מטלה וצורת מענה:\n${responseModePrompt}` : ''}${personalStylePrompt ? `\n\nהעדפות סגנון אישיות:\n${personalStylePrompt}` : ''}${sourceGroundingPrompt ? `\n\nGrounding למקורות:\n${sourceGroundingPrompt}` : ''}${singleCallSearchDirectivePrompt ? `\n\nחיפוש מקורות בתוך הכתיבה (קריאה אחת):\n${singleCallSearchDirectivePrompt}` : ''}${internetBackedWorkPrompt ? `\n\nאחזור אינטרנט נדרש:\n${internetBackedWorkPrompt}` : ''}${currentInfoAnswerPrompt ? `\n\nמענה לשאלה עדכנית נקודתית:\n${currentInfoAnswerPrompt}` : ''}${verifiedSourceFollowOnGroundingPrompt ? `\n\nמקורות מאומתים לשימוש בלעדי:\n${verifiedSourceFollowOnGroundingPrompt}` : ''}${groundedWebResultsContextPrompt ? `\n\nממצאי Web לשילוב במסמך:\n${groundedWebResultsContextPrompt}` : ''}${conversationHistoryPrompt ? `\n\nהיסטוריית השיחה הנוכחית:\n${conversationHistoryPrompt}` : ''}`;
+  // ^ סדר הבלוקים מכוון ל-implicit caching של Gemini 2.5 (הנחת ~75% על prefix זהה בייט-בייט):
+  //   קבועים-בין-תורות קודם (בלוק פרויקט/סקיל/הנחיות/זיכרון/מסמך), משתנים-פר-בקשה (grounding,
+  //   חיפוש, היסטוריה) בסוף. לא לשנות סדר בלי לבדוק cachedContentTokenCount בטלמטריה.
   const sysPrompt = isGeneralScope ? generalScopeSysPrompt : documentScopeSysPrompt;
 
   try { options.onSkillResolved?.(skillResolution); } catch {}
@@ -10825,10 +10898,10 @@ ${isGeneralWritingScope
         });
       }
     }
-    // ווטינג רלוונטיות — אותה שכבה כמו בצינור, אבל כאן דולק כברירת מחדל
-    // (cfg.retrieval.vetRelevance === false מכבה): שאילתות החיפוש במסלול הזה הן של
-    // המודל עצמו, אז ה-chunks הם הנקודה החלשה ביותר לרלוונטיות. fail-open תמיד.
-    if (verifiedSources.length >= 2 && cfg?.retrieval?.vetRelevance !== false) {
+    // ווטינג רלוונטיות — אותה שכבה כמו בצינור, וכמוה opt-in
+    // (ברירת מחדל: כבוי — קריאת flash נוספת על כל מסמך לא הצדיקה את עצמה;
+    // cfg.retrieval.vetRelevance === true מדליק). fail-open תמיד.
+    if (verifiedSources.length >= 2 && cfg?.retrieval?.vetRelevance === true) {
       const vet = await vetSourceRelevance({
         topic: singleCallTopicQuery || cleanUserPrompt,
         sources: verifiedSources,
@@ -10868,8 +10941,24 @@ ${isGeneralWritingScope
           ? { model: resolvedModel, tools: [{ googleSearch: {} }] }
           : { model: resolvedModel };
         if (Number.isFinite(options.temperature)) geminiModelConfig.generationConfig = { temperature: options.temperature };
+        // קריאות מכניות (תקן/סכם/טבלה/judge) לא צריכות חשיבה — טוקני thinking מחויבים
+        // במחיר output. נתמך רק ב-2.5 שאינו pro (pro לא יורד מתחת ל-128).
+        if (Number.isFinite(options.thinkingBudget)
+          && /^gemini-2\.5/i.test(resolvedModel)
+          && !/-pro/i.test(resolvedModel)) {
+          geminiModelConfig.generationConfig = {
+            ...(geminiModelConfig.generationConfig || {}),
+            thinkingConfig: { thinkingBudget: Math.max(0, Math.floor(options.thinkingBudget)) },
+          };
+        }
         const mdl = genAI.getGenerativeModel(geminiModelConfig);
         const result = await mdl.generateContent(`${sysPrompt}\n\nמשתמש: ${cleanUserPrompt}`);
+        recordModelUsage({
+          provider: 'gemini',
+          model: resolvedModel,
+          usageMetadata: result.response?.usageMetadata,
+          grounded: providerSupportsGeminiInternetBackedSourceTools,
+        });
         const geminiGroundedSources = providerSupportsGeminiInternetBackedSourceTools
           ? extractGeminiGroundedSources(result.response, 10)
           : [];
@@ -11257,10 +11346,14 @@ export const callAiAgent = async (agentId, selectedText, context = "") => {
   if (!agentConf) throw new Error("Invalid agent ID");
   const fullPrompt = buildPrompt(agentConf, selectedText, context);
   // משתמש במנוע הפעיל הנבחר (לא תמיד Gemini)
+  const nonResearchAgent = NON_RESEARCH_DIRECT_CHAT_AGENT_IDS.has(String(agentId || '').trim());
   const baseOptions = {
     skipAutomation: true,
     skipMultiModel: true,
     strictFormatting: true,
+    // סוכן inline מכני (תקן/סכם/ארגן…): ה-systemCtx שלו מכיל פעלים כמו "סכם"/"שכתב"
+    // שהדליקו googleSearch בתשלום דרך regex הניתוב; אין לו עבודת מקורות — מכבים במפורש.
+    ...(nonResearchAgent ? { forceSuppressResearchRouting: true, thinkingBudget: 0 } : {}),
   };
   const firstPass = await chatWithActiveProvider(fullPrompt, context, '', baseOptions);
 
@@ -11873,6 +11966,10 @@ export const getProviderModelChoices = (providerId = '', cfg = null, extraModels
 
   const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
   const configuredModel = normalizeProviderModelName(safeProvider, String(safeCfg?.[safeProvider]?.model || '').trim());
+  // מודלים שהמשתמש הצמיד למפתח (config[provider].models) — מיד אחרי המודל המוגדר.
+  const pinned = (Array.isArray(safeCfg?.[safeProvider]?.models) ? safeCfg[safeProvider].models : [])
+    .map((model) => normalizeProviderModelName(safeProvider, String(model || '').trim()))
+    .filter(Boolean);
   const extra = (Array.isArray(extraModels) ? extraModels : [extraModels])
     .map((model) => normalizeProviderModelName(safeProvider, String(model || '').trim()))
     .filter(Boolean);
@@ -11880,7 +11977,9 @@ export const getProviderModelChoices = (providerId = '', cfg = null, extraModels
     .map((model) => normalizeProviderModelName(safeProvider, model))
     .filter(Boolean);
 
-  return [...new Set([configuredModel, ...extra, ...fallbacks].filter(Boolean))];
+  // רק מודלי טקסט — בורר הצ'אט לא מציע מודלי תמונה/וידאו גם אם הוצמדו בטעות.
+  return [...new Set([configuredModel, ...pinned, ...extra, ...fallbacks].filter(Boolean))]
+    .filter((modelId) => isTextModelChoice(safeProvider, modelId));
 };
 
 const TEST_PROMPT = [{ role: 'user', content: 'אמור "אוקי" בלבד.' }];
@@ -11888,32 +11987,121 @@ const GEMINI_TEST_URL = 'https://generativelanguage.googleapis.com/v1beta/models
 const GEMINI_LIST_PAGE_SIZE = 1000;
 const GEMINI_GENERATE_CONTENT_METHOD = 'generateContent';
 
+// כל המודלים מה-API עם סיווג מודליות: [{id, kind: 'text'|'image'|'video'}].
+// modelCatalog מסווג regex-קודם (nano-banana מפרסם generateContent אבל הוא מודל תמונה).
+const extractGeminiModelEntries = (payload = {}) => {
+  const seen = new Set();
+  const out = [];
+  for (const entry of Array.isArray(payload?.models) ? payload.models : []) {
+    const classified = classifyGeminiApiEntry(entry);
+    if (!classified?.id || seen.has(classified.id)) continue;
+    seen.add(classified.id);
+    out.push(classified);
+  }
+  return out;
+};
+
+// תאימות: הרשימה ה"זמינה" לבדיקת חיבור נשארת מודלי צ'אט (generateContent) בלבד.
 const extractGeminiAvailableModels = (payload = {}) => [...new Set((Array.isArray(payload?.models) ? payload.models : [])
   .filter((entry) => Array.isArray(entry?.supportedGenerationMethods) && entry.supportedGenerationMethods.includes(GEMINI_GENERATE_CONTENT_METHOD))
   .map((entry) => String(entry?.name || '').trim().replace(/^models\//, ''))
   .filter(Boolean))];
 
-const listGeminiAvailableModels = async (key, signal) => {
+// ── קטלוג מודלים דינמי מהמפתח (cache מקומי, לא חלק מה-config המסונכרן) ──
+const GEMINI_MODEL_CACHE_KEY = 'wordai_gemini_models_cache_v1';
+let geminiModelCacheMemo = null;
+
+const readGeminiModelCache = () => {
+  if (geminiModelCacheMemo) return geminiModelCacheMemo;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(GEMINI_MODEL_CACHE_KEY) || 'null');
+    if (parsed && Array.isArray(parsed.models)) {
+      geminiModelCacheMemo = parsed;
+      return parsed;
+    }
+  } catch { /* noop */ }
+  return { fetchedAt: 0, models: [] };
+};
+
+const writeGeminiModelCache = (models = []) => {
+  const payload = { fetchedAt: Date.now(), models };
+  geminiModelCacheMemo = payload;
+  try { localStorage.setItem(GEMINI_MODEL_CACHE_KEY, JSON.stringify(payload)); } catch { /* noop */ }
+  return payload;
+};
+
+const listGeminiModelEntries = async (key, signal) => {
   const url = `${GEMINI_TEST_URL}?key=${encodeURIComponent(key)}&pageSize=${GEMINI_LIST_PAGE_SIZE}`;
   const desktopResult = await proxyDesktopHttpRequest({ url, method: 'GET', timeoutMs: 12000 }, signal);
   if (desktopResult) {
-    const result = desktopResult;
-    if (!result.ok) {
-      throw new Error(`${result.status}: ${String(result.body || '').slice(0, 200)}`);
-    }
-    const data = JSON.parse(result.body || '{}');
-    return extractGeminiAvailableModels(data);
+    if (!desktopResult.ok) throw new Error(`${desktopResult.status}: ${String(desktopResult.body || '').slice(0, 200)}`);
+    return extractGeminiModelEntries(JSON.parse(desktopResult.body || '{}'));
   }
-
-  const res = await fetch(url, {
-    method: 'GET',
-    signal,
-  });
+  const res = await fetch(url, { method: 'GET', signal });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
     throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
   }
-  const data = await res.json();
+  return extractGeminiModelEntries(await res.json());
+};
+
+/** רענון קטלוג המודלים של Gemini מהמפתח המוגדר. מחזיר {ok, counts, error?}. */
+export const refreshGeminiModelCatalog = async ({ signal } = {}) => {
+  const key = String(getProviderConfig()?.gemini?.key || '').trim() || localStorage.getItem('GEMINI_API_KEY') || '';
+  if (!key) return { ok: false, error: 'מפתח Gemini לא הוגדר', counts: { text: 0, image: 0, video: 0 } };
+  try {
+    const models = await listGeminiModelEntries(key, signal);
+    writeGeminiModelCache(models);
+    const counts = { text: 0, image: 0, video: 0 };
+    for (const entry of models) counts[entry.kind] = (counts[entry.kind] || 0) + 1;
+    return { ok: true, counts };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error), counts: { text: 0, image: 0, video: 0 } };
+  }
+};
+
+/** מודלים מה-cache הדינמי, אופציונלית מסוננים לפי מודליות ('text'|'image'|'video'). */
+export const getCachedGeminiModels = (kind = '') => {
+  const cache = readGeminiModelCache();
+  const models = Array.isArray(cache.models) ? cache.models : [];
+  return kind ? models.filter((entry) => entry.kind === kind).map((entry) => entry.id) : models.map((entry) => entry.id);
+};
+
+/**
+ * בחירות מודל מדיה ('image'|'video') לספק: [מוגדר, presets, מה-cache הדינמי], dedup.
+ * הבוררים בהגדרות ובסיידבר ניזונים מכאן — במקום שתי רשימות hardcoded ב-FileMenu.
+ */
+export const getMediaModelChoices = (kind = 'image', providerId = 'gemini', cfg = null) => {
+  const safeCfg = cfg && typeof cfg === 'object' ? cfg : getProviderConfig();
+  const configured = kind === 'video'
+    ? String(safeCfg?.videoGen?.model || '').trim()
+    : String(safeCfg?.imageGen?.model || '').trim();
+  const presets = kind === 'video'
+    ? (VIDEO_MODEL_PRESETS[providerId] || [])
+    : (IMAGE_MODEL_PRESETS[providerId] || []);
+  const discovered = providerId === 'gemini' ? getCachedGeminiModels(kind) : [];
+  return [...new Set([configured, ...presets, ...discovered].filter(Boolean))];
+};
+
+const listGeminiAvailableModels = async (key, signal) => {
+  const url = `${GEMINI_TEST_URL}?key=${encodeURIComponent(key)}&pageSize=${GEMINI_LIST_PAGE_SIZE}`;
+  let data = null;
+  const desktopResult = await proxyDesktopHttpRequest({ url, method: 'GET', timeoutMs: 12000 }, signal);
+  if (desktopResult) {
+    if (!desktopResult.ok) {
+      throw new Error(`${desktopResult.status}: ${String(desktopResult.body || '').slice(0, 200)}`);
+    }
+    data = JSON.parse(desktopResult.body || '{}');
+  } else {
+    const res = await fetch(url, { method: 'GET', signal });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => res.statusText);
+      throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+    }
+    data = await res.json();
+  }
+  // "בדוק חיבור" מוצלח = discovery בחינם: הקטלוג המלא (כולל imagen/veo) נכתב ל-cache.
+  try { writeGeminiModelCache(extractGeminiModelEntries(data)); } catch { /* noop */ }
   return extractGeminiAvailableModels(data);
 };
 

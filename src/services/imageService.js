@@ -91,18 +91,73 @@ export const searchStockImages = async (query, { count = 12, signal, featureId =
 };
 
 // ── יצירת תמונה ב-AI ─────────────────────────────────────────────
-const generateGeminiImage = async (prompt, key, model, signal) => {
+// שני מסלולי Gemini: imagen-* עובר ב-:predict; מודלי gemini-*-image ("nano banana")
+// הם מודלי generateContent רגילים שמחזירים תמונה כ-inlineData עם responseModalities.
+const generateGeminiPredictImage = async (prompt, key, model, signal, aspectRatio = '16:9') => {
   const cleanModel = String(model || 'imagen-3.0-generate-002').trim();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel)}:predict?key=${encodeURIComponent(key)}`;
   const body = JSON.stringify({
     instances: [{ prompt }],
-    parameters: { sampleCount: 1, aspectRatio: '16:9' },
+    parameters: { sampleCount: 1, aspectRatio: aspectRatio || '16:9' },
   });
   const { body: resBody } = await httpRequest({ url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal });
   const data = JSON.parse(resBody);
   const b64 = data.predictions?.[0]?.bytesBase64Encoded;
   if (!b64) throw new Error('Imagen לא החזיר תמונה. ייתכן שהמודל לא זמין למפתח הזה.');
   return `data:image/png;base64,${b64}`;
+};
+
+const generateGeminiFlashImage = async (prompt, key, model, signal) => {
+  const cleanModel = String(model || 'gemini-2.5-flash-image').trim();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel)}:generateContent?key=${encodeURIComponent(key)}`;
+  // נמדד ב-probe: המודל לא-דטרמיניסטי — אותו פרומפט מחזיר לפעמים תשובת טקסט בלבד.
+  // הנחיה מפורשת + ניסיון-חוזר אחד עם הנחיה קשוחה יותר סוגרים את רוב המקרים.
+  const directives = [
+    `Generate a single image (no text-only answer).\n${prompt}`,
+    `Output ONLY an image. Do not reply with text. Draw:\n${prompt}`,
+  ];
+  let lastError = null;
+  for (const directive of directives) {
+    const body = JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: directive }] }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+    });
+    const { body: resBody } = await httpRequest({ url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal });
+    const data = JSON.parse(resBody);
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const imagePart = parts.find((part) => part?.inlineData?.data || part?.inline_data?.data);
+    const inline = imagePart?.inlineData || imagePart?.inline_data;
+    if (inline?.data) {
+      const mime = inline.mimeType || inline.mime_type || 'image/png';
+      return `data:${mime};base64,${inline.data}`;
+    }
+    const blockReason = data.promptFeedback?.blockReason || '';
+    const textReply = parts.map((part) => part?.text || '').join(' ').trim().slice(0, 140);
+    // אבחון קומפקטי: אילו מפתחות באמת חזרו — חוסך ניחושים כשמבנה התשובה משתנה.
+    const shape = `finish=${data.candidates?.[0]?.finishReason || '?'} parts=[${parts.map((part) => Object.keys(part || {}).join('+')).join('|') || 'none'}]`;
+    lastError = new Error(blockReason
+      ? `המודל לא החזיר תמונה (${blockReason}) — ייתכן שהבקשה נחסמה על ידי מסנני הבטיחות.`
+      : `המודל ענה בטקסט במקום תמונה${textReply ? ` ("${textReply}…")` : ''} — נסה ניסוח ממוקד יותר. [${shape}]`);
+    // חסימת בטיחות לא תשתפר בניסיון חוזר — עוצרים מיד.
+    if (blockReason) break;
+  }
+  throw lastError || new Error('המודל לא החזיר תמונה.');
+};
+
+const generateGeminiImage = async (prompt, key, model, signal, aspectRatio = '16:9') => {
+  const cleanModel = String(model || 'imagen-3.0-generate-002').trim();
+  // מודל תמונה שאינו imagen (למשל gemini-2.5-flash-image) ⇒ מסלול generateContent.
+  if (!/^imagen-/i.test(cleanModel)) return generateGeminiFlashImage(prompt, key, cleanModel, signal);
+  try {
+    return await generateGeminiPredictImage(prompt, key, cleanModel, signal, aspectRatio);
+  } catch (error) {
+    // נמדד: מפתחות AI Studio רגילים לא מגישים imagen-* (:predict מחזיר 404) —
+    // נופלים אוטומטית ל-nano-banana באותו מפתח במקום להפיל את המצגות/הסיידבר.
+    if (/\(404\)/.test(String(error?.message || ''))) {
+      return generateGeminiFlashImage(prompt, key, 'gemini-2.5-flash-image', signal);
+    }
+    throw error;
+  }
 };
 
 const generateOpenAiImage = async (prompt, key, model, signal) => {
@@ -197,15 +252,18 @@ const resolveImageGenKey = (gen = {}, cfg = {}) => {
 /**
  * generateAiImage — מייצר תמונה ומחזיר dataUrl.
  * featureId (אופציונלי) → מכבד API ייעודי לתמונות של הפיצ'ר (מצגות/SPSS).
+ * provider/model (אופציונליים) → override פר-קריאה (בורר המדיה בסיידבר) מעל cfg.imageGen.
  */
-export const generateAiImage = async (prompt, { signal, featureId = '' } = {}) => {
+export const generateAiImage = async (prompt, { signal, featureId = '', provider: providerOverride = '', model: modelOverride = '', aspectRatio = '16:9' } = {}) => {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('חסר תיאור ליצירת התמונה.');
   const cfg = (featureId && getFeatureImageConfig(featureId)) || getProviderConfig();
-  const gen = cfg.imageGen || {};
+  const gen = { ...(cfg.imageGen || {}) };
+  if (providerOverride) gen.provider = providerOverride;
+  if (modelOverride) gen.model = modelOverride;
   const provider = gen.provider || 'gemini';
   const key = resolveImageGenKey(gen, cfg);
-  const finish = (dataUrl) => ({ source: 'ai', dataUrl, url: '', alt: cleanPrompt, query: cleanPrompt, attribution: 'נוצר ב-AI' });
+  const finish = (dataUrl) => ({ source: 'ai', dataUrl, url: '', alt: cleanPrompt, query: cleanPrompt, model: String(gen.model || '').trim(), provider, attribution: 'נוצר ב-AI' });
 
   if (provider === 'openai') {
     if (!key) throw new Error('לא הוגדר מפתח OpenAI ליצירת תמונות.');
@@ -224,7 +282,7 @@ export const generateAiImage = async (prompt, { signal, featureId = '' } = {}) =
     return finish(await generateFluxImage(cleanPrompt, key, gen.model, signal));
   }
   if (!key) throw new Error('לא הוגדר מפתח Gemini ליצירת תמונות.');
-  return finish(await generateGeminiImage(cleanPrompt, key, gen.model, signal));
+  return finish(await generateGeminiImage(cleanPrompt, key, gen.model, signal, aspectRatio));
 };
 
 /**

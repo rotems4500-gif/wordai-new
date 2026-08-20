@@ -11,6 +11,6 @@ export const APP_VERSION_LABEL = APP_VERSION ? `v${APP_VERSION}` : '';
 // מוצג בסרגל העליון כדי שאפשר יהיה לדעת במבט אם הקוד שרץ הוא החדש.
 // ⚠️ העלאה כאן חייבת ללכת יחד עם הקפצת מספר המטמון ב-public/sw.js — אחרת
 // ה-service worker מגיש את ה-index הישן והמונה החדש בכלל לא מגיע למסך.
-export const BUILD_NUMBER = 6;
+export const BUILD_NUMBER = 12;
 
 export const BUILD_LABEL = `b${BUILD_NUMBER}`;

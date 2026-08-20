@@ -22,7 +22,7 @@ import {
 // ייבוא namespace נוסף (ולא named) עבור getRepresentativeExcerpts: הפונקציה נוספה לשירות
 // במקביל, ו-named import של export חסר מפיל את ה-build. כאן היעדרותה מדרדרת ל-[] בשקט.
 import * as styleIngestModule from '../services/styleIngestService';
-import { getSampleStoreStats } from '../services/styleSampleStore';
+import { getSampleStoreStats, ensureSampleStoreReady, STYLE_SAMPLES_UPDATED_EVENT } from '../services/styleSampleStore';
 import {
   buildExternalPatternAnalysisPrompt,
   buildVerificationQuestions,
@@ -31,6 +31,7 @@ import {
   CONFIDENCE_LABELS,
 } from '../services/styleProfileService';
 import { getExternalAnalysisProviderHint } from '../services/aiService';
+import { decodeTextSmart } from '../services/materialExtractBrowser';
 
 // האם ההדבקה בכלל נראית כמו JSON — משמש רק כדי לבחור הודעת שגיאה מדויקת
 // ("נקרא אבל אין שדות מוכרים" מול "לא JSON בכלל"). לא שער קליטה.
@@ -39,22 +40,8 @@ const isJsonLike = (text) => /[{[][\s\S]*[}\]]/.test(String(text || ''));
 // סוגי קבצים לעבודות עבר — זהה ל-PAST_WORKS_ACCEPT ב-ProfileOnboarding.jsx.
 const PAST_WORKS_ACCEPT = '.docx,.pdf,.txt,.md,.rtf,.html';
 
-// רשימת ספקים לניתוח חיצוני — מועתקת מ-ProfileOnboarding.jsx (EXTERNAL_PROVIDER_OPTIONS).
-const EXTERNAL_PROVIDER_OPTIONS = [
-  { id: 'gemini', label: 'Gemini' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'claude', label: 'Claude' },
-  { id: 'groq', label: 'Groq' },
-  { id: 'perplexity', label: 'Perplexity' },
-  { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'mistral', label: 'Mistral' },
-  { id: 'together', label: 'Together.ai' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'xai', label: 'xAI (Grok)' },
-  { id: 'ollama', label: 'Ollama' },
-  { id: 'lmstudio', label: 'LM Studio' },
-  { id: 'custom', label: 'ספק אחר / מותאם' },
-];
+// רשימת ספקים לניתוח חיצוני — מקור-אמת משותף עם ProfileOnboarding (היו שני עותקים).
+import { EXTERNAL_PROVIDER_OPTIONS } from './onboardingProviders';
 
 // C2 — ספקים שהממשק שלהם לא תומך בהעלאת קבצים (ר' EXTERNAL_ANALYSIS_PROVIDER_HINTS
 // ב-aiService: "אם אין העלאת קבצים... הדבק קטעים מייצגים"). כשאחד מהם נבחר, ה-toggle
@@ -83,8 +70,11 @@ const PHASE_STEPS = [
 // refine = מאוחר, הדבקה+ניתוח עמוק→verify, עם אזור העלאה קומפקטי.
 const STAGE_CONFIG = {
   full:    { showUpload: true,  showExternal: true,  runVerify: true },   // התנהגות נוכחית — StyleProfilePanel
-  collect: { showUpload: true,  showExternal: true,  runVerify: false },  // מוקדם: העלאה ו/או הדבקת פלט חיצוני → baseline → summary קצר (בלי אימות)
-  refine:  { showUpload: true,  showExternal: true,  runVerify: true, compactUpload: true }, // מאוחר: הדבקה+ניתוח עמוק→verify
+  // חלוקה סופית (החלטת משתמש 14.8.26): כל הקליטה — העלאת עבודות וגם פלט JSON חיצוני —
+  // חיה בשלב העבודות (collect). שלב החידוד (refine) הוא רק שאלות אימות מכוונות: ניתוח
+  // אוטומטי → שאלה אחת בכל פעם → סיכום. בלי טפסי העלאה שמעיקים שם.
+  collect: { showUpload: true,  showExternal: true,  runVerify: false },  // קליטה: עבודות + פלט חיצוני → baseline (בלי אימות)
+  refine:  { showUpload: false, showExternal: false, runVerify: true },   // חידוד: שאלות בלבד (intake מדולג אוטומטית כשיש קורפוס)
 };
 
 // --- ערכות עיצוב לפי variant. מחלקה אחת לכל תפקיד — משומשת בכל ה-JSX, בלי תנאים מפוזרים. ---
@@ -177,7 +167,6 @@ export default function StyleSetupFlow({
   onComplete = null,
   onSkip = null,
   onIngestReport = null,
-  providerConfig = null,
   // autoStart — כשיש כבר מסמכים שנקלטו קודם (למשל בשלב 'collect' המוקדם) מדלגים על שלב
   // ה-intake כאן ומריצים ניתוח מיד, כדי לא להציג שוב את אותם טפסי העלאה/הדבקת JSON.
   autoStart = false,
@@ -212,6 +201,45 @@ export default function StyleSetupFlow({
   const [docStats, setDocStats] = useState(() => {
     try { return getSampleStoreStats(); } catch { return null; }
   });
+
+  // הידרציה: ה-store נטען אסינכרונית מ-IndexedDB, והקריאות הסינכרוניות למעלה רואות רק את
+  // ה-fallback הישן (localStorage) — ריק אצל מי שהקורפוס שלו נוצר אחרי המעבר ל-IDB. לכן:
+  // ensureSampleStoreReady → רענון הסטטיסטיקות, והאזנה לאירוע העדכון (אותה תבנית כמו
+  // PersonalTrainerPanel). אם autoStart מבוקש והמסמכים התגלו רק אחרי ההידרציה — מפעילים את
+  // הניתוח באיחור; בלי זה שלב 11 באונבורדינג מציג טפסי intake מול קורפוס מלא.
+  const autoStartFiredRef = useRef(shouldAutoStart);
+  const runAnalysisRef = useRef(null);
+  const phaseRef = useRef(null);
+  const [storeReady, setStoreReady] = useState(() => !autoStart || shouldAutoStart);
+  const refreshDocStats = useCallback(() => {
+    try { setDocStats(getSampleStoreStats()); } catch {}
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve()
+      .then(() => ensureSampleStoreReady())
+      .catch(() => null)
+      .then(() => {
+        if (!alive) return;
+        refreshDocStats();
+        setStoreReady(true);
+        if (autoStart && !autoStartFiredRef.current && phaseRef.current === 'intake') {
+          let count = 0;
+          try { count = getSampleStoreStats()?.docCount || 0; } catch {}
+          if (count > 0) {
+            autoStartFiredRef.current = true;
+            setPhase('processing');
+            runAnalysisRef.current?.();
+          }
+        }
+      });
+    if (typeof window !== 'undefined') window.addEventListener(STYLE_SAMPLES_UPDATED_EVENT, refreshDocStats);
+    return () => {
+      alive = false;
+      if (typeof window !== 'undefined') window.removeEventListener(STYLE_SAMPLES_UPDATED_EVENT, refreshDocStats);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Phase 1: ניתוח דרך AI חיצוני ---
   const [externalProviderId, setExternalProviderId] = useState('gemini');
@@ -268,6 +296,7 @@ export default function StyleSetupFlow({
 
   // --- Phase 4: סיכום ---
   const [summaryData, setSummaryData] = useState(null); // { confidence, patternsCount, docCount }
+  const [analysisWarning, setAnalysisWarning] = useState(''); // ר' runAnalysis — כשכל קריאות ה-LLM נכשלו
   // שדות פרופיל שהניתוח מילא אוטומטית מהעבודות — מוצג למשתמש כדי שכתיבה לפרופיל לא תהיה שקטה.
   const [autoFilledFields, setAutoFilledFields] = useState([]);
 
@@ -334,9 +363,17 @@ export default function StyleSetupFlow({
   // ============================ Phase 1 handlers ============================
 
   const handleFiles = useCallback(async (fileList) => {
-    const files = Array.from(fileList || []).filter(Boolean);
+    let files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
     setUploadError('');
+    // קובץ JSON שנגרר לכאן הוא כמעט תמיד פלט ניתוח מ-AI חיצוני, לא עבודה — עד עכשיו הוא
+    // נכשל בשקט ("לא חולץ טקסט") כי json לא נתמך במחלץ העבודות. מפנים לאזור הנכון.
+    const jsonFiles = files.filter((f) => /\.json$/i.test(String(f?.name || '')));
+    if (jsonFiles.length) {
+      files = files.filter((f) => !/\.json$/i.test(String(f?.name || '')));
+      setUploadError(`קובצי JSON (${jsonFiles.map((f) => f.name).join(', ')}) הם פלט ניתוח — העלה אותם בכפתור "העלה קובץ JSON" שבאזור "ניתוח דרך AI חיצוני", לא כעבודת עבר.`);
+      if (!files.length) return;
+    }
     setUploadReport(null);
     setFileLog([]);
     setUploading(true);
@@ -436,10 +473,11 @@ export default function StyleSetupFlow({
     }
   }, [promptText]);
 
-  const handleAddPastedOutput = useCallback(() => {
-    const raw = String(pasteRaw || '').trim();
-    if (!raw) return;
-    setPasteError('');
+  // ליבת הקליטה של פלט חיצוני — משותפת להדבקה ולהעלאת קובץ JSON. מחזירה {ok, error}
+  // כדי שהקוראים יחליטו איך להציג (הדבקה: הודעה יחידה; קבצים: צבירה פר-קובץ).
+  const addExternalRaw = useCallback((rawInput, sourceLabel = '') => {
+    const raw = String(rawInput || '').trim();
+    if (!raw) return { ok: false, error: 'הקובץ ריק.' };
     try {
       // lenientTypes:true — יישור למיזוג בשירות (applyExternalPatternAnalyses), כדי שפלט
       // תקין עם type לא-סטנדרטי לא יידחה כאן ולא יגיע כלל למסלול הלניאנטי.
@@ -462,21 +500,52 @@ export default function StyleSetupFlow({
         // ההודעה מציגה את המפתחות שכן נמצאו בפלט — בלי זה המשתמש מדביק שוב ושוב
         // את אותו JSON תקין בלי דרך לדעת מה בדיוק לא הותאם.
         const foundKeys = (parsed?.topKeys || []).slice(0, 8).join(', ');
-        setPasteError(isJsonLike(raw)
-          ? `ה-JSON נקרא, אבל אין בו אף שדה מוכר. נמצאו: ${foundKeys || '—'}. מצופה patterns / structuralSignature / avoidedPhrases / style / coverPageDefaults. ודא שהרצת את הפרומפט שמוצג כאן, והעתק את כל הפלט.`
-          : 'לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא, מהסוגר הפותח ועד הסוגר הסוגר).');
-        return;
+        return {
+          ok: false,
+          error: isJsonLike(raw)
+            ? `ה-JSON נקרא, אבל אין בו אף שדה מוכר. נמצאו: ${foundKeys || '—'}. מצופה patterns / structuralSignature / avoidedPhrases / style / coverPageDefaults. ודא שהרצת את הפרומפט שמוצג כאן, והעתק את כל הפלט.`
+            : 'לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא, מהסוגר הפותח ועד הסוגר הסוגר).',
+        };
       }
       setPastedOutputs((prev) => [
         ...prev,
-        { id: `ext_${Date.now()}_${prev.length}`, raw, patternsCount: count, structuralCount, avoidedCount, hasMeta },
+        { id: `ext_${Date.now()}_${prev.length}`, raw, patternsCount: count, structuralCount, avoidedCount, hasMeta, sourceLabel },
       ]);
-      setPasteRaw('');
+      return { ok: true };
     } catch (err) {
       console.error('StyleSetupFlow: parsePatternExtractionResult failed', err);
-      setPasteError('לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא).');
+      return { ok: false, error: 'לא נקלט כלום מהטקסט הזה — ודא שהדבקת את כל התשובה מה-AI (JSON מלא).' };
     }
-  }, [pasteRaw]);
+  }, []);
+
+  const handleAddPastedOutput = useCallback(() => {
+    const raw = String(pasteRaw || '').trim();
+    if (!raw) return;
+    setPasteError('');
+    const res = addExternalRaw(raw);
+    if (res.ok) setPasteRaw('');
+    else setPasteError(res.error);
+  }, [pasteRaw, addExternalRaw]);
+
+  // העלאת פלט ה-AI כקובץ (json/txt) — אותו שער בדיוק כמו ההדבקה. עד עכשיו לא הייתה
+  // דרך להעלות את הקובץ שהספק נותן להורדה, וגרירתו לאזור העבודות נכשלה בשקט
+  // (json לא נתמך שם בכוונה — הוא פלט ניתוח, לא עבודה לקורפוס).
+  const externalFileInputRef = useRef(null);
+  const handleExternalJsonFiles = useCallback(async (fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) return;
+    setPasteError('');
+    const errors = [];
+    for (const file of files) {
+      let raw = '';
+      // decodeTextSmart ולא file.text(): קובץ שנשמר מ-Windows/ספק יכול להגיע UTF-16 עם
+      // BOM — file.text() (UTF-8 בלבד) הופך אותו לג'יבריש וה-JSON "לא נקרא" למרות שהוא תקין.
+      try { raw = decodeTextSmart(new Uint8Array(await file.arrayBuffer())); } catch { errors.push(`${file.name}: הקובץ לא נקרא.`); continue; }
+      const res = addExternalRaw(raw, String(file.name || ''));
+      if (!res.ok) errors.push(`${file.name}: ${res.error}`);
+    }
+    if (errors.length) setPasteError(errors.join(' · '));
+  }, [addExternalRaw]);
 
   const handleRemovePastedOutput = useCallback((id) => {
     setPastedOutputs((prev) => prev.filter((o) => o.id !== id));
@@ -504,7 +573,14 @@ export default function StyleSetupFlow({
         }
       }
 
-      setAutoFilledFields(Array.isArray(result?.profileFactsFilled) ? result.profileFactsFilled : []);
+      // איחוד של שני מקורות המילוי — שדות ה"עומק" הוחלו על הפרופיל אבל לא הוצגו,
+      // כך שהסיכום דיווח פחות ממה שבאמת השתנה אצל המשתמש.
+      setAutoFilledFields([...new Set([
+        ...(Array.isArray(result?.profileFactsFilled) ? result.profileFactsFilled : []),
+        ...(Array.isArray(result?.deepProfileFilled) ? result.deepProfileFilled : []),
+      ])]);
+      // warning — הניתוח "הצליח" אבל בלי אף קריאת LLM (מפתח שבור/חסר): מוצג בסיכום במקום ✓ שקרי.
+      setAnalysisWarning(String(result?.warning || ''));
 
       if (result?.ok) {
         try { setStyleEngineEnabled(true); } catch (err) {
@@ -525,6 +601,10 @@ export default function StyleSetupFlow({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pastedOutputs, onProfileMetaPatch]);
+
+  // refs עדכניים עבור אפקט ההידרציה למעלה (מוגדר לפני שהפונקציות האלה קיימות).
+  runAnalysisRef.current = runAnalysis;
+  phaseRef.current = phase;
 
   // עובר משלב העיבוד הלאה: בונה תור אימות מהפרופיל הנוכחי; אם ריק — ישר לסיכום.
   const proceedFromProcessing = useCallback(() => {
@@ -549,8 +629,9 @@ export default function StyleSetupFlow({
     } else {
       goToSummary();
     }
+    // goToSummary היא הצהרת פונקציה (hoisted, יציבה לכל render) ולכן לא ברשימה.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [stageCfg.runVerify]);
 
   const handleStartAnalyze = useCallback(() => {
     setPhase('processing');
@@ -591,12 +672,25 @@ export default function StyleSetupFlow({
     const q = questions[questionIndex];
     if (!q) return;
     try {
+      // pinPattern/rejectPattern מחזירים {ok} — ok=false פירושו שהדפוס כבר לא קיים
+      // בפרופיל (למשל ניתוח חוזר שהחליף את הדפוסים בזמן שהתור כבר נבנה). ספירה
+      // עיוורת תציג "אושרו 5" כשבפועל לא נשמר כלום, לכן כישלון נספר כדילוג.
       if (action === 'yes') {
-        pinPattern(q.patternId, true);
-        setAnswerCounts((prev) => ({ ...prev, pinned: prev.pinned + 1 }));
+        const res = pinPattern(q.patternId, true);
+        if (res?.ok) {
+          setAnswerCounts((prev) => ({ ...prev, pinned: prev.pinned + 1 }));
+        } else {
+          console.warn('StyleSetupFlow: pinPattern did not apply (pattern missing?)', q.patternId);
+          setAnswerCounts((prev) => ({ ...prev, skipped: prev.skipped + 1 }));
+        }
       } else if (action === 'no') {
-        rejectPattern(q.patternId);
-        setAnswerCounts((prev) => ({ ...prev, rejected: prev.rejected + 1 }));
+        const res = rejectPattern(q.patternId);
+        if (res?.ok) {
+          setAnswerCounts((prev) => ({ ...prev, rejected: prev.rejected + 1 }));
+        } else {
+          console.warn('StyleSetupFlow: rejectPattern did not apply (pattern missing?)', q.patternId);
+          setAnswerCounts((prev) => ({ ...prev, skipped: prev.skipped + 1 }));
+        }
       } else {
         setAnswerCounts((prev) => ({ ...prev, skipped: prev.skipped + 1 }));
       }
@@ -624,6 +718,7 @@ export default function StyleSetupFlow({
     advanceQuestion();
   }, [questions, questionIndex, advanceQuestion]);
 
+  // רק קורא ל-goToSummary (הצהרת פונקציה — יציבה), ולכן deps ריקים נכונים כאן.
   const handleFinishVerification = useCallback(() => {
     goToSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -672,6 +767,16 @@ export default function StyleSetupFlow({
 
   // ============================ רינדור ============================
 
+  // עד סוף הידרציית ה-store לא מתחייבים ל-intake מול auto — מציגים שורת טעינה קצרה
+  // (רלוונטי רק כש-autoStart מבוקש והבדיקה הסינכרונית לא ראתה מסמכים).
+  if (!storeReady) {
+    return (
+      <div className={`flex flex-col gap-4 ${T.wrapper}`} dir="rtl">
+        <div className="text-sm opacity-70 animate-pulse">טוען את קורפוס הסגנון...</div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex flex-col gap-4 ${T.wrapper}`} dir="rtl">
       {/* מחוון שלבים — visibleSteps מסונן לפי stage (collect ללא 'verify'). */}
@@ -689,7 +794,20 @@ export default function StyleSetupFlow({
       </div>
 
       {/* ================= Phase 1: intake ================= */}
-      {phase === 'intake' && (
+      {phase === 'intake' && !stageCfg.showUpload && !stageCfg.showExternal ? (
+        /* refine בלי קורפוס: אין כאן טפסי קליטה בכלל (שאלות בלבד) — מצב ריק ידידותי. */
+        <div className={`${T.card} flex flex-col items-center gap-3 py-8 text-center`}>
+          <div className="text-[26px]">🖋️</div>
+          <div className={`${T.title} text-[15px]`}>עדיין אין עבודות שנלמדו</div>
+          <p className={`${T.subtitle} max-w-md`}>
+            שאלות החידוד נבנות מתוך העבודות שהעלית. חזור לשלב "העבודות שלך" (או להגדרות ← הסגנון שלי),
+            העלה עבודות או פלט JSON — ונחזור לכאן. אפשר גם לדלג ולעשות זאת בכל שלב מאוחר יותר.
+          </p>
+          {onSkip && (
+            <button type="button" onClick={onSkip} className={T.buttonPrimary}>המשך בינתיים ←</button>
+          )}
+        </div>
+      ) : phase === 'intake' && (
         <div className="flex flex-col gap-4">
           {/* stage: כשאין כרטיס חיצוני (collect) — כרטיס ההעלאה במרכז/רוחב מלא, עמודה אחת. */}
           <div className={stageCfg.showExternal ? 'grid grid-cols-1 md:grid-cols-2 gap-4' : 'w-full max-w-xl mx-auto'}>
@@ -907,9 +1025,23 @@ export default function StyleSetupFlow({
                 className={`${T.textarea} mb-1`}
               />
               <div className="flex items-center justify-between gap-2 mb-2">
-                <button type="button" onClick={handleAddPastedOutput} className={T.buttonPrimary} disabled={!pasteRaw.trim()}>
-                  ➕ הוסף פלט
-                </button>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={handleAddPastedOutput} className={T.buttonPrimary} disabled={!pasteRaw.trim()}>
+                    ➕ הוסף פלט
+                  </button>
+                  {/* חלק מהספקים נותנים את התשובה כקובץ להורדה — קולטים אותו ישירות, באותו שער כמו הדבקה. */}
+                  <input
+                    ref={externalFileInputRef}
+                    type="file"
+                    accept=".json,.txt"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files; e.target.value = ''; handleExternalJsonFiles(f); }}
+                  />
+                  <button type="button" onClick={() => externalFileInputRef.current?.click()} className={T.buttonSecondary}>
+                    📄 העלה קובץ JSON
+                  </button>
+                </div>
                 {pasteError && <span className={T.errorBox}>{pasteError}</span>}
               </div>
 
@@ -1091,6 +1223,8 @@ export default function StyleSetupFlow({
             </>
           )}
 
+          {analysisWarning && <div className={T.errorBox}>⚠️ {analysisWarning}</div>}
+
           {autoFilledFields.length > 0 && (
             <div className={T.successBox}>
               ✓ מילאתי מהעבודות גם: {autoFilledFields.map((f) => AUTO_FILLED_FIELD_LABELS[f] || f).join(', ')}. אפשר לתקן בהגדרות ← סגנון אישי.
@@ -1138,6 +1272,7 @@ export default function StyleSetupFlow({
               )}
             </>
           )}
+          {analysisWarning && <div className={`${T.errorBox} max-w-md`}>⚠️ {analysisWarning}</div>}
           {autoFilledFields.length > 0 && (
             <div className={T.successBox}>
               ✓ מילאתי מהעבודות גם: {autoFilledFields.map((f) => AUTO_FILLED_FIELD_LABELS[f] || f).join(', ')}

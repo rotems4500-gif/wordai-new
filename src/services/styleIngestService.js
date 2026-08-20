@@ -38,6 +38,7 @@ import {
   seedStyleEngineFromLegacyProfile,
   deriveManualDefaultsFromMetrics,
   GENRES,
+  hasExternalProfileFields,
 } from './styleProfileService';
 import { loadStyleReference, primeStyleReference } from './styleReferenceService';
 import { addStyleTargetDoc, removeStyleTargetDoc } from './styleTargetsStore';
@@ -50,6 +51,7 @@ import {
   clearSampleStore,
   addGoldChunk,
   setDocumentGenre,
+  setDocumentGenres,
   ensureSampleStoreReady,
   flushSampleStore,
   getSampleStoreWriteError,
@@ -279,12 +281,12 @@ export async function classifyPendingGenres() {
     llmFailed = true;
     map = Object.fromEntries(docsForClassify.map((d) => [String(d.id), 'אחר']));
   }
-  let classified = 0;
-  Object.entries(map).forEach(([id, genre]) => {
-    const g = GENRES.includes(genre) ? genre : 'אחר';
-    const res = setDocumentGenre(id, g);
-    if (res?.updated) classified += 1;
-  });
+  // אצווה אחת: writeBlob יחיד + אירוע עדכון יחיד, במקום סריאליזציה-של-כל-הקורפוס
+  // ואינבלידציית פרופילים פר-מסמך (סערת אירועים על 30 מסמכים).
+  const normalizedGenres = Object.fromEntries(
+    Object.entries(map).map(([id, genre]) => [id, GENRES.includes(genre) ? genre : 'אחר']),
+  );
+  const classified = setDocumentGenres(normalizedGenres)?.updated || 0;
   {
     const { profile, engine } = loadEngine();
     const prevMeta = isPlainObject(engine.extractionMeta) ? engine.extractionMeta : {};
@@ -972,7 +974,8 @@ export async function runQualitativeAnalysis({ force = false } = {}) {
     extraMeta: { llmBatchesFailed: failed },
     populationNgramFreq: popNgramFreq,
   });
-  return { skipped: false, engine: saved };
+  // llmAllFailed — כל הבאטצ'ים נכשלו (אין ספק / מפתח שבור): הקוראים מציגים אזהרה במקום ✓.
+  return { skipped: false, engine: saved, llmBatchesFailed: failed, llmAllFailed: failed > 0 && results.length === 0 };
 }
 
 // ---------- אימות avoidedPhrases מול הקורפוס האמיתי ----------
@@ -1331,7 +1334,10 @@ function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {},
     ...(Array.isArray(consensus.negativeSpace) ? consensus.negativeSpace : []),
   ]);
   const { structuralKeysLearned, avoidedPhrasesAdded, avoidedPhrasesRejected } = foldDeepSignals(engine, deepResults);
-  engine.qualitativePatternsStale = false;
+  // "מוכן" רק אם באמת התקבלו תוצאות: כשכל הבאטצ'ים נכשלו (batchCount=0 עם כשלונות ב-extraMeta)
+  // הדפוסים נשארים stale, כדי שהריצה הבאה תנסה שוב ושה-UI לא יציג ✓ על פרופיל בן 0 דפוסים.
+  const failedBatchCount = Number((isPlainObject(extraMeta) ? extraMeta.llmBatchesFailed : 0)) || 0;
+  engine.qualitativePatternsStale = batchCount === 0 && failedBatchCount > 0;
   engine.lastAnalysisAt = Date.now();
   engine.extractionMeta = {
     batches: batchCount,
@@ -1340,9 +1346,9 @@ function finishQualitativeMerge(profile, engine, batchResults, { extraMeta = {},
     // כמה מ-5 מפתחות החתימה המבנית מלאים בפועל, וכמה ביטויי-הימנעות חדשים נוספו.
     structuralKeysLearned,
     avoidedPhrasesAdded,
-    // ⚠️ כמה ביטויים נדחו באימות מול הקורפוס. extractionMeta ב-normalizeStyleEngine הוא
-    // allow-list קשיח — המפתח הזה **לא** ברשימה ולכן נמחק בשקט בכל שמירה. הוא נכון
-    // בזיכרון עד ה-save; להתמדה צריך להוסיף avoidedPhrasesRejected ל-allow-list שם.
+    // כמה ביטויים נדחו באימות מול הקורפוס. extractionMeta ב-normalizeStyleEngine הוא
+    // allow-list קשיח, והמפתח הזה כבר נמצא בה (styleProfileService) — כלומר הוא נשמר
+    // ושורד את ה-save, ולא נמחק כפי שהיה בעבר.
     avoidedPhrasesRejected,
     at: Date.now(),
     llmBatchesFailed: 0,
@@ -1400,7 +1406,9 @@ export async function applyExternalPatternAnalyses(rawTexts = [], { includeLocal
   for (const raw of list) {
     const parsedJson = decodeLooseJson(raw);
     if (isPlainObject(parsedJson) &&
-      (isPlainObject(parsedJson.style) || isPlainObject(parsedJson.coverPageDefaults) || typeof parsedJson.profileSummary === 'string')) {
+      (isPlainObject(parsedJson.style) || isPlainObject(parsedJson.coverPageDefaults) || typeof parsedJson.profileSummary === 'string'
+        // שדות פרופיל שהמודל הוסיף מעבר למה שהפרומפט ביקש — נקלטים גם הם (מילוי-רק-אם-ריק).
+        || hasExternalProfileFields(parsedJson))) {
       metaJsons.push(parsedJson);
     }
   }
@@ -1762,6 +1770,10 @@ export async function runUnifiedStyleAnalysis({ externalRawTexts = [], onProgres
       deepProfileFilled,
       crossValidated: Boolean(res.engine?.extractionMeta?.crossValidated),
       externalBatches: 0,
+      // warning — הניתוח "הצליח" טכנית אבל בלי אף קריאת LLM מוצלחת; ה-UI מציג זאת במקום ✓.
+      warning: res.llmAllFailed
+        ? 'הניתוח האיכותני לא הושלם — קריאות ה-AI נכשלו. בדוק מפתח API בהגדרות; הדפוסים יושלמו אוטומטית כשהחיבור יעבוד.'
+        : '',
       // F5 — מיפוי קוד ה-skip הגולמי להודעה עברית ידידותית.
       error: res.skipped
         ? ((res.reason === 'no-chunks' || res.reason === 'no-excerpts')

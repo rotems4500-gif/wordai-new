@@ -15,7 +15,7 @@ import {
   FORMAL_CONNECTORS, CLICHE_PHRASES, AI_REGISTER_PROMPT_EXAMPLES, markerExamplesQuoted,
 } from './styleMarkers.shared';
 
-export const DEFAULT_HUMANIZER_LOOP = { target: 35, maxPasses: 4 };
+export const DEFAULT_HUMANIZER_LOOP = { target: 35, maxPasses: 3 };
 
 // תוספת system חזקה לכתיבה "בלתי ניתנת לזיהוי". מנוסחת כדי לסתור ישירות את
 // הסיגנלים שהגלאי מודד: אחידות אורך משפט, מחברים פורמליים, קלישאות, מבנה מלוטש-מדי,
