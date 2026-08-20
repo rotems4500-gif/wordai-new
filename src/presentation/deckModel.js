@@ -56,7 +56,9 @@ export const createSlide = (overrides = {}) => ({
   ],
   stats: [],              // לפריסת stat: [{ value, label, caption }]
   steps: [],              // לפריסת steps: [{ title, body }]
-  image: null,            // { source:'stock'|'ai'|'upload', url, dataUrl, query, alt, attribution }
+  image: null,            // { source:'stock'|'ai'|'upload'|'chart'|'infographic', url, dataUrl, query, alt, attribution, model, provider, prompt, pending }
+  bgImage: null,          // רקע מחולל: { dataUrl, url, opacity, scrim, prompt, model }
+  visual: '',             // '' | 'chart' | 'infographic' — המלצת המודל לסוג הוויזואל
   notes: '',              // הערות מרצה
   accent: '',             // override צבע אקסנט (אופציונלי)
   bgVariant: '',          // '' / 'auto' = רוטציה אוטומטית | id מתוך BG_VARIANTS
@@ -75,19 +77,49 @@ export const createDeck = (overrides = {}) => ({
 });
 
 // ── נורמליזציה של תמונה ──────────────────────────────────────────
+export const IMAGE_SOURCES = ['stock', 'ai', 'upload', 'chart', 'infographic'];
+
 const normalizeImage = (image) => {
   if (!image || typeof image !== 'object') return null;
   const url = String(image.url || '').trim();
   const dataUrl = String(image.dataUrl || '').trim();
-  if (!url && !dataUrl) return null;
-  const source = ['stock', 'ai', 'upload'].includes(image.source) ? image.source : 'stock';
+  const query = String(image.query || '').trim();
+  const alt = String(image.alt || '').trim();
+  // ⚠️ בעבר תמונה בלי url/dataUrl נזרקה — וכך ה-query שהמודל מייצר לכל שקופית
+  // ("image": { query, alt }) נמחק בשקט, והצינור "צור את התמונות החסרות" מת.
+  // עכשיו נשמרת כ-placeholder: ה-renderer כבר יודע להציג אותה, והיוצר יודע למלא.
+  if (!url && !dataUrl && !query && !alt) return null;
+  const source = IMAGE_SOURCES.includes(image.source) ? image.source : 'stock';
   return {
     source,
     url,
     dataUrl,
-    query: String(image.query || '').trim(),
-    alt: String(image.alt || '').trim(),
+    query,
+    alt,
     attribution: String(image.attribution || '').trim(),
+    // provenance ליצירה חוזרת: איזה מודל/ספק יצר, ומה היה ה-prompt המלא.
+    model: String(image.model || '').trim(),
+    provider: String(image.provider || '').trim(),
+    prompt: String(image.prompt || '').trim(),
+    pending: !url && !dataUrl,
+  };
+};
+
+// רקע מחולל לשקופית — נפרד מ-image כדי שלא יתנגש בתוכן של הפריסה.
+const normalizeBgImage = (bgImage) => {
+  if (!bgImage || typeof bgImage !== 'object') return null;
+  const url = String(bgImage.url || '').trim();
+  const dataUrl = String(bgImage.dataUrl || '').trim();
+  if (!url && !dataUrl) return null;
+  const opacityRaw = Number(bgImage.opacity);
+  return {
+    url,
+    dataUrl,
+    opacity: Number.isFinite(opacityRaw) ? Math.min(1, Math.max(0.05, opacityRaw)) : 0.55,
+    // scrim = שכבת צבע-הרקע מעל התמונה, כדי שהטקסט יישאר קריא.
+    scrim: bgImage.scrim === false ? false : true,
+    prompt: String(bgImage.prompt || '').trim(),
+    model: String(bgImage.model || '').trim(),
   };
 };
 
@@ -140,6 +172,10 @@ export const normalizeSlide = (raw = {}) => {
     stats,
     steps,
     image: normalizeImage(raw.image),
+    bgImage: normalizeBgImage(raw.bgImage),
+    // המלצת ויזואל מהמודל: 'chart' (סדרת מספרים אמיתית) / 'infographic' (מבנה/תהליך).
+    // מניע את כפתור "אינפוגרפיקה" לבחור כלי בלי לנחש, ומסומן ב-UI כהצעה.
+    visual: ['chart', 'infographic'].includes(raw.visual) ? raw.visual : '',
     notes: String(raw.notes || '').trim(),
     accent: String(raw.accent || '').trim(),
     bgVariant: BG_VARIANT_IDS.includes(raw.bgVariant) ? raw.bgVariant : '',
@@ -246,6 +282,9 @@ export const normalizeDeck = (raw = {}) => {
     id: String(raw.id || createDeck().id),
     title: String(raw.title || 'מצגת חדשה').trim() || 'מצגת חדשה',
     themeId,
+    // ערכה שנוצרה ב-AI (resolveTheme כבר מילא בה כל שדה) — נשמרת כמו שהיא
+    // וגוברת על themeId ב-renderer ובייצוא. ערכה בלי colors נזרקת.
+    customTheme: (raw.customTheme && raw.customTheme.colors) ? raw.customTheme : null,
     meta: {
       audience: String(raw.meta?.audience || '').trim(),
       goal: String(raw.meta?.goal || '').trim(),

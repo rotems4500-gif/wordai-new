@@ -119,7 +119,9 @@ const resolveImages = async (deck) => {
  * @param {{profile?: 'auto'|'editable'|'faithful', pixelRatio?: number}} options
  */
 export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 } = {}) => {
-  const theme = getThemeById(deck.themeId);
+  // ערכה שנוצרה ב-AI גוברת על themeId — אותה שכבה שמשמשת את המסך (SlideStage),
+  // כך שהייצוא הנייטיב מקבל את אותם צבעים/פונטים בדיוק.
+  const theme = (deck?.customTheme && deck.customTheme.colors) ? deck.customTheme : getThemeById(deck.themeId);
   const c = theme.colors;
   const bg = hex(c.bg);
   const text = hex(c.text);
@@ -160,7 +162,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     });
   // JPEG q0.92 — בלתי-מובחן מ-PNG בתצוגה אך קטן פי ~6 (דק faithful ירד מ~27MB ל~4MB)
   const { map: pngMap, failures: imgFailures } = imageModeSlides.length
-    ? await renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss })
+    ? await renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null })
     : { map: new Map(), failures: [] };
   // שקף image שצריבתו נכשלה → יוצא native (fallback). מתריעים למשתמש.
   imgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא במצב פשוט (צריבת עיצוב נכשלה)`));
@@ -175,7 +177,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     .filter(({ slide }) => modeFor(slide) === 'native')
     .concat(failedImageSlides);
   const { map: bgMap, failures: bgFailures } = nativeModeSlides.length
-    ? await renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss })
+    ? await renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null })
     : { map: new Map(), failures: [] };
   // רקע native שצריבתו נכשלה → יוצא בצבע אחיד (fallback). מתריעים למשתמש.
   bgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא עם רקע אחיד (צריבת רקע נכשלה)`));

@@ -53,7 +53,7 @@ const restoreRaf = () => {
  * @param {number|null} index  למוטיב מספר השקף
  * @param {{pixelRatio?:number, bgOnly?:boolean, deckTitle?:string}} opts  bgOnly=רק שכבת הרקע (לצריבת רקע native); deckTitle=לצריבת הפוטר
  */
-export const renderSlideToPng = async (slide, themeId, index = null, { pixelRatio = 2, bgOnly = false, deckTitle = '', format = 'png', quality = 0.85, fontCss = null } = {}) => {
+export const renderSlideToPng = async (slide, themeId, index = null, { pixelRatio = 2, bgOnly = false, deckTitle = '', format = 'png', quality = 0.85, fontCss = null, customTheme = null } = {}) => {
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
   host.style.cssText = `position:fixed;left:-100000px;top:0;width:${STAGE_W}px;height:${STAGE_H}px;pointer-events:none;z-index:-1;`;
@@ -62,7 +62,7 @@ export const renderSlideToPng = async (slide, themeId, index = null, { pixelRati
   const root = createRoot(host);
   patchRafForHiddenTab();
   try {
-    root.render(React.createElement(SlideStage, { slide, themeId, index, bgOnly, deckTitle }));
+    root.render(React.createElement(SlideStage, { slide, themeId, index, bgOnly, deckTitle, customTheme }));
     await nextFrame();
     await waitForFonts();
     await waitForImages(host);

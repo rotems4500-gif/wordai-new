@@ -203,5 +203,40 @@ eq('disabled → no alerts', evaluateUsageAlerts({ force: true }), null);
 setUsageLimits({ enabled: true, monthlyBudgetIls: 0 });
 resetUsageTelemetry();
 
+// -- H. deck model media fields + prompt --
+console.log('\n[H] deck model media fields');
+const { normalizeSlide, normalizeDeck } = await import('../../src/presentation/deckModel.js');
+const { buildSlideImagePrompt } = await import('../../src/services/deckMediaService.js');
+
+const pendingSlide = normalizeSlide({ layout: 'image-right', title: 'slide', image: { query: 'solar panels', alt: 'panels' } });
+check('query-only image survives normalize', Boolean(pendingSlide.image), JSON.stringify(pendingSlide.image));
+eq('query-only image marked pending', pendingSlide.image?.pending, true);
+eq('image query preserved', pendingSlide.image?.query, 'solar panels');
+eq('empty image object -> null', normalizeSlide({ image: {} }).image, null);
+
+const provSlide = normalizeSlide({ image: { dataUrl: 'data:image/png;base64,AA', model: 'gemini-2.5-flash-image', provider: 'gemini', prompt: 'p' } });
+eq('image model kept', provSlide.image?.model, 'gemini-2.5-flash-image');
+eq('image not pending when dataUrl exists', provSlide.image?.pending, false);
+
+const bgSlide = normalizeSlide({ bgImage: { dataUrl: 'data:image/jpeg;base64,AA', opacity: 3 }, visual: 'chart' });
+eq('bgImage kept', Boolean(bgSlide.bgImage), true);
+eq('bgImage opacity clamped', bgSlide.bgImage?.opacity, 1);
+eq('visual hint kept', bgSlide.visual, 'chart');
+eq('bad visual hint dropped', normalizeSlide({ visual: 'nonsense' }).visual, '');
+eq('bgImage without src -> null', normalizeSlide({ bgImage: { opacity: 0.5 } }).bgImage, null);
+
+eq('customTheme kept', normalizeDeck({ customTheme: { colors: { bg: '#000' } } }).customTheme?.colors?.bg, '#000');
+eq('invalid customTheme dropped', normalizeDeck({ customTheme: { label: 'x' } }).customTheme, null);
+
+const dmPrompt = buildSlideImagePrompt(
+  { title: 'solar', image: { query: 'solar farm' } },
+  { colors: { bg: '#0B1220', accent: '#38BDF8' }, family: 'tech' },
+  { style: 'photo' },
+);
+check('prompt has aspect', /16:9/.test(dmPrompt), dmPrompt.slice(0, 80));
+check('prompt forbids text', /No words, letters/i.test(dmPrompt), dmPrompt.slice(0, 120));
+check('prompt carries palette', dmPrompt.includes('#38BDF8'), dmPrompt.slice(0, 200));
+check('prompt carries subject', dmPrompt.includes('solar farm'), dmPrompt.slice(-120));
+
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
 process.exit(failed ? 1 : 0);

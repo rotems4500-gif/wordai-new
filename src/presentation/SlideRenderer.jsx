@@ -42,8 +42,10 @@ function Motif({ theme, index }) {
 // במה בגודל קבוע — כל המידות ב-px ביחס ל-1280×720
 // bgOnly=true — מרנדר רק את שכבת הרקע/העיצוב של השקף (בלי טקסט/תוכן/תמונות),
 // לצריבת רקע ל-native export. early-return בראש כדי שלא ידרוף מלוגיקת הפריסות.
-export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '' }) {
-  const theme = getThemeById(themeId);
+export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '', customTheme = null }) {
+  // customTheme — ערכה שנוצרה ב-AI (resolveTheme כבר מילא בה כל שדה חסר).
+  // גוברת על themeId, כדי שהעיצוב החדש יופיע בעורך, בתצוגה ובייצוא באותה שכבה.
+  const theme = (customTheme && customTheme.colors) ? customTheme : getThemeById(themeId);
   const c = theme.colors;
   const fD = theme.fonts?.display || theme.fonts?.body || "'Heebo', sans-serif";
   const fB = theme.fonts?.body || "'Heebo', sans-serif";
@@ -56,13 +58,32 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
   const layout = slide?.layout || 'title-bullets';
   const img = slide?.image;
   const imgSrc = img ? (img.dataUrl || img.url) : '';
+  // רקע מחולל (AI): שכבה מתחת לתוכן ומעל בסיס ה-theme. מרונדר גם ב-bgOnly,
+  // ולכן נצרב אוטומטית לרקע ה-PPTX דרך מסלול ה-bg-raster הקיים.
+  const bgImg = slide?.bgImage;
+  const bgImgSrc = bgImg ? (bgImg.dataUrl || bgImg.url) : '';
+  // ⚠️ הרקע המחולל נצרב לתוך baseStage ולא כרכיב נפרד: חלק מהפריסות
+  // (image-full/cover/quote) לא עוברות דרך Shell, ושכבה נפרדת פשוט לא הופיעה בהן.
+  // שכבות CSS-background חלות על כל פריסה, וגם על bgOnly ⇒ שורדות לייצוא PPTX.
+  // אין opacity פר-שכבה ב-CSS, ולכן העמעום נעשה דרך אלפא של ה-scrim מעל התמונה.
+  const bgAlphaHex = (() => {
+    const opacity = Number.isFinite(bgImg?.opacity) ? bgImg.opacity : 0.55;
+    const scrimAlpha = Math.round(Math.min(1, Math.max(0, 1 - opacity)) * 255);
+    return scrimAlpha.toString(16).padStart(2, '0').toUpperCase();
+  })();
+  const generatedBgLayers = bgImgSrc
+    ? [
+        ...(bgImg?.scrim === false ? [] : [`linear-gradient(180deg, ${c.bg}${bgAlphaHex} 0%, ${c.bg}${bgAlphaHex} 100%)`]),
+        `url("${bgImgSrc}") center center / cover no-repeat`,
+      ]
+    : [];
 
   const baseStage = {
     position: 'relative',
     width: STAGE_W,
     height: STAGE_H,
     overflow: 'hidden',
-    background: getSlideBaseBackground(theme, accent, index),
+    background: [...generatedBgLayers, getSlideBaseBackground(theme, accent, index)].join(', '),
     color: c.text,
     fontFamily: fB,
     direction: 'rtl',
@@ -173,6 +194,7 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
   const Shell = ({ children, padded = true, withBg = true, withMotif = true }) => (
     <div style={baseStage}>
       {withBg && <SlideBackground theme={theme} variant={bgVariant} accent={accent} />}
+
       <TextureLayer theme={theme} accent={accent} />
       {withMotif && <Motif theme={theme} index={index} />}
       <div style={{ position: 'relative', zIndex: 1, height: '100%', boxSizing: 'border-box', ...(padded ? { padding: '92px 96px' } : {}) }}>
@@ -339,10 +361,11 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
       // תמונה מלאה: רק הבסיס (התמונה היא התוכן, מוזרקת ב-native)
       return <div style={baseStage} />;
     }
-    // ברירת מחדל: בסיס + variant + motif
+    // ברירת מחדל: בסיס + variant + רקע מחולל + motif
     return (
       <div style={baseStage}>
         <SlideBackground theme={theme} variant={bgVariant} accent={accent} />
+
         <TextureLayer theme={theme} accent={accent} />
         <Motif theme={theme} index={index} />
       </div>
@@ -961,7 +984,7 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
 }
 
 // עוטף רספונסיבי — מקטין את הבמה כדי שתתאים לרוחב ההורה (שומר 16:9)
-export function SlideFrame({ slide, themeId, index = null, rounded = true, shadow = true, className = '', style = {}, deckTitle = '' }) {
+export function SlideFrame({ slide, themeId, index = null, rounded = true, shadow = true, className = '', style = {}, deckTitle = '', customTheme = null }) {
   const ref = useRef(null);
   const [scale, setScale] = useState(0.5);
 
@@ -990,7 +1013,7 @@ export function SlideFrame({ slide, themeId, index = null, rounded = true, shado
       }}
     >
       <div style={{ position: 'absolute', top: 0, right: 0, transformOrigin: 'top right', transform: `scale(${scale})` }}>
-        <SlideStage slide={slide} themeId={themeId} index={index} deckTitle={deckTitle} />
+        <SlideStage slide={slide} themeId={themeId} index={index} deckTitle={deckTitle} customTheme={customTheme} />
       </div>
     </div>
   );

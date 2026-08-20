@@ -14,6 +14,10 @@ import {
   createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide,
 } from './presentation/deckModel';
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
+import {
+  generateSlideImage, generateSlideInfographic, generateSlideBackground,
+  generateMissingDeckImages, generateDeckTheme,
+} from './services/deckMediaService';
 import { buildPptxBase64 } from './services/pptxExport';
 import { getProviderConfig, saveProviderConfig, getPresentationPreferences, savePresentationPreferences } from './services/aiService';
 
@@ -562,6 +566,19 @@ export default function PresentationStudio({
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const themePanelRef = useRef(null);
 
+  // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
+  const [imageStyle, setImageStyle] = useState('photo');
+  const [mediaBusy, setMediaBusy] = useState('');      // מזהה הפעולה הרצה כרגע
+  const [mediaError, setMediaError] = useState('');
+  const [mediaProgress, setMediaProgress] = useState('');
+  const [mediaResult, setMediaResult] = useState('');
+  const [themePrompt, setThemePrompt] = useState('');
+  const [themeBusy, setThemeBusy] = useState(false);
+  const [themeError, setThemeError] = useState('');
+
+  // ערכה פעילה: ערכת AI מותאמת גוברת על themeId המובנה.
+  const activeTheme = deck?.customTheme?.colors ? deck.customTheme : getThemeById(deck?.themeId);
+
   const slides = deck?.slides || [];
   const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
   const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
@@ -633,6 +650,79 @@ export default function PresentationStudio({
   }
 
   const patchSlide = (patch) => onDeckChange(updateSlide(deck, selected.id, patch));
+
+  // ── פעולות מדיה ב-AI ─────────────────────────────────────────────
+  const pendingImageCount = slides.filter((s) => s?.image?.pending && (s.image.query || s.image.alt)).length;
+
+  // עוטף כל פעולת מדיה: נעילה, ניקוי שגיאה, החלת התוצאה, שחרור.
+  const runMedia = async (actionId, work) => {
+    if (mediaBusy) return;
+    setMediaBusy(actionId);
+    setMediaError('');
+    setMediaResult('');
+    setMediaProgress('');
+    try {
+      await work();
+    } catch (e) {
+      setMediaError(e?.message || 'הפעולה נכשלה');
+    } finally {
+      setMediaBusy('');
+      setMediaProgress('');
+    }
+  };
+
+  // פריסות כמו stat/steps/quote לא מציגות תמונה כלל — ויזואל שנוצר עבורן היה
+  // נשמר במודל ונעלם מהמסך. מחליפים פריסה כדי שהתוצאה תיראה; שדות התוכן
+  // (stats/steps) נשארים במודל, ולכן חזרה לפריסה הקודמת משחזרת אותם.
+  const withVisibleImageLayout = (image, preferred) => {
+    if (layoutHasImage(selected?.layout)) return { image };
+    setMediaResult(`הפריסה "${getLayout(selected?.layout)?.label || selected?.layout}" לא מציגה תמונה — הוחלפה ל"${getLayout(preferred)?.label || preferred}".`);
+    return { image, layout: preferred };
+  };
+
+  const handleGenerateImage = () => runMedia('image', async () => {
+    const image = await generateSlideImage(selected, activeTheme, { style: imageStyle, deck });
+    patchSlide(withVisibleImageLayout(image, 'image-right'));
+  });
+
+  const handleGenerateInfographic = () => runMedia('infographic', async () => {
+    const image = await generateSlideInfographic(selected, activeTheme, {});
+    patchSlide(withVisibleImageLayout(image, 'image-full'));
+  });
+
+  const handleGenerateBackground = () => runMedia('bg', async () => {
+    const bgImage = await generateSlideBackground(selected, activeTheme, {});
+    patchSlide({ bgImage });
+  });
+
+  const handleFillMissingImages = () => runMedia('batch', async () => {
+    const res = await generateMissingDeckImages(deck, activeTheme, {
+      style: imageStyle,
+      onProgress: ({ index, total }) => setMediaProgress(`יוצר תמונה ${index} מתוך ${total}…`),
+    });
+    // מקפלים את כל התוצאות ל-deck אחד ומעדכנים פעם אחת בלבד.
+    const nextDeck = (res.slides || []).reduce((acc, r) => updateSlide(acc, r.slideId, { image: r.image }), deck);
+    if (res.slides?.length) onDeckChange(nextDeck);
+    const failCount = res.failures?.length || 0;
+    setMediaResult(`נוצרו ${res.slides?.length || 0} תמונות${failCount ? ` · ${failCount} נכשלו` : ''}`);
+  });
+
+  const handleGenerateTheme = async () => {
+    if (themeBusy || !themePrompt.trim()) return;
+    setThemeBusy(true);
+    setThemeError('');
+    try {
+      const t = await generateDeckTheme(themePrompt.trim());
+      onDeckChange({ ...deck, customTheme: t });
+      setThemePrompt('');
+      setThemePanelOpen(false);
+    } catch (e) {
+      setThemeError(e?.message || 'יצירת הערכה נכשלה');
+    } finally {
+      setThemeBusy(false);
+    }
+  };
+
   const handleAddSlide = () => {
     const next = addSlideAfter(deck, selected.id, createSlide({ layout: 'title-bullets', title: 'שקופית חדשה' }));
     onDeckChange(next);
@@ -692,17 +782,60 @@ export default function PresentationStudio({
             type="button"
             onClick={() => setThemePanelOpen((v) => !v)}
             className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400"
-          >🎨 {getThemeById(deck.themeId).label} ▾</button>
+          >🎨 {activeTheme.label} ▾</button>
           {themePanelOpen && (
             <div className="absolute right-0 z-50 mt-1 max-h-[70vh] w-[380px] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl">
+              {/* יצירת ערכה ב-AI מתיאור חופשי */}
+              <div className="mb-3 rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-3">
+                <div className="text-xs font-bold text-cyan-300">ערכה משלך ב-AI</div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    value={themePrompt}
+                    onChange={(e) => setThemePrompt(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateTheme(); }}
+                    placeholder={'תאר סגנון: "מינימלי כחול עם טיפוגרפיה חדה"'}
+                    disabled={themeBusy}
+                    className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-400 disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGenerateTheme}
+                    disabled={themeBusy || !themePrompt.trim()}
+                    className="rounded-xl bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:opacity-40"
+                  >{themeBusy ? 'יוצר ערכה…' : '✨ צור ערכה'}</button>
+                </div>
+                {themeError && <div className="mt-1.5 text-[11px] leading-5 text-rose-400">{themeError}</div>}
+                {deck.customTheme && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-cyan-500/15 px-2.5 py-1 text-[11px] font-semibold text-cyan-300">
+                      ✨ {deck.customTheme.label || 'ערכה שנוצרה ב-AI'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onDeckChange({ ...deck, customTheme: null })}
+                      className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-cyan-400 hover:text-cyan-300"
+                    >↺ חזור לערכה רגילה</button>
+                  </div>
+                )}
+              </div>
               <ThemeFamilyPicker
                 value={deck.themeId}
-                onSelect={(id) => { onDeckChange({ ...deck, themeId: id }); setThemePanelOpen(false); }}
+                onSelect={(id) => { onDeckChange({ ...deck, themeId: id, customTheme: null }); setThemePanelOpen(false); }}
                 small
               />
             </div>
           )}
         </div>
+        {pendingImageCount > 0 && (
+          <button
+            type="button"
+            onClick={handleFillMissingImages}
+            disabled={Boolean(mediaBusy)}
+            title={`${pendingImageCount} שקופיות ממתינות לתמונה`}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400 disabled:opacity-50"
+          >{mediaBusy === 'batch' ? (mediaProgress || 'יוצר תמונות…') : `🖼️ מלא תמונות חסרות (${pendingImageCount})`}</button>
+        )}
+        {mediaResult && <span className="text-[11px] font-semibold text-emerald-400">{mediaResult}</span>}
         <div className="flex-1" />
         <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
@@ -738,7 +871,7 @@ export default function PresentationStudio({
           {slides.map((s, i) => (
             <button key={s.id} ref={s.id === selected.id ? selectedThumbRef : null} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
               <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-              <SlideFrame slide={s} themeId={deck.themeId} index={i} shadow={false} deckTitle={deck.title} />
+              <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} />
             </button>
           ))}
           <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
@@ -747,13 +880,55 @@ export default function PresentationStudio({
         {/* תצוגה מרכזית */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
           <div className="w-full max-w-3xl">
-            {selected && <SlideFrame slide={selected} themeId={deck.themeId} index={selectedIndex} deckTitle={deck.title} />}
+            {selected && <SlideFrame slide={selected} themeId={deck.themeId} customTheme={deck.customTheme} index={selectedIndex} deckTitle={deck.title} />}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
             <button onClick={() => handleMove('down')} disabled={selectedIndex >= slides.length - 1} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">אחר →</button>
             <button onClick={handleRemove} disabled={slides.length <= 1} className="rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs text-rose-400 disabled:opacity-30">מחק שקופית</button>
           </div>
+
+          {/* ── שורת פעולות מדיה ב-AI לשקופית הנבחרת ── */}
+          {selected && (
+            <div className="flex flex-col items-center gap-1.5">
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <select
+                  value={imageStyle}
+                  onChange={(e) => setImageStyle(e.target.value)}
+                  disabled={Boolean(mediaBusy)}
+                  title="סגנון התמונה"
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-400 disabled:opacity-50"
+                >
+                  <option value="photo">תצלום</option>
+                  <option value="illustration">איור</option>
+                  <option value="abstract">מופשט</option>
+                </select>
+                <button
+                  onClick={handleGenerateImage}
+                  disabled={Boolean(mediaBusy)}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400 disabled:opacity-50"
+                >{mediaBusy === 'image' ? '⏳ יוצר תמונה…' : '✨ תמונה'}</button>
+                <button
+                  onClick={handleGenerateInfographic}
+                  disabled={Boolean(mediaBusy)}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400 disabled:opacity-50"
+                >{mediaBusy === 'infographic' ? '⏳ יוצר אינפוגרפיקה…' : '📊 אינפוגרפיקה'}</button>
+                <button
+                  onClick={handleGenerateBackground}
+                  disabled={Boolean(mediaBusy)}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400 disabled:opacity-50"
+                >{mediaBusy === 'bg' ? '⏳ יוצר רקע…' : '🎨 רקע מעוצב'}</button>
+                {selected.bgImage && (
+                  <button
+                    onClick={() => patchSlide({ bgImage: null })}
+                    disabled={Boolean(mediaBusy)}
+                    className="rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs font-semibold text-rose-400 hover:border-rose-400 disabled:opacity-50"
+                  >🚫 הסר רקע</button>
+                )}
+              </div>
+              {mediaError && <div className="text-[11px] leading-5 text-rose-400">{mediaError}</div>}
+            </div>
+          )}
         </div>
 
         {/* inspector */}
@@ -766,7 +941,8 @@ export default function PresentationStudio({
         <ImagePicker
           slide={selected}
           onClose={() => setPickerOpen(false)}
-          onPick={(img) => { patchSlide({ image: { source: img.source || 'stock', url: img.url || '', dataUrl: img.dataUrl || '', query: img.query || '', alt: img.alt || '', attribution: img.attribution || '' } }); setPickerOpen(false); }}
+          // spread קודם — כדי לשמר model/provider/prompt שה-deckModel מנרמל.
+          onPick={(img) => { patchSlide({ image: { ...img, source: img.source || 'stock', url: img.url || '', dataUrl: img.dataUrl || '', query: img.query || '', alt: img.alt || '', attribution: img.attribution || '' } }); setPickerOpen(false); }}
         />
       )}
 

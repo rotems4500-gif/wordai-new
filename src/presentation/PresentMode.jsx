@@ -33,7 +33,7 @@ export default function PresentMode({ deck, startIndex = 0, onClose = () => {} }
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: 'min(100vw, 177.78vh)', maxHeight: '100vh' }}>
-        <SlideFrame slide={slide} themeId={deck.themeId} index={index} rounded={false} shadow={false} deckTitle={deck.title} />
+        <SlideFrame slide={slide} themeId={deck.themeId} index={index} rounded={false} shadow={false} deckTitle={deck.title} customTheme={deck.customTheme || null} />
       </div>
 
       {showNotes && slide.notes && (
