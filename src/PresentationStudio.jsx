@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // PresentationStudio.jsx — סטודיו מצגות מלא.
-// שני מצבים: (1) ללא deck → טופס יצירה. (2) עם deck → עורך שקופיות.
+// שלושה מסכים לפי state מפורש (view): 'list' רשימת מצגות · 'brief' טופס יצירה ·
+// 'editor' עורך שקופיות. (עד קודם המסך נגזר מ-!deck ולא אפשר חזרה בלי איבוד דק.)
 // מקור האמת הוא אובייקט ה-deck (deckModel). אין HTML, אין TipTap.
 // ═══════════════════════════════════════════════════════════════
 
@@ -589,7 +590,12 @@ export default function PresentationStudio({
   documentTitle = '',
   showToast = () => {},
   onOpenHelp = null,
+  initialView = null,
+  onViewConsumed = () => {},
 }) {
+  // מסך פעיל מפורש: 'list' (רשימת מצגות) · 'brief' (טופס יצירה) · 'editor' (עורך שקופיות).
+  // עד עכשיו המסך נגזר מ-!deck, ולכן לא היה אפשר לחזור לרשימה בלי לאבד את הדק.
+  const [view, setView] = useState(() => initialView || (deck ? 'editor' : 'brief'));
   const [selectedId, setSelectedId] = useState(deck?.slides?.[0]?.id || '');
   const [presenting, setPresenting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -632,32 +638,43 @@ export default function PresentationStudio({
   const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
   const selectedThumbRef = useRef(null);
 
+  // הדק העדכני ביותר דרך ref — פעולה אסינכרונית ארוכה (מדיה) סוגרת על ה-prop
+  // שהיה בתחילתה, וקומיט מתוכה היה מוחק עריכות שנעשו בינתיים.
+  const deckRef = useRef(deck);
+  deckRef.current = deck;
+
   // כל שינוי deck עובר כאן — דוחף את המצב הקודם להיסטוריה ומאפס את ה-redo.
+  // מקבל דק מוכן או פונקציית עדכון (prev) => next שנפתרת מול המצב העדכני.
   const commitDeck = (nextDeck) => {
-    if (!nextDeck) return;
+    const prev = deckRef.current;
+    const resolved = typeof nextDeck === 'function' ? nextDeck(prev) : nextDeck;
+    if (!resolved) return;
     const h = historyRef.current;
-    if (deck) {
-      h.past.push(deck);
+    if (prev) {
+      h.past.push(prev);
       if (h.past.length > 50) h.past.shift();
     }
     h.future = [];
     bumpHistory((v) => v + 1);
-    onDeckChange(nextDeck);
+    deckRef.current = resolved;
+    onDeckChange(resolved);
   };
   const undo = () => {
     const h = historyRef.current;
     if (!h.past.length) return;
     const prev = h.past.pop();
-    if (deck) h.future.push(deck);
+    if (deckRef.current) h.future.push(deckRef.current);
     bumpHistory((v) => v + 1);
+    deckRef.current = prev;
     onDeckChange(prev);
   };
   const redo = () => {
     const h = historyRef.current;
     if (!h.future.length) return;
     const next = h.future.pop();
-    if (deck) h.past.push(deck);
+    if (deckRef.current) h.past.push(deckRef.current);
     bumpHistory((v) => v + 1);
+    deckRef.current = next;
     onDeckChange(next);
   };
   const canUndo = historyRef.current.past.length > 0;
@@ -669,6 +686,34 @@ export default function PresentationStudio({
       ? { autoImages: Boolean(payload.autoImages), autoInfographics: Boolean(payload.autoInfographics) }
       : null;
     onGenerate(payload);
+  };
+
+  // מסך פתיחה שנכפה מבחוץ (כניסה מהטאב) — נצרך פעם אחת ומדווח לאב שיאפס אותו.
+  useEffect(() => {
+    if (!initialView) return;
+    setView(initialView);
+    onViewConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialView]);
+
+  // דק חדש (id אחר) — היסטוריית הביטול והבחירה של הדק הקודם כבר לא רלוונטיות,
+  // והתצוגה עוברת לעורך. בלי זה Ctrl+Z היה מחזיר את המצגת הקודמת.
+  const prevDeckIdRef = useRef(deck?.id || '');
+  useEffect(() => {
+    const id = deck?.id || '';
+    if (id === prevDeckIdRef.current) return;
+    prevDeckIdRef.current = id;
+    historyRef.current = { past: [], future: [] };
+    bumpHistory((v) => v + 1);
+    setSelectedId(deck?.slides?.[0]?.id || '');
+    if (id) setView('editor');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deck?.id]);
+
+  // חזרה: עורך → רשימה · טופס → רשימה · רשימה → יציאה מהסטודיו.
+  const handleBack = () => {
+    if (view === 'list') { onExit(); return; }
+    setView('list');
   };
 
   // ניווט שקופיות בחיצים (כל עוד לא מקלידים בשדה). RTL: ימינה=הקודם, שמאלה=הבא.
@@ -732,7 +777,10 @@ export default function PresentationStudio({
       setMediaError('');
       setMediaResult('');
       setMediaProgress('');
-      let working = deck;
+      // צוברים תיקונים פר-שקופית ומחילים אותם בסוף על המצב העדכני — עריכה
+      // שהמשתמש עשה בזמן שהמדיה נוצרה לא נמחקת.
+      const patches = {};
+      const addPatch = (slideId, patch) => { patches[slideId] = { ...(patches[slideId] || {}), ...patch }; };
       let imagesMade = 0;
       let chartsMade = 0;
       try {
@@ -742,25 +790,30 @@ export default function PresentationStudio({
             onProgress: ({ index, total }) => { if (!cancelled) setMediaProgress(`יוצר תמונה ${index} מתוך ${total}…`); },
           });
           (res?.slides || []).forEach((r) => {
-            working = updateSlide(working, r.slideId, { image: r.image });
+            addPatch(r.slideId, { image: r.image });
             imagesMade += 1;
           });
         }
         if (req.autoInfographics && !cancelled) {
-          const targets = (working.slides || []).filter((s) => s?.visual === 'chart');
+          const targets = (deck.slides || []).filter((s) => s?.visual === 'chart');
           for (let i = 0; i < targets.length; i += 1) {
             if (cancelled) break;
             setMediaProgress(`ממיר שקופית ${i + 1} מתוך ${targets.length} לאינפוגרפיקה…`);
             try {
               // eslint-disable-next-line no-await-in-loop
               const image = await generateSlideInfographic(targets[i], activeTheme, { force: 'chart' });
-              working = updateSlide(working, targets[i].id, { image });
+              addPatch(targets[i].id, { image });
               chartsMade += 1;
             } catch { /* שקופית בלי נתונים מספריים — מדלגים בשקט */ }
           }
         }
         if (!cancelled) {
-          if (imagesMade || chartsMade) commitDeck(working);
+          if (imagesMade || chartsMade) {
+            commitDeck((prev) => (prev ? {
+              ...prev,
+              slides: (prev.slides || []).map((s) => (patches[s.id] ? { ...s, ...patches[s.id] } : s)),
+            } : prev));
+          }
           const parts = [];
           if (req.autoImages) parts.push(`${imagesMade} תמונות`);
           if (req.autoInfographics) parts.push(`${chartsMade} אינפוגרפיקות`);
@@ -776,24 +829,67 @@ export default function PresentationStudio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck]);
 
-  // אם אין deck — טופס יצירה
-  if (!deck) {
+  // ── בחירת מסך לפי view (לא לפי !deck) ───────────────────────────
+  // 'editor' בלי deck בזיכרון נופל חזרה לטופס היצירה.
+  const resolvedView = (view === 'editor' && !deck) ? 'brief' : view;
+
+  const studioHeader = (
+    <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
+      <span className="text-sm font-bold text-slate-300">📊 סטודיו מצגות</span>
+      <div className="flex items-center gap-2">
+        {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓ מדריך</button>}
+        <button onClick={handleBack} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+      </div>
+    </div>
+  );
+
+  // רשימת המצגות — כרגע מסך פתיחה מינימלי (רשימה מלאה תגיע בשלב הבא).
+  if (resolvedView === 'list') {
     return (
       <div className="flex min-h-full flex-1 overflow-auto bg-slate-950">
         <div className="flex w-full flex-col">
-          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
-            <span className="text-sm font-bold text-slate-300">📊 סטודיו מצגות</span>
-            <div className="flex items-center gap-2">
-              {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓ מדריך</button>}
-              <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+          {studioHeader}
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-10">
+            <div>
+              <div className="inline-flex items-center rounded-full bg-cyan-500/15 px-3 py-1 text-[11px] font-bold text-cyan-300">סטודיו מצגות</div>
+              <h1 className="mt-3 text-3xl font-black text-white">המצגות שלך</h1>
+              <p className="mt-2 text-sm leading-7 text-slate-400">התחל מצגת חדשה, או המשך לערוך את המצגת הפתוחה.</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => setView('brief')}
+                className="rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3.5 text-sm font-bold text-white transition hover:from-cyan-400"
+              >📊 מצגת חדשה</button>
+              {deck && (
+                <button
+                  type="button"
+                  onClick={() => setView('editor')}
+                  className="rounded-2xl border border-slate-700 bg-slate-800/60 px-6 py-3.5 text-sm font-bold text-slate-200 transition hover:border-cyan-400 hover:text-cyan-300"
+                >✏️ המשך עריכה{deck.title ? ` — ${deck.title}` : ''}</button>
+              )}
             </div>
           </div>
-          {busy
-            ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-slate-300">
+        </div>
+      </div>
+    );
+  }
+
+  // טופס יצירה — נשאר מורכב גם בזמן היצירה (הנושא שהוקלד שורד כישלון), עם scrim.
+  if (resolvedView === 'brief') {
+    return (
+      <div className="flex min-h-full flex-1 overflow-auto bg-slate-950">
+        <div className="flex w-full flex-col">
+          {studioHeader}
+          <div className="relative flex flex-1 flex-col">
+            <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />
+            {busy && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center gap-4 bg-slate-950/70 pt-[18vh] text-slate-200 backdrop-blur-[2px]">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
                 <div className="text-sm font-semibold">בונה את המצגת...</div>
               </div>
-            : <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />}
+            )}
+          </div>
         </div>
       </div>
     );
@@ -863,9 +959,15 @@ export default function PresentationStudio({
       style: imageStyle,
       onProgress: ({ index, total }) => setMediaProgress(`יוצר תמונה ${index} מתוך ${total}…`),
     });
-    // מקפלים את כל התוצאות ל-deck אחד ומעדכנים פעם אחת בלבד.
-    const nextDeck = (res.slides || []).reduce((acc, r) => updateSlide(acc, r.slideId, { image: r.image }), deck);
-    if (res.slides?.length) commitDeck(nextDeck);
+    // מחילים את כל התוצאות בקומיט אחד על המצב העדכני (לא על ה-deck שנתפס בהתחלה).
+    const patches = {};
+    (res.slides || []).forEach((r) => { patches[r.slideId] = { image: r.image }; });
+    if (res.slides?.length) {
+      commitDeck((prev) => (prev ? {
+        ...prev,
+        slides: (prev.slides || []).map((s) => (patches[s.id] ? { ...s, ...patches[s.id] } : s)),
+      } : prev));
+    }
     const failCount = res.failures?.length || 0;
     setMediaResult(`נוצרו ${res.slides?.length || 0} תמונות${failCount ? ` · ${failCount} נכשלו` : ''}`);
   });
@@ -876,7 +978,7 @@ export default function PresentationStudio({
     setThemeError('');
     try {
       const t = await generateDeckTheme(themePrompt.trim());
-      commitDeck({ ...deck, customTheme: t });
+      commitDeck((prev) => (prev ? { ...prev, customTheme: t } : prev));
       setThemePrompt('');
       setThemePanelOpen(false);
     } catch (e) {
@@ -1028,7 +1130,7 @@ export default function PresentationStudio({
           aria-label="בצע שוב"
           className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-30"
         >↷</button>
-        <button onClick={() => onGenerate(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
+        <button onClick={() => { onGenerate(null); setView('brief'); }} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
         <div className="relative">
           <button onClick={() => setExportOpen((v) => !v)} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX ▾'}</button>
@@ -1053,7 +1155,7 @@ export default function PresentationStudio({
           )}
         </div>
         {onOpenHelp && <button onClick={() => onOpenHelp('studios')} title="מדריך הסטודיו" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">❓</button>}
-        <button onClick={onExit} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
+        <button onClick={handleBack} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">חזרה</button>
       </div>
 
       <div className="flex min-h-0 flex-1">

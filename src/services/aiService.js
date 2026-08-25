@@ -237,6 +237,8 @@ export const DEFAULT_PRESENTATION_PREFERENCES = {
   defaultDensity: 'balanced',
   defaultSlideCount: 10,
   defaultImageIntensity: 'high',
+  defaultAutoImages: false,
+  defaultAutoInfographics: false,
   defaultAudience: '',
   defaultGoal: '',
   rememberLastChoices: true,

@@ -51,7 +51,7 @@ import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
 import DocumentDraftStudio from './DocumentDraftStudio';
 import { generateDeck } from './services/presentationService';
-import { createSlide } from './presentation/deckModel';
+import { createSlide, normalizeDeck } from './presentation/deckModel';
 import { importPptxDraft } from './services/pptxDraftService';
 import { importDocumentDraft } from './services/documentDraftService';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
@@ -3372,14 +3372,25 @@ function App() {
   const cloudAvailable = isCloudAvailable();
   const [editor, setEditor] = React.useState(null);
   const [appMode, setAppMode] = React.useState('word');
+  // מצב נוכחי דרך ref (כמו showStartScreenRef) — כדי לזהות מעבר-מצב אמיתי מול קריאה חוזרת.
+  const appModeRef = React.useRef(appMode);
+  appModeRef.current = appMode;
   // זוכר מאיפה נכנסנו לסטודיו (start screen או העורך) כדי שהיציאה תחזור לאותו מקום.
   const studioEntryOriginRef = React.useRef('editor');
   // קורא דרך ref כי handlers עטופים ב-useCallback([]) סוגרים על העותק הראשון של הפונקציה.
   const enterStudioMode = (mode) => {
-    studioEntryOriginRef.current = showStartScreenRef.current ? 'start' : 'editor';
+    // רק מעבר-מצב אמיתי קובע את המקור. קריאות חוזרות מתוך הסטודיו (יצירת deck,
+    // העלאת pptx) לא ידרסו אותו ל-'editor' ויאבדו את החזרה למסך הבית.
+    if (appModeRef.current !== mode) {
+      studioEntryOriginRef.current = showStartScreenRef.current ? 'start' : 'editor';
+    }
     setAppMode(mode);
   };
   const exitStudioMode = () => {
+    // ביטול עבודה רצה של סטודיו המצגות (no-op כשאין) ושחרור מחוון העסוק.
+    presentationAbortRef.current?.abort();
+    presentationAbortRef.current = null;
+    setPresentationBusy(false);
     setAppMode('word');
     if (studioEntryOriginRef.current === 'start') setShowStartScreen(true);
   };
@@ -3402,6 +3413,10 @@ function App() {
   }, []);
   const [presentationDeck, setPresentationDeck] = React.useState(null);
   const [presentationBusy, setPresentationBusy] = React.useState(false);
+  // מסך פתיחה מבוקש לסטודיו המצגות ('list' בכניסה מהטאב); נצרך פעם אחת ומתאפס.
+  const [presentationInitialView, setPresentationInitialView] = React.useState(null);
+  // מבטל יצירת deck שרצה כשיוצאים מהסטודיו או כשמתחילים יצירה חדשה.
+  const presentationAbortRef = React.useRef(null);
   const [pptxDraft, setPptxDraft] = React.useState(null);
   const [docDraft, setDocDraft] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
@@ -6483,6 +6498,12 @@ ${sidebarReviewContext}`
 
     enterStudioMode('presentation');
     setShowStartScreen(false);
+    // היצירה מובילה לעורך — מסך פתיחה שנשאר תלוי יחטוף את התצוגה חזרה לרשימה.
+    setPresentationInitialView(null);
+    // יצירה חדשה מבטלת יצירה קודמת שעדיין רצה.
+    presentationAbortRef.current?.abort();
+    const controller = new AbortController();
+    presentationAbortRef.current = controller;
     setPresentationBusy(true);
     try {
       const deck = await generateDeck({
@@ -6495,7 +6516,9 @@ ${sidebarReviewContext}`
         themeId: themeId || theme || 'premium',
         density,
         imageIntensity,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted) return false;
       let finalDeck = deck;
       // נספח AI כשקופיות בסוף הדק (קריאת API נוספת) — לפי בקשה ממסך הפתיחה.
       if (aiAppendix && deck && Array.isArray(deck.slides)) {
@@ -6510,7 +6533,8 @@ ${sidebarReviewContext}`
           if (appendixParsed.ok && appendixParsed.appendixHtml) {
             const appendixSlides = buildAiAppendixSlidesFromHtml(appendixParsed.appendixHtml);
             if (appendixSlides.length) {
-              finalDeck = { ...deck, slides: [...deck.slides, ...appendixSlides] };
+              // normalizeDeck משלים שדות חסרים בשקופיות הנספח (ושומר את id הדק).
+              finalDeck = normalizeDeck({ ...deck, slides: [...deck.slides, ...appendixSlides] });
               showToast('נספח ה-AI נוסף כשקופיות בסוף הדק. זכור למחוק אותן לפני הגשה.');
             }
           } else {
@@ -6520,13 +6544,18 @@ ${sidebarReviewContext}`
           showToast('יצירת נספח ה-AI למצגת נכשלה: ' + (appendixError?.message || 'שגיאה'), { tone: 'warning' });
         }
       }
+      if (controller.signal.aborted) return false;
       setPresentationDeck(finalDeck);
       return true;
     } catch (error) {
+      if (controller.signal.aborted) return false;
       showToast(error?.message || 'יצירת המצגת נכשלה', { tone: 'error' });
       return false;
     } finally {
-      setPresentationBusy(false);
+      if (presentationAbortRef.current === controller) {
+        presentationAbortRef.current = null;
+        setPresentationBusy(false);
+      }
     }
   }, [editor, generateAiAppendixHtml]);
 
@@ -9068,7 +9097,11 @@ ${sidebarReviewContext}`
         assignmentBriefAvailable={Boolean(assignmentBrief.text)}
         assignmentBriefOpen={assignmentBriefOpen}
         appMode={appMode}
-        onModeChange={enterStudioMode}
+        onModeChange={(mode) => {
+          // כניסה לסטודיו המצגות מהטאב פותחת תמיד ברשימת המצגות, לא בעורך.
+          if (mode === 'presentation') setPresentationInitialView('list');
+          enterStudioMode(mode);
+        }}
         cloudAvailable={cloudAvailable}
         cloudUser={cloudUser}
         cloudStatusLabel={cloudStatusLabel}
@@ -9245,7 +9278,9 @@ ${sidebarReviewContext}`
               onDeckChange={setPresentationDeck}
               onGenerate={handleStudioGenerate}
               onUploadPptx={handleUploadPptxDraft}
-              onExit={exitStudioMode}
+              onExit={() => { setPresentationDeck(null); exitStudioMode(); }}
+              initialView={presentationInitialView}
+              onViewConsumed={() => setPresentationInitialView(null)}
               busy={presentationBusy}
               hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}
               documentTitle={getDraftTitleFromFilePath(currentFilePath)}
