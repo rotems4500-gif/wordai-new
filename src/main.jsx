@@ -6536,6 +6536,8 @@ ${sidebarReviewContext}`
             if (appendixSlides.length) {
               // normalizeDeck משלים שדות חסרים בשקופיות הנספח (ושומר את id הדק).
               finalDeck = normalizeDeck({ ...deck, slides: [...deck.slides, ...appendixSlides] });
+              // normalizeDeck משמיט מפתחות לא מוכרים — מחזירים את אזהרות היצירה.
+              if (deck.generationWarnings?.length) finalDeck.generationWarnings = deck.generationWarnings;
               showToast('נספח ה-AI נוסף כשקופיות בסוף הדק. זכור למחוק אותן לפני הגשה.');
             }
           } else {
@@ -6547,6 +6549,10 @@ ${sidebarReviewContext}`
       }
       if (controller.signal.aborted) return false;
       setPresentationDeck(finalDeck);
+      // מנות שנכשלו גם בניסיון החוזר הושלמו מהשלד — המשתמש חייב לדעת אילו.
+      if (finalDeck?.generationWarnings?.length) {
+        showToast(finalDeck.generationWarnings.join(' '), { tone: 'warning' });
+      }
       return true;
     } catch (error) {
       if (controller.signal.aborted) return false;

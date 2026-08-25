@@ -84,7 +84,8 @@ const normalizeImage = (image) => {
   const url = String(image.url || '').trim();
   const dataUrl = String(image.dataUrl || '').trim();
   const query = String(image.query || '').trim();
-  const alt = String(image.alt || '').trim();
+  // ה-query נשאר כמו שהוא (אנגלית, נשלח למנוע התמונות); ה-alt הוא טקסט מוצג ⇒ מנוקה.
+  const alt = sanitizeSlideText(image.alt);
   // ⚠️ בעבר תמונה בלי url/dataUrl נזרקה — וכך ה-query שהמודל מייצר לכל שקופית
   // ("image": { query, alt }) נמחק בשקט, והצינור "צור את התמונות החסרות" מת.
   // עכשיו נשמרת כ-placeholder: ה-renderer כבר יודע להציג אותה, והיוצר יודע למלא.
@@ -123,10 +124,47 @@ const normalizeBgImage = (bgImage) => {
   };
 };
 
+// ── ניקוי טקסט שהגיע מ-LLM ───────────────────────────────────────
+// כל שדה טקסט בשקופית אמור להיות טקסט נקי בעברית. המודל בכל זאת מדליף
+// markdown, תגי HTML, ישויות, תווי כיווניות וסימני תבליט — והם מגיעים כמו
+// שהם ל-render ול-PPTX. פונקציה טהורה, ללא תלות ב-DOM (רצה גם ב-Node).
+export const sanitizeSlideText = (value) => {
+  if (value == null) return '';
+  let text = String(value);
+  // 1. תווי בקרה
+  text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  // 2. תווי כיווניות (bidi) — שוברים את ה-RTL של המנוע שלנו
+  text = text.replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
+  // 3. תגי HTML תחומים בלבד — '<' בודד בתוך טקסט ("<5%") נשאר
+  text = text.replace(/<\/?[a-zA-Z][^<>]{0,80}>/g, '');
+  // 4. ישויות HTML נפוצות (&amp; אחרון כדי ש-&amp;lt; לא ייפתח פעמיים)
+  text = text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&');
+  // 5. פירוק markdown — רק סמנים מזווגים, כך ש-"5*3" ו-"מנכ\"ל" שורדים
+  text = text
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1');
+  // תחיליות שורה (כותרת md / תבליט / מספור) — רק בתחילת המחרוזת
+  text = text
+    .replace(/^\s*#{1,6}\s+/, '')
+    .replace(/^\s*[-*+•▸‣►]\s+/, '')
+    .replace(/^\s*\d+\.\s+/, '');
+  // 6. שלוש נקודות / אליפסיס תלויות בסוף
+  text = text.replace(/\s*(\.{3}|…)\s*$/, '');
+  // 7. רצפי רווחים → רווח יחיד
+  return text.replace(/\s+/g, ' ').trim();
+};
+
 const toStringArray = (value) => {
   if (!Array.isArray(value)) return [];
   return value
-    .map((item) => String(item == null ? '' : item).trim())
+    .map((item) => sanitizeSlideText(item))
     .filter(Boolean)
     .slice(0, 8);
 };
@@ -139,23 +177,23 @@ export const normalizeSlide = (raw = {}) => {
   let columns = base.columns;
   if (Array.isArray(raw.columns) && raw.columns.length) {
     columns = raw.columns.slice(0, 3).map((col) => ({
-      heading: String(col?.heading || '').trim(),
+      heading: sanitizeSlideText(col?.heading),
       bullets: toStringArray(col?.bullets),
     }));
   }
 
   const stats = Array.isArray(raw.stats)
     ? raw.stats.slice(0, 4).map((s) => ({
-        value: String(s?.value == null ? '' : s.value).trim(),
-        label: String(s?.label || '').trim(),
-        caption: String(s?.caption || '').trim(),
+        value: sanitizeSlideText(s?.value),
+        label: sanitizeSlideText(s?.label),
+        caption: sanitizeSlideText(s?.caption),
       })).filter((s) => s.value || s.label)
     : [];
 
   const steps = Array.isArray(raw.steps)
     ? raw.steps.slice(0, 6).map((s) => ({
-        title: String(s?.title || '').trim(),
-        body: String(s?.body || '').trim(),
+        title: sanitizeSlideText(s?.title),
+        body: sanitizeSlideText(s?.body),
       })).filter((s) => s.title || s.body)
     : [];
 
@@ -163,11 +201,11 @@ export const normalizeSlide = (raw = {}) => {
     ...base,
     id: String(raw.id || base.id),
     layout,
-    title: String(raw.title || '').trim(),
-    subtitle: String(raw.subtitle || '').trim(),
-    kicker: String(raw.kicker || '').trim(),
+    title: sanitizeSlideText(raw.title),
+    subtitle: sanitizeSlideText(raw.subtitle),
+    kicker: sanitizeSlideText(raw.kicker),
     bullets: toStringArray(raw.bullets),
-    body: String(raw.body || '').trim(),
+    body: sanitizeSlideText(raw.body),
     columns,
     stats,
     steps,
@@ -176,7 +214,7 @@ export const normalizeSlide = (raw = {}) => {
     // המלצת ויזואל מהמודל: 'chart' (סדרת מספרים אמיתית) / 'infographic' (מבנה/תהליך).
     // מניע את כפתור "אינפוגרפיקה" לבחור כלי בלי לנחש, ומסומן ב-UI כהצעה.
     visual: ['chart', 'infographic'].includes(raw.visual) ? raw.visual : '',
-    notes: String(raw.notes || '').trim(),
+    notes: sanitizeSlideText(raw.notes),
     accent: String(raw.accent || '').trim(),
     bgVariant: BG_VARIANT_IDS.includes(raw.bgVariant) ? raw.bgVariant : '',
     exportMode: ['image', 'native'].includes(raw.exportMode) ? raw.exportMode : '',

@@ -8653,7 +8653,7 @@ export const callOpenAICompatible = async (baseUrl, apiKey, model, messages, sig
   const bodyStr = JSON.stringify({
     model,
     messages,
-    max_tokens: 4096,
+    max_tokens: Number.isFinite(options.maxOutputTokens) ? Math.max(256, Math.floor(options.maxOutputTokens)) : 4096,
     stream: false,
     ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
     ...(requestBodyExtras || {}),
@@ -8728,7 +8728,8 @@ export const callClaudeApi = async (apiKey, model, systemPrompt, userMessage, si
     'anthropic-dangerous-direct-browser-access': 'true',
   };
   const bodyStr = JSON.stringify({
-    model, max_tokens: 4096,
+    model,
+    max_tokens: Number.isFinite(options.maxOutputTokens) ? Math.max(256, Math.floor(options.maxOutputTokens)) : 4096,
     ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
@@ -11004,6 +11005,13 @@ ${isGeneralWritingScope
           ? { model: resolvedModel, tools: [{ googleSearch: {} }] }
           : { model: resolvedModel };
         if (Number.isFinite(options.temperature)) geminiModelConfig.generationConfig = { temperature: options.temperature };
+        // תקרת פלט מפורשת (JSON ארוך כמו deck של מצגת נחתך בברירת המחדל של המודל).
+        if (Number.isFinite(options.maxOutputTokens)) {
+          geminiModelConfig.generationConfig = {
+            ...(geminiModelConfig.generationConfig || {}),
+            maxOutputTokens: Math.max(256, Math.floor(options.maxOutputTokens)),
+          };
+        }
         // קריאות מכניות (תקן/סכם/טבלה/judge) לא צריכות חשיבה — טוקני thinking מחויבים
         // במחיר output. משפחת 2.5 (לא-pro): thinkingBudget:0 מכבה לגמרי. משפחת 3.x (נמדד
         // על 3.7-flash): budget נבלע בשקט ו-minimal/none נדחים — המינימום הוא thinkingLevel:'low'.
@@ -11070,18 +11078,18 @@ ${isGeneralWritingScope
         return callOpenAICompatible('https://api.openai.com/v1', cfg.openai.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature, maxOutputTokens: options.maxOutputTokens });
       }
       case 'claude': {
         if (!cfg.claude.key) throw new Error('מפתח Claude לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
-        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
+        return callClaudeApi(cfg.claude.key, resolvedModel, sysPrompt, cleanUserPrompt, signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature, maxOutputTokens: options.maxOutputTokens });
       }
       case 'groq': {
         if (!cfg.groq.key) throw new Error('מפתח Groq לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
         return callOpenAICompatible('https://api.groq.com/openai/v1', cfg.groq.key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature, maxOutputTokens: options.maxOutputTokens });
       }
       case 'ollama': {
         const ollamaUrl = cfg.ollama.baseUrl || 'http://localhost:11434/v1';
@@ -11092,7 +11100,7 @@ ${isGeneralWritingScope
         return callOpenAICompatible(ollamaUrl, '', ollamaModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature, maxOutputTokens: options.maxOutputTokens });
       }
       case 'perplexity': {
         if (!cfg.perplexity.key) throw new Error('מפתח Perplexity לא הוגדר — עבור להגדרות AI (תפריט קובץ)');
@@ -11105,6 +11113,7 @@ ${isGeneralWritingScope
         ], signal, {
           includeCompletionMetadata: preserveProviderCompletionMetadata,
           temperature: options.temperature,
+          maxOutputTokens: options.maxOutputTokens,
           ...(perplexityRequestBodyExtras ? { requestBodyExtras: perplexityRequestBodyExtras } : {}),
         });
       }
@@ -11117,7 +11126,7 @@ ${isGeneralWritingScope
         return callOpenAICompatible(baseUrl, key, resolvedModel, [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: cleanUserPrompt },
-        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature });
+        ], signal, { includeCompletionMetadata: preserveProviderCompletionMetadata, temperature: options.temperature, maxOutputTokens: options.maxOutputTokens });
       }
       default:
         throw new Error('ספק AI לא ידוע');

@@ -16,7 +16,7 @@ const DENSITY_GUIDANCE = {
 };
 
 // מעל סף זה מייצרים ב-chunks (outline + מילוי במנות) כדי שהפלט של המודל לא ייחתך.
-const CHUNK_THRESHOLD = 18;
+const CHUNK_THRESHOLD = 12;
 const BATCH_SIZE = 10;
 
 const imageRule = (imageIntensity) =>
@@ -55,7 +55,8 @@ const SLIDE_CONTENT_RULES = (imageIntensity) => [
   '- שדה "visual": סמן "chart" רק כששדה stats/bullets מכיל סדרת מספרים אמיתית להשוואה (הערכים יצוירו כגרף מדויק — אל תמציא מספרים), ו-"infographic" כשהתוכן הוא מבנה/תהליך/יחסים שמרוויח דיאגרמה. השאר ריק כשתמונה רגילה מספיקה.',
   `- ${imageRule(imageIntensity)}`,
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',
-  '- נסח את תוכן השקופיות בקול ובסגנון האישי של המשתמש (ראה פרופיל הסגנון שסופק), בתוך מגבלות האורך של הכללים לעיל.',
+  '- שמור על טון עקבי ובהיר לאורך כל המצגת; אם סופק פרופיל סגנון — אמץ את הטון שלו בלבד, לא את מבנה המשפט או אורך הפסקה.',
+  '- כל ערך בשדות ה-JSON הוא טקסט נקי בעברית: בלי markdown (**, __, `, #), בלי תגי HTML, בלי סימני ▸/•/… בתחילת או סוף טקסט, בלי הערות שוליים.',
   '- שדה "kicker": בשקופיות תוכן (לא cover/section/image-full) תן תווית קצרה (2-4 מילים) שמזהה את הפרק/הנושא שהשקופית שייכת אליו, ואחידה לכל השקופיות באותו פרק.',
 ].join('\n');
 
@@ -192,12 +193,23 @@ export const generateDeck = async ({
   // seed סגנון אחד לכל המצגת: בלי זה כל batch במסלול ה-chunked קיבל seed אקראי משלו —
   // רוטציית תבניות סגנון שונה בין קבוצות שקופיות באותו deck.
   const deckSeed = hashStyleSeed(cleanTopic || trimmedDoc.slice(0, 500));
-  const runChat = (prompt) =>
+  // בידוד: יצירת deck היא קריאת JSON מכנית — לא כתיבת מסמך. בלי הבידוד הזה
+  // הקריאה ירשה את הוראות ה-HTML/ביבליוגרפיה של scope המסמך, קורפוס סגנון גולמי
+  // וזיכרון האפליקציה — כולם ניפחו את הפרומפט ושברו את ה-JSON.
+  const runChat = (prompt, maxOutputTokens = 4096) =>
     chatWithActiveProvider(prompt, '', 'אתה מעצב מצגות מקצועי. החזר אך ורק JSON תקין לפי הסכמה.', {
       skipAutomation: true,
       skipMultiModel: true,
       directChat: true,
       skipSkillSelection: true,
+      chatScope: 'general-writing',
+      strictFormatting: true,
+      forceSuppressResearchRouting: true,
+      thinkingBudget: 0,
+      includeAppMemory: false,
+      shouldPersistMemory: false,
+      suppressStyleEngine: true,
+      maxOutputTokens,
       omitPersonalStyleStructureHints: true,
       styleEngineSeed: deckSeed,
       // אחזור דוגמאות סגנון לפי הנושא — לא לפי פרומפט-הסכמה המלא (JSON+שלד).
@@ -208,19 +220,21 @@ export const generateDeck = async ({
 
   let deckTitle = cleanTopic || 'מצגת';
   let slides = [];
+  // אזהרות שנצברות במסלול ה-chunked (מנות שלא הושלמו) — מוצמדות ל-deck בסוף.
+  const generationWarnings = [];
 
   if (!isAuto && safeSlideCount <= CHUNK_THRESHOLD) {
     // מסלול shot-אחד — מצגות קטנות בכמות קבועה
     const prompt = [baseContext, buildSchemaInstruction(safeSlideCount, imageIntensity), docBlock]
       .filter(Boolean).join('\n');
-    const parsed = extractJson(await runChat(prompt));
+    const parsed = extractJson(await runChat(prompt, 8192));
     deckTitle = parsed.title || deckTitle;
     slides = Array.isArray(parsed.slides) ? parsed.slides : [];
   } else {
     // מסלול chunked — שלב 1: שלד (outline) לכל המצגת
     const outlinePrompt = [baseContext, buildOutlinePrompt(safeSlideCount), docBlock]
       .filter(Boolean).join('\n');
-    const outlineParsed = extractJson(await runChat(outlinePrompt));
+    const outlineParsed = extractJson(await runChat(outlinePrompt, 4096));
     deckTitle = outlineParsed.title || deckTitle;
     const outline = (Array.isArray(outlineParsed.outline) ? outlineParsed.outline : [])
       .map((o) => ({ layout: o?.layout || 'title-bullets', title: o?.title || '', focus: o?.focus || '' }))
@@ -232,13 +246,49 @@ export const generateDeck = async ({
     for (let start = 0; start < outline.length; start += BATCH_SIZE) {
       batches.push([start, Math.min(start + BATCH_SIZE, outline.length)]);
     }
-    const filled = await Promise.all(
-      batches.map(([start, end]) =>
-        runChat([baseContext, buildBatchPrompt(outline, start, end, imageIntensity), docBlock].filter(Boolean).join('\n'))
-          .then((raw) => extractJson(raw))
-          .then((p) => (Array.isArray(p.slides) ? p.slides : []))
-      )
-    );
+    const fillBatch = async ([start, end]) => {
+      const prompt = [baseContext, buildBatchPrompt(outline, start, end, imageIntensity), docBlock]
+        .filter(Boolean).join('\n');
+      const parsed = extractJson(await runChat(prompt, 4096));
+      const got = Array.isArray(parsed.slides) ? parsed.slides : [];
+      if (!got.length) throw new Error('המנה חזרה ריקה.');
+      return got;
+    };
+
+    // רשת ביטחון: שקופית מינימלית מפריט השלד, כדי שהמצגת תושלם גם אחרי כישלון מנה.
+    const slideFromOutline = (o) => ({
+      layout: o?.layout || 'title-bullets',
+      title: o?.title || '',
+      subtitle: '(השלמה נדרשת — נסה לרענן שקף זה)',
+    });
+
+    // יישור אורך המנה לשלד — שקופית N חייבת להישאר מיושרת ל-outline[N].
+    const alignBatch = (got, start, end) => {
+      const expected = end - start;
+      const out = got.slice(0, expected);
+      for (let i = out.length; i < expected; i += 1) out.push(slideFromOutline(outline[start + i]));
+      return out;
+    };
+
+    // allSettled ולא all: מנה אחת שנפלה (מכסה/עומס/JSON קטוע) הפילה את כל המצגת.
+    const settled = await Promise.allSettled(batches.map(fillBatch));
+    const filled = [];
+    for (let i = 0; i < batches.length; i += 1) {
+      const [start, end] = batches[i];
+      if (settled[i].status === 'fulfilled') {
+        filled.push(alignBatch(settled[i].value, start, end));
+        continue;
+      }
+      if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
+      // ניסיון חוזר יחיד, סדרתי — כישלון במקביל הוא לרוב עומס רגעי.
+      try {
+        filled.push(alignBatch(await fillBatch(batches[i]), start, end));
+      } catch {
+        filled.push(alignBatch([], start, end));
+        generationWarnings.push(`שקופיות ${start + 1}-${end} לא נוצרו במלואן — רענן אותן ידנית.`);
+      }
+      if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
+    }
     slides = filled.flat();
   }
 
@@ -250,5 +300,7 @@ export const generateDeck = async ({
   });
 
   if (!deck.slides.length) throw new Error('לא נוצרו שקופיות.');
+  // normalizeDeck מחזיר אובייקט חדש ומשמיט מפתחות לא מוכרים — לכן מצמידים אחריו.
+  if (generationWarnings.length) deck.generationWarnings = generationWarnings;
   return deck;
 };
