@@ -473,7 +473,7 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {}, cloudUser = null }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onOpenPresentationLibrary = null, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {}, cloudUser = null }) {
   const [prompt, setPrompt] = useState('');
   // seed שהגיע מ-Project Hub ("צור מסמך לשלב"): נשמר כדי לשייך את המסמך שנוצר לשלב.
   const [pendingProjectSeed, setPendingProjectSeed] = useState(null);
@@ -2050,7 +2050,19 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
             {isPresentationOutput && (
               <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
-                <div className="text-white font-semibold text-sm mb-4">⚙️ הגדרות מצגת</div>
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div className="text-white font-semibold text-sm">⚙️ הגדרות מצגת</div>
+                  {onOpenPresentationLibrary && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenPresentationLibrary()}
+                      title="כל המצגות ששמרת — פתיחה, שכפול, מחיקה"
+                      className="rounded-xl border border-white/25 bg-white/8 px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/20"
+                    >
+                      🗂️ המצגות שלי
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <label className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">

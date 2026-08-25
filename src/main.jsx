@@ -6462,8 +6462,9 @@ ${sidebarReviewContext}`
     return true;
   }, [beginDocumentIdentity, beginGenerationRequest, changeDocumentStyle, clearAssignmentBrief, clearDocumentArrival, confirmReplaceCurrentDocument, documentStyle, editor, isGenerationRequestCurrent, persistLocalCache, resetDocumentInteractionState, runStartTransition, storeAssignmentBrief, triggerDocumentArrival]);
 
-  // פותח את סטודיו המצגות (עם או בלי deck קיים)
+  // פותח את סטודיו המצגות על מסך "המצגות שלי" (הרשימה השמורה), עם או בלי deck פתוח.
   const openPresentationStudio = React.useCallback(() => {
+    setPresentationInitialView('list');
     enterStudioMode('presentation');
     setShowStartScreen(false);
   }, []);
@@ -10208,6 +10209,7 @@ ${sidebarReviewContext}`
                   payload,
                 })}
                 onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
+                onOpenPresentationLibrary={openPresentationStudio}
                 onUploadDocDraft={handleUploadDocDraft}
                 onOpenSpssProject={() => enterStudioMode('spss-project')}
                 onOpenAssignmentScaffold={() => enterStudioMode('assignment-scaffold')}

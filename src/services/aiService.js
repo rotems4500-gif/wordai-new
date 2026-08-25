@@ -943,6 +943,9 @@ export const PERSISTED_APP_SETTINGS_KEYS = [
   'wordai_hidden_project_materials',
   'wordai_projects_v1',
   'wordai_courses_v1',
+  // רק **האינדקס** של המצגות. גוף הדק (שקופיות + תמונות base64) הוא מקומי
+  // למכשיר ב-IndexedDB — ר' deckStore.js.
+  'wordai_decks_v1',
   'wordai_saved_docs_history',
   'wordai_app_memory',
   'wordflow_home_customizations',
@@ -1103,6 +1106,39 @@ const mergeCoursesV1Blobs = (currentRaw, incomingRaw) => {
   return JSON.stringify(incoming);
 };
 
+// מיזוג האינדקס של המצגות (wordai_decks_v1). אותו כלל רשומה-חדשה-מנצחת ומחיקה
+// רכה שלא קמה לתחייה. שתי הערות שאינן טריוויאליות:
+//   • רק האינדקס מסתנכרן — גוף הדק יושב ב-IndexedDB המקומי. לכן רשומה שהגיעה
+//     ממכשיר אחר תיפתח כאן רק אם הגוף במקרה קיים (ר' bodyMissing ב-deckStore).
+//   • thumbDataUrl הוא נכס **מקומי**: הוא נצרב מהגוף, והוא הדבר היחיד ברשומה
+//     שיכול לתפוח. משמרים תמיד את הגרסה המקומית כדי שלא ננפח את מסמך ה-Firestore
+//     המשותף בתמונות ממוזערות של מכשירים אחרים (שאין להם גוף כאן ממילא).
+const mergeDecksV1Blobs = (currentRaw, incomingRaw) => {
+  let incoming;
+  try { incoming = JSON.parse(incomingRaw); } catch { return incomingRaw; }
+  if (!incoming || typeof incoming !== 'object') return incomingRaw;
+  let current = null;
+  try { current = currentRaw ? JSON.parse(currentRaw) : null; } catch { current = null; }
+  if (current && typeof current === 'object') {
+    const localDecks = current.decks && typeof current.decks === 'object' ? current.decks : {};
+    const merged = mergeWorkspaceMaps(
+      localDecks,
+      incoming.decks && typeof incoming.decks === 'object' ? incoming.decks : {},
+      Date.now(),
+    );
+    Object.keys(merged).forEach((id) => {
+      const record = merged[id];
+      if (!record || typeof record !== 'object') return;
+      const localThumb = localDecks[id] && typeof localDecks[id] === 'object'
+        ? localDecks[id].thumbDataUrl
+        : '';
+      merged[id] = { ...record, thumbDataUrl: typeof localThumb === 'string' ? localThumb : '' };
+    });
+    incoming.decks = merged;
+  }
+  return JSON.stringify(incoming);
+};
+
 // אותו עיקרון עבור ה-blob המאוחד של V3: activeWorkspaceId (ו-bypass) הם מצב per-device.
 const mergeWorkspacesV3PreservingLocalPointer = (currentRaw, incomingRaw) => {
   let incoming;
@@ -1146,7 +1182,9 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
           ? mergeProjectsV1Blobs(current, incoming)
           : key === 'wordai_courses_v1'
             ? mergeCoursesV1Blobs(current, incoming)
-            : incoming;
+            : key === 'wordai_decks_v1'
+              ? mergeDecksV1Blobs(current, incoming)
+              : incoming;
     if (current === nextValue) return;
 
     localStorage.setItem(key, nextValue);

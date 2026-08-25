@@ -79,6 +79,9 @@ const CLOUD_PROFILE_APP_SETTING_KEYS = [
   "wordai_hidden_project_materials",
   "wordai_projects_v1",
   "wordai_courses_v1",
+  // אינדקס המצגות בלבד — רשומות זעירות. גוף הדק (base64 של תמונות) נשאר
+  // מקומי ב-IndexedDB, אחרת מסמך ה-1MB הזה היה מתפוצץ. ר' deckStore.js.
+  "wordai_decks_v1",
   "wordflow_home_customizations",
   "wordflow_style_overrides",
   "default-font",

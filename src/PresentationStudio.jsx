@@ -12,8 +12,11 @@ import { DECK_THEMES, getThemeById, THEME_ACCENTS } from './presentation/deckThe
 import { FAMILY_ORDER, FAMILY_LABELS } from './presentation/themes';
 import {
   SLIDE_LAYOUTS, getLayout, layoutHasImage, getSlideExportMode, BG_VARIANTS,
-  createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide,
+  createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide, normalizeDeck,
 } from './presentation/deckModel';
+import {
+  DECKS_UPDATED_EVENT, listDecks, loadDeck, saveDeck, deleteDeck, duplicateDeck, renameDeck,
+} from './services/deckStore';
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
 import {
   generateSlideImage, generateSlideInfographic, generateSlideBackground, restructureSlideAsInfographic,
@@ -94,6 +97,172 @@ function ThemeFamilyPicker({ value, onSelect, small = false }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── "המצגות שלי": רשימת המצגות השמורות ───────────────────────────
+// האינדקס יושב ב-localStorage וגוף הדק ב-IndexedDB (ר' services/deckStore.js).
+// רשומה עם bodyMissing נוצרה במכשיר אחר וסונכרנה — אפשר רק למחוק אותה.
+
+const RELATIVE_STEPS = [
+  { limit: 60 * 1000, label: () => 'עכשיו' },
+  { limit: 60 * 60 * 1000, label: (ms) => `לפני ${Math.max(1, Math.round(ms / 60000))} דקות` },
+  { limit: 24 * 60 * 60 * 1000, label: (ms) => `לפני ${Math.max(1, Math.round(ms / 3600000))} שעות` },
+  { limit: 7 * 24 * 60 * 60 * 1000, label: (ms) => `לפני ${Math.max(1, Math.round(ms / 86400000))} ימים` },
+];
+
+const formatUpdatedAt = (iso) => {
+  const time = Date.parse(iso || '');
+  if (!Number.isFinite(time)) return '';
+  const diff = Date.now() - time;
+  if (diff < 0) return 'עכשיו';
+  const step = RELATIVE_STEPS.find((s) => diff < s.limit);
+  if (step) return step.label(diff);
+  try { return new Date(time).toLocaleDateString('he-IL', { day: 'numeric', month: 'short', year: 'numeric' }); }
+  catch { return new Date(time).toISOString().slice(0, 10); }
+};
+
+function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onNewDeck, showToast }) {
+  const [records, setRecords] = useState(() => listDecks());
+  const [busyId, setBusyId] = useState('');
+
+  // רענון בכניסה למסך ובכל שינוי במאגר (שמירה אוטומטית, מחיקה, סנכרון ענן).
+  useEffect(() => {
+    const refresh = () => setRecords(listDecks());
+    refresh();
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener(DECKS_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(DECKS_UPDATED_EVENT, refresh);
+  }, []);
+
+  const runAction = async (id, work) => {
+    if (busyId) return;
+    setBusyId(id);
+    try { await work(); }
+    catch (e) { showToast?.(e?.message || 'הפעולה נכשלה', { tone: 'warning' }); }
+    finally { setBusyId(''); }
+  };
+
+  const handleOpen = (rec) => runAction(rec.id, async () => {
+    const body = await loadDeck(rec.id);
+    if (!body) {
+      showToast?.('המצגת נוצרה במכשיר אחר ואינה זמינה כאן', { tone: 'warning' });
+      return;
+    }
+    // normalizeDeck משמר את ה-id, ולכן ה-effect של deck?.id באב מאפס היסטוריה
+    // ומעביר לעורך. במכוון לא עובר דרך commitDeck — טעינה אינה עריכה.
+    onOpenDeck(normalizeDeck(body));
+  });
+
+  const handleRename = (rec) => {
+    const next = window.prompt('שם חדש למצגת:', rec.title);
+    if (next == null) return;
+    const clean = next.trim();
+    if (!clean || clean === rec.title) return;
+    runAction(rec.id, () => renameDeck(rec.id, clean));
+  };
+
+  const handleDuplicate = (rec) => runAction(rec.id, async () => {
+    await duplicateDeck(rec.id);
+    showToast?.('נוצר עותק של המצגת');
+  });
+
+  const handleDelete = (rec) => {
+    if (!window.confirm(`למחוק את "${rec.title}"? הפעולה בלתי הפיכה.`)) return;
+    runAction(rec.id, async () => {
+      await deleteDeck(rec.id);
+      // מחיקה של המצגת שפתוחה בעורך חייבת לרוקן גם אותו — אחרת העריכה הבאה
+      // הייתה שומרת אותה מחדש ומחזירה אותה לרשימה.
+      onDeckDeleted?.(rec.id);
+    });
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <div className="inline-flex items-center rounded-full bg-cyan-500/15 px-3 py-1 text-[11px] font-bold text-cyan-300">סטודיו מצגות</div>
+          <h1 className="mt-3 text-3xl font-black text-white">המצגות שלי</h1>
+          <p className="mt-2 text-sm leading-7 text-slate-400">
+            {records.length ? 'המצגות נשמרות אוטומטית תוך כדי עריכה.' : 'עוד לא שמרת מצגות.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onNewDeck}
+          className="rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3.5 text-sm font-bold text-white transition hover:from-cyan-400"
+        >+ מצגת חדשה</button>
+      </div>
+
+      {!records.length && (
+        <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-14 text-center">
+          <div className="text-lg font-bold text-slate-200">אין כאן עדיין מצגות</div>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-7 text-slate-400">
+            צור מצגת ראשונה מנושא חופשי, מהמסמך הפתוח או מקובץ PowerPoint קיים. כל מצגת שתיצור תישמר כאן אוטומטית.
+          </p>
+          <button
+            type="button"
+            onClick={onNewDeck}
+            className="mt-5 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3 text-sm font-bold text-white transition hover:from-cyan-400"
+          >בוא נתחיל</button>
+        </div>
+      )}
+
+      {Boolean(records.length) && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {records.map((rec) => {
+            const theme = getThemeById(rec.themeId);
+            const missing = rec.bodyMissing;
+            const isBusy = busyId === rec.id;
+            const isOpen = rec.id === openDeckId;
+            return (
+              <div
+                key={rec.id}
+                className={`flex flex-col overflow-hidden rounded-2xl border transition ${isOpen ? 'border-cyan-400 bg-cyan-500/5' : 'border-slate-800 bg-slate-900/50 hover:border-slate-600'}`}
+              >
+                <button
+                  type="button"
+                  onClick={() => !missing && !isBusy && handleOpen(rec)}
+                  disabled={missing || isBusy}
+                  title={missing ? 'המצגת נוצרה במכשיר אחר ואינה זמינה כאן' : 'פתח לעריכה'}
+                  className={`block w-full text-right ${missing ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  <div
+                    className="flex w-full items-end justify-between p-3"
+                    style={{ aspectRatio: '16 / 9', background: theme?.coverGradient || theme?.colors?.bg || '#0f172a' }}
+                  >
+                    {rec.thumbDataUrl
+                      ? <img src={rec.thumbDataUrl} alt="" className="h-full w-full object-cover" />
+                      : (
+                        <>
+                          <span className="rounded-lg bg-slate-950/55 px-2 py-1 text-[11px] font-semibold text-slate-200">{rec.slideCount} שקופיות</span>
+                          {isOpen && <span className="rounded-lg bg-cyan-400 px-2 py-1 text-[11px] font-bold text-slate-950">פתוחה</span>}
+                        </>
+                      )}
+                  </div>
+                  <div className="px-4 pb-2 pt-3">
+                    <div className="truncate text-sm font-bold text-slate-100">{rec.title}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {missing ? 'לא זמינה במכשיר הזה' : `עודכן ${formatUpdatedAt(rec.updatedAt)} · ${rec.slideCount} שקופיות`}
+                    </div>
+                  </div>
+                </button>
+                <div className="mt-auto flex flex-wrap gap-1.5 border-t border-slate-800 px-3 py-2">
+                  {!missing && (
+                    <>
+                      <button type="button" disabled={isBusy} onClick={() => handleOpen(rec)} className="rounded-lg bg-cyan-500/15 px-2.5 py-1 text-[11px] font-bold text-cyan-300 transition hover:bg-cyan-500/25 disabled:opacity-40">פתח</button>
+                      <button type="button" disabled={isBusy} onClick={() => handleDuplicate(rec)} className="rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-400 transition hover:text-slate-100 disabled:opacity-40">שכפל</button>
+                      <button type="button" disabled={isBusy} onClick={() => handleRename(rec)} className="rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-400 transition hover:text-slate-100 disabled:opacity-40">שנה שם</button>
+                    </>
+                  )}
+                  <button type="button" disabled={isBusy} onClick={() => handleDelete(rec)} className="mr-auto rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition hover:text-rose-400 disabled:opacity-40">מחק</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -619,6 +788,15 @@ export default function PresentationStudio({
 
   // בקשת מדיה אוטומטית מטופס היצירה — נצרכת ב-useEffect כשה-deck מופיע.
   const autoMediaRef = useRef(null);
+  // דגל "מדיה אוטומטית רצה כרגע" — משהה את השמירה האוטומטית, כדי שלא נשמור
+  // עשר גרסאות ביניים כבדות (כל תמונה מחוללת היא base64 של מאות KB).
+  const autoMediaRunningRef = useRef(false);
+  // הדק שכבר נשמר (לפי זהות אובייקט) — מונע שמירה מיותרת בפתיחה מהרשימה
+  // וברינדורים שלא שינו את הדק.
+  const savedDeckRef = useRef(null);
+  // דופק שמריץ מחדש את בדיקת השמירה כשהמדיה האוטומטית הסתיימה בלי לשנות דק
+  // (אפס תמונות נוצרו) — אחרת הדק שנוצר זה עתה לא היה נשמר לעולם.
+  const [autoSaveTick, setAutoSaveTick] = useState(0);
 
   // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
   const [imageStyle, setImageStyle] = useState('photo');
@@ -771,6 +949,7 @@ export default function PresentationStudio({
     const req = autoMediaRef.current;
     if (!req || (!req.autoImages && !req.autoInfographics)) return undefined;
     autoMediaRef.current = null;
+    autoMediaRunningRef.current = true;
     let cancelled = false;
     (async () => {
       setMediaBusy('auto');
@@ -822,12 +1001,35 @@ export default function PresentationStudio({
       } catch (e) {
         if (!cancelled) setMediaError(e?.message || 'יצירת המדיה האוטומטית נכשלה');
       } finally {
+        autoMediaRunningRef.current = false;
+        setAutoSaveTick((v) => v + 1);
         if (!cancelled) { setMediaBusy(''); setMediaProgress(''); }
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck]);
+
+  // ── שמירה אוטומטית (debounce 1200ms) ─────────────────────────────
+  // מקור האמת נשאר ה-prop deck; כאן רק מקרינים אותו ל-deckStore. השוואת זהות
+  // מול savedDeckRef חוסכת שמירה מיותרת (למשל מיד אחרי פתיחה מהרשימה).
+  useEffect(() => {
+    if (!deck?.id) return undefined;
+    if (savedDeckRef.current === deck) return undefined;
+    const timer = setTimeout(() => {
+      // מדיה אוטומטית באוויר — ננסה שוב אחרי שהיא תסיים (ה-commit שלה יריץ אותנו).
+      if (autoMediaRunningRef.current) return;
+      const snapshot = deck;
+      savedDeckRef.current = snapshot;
+      saveDeck(snapshot, {}).catch((e) => {
+        // כישלון מכסה חייב להגיע למשתמש — אחרת "נשמר" ונעלם בשקט.
+        savedDeckRef.current = null;
+        showToast?.(e?.message || 'שמירת המצגת נכשלה', { tone: 'warning' });
+      });
+    }, 1200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deck, autoSaveTick]);
 
   // ── בחירת מסך לפי view (לא לפי !deck) ───────────────────────────
   // 'editor' בלי deck בזיכרון נופל חזרה לטופס היצירה.
@@ -843,33 +1045,43 @@ export default function PresentationStudio({
     </div>
   );
 
-  // רשימת המצגות — כרגע מסך פתיחה מינימלי (רשימה מלאה תגיע בשלב הבא).
+  // רשימת המצגות השמורות.
   if (resolvedView === 'list') {
     return (
       <div className="flex min-h-full flex-1 overflow-auto bg-slate-950">
         <div className="flex w-full flex-col">
           {studioHeader}
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-10">
-            <div>
-              <div className="inline-flex items-center rounded-full bg-cyan-500/15 px-3 py-1 text-[11px] font-bold text-cyan-300">סטודיו מצגות</div>
-              <h1 className="mt-3 text-3xl font-black text-white">המצגות שלך</h1>
-              <p className="mt-2 text-sm leading-7 text-slate-400">התחל מצגת חדשה, או המשך לערוך את המצגת הפתוחה.</p>
-            </div>
-            <div className="flex flex-wrap gap-3">
+          {deck && (
+            <div className="border-b border-slate-800 bg-slate-900/40 px-6 py-2.5">
               <button
                 type="button"
-                onClick={() => setView('brief')}
-                className="rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3.5 text-sm font-bold text-white transition hover:from-cyan-400"
-              >📊 מצגת חדשה</button>
-              {deck && (
-                <button
-                  type="button"
-                  onClick={() => setView('editor')}
-                  className="rounded-2xl border border-slate-700 bg-slate-800/60 px-6 py-3.5 text-sm font-bold text-slate-200 transition hover:border-cyan-400 hover:text-cyan-300"
-                >✏️ המשך עריכה{deck.title ? ` — ${deck.title}` : ''}</button>
-              )}
+                onClick={() => setView('editor')}
+                className="text-xs font-bold text-cyan-300 transition hover:text-cyan-200"
+              >✏️ חזרה למצגת הפתוחה{deck.title ? ` — ${deck.title}` : ''}</button>
             </div>
-          </div>
+          )}
+          <DeckListScreen
+            openDeckId={deck?.id || ''}
+            onOpenDeck={(loaded) => {
+              // כבר "שמור" — מסמנים כדי שהשמירה האוטומטית לא תדרוס updatedAt
+              // ותקפיץ את המצגת לראש הרשימה רק בגלל פתיחה.
+              savedDeckRef.current = loaded;
+              deckRef.current = loaded;
+              onDeckChange(loaded);
+              // ה-effect של deck?.id כבר מעביר לעורך, אבל לא כשפותחים מחדש
+              // את אותה מצגת (id זהה) — ואז המסך היה נשאר על הרשימה.
+              setView('editor');
+            }}
+            onDeckDeleted={(id) => {
+              if (!deck || deck.id !== id) return;
+              savedDeckRef.current = null;
+              deckRef.current = null;
+              historyRef.current = { past: [], future: [] };
+              onDeckChange(null);
+            }}
+            onNewDeck={() => setView('brief')}
+            showToast={showToast}
+          />
         </div>
       </div>
     );
