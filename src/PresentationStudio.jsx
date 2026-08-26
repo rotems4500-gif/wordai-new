@@ -1341,7 +1341,7 @@ export default function PresentationStudio({
           {slides.map((s, i) => (
             <button key={s.id} ref={s.id === selected.id ? selectedThumbRef : null} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
               <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-              <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} />
+              <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} deckId={deck.id} />
             </button>
           ))}
           <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
@@ -1350,7 +1350,7 @@ export default function PresentationStudio({
         {/* תצוגה מרכזית */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
           <div className="w-full max-w-3xl">
-            {selected && <SlideFrame slide={selected} themeId={deck.themeId} customTheme={deck.customTheme} index={selectedIndex} deckTitle={deck.title} />}
+            {selected && <SlideFrame slide={selected} themeId={deck.themeId} customTheme={deck.customTheme} index={selectedIndex} deckTitle={deck.title} deckId={deck.id} />}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>

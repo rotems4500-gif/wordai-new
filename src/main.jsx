@@ -6490,6 +6490,10 @@ ${sidebarReviewContext}`
     imageIntensity = 'high',
     density = 'balanced',
     documentText: providedDocumentText = '',
+    // הועברו ממסך הפתיחה מאז ומתמיד — עד כה נזרקו כאן ולא הגיעו ל-generateDeck.
+    speakerNotes = true,
+    includeCover = true,
+    selectedMaterials = [],
     aiAppendix = false,
     // מדיה אוטומטית — נעשית כאן, בתוך שלב ה"עסוק", ולא אחרי שהדק כבר נפתח
     // בעורך. מצגת חצי-מוכנה היא כשל מוצר, ולכן היא לא נכנסת לעורך בכלל.
@@ -6533,6 +6537,9 @@ ${sidebarReviewContext}`
         themeId: themeId || theme || 'premium',
         density,
         imageIntensity,
+        speakerNotes,
+        includeCover,
+        materials: Array.isArray(selectedMaterials) ? selectedMaterials.filter(Boolean) : [],
         signal: controller.signal,
       });
       if (controller.signal.aborted) return false;

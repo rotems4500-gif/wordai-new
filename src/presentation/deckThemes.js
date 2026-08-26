@@ -27,7 +27,9 @@ export const THEME_ACCENTS = CORE_THEME_ACCENTS;
 
 // accent לשקף בודד: override ידני גובר; אחרת theme.accents (סכימה חדשה),
 // אחרת THEME_ACCENTS לפי id, אחרת [accent, accent2]. רוטציה לפי אינדקס.
-export const getSlideAccent = (theme, slide, index = 0) => {
+// seedOffset (deckDecorSeed) מזיז את נקודת ההתחלה פר-דק, כדי ששתי מצגות באותה
+// ערכה לא יפתחו בדיוק באותו accent.
+export const getSlideAccent = (theme, slide, index = 0, seedOffset = 0) => {
   if (slide?.accent && slide.accent.trim()) return slide.accent.trim();
   const list =
     (Array.isArray(theme?.accents) && theme.accents.length ? theme.accents : null) ||
@@ -35,7 +37,8 @@ export const getSlideAccent = (theme, slide, index = 0) => {
     [theme?.colors?.accent, theme?.colors?.accent2].filter(Boolean);
   if (!list.length) return theme?.colors?.accent || '#38bdf8';
   const i = Number.isFinite(index) ? index : 0;
-  return list[((i % list.length) + list.length) % list.length];
+  const off = Number.isFinite(seedOffset) ? seedOffset : 0;
+  return list[(((i + off) % list.length) + list.length) % list.length];
 };
 
 export const DEFAULT_THEME_ID = 'premium';

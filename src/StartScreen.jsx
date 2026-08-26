@@ -43,7 +43,7 @@ import {
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
-import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences, getPresentationPreferences, savePresentationPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 // שורת המצב החיה של ה-OCR נשלטת מ-main.jsx (מאזין CLIP_PROGRESS_EVENT גלובלי) —
 // כאן רק מפעילים את ההרצה ומרעננים את הרשימה.
@@ -491,6 +491,10 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [pptAutoImages, setPptAutoImages] = useState(false);
   const [pptAutoInfographics, setPptAutoInfographics] = useState(false);
   const [pptAutoTheme, setPptAutoTheme] = useState(true);
+  // קהל יעד + מטרה — נזרעים מברירות המחדל בהגדרות המצגות ונשמרים חזרה ביצירה,
+  // כך שמי שמרצה תמיד לאותו קהל לא מקליד אותו כל פעם מחדש.
+  const [pptAudience, setPptAudience] = useState(() => String(getPresentationPreferences().defaultAudience || ''));
+  const [pptGoal, setPptGoal] = useState(() => String(getPresentationPreferences().defaultGoal || ''));
   const [uiTheme, setUiTheme] = useState(getTheme);
   useEffect(() => onThemeChange(setUiTheme), []);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
@@ -1554,11 +1558,21 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
         : '';
       if (!fromDraft && !String(prompt || '').trim()) return;
       setIsGenerating(true);
+      // הקהל והמטרה שהוקלדו הופכים לברירת המחדל של הפעם הבאה.
+      try {
+        savePresentationPreferences({
+          ...getPresentationPreferences(),
+          defaultAudience: String(pptAudience || '').trim(),
+          defaultGoal: String(pptGoal || '').trim(),
+        });
+      } catch { /* העדפות הן נוחות, לא תנאי ליצירה */ }
       try {
         await onGeneratePresentation?.({
           source: fromDraft ? 'document' : 'topic',
           topic: String(prompt || '').trim(),
           documentText: draftSourceText,
+          audience: String(pptAudience || '').trim(),
+          goal: String(pptGoal || '').trim(),
           slideCount: pptSlideAuto ? 'auto' : pptSlideCount,
           theme: pptTheme,
           density: pptDensity,
@@ -2135,6 +2149,28 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                       })}
                     </div>
                   </div>
+                </div>
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">קהל יעד</span>
+                    <input
+                      type="text"
+                      value={pptAudience}
+                      onChange={(e) => setPptAudience(e.target.value)}
+                      placeholder="למשל: סטודנטים לשנה א׳ / ועדת היגוי"
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 placeholder:text-white/40 placeholder:text-xs"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-2">
+                    <span className="text-white/80 text-xs font-semibold">מטרת המצגת</span>
+                    <input
+                      type="text"
+                      value={pptGoal}
+                      onChange={(e) => setPptGoal(e.target.value)}
+                      placeholder="למשל: להסביר את המודל / לשכנע לאמץ את ההצעה"
+                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 placeholder:text-white/40 placeholder:text-xs"
+                    />
+                  </label>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <label className="inline-flex items-center gap-2 text-white/85 text-xs">

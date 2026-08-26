@@ -7,7 +7,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { getThemeById, getSlideAccent, isLightTheme } from './deckThemes';
-import { resolveBgVariant } from './deckModel';
+import { resolveBgVariant, deckDecorSeed } from './deckModel';
 import { SlideBackground, getSlideBaseBackground } from './slideBackgrounds';
 import {
   TextureLayer,
@@ -47,16 +47,18 @@ function Motif({ theme, index }) {
 // לצריבת רקע ל-native export. early-return בראש כדי שלא ידרוף מלוגיקת הפריסות.
 // forExport=true — רנדר לצריבה (PPTX/תמונה): מציין שקופית שהתמונה שלה עדיין
 // חסרה מרונדרת כבלוק ניטרלי לגמרי, בלי שום טקסט placeholder.
-export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '', customTheme = null, forExport = false }) {
+export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '', customTheme = null, forExport = false, deckId = '' }) {
   // customTheme — ערכה שנוצרה ב-AI (resolveTheme כבר מילא בה כל שדה חסר).
   // גוברת על themeId, כדי שהעיצוב החדש יופיע בעורך, בתצוגה ובייצוא באותה שכבה.
   const theme = (customTheme && customTheme.colors) ? customTheme : getThemeById(themeId);
   const c = theme.colors;
   const fD = theme.fonts?.display || theme.fonts?.body || "'Heebo', sans-serif";
   const fB = theme.fonts?.body || "'Heebo', sans-serif";
-  // per-slide: כל שקף accent מסתובב מפלטת ה-theme (override ידני גובר)
-  const accent = getSlideAccent(theme, slide, index);
-  const bgVariant = resolveBgVariant(slide, index, theme);
+  // per-slide: כל שקף accent מסתובב מפלטת ה-theme (override ידני גובר).
+  // deckId → היסט קבוע ברוטציה, כדי ששתי מצגות באותה ערכה לא ייפתחו זהות.
+  const decorSeed = deckDecorSeed(deckId);
+  const accent = getSlideAccent(theme, slide, index, decorSeed);
+  const bgVariant = resolveBgVariant(slide, index, theme, decorSeed);
   const accentStyle = theme.shape?.accentStyle || 'bar';
   const radius = theme.shape?.radius ?? 18;
   const isLight = isLightTheme(theme);
@@ -1013,7 +1015,7 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
 }
 
 // עוטף רספונסיבי — מקטין את הבמה כדי שתתאים לרוחב ההורה (שומר 16:9)
-export function SlideFrame({ slide, themeId, index = null, rounded = true, shadow = true, className = '', style = {}, deckTitle = '', customTheme = null }) {
+export function SlideFrame({ slide, themeId, index = null, rounded = true, shadow = true, className = '', style = {}, deckTitle = '', customTheme = null, deckId = '' }) {
   const ref = useRef(null);
   const [scale, setScale] = useState(0.5);
 
@@ -1042,7 +1044,7 @@ export function SlideFrame({ slide, themeId, index = null, rounded = true, shado
       }}
     >
       <div style={{ position: 'absolute', top: 0, right: 0, transformOrigin: 'top right', transform: `scale(${scale})` }}>
-        <SlideStage slide={slide} themeId={themeId} index={index} deckTitle={deckTitle} customTheme={customTheme} />
+        <SlideStage slide={slide} themeId={themeId} index={index} deckTitle={deckTitle} customTheme={customTheme} deckId={deckId} />
       </div>
     </div>
   );

@@ -161,6 +161,15 @@ export const sanitizeSlideText = (value) => {
   return text.replace(/\s+/g, ' ').trim();
 };
 
+// accent שהגיע מהמודל הוא טקסט חופשי ("כחול", "rgb(…)") לא פחות מהפעמים שהוא hex.
+// ערך לא-hex נשמר בעבר כמו שהוא והודלף ל-CSS ול-pptxgenjs. כאן נשאר רק hex תקין.
+const normalizeAccent = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(withHash) ? withHash : '';
+};
+
 const toStringArray = (value) => {
   if (!Array.isArray(value)) return [];
   return value
@@ -215,7 +224,7 @@ export const normalizeSlide = (raw = {}) => {
     // מניע את כפתור "אינפוגרפיקה" לבחור כלי בלי לנחש, ומסומן ב-UI כהצעה.
     visual: ['chart', 'infographic'].includes(raw.visual) ? raw.visual : '',
     notes: sanitizeSlideText(raw.notes),
-    accent: String(raw.accent || '').trim(),
+    accent: normalizeAccent(raw.accent),
     bgVariant: BG_VARIANT_IDS.includes(raw.bgVariant) ? raw.bgVariant : '',
     exportMode: ['image', 'native'].includes(raw.exportMode) ? raw.exportMode : '',
   };
@@ -285,17 +294,31 @@ export const getDecorSequence = (theme) => {
   return (pack && DECOR_PACKS[pack]) ? DECOR_PACKS[pack] : AUTO_BG_SEQUENCE;
 };
 
-// resolveBgVariant(slide, index[, theme])
+// deckDecorSeed — hash זעיר של מזהה הדק → היסט קבוע ברוטציית הקישוט/האקסנט.
+// בלי זה כל מצגת מתחילה בדיוק באותו variant ובאותו accent, ושתי מצגות שונות
+// נראות כמו תאומות. hash מקומי (ולא hashStyleSeed מ-aiService) כדי שה-renderer
+// לא יגרור את מונוליט ה-AI לתוך הבאנדל של התצוגה/הייצוא.
+export const deckDecorSeed = (deckId = '') => {
+  const s = String(deckId || '');
+  if (!s) return 0;
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
+// resolveBgVariant(slide, index[, theme[, seedOffset]])
 // הפרמטר השלישי theme אופציונלי ותאימות-לאחור מלאה: קריאה עם 2 ארגומנטים
 // מתנהגת בדיוק כמו קודם (AUTO_BG_SEQUENCE). אם הועבר theme עם decorPack תקף,
 // הרוטציה עוברת דרך אותו pack במקום ה-AUTO.
-export const resolveBgVariant = (slide, index = 0, theme = null) => {
+// seedOffset (deckDecorSeed) מזיז את נקודת ההתחלה ברצף — פר-דק, לא פר-שקף.
+export const resolveBgVariant = (slide, index = 0, theme = null, seedOffset = 0) => {
   const v = slide?.bgVariant;
   if (v && v !== 'auto' && BG_VARIANT_IDS.includes(v)) return v;
   if (OWN_BG_LAYOUTS.has(slide?.layout)) return 'none';
   const seq = getDecorSequence(theme);
   const i = Number.isFinite(index) ? index : 0;
-  return seq[((i % seq.length) + seq.length) % seq.length];
+  const off = Number.isFinite(seedOffset) ? seedOffset : 0;
+  return seq[(((i + off) % seq.length) + seq.length) % seq.length];
 };
 
 // ── מסלול ייצוא (hybrid) ─────────────────────────────────────────

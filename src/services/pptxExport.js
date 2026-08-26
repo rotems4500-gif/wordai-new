@@ -10,7 +10,7 @@ import PptxGenJS from 'pptxgenjs';
 import { getThemeById, hex, getSlideAccent, getThemeFontNames } from '../presentation/deckThemes';
 import { getFontEmbedCss } from './fontEmbed';
 import { getSlideBaseColor } from '../presentation/slideBackgrounds';
-import { getSlideExportMode } from '../presentation/deckModel';
+import { getSlideExportMode, deckDecorSeed } from '../presentation/deckModel';
 import { renderSlidesToPng } from './slideImageRender';
 import { fetchImageAsDataUrl } from './imageService';
 
@@ -160,7 +160,9 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
   const fD = fonts.display;
   const fB = fonts.body;
   // per-slide accent: רוטציה מפלטת ה-theme (override ידני גובר). hex בלי '#'.
-  const accentAt = (s, i) => hex(getSlideAccent(theme, s, i));
+  // אותו היסט פר-דק שה-renderer משתמש בו — אחרת האקסנטים בייצוא לא תואמים למסך.
+  const decorSeed = deckDecorSeed(deck?.id || '');
+  const accentAt = (s, i) => hex(getSlideAccent(theme, s, i, decorSeed));
   const warnings = [];
 
   // מצב ייצוא לכל שקף לפי ה-profile
@@ -191,7 +193,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     });
   // JPEG q0.92 — בלתי-מובחן מ-PNG בתצוגה אך קטן פי ~6 (דק faithful ירד מ~27MB ל~4MB)
   const { map: pngMap, failures: imgFailures } = imageModeSlides.length
-    ? await withRasterBudget(renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null }), 'ייצוא התמונות', warnings)
+    ? await withRasterBudget(renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }), 'ייצוא התמונות', warnings)
     : { map: new Map(), failures: [] };
   // שקף image שצריבתו נכשלה → יוצא native (fallback). מתריעים למשתמש.
   imgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא במצב פשוט (צריבת עיצוב נכשלה)`));
@@ -206,7 +208,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     .filter(({ slide }) => modeFor(slide) === 'native')
     .concat(failedImageSlides);
   const { map: bgMap, failures: bgFailures } = nativeModeSlides.length
-    ? await withRasterBudget(renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null }), 'צריבת הרקעים', warnings)
+    ? await withRasterBudget(renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }), 'צריבת הרקעים', warnings)
     : { map: new Map(), failures: [] };
   // רקע native שצריבתו נכשלה → יוצא בצבע אחיד (fallback). מתריעים למשתמש.
   bgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא עם רקע אחיד (צריבת רקע נכשלה)`));

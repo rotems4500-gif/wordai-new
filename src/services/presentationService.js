@@ -4,10 +4,12 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { chatWithActiveProvider, getFeatureProviderConfig, hashStyleSeed } from './aiService';
-import { normalizeDeck, SLIDE_LAYOUT_IDS } from '../presentation/deckModel';
+import { normalizeDeck, SLIDE_LAYOUT_IDS, BG_VARIANT_IDS } from '../presentation/deckModel';
 import { DECK_THEMES } from '../presentation/deckThemes';
 
 const MAX_SOURCE_CHARS = 16000;
+// חומרי עזר נבחרים — תקציב כולל, כדי שהם לא יבלעו את הפרומפט (ואת המסמך).
+const MAX_MATERIALS_CHARS = 4000;
 
 const DENSITY_GUIDANCE = {
   lean: 'רזה: כל שקופית כותרת + 1-3 נקודות קצרות מאוד. בלי טקסט מעוטר.',
@@ -33,6 +35,10 @@ const imageRule = (imageIntensity) =>
       ? `תמונות בכ-חצי מהשקופיות. **חובה**: לפחות 40% מהשקופיות בפריסות תומכות-תמונה (${IMAGE_LAYOUTS.join(', ')}) ולכל אחת מהן שדה "image" מלא.`
       : `תמונות ברוב השקופיות שתומכות בכך. **חובה**: לפחות 60% מהשקופיות בפריסות תומכות-תמונה (${IMAGE_LAYOUTS.join(', ')}) ולכל אחת מהן שדה "image" מלא. אל תשתמש ב-title-bullets לשקופית שאפשר להציג עם תמונה לצד הטקסט.`;
 
+// ids של רקעי-שקף שהמודל רשאי לבחור. 'auto' מושמט בכוונה — ריק כבר אומר "אוטומטי",
+// ושתי דרכים לומר את אותו דבר רק מבלבלות את המודל.
+const PROMPT_BG_VARIANT_IDS = BG_VARIANT_IDS.filter((id) => id !== 'auto');
+
 // מבנה אובייקט שקופית — משותף בין shot-אחד למילוי-מנות
 const SLIDE_SHAPE = `{
   "layout": "אחד מ: ${SLIDE_LAYOUT_IDS.join(', ')}",
@@ -46,17 +52,21 @@ const SLIDE_SHAPE = `{
   "steps": [{"title":"שם השלב","body":"תיאור קצר (אופציונלי)"}],
   "image": { "query": "תיאור באנגלית לחיפוש/יצירת תמונה", "alt": "תיאור התמונה בעברית — שדה חובה כשיש image" },
   "visual": "אופציונלי: 'infographic' כשהתוכן הוא מבנה/תהליך/יחסים שעדיף לראות כדיאגרמה, 'chart' כשיש סדרת מספרים אמיתית להשוואה",
+  "bgVariant": "אופציונלי — טיפול הרקע של השקף. אחד מ: ${PROMPT_BG_VARIANT_IDS.join(', ')}. ריק = בחירה אוטומטית",
+  "accent": "אופציונלי — צבע הדגשה לשקף בפורמט hex (#RRGGBB). השאר ריק אם אין סיבה תוכנית לשנות",
   "notes": "הערות מרצה קצרות (אופציונלי)"
 }`;
 
-const SLIDE_CONTENT_RULES = (imageIntensity) => [
+const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
   '- גוון פריסות לפי סוג התוכן — אל תשתמש ב-title-bullets לכל שקף. המר תוכן למבנה ויזואלי:',
   '  • stat — כשיש מספרים/אחוזים/מדדים בולטים (שדה "stats", 1-4 פריטים). value קצר וחד.',
   '  • steps — לתהליך/שלבים/שיטה (שדה "steps", 3-5 שלבים).',
   '  • comparison — להשוואת שתי גישות/אפשרויות (שדה "columns", בדיוק 2 עמודות).',
   '  • big-statement — למסר/תובנה מרכזית אחת (שדה "body", משפט אחד חד). בלי בולטים.',
   '  • two-column — לחלוקה לשני נושאים מקבילים. quote — לציטוט.',
-  '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים). מומלץ במצגות של 8+ שקופיות.',
+  // ⚠️ הסף כאן חייב להישאר זהה לזה שב-structureRules — שני מספרים שונים באותו
+  // פרומפט הם הוראה סותרת, והמודל בחר לפי מצב רוחו.
+  '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים), רק לפי חוקי המבנה למעלה.',
   '  • timeline — לכרונולוגיה/אבני דרך/roadmap (שדה "steps": title=שנה/תקופה, body=מה קרה). 3-6 נקודות.',
   `- שדה "image" רק בפריסות שתומכות בתמונה (${IMAGE_LAYOUTS.join(', ')}). ה-query באנגלית, קונקרטי ונקי.`,
   '- כשיש שדה "image" — **חובה** למלא בו גם "alt" בעברית (משפט קצר שמתאר מה רואים). alt ריק או באנגלית נחשב שגיאה.',
@@ -65,11 +75,55 @@ const SLIDE_CONTENT_RULES = (imageIntensity) => [
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',
   '- שמור על טון עקבי ובהיר לאורך כל המצגת; אם סופק פרופיל סגנון — אמץ את הטון שלו בלבד, לא את מבנה המשפט או אורך הפסקה.',
   '- כל ערך בשדות ה-JSON הוא טקסט נקי בעברית: בלי markdown (**, __, `, #), בלי תגי HTML, בלי סימני ▸/•/… בתחילת או סוף טקסט, בלי הערות שוליים.',
-  '- שדה "kicker": בשקופיות תוכן (לא cover/section/image-full) תן תווית קצרה (2-4 מילים) שמזהה את הפרק/הנושא שהשקופית שייכת אליו, ואחידה לכל השקופיות באותו פרק.',
+  // ⚠️ kicker חובה הפך כל מצגת לאותה מצגת: תווית פרק מעל כל כותרת גם כשאין פרקים
+  // בכלל. עכשיו הוא מותנה במבנה אמיתי — פרקים עם 3+ שקופיות כל אחד.
+  '- שדה "kicker": מלא אותו רק אם למצגת יש חלוקה ברורה לפרקים ובכל פרק 3 שקופיות ומעלה — ואז תן תווית קצרה (2-4 מילים) של שם הפרק, אחידה לכל שקופיות אותו פרק. אין חלוקה כזו ⇒ השאר את kicker ריק בכל השקופיות.',
+  `- שדה "bgVariant": גוון את טיפול הרקע בין שקופיות סמוכות. אל תחזור על אותו variant פעמיים ברצף. בחר מתוך: ${PROMPT_BG_VARIANT_IDS.join(', ')}. ריק = בחירה אוטומטית של המערכת.`,
+  ...(speakerNotes
+    ? []
+    : ['- אל תמלא את שדה "notes" — השאר אותו ריק בכל השקופיות.']),
 ].join('\n');
 
+// מטרה "שכנועית" — במצגת מכירה/שכנוע שקופית agenda שוברת את המומנטום.
+const isPersuasiveGoal = (goal) => /שכנע|מכיר|מכירה/.test(String(goal || ''));
+
+// טון נגזר-מטרה. בלי זה "מטרה" הייתה שורת קישוט בפרומפט שלא משנה שום דבר בפלט.
+const toneLineForGoal = (goal) => {
+  const g = String(goal || '');
+  if (!g.trim()) return '';
+  if (/שכנע/.test(g)) return 'טון: אסרטיבי וממוקד מסר; העדף שקפי big-statement ו-stat.';
+  if (/הסבר|ללמד|הוראה/.test(g)) return 'טון: מובנה ומדורג; העדף steps ו-comparison.';
+  if (/דיווח|סיכום|ממצאים/.test(g)) return 'טון: ענייני ומבוסס נתונים; העדף stat ו-timeline.';
+  return '';
+};
+
+/**
+ * structureRules — חוקי המבנה (שער/סיום/agenda) לפי ההקשר האמיתי,
+ * במקום שלוש מחרוזות קשיחות שהפכו כל מצגת לאותה מצגת.
+ * @param {string} goal מטרת המצגת (משפיעה על agenda)
+ * @param {number|null} slideCount מספר שקופיות; null = אוטומטי (המודל מחליט)
+ * @param {boolean} includeCover האם לפתוח בשקופית שער
+ */
+const structureRules = (goal, slideCount, includeCover = true) => {
+  const withCover = includeCover !== false;
+  const lines = [
+    withCover
+      ? '- שקופית ראשונה layout="cover".'
+      : '- בלי שקופית שער: השקופית הראשונה היא כבר שקופית תוכן (אל תשתמש ב-layout="cover" בכלל).',
+    '- מומלץ לסיים ב-layout="closing".',
+  ];
+  if (!isPersuasiveGoal(goal)) {
+    if (slideCount == null) {
+      lines.push(`- אם בחרת 10 שקופיות ומעלה — השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר"). פחות מ-10 ⇒ בלי agenda.`);
+    } else if (slideCount >= 10) {
+      lines.push(`- השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר").`);
+    }
+  }
+  return lines.join('\n');
+};
+
 // בונה את הסכמה שה-LLM חייב להחזיר (מסלול shot-אחד)
-const buildSchemaInstruction = (slideCount, imageIntensity) => `
+const buildSchemaInstruction = (slideCount, imageIntensity, { goal = '', includeCover = true, speakerNotes = true } = {}) => `
 החזר JSON תקין בלבד (בלי טקסט מסביב, בלי code fences) במבנה הבא:
 {
   "title": "כותרת המצגת",
@@ -79,13 +133,13 @@ const buildSchemaInstruction = (slideCount, imageIntensity) => `
 }
 חוקים:
 - בדיוק ${slideCount} שקופיות.
-- שקופית ראשונה layout="cover". מומלץ לסיים ב-"closing".
-${SLIDE_CONTENT_RULES(imageIntensity)}
+${structureRules(goal, slideCount, includeCover)}
+${SLIDE_CONTENT_RULES(imageIntensity, { speakerNotes })}
 `;
 
 // בונה prompt לשלד (outline) — פריט קליל לכל שקופית, נכנס בקלות בלי חיתוך.
 // slideCount === null => אוטומטי: המודל בוחר את מספר השקופיות לפי עומק התוכן.
-const buildOutlinePrompt = (slideCount) => `
+const buildOutlinePrompt = (slideCount, { goal = '', includeCover = true } = {}) => `
 ${slideCount == null
     ? 'תכנן שלד מצגת. בחר בעצמך את מספר השקופיות המתאים לעומק ולכמות התוכן.'
     : `תכנן שלד מצגת בת ${slideCount} שקופיות.`}
@@ -100,23 +154,31 @@ ${slideCount == null
 ${slideCount == null
     ? '- בחר מספר שקופיות הולם לתוכן (בדרך כלל 8–18, מותר עד 40 אם התוכן עשיר). לא מעט מדי ולא מנופח.'
     : `- בדיוק ${slideCount} פריטים.`}
-- נרטיב זורם בלי חזרות.
-- פריט ראשון layout="cover", אחרון layout="closing".
-- אם המצגת מונה 8 שקופיות ומעלה — פריט 2 יהיה layout="agenda" ("על מה נדבר").
+- נרטיב זורם בלי חזרות. כל פריט מוסיף מידע חדש שלא מכוסה בפריט אחר.
+${structureRules(goal, slideCount, includeCover)}
 - אם התוכן כרונולוגי (שלבים בזמן/היסטוריה/roadmap) — השתמש ב-layout="timeline" בשקופית המתאימה.
 - מגוון פריסות לפי התוכן. עברית.
 `;
 
 // בונה prompt למילוי טווח שקופיות בהינתן השלד המלא (להקשר)
-const buildBatchPrompt = (outline, start, end, imageIntensity) => {
+const buildBatchPrompt = (outline, start, end, imageIntensity, { speakerNotes = true } = {}) => {
   const outlineLines = outline
     .map((o, i) => `${i + 1}. [${o.layout}] ${o.title} — ${o.focus || ''}`)
     .join('\n');
+  // שכנים: המנה לא רואה את התוכן שנכתב במנות אחרות, ולכן חוזרת על עצמה בתפר.
+  // הזכרת השקופית שלפני ושאחרי הטווח היא הרמז הזול היחיד שמונע כפילות בתפר.
+  const prevItem = start > 0 ? outline[start - 1] : null;
+  const nextItem = end < outline.length ? outline[end] : null;
+  const neighbourLines = [
+    prevItem ? `- לפני הטווח (שקופית ${start}): "${prevItem.title}" — כבר מכוסה, אל תחזור עליה.` : '',
+    nextItem ? `- אחרי הטווח (שקופית ${end + 1}): "${nextItem.title}" — תיכתב בנפרד, אל תקדים אותה.` : '',
+  ].filter(Boolean).join('\n');
   return `
 לפניך שלד מלא של מצגת בת ${outline.length} שקופיות (כל המצגת, להקשר ורצף):
 ${outlineLines}
 
 מלא בתוכן מלא אך ורק את השקופיות ${start + 1}..${end} (כולל). שמור על אותו layout וכותרת מהשלד.
+${neighbourLines ? `\nגבולות הטווח:\n${neighbourLines}\n` : ''}
 החזר JSON תקין בלבד (בלי טקסט מסביב, בלי code fences):
 {
   "slides": [
@@ -125,8 +187,35 @@ ${outlineLines}
 }
 חוקים:
 - בדיוק ${end - start} שקופיות, באותו סדר כמו בשלד.
-${SLIDE_CONTENT_RULES(imageIntensity)}
+- אל תחזור על תוכן שכבר מכוסה בשקופיות אחרות במתווה; כל שקף מוסיף מידע חדש.
+${SLIDE_CONTENT_RULES(imageIntensity, { speakerNotes })}
 `;
+};
+
+/**
+ * buildMaterialsBlock — חומרי העזר שהמשתמש סימן במסך הבית, כבלוק מקור אחד.
+ * הפריטים מגיעים מ-loadProjectMaterials ⇒ { title, contentText, previewText }.
+ * תקציב כולל MAX_MATERIALS_CHARS, מחולק שווה בשווה, כדי שחומר אחד ארוך לא
+ * ידחוק את השאר ולא ינפח את הפרומפט מעבר לתקציב של המנה.
+ */
+const buildMaterialsBlock = (materials = []) => {
+  const list = (Array.isArray(materials) ? materials : []).filter(Boolean);
+  if (!list.length) return '';
+  const perItem = Math.max(300, Math.floor(MAX_MATERIALS_CHARS / Math.min(list.length, 8)));
+  let budget = MAX_MATERIALS_CHARS;
+  const parts = [];
+  for (const item of list) {
+    if (budget <= 0) break;
+    const title = String(item?.title || item?.file || '').trim() || 'חומר עזר';
+    const raw = String(item?.contentText || item?.previewText || '').replace(/\s+/g, ' ').trim();
+    if (!raw) continue;
+    const take = Math.min(perItem, budget);
+    const slice = raw.length > take ? `${raw.slice(0, take)}…` : raw;
+    budget -= slice.length;
+    parts.push(`- ${title}: ${slice}`);
+  }
+  if (!parts.length) return '';
+  return `\nחומרי עזר נבחרים:\n${parts.join('\n')}`;
 };
 
 // מחלץ JSON גם אם המודל עטף ב-code fence או הוסיף טקסט
@@ -215,6 +304,9 @@ export const generateDeck = async ({
   themeId = 'premium',
   density = 'balanced',
   imageIntensity = 'high',
+  speakerNotes = true,
+  includeCover = true,
+  materials = [],
   providerConfigOverride = null,
   signal,
 } = {}) => {
@@ -234,18 +326,26 @@ export const generateDeck = async ({
   if (fromDocument && !trimmedDoc.trim()) throw new Error('אין תוכן מקור להפיכה למצגת.');
   if (!fromDocument && !cleanTopic) throw new Error('חסר נושא למצגת.');
 
-  // הקשר משותף לכל קריאה (נושא/קהל/מטרה/צפיפות/מסמך)
+  const cleanAudience = String(audience || '').trim();
+  const cleanGoal = String(goal || '').trim();
+
+  // הקשר משותף לכל קריאה — brief אמיתי: נושא/קהל/מטרה/טון-נגזר-מטרה/צפיפות.
+  // הטון הוא ההבדל בין "מטרה" כשורת קישוט לבין מטרה שמזיזה את הפלט.
   const baseContext = [
     fromDocument
       ? 'הפוך את המסמך הבא למצגת ויזואלית שמסכמת ומציגה אותו. מותר לקצר, לסכם ולשנות מבנה.'
       : `צור מצגת בעברית בנושא: ${cleanTopic}`,
     fromDocument && cleanTopic ? `זווית/דגש מבוקש: ${cleanTopic}` : '',
-    audience ? `קהל יעד: ${String(audience).trim()}` : '',
-    goal ? `מטרה: ${String(goal).trim()}` : '',
+    cleanAudience ? `קהל יעד: ${cleanAudience} — התאם את רמת הפירוט, הדוגמאות והמונחים אליו.` : '',
+    cleanGoal ? `מטרה: ${cleanGoal}` : '',
+    toneLineForGoal(cleanGoal),
     DENSITY_GUIDANCE[safeDensity],
   ].filter(Boolean).join('\n');
 
   const docBlock = fromDocument ? `\nתוכן המסמך:\n"""\n${trimmedDoc}\n"""` : '';
+  // חומרי העזר נלווים ל-docBlock בכל מסלול (shot-אחד, שלד ומנות) — מנה שלא
+  // רואה את החומרים ממציאה תוכן שאמור היה לבוא מהם.
+  const materialsBlock = buildMaterialsBlock(materials);
 
   // override מפורש מנצח; אחרת — API ייעודי למצגות אם הוגדר בהגדרות.
   const featureOverride = providerConfigOverride || getFeatureProviderConfig('presentations')?.config || null;
@@ -283,16 +383,33 @@ export const generateDeck = async ({
   // אזהרות שנצברות במסלול ה-chunked (מנות שלא הושלמו) — מוצמדות ל-deck בסוף.
   const generationWarnings = [];
 
+  // אפשרויות מבנה/תוכן שמשותפות לכל בוני הפרומפט
+  const shapeOpts = { goal: cleanGoal, includeCover, speakerNotes };
+
+  // shot-אחד — מצגת קטנה. slideCountForShot נמסר גם ממסלול ה-auto (אורך השלד).
+  const runOneShot = async (slideCountForShot, outlineHint = '') => {
+    const prompt = [
+      baseContext,
+      outlineHint,
+      buildSchemaInstruction(slideCountForShot, imageIntensity, shapeOpts),
+      docBlock,
+      materialsBlock,
+    ].filter(Boolean).join('\n');
+    const parsed = extractJson(await runChat(prompt, 8192));
+    return {
+      title: parsed.title || '',
+      slides: Array.isArray(parsed.slides) ? parsed.slides : [],
+    };
+  };
+
   if (!isAuto && safeSlideCount <= CHUNK_THRESHOLD) {
     // מסלול shot-אחד — מצגות קטנות בכמות קבועה
-    const prompt = [baseContext, buildSchemaInstruction(safeSlideCount, imageIntensity), docBlock]
-      .filter(Boolean).join('\n');
-    const parsed = extractJson(await runChat(prompt, 8192));
-    deckTitle = parsed.title || deckTitle;
-    slides = Array.isArray(parsed.slides) ? parsed.slides : [];
+    const shot = await runOneShot(safeSlideCount);
+    deckTitle = shot.title || deckTitle;
+    slides = shot.slides;
   } else {
     // מסלול chunked — שלב 1: שלד (outline) לכל המצגת
-    const outlinePrompt = [baseContext, buildOutlinePrompt(safeSlideCount), docBlock]
+    const outlinePrompt = [baseContext, buildOutlinePrompt(safeSlideCount, shapeOpts), docBlock, materialsBlock]
       .filter(Boolean).join('\n');
     const outlineParsed = extractJson(await runChat(outlinePrompt, 4096));
     deckTitle = outlineParsed.title || deckTitle;
@@ -301,61 +418,85 @@ export const generateDeck = async ({
       .filter((o) => o.title);
     if (!outline.length) throw new Error('המודל לא החזיר שלד תקין למצגת.');
 
-    // שלב 2: מילוי במנות, במקביל — כל מנה מקבלת את השלד המלא להקשר
-    const batches = [];
-    for (let start = 0; start < outline.length; start += BATCH_SIZE) {
-      batches.push([start, Math.min(start + BATCH_SIZE, outline.length)]);
-    }
-    const fillBatch = async ([start, end]) => {
-      const prompt = [baseContext, buildBatchPrompt(outline, start, end, imageIntensity), docBlock]
-        .filter(Boolean).join('\n');
-      const parsed = extractJson(await runChat(prompt, 4096));
-      const got = Array.isArray(parsed.slides) ? parsed.slides : [];
-      if (!got.length) throw new Error('המנה חזרה ריקה.');
-      return got;
-    };
-
-    // רשת ביטחון: שקופית מינימלית מפריט השלד, כדי שהמצגת תושלם גם אחרי כישלון מנה.
-    const slideFromOutline = (o) => ({
-      layout: o?.layout || 'title-bullets',
-      title: o?.title || '',
-      subtitle: '(השלמה נדרשת — נסה לרענן שקף זה)',
-    });
-
-    // יישור אורך המנה לשלד — שקופית N חייבת להישאר מיושרת ל-outline[N].
-    const alignBatch = (got, start, end) => {
-      const expected = end - start;
-      const out = got.slice(0, expected);
-      for (let i = out.length; i < expected; i += 1) out.push(slideFromOutline(outline[start + i]));
-      return out;
-    };
-
-    // allSettled ולא all: מנה אחת שנפלה (מכסה/עומס/JSON קטוע) הפילה את כל המצגת.
-    const settled = await Promise.allSettled(batches.map(fillBatch));
-    const filled = [];
-    for (let i = 0; i < batches.length; i += 1) {
-      const [start, end] = batches[i];
-      if (settled[i].status === 'fulfilled') {
-        filled.push(alignBatch(settled[i].value, start, end));
-        continue;
-      }
-      if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
-      // ניסיון חוזר יחיד, סדרתי — כישלון במקביל הוא לרוב עומס רגעי.
+    // ── auto שיצא קצר: מצגת בת ≤CHUNK_THRESHOLD שקופיות לא צריכה מנות ──
+    // ב-auto מספר השקופיות ידוע רק אחרי השלד, ולכן מצגת קצרה נכנסה עד כה
+    // למסלול המנות ואיבדה את הקוהרנטיות של קריאה אחת. השלד לא הולך לפח:
+    // הוא נמסר כ"מתווה מוצע" לאותה קריאה.
+    if (isAuto && outline.length <= CHUNK_THRESHOLD) {
+      const outlineHint = [
+        'מתווה מוצע (בנה עליו; מותר לחדד ניסוח כותרות, לא לשנות את הרצף):',
+        ...outline.map((o, i) => `${i + 1}. [${o.layout}] ${o.title} — ${o.focus || ''}`),
+      ].join('\n');
       try {
-        filled.push(alignBatch(await fillBatch(batches[i]), start, end));
+        const shot = await runOneShot(outline.length, outlineHint);
+        if (shot.slides.length) {
+          deckTitle = shot.title || deckTitle;
+          slides = shot.slides;
+        }
       } catch {
-        filled.push(alignBatch([], start, end));
-        generationWarnings.push(`שקופיות ${start + 1}-${end} לא נוצרו במלואן — רענן אותן ידנית.`);
+        // נכשל (JSON קטוע/מכסה) → ממשיכים למסלול המנות עם אותו שלד.
       }
       if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
     }
-    slides = filled.flat();
+
+    // שלב 2: מילוי במנות, במקביל — כל מנה מקבלת את השלד המלא להקשר.
+    // מדולג כשמסלול ה-shot-אחד של auto כבר החזיר שקופיות.
+    if (!slides.length) {
+      const batches = [];
+      for (let start = 0; start < outline.length; start += BATCH_SIZE) {
+        batches.push([start, Math.min(start + BATCH_SIZE, outline.length)]);
+      }
+      const fillBatch = async ([start, end]) => {
+        const prompt = [baseContext, buildBatchPrompt(outline, start, end, imageIntensity, { speakerNotes }), docBlock, materialsBlock]
+          .filter(Boolean).join('\n');
+        const parsed = extractJson(await runChat(prompt, 4096));
+        const got = Array.isArray(parsed.slides) ? parsed.slides : [];
+        if (!got.length) throw new Error('המנה חזרה ריקה.');
+        return got;
+      };
+
+      // רשת ביטחון: שקופית מינימלית מפריט השלד, כדי שהמצגת תושלם גם אחרי כישלון מנה.
+      const slideFromOutline = (o) => ({
+        layout: o?.layout || 'title-bullets',
+        title: o?.title || '',
+        subtitle: '(השלמה נדרשת — נסה לרענן שקף זה)',
+      });
+
+      // יישור אורך המנה לשלד — שקופית N חייבת להישאר מיושרת ל-outline[N].
+      const alignBatch = (got, start, end) => {
+        const expected = end - start;
+        const out = got.slice(0, expected);
+        for (let i = out.length; i < expected; i += 1) out.push(slideFromOutline(outline[start + i]));
+        return out;
+      };
+
+      // allSettled ולא all: מנה אחת שנפלה (מכסה/עומס/JSON קטוע) הפילה את כל המצגת.
+      const settled = await Promise.allSettled(batches.map(fillBatch));
+      const filled = [];
+      for (let i = 0; i < batches.length; i += 1) {
+        const [start, end] = batches[i];
+        if (settled[i].status === 'fulfilled') {
+          filled.push(alignBatch(settled[i].value, start, end));
+          continue;
+        }
+        if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
+        // ניסיון חוזר יחיד, סדרתי — כישלון במקביל הוא לרוב עומס רגעי.
+        try {
+          filled.push(alignBatch(await fillBatch(batches[i]), start, end));
+        } catch {
+          filled.push(alignBatch([], start, end));
+          generationWarnings.push(`שקופיות ${start + 1}-${end} לא נוצרו במלואן — רענן אותן ידנית.`);
+        }
+        if (signal?.aborted) throw new Error('יצירת המצגת בוטלה.');
+      }
+      slides = filled.flat();
+    }
   }
 
   const normalized = normalizeDeck({
     title: deckTitle,
     themeId: safeTheme,
-    meta: { audience: String(audience || '').trim(), goal: String(goal || '').trim(), topic: cleanTopic },
+    meta: { audience: cleanAudience, goal: cleanGoal, topic: cleanTopic },
     slides,
   });
 
