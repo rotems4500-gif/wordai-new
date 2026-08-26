@@ -6635,7 +6635,10 @@ ${sidebarReviewContext}`
         if (controller.signal.aborted || media.aborted) return false;
         if (autoImages && media.pendingRemaining > 0) {
           setPresentationProgress('');
-          setPresentationMediaFailure({ deck: finalDeck, missing: media.pendingRemaining, autoInfographics: false });
+          // ⚠️ הדגל נשמר כמו שהוא. קודם הוא נדרס ל-false, ולכן ניסיון חוזר איבד
+          // את כוונת האינפוגרפיקות ושקופיות ה-chart קיבלו תמונת AI בתשלום
+          // במקום גרף QuickChart חינמי (ו-Boolean(held.autoInfographics) היה קוד מת).
+          setPresentationMediaFailure({ deck: finalDeck, missing: media.pendingRemaining, autoInfographics });
           return false;
         }
       }
@@ -6679,14 +6682,15 @@ ${sidebarReviewContext}`
       });
       if (controller.signal.aborted || media.aborted) return false;
       if (media.pendingRemaining > 0) {
-        setPresentationMediaFailure({ deck: media.deck, missing: media.pendingRemaining, autoInfographics: false });
+        // הכוונה נשמרת גם בין ניסיון לניסיון — אחרת היא נמחקת בניסיון הראשון.
+        setPresentationMediaFailure({ deck: media.deck, missing: media.pendingRemaining, autoInfographics: held.autoInfographics });
         return false;
       }
       setPresentationDeck(media.deck);
       return true;
     } catch (error) {
       if (controller.signal.aborted) return false;
-      setPresentationMediaFailure({ deck: held.deck, missing: held.missing, autoInfographics: false });
+      setPresentationMediaFailure({ deck: held.deck, missing: held.missing, autoInfographics: held.autoInfographics });
       showToast(error?.message || 'יצירת התמונות נכשלה', { tone: 'error' });
       return false;
     } finally {

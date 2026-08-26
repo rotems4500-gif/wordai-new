@@ -1069,10 +1069,14 @@ export default function PresentationStudio({
   // התשובה נשארת בצ'אט. פתיחה מהסטודיו נכנסת ישר למצב עריכה דרך launchPreset,
   // אחרת "ערוך לי את השקופית" היה נראה כאילו לא קרה כלום.
   const [assistantPreset, setAssistantPreset] = useState({ nonce: 0, classicAgentId: '', composerMode: '', prompt: '' });
-  const toggleAssistant = () => setAssistantOpen((open) => {
-    if (!open) setAssistantPreset({ nonce: Date.now(), classicAgentId: '', composerMode: 'edit', prompt: '' });
-    return !open;
-  });
+  // ⚠️ המצב הבא מחושב לפני הקריאות ל-setState: setAssistantPreset בתוך ה-updater
+  // של setAssistantOpen הוא עדכון-בתוך-עדכון, ותחת StrictMode/render כפול ה-updater
+  // רץ פעמיים ומייצר preset כפול (nonce שונה) — כלומר launchPreset שנורה פעמיים.
+  const toggleAssistant = () => {
+    const next = !assistantOpen;
+    if (next) setAssistantPreset({ nonce: Date.now(), classicAgentId: '', composerMode: 'edit', prompt: '' });
+    setAssistantOpen(next);
+  };
 
   // ── היסטוריית ביטול/ביצוע-שוב ברמת ה-deck (Ctrl+Z / Ctrl+Shift+Z) ──
   const historyRef = useRef({ past: [], future: [] });
@@ -1093,6 +1097,10 @@ export default function PresentationStudio({
   // הדק שכבר נשמר (לפי זהות אובייקט) — מונע שמירה מיותרת בפתיחה מהרשימה
   // וברינדורים שלא שינו את הדק.
   const savedDeckRef = useRef(null);
+  // שחרור מיידי של שמירה שממתינה בהשהיה (פירוק הסטודיו / beforeunload).
+  const flushSaveRef = useRef(null);
+  // המצגת שכבר הוצגה עליה התראת "נמחקה ממכשיר אחר" — פעם אחת לכל מצגת.
+  const deckDeletedToastRef = useRef('');
 
   // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
   const [imageStyle, setImageStyle] = useState('photo');
@@ -1127,6 +1135,10 @@ export default function PresentationStudio({
     const prev = deckRef.current;
     const resolved = typeof nextDeck === 'function' ? nextDeck(prev) : nextDeck;
     if (!resolved) return;
+    // ⚠️ פעולה שלא שינתה כלום מחזירה את אותו אובייקט (moveSlide בקצה הרצועה,
+    // removeSlide על שקופית יחידה, updater שהחזיר prev). בלי השער הזה Alt+↑ על
+    // השקופית הראשונה היה דוחף צעד-ביטול ריק ומוחק את ה-redo.
+    if (resolved === prev) return;
     const h = historyRef.current;
     if (prev) {
       h.past.push(prev);
@@ -1162,17 +1174,25 @@ export default function PresentationStudio({
   // ⚠️ מוגדרות כאן, לפני ה-effects והיציאות המוקדמות (list/brief), כדי שגם
   // ה-effect של המקלדת יוכל לקרוא להן. הגדרה אחרי היציאה המוקדמת הייתה משאירה
   // אותן לא-מאותחלות במסכים האחרים ומפילה את ה-handler ב-TDZ.
+  // ⚠️ קוראות דרך ה-refs ולא דרך deck/selected של הרינדור: ה-handler נתפס
+  // ב-effect של המקלדת (תלויות חלקיות) ובכפתורים, ומצב מיושן היה מוחק/מזיז
+  // את השקופית הלא-נכונה או דורס עריכה שנעשתה בינתיים.
   const handleRemove = () => {
-    if (!deck || !selected || slides.length <= 1) return;
-    const idx = selectedIndex;
-    const next = removeSlide(deck, selected.id);
+    const current = deckRef.current;
+    const list = current?.slides || [];
+    const id = selectedIdRef.current;
+    const idx = list.findIndex((s) => s.id === id);
+    if (!current || idx < 0 || list.length <= 1) return;
+    const next = removeSlide(current, id);
     commitDeck(next);
     setSelectedId(next.slides[Math.max(0, idx - 1)]?.id || '');
     showToast?.('השקופית נמחקה — Ctrl+Z לביטול');
   };
   const handleMove = (dir) => {
-    if (!deck || !selected) return;
-    commitDeck(moveSlide(deck, selected.id, dir));
+    const current = deckRef.current;
+    const id = selectedIdRef.current;
+    if (!current || !id) return;
+    commitDeck(moveSlide(current, id, dir));
   };
   // שינוי סדר חופשי (גרירה ברצועה). moveSlide מזיז צעד אחד בלבד, ולכן כאן
   // בונים את מערך השקופיות מחדש עם splice ומקמטים בקומיט אחד.
@@ -1258,13 +1278,10 @@ export default function PresentationStudio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialView]);
 
-  // שער השלמות המדיה חי במסך ה-brief בלבד. משתמש שחזר לרשימה בזמן היצירה היה
-  // נשאר בלי שום סימן שהריצה נעצרה וממתינה להחלטה — לכן כישלון מדיה מושך את
-  // התצוגה חזרה לטופס. (התלות היא באובייקט עצמו: חזרה ידנית לרשימה אחריו לא
-  // מריצה את ה-effect שוב, ולכן היא לא "נחטפת".)
-  useEffect(() => {
-    if (mediaFailure) setView('brief');
-  }, [mediaFailure]);
+  // ⚠️ שער השלמות המדיה **אינו** משנה view. קודם הוא כפה setView('brief') כדי
+  // שיהיה גלוי גם למי שחזר לרשימה — אבל זה פירק ומרכיב מחדש את CreateForm
+  // ומחק את מה שהמשתמש הקליד. במקום זה הוא מרונדר כשכבת fixed עצמאית
+  // (mediaFailureOverlay למטה) שמופיעה מעל כל מסך, בלי לגעת ב-state התצוגה.
 
   // דק חדש (id אחר) — היסטוריית הביטול והבחירה של הדק הקודם כבר לא רלוונטיות,
   // והתצוגה עוברת לעורך. בלי זה Ctrl+Z היה מחזיר את המצגת הקודמת.
@@ -1345,26 +1362,70 @@ export default function PresentationStudio({
     selectedThumbRef.current?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
 
+  // הודעות המדיה ("הפריסה הוחלפה" / שגיאה) שייכות לשקופית שעליה רצה הפעולה.
+  // בלי הניקוי הזה הן נשארו על המסך אחרי מעבר לשקופית אחרת ונקראו כאילו הן
+  // מתארות אותה.
+  useEffect(() => {
+    setMediaResult('');
+    setMediaError('');
+  }, [selectedId]);
+
   // ── שמירה אוטומטית (debounce 1200ms) ─────────────────────────────
   // מקור האמת נשאר ה-prop deck; כאן רק מקרינים אותו ל-deckStore. השוואת זהות
   // מול savedDeckRef חוסכת שמירה מיותרת (למשל מיד אחרי פתיחה מהרשימה).
+  // ⚠️ הניקוי של ה-effect רץ גם על כל שינוי deck (זו בדיוק ההשהיה), ולכן שחרור
+  // מיידי מותנה בדגל הפירוק. ה-effect הזה מוגדר לפני השמירה האוטומטית כדי
+  // שהניקוי שלו ירוץ ראשון (React מנקה לפי סדר ההגדרה).
+  const unmountedRef = useRef(false);
+  useEffect(() => () => { unmountedRef.current = true; }, []);
   useEffect(() => {
-    if (!deck?.id) return undefined;
-    if (savedDeckRef.current === deck) return undefined;
-    const timer = setTimeout(() => {
+    if (!deck?.id) { flushSaveRef.current = null; return undefined; }
+    if (savedDeckRef.current === deck) { flushSaveRef.current = null; return undefined; }
+    let done = false;
+    const run = () => {
+      if (done) return;
+      done = true;
       const snapshot = deck;
       savedDeckRef.current = snapshot;
       // allowRevive:false — מחיקה של המצגת הפתוחה ושמירה אוטומטית שכבר הייתה
       // בהמתנה רצו במרוץ, והשמירה החזירה את המצגת המחוקה לרשימה.
-      saveDeck(snapshot, { allowRevive: false }).catch((e) => {
+      saveDeck(snapshot, { allowRevive: false }).then((record) => {
+        // null = הרשומה מסומנת כמחוקה (tombstone ממכשיר אחר) והשמירה דולגה.
+        // בלי הבדיקה הזו זה נראה בדיוק כמו שמירה מוצלחת, והמשתמש ממשיך לערוך
+        // מצגת שכבר לא נשמרת לשום מקום.
+        if (record === null) {
+          savedDeckRef.current = null;
+          if (deckDeletedToastRef.current !== snapshot.id) {
+            deckDeletedToastRef.current = snapshot.id;
+            showToast?.('המצגת נמחקה ממכשיר אחר — השינויים לא נשמרים', { tone: 'warning' });
+          }
+        }
+      }).catch((e) => {
         // כישלון מכסה חייב להגיע למשתמש — אחרת "נשמר" ונעלם בשקט.
         savedDeckRef.current = null;
         showToast?.(e?.message || 'שמירת המצגת נכשלה', { tone: 'warning' });
       });
-    }, 1200);
-    return () => clearTimeout(timer);
+    };
+    const timer = setTimeout(run, 1200);
+    flushSaveRef.current = run;
+    return () => {
+      clearTimeout(timer);
+      // יציאה מהסטודיו פחות מ-1.2 שניות אחרי העריכה האחרונה ביטלה את הטיימר
+      // ואיבדה אותה בשקט. בפירוק משחררים את השמירה מיד.
+      if (unmountedRef.current) run();
+      if (flushSaveRef.current === run) flushSaveRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck]);
+
+  // סגירת חלון/רענון: משחררים שמירה ממתינה. כתיבת האינדקס ל-localStorage
+  // סינכרונית ותופסת; גוף המצגת ב-IndexedDB אסינכרוני ועלול לא להספיק —
+  // best-effort במכוון, עדיף רשומה מעודכנת מאשר כלום.
+  useEffect(() => {
+    const onBeforeUnload = () => { try { flushSaveRef.current?.(); } catch { /* noop */ } };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   // ── בחירת מסך לפי view (לא לפי !deck) ───────────────────────────
   // 'editor' בלי deck בזיכרון נופל חזרה לטופס היצירה.
@@ -1379,6 +1440,33 @@ export default function PresentationStudio({
       </div>
     </div>
   );
+
+  // ── שער השלמות: תמונות שנכשלו ⇒ הדק לא נכנס לעורך עד החלטת המשתמש ──
+  // שכבת fixed עצמאית: מרונדרת מעל כל מסך (רשימה/טופס/עורך) בלי לשנות את
+  // ה-view, ולכן טופס היצירה שמתחתיה שומר על כל מה שהוקלד.
+  const mediaFailureOverlay = (!busy && mediaFailure) ? (
+    <div className="fixed inset-0 z-[70] flex flex-col items-center bg-slate-950/85 pt-[16vh] backdrop-blur-[2px]">
+      <div className="mx-6 max-w-md rounded-2xl border border-rose-500/40 bg-slate-900 p-5 text-right">
+        <div className="text-base font-black text-rose-300">יצירת {mediaFailure.missing} תמונות נכשלה</div>
+        <div className="mt-2 text-xs leading-6 text-slate-400">
+          המצגת עצמה מוכנה. אפשר לנסות שוב ליצור רק את התמונות החסרות, או לפתוח את המצגת בלעדיהן —
+          השקופיות האלה יופיעו עם בלוק ריק במקום התמונה.
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onRetryMedia?.()}
+            className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:from-cyan-400"
+          >נסה שוב</button>
+          <button
+            type="button"
+            onClick={() => onOpenAnyway?.()}
+            className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-slate-800"
+          >פתח בלי התמונות</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   // רשימת המצגות השמורות.
   if (resolvedView === 'list') {
@@ -1442,6 +1530,7 @@ export default function PresentationStudio({
             showToast={showToast}
           />
         </div>
+        {mediaFailureOverlay}
       </div>
     );
   }
@@ -1461,32 +1550,9 @@ export default function PresentationStudio({
                 {busyLabel && <div className="max-w-md px-6 text-center text-xs leading-6 text-cyan-200">{busyLabel}</div>}
               </div>
             )}
-            {/* ── שער השלמות: תמונות שנכשלו ⇒ הדק לא נכנס לעורך עד החלטת המשתמש ── */}
-            {!busy && mediaFailure && (
-              <div className="absolute inset-0 z-20 flex flex-col items-center bg-slate-950/85 pt-[16vh] backdrop-blur-[2px]">
-                <div className="mx-6 max-w-md rounded-2xl border border-rose-500/40 bg-slate-900 p-5 text-right">
-                  <div className="text-base font-black text-rose-300">יצירת {mediaFailure.missing} תמונות נכשלה</div>
-                  <div className="mt-2 text-xs leading-6 text-slate-400">
-                    המצגת עצמה מוכנה. אפשר לנסות שוב ליצור רק את התמונות החסרות, או לפתוח את המצגת בלעדיהן —
-                    השקופיות האלה יופיעו עם בלוק ריק במקום התמונה.
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onRetryMedia?.()}
-                      className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:from-cyan-400"
-                    >נסה שוב</button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenAnyway?.()}
-                      className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-slate-800"
-                    >פתח בלי התמונות</button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
+        {mediaFailureOverlay}
       </div>
     );
   }
@@ -1522,11 +1588,25 @@ export default function PresentationStudio({
   // פריסות כמו stat/steps/quote לא מציגות תמונה כלל — ויזואל שנוצר עבורן היה
   // נשמר במודל ונעלם מהמסך. מחליפים פריסה כדי שהתוצאה תיראה; שדות התוכן
   // (stats/steps) נשארים במודל, ולכן חזרה לפריסה הקודמת משחזרת אותם.
-  const withVisibleImageLayout = (image, preferred) => {
-    if (layoutHasImage(selected?.layout)) return { image };
-    setMediaResult(`הפריסה "${getLayout(selected?.layout)?.label || selected?.layout}" לא מציגה תמונה — הוחלפה ל"${getLayout(preferred)?.label || preferred}".`);
+  // ⚠️ הפריסה נבדקת מול השקופית שמקבלת את המדיה (slide), לא מול הנבחרת ברגע
+  // הסיום: היצירה נמשכת עשרות שניות והמשתמש עשוי לעבור שקופית בינתיים.
+  const withVisibleImageLayout = (slide, image, preferred) => {
+    if (layoutHasImage(slide?.layout)) return { image };
+    setMediaResult(`הפריסה "${getLayout(slide?.layout)?.label || slide?.layout}" לא מציגה תמונה — הוחלפה ל"${getLayout(preferred)?.label || preferred}".`);
     return { image, layout: preferred };
   };
+
+  // ── קומיט מדיה לשקופית שנתפסה בתחילת הפעולה ─────────────────────
+  // אותו דפוס של handleInsertGeneratedMedia: ה-id נתפס בלחיצה, וה-patch נבנה
+  // מול מצב השקופית ב-prev (הדק העדכני), ולא מול ה-snapshot מזמן הלחיצה.
+  // שקופית שנמחקה בינתיים ⇒ אין קומיט בכלל.
+  const commitSlideMedia = (slideId, buildPatch) => commitDeck((prev) => {
+    if (!prev || !slideId) return prev;
+    const slide = (prev.slides || []).find((s) => s.id === slideId);
+    if (!slide) return prev;
+    const patch = buildPatch(slide);
+    return patch ? updateSlide(prev, slideId, patch) : prev;
+  });
 
   // ── הוספת מדיה שנוצרה בעוזר ה-AI לשקופית הנבחרת ─────────────────
   // ⚠️ ה-id נתפס בזמן הלחיצה: הדחיסה היא await ארוך, והמשתמש עלול לבחור
@@ -1581,33 +1661,49 @@ export default function PresentationStudio({
     }
   };
 
-  const handleGenerateImage = () => runMedia('image', async () => {
-    const image = await generateSlideImage(selected, activeTheme, { style: imageStyle, deck });
-    patchSlide(withVisibleImageLayout(image, 'image-right'));
-  });
+  // ⚠️ שלוש פעולות המדיה תופסות את השקופית ואת ה-id שלה ברגע הלחיצה. היצירה
+  // היא await של 30-60 שניות, ובזמן הזה המשתמש עלול לבחור שקופית אחרת — עד
+  // עכשיו התוצאה נחתה על הנבחרת החדשה (patchSlide קרא את selectedIdRef בזמן
+  // הסיום), ותיקון הפריסה חושב מול השקופית הישנה. עכשיו הכול נעול על slideId.
+  const handleGenerateImage = () => {
+    const slideId = selectedIdRef.current;
+    const source = selected;
+    return runMedia('image', async () => {
+      const image = await generateSlideImage(source, activeTheme, { style: imageStyle, deck });
+      commitSlideMedia(slideId, (slide) => withVisibleImageLayout(slide, image, 'image-right'));
+    });
+  };
 
   // אינפוגרפיקה בשני מסלולים, שניהם עם עברית אמיתית:
   //   1. יש סדרת מספרים ⇒ גרף QuickChart מדויק (חינם, התוויות מרונדרות מטקסט אמיתי).
   //   2. אחרת ⇒ המרה לפריסה מובנית מקורית (שלבים/ציר זמן/השוואה/מספרים).
   // ⚠️ בכוונה *לא* דיאגרמה ממודל תמונות: נמדד שהוא משבש עברית בתוך התמונה
   // (אותיות שנראות עבריות אך חסרות פשר), ומצגת עם ג'יבריש היא כשל מוצר.
-  const handleGenerateInfographic = () => runMedia('infographic', async () => {
-    try {
-      const image = await generateSlideInfographic(selected, activeTheme, {});
-      patchSlide(withVisibleImageLayout(image, 'image-full'));
-      return;
-    } catch {
-      // אין נתונים מספריים לגרף — ממשיכים למבנה ויזואלי מקורי.
-    }
-    const patch = await restructureSlideAsInfographic(selected, {});
-    patchSlide(patch);
-    setMediaResult('התוכן הומר למבנה ויזואלי עם טקסט אמיתי (ניתן לעריכה).');
-  });
+  const handleGenerateInfographic = () => {
+    const slideId = selectedIdRef.current;
+    const source = selected;
+    return runMedia('infographic', async () => {
+      try {
+        const image = await generateSlideInfographic(source, activeTheme, {});
+        commitSlideMedia(slideId, (slide) => withVisibleImageLayout(slide, image, 'image-full'));
+        return;
+      } catch {
+        // אין נתונים מספריים לגרף — ממשיכים למבנה ויזואלי מקורי.
+      }
+      const patch = await restructureSlideAsInfographic(source, {});
+      commitSlideMedia(slideId, () => patch);
+      setMediaResult('התוכן הומר למבנה ויזואלי עם טקסט אמיתי (ניתן לעריכה).');
+    });
+  };
 
-  const handleGenerateBackground = () => runMedia('bg', async () => {
-    const bgImage = await generateSlideBackground(selected, activeTheme, {});
-    patchSlide({ bgImage });
-  });
+  const handleGenerateBackground = () => {
+    const slideId = selectedIdRef.current;
+    const source = selected;
+    return runMedia('bg', async () => {
+      const bgImage = await generateSlideBackground(source, activeTheme, {});
+      commitSlideMedia(slideId, () => ({ bgImage }));
+    });
+  };
 
   const handleFillMissingImages = () => runMedia('batch', async () => {
     const res = await generateMissingDeckImages(deck, activeTheme, {
@@ -2022,6 +2118,8 @@ export default function PresentationStudio({
       )}
 
       {presenting && <PresentMode deck={deck} startIndex={Math.max(0, selectedIndex)} onClose={() => setPresenting(false)} />}
+
+      {mediaFailureOverlay}
     </div>
   );
 }

@@ -16,24 +16,35 @@ export default function PresentMode({ deck, startIndex = 0, onClose = () => {} }
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') { onClose(); return; }
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(1); }
-      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
-      else if (e.key === 'Home') setIndex(0);
-      else if (e.key === 'End') setIndex(slides.length - 1);
-      else if (e.key.toLowerCase() === 'n') setShowNotes((v) => !v);
+      // ⚠️ e.key עשוי להיות undefined (אירוע סינתטי / השלמה אוטומטית) —
+      // .toLowerCase() עליו הפיל את כל ה-handler, כולל Escape.
+      const key = String(e?.key || '');
+      if (!key) return;
+      if (key === 'Escape') { onClose(); return; }
+      // RTL: שמאלה/למטה = השקופית הבאה, ימינה/למעלה = הקודמת. זו המוסכמה
+      // של העורך (מקלדת ה-PresentationStudio), וכיוון הפוך בין השניים הוא
+      // באג ניווט שמרגיש כמו תקלה אקראית.
+      if (key === 'ArrowLeft' || key === 'ArrowDown' || key === ' ' || key === 'PageDown') { e.preventDefault(); go(1); }
+      else if (key === 'ArrowRight' || key === 'ArrowUp' || key === 'PageUp') { e.preventDefault(); go(-1); }
+      else if (key === 'Home') setIndex(0);
+      else if (key === 'End') setIndex(slides.length - 1);
+      else if (key.toLowerCase() === 'n') setShowNotes((v) => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [go, onClose, slides.length]);
 
   if (!slides.length) return null;
-  const slide = slides[index];
+  // ⚠️ index הוא state ולא מתאפס כשהדק מתקצר (מחיקת שקופית בזמן שהנגן פתוח,
+  // או deck אחר עם פחות שקופיות) — קריאה ישירה ב-slides[index] נתנה undefined
+  // ומפילה את ה-SlideFrame. מהדקים בכל רינדור.
+  const safeIndex = Math.max(0, Math.min(index, slides.length - 1));
+  const slide = slides[safeIndex];
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: 'min(100vw, 177.78vh)', maxHeight: '100vh' }}>
-        <SlideFrame slide={slide} themeId={deck.themeId} index={index} rounded={false} shadow={false} deckTitle={deck.title} customTheme={deck.customTheme || null} deckId={deck.id || ''} />
+        <SlideFrame slide={slide} themeId={deck.themeId} index={safeIndex} rounded={false} shadow={false} deckTitle={deck.title} customTheme={deck.customTheme || null} deckId={deck.id || ''} />
       </div>
 
       {showNotes && slide.notes && (
@@ -44,9 +55,9 @@ export default function PresentMode({ deck, startIndex = 0, onClose = () => {} }
 
       {/* פס בקרה */}
       <div style={{ position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(15,23,42,0.7)', padding: '8px 16px', borderRadius: 999, color: '#e2e8f0', fontSize: 14, direction: 'ltr' }}>
-        <button onClick={() => go(-1)} disabled={index === 0} style={navBtn(index === 0)}>‹</button>
-        <span>{index + 1} / {slides.length}</span>
-        <button onClick={() => go(1)} disabled={index === slides.length - 1} style={navBtn(index === slides.length - 1)}>›</button>
+        <button onClick={() => go(-1)} disabled={safeIndex === 0} style={navBtn(safeIndex === 0)}>‹</button>
+        <span>{safeIndex + 1} / {slides.length}</span>
+        <button onClick={() => go(1)} disabled={safeIndex === slides.length - 1} style={navBtn(safeIndex === slides.length - 1)}>›</button>
         <span style={{ opacity: 0.4 }}>|</span>
         <button onClick={() => setShowNotes((v) => !v)} style={navBtn(false)} title="הערות מרצה (N)">📝</button>
         <button onClick={onClose} style={navBtn(false)} title="יציאה (Esc)">✕</button>

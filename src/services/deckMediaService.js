@@ -337,7 +337,10 @@ const countPendingImages = (deck, skipSlideIds = null) =>
  * @param {{autoImages?:boolean, autoInfographics?:boolean, style?:string,
  *          signal?:AbortSignal, onProgress?:(text:string)=>void,
  *          imageLimit?:number, imageRetries?:number}} opts
- * @returns {Promise<{deck:object, imagesMade:number, chartsMade:number, pendingRemaining:number, aborted:boolean}>}
+ * @returns {Promise<{deck:object, imagesMade:number, chartsMade:number,
+ *          infographicFailures:number, pendingRemaining:number, aborted:boolean}>}
+ *   pendingRemaining סופר תמונות חסרות **בלי** שקופיות ה-chart (המסלול שלהן הוא
+ *   האינפוגרפיקה); כישלון אינפוגרפיקה מדווח ב-infographicFailures ואינו חוסם.
  */
 export const runDeckAutoMedia = async (deck, theme, {
   autoImages = false,
@@ -351,6 +354,7 @@ export const runDeckAutoMedia = async (deck, theme, {
   let current = deck;
   let imagesMade = 0;
   let chartsMade = 0;
+  let infographicFailures = 0;
   const emit = (text) => { try { onProgress?.(text); } catch { /* noop */ } };
   const applyImages = (list) => {
     if (!list?.length) return;
@@ -404,15 +408,24 @@ export const runDeckAutoMedia = async (deck, theme, {
             : s)),
         };
         chartsMade += 1;
-      } catch { /* שקופית בלי נתונים מספריים — מדלגים בשקט */ }
+      } catch {
+        // שקופית בלי נתונים מספריים — מדלגים, אבל סופרים. ר' pendingRemaining.
+        infographicFailures += 1;
+      }
     }
   }
 
+  // ⚠️ הספירה מדלגת על שקופיות ה-chart בדיוק כמו מעבר התמונות. שקופית כזו
+  // נשארת image.pending במכוון (המסלול שלה הוא אינפוגרפיקת QuickChart חינמית,
+  // לא תמונת AI בתשלום) — ספירתה כאן ניפחה את pendingRemaining והפעילה את
+  // שער "יצירת התמונות נכשלה" גם כשכל התמונות האמיתיות הצליחו.
+  // כישלון אינפוגרפיקה מדווח בנפרד ואינו חוסם.
   return {
     deck: current,
     imagesMade,
     chartsMade,
-    pendingRemaining: countPendingImages(current),
+    infographicFailures,
+    pendingRemaining: countPendingImages(current, chartSkipIds),
     aborted: Boolean(signal?.aborted),
   };
 };

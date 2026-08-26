@@ -192,6 +192,12 @@ export function getDeckRecord(id) {
 
 const bodyLsKey = (id) => `${BODY_LS_PREFIX}${id}`;
 
+// האם כבר שמור גוף למצגת הזו ב-fallback של localStorage. משמש רק במסלול
+// הכישלון: כתיבה חדשה שנפלה על מכסה לא מחקה את הגוף הקודם.
+const hasLsBody = (id) => {
+  try { return Boolean(localStorage.getItem(bodyLsKey(id))); } catch { return false; }
+};
+
 async function writeBody(id, deck) {
   const serialized = JSON.stringify(deck);
   // מדיה מוטמעת (סרטונים בעיקר) מנפחת את הגוף. לא חוסמים — רק מתריעים בקונסול,
@@ -204,16 +210,25 @@ async function writeBody(id, deck) {
     try { localStorage.removeItem(bodyLsKey(id)); } catch {}
     return { ok: true };
   }
+  // ⚠️ keptExistingBody: כישלון כתיבה של הגרסה החדשה אינו מוחק את הגוף הישן.
+  // בלי הדגל הזה הרשומה סומנה bodyMissing:true, והכרטיס ברשימה ננעל עם ההודעה
+  // השגויה "המצגת נוצרה במכשיר אחר" — בזמן שהגרסה הקודמת עדיין כאן וניתנת
+  // לפתיחה. השגיאה עצמה עדיין מגיעה למשתמש דרך ה-throw ב-saveDeck.
   if (serialized.length > LS_BODY_MAX_CHARS) {
     return {
       ok: false,
+      keptExistingBody: hasLsBody(id),
       message: 'המצגת כבדה מדי לשמירה בדפדפן הזה (אין IndexedDB). ייצא אותה ל-PowerPoint כדי לא לאבד אותה.',
     };
   }
   try {
     localStorage.setItem(bodyLsKey(id), serialized);
   } catch {
-    return { ok: false, message: 'שמירת המצגת נכשלה — אין מקום פנוי באחסון המקומי.' };
+    return {
+      ok: false,
+      keptExistingBody: hasLsBody(id),
+      message: 'שמירת המצגת נכשלה — אין מקום פנוי באחסון המקומי.',
+    };
   }
   return { ok: true };
 }
@@ -286,7 +301,8 @@ export async function saveDeck(deck, { thumbDataUrl, allowRevive = true } = {}) 
     themeId: deck?.themeId || existing?.themeId || '',
     topic: deck?.meta?.topic || deck?.meta?.goal || existing?.topic || '',
     thumbDataUrl: nextThumb,
-    bodyMissing: !bodyResult.ok,
+    // גוף קודם ששרד כישלון כתיבה ⇒ המצגת עדיין פתיחה כאן.
+    bodyMissing: !bodyResult.ok && !bodyResult.keptExistingBody,
   });
 
   writeIndexBlob({ decks: { ...(blob.decks || {}), [id]: record } });

@@ -1167,6 +1167,8 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
 
   const replaceExisting = options?.replaceExisting !== false;
   let appliedAny = false;
+  // אינדקס המצגות שהתעדכן מהענן חייב לרענן את "המצגות שלי" — ר' הדיספאץ' למטה.
+  let decksChanged = false;
 
   PERSISTED_APP_SETTINGS_KEYS.forEach((key) => {
     const incoming = snapshot[key];
@@ -1192,6 +1194,7 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
 
     localStorage.setItem(key, nextValue);
     appliedAny = true;
+    if (key === 'wordai_decks_v1') decksChanged = true;
   });
 
   if (!appliedAny) return false;
@@ -1201,6 +1204,11 @@ export const applyPersistedAppSettingsSnapshot = (snapshot = {}, options = {}) =
     window.dispatchEvent(new CustomEvent('wordai-settings-hydrated'));
     window.dispatchEvent(new CustomEvent('wordai-personal-style-updated'));
     window.dispatchEvent(new CustomEvent('wordai-workspaces-v2-changed'));
+    // ⚠️ DECKS_UPDATED_EVENT מ-deckStore.js, כמחרוזת ולא כ-import: deckStore
+    // מייבא מכאן (syncPersistedAppSettings) ו-import הפוך היה סוגר מעגל.
+    // רשימת המצגות מאזינה לאירוע הזה בלבד; בלעדיו מצגת שנוספה במכשיר אחר
+    // הופיעה רק אחרי רענון ידני.
+    if (decksChanged) window.dispatchEvent(new CustomEvent('wordai-decks-updated'));
   } catch {}
 
   return true;
