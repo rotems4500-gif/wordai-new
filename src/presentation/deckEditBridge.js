@@ -66,6 +66,16 @@ export const serializeSlideBody = (slide) => {
     push(`שלב ${i + 1}: ${title || UNTITLED}${body ? `: ${body}` : ''}`);
   });
 
+  // מדיה — קונטקסט קריאה-בלבד. המודל צריך לדעת שלשקופית יש חזות, אבל אסור לו
+  // "לערוך" אותה בטקסט: הפרסר מדלג על השורות האלה ולעולם לא כותב אותן לשקופית.
+  const image = slide?.image;
+  if (image?.url || image?.dataUrl) {
+    push(`תמונה: ${clean(image.alt) || clean(image.query) || 'ללא תיאור'}`);
+  } else if (image?.pending) {
+    push('תמונה: (בהמתנה ליצירה)');
+  }
+  if (slide?.video) push(`וידאו: ${clean(slide.video?.prompt) || 'סרטון'}`);
+
   push(clean(slide?.notes) && `הערות מרצה: ${clean(slide.notes)}`);
 
   return lines.join('\n');
@@ -137,6 +147,33 @@ const FIELD_LABELS = [
 const COLUMN_KEYS = ['עמודה', 'צד', 'column'];
 const STAT_KEYS = ['נתון', 'מספר', 'stat'];
 const STEP_KEYS = ['שלב', 'step'];
+// מדיה — נקראת בסריאליזציה, נזרקת בפרסור. אף פעם לא הופכת לשדה שקופית.
+const MEDIA_KEYS = ['תמונה', 'וידאו', 'סרטון', 'image', 'video'];
+
+/**
+ * מנקה סימון HTML לפני הפיצול לשורות.
+ * ⚠️ קריטי: הפרסר מפצל על `\n` בלבד, ולכן תשובה כמו
+ * `<ul><li>א</li><li>ב</li></ul>` בשורה אחת הייתה נכתבת כולה ככותרת אחת
+ * ומוחקת את השקופית. סוגרי בלוק הופכים לשורות, שאר התגיות נמחקות.
+ */
+const normalizeReplyMarkup = (raw) => String(raw == null ? '' : raw)
+  .replace(/\r\n?/g, '\n')
+  .replace(/<\s*\/\s*(?:li|p|h[1-6]|tr|div|blockquote)\s*>/gi, '\n')
+  .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  // פריט רשימה → נקודה אמיתית, ולא שורת טקסט סתמית שתתמזג ל-body.
+  .replace(/<\s*li(?:\s[^<>]{0,80})?>/gi, '\n• ')
+  // תגית חסומה באורך (≤80 תווים, בלי < > בפנים) — כדי לא לבלוע טקסט עברי
+  // שמכיל סוגריים משולשים בשוגג.
+  .replace(/<\/?[a-zA-Z][^<>]{0,80}>/g, '')
+  .replace(/&nbsp;/gi, ' ')
+  .replace(/&(?:#39|apos);/gi, "'")
+  .replace(/&quot;/gi, '"')
+  .replace(/&lt;/gi, '<')
+  .replace(/&gt;/gi, '>')
+  .replace(/&amp;/gi, '&');
+
+/** placeholder של סריאליזציה שהמודל החזיר במקום ערך אמיתי — לא נכתב כתוכן. */
+const dropPlaceholder = (text) => (clean(text) === UNTITLED ? '' : clean(text));
 
 // מפרק "תווית: ערך" — התווית חייבת להיות אחת מהמוכרות, אחרת השורה היא טקסט רגיל
 // (משפט עברי עם נקודתיים באמצע לא ייחשב בטעות לשדה).
@@ -167,9 +204,9 @@ const parseStatLine = (value) => {
 const parseStepLine = (value) => {
   const rest = clean(value);
   const sepIdx = rest.search(/[:—–]/);
-  if (sepIdx < 0) return { title: sanitizeSlideText(rest), body: '' };
+  if (sepIdx < 0) return { title: dropPlaceholder(sanitizeSlideText(rest)), body: '' };
   return {
-    title: sanitizeSlideText(rest.slice(0, sepIdx)),
+    title: dropPlaceholder(sanitizeSlideText(rest.slice(0, sepIdx))),
     body: sanitizeSlideText(rest.slice(sepIdx + 1)),
   };
 };
@@ -192,7 +229,7 @@ export const parseSlideContent = (raw) => {
     titleExplicit: false,
     bullets: [], columns: [], stats: [], steps: [], plain: [],
   };
-  const lines = String(raw == null ? '' : raw).split(/\r?\n/);
+  const lines = normalizeReplyMarkup(raw).split(/\n/);
   let titleTaken = false;
   let currentColumn = null;
 
@@ -210,10 +247,17 @@ export const parseSlideContent = (raw) => {
 
     const columnValue = splitLabeled(line, COLUMN_KEYS);
     if (columnValue != null) {
-      currentColumn = { heading: sanitizeSlideText(columnValue), bullets: [] };
+      currentColumn = { heading: dropPlaceholder(sanitizeSlideText(columnValue)), bullets: [] };
       out.columns.push(currentColumn);
       continue;
     }
+
+    // כל שורה שאינה נקודה ואינה "עמודה:" סוגרת את בלוק העמודות. בלי זה כל
+    // הנקודות שאחרי העמודות היו נערמות בעמודה האחרונה במקום בנקודות השקופית.
+    currentColumn = null;
+
+    // שורות מדיה — קונטקסט קריאה-בלבד, נזרקות בשקט.
+    if (splitLabeled(line, MEDIA_KEYS) != null) continue;
 
     const statValue = splitLabeled(line, STAT_KEYS);
     if (statValue != null) {
@@ -234,7 +278,7 @@ export const parseSlideContent = (raw) => {
       const value = splitLabeled(line, keys);
       if (value == null) continue;
       matchedField = true;
-      const text = sanitizeSlideText(value);
+      const text = field === 'title' ? dropPlaceholder(sanitizeSlideText(value)) : sanitizeSlideText(value);
       if (field === 'title') { if (text) { out.title = text; out.titleExplicit = true; titleTaken = true; } }
       else if (text) out[field] = text;
       break;
@@ -245,7 +289,7 @@ export const parseSlideContent = (raw) => {
       const stripped = HEADING_PREFIX.test(line)
         ? line.replace(HEADING_PREFIX, '')
         : line.replace(LEADING_HASHES, '');
-      const text = sanitizeSlideText(stripped);
+      const text = dropPlaceholder(sanitizeSlideText(stripped));
       titleTaken = true;
       if (text) out.title = text;
       continue;

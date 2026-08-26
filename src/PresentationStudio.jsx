@@ -5,7 +5,7 @@
 // מקור האמת הוא אובייקט ה-deck (deckModel). אין HTML, אין TipTap.
 // ═══════════════════════════════════════════════════════════════
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AiSidebar from './AiSidebar';
 import { SlideFrame } from './presentation/SlideRenderer';
 import PresentMode from './presentation/PresentMode';
@@ -14,6 +14,7 @@ import { FAMILY_ORDER, FAMILY_LABELS } from './presentation/themes';
 import {
   SLIDE_LAYOUTS, getLayout, layoutHasImage, getSlideExportMode, BG_VARIANTS,
   createSlide, updateSlide, addSlideAfter, removeSlide, moveSlide, normalizeDeck,
+  MAX_VIDEO_DATA_URL_CHARS,
 } from './presentation/deckModel';
 import {
   DECKS_UPDATED_EVENT, listDecks, loadDeck, saveDeck, deleteDeck, duplicateDeck, renameDeck,
@@ -21,10 +22,11 @@ import {
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
 import {
   generateSlideImage, generateSlideInfographic, generateSlideBackground, restructureSlideAsInfographic,
-  generateMissingDeckImages, generateDeckTheme,
+  generateMissingDeckImages, generateDeckTheme, compressImageDataUrl,
 } from './services/deckMediaService';
 import {
   buildDeckDocumentSnapshot, buildDeckEditTargetState, createDeckEditBridge, parseSlideContent,
+  serializeSlide, slideLocatorLabel,
 } from './presentation/deckEditBridge';
 import { buildPptxBase64 } from './services/pptxExport';
 import {
@@ -68,6 +70,95 @@ const cloneSlideContent = (slide) => {
 
 // AiSidebar משדר התקדמות ל"מסמך חי" — במצגת אין יעד סטרימינג, ולכן noop.
 const noopStream = () => {};
+
+// ── פרומפט מצב העריכה של המצגת ────────────────────────────────────
+// ברירת המחדל של AiSidebar מדברת על "פסקה במסמך" ומתירה במפורש HTML בלוקי —
+// תשובה כזו הייתה נכנסת לגשר כמחרוזת אחת ומוחקת את השקופית. כאן מלמדים את
+// המודל את דקדוק התוויות של deckEditBridge.
+// ⚠️ כל טקסט דוגמה מסומן כדוגמה בלבד: מודלים בריפו הזה נתפסו מעתיקים מילולית
+// ביטויים מתוך דוגמאות בפרומפט אל התוצר.
+const DECK_EDIT_SYSTEM_PROMPT = [
+  'מצב עריכת שקופית: אתה עורך שקופית אחת במצגת, לא פסקה במסמך. החזר אך ורק את התוכן החלופי המלא של השקופית.',
+  'פורמט התשובה: שורות טקסט רגיל בלבד. אסור HTML, אסור Markdown, אסור בלוקי קוד, אסור פתיח או הסבר.',
+  'דקדוק השורות (כל שדה בשורה נפרדת, רק שדות שאתה רוצה שיופיעו):',
+  [
+    'שורה ראשונה = כותרת השקופית',
+    'תווית עליונה: <טקסט קצר מעל הכותרת>',
+    'כותרת משנה: <טקסט>',
+    '• <נקודה> — שורה נפרדת לכל נקודה',
+    'עמודה: <כותרת העמודה>, ואחריה שורות "• " ששייכות לאותה עמודה',
+    'נתון: <ערך> — <תווית> (<כיתוב משנה>)',
+    'שלב N: <כותרת השלב>: <גוף השלב>',
+    'הערות מרצה: <טקסט למרצה>',
+  ].join('\n'),
+  'החזר תמיד את תוכן השקופית במלואו. אין תמיכה ב"רק את מה שהשתנה" — שדה שלא תחזיר פשוט יישאר כפי שהוא.',
+  'שורות "תמונה:" ו-"וידאו:" הן קונטקסט קריאה-בלבד שמתאר את המדיה בשקופית. אל תחזיר אותן ואל תנסה לערוך אותן.',
+  'אינך יכול לשנות פריסה, תמונות, רקע או סדר שקופיות — רק טקסט. אם הבקשה דורשת אחת מאלה, כתוב זאת בטקסט התשובה ואל תמציא שדות.',
+  'לדוגמה בלבד — נסח בעצמך, אל תעתיק את המילים האלה:\nהכותרת כאן\n• נקודה ראשונה\n• נקודה שנייה\nהערות מרצה: מה לומר בעל פה',
+].join('\n\n');
+
+// ── זיהוי הפניות מפורשות לשקופיות בבקשה ("שפר את שקופיות 2 ו-5") ──
+// בלי זה כל בקשה מרובת-שקופיות הייתה עורכת רק את השקופית הנבחרת, בשקט.
+// המספרים הם 1-based, כמו ב-rail וכמו בסריאליזציה שהמודל רואה.
+const SLIDE_REF_PATTERN = /(?:שקופיות|שקופית|שקפים|שקף|slides|slide)\s*(?:מספר\s*|מס['׳]?\s*|#\s*)?(\d+(?:\s*(?:,|ו[־–—-]?|עד|and|to|[־–—-])\s*\d+)*)/gi;
+
+/** "2 ו-5" → [2,5] · "3-5" → [3,4,5] · "3 עד 5" → [3,4,5] */
+const parseSlideNumberSpan = (span) => {
+  // "ו-5"/"ו5" הוא ו' החיבור, לא טווח — מנטרלים לפני הטוקניזציה, אחרת
+  // "שקופיות 2 ו-5" היה נקרא כטווח 2..5.
+  const normalized = String(span || '').replace(/ו[־–—-]?(?=\s*\d)/g, ' , ');
+  const tokens = normalized.match(/\d+|עד|to|and|[־–—-]/gi) || [];
+  const out = [];
+  let rangeOpen = false;
+  let prev = null;
+  tokens.forEach((token) => {
+    if (!/^\d+$/.test(token)) { rangeOpen = !/^(?:and)$/i.test(token); return; }
+    const num = Number(token);
+    if (rangeOpen && prev != null) {
+      const [from, to] = prev <= num ? [prev, num] : [num, prev];
+      if (to - from <= 200) for (let i = from; i <= to; i += 1) out.push(i);
+    } else out.push(num);
+    rangeOpen = false;
+    prev = num;
+  });
+  return out;
+};
+
+/**
+ * מחזיר את חוזה resolveEditTargetsFromPrompt של AiSidebar:
+ * { targets, unresolvedExplicitReferences }. מחזיר null כשאין הפניה מפורשת
+ * לשתי שקופיות ומעלה — כדי לא לגעת במסלול היעד היחיד (השקופית הנבחרת).
+ */
+export const resolveDeckSlideReferences = (promptText, slides = []) => {
+  const text = String(promptText || '');
+  if (!text.trim()) return null;
+
+  const numbers = [];
+  SLIDE_REF_PATTERN.lastIndex = 0;
+  let match = SLIDE_REF_PATTERN.exec(text);
+  while (match) {
+    parseSlideNumberSpan(match[1]).forEach((n) => { if (n > 0 && !numbers.includes(n)) numbers.push(n); });
+    match = SLIDE_REF_PATTERN.exec(text);
+  }
+  if (numbers.length < 2) return null;
+
+  const list = Array.isArray(slides) ? slides : [];
+  const targets = [];
+  const unresolvedExplicitReferences = [];
+  numbers.forEach((num) => {
+    const slide = list[num - 1];
+    if (!slide?.id) { unresolvedExplicitReferences.push({ locatorLabel: `שקופית ${num}` }); return; }
+    targets.push({
+      kind: 'block',
+      text: serializeSlide(slide, num - 1),
+      targetId: `deck:${slide.id}`,
+      locatorLabel: slideLocatorLabel(slide, num - 1),
+      headingText: String(slide.title || '').trim(),
+      matchKind: 'deck-slide-number',
+    });
+  });
+  return { targets, unresolvedExplicitReferences };
+};
 
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -1145,6 +1236,13 @@ export default function PresentationStudio({
     commitDeck: (next) => commitDeckRef.current?.(next),
     showToast: (...args) => showToastRef.current?.(...args),
   }), []);
+  // "שפר את שקופיות 2 ו-5" → שני יעדי עריכה, ומשם מסלול ה-batch של AiSidebar
+  // (onApplyEditBatch). קורא דרך ה-ref, כי הבקשה מנוסחת ברגע השליחה.
+  const resolveDeckEditTargetsFromPrompt = useCallback(
+    (promptText = '') => resolveDeckSlideReferences(promptText, deckRef.current?.slides || []),
+    [],
+  );
+
   // הפניות/הגדרות העוזר נקראות פעם אחת לכניסה לעורך (זהה ל-AddinApp).
   const assistantWordPreferences = useMemo(() => getWordPreferences(), []);
   const assistantBehavior = useMemo(() => getAssistantBehavior(), []);
@@ -1428,6 +1526,59 @@ export default function PresentationStudio({
     if (layoutHasImage(selected?.layout)) return { image };
     setMediaResult(`הפריסה "${getLayout(selected?.layout)?.label || selected?.layout}" לא מציגה תמונה — הוחלפה ל"${getLayout(preferred)?.label || preferred}".`);
     return { image, layout: preferred };
+  };
+
+  // ── הוספת מדיה שנוצרה בעוזר ה-AI לשקופית הנבחרת ─────────────────
+  // ⚠️ ה-id נתפס בזמן הלחיצה: הדחיסה היא await ארוך, והמשתמש עלול לבחור
+  // שקופית אחרת בינתיים — קומיט לפי selectedIdRef העדכני היה נוחת על הלא-נכונה.
+  const handleInsertGeneratedMedia = async (payload) => {
+    const slideId = selectedIdRef.current;
+    const dataUrl = String(payload?.dataUrl || '');
+    if (!slideId || !dataUrl) { showToast?.('לא נמצאה מדיה להוספה', { tone: 'warning' }); return; }
+    // פריסה בלי חריץ תמונה (stat/steps/quote) לא תציג את המדיה — מחליפים.
+    // ⚠️ לסרטון הרשימה צרה יותר: cover/closing מרנדרים את התמונה ישירות ולא
+    // דרך ImageBox, ולכן סרטון שם היה נשמר במודל ונעלם מהמסך.
+    const VIDEO_LAYOUTS = ['image-right', 'image-left', 'image-full'];
+    const layoutPatchFor = (slide, kind) => {
+      const ok = kind === 'video' ? VIDEO_LAYOUTS.includes(slide?.layout) : layoutHasImage(slide?.layout);
+      return ok ? {} : { layout: 'image-right' };
+    };
+    try {
+      if (payload.type === 'video') {
+        if (dataUrl.length > MAX_VIDEO_DATA_URL_CHARS) {
+          showToast?.('הסרטון כבד מדי לשמירה במצגת', { tone: 'error' });
+          return;
+        }
+        commitDeck((prev) => (prev ? updateSlide(prev, slideId, (slide) => ({
+          ...slide,
+          ...layoutPatchFor(slide, 'video'),
+          video: { dataUrl, mime: payload.mime || 'video/mp4', prompt: payload.prompt || '', model: payload.model || '' },
+        })) : prev));
+        showToast?.('הסרטון נוסף לשקופית ✓', { tone: 'success' });
+        return;
+      }
+      const compressed = await compressImageDataUrl(dataUrl);
+      const image = {
+        source: 'ai',
+        dataUrl: compressed,
+        url: '',
+        query: payload.prompt || '',
+        alt: payload.prompt || '',
+        attribution: 'נוצר ב-AI',
+        model: payload.model || '',
+        provider: payload.provider || '',
+        prompt: payload.prompt || '',
+        pending: false,
+      };
+      commitDeck((prev) => (prev ? updateSlide(prev, slideId, (slide) => ({
+        ...slide,
+        ...layoutPatchFor(slide, 'image'),
+        image,
+      })) : prev));
+      showToast?.('התמונה נוספה לשקופית ✓', { tone: 'success' });
+    } catch (e) {
+      showToast?.(e?.message || 'הוספת המדיה נכשלה', { tone: 'error' });
+    }
   };
 
   const handleGenerateImage = () => runMedia('image', async () => {
@@ -1843,8 +1994,11 @@ export default function PresentationStudio({
               editTarget={assistantTargetState}
               getCurrentEditTarget={() => buildDeckEditTargetState(deckRef.current, selectedIdRef.current)}
               resolveEditTargetFromPrompt={() => null}
-              resolveEditTargetsFromPrompt={null}
+              resolveEditTargetsFromPrompt={resolveDeckEditTargetsFromPrompt}
+              editModeSystemPrompt={DECK_EDIT_SYSTEM_PROMPT}
               onInsert={handleAssistantInsert}
+              onInsertGeneratedMedia={handleInsertGeneratedMedia}
+              insertMediaLabel="הוסף לשקופית"
               onApplyEdit={deckBridge.applyEdit}
               onApplyEditBatch={deckBridge.applyEditBatch}
               onStreamStart={noopStream}

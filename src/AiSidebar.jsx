@@ -1056,7 +1056,7 @@ const IDLE_AGENT_STATUS = {
   runId: '',
 };
 
-export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onInsertGeneratedImage = null, onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onReviseDocument = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
+export default function AiSidebar({ onClose, documentContext, currentFilePath = '', activeDocumentSessionId = '', assignmentBrief = null, onInsert, onInsertGeneratedImage = null, onInsertGeneratedMedia = null, insertMediaLabel = '', onAppendAiAppendix = null, onApplyEdit = null, onApplyEditBatch = null, onApplyDocumentPlan = null, onReviseDocument = null, onStreamStart, onStreamChunk, onStreamEnd, selectedText, currentBlockText = '', editTarget = null, getCurrentEditTarget = null, resolveEditTargetFromPrompt = null, resolveEditTargetsFromPrompt = null, editModeSystemPrompt = '', mode = 'popup', reason = 'manual', compactMode = mode === 'sidebar', onToggleCompact = () => {}, wordPreferences = {}, assistantBehavior = {}, onOpenSettingsTab = () => {}, onOpenHelp = null, launchPreset = null }) {
   const effectiveDocId = currentFilePath || activeDocumentSessionId;
   const documentPersistenceIds = buildDocumentPersistenceIds(effectiveDocId, currentFilePath, activeDocumentSessionId);
   const documentPersistenceScopeKey = documentPersistenceIds.join('::');
@@ -1434,15 +1434,19 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
     if (NUMBERED_REVIEW_CONTEXT_PATTERN.test(cleanPrompt) && (NUMBERED_LIST_MARKER_PATTERN.test(cleanPrompt) || SOURCE_INTEGRATION_PLAN_PATTERN.test(cleanPrompt))) return true;
     return documentWideEditPlanPattern.test(cleanPrompt) || TASKPANE_FIX_APPLY_INTENT_PATTERN.test(cleanPrompt);
   };
+  // מארח שהיעד שלו אינו פסקת מסמך (למשל סטודיו המצגות) מזריק פרומפט עריכה משלו.
+  // ברירת המחדל נשארת מילה-במילה עבור שאר המארחים.
   const composerModeSystemPrompt = isEditComposerMode
-    ? 'מצב עריכה ישיר: החזר רק את התוכן החלופי המדויק עבור יעד העריכה שסופק. אם היעד דורש יותר מפסקה אחת, מותר להחזיר כמה פסקאות רצופות או HTML בלוקי בטוח בלבד כמו <p>, <ul>, <ol>, <li>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <blockquote> ו-<br>. אל תחזיר מסמך מלא, תגיות <html> או <body>, Markdown, פתיח, הסבר, מרכאות, כותרות מסבירות או הערות מחוץ לתוכן שאמור להיכנס למסמך. אם המשתמש נתן רשימת תיקונים מסודרת וביקש "לפי הסדר" או להתחיל מהראשון, בצע קודם את הסעיף הביצועי הראשון ואל תשאל מאיפה להתחיל.'
+    ? String(editModeSystemPrompt || '').trim() || 'מצב עריכה ישיר: החזר רק את התוכן החלופי המדויק עבור יעד העריכה שסופק. אם היעד דורש יותר מפסקה אחת, מותר להחזיר כמה פסקאות רצופות או HTML בלוקי בטוח בלבד כמו <p>, <ul>, <ol>, <li>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <blockquote> ו-<br>. אל תחזיר מסמך מלא, תגיות <html> או <body>, Markdown, פתיח, הסבר, מרכאות, כותרות מסבירות או הערות מחוץ לתוכן שאמור להיכנס למסמך. אם המשתמש נתן רשימת תיקונים מסודרת וביקש "לפי הסדר" או להתחיל מהראשון, בצע קודם את הסעיף הביצועי הראשון ואל תשאל מאיפה להתחיל.'
     : '';
   const buildStructuredEditBatchSystemPrompt = (targets = []) => [
     composerModeSystemPrompt,
     'יש כמה יעדי עריכה נפרדים בבקשה אחת. החזר JSON בלבד, ללא Markdown וללא הסברים.',
     'המבנה המחייב: {"edits":[{"targetId":"...","replacement":"..."}]}',
     'חובה להחזיר בדיוק ערך אחד לכל targetId שסופק. אסור להמציא targetId, להשמיט יעד, או לאחד יעדים.',
-    'כל replacement הוא התוכן החלופי המדויק לאותו יעד בלבד. מותר להשתמש ב-HTML בלוקי בטוח כמו במצב עריכה רגיל.',
+    String(editModeSystemPrompt || '').trim()
+      ? 'כל replacement הוא התוכן החלופי המדויק לאותו יעד בלבד, בדיוק בפורמט שתואר למעלה.'
+      : 'כל replacement הוא התוכן החלופי המדויק לאותו יעד בלבד. מותר להשתמש ב-HTML בלוקי בטוח כמו במצב עריכה רגיל.',
     `targetIds: ${(Array.isArray(targets) ? targets : []).map((target) => target?.targetId).filter(Boolean).join(', ')}`,
   ].filter(Boolean).join('\n\n');
   const composerPlaceholder = activeClassicAgent
@@ -5254,7 +5258,28 @@ export default function AiSidebar({ onClose, documentContext, currentFilePath = 
           </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          {media.type === 'image' && src && typeof onInsertGeneratedImage === 'function' && (
+          {/* מארח שמכיר מדיה (סטודיו המצגות) מקבל כפתור אחד לתמונה ולסרטון.
+              הכפתור הישן (תמונה בלבד) נשאר למארחים שמעבירים רק אותו — אבל לא
+              מוצג לצידו, אחרת יופיעו שני כפתורי הוספה על אותה תמונה. */}
+          {(media.type === 'image' || media.type === 'video') && (src || runtime.base64) && typeof onInsertGeneratedMedia === 'function' && (
+            <button
+              type="button"
+              style={{ ...actionButtonStyle, background: '#4F46E5', border: 0, color: '#FFFFFF' }}
+              onClick={() => onInsertGeneratedMedia({
+                type: media.type,
+                dataUrl: runtime.base64
+                  ? `data:${runtime.mime || media.mime || (media.type === 'video' ? 'video/mp4' : 'image/png')};base64,${runtime.base64}`
+                  : src,
+                mime: runtime.mime || media.mime || '',
+                prompt: media.prompt || '',
+                model: media.model || '',
+                provider: '',
+              })}
+            >
+              {insertMediaLabel || 'הוסף למסמך'}
+            </button>
+          )}
+          {media.type === 'image' && src && typeof onInsertGeneratedMedia !== 'function' && typeof onInsertGeneratedImage === 'function' && (
             <button
               type="button"
               style={{ ...actionButtonStyle, background: '#4F46E5', border: 0, color: '#FFFFFF' }}

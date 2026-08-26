@@ -58,6 +58,7 @@ export const createSlide = (overrides = {}) => ({
   steps: [],              // לפריסת steps: [{ title, body }]
   image: null,            // { source:'stock'|'ai'|'upload'|'chart'|'infographic', url, dataUrl, query, alt, attribution, model, provider, prompt, pending }
   bgImage: null,          // רקע מחולל: { dataUrl, url, opacity, scrim, prompt, model }
+  video: null,            // סרטון שנוצר ב-AI: { dataUrl, mime, prompt, model } — תופס את חריץ התמונה בפריסה
   visual: '',             // '' | 'chart' | 'infographic' — המלצת המודל לסוג הוויזואל
   notes: '',              // הערות מרצה
   accent: '',             // override צבע אקסנט (אופציונלי)
@@ -103,6 +104,32 @@ const normalizeImage = (image) => {
     provider: String(image.provider || '').trim(),
     prompt: String(image.prompt || '').trim(),
     pending: !url && !dataUrl,
+  };
+};
+
+// ── נורמליזציה של סרטון ──────────────────────────────────────────
+// ⚠️ סרטון נשמר כ-dataUrl מוטמע בגוף המצגת (IndexedDB) ומוטמע שוב ב-PPTX,
+// ולכן יש תקרה קשיחה: מעל ~15MB בינארי הרשומה נזרקת ולא נשמרת בשקט חלקית.
+export const VIDEO_MIMES = ['video/mp4', 'video/webm'];
+export const MAX_VIDEO_DATA_URL_CHARS = 20_000_000;
+
+const normalizeVideo = (video) => {
+  if (!video || typeof video !== 'object') return null;
+  const dataUrl = String(video.dataUrl || '').trim();
+  if (!dataUrl.startsWith('data:video/')) return null;
+  if (dataUrl.length > MAX_VIDEO_DATA_URL_CHARS) return null;
+  // ה-mime הסמכותי הוא זה שבתוך ה-dataUrl; השדה הנפרד רק מגבה אותו.
+  const fromUrl = dataUrl.slice(5).split(';')[0].trim().toLowerCase();
+  const declared = String(video.mime || '').trim().toLowerCase();
+  const mime = VIDEO_MIMES.includes(fromUrl)
+    ? fromUrl
+    : (VIDEO_MIMES.includes(declared) ? declared : '');
+  if (!mime) return null;
+  return {
+    dataUrl, // ⚠️ לא עובר sanitize — זה payload בינארי, לא טקסט מוצג
+    mime,
+    prompt: String(video.prompt || '').trim(),
+    model: String(video.model || '').trim(),
   };
 };
 
@@ -220,6 +247,7 @@ export const normalizeSlide = (raw = {}) => {
     steps,
     image: normalizeImage(raw.image),
     bgImage: normalizeBgImage(raw.bgImage),
+    video: normalizeVideo(raw.video),
     // המלצת ויזואל מהמודל: 'chart' (סדרת מספרים אמיתית) / 'infographic' (מבנה/תהליך).
     // מניע את כפתור "אינפוגרפיקה" לבחור כלי בלי לנחש, ומסומן ב-UI כהצעה.
     visual: ['chart', 'infographic'].includes(raw.visual) ? raw.visual : '',

@@ -194,6 +194,9 @@ const bodyLsKey = (id) => `${BODY_LS_PREFIX}${id}`;
 
 async function writeBody(id, deck) {
   const serialized = JSON.stringify(deck);
+  // מדיה מוטמעת (סרטונים בעיקר) מנפחת את הגוף. לא חוסמים — רק מתריעים בקונסול,
+  // כדי שגוף כבד לא ייראה כמו תקלת ביצועים אקראית.
+  if (serialized.length > 40_000_000) console.warn(`[deckStore] גוף מצגת כבד (${Math.round(serialized.length / 1e6)}MB) — מדיה מוטמעת עלולה להאט שמירה וייצוא`);
   if (isIdbAvailable()) {
     // שומרים את האובייקט עצמו (structured clone) — מהיר יותר מ-parse/stringify.
     await idbRunWrite((store) => store.put(deck, String(id)));

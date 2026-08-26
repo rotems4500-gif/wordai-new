@@ -65,6 +65,9 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
   const layout = slide?.layout || 'title-bullets';
   const img = slide?.image;
   const imgSrc = img ? (img.dataUrl || img.url) : '';
+  // סרטון תופס את חריץ התמונה של הפריסה. בצריבה (forExport) לא מרנדרים
+  // <video> — html-to-image לא צורב פריים, ולכן נצרב מלבן כהה עם ▶ במקומו.
+  const vidSrc = String(slide?.video?.dataUrl || '');
   // רקע מחולל (AI): שכבה מתחת לתוכן ומעל בסיס ה-theme. מרונדר גם ב-bgOnly,
   // ולכן נצרב אוטומטית לרקע ה-PPTX דרך מסלול ה-bg-raster הקיים.
   const bgImg = slide?.bgImage;
@@ -203,7 +206,30 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
     </div>
   );
 
+  // חריץ הסרטון: נגן אמיתי במסך/הצגה, מלבן ▶ בצריבה לרסטר.
+  const VideoBox = ({ style, rounded = false }) => {
+    const box = { ...style, ...(rounded ? { borderRadius: radius } : {}), overflow: 'hidden' };
+    if (forExport) {
+      return (
+        <div style={{
+          ...box, background: '#0F172A', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'rgba(255,255,255,0.85)', fontSize: 64, lineHeight: 1,
+        }}>▶</div>
+      );
+    }
+    return (
+      <video
+        src={vidSrc}
+        controls
+        playsInline
+        preload="metadata"
+        style={{ objectFit: 'cover', background: '#0F172A', ...box }}
+      />
+    );
+  };
+
   const ImageBox = ({ style, rounded = false }) => {
+    if (vidSrc) return <VideoBox style={style} rounded={rounded} />;
     const tr = getImageTreatment({ image: theme.image, accent, colors: c, radius });
     // plain → tr ריק, פלט זהה לקודם. treatments עוטפים (frame/polaroid/duotone) → wrapper.
     if (!tr.wrap) {
@@ -977,7 +1003,7 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
 
   // title-bullets: כותרת + נקודות. זוגי = top-heading (ברירת מחדל); אי-זוגי = side-rail.
   // תמונה בשקף → תמיד top-heading (בלי רוטציה) כדי לשמר את מקום התמונה.
-  const rotateSideRail = layout === 'title-bullets' && index != null && index % 2 === 1 && !imgSrc;
+  const rotateSideRail = layout === 'title-bullets' && index != null && index % 2 === 1 && !imgSrc && !vidSrc;
 
   if (rotateSideRail) {
     return (
@@ -1008,7 +1034,7 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
       {slide.subtitle && <p style={{ margin: '20px 0 0', fontFamily: fB, fontSize: 30, color: c.muted }}>{slide.subtitle}</p>}
       <div style={{ marginTop: 40, display: 'flex', gap: 60, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}><Bullets items={slide.bullets} size={32} /></div>
-        {imgSrc && <div style={{ flex: '0 0 38%' }}><ImageBox rounded style={{ width: '100%', height: 400 }} /></div>}
+        {(imgSrc || vidSrc) && <div style={{ flex: '0 0 38%' }}><ImageBox rounded style={{ width: '100%', height: 400 }} /></div>}
       </div>
     </Shell>
   );

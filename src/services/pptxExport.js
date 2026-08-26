@@ -165,11 +165,33 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
   const accentAt = (s, i) => hex(getSlideAccent(theme, s, i, decorSeed));
   const warnings = [];
 
+  const hasVideo = (s) => !!String(s?.video?.dataUrl || '');
+
   // מצב ייצוא לכל שקף לפי ה-profile
+  // ⚠️ שקף עם סרטון יוצא תמיד native: במסלול ה-image הוא נצרב לרסטר,
+  // והסרטון היה נעלם מה-PPTX בשקט (rasterו של <video> הוא מלבן ▶ בלבד).
   const modeFor = (s) => {
+    if (hasVideo(s)) return 'native';
     if (profile === 'editable') return 'native';
     if (profile === 'faithful') return 'image';
     return getSlideExportMode(s);
+  };
+  deck.slides.forEach((s, i) => {
+    if (hasVideo(s) && (profile === 'faithful' || getSlideExportMode(s) === 'image')) {
+      warnings.push(`שקף ${i + 1} יוצא במצב ניתן-לעריכה כדי לשמר את הסרטון`);
+    }
+  });
+
+  // סרטון תופס את חריץ התמונה של הפריסה. pptxgenjs דורש data עם כותרת base64,
+  // וגוזר את הסיומת מתוך ה-mime שב-dataUrl (data:video/mp4;base64 → mp4).
+  const addSlideVideo = (slide, s, box) => {
+    try {
+      slide.addMedia({ type: 'video', data: s.video.dataUrl, ...box });
+      return true;
+    } catch {
+      warnings.push('סרטון אחד לא הוטמע בייצוא');
+      return false;
+    }
   };
 
   // קודם ממירים כל תמונה ל-dataUrl (גם לשקפי image — אחרת html-to-image נכשל על CORS)
@@ -278,7 +300,8 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     }
 
     if (layout === 'image-full') {
-      if (imgData) slide.addImage({ data: imgData, x: 0, y: 0, w: W, h: H, sizing: { type: 'cover', w: W, h: H } });
+      if (hasVideo(s)) addSlideVideo(slide, s, { x: 0, y: 0, w: W, h: H });
+      else if (imgData) slide.addImage({ data: imgData, x: 0, y: 0, w: W, h: H, sizing: { type: 'cover', w: W, h: H } });
       if (s.title) {
         slide.addShape(pptx.ShapeType.rect, { x: 0, y: H - 2.0, w: W, h: 2.0, fill: { color: bg, transparency: 25 } });
         putText(slide, s.title, { x: 0.8, y: H - 1.7, w: W - 1.6, h: 1.0, ...titleOpts(text, fD), fontSize: 30 });
@@ -292,7 +315,10 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
       const imgX = imgOnRight ? W - imgW : 0;
       const txtX = imgOnRight ? 0.8 : imgW + 0.6;
       const txtW = W - imgW - 1.4;
-      if (imgData) slide.addImage({ data: imgData, x: imgX, y: 0, w: imgW, h: H, sizing: { type: 'cover', w: imgW, h: H } });
+      if (hasVideo(s)) {
+        slide.addShape(pptx.ShapeType.rect, { x: imgX, y: 0, w: imgW, h: H, fill: { color: hex(c.bgAlt) } });
+        addSlideVideo(slide, s, { x: imgX, y: 0, w: imgW, h: H });
+      } else if (imgData) slide.addImage({ data: imgData, x: imgX, y: 0, w: imgW, h: H, sizing: { type: 'cover', w: imgW, h: H } });
       else slide.addShape(pptx.ShapeType.rect, { x: imgX, y: 0, w: imgW, h: H, fill: { color: hex(c.bgAlt) } });
       addKicker(slide, s.kicker, { x: txtX, y: 0.6, w: txtW, color: ac, font: fB });
       putText(slide, s.title || 'כותרת', { x: txtX, y: s.kicker ? 1.05 : 0.9, w: txtW, h: 1.2, ...titleOpts(text, fD), fontSize: 30 });
@@ -434,10 +460,11 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     addKicker(slide, s.kicker, { x: 0.8, y: 0.5, w: W - 1.6, color: ac, font: fB });
     putText(slide, s.title || 'כותרת השקופית', { x: 0.8, y: s.kicker ? 0.85 : 0.8, w: W - 1.6, h: 1.2, ...titleOpts(text, fD), fontSize: 32 });
     if (s.subtitle) putText(slide, s.subtitle, { x: 0.8, y: 1.9, w: W - 1.6, h: 0.7, ...bodyOpts(muted, fB), fontSize: 20 });
-    const hasImg = Boolean(imgData);
+    const hasImg = Boolean(imgData) || hasVideo(s);
     const bulletsW = hasImg ? (W - 1.6) * 0.58 : W - 1.6;
     addBullets(slide, s.bullets, { x: hasImg ? (W - 0.8 - bulletsW) : 0.8, y: s.subtitle ? 2.7 : 2.4, w: bulletsW, h: 4.0, color: text, fontSize: 20, font: fB });
-    if (hasImg) slide.addImage({ data: imgData, x: 0.8, y: 2.7, w: (W - 1.6) * 0.38, h: 3.8, sizing: { type: 'cover', w: (W - 1.6) * 0.38, h: 3.8 } });
+    if (hasVideo(s)) addSlideVideo(slide, s, { x: 0.8, y: 2.7, w: (W - 1.6) * 0.38, h: 3.8 });
+    else if (imgData) slide.addImage({ data: imgData, x: 0.8, y: 2.7, w: (W - 1.6) * 0.38, h: 3.8, sizing: { type: 'cover', w: (W - 1.6) * 0.38, h: 3.8 } });
     addFooter(slide, { deckTitle: deck.title, index: i, color: muted, font: fB });
   });
 
