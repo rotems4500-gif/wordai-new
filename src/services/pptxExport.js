@@ -11,7 +11,7 @@ import { getThemeById, hex, getSlideAccent, getThemeFontNames } from '../present
 import { getFontEmbedCss } from './fontEmbed';
 import { getSlideBaseColor } from '../presentation/slideBackgrounds';
 import { getSlideExportMode, deckDecorSeed } from '../presentation/deckModel';
-import { renderSlidesToPng } from './slideImageRender';
+import { renderSlideToPng } from './slideImageRender';
 import { fetchImageAsDataUrl } from './imageService';
 
 const W = 13.333; // רוחב שקופית 16:9 באינצ'ים
@@ -122,6 +122,27 @@ const resolveImages = async (deck) => {
 // שלבים שקודמים לו (document.fonts.ready, פענוח תמונות) יכולים להיתקע ללא הגבלה —
 // למשל בחלון/טאב חבוי שבו rAF אינו יורה. בלי התקציב הזה הייצוא נתקע בשקט לנצח;
 // איתו הוא מידרדר לשקפים ללא צריבה + אזהרה בעברית.
+// ── צריבה מקבילה עם דיווח התקדמות ────────────────────────────────
+// זהה ל-renderSlidesToPng של slideImageRender, בתוספת tick פר-שקף שמסתיים.
+// הצריבה היא רוב זמן הייצוא, ולכן זו הנקודה היחידה שבה דיווח התקדמות אמיתי
+// מגיע למשתמש (לולאת ההרכבה שאחריה כמעט מיידית).
+const renderSlidesWithTicks = async (slides, themeId, opts, tick) => {
+  const map = new Map();
+  const failures = [];
+  await Promise.all(slides.map(async ({ slide, index }) => {
+    try {
+      const png = await renderSlideToPng(slide, themeId, index, opts);
+      if (png) map.set(slide.id, png);
+      else failures.push({ id: slide.id, index, error: 'empty raster' });
+    } catch (e) {
+      failures.push({ id: slide.id, index, error: String(e?.message || e) });
+    } finally {
+      try { tick?.(); } catch { /* דיווח התקדמות לא מפיל ייצוא */ }
+    }
+  }));
+  return { map, failures };
+};
+
 const RASTER_PHASE_BUDGET_MS = 90000;
 const withRasterBudget = async (promise, label, warnings) => {
   let timer = null;
@@ -145,9 +166,12 @@ const withRasterBudget = async (promise, label, warnings) => {
  *   base64   — ה-pptx כ-base64 string
  *   warnings — string[] בעברית על שקפים שיצאו ב-fallback (צריבה נכשלה)
  * @param {object} deck
- * @param {{profile?: 'auto'|'editable'|'faithful', pixelRatio?: number}} options
+ * @param {{profile?: 'auto'|'editable'|'faithful', pixelRatio?: number,
+ *          onProgress?: (done:number,total:number)=>void}} options
+ *   onProgress — נקרא פר-שקף שסיים את שלב הצריבה (native ו-image כאחד),
+ *   ופעם אחרונה עם (total,total) לפני כתיבת הקובץ. אופציונלי לגמרי.
  */
-export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 } = {}) => {
+export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2, onProgress = null } = {}) => {
   // ערכה שנוצרה ב-AI גוברת על themeId — אותה שכבה שמשמשת את המסך (SlideStage),
   // כך שהייצוא הנייטיב מקבל את אותם צבעים/פונטים בדיוק.
   const theme = (deck?.customTheme && deck.customTheme.colors) ? deck.customTheme : getThemeById(deck.themeId);
@@ -164,6 +188,19 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
   const decorSeed = deckDecorSeed(deck?.id || '');
   const accentAt = (s, i) => hex(getSlideAccent(theme, s, i, decorSeed));
   const warnings = [];
+
+  // ── התקדמות ──────────────────────────────────────────────────────
+  // כל שקף נצרב פעם אחת בדיוק (image-mode בשלב הראשון, native בשלב הרקעים),
+  // ולכן מונה אחד משותף לשני השלבים מתאר את ההתקדמות האמיתית. clamp כי שקף
+  // image שנכשל נצרב שוב כרקע.
+  const progressTotal = Math.max(1, deck?.slides?.length || 0);
+  let progressDone = 0;
+  const emitProgress = (value) => {
+    if (typeof onProgress !== 'function') return;
+    try { onProgress(Math.min(progressTotal, value), progressTotal); } catch { /* no-op */ }
+  };
+  const tickProgress = () => { progressDone += 1; emitProgress(progressDone); };
+  emitProgress(0);
 
   const hasVideo = (s) => !!String(s?.video?.dataUrl || '');
 
@@ -215,7 +252,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     });
   // JPEG q0.92 — בלתי-מובחן מ-PNG בתצוגה אך קטן פי ~6 (דק faithful ירד מ~27MB ל~4MB)
   const { map: pngMap, failures: imgFailures } = imageModeSlides.length
-    ? await withRasterBudget(renderSlidesToPng(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }), 'ייצוא התמונות', warnings)
+    ? await withRasterBudget(renderSlidesWithTicks(imageModeSlides, deck.themeId, { pixelRatio, deckTitle: deck.title, format: 'jpeg', quality: 0.92, fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }, tickProgress), 'ייצוא התמונות', warnings)
     : { map: new Map(), failures: [] };
   // שקף image שצריבתו נכשלה → יוצא native (fallback). מתריעים למשתמש.
   imgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא במצב פשוט (צריבת עיצוב נכשלה)`));
@@ -230,7 +267,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     .filter(({ slide }) => modeFor(slide) === 'native')
     .concat(failedImageSlides);
   const { map: bgMap, failures: bgFailures } = nativeModeSlides.length
-    ? await withRasterBudget(renderSlidesToPng(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }), 'צריבת הרקעים', warnings)
+    ? await withRasterBudget(renderSlidesWithTicks(nativeModeSlides, deck.themeId, { pixelRatio: 1.5, bgOnly: true, format: 'jpeg', fontCss, customTheme: deck?.customTheme || null, deckId: deck?.id || '' }, tickProgress), 'צריבת הרקעים', warnings)
     : { map: new Map(), failures: [] };
   // רקע native שצריבתו נכשלה → יוצא בצבע אחיד (fallback). מתריעים למשתמש.
   bgFailures.forEach((f) => warnings.push(`שקף ${f.index + 1} יוצא עם רקע אחיד (צריבת רקע נכשלה)`));
@@ -468,6 +505,7 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     addFooter(slide, { deckTitle: deck.title, index: i, color: muted, font: fB });
   });
 
+  emitProgress(progressTotal);
   const base64 = await pptx.write('base64');
   return { base64, warnings };
 };

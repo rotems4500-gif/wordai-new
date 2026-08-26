@@ -17,8 +17,10 @@ import {
   MAX_VIDEO_DATA_URL_CHARS,
 } from './presentation/deckModel';
 import {
-  DECKS_UPDATED_EVENT, listDecks, loadDeck, saveDeck, deleteDeck, duplicateDeck, renameDeck,
+  DECKS_UPDATED_EVENT, THUMB_MAX_CHARS, listDecks, loadDeck, saveDeck, deleteDeck, duplicateDeck,
+  renameDeck, getDeckRecord,
 } from './services/deckStore';
+import { renderSlideToPng } from './services/slideImageRender';
 import { searchStockImages, generateAiImage, getImageSourceAvailability } from './services/imageService';
 import {
   generateSlideImage, generateSlideInfographic, generateSlideBackground, restructureSlideAsInfographic,
@@ -208,6 +210,39 @@ const ThemePreviewCell = React.memo(function ThemePreviewCell({ theme, selected,
   );
 });
 
+// תצוגה מקדימה ברצועת השקופיות — SlideFrame חי רק כשהתא נראה (אותה תבנית
+// IntersectionObserver של ThemePreviewCell). מצגת בת 40 שקפים רינדרה 40 במות
+// חיות בו-זמנית, כל אחת עם ResizeObserver משלה. הגרירה והבחירה יושבות על
+// הכפתור העוטף ולכן אינן מושפעות.
+const RailSlidePreview = React.memo(function RailSlidePreview({ slide, themeId, customTheme, index, deckTitle, deckId, placeholderBg }) {
+  const wrapRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (visible) return undefined;
+    const el = wrapRef.current;
+    if (!el) return undefined;
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return undefined; }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
+    }, { rootMargin: '300px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+
+  return (
+    <div ref={wrapRef} style={{ width: '100%', aspectRatio: '16 / 9' }} className="overflow-hidden">
+      {visible ? (
+        <SlideFrame slide={slide} themeId={themeId} customTheme={customTheme} index={index} shadow={false} deckTitle={deckTitle} deckId={deckId} />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center px-3" style={{ background: placeholderBg }}>
+          <span className="line-clamp-2 text-[10px] leading-4 text-slate-300/80">{slide?.title || `שקופית ${index + 1}`}</span>
+        </div>
+      )}
+    </div>
+  );
+});
+
 // בורר themes מקובץ לפי family, עם כותרות עבריות ותאי preview חיים.
 function ThemeFamilyPicker({ value, onSelect, small = false }) {
   return (
@@ -234,6 +269,35 @@ function ThemeFamilyPicker({ value, onSelect, small = false }) {
 // האינדקס יושב ב-localStorage וגוף הדק ב-IndexedDB (ר' services/deckStore.js).
 // רשומה עם bodyMissing נוצרה במכשיר אחר וסונכרנה — אפשר רק למחוק אותה.
 
+// ── תמונה ממוזערת לכרטיס המצגת ───────────────────────────────────
+// שקף 0 נצרב ל-JPEG ברוחב ~320px (pixelRatio 0.25 על במה של 1280) ונשמר
+// באינדקס. ⚠️ renderSlideToPng מחליף את requestAnimationFrame גלובלית לזמן
+// הצריבה — אסור להריץ אותו בלולאה או במקביל לעצמו/לייצוא. הנעילה הגלובלית
+// הזו מוודאת צריבה אחת בכל רגע, והכישלון תמיד נבלע (thumb הוא נוחות בלבד).
+const THUMB_PIXEL_RATIO = 0.25;
+let deckThumbBusy = false;
+const captureDeckThumb = async (deck) => {
+  const slide = deck?.slides?.[0];
+  if (deckThumbBusy || !deck?.id || !slide) return;
+  deckThumbBusy = true;
+  try {
+    const dataUrl = await renderSlideToPng(slide, deck.themeId, 0, {
+      pixelRatio: THUMB_PIXEL_RATIO,
+      format: 'jpeg',
+      quality: 0.72,
+      deckTitle: deck.title || '',
+      customTheme: deck.customTheme || null,
+      deckId: deck.id,
+    });
+    // חורג מתקרת האינדקס ⇒ נשמר כ-'' ממילא (normalizeRecord); עדיף לא לגעת.
+    if (!dataUrl || dataUrl.length > THUMB_MAX_CHARS) return;
+    // allowRevive:false — כמו השמירה האוטומטית: לא מחזירים לרשימה מצגת שנמחקה.
+    await saveDeck(deck, { thumbDataUrl: dataUrl, allowRevive: false });
+  } catch { /* תמונה ממוזערת לעולם לא חוסמת ניווט */ } finally {
+    deckThumbBusy = false;
+  }
+};
+
 const RELATIVE_STEPS = [
   { limit: 60 * 1000, label: () => 'עכשיו' },
   { limit: 60 * 60 * 1000, label: (ms) => `לפני ${Math.max(1, Math.round(ms / 60000))} דקות` },
@@ -252,9 +316,84 @@ const formatUpdatedAt = (iso) => {
   catch { return new Date(time).toISOString().slice(0, 10); }
 };
 
+// ── דיאלוג פעולה על מצגת (שינוי שם / מחיקה) ──────────────────────
+// מחליף את window.prompt/window.confirm: הם לא מעוצבים, לא RTL, וב-WebView2
+// הם חוסמים את כל החלון. RTL, מיקוד אוטומטי, Enter מאשר ו-Esc מבטל.
+function DeckActionDialog({ dialog, busy, onChange, onConfirm, onCancel }) {
+  const inputRef = useRef(null);
+  const confirmRef = useRef(null);
+  const kind = dialog?.kind || '';
+  const recId = dialog?.rec?.id || '';
+  // ה-handlers מגיעים כ-inline arrow ומשנים זהות בכל רנדר — דרך ref כדי שמאזין
+  // ה-Escape לא יירשם מחדש בכל רנדר.
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+
+  useEffect(() => {
+    if (!kind) return;
+    if (kind === 'rename') { inputRef.current?.focus(); inputRef.current?.select(); }
+    else confirmRef.current?.focus();
+  }, [kind, recId]);
+
+  useEffect(() => {
+    if (!kind) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onCancelRef.current?.(); } };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [kind]);
+
+  if (!kind) return null;
+  const isRename = kind === 'rename';
+  const title = dialog?.rec?.title || 'מצגת ללא שם';
+
+  return (
+    <div
+      dir="rtl"
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-950/75 pt-[18vh] backdrop-blur-[2px]"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    >
+      <div className="mx-6 w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-5 text-right shadow-2xl">
+        <div className={`text-base font-black ${isRename ? 'text-slate-100' : 'text-rose-300'}`}>
+          {isRename ? 'שם חדש למצגת' : 'מחיקת מצגת'}
+        </div>
+        {isRename ? (
+          <input
+            ref={inputRef}
+            value={dialog.value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onConfirm(); } }}
+            className="mt-3 w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400"
+          />
+        ) : (
+          <div className="mt-2 text-xs leading-6 text-slate-400">
+            {`למחוק את המצגת "${title}"? פעולה זו אינה הפיכה במכשיר זה.`}
+          </div>
+        )}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            ref={confirmRef}
+            type="button"
+            disabled={busy || (isRename && !dialog.value.trim())}
+            onClick={onConfirm}
+            className={`rounded-xl px-4 py-2 text-sm font-bold text-white transition disabled:opacity-40 ${isRename ? 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400' : 'bg-rose-600 hover:bg-rose-500'}`}
+          >{isRename ? 'שמור' : 'מחק'}</button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-slate-800"
+          >ביטול</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, onNewDeck, showToast }) {
   const [records, setRecords] = useState(() => listDecks());
   const [busyId, setBusyId] = useState('');
+  // חיפוש (מוצג רק כשיש מספיק מצגות) + דיאלוג פעולה פעיל.
+  const [query, setQuery] = useState('');
+  const [dialog, setDialog] = useState(null);
 
   // רענון בכניסה למסך ובכל שינוי במאגר (שמירה אוטומטית, מחיקה, סנכרון ענן).
   useEffect(() => {
@@ -284,11 +423,13 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
     onOpenDeck(normalizeDeck(body));
   });
 
-  const handleRename = (rec) => {
-    const next = window.prompt('שם חדש למצגת:', rec.title);
-    if (next == null) return;
-    const clean = next.trim();
-    if (!clean || clean === rec.title) return;
+  const handleRename = (rec) => setDialog({ kind: 'rename', rec, value: rec.title || '' });
+
+  const confirmRename = () => {
+    const rec = dialog?.rec;
+    const clean = String(dialog?.value || '').trim();
+    setDialog(null);
+    if (!rec || !clean || clean === rec.title) return;
     runAction(rec.id, async () => {
       await renameDeck(rec.id, clean);
       // שינוי שם של המצגת שפתוחה בעורך חייב להגיע גם לדק שבזיכרון — אחרת
@@ -302,8 +443,12 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
     showToast?.('נוצר עותק של המצגת');
   });
 
-  const handleDelete = (rec) => {
-    if (!window.confirm(`למחוק את "${rec.title}"? הפעולה בלתי הפיכה.`)) return;
+  const handleDelete = (rec) => setDialog({ kind: 'delete', rec, value: '' });
+
+  const confirmDelete = () => {
+    const rec = dialog?.rec;
+    setDialog(null);
+    if (!rec) return;
     runAction(rec.id, async () => {
       await deleteDeck(rec.id);
       // מחיקה של המצגת שפתוחה בעורך חייבת לרוקן גם אותו — אחרת העריכה הבאה
@@ -311,6 +456,13 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
       onDeckDeleted?.(rec.id);
     });
   };
+
+  // חיפוש לפי כותרת + נושא. מוצג רק כשהרשימה מתחילה להיות ארוכה.
+  const showSearch = records.length > 6;
+  const needle = query.trim().toLowerCase();
+  const visibleRecords = (showSearch && needle)
+    ? records.filter((r) => `${r.title || ''} ${r.topic || ''}`.toLowerCase().includes(needle))
+    : records;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
@@ -329,6 +481,27 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
         >+ מצגת חדשה</button>
       </div>
 
+      {showSearch && (
+        <div className="flex items-center gap-3">
+          <input
+            dir="rtl"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="חיפוש מצגת…"
+            className="w-full max-w-sm rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
+          />
+          {Boolean(needle) && (
+            <span className="text-[11px] text-slate-500">{visibleRecords.length} מתוך {records.length}</span>
+          )}
+        </div>
+      )}
+
+      {showSearch && Boolean(needle) && !visibleRecords.length && (
+        <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-8 text-center text-sm text-slate-400">
+          לא נמצאה מצגת שתואמת לחיפוש.
+        </div>
+      )}
+
       {!records.length && (
         <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-14 text-center">
           <div className="text-lg font-bold text-slate-200">אין כאן עדיין מצגות</div>
@@ -343,9 +516,9 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
         </div>
       )}
 
-      {Boolean(records.length) && (
+      {Boolean(visibleRecords.length) && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {records.map((rec) => {
+          {visibleRecords.map((rec) => {
             const theme = getThemeById(rec.themeId);
             const missing = rec.bodyMissing;
             const isBusy = busyId === rec.id;
@@ -397,6 +570,14 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
           })}
         </div>
       )}
+
+      <DeckActionDialog
+        dialog={dialog}
+        busy={Boolean(busyId)}
+        onChange={(value) => setDialog((d) => (d ? { ...d, value } : d))}
+        onConfirm={dialog?.kind === 'rename' ? confirmRename : confirmDelete}
+        onCancel={() => setDialog(null)}
+      />
     </div>
   );
 }
@@ -1051,6 +1232,10 @@ export default function PresentationStudio({
   const [presenting, setPresenting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // התקדמות הייצוא ({done,total}) — מגיעה מ-buildPptxBase64 פר-שקף שנצרב.
+  const [exportProgress, setExportProgress] = useState(null);
+  // חיווי שמירה: 'idle' (עוד לא נשמר כלום) · 'saving' · 'saved'.
+  const [saveState, setSaveState] = useState('idle');
   const [exportOpen, setExportOpen] = useState(false);
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const themePanelRef = useRef(null);
@@ -1072,8 +1257,12 @@ export default function PresentationStudio({
   // ⚠️ המצב הבא מחושב לפני הקריאות ל-setState: setAssistantPreset בתוך ה-updater
   // של setAssistantOpen הוא עדכון-בתוך-עדכון, ותחת StrictMode/render כפול ה-updater
   // רץ פעמיים ומייצר preset כפול (nonce שונה) — כלומר launchPreset שנורה פעמיים.
+  // ⚠️ נקרא גם מתוך ה-effect של המקלדת (Ctrl+E), שאינו תלוי ב-assistantOpen —
+  // קריאה ישירה מה-state שם הייתה מיושנת ומחזירה תמיד לאותו מצב.
+  const assistantOpenRef = useRef(false);
+  assistantOpenRef.current = assistantOpen;
   const toggleAssistant = () => {
-    const next = !assistantOpen;
+    const next = !assistantOpenRef.current;
     if (next) setAssistantPreset({ nonce: Date.now(), classicAgentId: '', composerMode: 'edit', prompt: '' });
     setAssistantOpen(next);
   };
@@ -1101,6 +1290,9 @@ export default function PresentationStudio({
   const flushSaveRef = useRef(null);
   // המצגת שכבר הוצגה עליה התראת "נמחקה ממכשיר אחר" — פעם אחת לכל מצגת.
   const deckDeletedToastRef = useRef('');
+  // הדק שכבר נצרבה עבורו תמונה ממוזערת (השוואת זהות אובייקט — כל עריכה יוצרת
+  // אובייקט חדש). מונע צריבה חוזרת של דק שלא השתנה.
+  const lastThumbDeckRef = useRef(null);
 
   // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
   const [imageStyle, setImageStyle] = useState('photo');
@@ -1114,6 +1306,8 @@ export default function PresentationStudio({
 
   // ערכה פעילה: ערכת AI מותאמת גוברת על themeId המובנה.
   const activeTheme = deck?.customTheme?.colors ? deck.customTheme : getThemeById(deck?.themeId);
+  // רקע ה-placeholder של תאי הרצועה שטרם נכנסו לתצוגה.
+  const railPlaceholderBg = activeTheme?.coverGradient || activeTheme?.colors?.bg || '#0f172a';
 
   const slides = deck?.slides || [];
   const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
@@ -1293,14 +1487,35 @@ export default function PresentationStudio({
     historyRef.current = { past: [], future: [] };
     bumpHistory((v) => v + 1);
     setSelectedId(deck?.slides?.[0]?.id || '');
-    if (id) setView('editor');
+    if (id) {
+      setView('editor');
+      // מצגת שנוצרה/יובאה זה עתה מגיעה בלי תמונה ממוזערת — צורבים אחת לרשימה.
+      // פתיחה של מצגת שכבר יש לה thumb לא צורבת מחדש (הרענון קורה ב-handleBack).
+      if (!getDeckRecord(id)?.thumbDataUrl) requestDeckThumb(deck);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck?.id]);
+
+  // ── בקשת תמונה ממוזערת (fire-and-forget) ─────────────────────────
+  // תמיד נדחית ל-macrotask אחרי החלפת המסך: הצריבה לוקחת מאות מ"ש ומחליפה
+  // את requestAnimationFrame הגלובלי, ואסור לה לעכב את הניווט.
+  const requestDeckThumb = (target) => {
+    const current = target || deckRef.current;
+    if (!current?.id || !current?.slides?.length) return;
+    // ייצוא רץ = צריבות רבות במקביל; לא מוסיפים עליהן עוד אחת.
+    if (exporting) return;
+    if (lastThumbDeckRef.current === current) return;
+    lastThumbDeckRef.current = current;
+    setTimeout(() => { captureDeckThumb(current); }, 0);
+  };
 
   // חזרה: עורך → רשימה · טופס → רשימה · רשימה → יציאה מהסטודיו.
   const handleBack = () => {
     if (view === 'list') { onExit(); return; }
+    const leavingEditor = view === 'editor';
     setView('list');
+    // אחרי מעבר המסך, לא לפניו — כישלון צריבה לא חוסם את החזרה לרשימה.
+    if (leavingEditor) requestDeckThumb(deckRef.current);
   };
 
   // ניווט שקופיות בחיצים (כל עוד לא מקלידים בשדה). RTL: ימינה=הקודם, שמאלה=הבא.
@@ -1311,6 +1526,19 @@ export default function PresentationStudio({
       if (presenting || pickerOpen || exportOpen || themePanelOpen || addMenuOpen) return;
       const t = e.target;
       const tag = t?.tagName;
+      // F5 = מצב הצגה · Ctrl+E = פתיחה/סגירה של עוזר ה-AI. שניהם לפני שער
+      // שדות הקלט: הם פעולות מסך ולא הקלדה. ⚠️ preventDefault ל-F5 חובה —
+      // בלעדיו הדפדפן/WebView2 מרענן את האפליקציה ומאבד את המצגת שבזיכרון.
+      if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setPresenting(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && String(e.key || '').toLowerCase() === 'e') {
+        e.preventDefault();
+        toggleAssistant();
+        return;
+      }
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
       // ביטול / ביצוע-שוב / שכפול
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -1382,6 +1610,8 @@ export default function PresentationStudio({
     if (!deck?.id) { flushSaveRef.current = null; return undefined; }
     if (savedDeckRef.current === deck) { flushSaveRef.current = null; return undefined; }
     let done = false;
+    // מרגע שיש שינוי שממתין לשמירה — חיווי "שומר…" (כולל 1.2 שניות ההשהיה).
+    setSaveState('saving');
     const run = () => {
       if (done) return;
       done = true;
@@ -1393,16 +1623,22 @@ export default function PresentationStudio({
         // null = הרשומה מסומנת כמחוקה (tombstone ממכשיר אחר) והשמירה דולגה.
         // בלי הבדיקה הזו זה נראה בדיוק כמו שמירה מוצלחת, והמשתמש ממשיך לערוך
         // מצגת שכבר לא נשמרת לשום מקום.
+        if (unmountedRef.current) return;
         if (record === null) {
           savedDeckRef.current = null;
+          // לא נשמר — החיווי חוזר ל"שומר…" יישאר מטעה; מכבים אותו והטוסט מדבר.
+          setSaveState('idle');
           if (deckDeletedToastRef.current !== snapshot.id) {
             deckDeletedToastRef.current = snapshot.id;
             showToast?.('המצגת נמחקה ממכשיר אחר — השינויים לא נשמרים', { tone: 'warning' });
           }
+          return;
         }
+        setSaveState('saved');
       }).catch((e) => {
         // כישלון מכסה חייב להגיע למשתמש — אחרת "נשמר" ונעלם בשקט.
         savedDeckRef.current = null;
+        if (!unmountedRef.current) setSaveState('idle');
         showToast?.(e?.message || 'שמירת המצגת נכשלה', { tone: 'warning' });
       });
     };
@@ -1769,8 +2005,13 @@ export default function PresentationStudio({
   const handleExport = async (profile = 'auto') => {
     setExportOpen(false);
     setExporting(true);
+    setExportProgress(null);
     try {
-      const { base64, warnings } = await buildPptxBase64(deck, { profile });
+      const { base64, warnings } = await buildPptxBase64(deck, {
+        profile,
+        // ⚠️ ה-callback נורא פר-שקף מתוך צריבה מקבילה — רק setState זול כאן.
+        onProgress: (done, total) => setExportProgress({ done, total }),
+      });
       if (window.desktopApp?.saveDocumentDialog) {
         const res = await window.desktopApp.saveDocumentDialog({ title: deck.title || 'presentation', preferredExtension: 'pptx', base64 });
         if (res?.ok) {
@@ -1797,8 +2038,13 @@ export default function PresentationStudio({
       }
     } catch (e) {
       showToast(e?.message || 'ייצוא נכשל', { tone: 'error' });
-    } finally { setExporting(false); }
+    } finally { setExporting(false); setExportProgress(null); }
   };
+
+  // תווית כפתור הייצוא: 'מייצא שקף 3/12…' כשיש התקדמות, אחרת 'מייצא...'.
+  const exportLabel = exportProgress && exportProgress.total > 0
+    ? `מייצא שקף ${Math.min(exportProgress.done + 1, exportProgress.total)}/${exportProgress.total}…`
+    : 'מייצא...';
 
   return (
     <div className="flex min-h-full flex-1 flex-col overflow-hidden bg-slate-950" dir="rtl">
@@ -1817,6 +2063,14 @@ export default function PresentationStudio({
           }}
           className="rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-white outline-none focus:bg-slate-800"
         />
+        {/* חיווי שמירה — 'שומר…' כל עוד יש שינוי ממתין/בדרך, 'נשמר ✓' אחרי הצלחה.
+            לפני השינוי הראשון אין כאן כלום. */}
+        {saveState !== 'idle' && (
+          <span
+            title={saveState === 'saving' ? 'שמירה אוטומטית מתבצעת' : 'כל השינויים נשמרו'}
+            className={`select-none text-[11px] font-semibold transition-colors ${saveState === 'saving' ? 'text-slate-500' : 'text-emerald-400'}`}
+          >{saveState === 'saving' ? 'שומר…' : 'נשמר ✓'}</span>
+        )}
         <div className="relative" ref={themePanelRef}>
           <button
             type="button"
@@ -1902,7 +2156,7 @@ export default function PresentationStudio({
         <button onClick={() => { onGenerate(null); setView('brief'); }} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
         <div className="relative">
-          <button onClick={() => setExportOpen((v) => !v)} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? 'מייצא...' : '⬇ ייצוא PPTX ▾'}</button>
+          <button onClick={() => setExportOpen((v) => !v)} disabled={exporting} className="rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{exporting ? exportLabel : '⬇ ייצוא PPTX ▾'}</button>
           {exportOpen && !exporting && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setExportOpen(false)} />
@@ -1968,7 +2222,15 @@ export default function PresentationStudio({
                   className={`relative cursor-grab rounded-lg border-2 text-right transition active:cursor-grabbing ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'} ${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-cyan-400 ring-offset-2 ring-offset-slate-900' : ''}`}
                 >
                   <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-                  <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} deckId={deck.id} />
+                  <RailSlidePreview
+                    slide={s}
+                    themeId={deck.themeId}
+                    customTheme={deck.customTheme}
+                    index={i}
+                    deckTitle={deck.title}
+                    deckId={deck.id}
+                    placeholderBg={railPlaceholderBg}
+                  />
                 </button>
               );
             })}
