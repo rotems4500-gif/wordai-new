@@ -179,6 +179,50 @@ export const requestChartSpec = async ({ output = '', analysis = null, focus = '
 // צבעים נעימים ועקביים לסדרות (כשה-LLM לא סיפק)
 const PALETTE = ['#2563EB', '#F59E0B', '#10B981', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
 
+// ── עברית ב-QuickChart ───────────────────────────────────────────
+// QuickChart מריץ Chart.js v4 בשרת. אין "options.font" גלובלי — משפחת הפונט
+// נקבעת פר-סקייל ופר-legend (labels.font.family), ו-RTL נקבע ב-plugins.legend.rtl
+// ו-plugins.tooltip.rtl. בלי זה תוויות עבריות יצאו בפונט ברירת-מחדל לטיני
+// (ריבועים/היפוך). ⚠️ דורש אימות אמפירי מול השרת — אם המשפחה לא מותקנת שם,
+// Chart.js נופל לפונט הבא ברשימה.
+const HEB_FONT_FAMILY = 'Noto Sans Hebrew, Alef, Arial, sans-serif';
+
+const withHebrewFont = (node = {}) => ({
+  ...node,
+  ticks: { ...(node.ticks || {}), font: { family: HEB_FONT_FAMILY, ...((node.ticks || {}).font || {}) } },
+  title: { ...(node.title || {}), font: { family: HEB_FONT_FAMILY, ...((node.title || {}).font || {}) } },
+});
+
+// טיפוסים קרטזיים בלבד מקבלים scales.x/scales.y — לגרף עוגה/רדאר אין צירים כאלה.
+const CARTESIAN_TYPES = new Set(['bar', 'horizontalBar', 'line', 'scatter', 'bubble']);
+
+const decorateChartOptions = (options = {}, { showLegend, type }) => {
+  const plugins = options.plugins || {};
+  const scales = options.scales || {};
+  const cartesian = CARTESIAN_TYPES.has(type);
+  return {
+    ...options,
+    plugins: {
+      ...plugins,
+      legend: {
+        display: showLegend,
+        rtl: true,
+        textDirection: 'rtl',
+        ...(plugins.legend || {}),
+        labels: { font: { family: HEB_FONT_FAMILY }, ...((plugins.legend || {}).labels || {}) },
+      },
+      tooltip: { rtl: true, textDirection: 'rtl', ...(plugins.tooltip || {}) },
+      title: {
+        ...(plugins.title || {}),
+        font: { family: HEB_FONT_FAMILY, ...((plugins.title || {}).font || {}) },
+      },
+    },
+    ...(cartesian
+      ? { scales: { ...scales, x: withHebrewFont(scales.x), y: withHebrewFont(scales.y) } }
+      : (options.scales ? { scales } : {})),
+  };
+};
+
 const decorateChartSpec = (chart) => {
   const type = chart.type;
   const isCategorical = type === 'pie' || type === 'doughnut';
@@ -202,10 +246,10 @@ const decorateChartSpec = (chart) => {
   return {
     ...chart,
     data: { ...chart.data, datasets },
-    options: {
-      plugins: { legend: { display: datasets.length > 1 || isCategorical } },
-      ...(chart.options || {}),
-    },
+    options: decorateChartOptions(chart.options || {}, {
+      showLegend: datasets.length > 1 || isCategorical,
+      type,
+    }),
   };
 };
 

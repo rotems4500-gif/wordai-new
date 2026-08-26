@@ -62,7 +62,9 @@ export const renderSlideToPng = async (slide, themeId, index = null, { pixelRati
   const root = createRoot(host);
   patchRafForHiddenTab();
   try {
-    root.render(React.createElement(SlideStage, { slide, themeId, index, bgOnly, deckTitle, customTheme }));
+    // forExport — שקופית עם תמונה שעדיין לא נוצרה נצרבת כבלוק ניטרלי בלי שום
+    // טקסט placeholder (אחרת ה-alt/query היו נצרבים לתוך ה-PPTX).
+    root.render(React.createElement(SlideStage, { slide, themeId, index, bgOnly, deckTitle, customTheme, forExport: true }));
     await nextFrame();
     await waitForFonts();
     await waitForImages(host);

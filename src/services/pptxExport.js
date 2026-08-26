@@ -24,10 +24,15 @@ const RE_HAS_LATIN = /[A-Za-z]/;
 const RE_HAS_HEB = /[֐-׿יִ-ﭏ]/;
 // רצף לטיני: מתחיל באות לטינית, ממשיך באותיות/ספרות/פיסוק פנימי (בלי סוגריים/;)
 const RE_LATIN_SEG = /[A-Za-z][A-Za-z0-9.,'’"&/:\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9.,'’"&/:\-]*)*/g;
+// מחרוזת של ספרות/סימנים בלבד ('87%', '1.5M' בלי אות, '2019-2024', '3:1').
+// ⚠️ נמדד: תיוגה כ-he-IL + rtlMode הפך אותה ב-PowerPoint ל-'%87'. אין בה
+// שום תו עברי — היא חייבת לצאת כ-run לטיני (en-US) בלי rtlMode.
+const RE_PURE_NUMERIC = /^[\d\s.,%+\-–—/:()]+$/;
 
 const splitBidi = (text) => {
   const str = String(text == null ? '' : text);
   if (!str) return [{ t: '', lang: 'he-IL' }];
+  if (RE_PURE_NUMERIC.test(str)) return [{ t: str, lang: 'en-US' }];
   if (!RE_HAS_HEB.test(str)) return [{ t: str, lang: RE_HAS_LATIN.test(str) ? 'en-US' : 'he-IL' }];
   if (!RE_HAS_LATIN.test(str)) return [{ t: str, lang: 'he-IL' }];
   const runs = [];
@@ -45,10 +50,12 @@ const splitBidi = (text) => {
 };
 
 // מחרוזת → מערך runs ל-pptxgenjs (font/color/size מגיעים מ-opts של ה-textbox)
+// lang/rtlMode נקבעים לפי הכיווניות בפועל ואסור ש-extra ידרוס אותם — run לטיני
+// (או מספרי) עם rtlMode:true הוא בדיוק הבאג שהפך '87%' ל-'%87'.
 const toRuns = (text, extra = {}) =>
   splitBidi(text).map((r) => ({
     text: r.t,
-    options: { lang: r.lang, rtlMode: r.lang === 'he-IL', ...extra },
+    options: { ...extra, lang: r.lang, rtlMode: r.lang === 'he-IL' },
   }));
 
 // כותרות/מספרים — פונט ה-display של ה-theme; גוף/בולטים — פונט ה-body.
@@ -258,9 +265,12 @@ export const buildPptxBase64 = async (deck, { profile = 'auto', pixelRatio = 2 }
     }
 
     if (layout === 'quote') {
-      slide.addText('”', { x: 0.8, y: 0.6, w: 2, h: 1.5, fontFace: fD, bold: true, color: ac, fontSize: 96, align: 'right' });
+      // ⚠️ בלי גליפים קשיחים: גרש הפתיחה בגודל 96 ('”') וגם המקף שלפני הייחוס
+      // ('— ') נדפסו כתו לטיני בתוך פסקה עברית ונדדו לצד הלא-נכון. במקומם —
+      // פס accent מעוגל (צורה, לא טקסט) והייחוס כטקסט עברי נקי בצבע ה-accent.
+      slide.addShape(pptx.ShapeType.roundRect, { x: W - 1.6, y: 1.0, w: 0.8, h: 0.14, fill: { color: ac }, rectRadius: 0.07 });
       putText(slide, s.body || 'ציטוט', { x: 1.0, y: 2.0, w: W - 2.0, h: 3.0, ...titleOpts(text, fD), fontSize: 32, valign: 'middle' });
-      if (s.subtitle) putText(slide, `— ${s.subtitle}`, { x: 1.0, y: 5.2, w: W - 2.0, h: 0.8, ...bodyOpts(muted, fB), fontSize: 20 });
+      if (s.subtitle) putText(slide, s.subtitle, { x: 1.0, y: 5.2, w: W - 2.0, h: 0.8, ...bodyOpts(muted, fB), fontSize: 18, bold: true, color: ac });
       addFooter(slide, { deckTitle: deck.title, index: i, color: muted, font: fB });
       return;
     }

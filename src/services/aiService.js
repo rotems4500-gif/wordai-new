@@ -239,6 +239,9 @@ export const DEFAULT_PRESENTATION_PREFERENCES = {
   defaultImageIntensity: 'high',
   defaultAutoImages: false,
   defaultAutoInfographics: false,
+  // עיצוב מחולל: ערכת theme שנוצרת ב-AI לפי הנושא בזמן היצירה. דלוק כברירת
+  // מחדל — עולה קריאת טקסט אחת בלבד, ונופל בשקט לערכה שנבחרה אם נכשל.
+  defaultAutoTheme: true,
   defaultAudience: '',
   defaultGoal: '',
   rememberLastChoices: true,

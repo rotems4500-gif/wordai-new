@@ -486,6 +486,11 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const [pptSpeakerNotes, setPptSpeakerNotes] = useState(false);
   const [pptIncludeCover, setPptIncludeCover] = useState(true);
   const [pptAiAppendix, setPptAiAppendix] = useState(false);
+  // מדיה אוטומטית + עיצוב מחולל — נעשים בשלב היצירה עצמו (main.jsx), כך
+  // שהמצגת נכנסת לסטודיו מוכנה ולא חצי-מוכנה.
+  const [pptAutoImages, setPptAutoImages] = useState(false);
+  const [pptAutoInfographics, setPptAutoInfographics] = useState(false);
+  const [pptAutoTheme, setPptAutoTheme] = useState(true);
   const [uiTheme, setUiTheme] = useState(getTheme);
   useEffect(() => onThemeChange(setUiTheme), []);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
@@ -1561,6 +1566,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
           speakerNotes: pptSpeakerNotes,
           includeCover: pptIncludeCover,
           aiAppendix: pptAiAppendix,
+          autoImages: pptAutoImages,
+          autoInfographics: pptAutoInfographics,
+          autoTheme: pptAutoTheme,
           selectedMaterials: presentationSelectedMaterials,
         });
       } finally {
@@ -2140,6 +2148,18 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                   <label className="inline-flex items-center gap-2 text-amber-200/90 text-xs" title="שקופיות נספח בסוף הדק עם הפרומפטים לפי שלבים והדרכה. כרוך בקריאת API נוספת.">
                     <input type="checkbox" checked={pptAiAppendix} onChange={(e) => setPptAiAppendix(e.target.checked)} />
                     📎 נספח AI (קריאת API נוספת)
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="כל שקופית שמסומנת כזקוקה לתמונה תקבל תמונה מחוללת לפני שהמצגת נפתחת. עולה כסף — כ-4 סנט לתמונה.">
+                    <input type="checkbox" checked={pptAutoImages} onChange={(e) => setPptAutoImages(e.target.checked)} />
+                    🖼️ צור תמונות אוטומטית
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="שקופיות עם סדרת מספרים יומרו לגרף מדויק (חינם).">
+                    <input type="checkbox" checked={pptAutoInfographics} onChange={(e) => setPptAutoInfographics(e.target.checked)} />
+                    📊 אינפוגרפיקות מהנתונים
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="ה-AI מייצר ערכת צבעים ופונטים לפי הנושא במקום ערכה מוכנה. אם נכשל נשארת הערכה שנבחרה.">
+                    <input type="checkbox" checked={pptAutoTheme} onChange={(e) => setPptAutoTheme(e.target.checked)} />
+                    🎨 עיצוב מחולל
                   </label>
                 </div>
                 <div className="mt-3 text-white/55 text-[11px]">

@@ -12,6 +12,7 @@
 import { generateAiImage } from './imageService';
 import { renderQuickChart } from './chartService';
 import { chatWithActiveProvider } from './aiService';
+import { layoutHasImage } from '../presentation/deckModel';
 import { resolveTheme } from '../presentation/themes/_schema';
 
 const MAX_IMAGE_EDGE = 1280;
@@ -88,24 +89,6 @@ export const buildSlideImagePrompt = (slide = {}, theme = {}, { style = 'photo',
   ].filter(Boolean).join('\n');
 };
 
-const buildInfographicPrompt = (slide = {}, theme = {}) => {
-  const colors = theme.colors || {};
-  return [
-    'Create a clean, professional infographic diagram on a plain light background.',
-    'Flat vector style, bold simple shapes, clear hierarchy, generous spacing.',
-    colors.accent ? `Use ${colors.accent} as the primary accent color${colors.accent2 ? ` and ${colors.accent2} as secondary` : ''}.` : '',
-    // ⚠️ נמדד: מודלי תמונה משבשים עברית בתוך תמונה — אותיות שנראות עבריות אבל חסרות פשר.
-    // לכן המסלול הזה מבקש ויזואל ללא טקסט כלל; טקסט אמיתי מגיע מפריסה מובנית (restructureSlideAsInfographic).
-    'Do NOT render any text, letters, numbers or labels inside the image — icons and shapes only.',
-    `Title: ${slide?.title || ''}`,
-    `Content to visualize: ${slideTextSummary(slide)}`,
-  ].filter(Boolean).join('\n');
-};
-
-// מודל תמונה שמצייר טקסט עברי היטב — nano-banana. Imagen חלש בטקסט,
-// ולכן אינפוגרפיקה (שכולה תוויות) נכפית עליו בנפרד מתמונה אילוסטרטיבית.
-const HEBREW_TEXT_IMAGE_MODEL = 'gemini-2.5-flash-image';
-
 const finishImage = async (raw, extra = {}) => ({
   source: 'ai',
   url: '',
@@ -150,84 +133,100 @@ export const generateSlideBackground = async (slide, theme, { model = '', provid
   };
 };
 
+const MAX_LABEL_CHARS = 40;
+const cutLabel = (text) => {
+  const clean = String(text || '').trim();
+  return clean.length > MAX_LABEL_CHARS ? `${clean.slice(0, MAX_LABEL_CHARS - 1).trim()}…` : clean;
+};
+
+// שנה (1900-2100) היא בדרך כלל הציר ולא הערך — "בשנת 2019 עלה השיעור ל-42%".
+const isYearToken = (token) => /^\d{4}$/.test(token) && Number(token) >= 1900 && Number(token) <= 2100;
+
+/**
+ * bulletToPoint — בולט אחד → { label, value }.
+ * ⚠️ הגרסה הקודמת לקחה את **המספר הראשון** בשורה ומחקה אותו ממנה עם replace
+ * גלובלי-ראשון: "2019: 42% מהמשיבים" נתן value=2019 ותווית "42% מהמשיבים".
+ * כאן: אוספים את כל המספרים, מעדיפים את האחרון (הערך בא בדרך כלל אחרי ההקשר),
+ * ומדלגים על שנה כשיש מספר אחר; מוסר רק המספר שנבחר.
+ */
+const bulletToPoint = (line) => {
+  const text = String(line || '').trim();
+  if (!text) return null;
+  const matches = [...text.matchAll(/-?\d+(?:[.,]\d+)?/g)];
+  if (!matches.length) return null;
+  let chosen = matches[matches.length - 1];
+  if (isYearToken(chosen[0]) && matches.length > 1) {
+    const alt = [...matches].reverse().find((m) => !isYearToken(m[0]));
+    if (alt) chosen = alt;
+  }
+  const value = Number(String(chosen[0]).replace(',', '.'));
+  if (!Number.isFinite(value)) return null;
+  const start = chosen.index;
+  const rest = text.slice(start + chosen[0].length);
+  const end = start + chosen[0].length + (rest.startsWith('%') ? 1 : 0);
+  const stripped = `${text.slice(0, start)}${text.slice(end)}`
+    .replace(/[—–:\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  // תווית שנשחקה לכלום (למשל "42%") — עדיף הבולט המלא מאשר פריט בלי שם.
+  const label = stripped.length >= 3
+    ? stripped
+    : text.replace(/\s+/g, ' ').trim();
+  if (label.length < 3) return null;
+  return { label: cutLabel(label), value };
+};
+
 // מספרים בתוכן השקופית = מועמד לגרף אמיתי (QuickChart) ולא לתמונה מחוללת.
 const extractSlideSeries = (slide = {}) => {
   const stats = Array.isArray(slide.stats) ? slide.stats : [];
   const fromStats = stats
-    .map((s) => ({ label: String(s?.label || '').trim(), value: Number(String(s?.value || '').replace(/[^\d.-]/g, '')) }))
+    .map((s) => ({ label: cutLabel(s?.label), value: Number(String(s?.value || '').replace(/[^\d.-]/g, '')) }))
     .filter((s) => s.label && Number.isFinite(s.value));
   if (fromStats.length >= 2) return fromStats;
   const bullets = Array.isArray(slide.bullets) ? slide.bullets : [];
-  const fromBullets = bullets.map((line) => {
-    const text = String(line || '');
-    const match = text.match(/(-?\d+(?:[.,]\d+)?)\s*%?/);
-    if (!match) return null;
-    const label = text.replace(match[0], '').replace(/[—–:\-]/g, ' ').replace(/\s+/g, ' ').trim();
-    const value = Number(String(match[1]).replace(',', '.'));
-    return label && Number.isFinite(value) ? { label: label.slice(0, 40), value } : null;
-  }).filter(Boolean);
+  const fromBullets = bullets.map(bulletToPoint).filter(Boolean);
   return fromBullets.length >= 2 ? fromBullets : [];
 };
 
 /**
- * generateSlideInfographic — בוחר את הכלי לפי התוכן:
- *   יש סדרת מספרים ⇒ גרף QuickChart מדויק (**חינם**, בלי מודל תמונה).
- *   אחרת ⇒ דיאגרמה מחוללת ב-nano-banana עם תוויות בעברית.
+ * generateSlideInfographic — גרף QuickChart מדויק מהמספרים שבשקופית (**חינם**,
+ * בלי מודל תמונה). אין סדרת מספרים ⇒ נזרקת שגיאה, והקורא ממשיך למבנה ויזואלי
+ * מקורי (restructureSlideAsInfographic).
+ *
+ * ⚠️ היה כאן מסלול שני — דיאגרמה מחוללת במודל תמונה. הוא היה **קוד מת** (כל
+ * הקוראים מעבירים force:'chart'), וגם פסול לגופו: מודלי תמונה משבשים עברית
+ * בתוך התמונה. נמחק במכוון; טקסט עברי אמיתי מגיע מגרף או מפריסה מובנית.
  * @returns {Promise<object>} אובייקט image לשקופית
  */
-export const generateSlideInfographic = async (slide, theme, { force = '', model = '', provider = '', signal } = {}) => {
-  // המלצת המודל מזמן בניית המצגת (slide.visual) משמשת כברירת מחדל כשאין כפייה ידנית.
-  const intent = force || (slide?.visual === 'chart' ? 'chart' : slide?.visual === 'infographic' ? 'diagram' : '');
-  if (intent === 'chart' && !force) {
-    const auto = extractSlideSeries(slide);
-    if (auto.length < 2) return generateSlideInfographic(slide, theme, { force: 'diagram', model, provider, signal });
-  }
-  const series = intent === 'diagram' ? [] : extractSlideSeries(slide);
-  if (series.length >= 2 || intent === 'chart') {
-    if (series.length < 2) throw new Error('לא נמצאו מספרים בשקופית — אפשר ליצור דיאגרמה במקום גרף.');
-    const accents = (Array.isArray(theme?.accents) && theme.accents.length)
-      ? theme.accents
-      : [theme?.colors?.accent, theme?.colors?.accent2].filter(Boolean);
-    const chart = {
-      type: series.length > 5 ? 'bar' : 'bar',
-      data: {
-        labels: series.map((s) => s.label),
-        datasets: [{
-          label: String(slide?.title || '').trim() || 'נתונים',
-          data: series.map((s) => s.value),
-          backgroundColor: series.map((_, i) => accents[i % Math.max(1, accents.length)] || '#2563EB'),
-        }],
-      },
-      options: { plugins: { legend: { display: false } } },
-    };
-    const dataUrl = await renderQuickChart({ chart, width: 1280, height: 720, signal });
-    return {
-      source: 'chart',
-      dataUrl: await compressImageDataUrl(dataUrl),
-      url: '',
-      query: String(slide?.title || '').trim(),
-      alt: `תרשים: ${String(slide?.title || '').trim()}`,
-      attribution: 'QuickChart — מהנתונים בשקופית',
-      model: 'quickchart',
-      provider: 'quickchart',
-      prompt: '',
-      pending: false,
-    };
-  }
-  const prompt = buildInfographicPrompt(slide, theme);
-  const raw = await generateAiImage(prompt, {
-    featureId: 'presentations',
-    model: model || HEBREW_TEXT_IMAGE_MODEL,
-    provider: provider || 'gemini',
-    signal,
-  });
-  return finishImage(raw, {
-    source: 'infographic',
+export const generateSlideInfographic = async (slide, theme, { signal } = {}) => {
+  const series = extractSlideSeries(slide);
+  if (series.length < 2) throw new Error('לא נמצאו מספרים בשקופית — אפשר ליצור דיאגרמה במקום גרף.');
+  const accents = (Array.isArray(theme?.accents) && theme.accents.length)
+    ? theme.accents
+    : [theme?.colors?.accent, theme?.colors?.accent2].filter(Boolean);
+  const chart = {
+    type: 'bar',
+    data: {
+      labels: series.map((s) => s.label),
+      datasets: [{
+        label: String(slide?.title || '').trim() || 'נתונים',
+        data: series.map((s) => s.value),
+        backgroundColor: series.map((_, i) => accents[i % Math.max(1, accents.length)] || '#2563EB'),
+      }],
+    },
+    options: { plugins: { legend: { display: false } } },
+  };
+  const dataUrl = await renderQuickChart({ chart, width: 1280, height: 720, signal });
+  return {
+    source: 'chart',
+    dataUrl: await compressImageDataUrl(dataUrl),
+    url: '',
     query: String(slide?.title || '').trim(),
-    alt: `אינפוגרפיקה: ${String(slide?.title || '').trim()}`,
-    attribution: 'אינפוגרפיקה שנוצרה ב-AI',
-    prompt,
-  });
+    alt: `תרשים: ${String(slide?.title || '').trim()}`,
+    attribution: 'QuickChart — מהנתונים בשקופית',
+    model: 'quickchart',
+    provider: 'quickchart',
+    prompt: '',
+    pending: false,
+  };
 };
 
 /**
@@ -303,7 +302,7 @@ export const restructureSlideAsInfographic = async (slide, { signal } = {}) => {
  * ומקביליות מזמינה rate-limit.
  * @returns {Promise<{slides: Array<{slideId, image}>, failures: Array}>}
  */
-export const generateMissingDeckImages = async (deck, theme, { style = 'photo', model = '', provider = '', signal, onProgress = null, limit = 12 } = {}) => {
+export const generateMissingDeckImages = async (deck, theme, { style = 'photo', model = '', provider = '', signal, onProgress = null, limit = 24 } = {}) => {
   const targets = (deck?.slides || []).filter((slide) => slide?.image?.pending && (slide.image.query || slide.image.alt)).slice(0, limit);
   const results = [];
   const failures = [];
@@ -320,6 +319,92 @@ export const generateMissingDeckImages = async (deck, theme, { style = 'photo', 
     }
   }
   return { slides: results, failures, attempted: targets.length };
+};
+
+const countPendingImages = (deck) =>
+  (deck?.slides || []).filter((s) => s?.image?.pending && (s.image.query || s.image.alt)).length;
+
+/**
+ * runDeckAutoMedia — מעבר מדיה שלם על דק: תמונות חסרות (עם ניסיון חוזר) ואז
+ * אינפוגרפיקות לשקופיות שסומנו visual:'chart'. הפונקציה **טהורה כלפי ה-state**:
+ * מקבלת דק ומחזירה דק חדש, ולכן היא רצה זהה משלב היצירה (main.jsx) ומהעורך.
+ *
+ * @param {object} deck  דק מנורמל
+ * @param {object} theme הערכה הפעילה (customTheme או getThemeById)
+ * @param {{autoImages?:boolean, autoInfographics?:boolean, style?:string,
+ *          signal?:AbortSignal, onProgress?:(text:string)=>void,
+ *          imageLimit?:number, imageRetries?:number}} opts
+ * @returns {Promise<{deck:object, imagesMade:number, chartsMade:number, pendingRemaining:number, aborted:boolean}>}
+ */
+export const runDeckAutoMedia = async (deck, theme, {
+  autoImages = false,
+  autoInfographics = false,
+  style = 'photo',
+  signal,
+  onProgress = null,
+  imageLimit = 24,
+  imageRetries = 1,
+} = {}) => {
+  let current = deck;
+  let imagesMade = 0;
+  let chartsMade = 0;
+  const emit = (text) => { try { onProgress?.(text); } catch { /* noop */ } };
+  const applyImages = (list) => {
+    if (!list?.length) return;
+    const map = {};
+    list.forEach(({ slideId, image }) => { map[slideId] = image; });
+    current = { ...current, slides: (current.slides || []).map((s) => (map[s.id] ? { ...s, image: map[s.id] } : s)) };
+  };
+
+  if (autoImages) {
+    // ניסיון חוזר יחיד לשקופיות שנשארו pending — כישלון בודד הוא לרוב עומס רגעי.
+    for (let attempt = 0; attempt <= imageRetries; attempt += 1) {
+      if (signal?.aborted) break;
+      if (!countPendingImages(current)) break;
+      if (attempt > 0) emit('מנסה שוב תמונות שנכשלו…');
+      // eslint-disable-next-line no-await-in-loop
+      const res = await generateMissingDeckImages(current, theme, {
+        style,
+        signal,
+        limit: imageLimit,
+        onProgress: ({ index, total }) => emit(`יוצר תמונה ${index} מתוך ${total}…`),
+      });
+      applyImages(res?.slides);
+      imagesMade += res?.slides?.length || 0;
+      if (!res?.failures?.length) break;
+    }
+  }
+
+  if (autoInfographics && !signal?.aborted) {
+    const targets = (current.slides || []).filter((s) => s?.visual === 'chart');
+    for (let i = 0; i < targets.length; i += 1) {
+      if (signal?.aborted) break;
+      emit(`ממיר שקופית ${i + 1} מתוך ${targets.length} לאינפוגרפיקה…`);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const image = await generateSlideInfographic(targets[i], theme, { signal });
+        const id = targets[i].id;
+        // פריסה שלא מציגה תמונה (stat/title-bullets) הייתה בולעת את הגרף בשקט —
+        // מעבירים ל-image-full, בדיוק כמו הכפתור הידני. שדות התוכן נשמרים.
+        const layout = layoutHasImage(targets[i].layout) ? null : 'image-full';
+        current = {
+          ...current,
+          slides: (current.slides || []).map((s) => (s.id === id
+            ? { ...s, image, ...(layout ? { layout } : {}) }
+            : s)),
+        };
+        chartsMade += 1;
+      } catch { /* שקופית בלי נתונים מספריים — מדלגים בשקט */ }
+    }
+  }
+
+  return {
+    deck: current,
+    imagesMade,
+    chartsMade,
+    pendingRemaining: countPendingImages(current),
+    aborted: Boolean(signal?.aborted),
+  };
 };
 
 // ── יצירת ערכת עיצוב ב-AI ────────────────────────────────────────

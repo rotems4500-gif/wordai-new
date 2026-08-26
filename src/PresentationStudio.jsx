@@ -282,6 +282,7 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
   const [imageIntensity, setImageIntensity] = useState(prefs.defaultImageIntensity || 'high');
   const [autoImages, setAutoImages] = useState(prefs.defaultAutoImages === true);
   const [autoInfographics, setAutoInfographics] = useState(prefs.defaultAutoInfographics === true);
+  const [autoTheme, setAutoTheme] = useState(prefs.defaultAutoTheme !== false);
 
   const fromDocument = source === 'document';
   const fromUpload = source === 'upload';
@@ -299,6 +300,7 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
         defaultImageIntensity: imageIntensity,
         defaultAutoImages: autoImages,
         defaultAutoInfographics: autoInfographics,
+        defaultAutoTheme: autoTheme,
         defaultAudience: audience.trim(),
         defaultGoal: goal.trim(),
       });
@@ -306,7 +308,7 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
     onGenerate({
       source, topic: topic.trim(), audience: audience.trim(), goal: goal.trim(),
       slideCount: slideAuto ? 'auto' : resolvedSlideCount,
-      themeId, density, imageIntensity, autoImages, autoInfographics,
+      themeId, density, imageIntensity, autoImages, autoInfographics, autoTheme,
     });
   };
 
@@ -390,6 +392,18 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
             <span className="text-sm font-bold text-slate-200">📊 המר שקופיות מתאימות לאינפוגרפיקה</span>
           </span>
           <span className="pr-6 text-[11px] leading-5 text-slate-500">שקופיות עם סדרת מספרים יומרו לגרף מדויק (חינם); השאר למבנה ויזואלי.</span>
+        </label>
+        <label className="flex cursor-pointer flex-col gap-1">
+          <span className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={autoTheme}
+              onChange={(e) => setAutoTheme(e.target.checked)}
+              className="h-4 w-4 flex-none cursor-pointer accent-cyan-500"
+            />
+            <span className="text-sm font-bold text-slate-200">🎨 עיצוב מחולל (ערכה מותאמת לנושא)</span>
+          </span>
+          <span className="pr-6 text-[11px] leading-5 text-slate-500">ה-AI מייצר ערכת צבעים ופונטים לפי הנושא במקום ערכה מוכנה. קריאת טקסט אחת; אם נכשל נשארת הערכה שבחרת.</span>
         </label>
       </div>
 
@@ -755,6 +769,12 @@ export default function PresentationStudio({
   onUploadPptx = () => {},
   onExit = () => {},
   busy = false,
+  // טקסט התקדמות של שלב היצירה/מדיה (מגיע מ-main.jsx, מוצג בספינר)
+  busyLabel = '',
+  // שער השלמות: { deck, missing } — דק שנוצר אבל חלק מהתמונות נכשלו.
+  mediaFailure = null,
+  onRetryMedia = null,
+  onOpenAnyway = null,
   hasDocument = false,
   documentTitle = '',
   showToast = () => {},
@@ -786,17 +806,12 @@ export default function PresentationStudio({
   };
   const [, bumpHistory] = useState(0);
 
-  // בקשת מדיה אוטומטית מטופס היצירה — נצרכת ב-useEffect כשה-deck מופיע.
-  const autoMediaRef = useRef(null);
-  // דגל "מדיה אוטומטית רצה כרגע" — משהה את השמירה האוטומטית, כדי שלא נשמור
-  // עשר גרסאות ביניים כבדות (כל תמונה מחוללת היא base64 של מאות KB).
-  const autoMediaRunningRef = useRef(false);
+  // ⚠️ המדיה האוטומטית של דק חדש כבר לא רצה כאן. היא הועברה לשלב ה"עסוק" של
+  // היצירה (main.jsx → runDeckAutoMedia), כדי שדק לא ייכנס לעורך חצי-מוכן.
+  // הכפתור הידני "מלא תמונות חסרות" נשאר.
   // הדק שכבר נשמר (לפי זהות אובייקט) — מונע שמירה מיותרת בפתיחה מהרשימה
   // וברינדורים שלא שינו את הדק.
   const savedDeckRef = useRef(null);
-  // דופק שמריץ מחדש את בדיקת השמירה כשהמדיה האוטומטית הסתיימה בלי לשנות דק
-  // (אפס תמונות נוצרו) — אחרת הדק שנוצר זה עתה לא היה נשמר לעולם.
-  const [autoSaveTick, setAutoSaveTick] = useState(0);
 
   // ── מדיה ב-AI (תמונה/אינפוגרפיקה/רקע/מילוי אצווה/ערכה) ──────────
   const [imageStyle, setImageStyle] = useState('photo');
@@ -858,13 +873,8 @@ export default function PresentationStudio({
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
 
-  // טופס היצירה קורא לזה במקום ל-onGenerate ישירות — כדי לזכור בקשת מדיה אוטומטית.
-  const handleCreateSubmit = (payload) => {
-    autoMediaRef.current = (payload?.autoImages || payload?.autoInfographics)
-      ? { autoImages: Boolean(payload.autoImages), autoInfographics: Boolean(payload.autoInfographics) }
-      : null;
-    onGenerate(payload);
-  };
+  // דגלי המדיה נוסעים ב-payload עצמו ומטופלים בשלב היצירה (main.jsx).
+  const handleCreateSubmit = (payload) => onGenerate(payload);
 
   // מסך פתיחה שנכפה מבחוץ (כניסה מהטאב) — נצרך פעם אחת ומדווח לאב שיאפס אותו.
   useEffect(() => {
@@ -942,74 +952,6 @@ export default function PresentationStudio({
     selectedThumbRef.current?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
 
-  // ── מדיה אוטומטית: רץ פעם אחת כשה-deck מופיע, רק אם הטופס ביקש זאת ──
-  // (הפעולה נדרשת כאן ולא בנתיב היצירה, כי onGenerate מגיע כ-prop מבחוץ.)
-  useEffect(() => {
-    if (!deck) return undefined;
-    const req = autoMediaRef.current;
-    if (!req || (!req.autoImages && !req.autoInfographics)) return undefined;
-    autoMediaRef.current = null;
-    autoMediaRunningRef.current = true;
-    let cancelled = false;
-    (async () => {
-      setMediaBusy('auto');
-      setMediaError('');
-      setMediaResult('');
-      setMediaProgress('');
-      // צוברים תיקונים פר-שקופית ומחילים אותם בסוף על המצב העדכני — עריכה
-      // שהמשתמש עשה בזמן שהמדיה נוצרה לא נמחקת.
-      const patches = {};
-      const addPatch = (slideId, patch) => { patches[slideId] = { ...(patches[slideId] || {}), ...patch }; };
-      let imagesMade = 0;
-      let chartsMade = 0;
-      try {
-        if (req.autoImages) {
-          const res = await generateMissingDeckImages(deck, activeTheme, {
-            style: 'photo',
-            onProgress: ({ index, total }) => { if (!cancelled) setMediaProgress(`יוצר תמונה ${index} מתוך ${total}…`); },
-          });
-          (res?.slides || []).forEach((r) => {
-            addPatch(r.slideId, { image: r.image });
-            imagesMade += 1;
-          });
-        }
-        if (req.autoInfographics && !cancelled) {
-          const targets = (deck.slides || []).filter((s) => s?.visual === 'chart');
-          for (let i = 0; i < targets.length; i += 1) {
-            if (cancelled) break;
-            setMediaProgress(`ממיר שקופית ${i + 1} מתוך ${targets.length} לאינפוגרפיקה…`);
-            try {
-              // eslint-disable-next-line no-await-in-loop
-              const image = await generateSlideInfographic(targets[i], activeTheme, { force: 'chart' });
-              addPatch(targets[i].id, { image });
-              chartsMade += 1;
-            } catch { /* שקופית בלי נתונים מספריים — מדלגים בשקט */ }
-          }
-        }
-        if (!cancelled) {
-          if (imagesMade || chartsMade) {
-            commitDeck((prev) => (prev ? {
-              ...prev,
-              slides: (prev.slides || []).map((s) => (patches[s.id] ? { ...s, ...patches[s.id] } : s)),
-            } : prev));
-          }
-          const parts = [];
-          if (req.autoImages) parts.push(`${imagesMade} תמונות`);
-          if (req.autoInfographics) parts.push(`${chartsMade} אינפוגרפיקות`);
-          setMediaResult(parts.length ? `נוצרו אוטומטית: ${parts.join(' · ')}` : '');
-        }
-      } catch (e) {
-        if (!cancelled) setMediaError(e?.message || 'יצירת המדיה האוטומטית נכשלה');
-      } finally {
-        autoMediaRunningRef.current = false;
-        setAutoSaveTick((v) => v + 1);
-        if (!cancelled) { setMediaBusy(''); setMediaProgress(''); }
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck]);
-
   // ── שמירה אוטומטית (debounce 1200ms) ─────────────────────────────
   // מקור האמת נשאר ה-prop deck; כאן רק מקרינים אותו ל-deckStore. השוואת זהות
   // מול savedDeckRef חוסכת שמירה מיותרת (למשל מיד אחרי פתיחה מהרשימה).
@@ -1017,8 +959,6 @@ export default function PresentationStudio({
     if (!deck?.id) return undefined;
     if (savedDeckRef.current === deck) return undefined;
     const timer = setTimeout(() => {
-      // מדיה אוטומטית באוויר — ננסה שוב אחרי שהיא תסיים (ה-commit שלה יריץ אותנו).
-      if (autoMediaRunningRef.current) return;
       const snapshot = deck;
       savedDeckRef.current = snapshot;
       saveDeck(snapshot, {}).catch((e) => {
@@ -1029,7 +969,7 @@ export default function PresentationStudio({
     }, 1200);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, autoSaveTick]);
+  }, [deck]);
 
   // ── בחירת מסך לפי view (לא לפי !deck) ───────────────────────────
   // 'editor' בלי deck בזיכרון נופל חזרה לטופס היצירה.
@@ -1099,6 +1039,31 @@ export default function PresentationStudio({
               <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center gap-4 bg-slate-950/70 pt-[18vh] text-slate-200 backdrop-blur-[2px]">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
                 <div className="text-sm font-semibold">בונה את המצגת...</div>
+                {busyLabel && <div className="max-w-md px-6 text-center text-xs leading-6 text-cyan-200">{busyLabel}</div>}
+              </div>
+            )}
+            {/* ── שער השלמות: תמונות שנכשלו ⇒ הדק לא נכנס לעורך עד החלטת המשתמש ── */}
+            {!busy && mediaFailure && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center bg-slate-950/85 pt-[16vh] backdrop-blur-[2px]">
+                <div className="mx-6 max-w-md rounded-2xl border border-rose-500/40 bg-slate-900 p-5 text-right">
+                  <div className="text-base font-black text-rose-300">יצירת {mediaFailure.missing} תמונות נכשלה</div>
+                  <div className="mt-2 text-xs leading-6 text-slate-400">
+                    המצגת עצמה מוכנה. אפשר לנסות שוב ליצור רק את התמונות החסרות, או לפתוח את המצגת בלעדיהן —
+                    השקופיות האלה יופיעו עם בלוק ריק במקום התמונה.
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onRetryMedia?.()}
+                      className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:from-cyan-400"
+                    >נסה שוב</button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenAnyway?.()}
+                      className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-slate-800"
+                    >פתח בלי התמונות</button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -1150,7 +1115,7 @@ export default function PresentationStudio({
   // (אותיות שנראות עבריות אך חסרות פשר), ומצגת עם ג'יבריש היא כשל מוצר.
   const handleGenerateInfographic = () => runMedia('infographic', async () => {
     try {
-      const image = await generateSlideInfographic(selected, activeTheme, { force: 'chart' });
+      const image = await generateSlideInfographic(selected, activeTheme, {});
       patchSlide(withVisibleImageLayout(image, 'image-full'));
       return;
     } catch {

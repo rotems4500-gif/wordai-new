@@ -51,6 +51,8 @@ import PresentationStudio from './PresentationStudio';
 import PptxDraftStudio from './PptxDraftStudio';
 import DocumentDraftStudio from './DocumentDraftStudio';
 import { generateDeck } from './services/presentationService';
+import { runDeckAutoMedia, generateDeckTheme } from './services/deckMediaService';
+import { getThemeById } from './presentation/deckThemes';
 import { createSlide, normalizeDeck } from './presentation/deckModel';
 import { importPptxDraft } from './services/pptxDraftService';
 import { importDocumentDraft } from './services/documentDraftService';
@@ -3391,6 +3393,8 @@ function App() {
     presentationAbortRef.current?.abort();
     presentationAbortRef.current = null;
     setPresentationBusy(false);
+    setPresentationProgress('');
+    setPresentationMediaFailure(null);
     setAppMode('word');
     if (studioEntryOriginRef.current === 'start') setShowStartScreen(true);
   };
@@ -3415,6 +3419,11 @@ function App() {
   const [presentationBusy, setPresentationBusy] = React.useState(false);
   // מסך פתיחה מבוקש לסטודיו המצגות ('list' בכניסה מהטאב); נצרך פעם אחת ומתאפס.
   const [presentationInitialView, setPresentationInitialView] = React.useState(null);
+  // טקסט התקדמות בזמן שלב המדיה (מוצג בספינר של מסך היצירה).
+  const [presentationProgress, setPresentationProgress] = React.useState('');
+  // שער השלמות: דק שנוצר אבל תמונות שלו נכשלו — לא נכנס לעורך עד שהמשתמש מחליט.
+  // { deck, missing, theme, autoInfographics }
+  const [presentationMediaFailure, setPresentationMediaFailure] = React.useState(null);
   // מבטל יצירת deck שרצה כשיוצאים מהסטודיו או כשמתחילים יצירה חדשה.
   const presentationAbortRef = React.useRef(null);
   const [pptxDraft, setPptxDraft] = React.useState(null);
@@ -6482,6 +6491,11 @@ ${sidebarReviewContext}`
     density = 'balanced',
     documentText: providedDocumentText = '',
     aiAppendix = false,
+    // מדיה אוטומטית — נעשית כאן, בתוך שלב ה"עסוק", ולא אחרי שהדק כבר נפתח
+    // בעורך. מצגת חצי-מוכנה היא כשל מוצר, ולכן היא לא נכנסת לעורך בכלל.
+    autoImages = false,
+    autoInfographics = false,
+    autoTheme = false,
   } = {}) => {
     const cleanTopic = String(topic || '').trim();
     const fromDocument = source === 'document';
@@ -6506,6 +6520,8 @@ ${sidebarReviewContext}`
     const controller = new AbortController();
     presentationAbortRef.current = controller;
     setPresentationBusy(true);
+    setPresentationProgress('');
+    setPresentationMediaFailure(null);
     try {
       const deck = await generateDeck({
         source,
@@ -6548,6 +6564,44 @@ ${sidebarReviewContext}`
         }
       }
       if (controller.signal.aborted) return false;
+
+      // ── ערכת עיצוב מחוללת (קריאת טקסט אחת) ──────────────────────
+      if (autoTheme) {
+        setPresentationProgress('מעצב ערכה מותאמת לנושא…');
+        try {
+          const description = [
+            `מצגת בנושא: ${cleanTopic || finalDeck.title || ''}`,
+            String(audience || '').trim() ? `קהל יעד: ${String(audience).trim()}` : '',
+            String(goal || '').trim() ? `מטרה: ${String(goal).trim()}` : '',
+          ].filter(Boolean).join('. ');
+          const custom = await generateDeckTheme(description, { signal: controller.signal });
+          if (custom?.colors) finalDeck = { ...finalDeck, customTheme: custom };
+        } catch {
+          // נכשל → נשארים עם הערכה שנבחרה. שקט בכוונה: זו לא תקלה מבחינת המשתמש.
+        }
+      }
+      if (controller.signal.aborted) return false;
+
+      // ── מדיה: תמונות (עם ניסיון חוזר) ואינפוגרפיקות ─────────────
+      if (autoImages || autoInfographics) {
+        const activeTheme = finalDeck?.customTheme?.colors ? finalDeck.customTheme : getThemeById(finalDeck.themeId);
+        setPresentationProgress('מכין את המדיה…');
+        const media = await runDeckAutoMedia(finalDeck, activeTheme, {
+          autoImages,
+          autoInfographics,
+          signal: controller.signal,
+          onProgress: (text) => setPresentationProgress(text),
+        });
+        finalDeck = media.deck;
+        // ביטול תוך כדי — יציאה שקטה, בלי פאנל כישלון.
+        if (controller.signal.aborted || media.aborted) return false;
+        if (autoImages && media.pendingRemaining > 0) {
+          setPresentationProgress('');
+          setPresentationMediaFailure({ deck: finalDeck, missing: media.pendingRemaining, autoInfographics: false });
+          return false;
+        }
+      }
+      setPresentationProgress('');
       setPresentationDeck(finalDeck);
       // מנות שנכשלו גם בניסיון החוזר הושלמו מהשלד — המשתמש חייב לדעת אילו.
       if (finalDeck?.generationWarnings?.length) {
@@ -6562,9 +6616,57 @@ ${sidebarReviewContext}`
       if (presentationAbortRef.current === controller) {
         presentationAbortRef.current = null;
         setPresentationBusy(false);
+        setPresentationProgress('');
       }
     }
   }, [editor, generateAiAppendixHtml]);
+
+  // ניסיון חוזר לתמונות שנכשלו, על הדק שמוחזק בשער השלמות (בלי לייצר מחדש).
+  const retryPresentationMedia = React.useCallback(async () => {
+    const held = presentationMediaFailure;
+    if (!held?.deck) return false;
+    presentationAbortRef.current?.abort();
+    const controller = new AbortController();
+    presentationAbortRef.current = controller;
+    setPresentationMediaFailure(null);
+    setPresentationBusy(true);
+    setPresentationProgress('מנסה שוב ליצור את התמונות…');
+    try {
+      const activeTheme = held.deck?.customTheme?.colors ? held.deck.customTheme : getThemeById(held.deck.themeId);
+      const media = await runDeckAutoMedia(held.deck, activeTheme, {
+        autoImages: true,
+        autoInfographics: Boolean(held.autoInfographics),
+        signal: controller.signal,
+        onProgress: (text) => setPresentationProgress(text),
+      });
+      if (controller.signal.aborted || media.aborted) return false;
+      if (media.pendingRemaining > 0) {
+        setPresentationMediaFailure({ deck: media.deck, missing: media.pendingRemaining, autoInfographics: false });
+        return false;
+      }
+      setPresentationDeck(media.deck);
+      return true;
+    } catch (error) {
+      if (controller.signal.aborted) return false;
+      setPresentationMediaFailure({ deck: held.deck, missing: held.missing, autoInfographics: false });
+      showToast(error?.message || 'יצירת התמונות נכשלה', { tone: 'error' });
+      return false;
+    } finally {
+      if (presentationAbortRef.current === controller) {
+        presentationAbortRef.current = null;
+        setPresentationBusy(false);
+        setPresentationProgress('');
+      }
+    }
+  }, [presentationMediaFailure]);
+
+  // "פתח בלי התמונות" — הדק נכנס לעורך עם ה-placeholders הניטרליים.
+  const openPresentationWithoutMedia = React.useCallback(() => {
+    const held = presentationMediaFailure;
+    if (!held?.deck) return;
+    setPresentationMediaFailure(null);
+    setPresentationDeck(held.deck);
+  }, [presentationMediaFailure]);
 
   const runDocumentFeedbackRevision = React.useCallback(async (action) => {
     const payload = action?.payload || {};
@@ -9289,6 +9391,10 @@ ${sidebarReviewContext}`
               initialView={presentationInitialView}
               onViewConsumed={() => setPresentationInitialView(null)}
               busy={presentationBusy}
+              busyLabel={presentationProgress}
+              mediaFailure={presentationMediaFailure}
+              onRetryMedia={retryPresentationMedia}
+              onOpenAnyway={openPresentationWithoutMedia}
               hasDocument={Boolean(editor && editor.getText && editor.getText().trim())}
               documentTitle={getDraftTitleFromFilePath(currentFilePath)}
               showToast={showToast}

@@ -25,6 +25,9 @@ export const STAGE_H = 720;
 // פריסות "תוכן" — יש להן קיקר + פוטר. שער/מפריד/תמונה-מלאה יש להם קומפוזיציה עצמאית.
 const FURNITURE_LAYOUTS_EXCLUDE = new Set(['cover', 'section', 'image-full']);
 
+// יש בטקסט אות עברית? (משמש לשער ה-placeholder — לא מציגים query באנגלית)
+const RE_HAS_HEB = /[֐-׿יִ-ﭏ]/;
+
 // ── motif: מספר שקף ענק ועמום כקישוט (כשמוגדר ב-theme) ───────────
 function Motif({ theme, index }) {
   if (theme.motif !== 'index' || index == null) return null;
@@ -42,7 +45,9 @@ function Motif({ theme, index }) {
 // במה בגודל קבוע — כל המידות ב-px ביחס ל-1280×720
 // bgOnly=true — מרנדר רק את שכבת הרקע/העיצוב של השקף (בלי טקסט/תוכן/תמונות),
 // לצריבת רקע ל-native export. early-return בראש כדי שלא ידרוף מלוגיקת הפריסות.
-export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '', customTheme = null }) {
+// forExport=true — רנדר לצריבה (PPTX/תמונה): מציין שקופית שהתמונה שלה עדיין
+// חסרה מרונדרת כבלוק ניטרלי לגמרי, בלי שום טקסט placeholder.
+export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckTitle = '', customTheme = null, forExport = false }) {
   // customTheme — ערכה שנוצרה ב-AI (resolveTheme כבר מילא בה כל שדה חסר).
   // גוברת על themeId, כדי שהעיצוב החדש יופיע בעורך, בתצוגה ובייצוא באותה שכבה.
   const theme = (customTheme && customTheme.colors) ? customTheme : getThemeById(themeId);
@@ -168,23 +173,47 @@ export function SlideStage({ slide, themeId, index = null, bgOnly = false, deckT
     </ul>
   );
 
+  // ── placeholder לתמונה שעדיין לא נוצרה ──────────────────────────
+  // ⚠️ בעבר הוצג כאן `🖼 ${alt || query}` — אימוג'י + ה-query באנגלית. שקפי
+  // cover/closing/image-full מיוצאים כרסטר, ולכן הטקסט הזה נצרב לתוך ה-PPTX.
+  // עכשיו: רק alt עברי (בלי אימוג'י), ובצריבה (forExport) בלי שום טקסט.
+  const placeholderLabel = (() => {
+    if (forExport) return '';
+    const alt = String(img?.alt || '').trim();
+    return alt && RE_HAS_HEB.test(alt) ? alt : '';
+  })();
+  const placeholderBackground = `linear-gradient(135deg, ${accent}1F 0%, ${c.bgAlt} 70%)`;
+
+  const ImagePlaceholder = ({ style }) => (
+    <div style={{
+      ...style,
+      background: placeholderBackground,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: placeholderLabel ? '0 28px' : 0,
+      textAlign: 'center',
+      color: c.muted,
+      fontFamily: fB,
+      fontSize: 22,
+    }}>
+      {placeholderLabel}
+    </div>
+  );
+
   const ImageBox = ({ style, rounded = false }) => {
     const tr = getImageTreatment({ image: theme.image, accent, colors: c, radius });
     // plain → tr ריק, פלט זהה לקודם. treatments עוטפים (frame/polaroid/duotone) → wrapper.
     if (!tr.wrap) {
       return imgSrc
         ? <img src={imgSrc} alt={img?.alt || ''} style={{ objectFit: 'cover', ...(rounded ? { borderRadius: radius } : {}), ...tr.imgStyle, ...style }} />
-        : <div style={{ ...style, ...(rounded ? { borderRadius: radius } : {}), ...tr.placeholderStyle, background: c.bgAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.muted, fontSize: 22 }}>
-            {img?.query ? `🖼 ${img.alt || img.query}` : '🖼 תמונה'}
-          </div>;
+        : <ImagePlaceholder style={{ ...style, ...(rounded ? { borderRadius: radius } : {}), ...tr.placeholderStyle }} />;
     }
     return (
       <div style={{ ...style, ...tr.wrapperStyle, position: (style && style.position) || 'relative', overflow: 'hidden' }}>
         {imgSrc
           ? <img src={imgSrc} alt={img?.alt || ''} style={{ width: '100%', height: '100%', objectFit: 'cover', ...tr.imgStyle }} />
-          : <div style={{ width: '100%', height: '100%', background: c.bgAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.muted, fontSize: 22 }}>
-              {img?.query ? `🖼 ${img.alt || img.query}` : '🖼 תמונה'}
-            </div>}
+          : <ImagePlaceholder style={{ width: '100%', height: '100%' }} />}
         {tr.overlay}
       </div>
     );

@@ -19,12 +19,19 @@ const DENSITY_GUIDANCE = {
 const CHUNK_THRESHOLD = 12;
 const BATCH_SIZE = 10;
 
+// פריסות שיכולות לשאת שדה image (חייב להישאר מסונכרן עם deckModel.SLIDE_LAYOUTS)
+const IMAGE_LAYOUTS = ['cover', 'image-right', 'image-left', 'image-full', 'closing'];
+
+// יעד מבני קשיח לפי עוצמת התמונות: כמה מהשקופיות חייבות לשאת שדה image.
+// low מכוון לשער/סיום בלבד ולכן אין לו יעד יחסי.
+const IMAGE_TARGET_RATIO = { high: 0.5, medium: 0.3, low: 0 };
+
 const imageRule = (imageIntensity) =>
   imageIntensity === 'low'
     ? 'מעט תמונות — רק בשער ובסיום.'
     : imageIntensity === 'medium'
-      ? 'תמונות בכ-חצי מהשקופיות.'
-      : 'תמונות ברוב השקופיות שתומכות בכך.';
+      ? `תמונות בכ-חצי מהשקופיות. **חובה**: לפחות 40% מהשקופיות בפריסות תומכות-תמונה (${IMAGE_LAYOUTS.join(', ')}) ולכל אחת מהן שדה "image" מלא.`
+      : `תמונות ברוב השקופיות שתומכות בכך. **חובה**: לפחות 60% מהשקופיות בפריסות תומכות-תמונה (${IMAGE_LAYOUTS.join(', ')}) ולכל אחת מהן שדה "image" מלא. אל תשתמש ב-title-bullets לשקופית שאפשר להציג עם תמונה לצד הטקסט.`;
 
 // מבנה אובייקט שקופית — משותף בין shot-אחד למילוי-מנות
 const SLIDE_SHAPE = `{
@@ -37,7 +44,7 @@ const SLIDE_SHAPE = `{
   "columns": [{"heading":"...","bullets":["..."]}],
   "stats": [{"value":"87%","label":"תיאור קצר","caption":"הקשר (אופציונלי)"}],
   "steps": [{"title":"שם השלב","body":"תיאור קצר (אופציונלי)"}],
-  "image": { "query": "תיאור באנגלית לחיפוש/יצירת תמונה", "alt": "תיאור בעברית" },
+  "image": { "query": "תיאור באנגלית לחיפוש/יצירת תמונה", "alt": "תיאור התמונה בעברית — שדה חובה כשיש image" },
   "visual": "אופציונלי: 'infographic' כשהתוכן הוא מבנה/תהליך/יחסים שעדיף לראות כדיאגרמה, 'chart' כשיש סדרת מספרים אמיתית להשוואה",
   "notes": "הערות מרצה קצרות (אופציונלי)"
 }`;
@@ -51,7 +58,8 @@ const SLIDE_CONTENT_RULES = (imageIntensity) => [
   '  • two-column — לחלוקה לשני נושאים מקבילים. quote — לציטוט.',
   '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים). מומלץ במצגות של 8+ שקופיות.',
   '  • timeline — לכרונולוגיה/אבני דרך/roadmap (שדה "steps": title=שנה/תקופה, body=מה קרה). 3-6 נקודות.',
-  '- שדה "image" רק בפריסות שתומכות בתמונה (cover, image-right, image-left, image-full, closing). ה-query באנגלית, קונקרטי ונקי.',
+  `- שדה "image" רק בפריסות שתומכות בתמונה (${IMAGE_LAYOUTS.join(', ')}). ה-query באנגלית, קונקרטי ונקי.`,
+  '- כשיש שדה "image" — **חובה** למלא בו גם "alt" בעברית (משפט קצר שמתאר מה רואים). alt ריק או באנגלית נחשב שגיאה.',
   '- שדה "visual": סמן "chart" רק כששדה stats/bullets מכיל סדרת מספרים אמיתית להשוואה (הערכים יצוירו כגרף מדויק — אל תמציא מספרים), ו-"infographic" כשהתוכן הוא מבנה/תהליך/יחסים שמרוויח דיאגרמה. השאר ריק כשתמונה רגילה מספיקה.',
   `- ${imageRule(imageIntensity)}`,
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',
@@ -139,6 +147,58 @@ const extractJson = (raw = '') => {
     const repaired = candidate.replace(/,\s*([}\]])/g, '$1');
     return JSON.parse(repaired);
   }
+};
+
+/**
+ * enforceImageQuota — אכיפה דטרמיניסטית של יעד התמונות אחרי normalizeDeck.
+ * המודל מפר את הכלל המבני בקביעות (במיוחד במסלול ה-chunked, שבו כל מנה רואה
+ * רק את עצמה). כאן ממירים שקופיות title-bullets עמוסות ל-image-right/image-left
+ * לסירוגין ומצמידים להן image pending — הצינור של "מלא תמונות חסרות" ימלא אותן.
+ *
+ * ⚠️ שפת ה-query: עברית במכוון. אין כאן קריאת מודל ולכן אין תרגום, ו-
+ * buildSlideImagePrompt ממילא נופל לטקסט השקופית העברי כשאין query. ספק
+ * ברירת המחדל (Gemini) מטפל היטב בנושא עברי בתוך פרומפט אנגלי.
+ */
+const enforceImageQuota = (deck, imageIntensity) => {
+  const ratio = IMAGE_TARGET_RATIO[imageIntensity] ?? IMAGE_TARGET_RATIO.high;
+  const slides = deck.slides || [];
+  if (!ratio || !slides.length) return deck;
+  const target = Math.floor(slides.length * ratio);
+  const have = slides.filter((s) => s.image).length;
+  let missing = target - have;
+  if (missing <= 0) return deck;
+
+  const topic = String(deck?.meta?.topic || deck.title || '').trim();
+  let flip = 0;
+  const next = slides.map((slide) => {
+    if (missing <= 0) return slide;
+    if (slide.image) return slide;
+    if (slide.layout !== 'title-bullets') return slide;
+    if (!Array.isArray(slide.bullets) || slide.bullets.length < 2) return slide;
+    const title = String(slide.title || '').trim();
+    if (!title) return slide;
+    missing -= 1;
+    flip += 1;
+    return {
+      ...slide,
+      layout: flip % 2 === 1 ? 'image-right' : 'image-left',
+      // צורת ה-image המנורמלת (normalizeImage) — נבנית ידנית כדי לא להריץ
+      // normalizeDeck שוב על דק שכבר נורמל.
+      image: {
+        source: 'ai',
+        url: '',
+        dataUrl: '',
+        query: [topic, title].filter(Boolean).join(' — '),
+        alt: title,
+        attribution: '',
+        model: '',
+        provider: '',
+        prompt: '',
+        pending: true,
+      },
+    };
+  });
+  return { ...deck, slides: next };
 };
 
 /**
@@ -292,14 +352,15 @@ export const generateDeck = async ({
     slides = filled.flat();
   }
 
-  const deck = normalizeDeck({
+  const normalized = normalizeDeck({
     title: deckTitle,
     themeId: safeTheme,
     meta: { audience: String(audience || '').trim(), goal: String(goal || '').trim(), topic: cleanTopic },
     slides,
   });
 
-  if (!deck.slides.length) throw new Error('לא נוצרו שקופיות.');
+  if (!normalized.slides.length) throw new Error('לא נוצרו שקופיות.');
+  const deck = enforceImageQuota(normalized, imageIntensity);
   // normalizeDeck מחזיר אובייקט חדש ומשמיט מפתחות לא מוכרים — לכן מצמידים אחריו.
   if (generationWarnings.length) deck.generationWarnings = generationWarnings;
   return deck;
