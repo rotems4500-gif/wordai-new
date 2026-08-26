@@ -311,12 +311,17 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, 
 }
 
 // ── טופס יצירה (מצב ללא deck) ────────────────────────────────────
-function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDocument, documentTitle }) {
+function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDocument, documentTitle, seed = null, onSeedConsumed = () => {} }) {
   const prefs = useMemo(() => getPresentationPreferences(), []);
   const uploadRef = useRef(null);
   const importRef = useRef(null);
   const [source, setSource] = useState('topic');
   const [topic, setTopic] = useState('');
+  // brief שהגיע ממסך הפתיחה: חומרי עזר שנבחרו שם + טיוטת בסיס שנבחרה שם.
+  // הטופס הזה לא בוחר חומרים בעצמו, ולכן הם נשמרים כמות שהם ונשלחים ב-payload.
+  const [seedMaterials, setSeedMaterials] = useState([]);
+  const [seedDocText, setSeedDocText] = useState('');
+  const [seedDocTitle, setSeedDocTitle] = useState('');
   const [audience, setAudience] = useState(prefs.defaultAudience || '');
   const [goal, setGoal] = useState(prefs.defaultGoal || '');
   const [slideCount, setSlideCount] = useState(prefs.defaultSlideCount === 'auto' ? 10 : (prefs.defaultSlideCount || 10));
@@ -327,10 +332,34 @@ function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDoc
   const [autoImages, setAutoImages] = useState(prefs.defaultAutoImages === true);
   const [autoInfographics, setAutoInfographics] = useState(prefs.defaultAutoInfographics === true);
   const [autoTheme, setAutoTheme] = useState(prefs.defaultAutoTheme !== false);
+  // אפשרויות שהיו עד כה רק בפאנל המוקטן של מסך הפתיחה. הן עוברות ל-generateDeck
+  // דרך אותו payload, ולכן הן חייבות לחיות כאן אחרי שהפאנל ההוא ירד.
+  const [includeCover, setIncludeCover] = useState(prefs.defaultIncludeCover !== false);
+  const [speakerNotes, setSpeakerNotes] = useState(prefs.defaultSpeakerNotes === true);
+  const [aiAppendix, setAiAppendix] = useState(false);
+
+  // אימוץ ה-seed ממסך הפתיחה — פעם אחת, ואז הוא מתאפס אצל ההורה.
+  useEffect(() => {
+    if (!seed) return;
+    const seedTopic = String(seed.topic || '').trim();
+    if (seedTopic) setTopic(seedTopic);
+    const mats = Array.isArray(seed.selectedMaterials) ? seed.selectedMaterials.filter(Boolean) : [];
+    if (mats.length) setSeedMaterials(mats);
+    const docText = String(seed.baseDraftText || '').trim();
+    if (docText) {
+      setSeedDocText(docText);
+      setSeedDocTitle(String(seed.baseDraftTitle || '').trim());
+      setSource('document');
+    }
+    onSeedConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed]);
 
   const fromDocument = source === 'document';
   const fromUpload = source === 'upload';
-  const canGenerate = (fromDocument ? hasDocument : Boolean(topic.trim())) && !busy;
+  // מקור "מסמך" זמין גם כשהמסמך הגיע כטיוטת בסיס ממסך הפתיחה ולא מהעורך הפתוח.
+  const documentAvailable = hasDocument || Boolean(seedDocText);
+  const canGenerate = (fromDocument ? documentAvailable : Boolean(topic.trim())) && !busy;
 
   const submit = () => {
     if (!canGenerate) return;
@@ -347,12 +376,19 @@ function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDoc
         defaultAutoTheme: autoTheme,
         defaultAudience: audience.trim(),
         defaultGoal: goal.trim(),
+        defaultIncludeCover: includeCover,
+        defaultSpeakerNotes: speakerNotes,
       });
     }
     onGenerate({
       source, topic: topic.trim(), audience: audience.trim(), goal: goal.trim(),
       slideCount: slideAuto ? 'auto' : resolvedSlideCount,
       themeId, density, imageIntensity, autoImages, autoInfographics, autoTheme,
+      includeCover, speakerNotes, aiAppendix,
+      // חומרי העזר וטיוטת הבסיס שהגיעו ממסך הפתיחה — בלעדיהם המצגת נבנית
+      // מהנושא בלבד, וזה בדיוק מה שהמשתמש כבר בחר שלא לעשות.
+      selectedMaterials: seedMaterials,
+      ...(seedDocText ? { documentText: seedDocText } : {}),
     });
   };
 
@@ -366,7 +402,7 @@ function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDoc
 
       <div className="inline-flex w-fit rounded-2xl border border-slate-700 bg-slate-800/60 p-1">
         <button type="button" onClick={() => setSource('topic')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${source === 'topic' ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>נושא חופשי</button>
-        <button type="button" onClick={() => setSource('document')} disabled={!hasDocument} title={hasDocument ? '' : 'אין מסמך פתוח'} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'} ${!hasDocument ? 'cursor-not-allowed opacity-40' : ''}`}>מהמסמך הפתוח</button>
+        <button type="button" onClick={() => setSource('document')} disabled={!documentAvailable} title={documentAvailable ? '' : 'אין מסמך פתוח'} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromDocument ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'} ${!documentAvailable ? 'cursor-not-allowed opacity-40' : ''}`}>{seedDocText ? 'מטיוטת הבסיס' : 'מהמסמך הפתוח'}</button>
         <button type="button" onClick={() => setSource('upload')} className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${fromUpload ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}>העלאת מצגת (טיוטה)</button>
       </div>
 
@@ -400,7 +436,23 @@ function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDoc
 
       {!fromUpload && fromDocument && (
         <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm text-slate-300">
-          {hasDocument ? <>המצגת תיבנה מהמסמך הפתוח{documentTitle ? <>: <b className="text-white">{documentTitle}</b></> : ''}. שדה הנושא אופציונלי — זווית או דגש.</> : 'אין מסמך פתוח.'}
+          {seedDocText
+            ? <>המצגת תיבנה מטיוטת הבסיס שבחרת במסך הפתיחה{seedDocTitle ? <>: <b className="text-white">{seedDocTitle}</b></> : ''}. שדה הנושא אופציונלי — זווית או דגש.</>
+            : hasDocument
+              ? <>המצגת תיבנה מהמסמך הפתוח{documentTitle ? <>: <b className="text-white">{documentTitle}</b></> : ''}. שדה הנושא אופציונלי — זווית או דגש.</>
+              : 'אין מסמך פתוח.'}
+        </div>
+      )}
+
+      {!fromUpload && seedMaterials.length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-2.5 text-sm text-emerald-200">
+          <span>📎 ייכללו {seedMaterials.length} חומרי עזר שנבחרו</span>
+          <button
+            type="button"
+            onClick={() => setSeedMaterials([])}
+            title="אל תשתמש בחומרי העזר האלה במצגת"
+            className="rounded-lg px-2 py-0.5 text-xs font-bold text-emerald-300/80 transition hover:bg-emerald-500/15 hover:text-emerald-200"
+          >✕</button>
         </div>
       )}
 
@@ -463,6 +515,22 @@ function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDoc
             <span className="text-sm font-bold text-slate-200">🎨 עיצוב מחולל (ערכה מותאמת לנושא)</span>
           </span>
           <span className="pr-6 text-[11px] leading-5 text-slate-500">ה-AI מייצר ערכת צבעים ופונטים לפי הנושא במקום ערכה מוכנה. קריאת טקסט אחת; אם נכשל נשארת הערכה שבחרת.</span>
+        </label>
+      </div>
+
+      {/* ── מבנה ותוספות ── */}
+      <div className="flex flex-wrap gap-x-5 gap-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+        <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+          <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-4 w-4 cursor-pointer accent-cyan-500" />
+          שקופית פתיחה
+        </label>
+        <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+          <input type="checkbox" checked={speakerNotes} onChange={(e) => setSpeakerNotes(e.target.checked)} className="h-4 w-4 cursor-pointer accent-cyan-500" />
+          הערות מרצה קצרות
+        </label>
+        <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-amber-200/90" title="שקופיות נספח בסוף הדק עם הפרומפטים לפי שלבים והדרכה. כרוך בקריאת API נוספת.">
+          <input type="checkbox" checked={aiAppendix} onChange={(e) => setAiAppendix(e.target.checked)} className="h-4 w-4 cursor-pointer accent-amber-500" />
+          📎 נספח AI (קריאת API נוספת)
         </label>
       </div>
 
@@ -880,6 +948,10 @@ export default function PresentationStudio({
   onOpenHelp = null,
   initialView = null,
   onViewConsumed = () => {},
+  // brief ממסך הפתיחה: { topic, selectedMaterials, baseDraftText, baseDraftTitle }.
+  // ממלא מראש את טופס היצירה במקום לייצר מיד.
+  briefSeed = null,
+  onBriefSeedConsumed = () => {},
 }) {
   // מסך פעיל מפורש: 'list' (רשימת מצגות) · 'brief' (טופס יצירה) · 'editor' (עורך שקופיות).
   // עד עכשיו המסך נגזר מ-!deck, ולכן לא היה אפשר לחזור לרשימה בלי לאבד את הדק.
@@ -1283,7 +1355,7 @@ export default function PresentationStudio({
         <div className="flex w-full flex-col">
           {studioHeader}
           <div className="relative flex flex-1 flex-col">
-            <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} onImportPptxAsDeck={onImportPptxAsDeck} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />
+            <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} onImportPptxAsDeck={onImportPptxAsDeck} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} seed={briefSeed} onSeedConsumed={onBriefSeedConsumed} />
             {busy && (
               <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center gap-4 bg-slate-950/70 pt-[18vh] text-slate-200 backdrop-blur-[2px]">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />

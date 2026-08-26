@@ -3426,6 +3426,9 @@ function App() {
   const [presentationBusy, setPresentationBusy] = React.useState(false);
   // מסך פתיחה מבוקש לסטודיו המצגות ('list' בכניסה מהטאב); נצרך פעם אחת ומתאפס.
   const [presentationInitialView, setPresentationInitialView] = React.useState(null);
+  // brief שמגיע ממסך הפתיחה (נושא + חומרי עזר נבחרים + טיוטת בסיס) — ממלא מראש
+  // את טופס היצירה של הסטודיו במקום לייצר מיד. נצרך פעם אחת ומתאפס.
+  const [presentationBriefSeed, setPresentationBriefSeed] = React.useState(null);
   // טקסט התקדמות בזמן שלב המדיה (מוצג בספינר של מסך היצירה).
   const [presentationProgress, setPresentationProgress] = React.useState('');
   // שער השלמות: דק שנוצר אבל תמונות שלו נכשלו — לא נכנס לעורך עד שהמשתמש מחליט.
@@ -6494,6 +6497,15 @@ ${sidebarReviewContext}`
     setShowStartScreen(false);
   }, []);
 
+  // "צור מצגת" ממסך הפתיחה לא מייצר מיד — הוא פותח את טופס ה-brief המלא של
+  // הסטודיו, מלא מראש במה שכבר נאסף במסך הבית (נושא, חומרי עזר, טיוטת בסיס).
+  const openPresentationBrief = React.useCallback((seed = null) => {
+    setPresentationBriefSeed(seed && typeof seed === 'object' ? seed : null);
+    setPresentationInitialView('brief');
+    enterStudioMode('presentation');
+    setShowStartScreen(false);
+  }, []);
+
   // מייצר deck JSON אמיתי (לא HTML) ומציג אותו בסטודיו המצגות
   const generatePresentationDeck = React.useCallback(async ({
     source = 'topic',
@@ -9446,6 +9458,8 @@ ${sidebarReviewContext}`
               onExit={() => { setPresentationDeck(null); exitStudioMode(); }}
               initialView={presentationInitialView}
               onViewConsumed={() => setPresentationInitialView(null)}
+              briefSeed={presentationBriefSeed}
+              onBriefSeedConsumed={() => setPresentationBriefSeed(null)}
               busy={presentationBusy}
               busyLabel={presentationProgress}
               mediaFailure={presentationMediaFailure}
@@ -10376,7 +10390,7 @@ ${sidebarReviewContext}`
                   workspaceId: payload?.workspaceId || getActiveWorkspaceId(),
                   payload,
                 })}
-                onGeneratePresentation={(payload) => generatePresentationDeck(payload)}
+                onOpenPresentationForm={openPresentationBrief}
                 onOpenPresentationLibrary={openPresentationStudio}
                 onUploadDocDraft={handleUploadDocDraft}
                 onOpenSpssProject={() => enterStudioMode('spss-project')}

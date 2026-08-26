@@ -43,7 +43,7 @@ import {
   getInstructionFileAcceptList,
 } from './services/workspaceLearningService';
 import { getTheme, toggleTheme, onThemeChange } from './theme';
-import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences, getPresentationPreferences, savePresentationPreferences } from './services/aiService';
+import { getOrderedRoleAgents, getRoleAgents, getWorkspaceAutomation, saveWorkspaceAutomation, saveRoleAgents, buildWorkspaceAgentPreset, getPersonalStyleProfile, savePersonalStyleProfile, chefModeInterview, formatChefResponsesForCompose, getWorkspacesLibrary, switchToWorkspace, setWorkspaceBypassEnabled, getConfiguredProviderChoices, getProviderModelChoices, getProviderConfig, getAppMemory, saveAppMemory, testProviderConnection, normalizeProviderModelName, buildWorkspaceRoutingSummary, getWorkspaceV2Templates, getHumanizerPreferences, saveHumanizerPreferences } from './services/aiService';
 import { readBrowserDocumentFile, BROWSER_DOC_ACCEPT } from './services/documentUpload';
 // שורת המצב החיה של ה-OCR נשלטת מ-main.jsx (מאזין CLIP_PROGRESS_EVENT גלובלי) —
 // כאן רק מפעילים את ההרצה ומרעננים את הרשימה.
@@ -107,19 +107,6 @@ const MODERN_TEMPLATES = [
     gradient: 'from-pink-400 to-rose-600',
     icon: '🌟'
   },
-];
-
-const PPT_THEMES = [
-  { id: 'premium', label: 'פרימיום' },
-  { id: 'academic', label: 'אקדמי' },
-  { id: 'cinematic', label: 'קולנועי' },
-  { id: 'bold', label: 'נועז' },
-];
-
-const PPT_DENSITY = [
-  { id: 'lean', label: 'רזה', blurb: 'מינימלי ונקי' },
-  { id: 'balanced', label: 'מאוזן', blurb: 'איזון תוכן/ויזואל' },
-  { id: 'rich', label: 'עשיר', blurb: 'ויזואלי ומלא' },
 ];
 
 const PRIMARY_TEMPLATE_CARD_LIMIT = 3;
@@ -473,28 +460,14 @@ const formatInstructionFileUploadError = (error) => {
   return 'לא הצלחתי לקרוא את קובץ ההנחיות.';
 };
 
-export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onGeneratePresentation = () => {}, onOpenPresentationLibrary = null, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {}, cloudUser = null }) {
+export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLastDraft, onOpenDocument = () => {}, onGenerateFromPrompt, onOpenPresentationForm = () => {}, onOpenPresentationLibrary = null, onUploadDocDraft = null, onOpenSpssProject = null, onOpenAssignmentScaffold = null, onDocumentStyleChange = () => {}, onOpenSettings = () => {}, onOpenHelp = null, onClose = () => {}, escapeBlocked = false, documentStyle = 'academic', hasDraft = false, hasOpenDocument = false, lastSavedAt = '', instructionsResetToken = 0, onInstructionsResetConsumed = () => {}, onOpenProjectHub = null, projectDocSeed = null, onProjectDocSeedConsumed = () => {}, cloudUser = null }) {
   const [prompt, setPrompt] = useState('');
   // seed שהגיע מ-Project Hub ("צור מסמך לשלב"): נשמר כדי לשייך את המסמך שנוצר לשלב.
   const [pendingProjectSeed, setPendingProjectSeed] = useState(null);
   const [outputType, setOutputType] = useState('document');
-  const [pptSlideCount, setPptSlideCount] = useState(10);
-  const [pptSlideAuto, setPptSlideAuto] = useState(false);
-  const [pptTheme, setPptTheme] = useState('premium');
-  const [pptDensity, setPptDensity] = useState('balanced');
-  const [pptImageIntensity, setPptImageIntensity] = useState('high');
-  const [pptSpeakerNotes, setPptSpeakerNotes] = useState(false);
-  const [pptIncludeCover, setPptIncludeCover] = useState(true);
-  const [pptAiAppendix, setPptAiAppendix] = useState(false);
-  // מדיה אוטומטית + עיצוב מחולל — נעשים בשלב היצירה עצמו (main.jsx), כך
-  // שהמצגת נכנסת לסטודיו מוכנה ולא חצי-מוכנה.
-  const [pptAutoImages, setPptAutoImages] = useState(false);
-  const [pptAutoInfographics, setPptAutoInfographics] = useState(false);
-  const [pptAutoTheme, setPptAutoTheme] = useState(true);
-  // קהל יעד + מטרה — נזרעים מברירות המחדל בהגדרות המצגות ונשמרים חזרה ביצירה,
-  // כך שמי שמרצה תמיד לאותו קהל לא מקליד אותו כל פעם מחדש.
-  const [pptAudience, setPptAudience] = useState(() => String(getPresentationPreferences().defaultAudience || ''));
-  const [pptGoal, setPptGoal] = useState(() => String(getPresentationPreferences().defaultGoal || ''));
+  // ⚠️ הגדרות המצגת (שקופיות/ערכה/קהל/מטרה/מדיה) כבר לא יושבות כאן. "צור מצגת"
+  // פותח את טופס ה-brief המלא של סטודיו המצגות עם מה שנאסף כאן (נושא, חומרי
+  // עזר, טיוטת בסיס), ושם נמצאות כל האפשרויות — פאנל מוקטן כפול רק סתר אותן.
   const [uiTheme, setUiTheme] = useState(getTheme);
   useEffect(() => onThemeChange(setUiTheme), []);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
@@ -1310,8 +1283,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
   const hasBaseDraft = Boolean(String(baseDraft?.html || '').trim());
   const hasGenerationInput = Boolean(String(prompt || '').trim() || String(instructions || '').trim() || hasBaseDraft);
   const isPresentationOutput = outputType === 'presentation';
-  const canGeneratePresentation = Boolean(String(prompt || '').trim() || hasBaseDraft);
-  const canGenerate = (isPresentationOutput ? canGeneratePresentation : hasGenerationInput) && !isGenerating;
+  // במצב מצגת הכפתור רק פותח את טופס ה-brief של הסטודיו — ולכן הוא פתוח תמיד;
+  // הנושא הוא שדה של הטופס ההוא, ואין סיבה לחסום את הדרך אליו.
+  const canGenerate = (isPresentationOutput ? true : hasGenerationInput) && !isGenerating;
 
   const activeCourseId = activeCourseInfo?.course?.id || '';
   const hasCourseOverride = activeCourseInfo?.source === 'override';
@@ -1551,43 +1525,20 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
     if (isGenerating) return;
 
     if (outputType === 'presentation') {
+      // לא מייצרים כאן. פותחים את טופס ה-brief של הסטודיו עם מה שכבר נאסף
+      // במסך הבית — שם יושבות כל ההגדרות (ערכה, קהל, מטרה, מדיה, מספר שקופיות).
       const presentationSelectedMaterials = materials.filter((item) => selectedIds.includes(item.id));
       const fromDraft = hasBaseDraft;
       const draftSourceText = fromDraft
         ? (String(baseDraft?.text || '').trim() || String(baseDraft?.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
         : '';
-      if (!fromDraft && !String(prompt || '').trim()) return;
-      setIsGenerating(true);
-      // הקהל והמטרה שהוקלדו הופכים לברירת המחדל של הפעם הבאה.
-      try {
-        savePresentationPreferences({
-          ...getPresentationPreferences(),
-          defaultAudience: String(pptAudience || '').trim(),
-          defaultGoal: String(pptGoal || '').trim(),
-        });
-      } catch { /* העדפות הן נוחות, לא תנאי ליצירה */ }
-      try {
-        await onGeneratePresentation?.({
-          source: fromDraft ? 'document' : 'topic',
-          topic: String(prompt || '').trim(),
-          documentText: draftSourceText,
-          audience: String(pptAudience || '').trim(),
-          goal: String(pptGoal || '').trim(),
-          slideCount: pptSlideAuto ? 'auto' : pptSlideCount,
-          theme: pptTheme,
-          density: pptDensity,
-          imageIntensity: pptImageIntensity,
-          speakerNotes: pptSpeakerNotes,
-          includeCover: pptIncludeCover,
-          aiAppendix: pptAiAppendix,
-          autoImages: pptAutoImages,
-          autoInfographics: pptAutoInfographics,
-          autoTheme: pptAutoTheme,
-          selectedMaterials: presentationSelectedMaterials,
-        });
-      } finally {
-        setIsGenerating(false);
-      }
+      onOpenPresentationForm?.({
+        topic: String(prompt || '').trim(),
+        selectedMaterials: presentationSelectedMaterials,
+        baseDraftText: draftSourceText,
+        baseDraftHtml: fromDraft ? String(baseDraft?.html || '') : '',
+        baseDraftTitle: fromDraft ? String(baseDraft?.title || baseDraft?.name || '') : '',
+      });
       return;
     }
 
@@ -1915,6 +1866,16 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                 >
                   📊 מצגת
                 </button>
+                {isPresentationOutput && onOpenPresentationLibrary && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPresentationLibrary()}
+                    title="כל המצגות ששמרת — פתיחה, שכפול, מחיקה"
+                    className="rounded-xl px-5 py-2 text-sm font-bold text-white/80 transition hover:bg-white/15"
+                  >
+                    🗂️ המצגות שלי
+                  </button>
+                )}
                 {onUploadDocDraft && (
                   <button
                     type="button"
@@ -1990,7 +1951,7 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
                     יוצר...
                   </div>
                 ) : (
-                  <>{isPresentationOutput ? '📊 צור מצגת' : (hasBaseDraft ? '✨ עדכן מהטיוטה' : '✨ בואו נתחיל')}</>
+                  <>{isPresentationOutput ? '📊 המשך להגדרות המצגת' : (hasBaseDraft ? '✨ עדכן מהטיוטה' : '✨ בואו נתחיל')}</>
                 )}
               </button>
 
@@ -2070,143 +2031,9 @@ export default function StartScreen({ onCreateBlank, onCreateTemplate, onOpenLas
 
             {!isPresentationOutput && <StyleEngineControls />}
 
-            {isPresentationOutput && (
-              <div className="bg-white/10 backdrop-blur-xl border border-white/25 rounded-2xl p-5 mb-6 text-right">
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <div className="text-white font-semibold text-sm">⚙️ הגדרות מצגת</div>
-                  {onOpenPresentationLibrary && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenPresentationLibrary()}
-                      title="כל המצגות ששמרת — פתיחה, שכפול, מחיקה"
-                      className="rounded-xl border border-white/25 bg-white/8 px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/20"
-                    >
-                      🗂️ המצגות שלי
-                    </button>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-white/80 text-xs font-semibold">מספר שקופיות</span>
-                      <button
-                        type="button"
-                        onClick={() => setPptSlideAuto((v) => !v)}
-                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${pptSlideAuto ? 'bg-cyan-400 text-slate-900' : 'bg-white/10 text-white/70 hover:bg-white/20'}`}
-                      >
-                        ✨ אוטומטי
-                      </button>
-                    </div>
-                    <input
-                      type="number"
-                      min="4"
-                      max="40"
-                      value={pptSlideAuto ? '' : pptSlideCount}
-                      disabled={pptSlideAuto}
-                      placeholder={pptSlideAuto ? 'ה-AI יחליט לפי התוכן' : ''}
-                      onChange={(e) => setPptSlideCount(Math.max(4, Math.min(40, Number(e.target.value) || 10)))}
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 disabled:opacity-50 placeholder:text-white/40 placeholder:text-xs"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">סגנון עיצובי</span>
-                    <select
-                      value={pptTheme}
-                      onChange={(e) => setPptTheme(e.target.value)}
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 [&>option]:text-slate-900"
-                    >
-                      {PPT_THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">דגש על תמונות</span>
-                    <select
-                      value={pptImageIntensity}
-                      onChange={(e) => setPptImageIntensity(e.target.value)}
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 [&>option]:text-slate-900"
-                    >
-                      <option value="high">גבוה</option>
-                      <option value="medium">בינוני</option>
-                      <option value="low">נמוך</option>
-                    </select>
-                  </label>
-                  <div className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">רמת עומס</span>
-                    <div className="grid grid-cols-3 gap-2">
-                      {PPT_DENSITY.map((d) => {
-                        const active = d.id === pptDensity;
-                        return (
-                          <button
-                            key={d.id}
-                            type="button"
-                            onClick={() => setPptDensity(d.id)}
-                            title={d.blurb}
-                            className={`rounded-xl border px-2 py-2 text-xs font-bold transition ${active ? 'border-cyan-200 bg-cyan-400/25 text-white' : 'border-white/25 bg-white/8 text-white/75 hover:bg-white/15'}`}
-                          >
-                            {d.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">קהל יעד</span>
-                    <input
-                      type="text"
-                      value={pptAudience}
-                      onChange={(e) => setPptAudience(e.target.value)}
-                      placeholder="למשל: סטודנטים לשנה א׳ / ועדת היגוי"
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 placeholder:text-white/40 placeholder:text-xs"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-2">
-                    <span className="text-white/80 text-xs font-semibold">מטרת המצגת</span>
-                    <input
-                      type="text"
-                      value={pptGoal}
-                      onChange={(e) => setPptGoal(e.target.value)}
-                      placeholder="למשל: להסביר את המודל / לשכנע לאמץ את ההצעה"
-                      className="rounded-xl bg-white/15 border border-white/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-200 placeholder:text-white/40 placeholder:text-xs"
-                    />
-                  </label>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <label className="inline-flex items-center gap-2 text-white/85 text-xs">
-                    <input type="checkbox" checked={pptIncludeCover} onChange={(e) => setPptIncludeCover(e.target.checked)} />
-                    שקופית פתיחה
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-white/85 text-xs">
-                    <input type="checkbox" checked={pptSpeakerNotes} onChange={(e) => setPptSpeakerNotes(e.target.checked)} />
-                    הערות מרצה קצרות
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-amber-200/90 text-xs" title="שקופיות נספח בסוף הדק עם הפרומפטים לפי שלבים והדרכה. כרוך בקריאת API נוספת.">
-                    <input type="checkbox" checked={pptAiAppendix} onChange={(e) => setPptAiAppendix(e.target.checked)} />
-                    📎 נספח AI (קריאת API נוספת)
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="כל שקופית שמסומנת כזקוקה לתמונה תקבל תמונה מחוללת לפני שהמצגת נפתחת. עולה כסף — כ-4 סנט לתמונה.">
-                    <input type="checkbox" checked={pptAutoImages} onChange={(e) => setPptAutoImages(e.target.checked)} />
-                    🖼️ צור תמונות אוטומטית
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="שקופיות עם סדרת מספרים יומרו לגרף מדויק (חינם).">
-                    <input type="checkbox" checked={pptAutoInfographics} onChange={(e) => setPptAutoInfographics(e.target.checked)} />
-                    📊 אינפוגרפיקות מהנתונים
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-white/85 text-xs" title="ה-AI מייצר ערכת צבעים ופונטים לפי הנושא במקום ערכה מוכנה. אם נכשל נשארת הערכה שנבחרה.">
-                    <input type="checkbox" checked={pptAutoTheme} onChange={(e) => setPptAutoTheme(e.target.checked)} />
-                    🎨 עיצוב מחולל
-                  </label>
-                </div>
-                <div className="mt-3 text-white/55 text-[11px]">
-                  {hasBaseDraft ? 'המקור: טיוטת הבסיס שנבחרה למטה. שדה הנושא למעלה אופציונלי (זווית/דגש).' : 'המצגת תיווצר מהנושא למעלה. אפשר גם לבחור טיוטת בסיס למטה כמקור.'}
-                </div>
-              </div>
-            )}
-
             <div className="text-right text-xs text-white/72 mb-6">
               {isPresentationOutput
-                ? 'בחרת מצגת: ה-deck נפתח כמסמך חדש. אם בחרת טיוטת בסיס היא תהפוך לשקופיות בלי לדרוס את הקובץ המקורי.'
+                ? 'בחרת מצגת: הכפתור פותח את טופס היצירה של סטודיו המצגות (ערכה, קהל, מטרה, מספר שקופיות, מדיה). הנושא, חומרי העזר וטיוטת הבסיס שבחרת כאן ייכנסו אליו מראש.'
                 : 'שדה הנושא העליון הוא רשות. ההנחיות למטה הן המקור המחייב, והשדה הזה נועד רק להוסיף brief או הקשר קצר אם צריך. אם בחרת טיוטת בסיס, אפשר גם להשאיר את שני השדות ריקים כדי לבצע ליטוש ראשוני.'}
             </div>
 

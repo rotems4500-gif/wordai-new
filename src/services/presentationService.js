@@ -57,16 +57,44 @@ const SLIDE_SHAPE = `{
   "notes": "הערות מרצה קצרות (אופציונלי)"
 }`;
 
+// ── ארכיטיפים נרטיביים ───────────────────────────────────────────
+// בלי זה כל מצגת יצאה באותה צורה: שער → agenda → רצף title-bullets → סיכום.
+// הארכיטיפ נבחר אקראית (Math.random ולא hash) בכוונה — יצירה חוזרת של אותו
+// brief אמורה לתת מצגת אחרת, אחרת "צור שוב" הוא כפתור מת.
+const NARRATIVE_ARCHETYPES = [
+  'סיפור-מסע — פתח בשאלה או במקרה קונקרטי, בנה מתח לאורך השקפים, והגע לפתרון ולתובנה בסוף.',
+  'בעיה → פתרון → השלכות — הצג את הבעיה במלוא חומרתה לפני שאתה מציע מענה, וסיים במה שמשתנה בעקבותיו.',
+  'תזה → אנטיתזה → סינתזה — העמד עמדה, הצג נגדה את הביקורת החזקה ביותר, ורק אז הכרע.',
+  'מן הפרט אל הכלל — פתח במקרה בוחן קונקרטי אחד, וגזור ממנו את העקרונות הרחבים.',
+  'ציר זמן/התפתחות — עקוב אחרי מה שהיה, מה השתנה ולאן זה הולך; כל שקף הוא תחנה.',
+  'טענה מרכזית → ראיות → התמודדות עם ביקורת — הצהר על הטענה מוקדם, בסס אותה, והתמודד עם ההשגות עליה.',
+];
+
+const pickNarrativeArchetype = () =>
+  NARRATIVE_ARCHETYPES[Math.floor(Math.random() * NARRATIVE_ARCHETYPES.length)];
+
+const archetypeLines = (archetype) => (archetype
+  ? `בנה את המצגת לפי הגישה הנרטיבית: ${archetype}\nאל תיצמד לתבנית מבוא-גוף-סיכום.`
+  : '');
+
+// ── חוקים נגד תבניתיות — משותפים לשלד ולמילוי התוכן ───────────────
+const TITLE_RULE = '- אסור כותרות גנריות: "מבוא", "רקע", "סיכום", "נושאים", "תוכן", "כללי", "דיון". כל כותרת שקף היא טענה או שאלה ספציפית לתוכן שלו, באורך 5-9 מילים (שקף ה-cover פטור — שם הכותרת היא שם המצגת).';
+const LAYOUT_MIX_RULE = '- לא יותר משני שקפי title-bullets ברצף. שלב לפחות 3 פריסות שונות מלבד cover ו-closing.';
+const CLOSING_RULE = '- שקף הסיום: לא "תודה" גנרי ולא "סיכום" שחוזר על מה שנאמר — סיים במסר, בקריאה לפעולה או בשאלה פתוחה, בהתאם למטרה.';
+
 const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
+  TITLE_RULE,
+  LAYOUT_MIX_RULE,
+  CLOSING_RULE,
   '- גוון פריסות לפי סוג התוכן — אל תשתמש ב-title-bullets לכל שקף. המר תוכן למבנה ויזואלי:',
   '  • stat — כשיש מספרים/אחוזים/מדדים בולטים (שדה "stats", 1-4 פריטים). value קצר וחד.',
   '  • steps — לתהליך/שלבים/שיטה (שדה "steps", 3-5 שלבים).',
   '  • comparison — להשוואת שתי גישות/אפשרויות (שדה "columns", בדיוק 2 עמודות).',
   '  • big-statement — למסר/תובנה מרכזית אחת (שדה "body", משפט אחד חד). בלי בולטים.',
   '  • two-column — לחלוקה לשני נושאים מקבילים. quote — לציטוט.',
-  // ⚠️ הסף כאן חייב להישאר זהה לזה שב-structureRules — שני מספרים שונים באותו
-  // פרומפט הם הוראה סותרת, והמודל בחר לפי מצב רוחו.
-  '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים), רק לפי חוקי המבנה למעלה.',
+  // ⚠️ אין כאן סף — הוא חי רק ב-structureRules (AGENDA_MIN_SLIDES). שני מספרים
+  // שונים באותו פרומפט הם הוראה סותרת, והמודל בחר לפי מצב רוחו.
+  '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים), אך ורק אם חוקי המבנה למעלה מתירים זאת במפורש.',
   '  • timeline — לכרונולוגיה/אבני דרך/roadmap (שדה "steps": title=שנה/תקופה, body=מה קרה). 3-6 נקודות.',
   `- שדה "image" רק בפריסות שתומכות בתמונה (${IMAGE_LAYOUTS.join(', ')}). ה-query באנגלית, קונקרטי ונקי.`,
   '- כשיש שדה "image" — **חובה** למלא בו גם "alt" בעברית (משפט קצר שמתאר מה רואים). alt ריק או באנגלית נחשב שגיאה.',
@@ -86,6 +114,12 @@ const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
 
 // מטרה "שכנועית" — במצגת מכירה/שכנוע שקופית agenda שוברת את המומנטום.
 const isPersuasiveGoal = (goal) => /שכנע|מכיר|מכירה/.test(String(goal || ''));
+
+// ⚠️ agenda היא כבר לא ברירת מחדל. "על מה נדבר" בשקף השני הוא הסימן המובהק
+// ביותר של מצגת-תבנית, והוא מצדיק את עצמו רק בפורמט פורמלי וארוך (הרצאה/
+// שיעור/סמינר/דיווח) שבו הקהל באמת צריך מפת דרכים. בכל שאר המקרים — אסור.
+const AGENDA_GOAL_PATTERN = /הרצאה|שיעור|סמינר|דיווח/;
+const AGENDA_MIN_SLIDES = 12;
 
 // טון נגזר-מטרה. בלי זה "מטרה" הייתה שורת קישוט בפרומפט שלא משנה שום דבר בפלט.
 const toneLineForGoal = (goal) => {
@@ -112,18 +146,22 @@ const structureRules = (goal, slideCount, includeCover = true) => {
       : '- בלי שקופית שער: השקופית הראשונה היא כבר שקופית תוכן (אל תשתמש ב-layout="cover" בכלל).',
     '- מומלץ לסיים ב-layout="closing".',
   ];
-  if (!isPersuasiveGoal(goal)) {
-    if (slideCount == null) {
-      lines.push(`- אם בחרת 10 שקופיות ומעלה — השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר"). פחות מ-10 ⇒ בלי agenda.`);
-    } else if (slideCount >= 10) {
-      lines.push(`- השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר").`);
-    }
+  const agendaEligible = AGENDA_GOAL_PATTERN.test(String(goal || '')) && !isPersuasiveGoal(goal);
+  if (!agendaEligible) {
+    lines.push('- אל תכלול שקף agenda ("על מה נדבר" / "תוכן העניינים") בכלל. פתח ישר בתוכן.');
+  } else if (slideCount == null) {
+    lines.push(`- אם בחרת ${AGENDA_MIN_SLIDES} שקופיות ומעלה — השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר"). פחות מ-${AGENDA_MIN_SLIDES} ⇒ בלי agenda בכלל.`);
+  } else if (slideCount >= AGENDA_MIN_SLIDES) {
+    lines.push(`- השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר").`);
+  } else {
+    lines.push('- אל תכלול שקף agenda ("על מה נדבר" / "תוכן העניינים") — המצגת קצרה מדי בשבילו.');
   }
   return lines.join('\n');
 };
 
 // בונה את הסכמה שה-LLM חייב להחזיר (מסלול shot-אחד)
-const buildSchemaInstruction = (slideCount, imageIntensity, { goal = '', includeCover = true, speakerNotes = true } = {}) => `
+const buildSchemaInstruction = (slideCount, imageIntensity, { goal = '', includeCover = true, speakerNotes = true, archetype = '' } = {}) => `
+${archetypeLines(archetype)}
 החזר JSON תקין בלבד (בלי טקסט מסביב, בלי code fences) במבנה הבא:
 {
   "title": "כותרת המצגת",
@@ -139,7 +177,8 @@ ${SLIDE_CONTENT_RULES(imageIntensity, { speakerNotes })}
 
 // בונה prompt לשלד (outline) — פריט קליל לכל שקופית, נכנס בקלות בלי חיתוך.
 // slideCount === null => אוטומטי: המודל בוחר את מספר השקופיות לפי עומק התוכן.
-const buildOutlinePrompt = (slideCount, { goal = '', includeCover = true } = {}) => `
+const buildOutlinePrompt = (slideCount, { goal = '', includeCover = true, archetype = '' } = {}) => `
+${archetypeLines(archetype)}
 ${slideCount == null
     ? 'תכנן שלד מצגת. בחר בעצמך את מספר השקופיות המתאים לעומק ולכמות התוכן.'
     : `תכנן שלד מצגת בת ${slideCount} שקופיות.`}
@@ -155,6 +194,9 @@ ${slideCount == null
     ? '- בחר מספר שקופיות הולם לתוכן (בדרך כלל 8–18, מותר עד 40 אם התוכן עשיר). לא מעט מדי ולא מנופח.'
     : `- בדיוק ${slideCount} פריטים.`}
 - נרטיב זורם בלי חזרות. כל פריט מוסיף מידע חדש שלא מכוסה בפריט אחר.
+${TITLE_RULE}
+${LAYOUT_MIX_RULE}
+${CLOSING_RULE}
 ${structureRules(goal, slideCount, includeCover)}
 - אם התוכן כרונולוגי (שלבים בזמן/היסטוריה/roadmap) — השתמש ב-layout="timeline" בשקופית המתאימה.
 - מגוון פריסות לפי התוכן. עברית.
@@ -291,6 +333,61 @@ const enforceImageQuota = (deck, imageIntensity) => {
 };
 
 /**
+ * enforceLayoutVariety — שובר רצפים של title-bullets אחרי הנורמליזציה.
+ * הכלל בפרומפט ("לא יותר משניים ברצף") מופר בקביעות, ובמסלול ה-chunked אף מנה
+ * לא רואה את השכנות שלה. כאן זה נאכף דטרמיניסטית, ובשמרנות:
+ * - נשברים רק רצפים של 3 שקפים ומעלה, ורק האמצעיים שבהם (הראשון והאחרון נשארים).
+ * - cover/section/closing/agenda ושקפים עם תמונה לא נוגעים בהם כלל (הם לא title-bullets).
+ * - ההמרה נעשית רק כשהתוכן מתאים: 4+ בולטים ⇒ שתי עמודות; בולט יחיד ⇒ big-statement.
+ *   2-3 בולטים נשארים כמו שהם — עדיף רצף מעט משעמם מאשר שקף מעוות.
+ */
+const enforceLayoutVariety = (deck) => {
+  const slides = Array.isArray(deck?.slides) ? deck.slides : [];
+  if (slides.length < 3) return deck;
+  const isPlainBullets = (s) => s?.layout === 'title-bullets' && !s?.image;
+  const next = slides.slice();
+  let changed = false;
+
+  const breakRun = (start, end) => {
+    if (end - start < 3) return;
+    for (let i = start + 1; i < end - 1; i += 1) {
+      if (i <= 0 || i >= next.length - 1) continue;
+      const slide = next[i];
+      const bullets = (Array.isArray(slide.bullets) ? slide.bullets : []).map((b) => String(b || '').trim()).filter(Boolean);
+      if (bullets.length >= 4) {
+        const half = Math.ceil(bullets.length / 2);
+        next[i] = {
+          ...slide,
+          layout: 'two-column',
+          bullets: [],
+          // heading ריק — הרנדרר מדלג עליו, ושתי כרטיסיות בולטים זו הצורה הרצויה.
+          columns: [
+            { heading: '', bullets: bullets.slice(0, half) },
+            { heading: '', bullets: bullets.slice(half) },
+          ],
+        };
+        changed = true;
+      } else if (bullets.length === 1) {
+        const body = String(slide.body || '').trim() || bullets[0];
+        if (!body) continue;
+        next[i] = { ...slide, layout: 'big-statement', body, bullets: [] };
+        changed = true;
+      }
+    }
+  };
+
+  let runStart = -1;
+  for (let i = 0; i <= slides.length; i += 1) {
+    if (i < slides.length && isPlainBullets(slides[i])) {
+      if (runStart < 0) runStart = i;
+      continue;
+    }
+    if (runStart >= 0) { breakRun(runStart, i); runStart = -1; }
+  }
+  return changed ? { ...deck, slides: next } : deck;
+};
+
+/**
  * generateDeck — מייצר deck מנושא או ממסמך קיים.
  * @returns {Promise<object>} deck מנורמל (deckModel.normalizeDeck)
  */
@@ -360,7 +457,7 @@ export const generateDeck = async ({
   // בידוד: יצירת deck היא קריאת JSON מכנית — לא כתיבת מסמך. בלי הבידוד הזה
   // הקריאה ירשה את הוראות ה-HTML/ביבליוגרפיה של scope המסמך, קורפוס סגנון גולמי
   // וזיכרון האפליקציה — כולם ניפחו את הפרומפט ושברו את ה-JSON.
-  const runChat = (prompt, maxOutputTokens = 4096) =>
+  const runChat = (prompt, maxOutputTokens = 4096, extraOptions = {}) =>
     chatWithActiveProvider(prompt, '', 'אתה מעצב מצגות מקצועי. החזר אך ורק JSON תקין לפי הסכמה.', {
       skipAutomation: true,
       skipMultiModel: true,
@@ -380,6 +477,7 @@ export const generateDeck = async ({
       ...(cleanTopic ? { styleRequestTextOverride: cleanTopic } : {}),
       ...(featureOverride ? { providerConfigOverride: featureOverride } : {}),
       ...(signal ? { signal } : {}),
+      ...extraOptions,
     });
 
   let deckTitle = cleanTopic || 'מצגת';
@@ -387,8 +485,11 @@ export const generateDeck = async ({
   // אזהרות שנצברות במסלול ה-chunked (מנות שלא הושלמו) — מוצמדות ל-deck בסוף.
   const generationWarnings = [];
 
+  // ארכיטיפ נרטיבי אחד לכל הדק (נבחר אקראית — יצירה חוזרת נותנת מבנה אחר).
+  const archetype = pickNarrativeArchetype();
+
   // אפשרויות מבנה/תוכן שמשותפות לכל בוני הפרומפט
-  const shapeOpts = { goal: cleanGoal, includeCover, speakerNotes };
+  const shapeOpts = { goal: cleanGoal, includeCover, speakerNotes, archetype };
 
   // shot-אחד — מצגת קטנה. slideCountForShot נמסר גם ממסלול ה-auto (אורך השלד).
   const runOneShot = async (slideCountForShot, outlineHint = '') => {
@@ -415,7 +516,9 @@ export const generateDeck = async ({
     // מסלול chunked — שלב 1: שלד (outline) לכל המצגת
     const outlinePrompt = [baseContext, buildOutlinePrompt(safeSlideCount, shapeOpts), docBlock, materialsBlock]
       .filter(Boolean).join('\n');
-    const outlineParsed = extractJson(await runChat(outlinePrompt, 4096));
+    // ⚠️ טמפרטורה גבוהה רק לשלד: כאן נקבע המבנה, וטמפרטורה נמוכה מחזירה שוב
+    // ושוב את אותו רצף שקפים. מילוי התוכן נשאר בברירת המחדל (JSON יציב).
+    const outlineParsed = extractJson(await runChat(outlinePrompt, 4096, { temperature: 0.9 }));
     deckTitle = outlineParsed.title || deckTitle;
     const outline = (Array.isArray(outlineParsed.outline) ? outlineParsed.outline : [])
       .map((o) => ({ layout: o?.layout || 'title-bullets', title: o?.title || '', focus: o?.focus || '' }))
@@ -505,7 +608,10 @@ export const generateDeck = async ({
   });
 
   if (!normalized.slides.length) throw new Error('לא נוצרו שקופיות.');
-  const deck = autoImages ? enforceImageQuota(normalized, imageIntensity) : normalized;
+  // סדר: קודם מכסת התמונות (היא ממירה title-bullets ל-image-right/left ובכך
+  // שוברת רצפים בעצמה), ורק אחריה שבירת הרצפים שנותרו.
+  const withImages = autoImages ? enforceImageQuota(normalized, imageIntensity) : normalized;
+  const deck = enforceLayoutVariety(withImages);
   // normalizeDeck מחזיר אובייקט חדש ומשמיט מפתחות לא מוכרים — לכן מצמידים אחריו.
   if (generationWarnings.length) deck.generationWarnings = generationWarnings;
   return deck;
