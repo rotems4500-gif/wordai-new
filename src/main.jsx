@@ -54,7 +54,7 @@ import { generateDeck } from './services/presentationService';
 import { runDeckAutoMedia, generateDeckTheme } from './services/deckMediaService';
 import { getThemeById } from './presentation/deckThemes';
 import { createSlide, normalizeDeck } from './presentation/deckModel';
-import { importPptxDraft } from './services/pptxDraftService';
+import { importPptxDraft, pptxDraftToDeck } from './services/pptxDraftService';
 import { importDocumentDraft } from './services/documentDraftService';
 import { mergeSpssFindingsIntoDraftHtml } from './services/spssFindingsMerge';
 import OneAxisAirHockeyGame from './OneAxisAirHockeyGame';
@@ -9153,6 +9153,29 @@ ${sidebarReviewContext}`
     }
   }, []);
 
+  // ייבוא מצגת קיימת (.pptx) לעורך המלא: הטקסט, ההערות והתמונות הופכים ל-deck
+  // רגיל (העיצוב המקורי לא נשמר — זו הבחירה השנייה במסך ההעלאה).
+  const handleImportPptxAsDeck = React.useCallback(async (file) => {
+    if (!file) return false;
+    enterStudioMode('presentation');
+    setShowStartScreen(false);
+    setPresentationBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const draft = await importPptxDraft(new Uint8Array(buf), file.name || 'presentation.pptx');
+      const deck = normalizeDeck(await pptxDraftToDeck(draft));
+      setPptxDraft(null);
+      setPresentationDeck(deck);
+      showToast(`המצגת יובאה לעריכה — ${deck.slides.length} שקופיות`, { tone: 'success' });
+      return true;
+    } catch (error) {
+      showToast(error?.message || 'ייבוא המצגת נכשל', { tone: 'error' });
+      return false;
+    } finally {
+      setPresentationBusy(false);
+    }
+  }, []);
+
   // העלאת מסמך Word קיים (.docx) כטיוטה לשכתוב לסגנון המשתמש — נכנס למצב טיוטת מסמך.
   const handleUploadDocDraft = React.useCallback(async (file) => {
     if (!file) return false;
@@ -9394,6 +9417,7 @@ ${sidebarReviewContext}`
               onDeckChange={setPresentationDeck}
               onGenerate={handleStudioGenerate}
               onUploadPptx={handleUploadPptxDraft}
+              onImportPptxAsDeck={handleImportPptxAsDeck}
               onExit={() => { setPresentationDeck(null); exitStudioMode(); }}
               initialView={presentationInitialView}
               onViewConsumed={() => setPresentationInitialView(null)}

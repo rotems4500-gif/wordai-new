@@ -157,6 +157,231 @@ export const importPptxDraft = async (uint8, fileName = 'presentation.pptx') => 
 // מחזיר את כל הפסקאות הניתנות לעריכה לאורך הטיוטה (סדר יציב).
 export const draftParas = (draft) => draft.slides.flatMap((s) => s.paras);
 
+// ═══════════════════════════════════════════════════════════════
+// ייבוא לעריכה מלאה — pptx → deck model (מסלול שונה לגמרי מהטיוטה):
+// כאן *לא* שומרים את העיצוב המקורי. מחלצים טקסט, הערות ותמונות,
+// ומרכיבים מהם deck רגיל שהעורך והייצוא של הסטודיו יודעים לטפל בו.
+// ═══════════════════════════════════════════════════════════════
+
+const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+// פורמטים רסטריים בלבד. emf/wmf/svg/tif אינם נתמכים ב-<img> וב-pptxgenjs שלנו ⇒ מדולגים.
+const RASTER_MIME_BY_EXT = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  jfif: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+};
+
+// תקרת גודל לתמונה מיובאת. ה-deck נשמר כ-JSON ב-deckStore (autosave) — תמונת
+// ענק אחת מנפחת כל שמירה ומסכנת את מכסת האחסון. מעל התקרה מדלגים בשקט.
+const MAX_IMAGE_BASE64_CHARS = 2 * 1024 * 1024;
+
+// כל אלמנטי <a:blip> במסמך, namespace-safe (parseFromString עם prefix, בלי, או localName).
+const blipsOf = (doc) => {
+  if (!doc) return [];
+  let els = [];
+  try { els = Array.from(doc.getElementsByTagNameNS(A_NS, 'blip')); } catch { els = []; }
+  if (!els.length) els = Array.from(doc.getElementsByTagName('a:blip'));
+  if (!els.length) {
+    try {
+      els = Array.from(doc.getElementsByTagName('*')).filter((el) => el.localName === 'blip');
+    } catch { els = []; }
+  }
+  return els;
+};
+
+const embedIdOf = (el) => {
+  let id = '';
+  try { id = el.getAttributeNS(R_NS, 'embed') || ''; } catch { id = ''; }
+  if (!id) id = el.getAttribute('r:embed') || '';
+  return String(id || '').trim();
+};
+
+// ppt/slides/slide3.xml → ppt/slides/_rels/slide3.xml.rels
+const relsPathForPart = (partPath) =>
+  String(partPath).replace(/([^/]+)$/, '_rels/$1.rels');
+
+// Target ב-rels יחסי לתיקיית ה-part ('../media/image1.png' מתוך ppt/slides/).
+const resolveRelTarget = (partPath, target) => {
+  const raw = String(target || '').replace(/\\/g, '/').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/')) return raw.slice(1);
+  const parts = String(partPath).split('/').slice(0, -1);
+  for (const seg of raw.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join('/');
+};
+
+const attrOf = (tag, name) => {
+  const m = tag.match(new RegExp(`\\b${name}="([^"]*)"`, 'i'));
+  return m ? m[1] : '';
+};
+
+// מפת rId → Target פנימי. regex ולא DOMParser: ה-rels קובץ שטוח וידוע,
+// והפונקציה נקראת גם מהרנס Node שאין בו DOMParser.
+const readRelsMap = async (zip, partPath) => {
+  const relPath = relsPathForPart(partPath);
+  const file = zip.files?.[relPath] || (zip.file ? zip.file(relPath) : null);
+  if (!file) return new Map();
+  let xml = '';
+  try { xml = await file.async('string'); } catch { return new Map(); }
+  const map = new Map();
+  const re = /<Relationship\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(xml))) {
+    const tag = m[0];
+    const id = attrOf(tag, 'Id');
+    const target = attrOf(tag, 'Target');
+    // קישור חיצוני (TargetMode="External") אינו קיים ב-zip ⇒ אין מה לחלץ.
+    if (!id || !target || /TargetMode="External"/i.test(tag)) continue;
+    map.set(id, target);
+  }
+  return map;
+};
+
+/**
+ * extractSlideImages — התמונה הרסטרית הראשונה בכל שקופית, כ-dataUrl.
+ * @param {object} draft - תוצאת importPptxDraft.
+ * @returns {Promise<Map<string, {source:'upload', dataUrl:string, alt:string}>>} slidePath → image
+ */
+export const extractSlideImages = async (draft) => {
+  const out = new Map();
+  const zip = draft?.zip;
+  if (!zip) return out;
+
+  // מטמון פר-part: אותה תמונה יכולה לחזור בכמה שקופיות.
+  const dataUrlCache = new Map();
+
+  for (const slide of draft?.slides || []) {
+    if (!slide?.doc) continue;
+    const blips = blipsOf(slide.doc);
+    if (!blips.length) continue;
+
+    let rels = null;
+    for (const blip of blips) {
+      const rId = embedIdOf(blip);
+      if (!rId) continue;
+      if (!rels) rels = await readRelsMap(zip, slide.slidePath);
+      const target = rels.get(rId);
+      if (!target) continue;
+      const path = resolveRelTarget(slide.slidePath, target);
+      if (!path) continue;
+
+      if (dataUrlCache.has(path)) {
+        const cached = dataUrlCache.get(path);
+        if (cached) { out.set(slide.slidePath, { source: 'upload', dataUrl: cached, alt: '' }); break; }
+        continue;                                  // דילוג שכבר הוכרע (וקטורי/גדול מדי)
+      }
+
+      const ext = (path.split('.').pop() || '').toLowerCase();
+      const mime = RASTER_MIME_BY_EXT[ext];
+      if (!mime) { dataUrlCache.set(path, null); continue; }
+
+      const file = zip.files?.[path] || (zip.file ? zip.file(path) : null);
+      if (!file) { dataUrlCache.set(path, null); continue; }
+
+      let base64 = '';
+      try { base64 = await file.async('base64'); } catch { base64 = ''; }
+      if (!base64 || base64.length > MAX_IMAGE_BASE64_CHARS) { dataUrlCache.set(path, null); continue; }
+
+      const dataUrl = `data:${mime};base64,${base64}`;
+      dataUrlCache.set(path, dataUrl);
+      out.set(slide.slidePath, { source: 'upload', dataUrl, alt: '' });
+      break;                                       // תמונה ראשונה בלבד לכל שקופית
+    }
+  }
+
+  return out;
+};
+
+// אורך מינימלי שממנו פסקה בודדת נחשבת "משפט מפתח" ולא תבליט.
+const BIG_STATEMENT_MIN_CHARS = 120;
+// תקרת התבליטים ב-normalizeSlide (toStringArray) — העודף עובר להערות.
+const MAX_BULLETS = 8;
+
+const fileStem = (name = '') => String(name).replace(/\.[a-z0-9]+$/i, '').trim();
+
+/**
+ * pptxDraftToDeck — הופך טיוטת pptx ל-deck גולמי לעורך המצגות המלא.
+ * הקורא אחראי ל-normalizeDeck (הוא זה שמנקה טקסט וחותך תבליטים).
+ * ⚠️ אסינכרוני: חילוץ התמונות קורא מה-zip.
+ * @param {object} draft - תוצאת importPptxDraft.
+ * @returns {Promise<object>} deck גולמי.
+ */
+export const pptxDraftToDeck = async (draft) => {
+  const srcSlides = Array.isArray(draft?.slides) ? draft.slides : [];
+  const images = await extractSlideImages(draft);
+
+  const firstTitle = (srcSlides[0]?.paras || []).find((p) => p.titleish && p.kind === 'body')?.text;
+  const deckTitle = String(firstTitle || '').trim() || fileStem(draft?.fileName) || 'מצגת מיובאת';
+
+  const slides = srcSlides.map((slide, index) => {
+    const paras = Array.isArray(slide.paras) ? slide.paras : [];
+    const titlePara = paras.find((p) => p.titleish && p.kind === 'body') || null;
+    const bodyTexts = paras
+      .filter((p) => p.kind === 'body' && p !== titlePara)
+      .map((p) => String(p.text || '').trim())
+      .filter(Boolean);
+    const notesTexts = paras
+      .filter((p) => p.kind === 'notes')
+      .map((p) => String(p.text || '').trim())
+      .filter(Boolean);
+
+    const title = String(titlePara?.text || '').trim();
+    const image = images.get(slide.slidePath) || null;
+
+    const bullets = bodyTexts.slice(0, MAX_BULLETS);
+    const overflow = bodyTexts.slice(MAX_BULLETS);
+    const notesParts = [...notesTexts];
+    // תקרת ה-8 של normalizeSlide הייתה מוחקת את העודף בשקט — נשמר בהערות.
+    if (overflow.length) notesParts.push(`טקסט נוסף מהשקף המקורי: ${overflow.join(' | ')}`);
+    const notes = notesParts.join('\n');
+
+    // ── בחירת פריסה: ההיסק היחיד כאן. אין ניחוש תוכן, רק מבנה. ──
+    if (index === 0 && bodyTexts.length <= 1) {
+      return {
+        layout: 'cover',
+        title: title || deckTitle,
+        subtitle: bodyTexts[0] || '',
+        notes,
+        ...(image ? { image } : {}),
+      };
+    }
+    if (!bodyTexts.length) {
+      // שקף בלי טקסט גוף: אם יש בו תמונה זו שקופית-תמונה, אחרת מפריד נושא.
+      return image
+        ? { layout: 'image-full', title: title || `שקופית ${index + 1}`, subtitle: '', image, notes }
+        : { layout: 'section', title: title || `שקופית ${index + 1}`, subtitle: '', notes };
+    }
+    if (bodyTexts.length === 1 && bodyTexts[0].length > BIG_STATEMENT_MIN_CHARS) {
+      // משפט ארוך יחיד — כותרת יורדת ל-subtitle כדי שתמשיך להופיע בפריסה הזו.
+      return { layout: 'big-statement', title, body: bodyTexts[0], subtitle: title, notes };
+    }
+    if (image) {
+      return { layout: 'image-right', title: title || `שקופית ${index + 1}`, bullets, image, notes };
+    }
+    return { layout: 'title-bullets', title: title || `שקופית ${index + 1}`, bullets, notes };
+  });
+
+  return {
+    title: deckTitle,
+    slides,
+    meta: {
+      topic: deckTitle,
+      source: 'pptx-import',
+      originalFileName: String(draft?.fileName || ''),
+    },
+  };
+};
+
 const extractJson = (raw = '') => {
   let text = String(raw || '').trim();
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);

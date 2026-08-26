@@ -278,9 +278,10 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onNewDeck, show
 }
 
 // ── טופס יצירה (מצב ללא deck) ────────────────────────────────────
-function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle }) {
+function CreateForm({ onGenerate, onUploadPptx, onImportPptxAsDeck, busy, hasDocument, documentTitle }) {
   const prefs = useMemo(() => getPresentationPreferences(), []);
   const uploadRef = useRef(null);
+  const importRef = useRef(null);
   const [source, setSource] = useState('topic');
   const [topic, setTopic] = useState('');
   const [audience, setAudience] = useState(prefs.defaultAudience || '');
@@ -339,13 +340,28 @@ function CreateForm({ onGenerate, onUploadPptx, busy, hasDocument, documentTitle
       {fromUpload && (
         <div className="flex flex-col gap-3">
           <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm leading-7 text-slate-300">
-            העלה מצגת קיימת (<b className="text-white">.pptx</b>) כדי לערוך ולשכתב את הטקסט לסגנון שלך.
-            <br />העיצוב המקורי — צבעים, מיקומים, תמונות, פונטים — נשמר במלואו בקובץ המיוצא.
+            העלה מצגת קיימת (<b className="text-white">.pptx</b>) ובחר מה לעשות איתה. שתי הדרכים מתחילות מאותו קובץ.
           </div>
           <input ref={uploadRef} type="file" accept=".pptx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onUploadPptx?.(f); e.target.value = ''; }} />
-          <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy} className="rounded-2xl border-2 border-dashed border-slate-600 py-12 text-sm font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-50">
-            {busy ? 'טוען מצגת...' : '📥 לחץ לבחירת קובץ PowerPoint (.pptx)'}
-          </button>
+          <input ref={importRef} type="file" accept=".pptx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onImportPptxAsDeck?.(f); e.target.value = ''; }} />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <button type="button" onClick={() => uploadRef.current?.click()} disabled={busy} className="flex h-full min-h-[112px] flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-600 px-4 py-6 text-center text-sm font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-50">
+                <span className="text-lg">📝</span>
+                <span>{busy ? 'טוען מצגת...' : 'שכתוב טקסט בלבד — העיצוב המקורי נשמר'}</span>
+              </button>
+              <span className="px-1 text-[11px] leading-5 text-slate-500">הקובץ המיוצא זהה למקור — צבעים, מיקומים, תמונות ופונטים — רק הטקסט משוכתב.</span>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button type="button" onClick={() => importRef.current?.click()} disabled={busy} className="flex h-full min-h-[112px] flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-600 px-4 py-6 text-center text-sm font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-50">
+                <span className="text-lg">🎨</span>
+                <span>{busy ? 'טוען מצגת...' : 'ייבוא לעריכה מלאה — העיצוב יוחלף בערכת עיצוב'}</span>
+              </button>
+              <span className="px-1 text-[11px] leading-5 text-slate-500">טבלאות, אנימציות ומיקומים מקוריים לא נשמרים; הטקסט, התמונות וההערות מיובאים.</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -777,6 +793,8 @@ export default function PresentationStudio({
   onDeckChange = () => {},
   onGenerate = () => {},
   onUploadPptx = () => {},
+  // ייבוא אותו .pptx כ-deck מלא (טקסט+תמונות+הערות) במקום כטיוטת שכתוב.
+  onImportPptxAsDeck = () => {},
   onExit = () => {},
   busy = false,
   // טקסט התקדמות של שלב היצירה/מדיה (מגיע מ-main.jsx, מוצג בספינר)
@@ -1075,7 +1093,7 @@ export default function PresentationStudio({
         <div className="flex w-full flex-col">
           {studioHeader}
           <div className="relative flex flex-1 flex-col">
-            <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />
+            <CreateForm onGenerate={handleCreateSubmit} onUploadPptx={onUploadPptx} onImportPptxAsDeck={onImportPptxAsDeck} busy={busy} hasDocument={hasDocument} documentTitle={documentTitle} />
             {busy && (
               <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center gap-4 bg-slate-950/70 pt-[18vh] text-slate-200 backdrop-blur-[2px]">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400" />
