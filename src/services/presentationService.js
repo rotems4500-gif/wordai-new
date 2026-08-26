@@ -48,7 +48,7 @@ const SLIDE_SHAPE = `{
   "bullets": ["נקודה קצרה", "נקודה קצרה"],
   "body": "טקסט חופשי — לפריסות quote / big-statement",
   "columns": [{"heading":"...","bullets":["..."]}],
-  "stats": [{"value":"87%","label":"תיאור קצר","caption":"הקשר (אופציונלי)"}],
+  "stats": [{"value":"ערך קצר וחד — מספר/אחוז/סדר גודל","label":"תיאור קצר","caption":"הקשר (אופציונלי)"}],
   "steps": [{"title":"שם השלב","body":"תיאור קצר (אופציונלי)"}],
   "image": { "query": "תיאור באנגלית לחיפוש/יצירת תמונה", "alt": "תיאור התמונה בעברית — שדה חובה כשיש image" },
   "visual": "אופציונלי: 'infographic' כשהתוכן הוא מבנה/תהליך/יחסים שעדיף לראות כדיאגרמה, 'chart' כשיש סדרת מספרים אמיתית להשוואה",
@@ -57,24 +57,27 @@ const SLIDE_SHAPE = `{
   "notes": "הערות מרצה קצרות (אופציונלי)"
 }`;
 
-// ── ארכיטיפים נרטיביים ───────────────────────────────────────────
-// בלי זה כל מצגת יצאה באותה צורה: שער → agenda → רצף title-bullets → סיכום.
-// הארכיטיפ נבחר אקראית (Math.random ולא hash) בכוונה — יצירה חוזרת של אותו
-// brief אמורה לתת מצגת אחרת, אחרת "צור שוב" הוא כפתור מת.
-const NARRATIVE_ARCHETYPES = [
-  'סיפור-מסע — פתח בשאלה או במקרה קונקרטי, בנה מתח לאורך השקפים, והגע לפתרון ולתובנה בסוף.',
-  'בעיה → פתרון → השלכות — הצג את הבעיה במלוא חומרתה לפני שאתה מציע מענה, וסיים במה שמשתנה בעקבותיו.',
-  'תזה → אנטיתזה → סינתזה — העמד עמדה, הצג נגדה את הביקורת החזקה ביותר, ורק אז הכרע.',
-  'מן הפרט אל הכלל — פתח במקרה בוחן קונקרטי אחד, וגזור ממנו את העקרונות הרחבים.',
-  'ציר זמן/התפתחות — עקוב אחרי מה שהיה, מה השתנה ולאן זה הולך; כל שקף הוא תחנה.',
-  'טענה מרכזית → ראיות → התמודדות עם ביקורת — הצהר על הטענה מוקדם, בסס אותה, והתמודד עם ההשגות עליה.',
+// ── זוויות ניסוח ─────────────────────────────────────────────────
+// ⚠️ הציר כאן הוא **ניסוח, לא מבנה**. המבנה הלימודי (מהלך הדרגתי) הוא רצוי
+// ואמור להישאר יציב — מה שחזר על עצמו בין מצגות היה אוצר המילים: אותם ביטויי
+// מדף ואותן תבניות משפט, רק עם נושא מוחלף. לכן כל פריט כאן הוא הוראת ניסוח/
+// הדגשה, ולא הוראת סדר-שקפים.
+// הזווית נבחרת אקראית (Math.random ולא hash) בכוונה — יצירה חוזרת של אותו
+// brief אמורה לתת ניסוח אחר, אחרת "צור שוב" הוא כפתור מת.
+const RHETORICAL_ANGLES = [
+  'פתח נקודות בשאלות שמזמינות חשיבה — נסח חלק מהכותרות והנקודות כשאלה ולא כהצהרה.',
+  'נסח דרך דוגמאות קונקרטיות מחיי היומיום — כל רעיון מופיע דרך מקרה או סיטואציה מוחשית.',
+  'הדגש מספרים ונתונים בניסוח — שלב ערכים, סדרי גודל ומדדים בתוך המשפטים עצמם.',
+  'נסח כטענות חדות שאפשר לחלוק עליהן — משפטים בעלי עמדה, לא תיאורים ניטרליים.',
+  'השתמש באנלוגיות והמחשות — הסבר כל מושג מורכב דרך משהו מוכר.',
+  'נסח מנקודת מבט של הקהל — "מה זה אומר עבורכם", מה משתנה אצלם בפועל.',
 ];
 
-const pickNarrativeArchetype = () =>
-  NARRATIVE_ARCHETYPES[Math.floor(Math.random() * NARRATIVE_ARCHETYPES.length)];
+const pickRhetoricalAngle = () =>
+  RHETORICAL_ANGLES[Math.floor(Math.random() * RHETORICAL_ANGLES.length)];
 
-const archetypeLines = (archetype) => (archetype
-  ? `בנה את המצגת לפי הגישה הנרטיבית: ${archetype}\nאל תיצמד לתבנית מבוא-גוף-סיכום.`
+const angleLines = (angle) => (angle
+  ? `זווית הניסוח של המצגת הזו: ${angle}\nשמור על מהלך לימודי הגיוני והדרגתי.`
   : '');
 
 // ── חוקים נגד תבניתיות — משותפים לשלד ולמילוי התוכן ───────────────
@@ -82,10 +85,22 @@ const TITLE_RULE = '- אסור כותרות גנריות: "מבוא", "רקע", 
 const LAYOUT_MIX_RULE = '- לא יותר משני שקפי title-bullets ברצף. שלב לפחות 3 פריסות שונות מלבד cover ו-closing.';
 const CLOSING_RULE = '- שקף הסיום: לא "תודה" גנרי ולא "סיכום" שחוזר על מה שנאמר — סיים במסר, בקריאה לפעולה או בשאלה פתוחה, בהתאם למטרה.';
 
+// ── נגד ביטויי-מדף ────────────────────────────────────────────────
+// הבעיה שזה פותר: המבנה הלימודי היה בסדר, אבל **המילים** חזרו על עצמן בין
+// מצגות — אותם ביטויי פתיחה ואותן תבניות משפט, רק עם נושא מוחלף. שלושת
+// הכללים האלה תוקפים את שלושת המקורות: ביטויים שגורים, חזרה על תבנית בתוך
+// אותה מצגת, וניסוח גנרי שנכון לכל נושא.
+const ANTI_BOILERPLATE_RULES = [
+  '- אסור להשתמש בביטויי מדף: "בעידן המודרני", "בעולם של היום", "חשוב לציין", "יתרה מזאת", "לסיכום ניתן לומר", "אין ספק ש", "משחק תפקיד מרכזי", "כלי רב עוצמה", "עולם ה...", "מסע אל".',
+  '- אל תתחיל שתי שקופיות באותה מילה; אל תשתמש באותה תבנית משפט פעמיים במצגת.',
+  '- כל נקודה מכילה פרט ספציפי לנושא (מונח מקצועי, שם, מספר, דוגמה) — לא ניסוח כללי שנכון לכל נושא. מבחן: אם אפשר להחליף את הנושא והמשפט עדיין נכון — נסח מחדש.',
+];
+
 const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
   TITLE_RULE,
   LAYOUT_MIX_RULE,
   CLOSING_RULE,
+  ...ANTI_BOILERPLATE_RULES,
   '- גוון פריסות לפי סוג התוכן — אל תשתמש ב-title-bullets לכל שקף. המר תוכן למבנה ויזואלי:',
   '  • stat — כשיש מספרים/אחוזים/מדדים בולטים (שדה "stats", 1-4 פריטים). value קצר וחד.',
   '  • steps — לתהליך/שלבים/שיטה (שדה "steps", 3-5 שלבים).',
@@ -94,7 +109,9 @@ const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
   '  • two-column — לחלוקה לשני נושאים מקבילים. quote — לציטוט.',
   // ⚠️ אין כאן סף — הוא חי רק ב-structureRules (AGENDA_MIN_SLIDES). שני מספרים
   // שונים באותו פרומפט הם הוראה סותרת, והמודל בחר לפי מצב רוחו.
-  '  • agenda — שקופית "על מה נדבר" אחרי השער (שדה "bullets", 4-8 פריטים קצרים), אך ורק אם חוקי המבנה למעלה מתירים זאת במפורש.',
+  // ⚠️ בלי "נסח כותרת משלך" המודל העתיק את הביטוי מהפרומפט מילה במילה, וכל
+  //    מצגת עם agenda קיבלה בדיוק את אותה כותרת.
+  '  • agenda — שקופית מפת-דרכים אחרי השער (שדה "bullets", 4-8 פריטים קצרים), אך ורק אם חוקי המבנה למעלה מתירים זאת במפורש. נסח לה כותרת משלך שנגזרת מהנושא — לא ביטוי גנרי.',
   '  • timeline — לכרונולוגיה/אבני דרך/roadmap (שדה "steps": title=שנה/תקופה, body=מה קרה). 3-6 נקודות.',
   `- שדה "image" רק בפריסות שתומכות בתמונה (${IMAGE_LAYOUTS.join(', ')}). ה-query באנגלית, קונקרטי ונקי.`,
   '- כשיש שדה "image" — **חובה** למלא בו גם "alt" בעברית (משפט קצר שמתאר מה רואים). alt ריק או באנגלית נחשב שגיאה.',
@@ -103,6 +120,8 @@ const SLIDE_CONTENT_RULES = (imageIntensity, { speakerNotes = true } = {}) => [
   '- נקודות קצרות (עד ~10 מילים). בלי פסקאות ארוכות. עברית.',
   '- שמור על טון עקבי ובהיר לאורך כל המצגת; אם סופק פרופיל סגנון — אמץ את הטון שלו בלבד, לא את מבנה המשפט או אורך הפסקה.',
   '- כל ערך בשדות ה-JSON הוא טקסט נקי בעברית: בלי markdown (**, __, `, #), בלי תגי HTML, בלי סימני ▸/•/… בתחילת או סוף טקסט, בלי הערות שוליים.',
+  // ⚠️ הערכים בסכמה הם תיאורי-שדה, והמודל העתיק אותם כטקסט שקופית.
+  '- הערכים בסכמה למעלה הם תיאורי שדה — לדוגמה בלבד, נסח בעצמך. אל תעתיק אותם לשקופיות.',
   // ⚠️ kicker חובה הפך כל מצגת לאותה מצגת: תווית פרק מעל כל כותרת גם כשאין פרקים
   // בכלל. עכשיו הוא מותנה במבנה אמיתי — פרקים עם 3+ שקופיות כל אחד.
   '- שדה "kicker": מלא אותו רק אם למצגת יש חלוקה ברורה לפרקים ובכל פרק 3 שקופיות ומעלה — ואז תן תווית קצרה (2-4 מילים) של שם הפרק, אחידה לכל שקופיות אותו פרק. אין חלוקה כזו ⇒ השאר את kicker ריק בכל השקופיות.',
@@ -150,9 +169,9 @@ const structureRules = (goal, slideCount, includeCover = true) => {
   if (!agendaEligible) {
     lines.push('- אל תכלול שקף agenda ("על מה נדבר" / "תוכן העניינים") בכלל. פתח ישר בתוכן.');
   } else if (slideCount == null) {
-    lines.push(`- אם בחרת ${AGENDA_MIN_SLIDES} שקופיות ומעלה — השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר"). פחות מ-${AGENDA_MIN_SLIDES} ⇒ בלי agenda בכלל.`);
+    lines.push(`- אם בחרת ${AGENDA_MIN_SLIDES} שקופיות ומעלה — השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda", עם כותרת בניסוח שלך שנגזרת מהנושא. פחות מ-${AGENDA_MIN_SLIDES} ⇒ בלי agenda בכלל.`);
   } else if (slideCount >= AGENDA_MIN_SLIDES) {
-    lines.push(`- השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda" ("על מה נדבר").`);
+    lines.push(`- השקופית ה${withCover ? 'שנייה' : 'ראשונה'} תהיה layout="agenda", עם כותרת בניסוח שלך שנגזרת מהנושא.`);
   } else {
     lines.push('- אל תכלול שקף agenda ("על מה נדבר" / "תוכן העניינים") — המצגת קצרה מדי בשבילו.');
   }
@@ -160,8 +179,8 @@ const structureRules = (goal, slideCount, includeCover = true) => {
 };
 
 // בונה את הסכמה שה-LLM חייב להחזיר (מסלול shot-אחד)
-const buildSchemaInstruction = (slideCount, imageIntensity, { goal = '', includeCover = true, speakerNotes = true, archetype = '' } = {}) => `
-${archetypeLines(archetype)}
+const buildSchemaInstruction = (slideCount, imageIntensity, { goal = '', includeCover = true, speakerNotes = true, angle = '' } = {}) => `
+${angleLines(angle)}
 החזר JSON תקין בלבד (בלי טקסט מסביב, בלי code fences) במבנה הבא:
 {
   "title": "כותרת המצגת",
@@ -177,8 +196,8 @@ ${SLIDE_CONTENT_RULES(imageIntensity, { speakerNotes })}
 
 // בונה prompt לשלד (outline) — פריט קליל לכל שקופית, נכנס בקלות בלי חיתוך.
 // slideCount === null => אוטומטי: המודל בוחר את מספר השקופיות לפי עומק התוכן.
-const buildOutlinePrompt = (slideCount, { goal = '', includeCover = true, archetype = '' } = {}) => `
-${archetypeLines(archetype)}
+const buildOutlinePrompt = (slideCount, { goal = '', includeCover = true, angle = '' } = {}) => `
+${angleLines(angle)}
 ${slideCount == null
     ? 'תכנן שלד מצגת. בחר בעצמך את מספר השקופיות המתאים לעומק ולכמות התוכן.'
     : `תכנן שלד מצגת בת ${slideCount} שקופיות.`}
@@ -197,13 +216,14 @@ ${slideCount == null
 ${TITLE_RULE}
 ${LAYOUT_MIX_RULE}
 ${CLOSING_RULE}
+${ANTI_BOILERPLATE_RULES.join('\n')}
 ${structureRules(goal, slideCount, includeCover)}
 - אם התוכן כרונולוגי (שלבים בזמן/היסטוריה/roadmap) — השתמש ב-layout="timeline" בשקופית המתאימה.
 - מגוון פריסות לפי התוכן. עברית.
 `;
 
 // בונה prompt למילוי טווח שקופיות בהינתן השלד המלא (להקשר)
-const buildBatchPrompt = (outline, start, end, imageIntensity, { speakerNotes = true } = {}) => {
+const buildBatchPrompt = (outline, start, end, imageIntensity, { speakerNotes = true, angle = '' } = {}) => {
   const outlineLines = outline
     .map((o, i) => `${i + 1}. [${o.layout}] ${o.title} — ${o.focus || ''}`)
     .join('\n');
@@ -215,7 +235,10 @@ const buildBatchPrompt = (outline, start, end, imageIntensity, { speakerNotes = 
     prevItem ? `- לפני הטווח (שקופית ${start}): "${prevItem.title}" — כבר מכוסה, אל תחזור עליה.` : '',
     nextItem ? `- אחרי הטווח (שקופית ${end + 1}): "${nextItem.title}" — תיכתב בנפרד, אל תקדים אותה.` : '',
   ].filter(Boolean).join('\n');
+  // ⚠️ זווית הניסוח חייבת להגיע גם לכאן: במצגת ארוכה גוף הטקסט נכתב **רק**
+  // במנות, ובלי זה הזווית משפיעה על כותרות השלד בלבד והתוכן חוזר לניסוח שגור.
   return `
+${angleLines(angle)}
 לפניך שלד מלא של מצגת בת ${outline.length} שקופיות (כל המצגת, להקשר ורצף):
 ${outlineLines}
 
@@ -485,11 +508,11 @@ export const generateDeck = async ({
   // אזהרות שנצברות במסלול ה-chunked (מנות שלא הושלמו) — מוצמדות ל-deck בסוף.
   const generationWarnings = [];
 
-  // ארכיטיפ נרטיבי אחד לכל הדק (נבחר אקראית — יצירה חוזרת נותנת מבנה אחר).
-  const archetype = pickNarrativeArchetype();
+  // זווית ניסוח אחת לכל הדק (נבחרת אקראית — יצירה חוזרת נותנת ניסוח אחר).
+  const angle = pickRhetoricalAngle();
 
   // אפשרויות מבנה/תוכן שמשותפות לכל בוני הפרומפט
-  const shapeOpts = { goal: cleanGoal, includeCover, speakerNotes, archetype };
+  const shapeOpts = { goal: cleanGoal, includeCover, speakerNotes, angle };
 
   // shot-אחד — מצגת קטנה. slideCountForShot נמסר גם ממסלול ה-auto (אורך השלד).
   const runOneShot = async (slideCountForShot, outlineHint = '') => {
@@ -500,7 +523,9 @@ export const generateDeck = async ({
       docBlock,
       materialsBlock,
     ].filter(Boolean).join('\n');
-    const parsed = extractJson(await runChat(prompt, 8192));
+    // טמפרטורה לתוכן: ברירת המחדל הנמוכה החזירה את אותם ביטויי מדף ואותן
+    // תבניות משפט בכל מצגת. 0.85 היא התקרה שנבדקה — מעליה ה-JSON מתחיל להישבר.
+    const parsed = extractJson(await runChat(prompt, 8192, { temperature: 0.85 }));
     return {
       title: parsed.title || '',
       slides: Array.isArray(parsed.slides) ? parsed.slides : [],
@@ -516,8 +541,8 @@ export const generateDeck = async ({
     // מסלול chunked — שלב 1: שלד (outline) לכל המצגת
     const outlinePrompt = [baseContext, buildOutlinePrompt(safeSlideCount, shapeOpts), docBlock, materialsBlock]
       .filter(Boolean).join('\n');
-    // ⚠️ טמפרטורה גבוהה רק לשלד: כאן נקבע המבנה, וטמפרטורה נמוכה מחזירה שוב
-    // ושוב את אותו רצף שקפים. מילוי התוכן נשאר בברירת המחדל (JSON יציב).
+    // ⚠️ 0.9 לשלד: כאן נקבע המבנה, וטמפרטורה נמוכה מחזירה שוב ושוב את אותו
+    // רצף שקפים. מילוי התוכן רץ ב-0.85 — נמוך יותר, כי שם ה-JSON גדול ושביר.
     const outlineParsed = extractJson(await runChat(outlinePrompt, 4096, { temperature: 0.9 }));
     deckTitle = outlineParsed.title || deckTitle;
     const outline = (Array.isArray(outlineParsed.outline) ? outlineParsed.outline : [])
@@ -554,9 +579,11 @@ export const generateDeck = async ({
         batches.push([start, Math.min(start + BATCH_SIZE, outline.length)]);
       }
       const fillBatch = async ([start, end]) => {
-        const prompt = [baseContext, buildBatchPrompt(outline, start, end, imageIntensity, { speakerNotes }), docBlock, materialsBlock]
+        const prompt = [baseContext, buildBatchPrompt(outline, start, end, imageIntensity, { speakerNotes, angle }), docBlock, materialsBlock]
           .filter(Boolean).join('\n');
-        const parsed = extractJson(await runChat(prompt, 4096));
+        // אותה טמפרטורה כמו במסלול ה-shot-אחד — אחרת מצגת ארוכה (מסלול המנות)
+        // יוצאת בניסוח שגור בדיוק במקום שבו יש הכי הרבה שקפים לחזור על עצמם.
+        const parsed = extractJson(await runChat(prompt, 4096, { temperature: 0.85 }));
         const got = Array.isArray(parsed.slides) ? parsed.slides : [];
         if (!got.length) throw new Error('המנה חזרה ריקה.');
         return got;
