@@ -307,6 +307,10 @@ export const generateDeck = async ({
   speakerNotes = true,
   includeCover = true,
   materials = [],
+  // האם שלב המדיה האוטומטית ירוץ אחרי היצירה. רק אז מותר לאכוף מכסת תמונות:
+  // enforceImageQuota מצמיד image.pending לשקופיות, ובלי מילוי אוטומטי הן
+  // מגיעות לעורך כבלוקים ריקים — בדיוק מה שהמשתמש ביקש להימנע ממנו.
+  autoImages = false,
   providerConfigOverride = null,
   signal,
 } = {}) => {
@@ -501,7 +505,7 @@ export const generateDeck = async ({
   });
 
   if (!normalized.slides.length) throw new Error('לא נוצרו שקופיות.');
-  const deck = enforceImageQuota(normalized, imageIntensity);
+  const deck = autoImages ? enforceImageQuota(normalized, imageIntensity) : normalized;
   // normalizeDeck מחזיר אובייקט חדש ומשמיט מפתחות לא מוכרים — לכן מצמידים אחריו.
   if (generationWarnings.length) deck.generationWarnings = generationWarnings;
   return deck;

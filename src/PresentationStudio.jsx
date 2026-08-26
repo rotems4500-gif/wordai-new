@@ -161,7 +161,7 @@ const formatUpdatedAt = (iso) => {
   catch { return new Date(time).toISOString().slice(0, 10); }
 };
 
-function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onNewDeck, showToast }) {
+function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onDeckRenamed, onNewDeck, showToast }) {
   const [records, setRecords] = useState(() => listDecks());
   const [busyId, setBusyId] = useState('');
 
@@ -198,7 +198,12 @@ function DeckListScreen({ openDeckId, onOpenDeck, onDeckDeleted, onNewDeck, show
     if (next == null) return;
     const clean = next.trim();
     if (!clean || clean === rec.title) return;
-    runAction(rec.id, () => renameDeck(rec.id, clean));
+    runAction(rec.id, async () => {
+      await renameDeck(rec.id, clean);
+      // שינוי שם של המצגת שפתוחה בעורך חייב להגיע גם לדק שבזיכרון — אחרת
+      // השמירה האוטומטית הבאה הייתה כותבת מחדש את הכותרת הישנה ומבטלת את השינוי.
+      onDeckRenamed?.(rec.id, clean);
+    });
   };
 
   const handleDuplicate = (rec) => runAction(rec.id, async () => {
@@ -1083,6 +1088,14 @@ export default function PresentationStudio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialView]);
 
+  // שער השלמות המדיה חי במסך ה-brief בלבד. משתמש שחזר לרשימה בזמן היצירה היה
+  // נשאר בלי שום סימן שהריצה נעצרה וממתינה להחלטה — לכן כישלון מדיה מושך את
+  // התצוגה חזרה לטופס. (התלות היא באובייקט עצמו: חזרה ידנית לרשימה אחריו לא
+  // מריצה את ה-effect שוב, ולכן היא לא "נחטפת".)
+  useEffect(() => {
+    if (mediaFailure) setView('brief');
+  }, [mediaFailure]);
+
   // דק חדש (id אחר) — היסטוריית הביטול והבחירה של הדק הקודם כבר לא רלוונטיות,
   // והתצוגה עוברת לעורך. בלי זה Ctrl+Z היה מחזיר את המצגת הקודמת.
   const prevDeckIdRef = useRef(deck?.id || '');
@@ -1171,7 +1184,9 @@ export default function PresentationStudio({
     const timer = setTimeout(() => {
       const snapshot = deck;
       savedDeckRef.current = snapshot;
-      saveDeck(snapshot, {}).catch((e) => {
+      // allowRevive:false — מחיקה של המצגת הפתוחה ושמירה אוטומטית שכבר הייתה
+      // בהמתנה רצו במרוץ, והשמירה החזירה את המצגת המחוקה לרשימה.
+      saveDeck(snapshot, { allowRevive: false }).catch((e) => {
         // כישלון מכסה חייב להגיע למשתמש — אחרת "נשמר" ונעלם בשקט.
         savedDeckRef.current = null;
         showToast?.(e?.message || 'שמירת המצגת נכשלה', { tone: 'warning' });
@@ -1201,6 +1216,14 @@ export default function PresentationStudio({
       <div className="flex min-h-full flex-1 overflow-auto bg-slate-950">
         <div className="flex w-full flex-col">
           {studioHeader}
+          {/* ריצה פעילה חייבת להיות גלויה גם כאן — אחרת "יצירת מצגת" נראית תקועה. */}
+          {busy && (
+            <div className="flex items-center gap-3 border-b border-cyan-500/25 bg-cyan-500/10 px-6 py-2">
+              <div className="h-3.5 w-3.5 flex-none animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
+              <span className="flex-none text-xs font-bold text-cyan-200">יוצר מצגת…</span>
+              {busyLabel && <span className="truncate text-[11px] text-slate-400">{busyLabel}</span>}
+            </div>
+          )}
           {deck && (
             <div className="border-b border-slate-800 bg-slate-900/40 px-6 py-2.5">
               <button
@@ -1218,8 +1241,13 @@ export default function PresentationStudio({
               savedDeckRef.current = loaded;
               deckRef.current = loaded;
               onDeckChange(loaded);
-              // ה-effect של deck?.id כבר מעביר לעורך, אבל לא כשפותחים מחדש
-              // את אותה מצגת (id זהה) — ואז המסך היה נשאר על הרשימה.
+              // ה-effect של deck?.id מטפל רק במעבר בין מזהים, ולכן פתיחה מחדש
+              // של אותה מצגת (id זהה) הייתה משאירה היסטוריית ביטול של הגרסה
+              // שלפני הטעינה — Ctrl+Z היה מחזיר תוכן שכבר לא קיים בקובץ.
+              // כאן מאפסים תמיד, בלי תלות ב-effect.
+              historyRef.current = { past: [], future: [] };
+              bumpHistory((v) => v + 1);
+              setSelectedId(loaded?.slides?.[0]?.id || '');
               setView('editor');
             }}
             onDeckDeleted={(id) => {
@@ -1228,6 +1256,17 @@ export default function PresentationStudio({
               deckRef.current = null;
               historyRef.current = { past: [], future: [] };
               onDeckChange(null);
+            }}
+            onDeckRenamed={(id, title) => {
+              const current = deckRef.current;
+              if (!current || current.id !== id) return;
+              // לא commitDeck: שינוי שם מהרשימה אינו צעד עריכה בהיסטוריית הביטול.
+              // renameDeck כבר כתב לאחסון, ולכן מסמנים את הדק כ"שמור" כדי שלא
+              // תיווצר שמירה אוטומטית מיותרת שרק תקפיץ updatedAt.
+              const next = { ...current, title };
+              deckRef.current = next;
+              savedDeckRef.current = next;
+              onDeckChange(next);
             }}
             onNewDeck={() => setView('brief')}
             showToast={showToast}
@@ -1282,7 +1321,10 @@ export default function PresentationStudio({
     );
   }
 
-  const patchSlide = (patch) => commitDeck(updateSlide(deck, selected.id, patch));
+  // פונקציונלי בכוונה: פעולות המדיה קוראות ל-patchSlide אחרי await ארוך, ואז
+  // deck/selected שנתפסו ברינדור כבר מיושנים — קומיט מתוכם היה מוחק עריכות
+  // שנעשו בינתיים. commitDeck פותר את הפונקציה מול deckRef העדכני.
+  const patchSlide = (patch) => commitDeck((prev) => (prev ? updateSlide(prev, selectedIdRef.current, patch) : prev));
 
   // יעד העריכה שהעוזר רואה — השקופית הנבחרת במלואה. מחושב פעם אחת לרנדר.
   const assistantTargetState = assistantOpen ? buildDeckEditTargetState(deck, selected?.id) : null;
@@ -1726,7 +1768,7 @@ export default function PresentationStudio({
               documentContext={() => buildDeckDocumentSnapshot(deckRef.current)}
               selectedText=""
               currentBlockText={assistantTargetState?.block?.text || ''}
-              editTarget={assistantTargetState?.active || null}
+              editTarget={assistantTargetState}
               getCurrentEditTarget={() => buildDeckEditTargetState(deckRef.current, selectedIdRef.current)}
               resolveEditTargetFromPrompt={() => null}
               resolveEditTargetsFromPrompt={null}

@@ -302,8 +302,11 @@ export const restructureSlideAsInfographic = async (slide, { signal } = {}) => {
  * ומקביליות מזמינה rate-limit.
  * @returns {Promise<{slides: Array<{slideId, image}>, failures: Array}>}
  */
-export const generateMissingDeckImages = async (deck, theme, { style = 'photo', model = '', provider = '', signal, onProgress = null, limit = 24 } = {}) => {
-  const targets = (deck?.slides || []).filter((slide) => slide?.image?.pending && (slide.image.query || slide.image.alt)).slice(0, limit);
+export const generateMissingDeckImages = async (deck, theme, { style = 'photo', model = '', provider = '', signal, onProgress = null, limit = 24, skipSlideIds = null } = {}) => {
+  const targets = (deck?.slides || [])
+    .filter((slide) => slide?.image?.pending && (slide.image.query || slide.image.alt))
+    .filter((slide) => !skipSlideIds?.has(slide.id))
+    .slice(0, limit);
   const results = [];
   const failures = [];
   for (let i = 0; i < targets.length; i += 1) {
@@ -321,8 +324,8 @@ export const generateMissingDeckImages = async (deck, theme, { style = 'photo', 
   return { slides: results, failures, attempted: targets.length };
 };
 
-const countPendingImages = (deck) =>
-  (deck?.slides || []).filter((s) => s?.image?.pending && (s.image.query || s.image.alt)).length;
+const countPendingImages = (deck, skipSlideIds = null) =>
+  (deck?.slides || []).filter((s) => s?.image?.pending && (s.image.query || s.image.alt) && !skipSlideIds?.has(s.id)).length;
 
 /**
  * runDeckAutoMedia — מעבר מדיה שלם על דק: תמונות חסרות (עם ניסיון חוזר) ואז
@@ -356,17 +359,24 @@ export const runDeckAutoMedia = async (deck, theme, {
     current = { ...current, slides: (current.slides || []).map((s) => (map[s.id] ? { ...s, image: map[s.id] } : s)) };
   };
 
+  // שקופית visual:'chart' תקבל אינפוגרפיקה במעבר הבא, שדורסת את שדה image.
+  // בלי הדילוג הזה שילמנו על יצירת תמונה שנזרקת מיד אחר כך.
+  const chartSkipIds = autoInfographics
+    ? new Set((deck?.slides || []).filter((s) => s?.visual === 'chart').map((s) => s.id))
+    : null;
+
   if (autoImages) {
     // ניסיון חוזר יחיד לשקופיות שנשארו pending — כישלון בודד הוא לרוב עומס רגעי.
     for (let attempt = 0; attempt <= imageRetries; attempt += 1) {
       if (signal?.aborted) break;
-      if (!countPendingImages(current)) break;
+      if (!countPendingImages(current, chartSkipIds)) break;
       if (attempt > 0) emit('מנסה שוב תמונות שנכשלו…');
       // eslint-disable-next-line no-await-in-loop
       const res = await generateMissingDeckImages(current, theme, {
         style,
         signal,
         limit: imageLimit,
+        skipSlideIds: chartSkipIds,
         onProgress: ({ index, total }) => emit(`יוצר תמונה ${index} מתוך ${total}…`),
       });
       applyImages(res?.slides);

@@ -3380,21 +3380,28 @@ function App() {
   // זוכר מאיפה נכנסנו לסטודיו (start screen או העורך) כדי שהיציאה תחזור לאותו מקום.
   const studioEntryOriginRef = React.useRef('editor');
   // קורא דרך ref כי handlers עטופים ב-useCallback([]) סוגרים על העותק הראשון של הפונקציה.
+  // ביטול עבודה רצה של סטודיו המצגות (no-op כשאין) ושחרור מחוון העסוק.
+  // משותף ליציאה מהסטודיו ולמעבר לסטודיו אחר — בלי זה מעבר טאב השאיר קריאות
+  // API רצות ומחוון "עסוק" תקוע שחוזר לקדם את הפנים הבאות של הסטודיו.
+  const cancelPresentationWork = () => {
+    presentationAbortRef.current?.abort();
+    presentationAbortRef.current = null;
+    setPresentationBusy(false);
+    setPresentationProgress('');
+    setPresentationMediaFailure(null);
+  };
   const enterStudioMode = (mode) => {
     // רק מעבר-מצב אמיתי קובע את המקור. קריאות חוזרות מתוך הסטודיו (יצירת deck,
     // העלאת pptx) לא ידרסו אותו ל-'editor' ויאבדו את החזרה למסך הבית.
     if (appModeRef.current !== mode) {
       studioEntryOriginRef.current = showStartScreenRef.current ? 'start' : 'editor';
     }
+    // עזיבת סטודיו המצגות לטובת סטודיו אחר = בדיוק אותו ניקוי כמו יציאה.
+    if (appModeRef.current === 'presentation' && mode !== 'presentation') cancelPresentationWork();
     setAppMode(mode);
   };
   const exitStudioMode = () => {
-    // ביטול עבודה רצה של סטודיו המצגות (no-op כשאין) ושחרור מחוון העסוק.
-    presentationAbortRef.current?.abort();
-    presentationAbortRef.current = null;
-    setPresentationBusy(false);
-    setPresentationProgress('');
-    setPresentationMediaFailure(null);
+    cancelPresentationWork();
     setAppMode('word');
     if (studioEntryOriginRef.current === 'start') setShowStartScreen(true);
   };
@@ -3426,6 +3433,15 @@ function App() {
   const [presentationMediaFailure, setPresentationMediaFailure] = React.useState(null);
   // מבטל יצירת deck שרצה כשיוצאים מהסטודיו או כשמתחילים יצירה חדשה.
   const presentationAbortRef = React.useRef(null);
+  // כל דרך שמכניסה מצגת לעורך (פתיחה מהרשימה, ייבוא pptx, יצירה חדשה) מבטלת
+  // שער השלמות ישן. בלי זה פאנל "יצירת התמונות נכשלה" של מצגת קודמת היה חוסם
+  // את המסך מעל מצגת אחרת לגמרי — ו"נסה שוב" היה עובד על הדק הישן.
+  React.useEffect(() => {
+    if (presentationDeck) {
+      setPresentationMediaFailure(null);
+      setPresentationProgress('');
+    }
+  }, [presentationDeck?.id]);
   const [pptxDraft, setPptxDraft] = React.useState(null);
   const [docDraft, setDocDraft] = React.useState(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
@@ -6540,6 +6556,9 @@ ${sidebarReviewContext}`
         speakerNotes,
         includeCover,
         materials: Array.isArray(selectedMaterials) ? selectedMaterials.filter(Boolean) : [],
+        // בלי מדיה אוטומטית אין מי שימלא את התמונות שמכסת התמונות מצמידה —
+        // ולכן היא לא נאכפת כלל (אחרת: בלוקים ריקים בעורך).
+        autoImages,
         signal: controller.signal,
       });
       if (controller.signal.aborted) return false;
@@ -9138,6 +9157,9 @@ ${sidebarReviewContext}`
     if (!file) return false;
     enterStudioMode('presentation');
     setShowStartScreen(false);
+    // שער השלמות של ריצה קודמת אינו רלוונטי למצגת שמועלית עכשיו.
+    setPresentationMediaFailure(null);
+    setPresentationProgress('');
     setPresentationBusy(true);
     try {
       const buf = await file.arrayBuffer();
@@ -9159,6 +9181,9 @@ ${sidebarReviewContext}`
     if (!file) return false;
     enterStudioMode('presentation');
     setShowStartScreen(false);
+    // שער השלמות של ריצה קודמת אינו רלוונטי למצגת שמיובאת עכשיו.
+    setPresentationMediaFailure(null);
+    setPresentationProgress('');
     setPresentationBusy(true);
     try {
       const buf = await file.arrayBuffer();

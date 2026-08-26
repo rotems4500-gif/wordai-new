@@ -243,18 +243,33 @@ async function removeBody(id) {
 /**
  * שמירה (upsert) של מצגת: גוף למכשיר, רשומה לאינדקס.
  * @param {object} deck  אובייקט deck מלא (deckModel)
- * @param {{thumbDataUrl?: string}} options  thumb חדש; כשלא מסופק נשמר הקיים.
- * @returns {Promise<object>} רשומת האינדקס שנכתבה
+ * @param {{thumbDataUrl?: string, allowRevive?: boolean}} options
+ *   thumbDataUrl — thumb חדש; כשלא מסופק נשמר הקיים.
+ *   allowRevive — האם שמירה על רשומה מחוקה (tombstone) מחיה אותה. ברירת המחדל
+ *   true (שמירה יזומה של המשתמש), אבל שמירה אוטומטית חייבת להעביר false:
+ *   מחיקה ושמירה אוטומטית בהמתנה רצו במרוץ, והשמירה החזירה מצגת מחוקה לרשימה.
+ * @returns {Promise<object|null>} רשומת האינדקס שנכתבה, או null כשהשמירה דולגה
  * @throws {Error} הודעה בעברית כשהשמירה נכשלה (מכסה/אחסון)
  */
-export async function saveDeck(deck, { thumbDataUrl } = {}) {
+export async function saveDeck(deck, { thumbDataUrl, allowRevive = true } = {}) {
   const id = String(deck?.id || '').trim();
   if (!id) throw new Error('לא ניתן לשמור מצגת בלי מזהה.');
+
+  // בדיקת ה-tombstone לפני כתיבת הגוף — אחרת היינו מחזירים לדיסק גוף של
+  // מצגת שנמחקה, גם אם האינדקס נשאר נקי.
+  const preBlob = readIndexBlob();
+  const preExisting = normalizeRecord(preBlob.decks?.[id]);
+  if (!allowRevive && preExisting?.deletedAt) return null;
 
   const bodyResult = await writeBody(id, deck);
 
   const blob = readIndexBlob();
   const existing = normalizeRecord(blob.decks?.[id]);
+  // מחיקה שהתרחשה תוך כדי כתיבת הגוף (writeBody הוא אסינכרוני) — מנקים אחרינו.
+  if (!allowRevive && existing?.deletedAt) {
+    try { await removeBody(id); } catch { /* noop */ }
+    return null;
+  }
   const incomingThumb = typeof thumbDataUrl === 'string' ? thumbDataUrl : null;
   const nextThumb = incomingThumb != null ? incomingThumb : (existing?.thumbDataUrl || '');
 
