@@ -38,6 +38,34 @@ const DENSITY = [
   { id: 'rich', label: 'עשיר' },
 ];
 
+// אפשרויות "שקופית חדשה" — פריסה נבחרת מראש במקום title-bullets תמיד.
+const ADD_SLIDE_OPTIONS = [
+  { layout: 'title-bullets', label: 'תוכן (כותרת + נקודות)', icon: '📝' },
+  { layout: 'section', label: 'פרק', icon: '📑' },
+  { layout: 'stat', label: 'נתון', icon: '📈' },
+  { layout: 'steps', label: 'שלבים', icon: '🪜' },
+  { layout: 'comparison', label: 'השוואה', icon: '⚖️' },
+  { layout: 'quote', label: 'ציטוט', icon: '❝' },
+  { layout: 'image-full', label: 'תמונה מלאה', icon: '🖼️' },
+];
+
+// שכפול שקופית: העתק עמוק של כל המבנים המקוננים (bullets/columns/stats/steps/
+// image/bgImage). ⚠️ בלי זה העותק היה חולק מערכים עם המקור, ועריכה באחד הייתה
+// משנה גם את השני. ה-id מושמט בכוונה — createSlide מנפיק חדש (addSlideAfter
+// מכניס את האובייקט כמו שהוא ואינו מנפיק id).
+const cloneSlideContent = (slide) => {
+  const { id: _dropId, ...rest } = slide || {};
+  return {
+    ...rest,
+    bullets: [...(slide?.bullets || [])],
+    columns: (slide?.columns || []).map((c) => ({ heading: c?.heading || '', bullets: [...(c?.bullets || [])] })),
+    stats: (slide?.stats || []).map((s) => ({ ...s })),
+    steps: (slide?.steps || []).map((s) => ({ ...s })),
+    image: slide?.image ? { ...slide.image } : null,
+    bgImage: slide?.bgImage ? { ...slide.bgImage } : null,
+  };
+};
+
 // AiSidebar משדר התקדמות ל"מסמך חי" — במצגת אין יעד סטרימינג, ולכן noop.
 const noopStream = () => {};
 
@@ -609,7 +637,9 @@ function ImagePicker({ slide, onPick, onClose }) {
 }
 
 // ── עורך (inspector) של שקופית נבחרת ─────────────────────────────
-function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
+// focusFieldRef מקבל את שדה הטקסט הראשי של הפריסה (כותרת, ואם אין — גוף הטקסט);
+// לחיצה כפולה על התצוגה הגדולה מקפיצה את המיקוד לשם (ר' focusInspectorTitle).
+function Inspector({ slide, themeId, onChange, onOpenImagePicker, focusFieldRef = null }) {
   const layoutDef = getLayout(slide.layout);
   const theme = getThemeById(themeId);
   const accentChoices = (Array.isArray(theme.accents) && theme.accents.length ? theme.accents : null)
@@ -630,7 +660,29 @@ function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
   const addStep = () => setField('steps', [...(slide.steps || []), { title: '', body: '' }]);
   const removeStep = (i) => setField('steps', (slide.steps || []).filter((_, idx) => idx !== i));
 
+  // ── עמודות ──
+  // ⚠️ עד קודם הפיצול לשורות סינן שורות ריקות בכל הקשה (.filter(Boolean)), ולכן
+  // Enter באמצע הרשימה "נבלע" והסמן קפץ. עכשיו הפיצול משמר שורות ריקות תוך כדי
+  // הקלדה, והניקוי (שורות ריקות בסוף בלבד) קורה ביציאה מהשדה.
+  const setColumn = (ci, patch) => setField('columns', (slide.columns || []).map((c, idx) => (idx === ci ? { ...c, ...patch } : c)));
+  const addColumn = () => {
+    const cols = slide.columns || [];
+    if (cols.length >= 3) return;   // deckModel חותך ל-3 (normalizeSlide)
+    setField('columns', [...cols, { heading: '', bullets: [] }]);
+  };
+  const removeColumn = (ci) => {
+    const cols = (slide.columns || []).filter((_, idx) => idx !== ci);
+    setField('columns', cols.length ? cols : [{ heading: '', bullets: [] }]);
+  };
+  const trimTrailingEmpty = (arr) => {
+    const out = [...(arr || [])];
+    while (out.length && !String(out[out.length - 1]).trim()) out.pop();
+    return out;
+  };
+
   const fields = layoutDef.fields;
+  const titleFieldRef = fields.includes('title') ? focusFieldRef : null;
+  const bodyFieldRef = !fields.includes('title') && fields.includes('body') ? focusFieldRef : null;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -684,7 +736,7 @@ function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
 
       {(fields.includes('title')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">כותרת</span>
-          <input value={slide.title} onChange={(e) => setField('title', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
+          <input ref={titleFieldRef} value={slide.title} onChange={(e) => setField('title', e.target.value)} className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400" /></label>
       )}
       {(fields.includes('title')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">תווית עליונה (אופציונלי)</span>
@@ -696,7 +748,7 @@ function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
       )}
       {(fields.includes('body')) && (
         <label className="flex flex-col gap-1.5"><span className="text-xs font-bold text-slate-400">טקסט / ציטוט</span>
-          <textarea value={slide.body} onChange={(e) => setField('body', e.target.value)} className="min-h-[100px] rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm leading-7 text-slate-100 outline-none focus:border-cyan-400" /></label>
+          <textarea ref={bodyFieldRef} value={slide.body} onChange={(e) => setField('body', e.target.value)} className="min-h-[100px] rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm leading-7 text-slate-100 outline-none focus:border-cyan-400" /></label>
       )}
 
       {(fields.includes('bullets')) && (
@@ -717,10 +769,24 @@ function Inspector({ slide, themeId, onChange, onOpenImagePicker }) {
           <span className="text-xs font-bold text-slate-400">עמודות</span>
           {(slide.columns || []).map((col, ci) => (
             <div key={ci} className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
-              <input value={col.heading} placeholder={`כותרת עמודה ${ci + 1}`} onChange={(e) => { const cols = slide.columns.map((c, idx) => idx === ci ? { ...c, heading: e.target.value } : c); setField('columns', cols); }} className="mb-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
-              <textarea value={(col.bullets || []).join('\n')} placeholder="נקודה בכל שורה" onChange={(e) => { const cols = slide.columns.map((c, idx) => idx === ci ? { ...c, bullets: e.target.value.split('\n').filter(Boolean) } : c); setField('columns', cols); }} className="min-h-[70px] w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400" />
+              <div className="mb-2 flex gap-1.5">
+                <input value={col.heading} placeholder={`כותרת עמודה ${ci + 1}`} onChange={(e) => setColumn(ci, { heading: e.target.value })} className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-400" />
+                {(slide.columns || []).length > 1 && (
+                  <button onClick={() => removeColumn(ci)} title="הסר עמודה" className="rounded-lg px-2 text-slate-500 hover:text-rose-400">✕</button>
+                )}
+              </div>
+              <textarea
+                value={(col.bullets || []).join('\n')}
+                placeholder="נקודה בכל שורה"
+                onChange={(e) => setColumn(ci, { bullets: e.target.value.split('\n') })}
+                onBlur={() => setColumn(ci, { bullets: trimTrailingEmpty(col.bullets) })}
+                className="min-h-[70px] w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400"
+              />
             </div>
           ))}
+          {(slide.columns || []).length < 3 && (
+            <button onClick={addColumn} className="self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-cyan-400">+ הוסף עמודה</button>
+          )}
         </div>
       )}
 
@@ -820,6 +886,15 @@ export default function PresentationStudio({
   const [exportOpen, setExportOpen] = useState(false);
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const themePanelRef = useRef(null);
+  // תפריט "שקופית חדשה" (בחירת פריסה) בתחתית רצועת התצוגות המקדימות.
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // גרירה לשינוי סדר ברצועה: אינדקס הנגרר ואינדקס יעד ההשלכה (להדגשה ויזואלית).
+  const [dragIndex, setDragIndex] = useState(-1);
+  const [dragOverIndex, setDragOverIndex] = useState(-1);
+  // לחיצה כפולה על התצוגה הגדולה → מיקוד בשדה הכותרת בפאנל התכונות + הבהוב.
+  const inspectorFieldRef = useRef(null);
+  const inspectorFlashTimerRef = useRef(null);
+  const [inspectorFlash, setInspectorFlash] = useState(false);
   // חלונית העוזר (AiSidebar) בתוך העורך — ר' "גשר עריכה לעוזר" בהמשך.
   const [assistantOpen, setAssistantOpen] = useState(false);
   // ⚠️ ב-AiSidebar החלת עריכה (onApplyEdit) רצה רק במצב מחבר 'edit'; ב-'chat'
@@ -915,6 +990,71 @@ export default function PresentationStudio({
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
 
+  // ── פעולות שקופית ────────────────────────────────────────────────
+  // ⚠️ מוגדרות כאן, לפני ה-effects והיציאות המוקדמות (list/brief), כדי שגם
+  // ה-effect של המקלדת יוכל לקרוא להן. הגדרה אחרי היציאה המוקדמת הייתה משאירה
+  // אותן לא-מאותחלות במסכים האחרים ומפילה את ה-handler ב-TDZ.
+  const handleRemove = () => {
+    if (!deck || !selected || slides.length <= 1) return;
+    const idx = selectedIndex;
+    const next = removeSlide(deck, selected.id);
+    commitDeck(next);
+    setSelectedId(next.slides[Math.max(0, idx - 1)]?.id || '');
+    showToast?.('השקופית נמחקה — Ctrl+Z לביטול');
+  };
+  const handleMove = (dir) => {
+    if (!deck || !selected) return;
+    commitDeck(moveSlide(deck, selected.id, dir));
+  };
+  // שינוי סדר חופשי (גרירה ברצועה). moveSlide מזיז צעד אחד בלבד, ולכן כאן
+  // בונים את מערך השקופיות מחדש עם splice ומקמטים בקומיט אחד.
+  const handleReorderSlides = (from, to) => {
+    const current = deckRef.current;
+    const list = [...(current?.slides || [])];
+    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    commitDeck({ ...current, slides: list });
+    setSelectedId(moved.id);
+  };
+  const handleAddSlideOfLayout = (layout = 'title-bullets') => {
+    const current = deckRef.current;
+    if (!current) return;
+    const slide = createSlide({ layout, title: 'שקופית חדשה' });
+    commitDeck(addSlideAfter(current, selectedIdRef.current, slide));
+    setSelectedId(slide.id);
+  };
+  const handleDuplicateSlide = () => {
+    const current = deckRef.current;
+    const source = (current?.slides || []).find((s) => s.id === selectedIdRef.current);
+    if (!current || !source) return;
+    const copy = createSlide(cloneSlideContent(source));
+    commitDeck(addSlideAfter(current, source.id, copy));
+    setSelectedId(copy.id);
+    showToast?.('השקופית שוכפלה ✓', { tone: 'success' });
+  };
+
+  // ניקוי טיימר ההבהוב של פאנל התכונות ביציאה.
+  useEffect(() => () => clearTimeout(inspectorFlashTimerRef.current), []);
+  // סגירת תפריט ההוספה ב-Escape.
+  useEffect(() => {
+    if (!addMenuOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setAddMenuOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [addMenuOpen]);
+  // ⚠️ עריכה במקום (contenteditable) על התצוגה הגדולה לא מומשה בכוונה: ה-SlideStage
+  // מרונדר ב-1280×720 ומוקטן ב-transform: scale, והטקסט מפוזר בין 15 פריסות שכל
+  // אחת מרנדרת את הכותרת אחרת. שכבת שדות שקופה מעל במה מוקטנת שבירה מדי.
+  // במקום זה: לחיצה כפולה על התצוגה = מיקוד בשדה הראשי בפאנל התכונות + הבהוב.
+  const focusInspectorField = () => {
+    const el = inspectorFieldRef.current;
+    if (el) { el.focus(); el.select?.(); }
+    setInspectorFlash(true);
+    clearTimeout(inspectorFlashTimerRef.current);
+    inspectorFlashTimerRef.current = setTimeout(() => setInspectorFlash(false), 1200);
+  };
+
   // ── גשר עריכה לעוזר ה-AI ─────────────────────────────────────────
   // הגשר נבנה פעם אחת (זהות יציבה, כי הוא נשלח כ-prop ל-AiSidebar) וקורא את
   // הדק/הקומיט/הטוסט דרך refs — תשובה שמגיעה אחרי אסינכרון ארוך חייבת להיפגש
@@ -964,20 +1104,30 @@ export default function PresentationStudio({
   };
 
   // ניווט שקופיות בחיצים (כל עוד לא מקלידים בשדה). RTL: ימינה=הקודם, שמאלה=הבא.
+  // בנוסף: Ctrl+Z/Y ביטול · Ctrl+D שכפול · Alt+חיצים הזזה · Delete מחיקה.
   useEffect(() => {
-    if (!deck) return undefined;
+    if (!deck || view !== 'editor') return undefined;
     const onKey = (e) => {
-      if (presenting || pickerOpen || exportOpen || themePanelOpen) return;
+      if (presenting || pickerOpen || exportOpen || themePanelOpen || addMenuOpen) return;
       const t = e.target;
       const tag = t?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
-      // ביטול / ביצוע-שוב
+      // ביטול / ביצוע-שוב / שכפול
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const key = String(e.key || '').toLowerCase();
         if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
         if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); return; }
+        // preventDefault חובה — אחרת Ctrl+D פותח "הוסף סימנייה" בדפדפן.
+        if (key === 'd' && !e.shiftKey) { e.preventDefault(); handleDuplicateSlide(); return; }
+      }
+      // Alt+חיצים = הזזת השקופית הנבחרת (ולא ניווט)
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        handleMove(e.key === 'ArrowUp' ? 'up' : 'down');
+        return;
       }
       if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === 'Delete') { e.preventDefault(); handleRemove(); return; }
       const list = deck.slides || [];
       const idx = list.findIndex((s) => s.id === selectedId);
       let next = null;
@@ -989,7 +1139,8 @@ export default function PresentationStudio({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deck, presenting, pickerOpen, exportOpen, themePanelOpen, selectedId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deck, view, presenting, pickerOpen, exportOpen, themePanelOpen, addMenuOpen, selectedId]);
 
   // סגירת פאנל ה-theme בלחיצה מחוץ לו או ב-Escape
   useEffect(() => {
@@ -1227,12 +1378,6 @@ export default function PresentationStudio({
     }
   };
 
-  const handleAddSlide = () => {
-    const next = addSlideAfter(deck, selected.id, createSlide({ layout: 'title-bullets', title: 'שקופית חדשה' }));
-    commitDeck(next);
-    const newIdx = next.slides.findIndex((s) => s.id === selected.id) + 1;
-    setSelectedId(next.slides[newIdx]?.id || selectedId);
-  };
   // "הוסף למסמך" מהעוזר = שקופית חדשה אחרי הנבחרת. שורה ראשונה כותרת, השאר
   // נקודות. stats/steps שהמודל ניסח בתווית מקופלים לטקסט נקודה כדי שלא ייעלמו.
   const handleAssistantInsert = (text) => {
@@ -1259,15 +1404,6 @@ export default function PresentationStudio({
     setSelectedId(newSlide.id);
     showToast?.('נוספה שקופית חדשה מהעוזר ✓', { tone: 'success' });
   };
-
-  const handleRemove = () => {
-    if (slides.length <= 1) return;
-    const idx = selectedIndex;
-    const next = removeSlide(deck, selected.id);
-    commitDeck(next);
-    setSelectedId(next.slides[Math.max(0, idx - 1)]?.id || '');
-  };
-  const handleMove = (dir) => commitDeck(moveSlide(deck, selected.id, dir));
 
   const handleExport = async (profile = 'auto') => {
     setExportOpen(false);
@@ -1431,26 +1567,95 @@ export default function PresentationStudio({
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* ניווט שקופיות */}
-        <div className="flex w-52 flex-col gap-2 overflow-auto border-l border-slate-800 bg-slate-900/50 p-3">
-          {slides.map((s, i) => (
-            <button key={s.id} ref={s.id === selected.id ? selectedThumbRef : null} onClick={() => setSelectedId(s.id)} className={`relative rounded-lg border-2 text-right transition ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'}`}>
-              <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
-              <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} deckId={deck.id} />
-            </button>
-          ))}
-          <button onClick={handleAddSlide} className="mt-1 rounded-lg border border-dashed border-slate-700 py-3 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300">+ שקופית</button>
+        {/* ניווט שקופיות — גרירה משנה סדר; הכפתור התחתון יושב מחוץ לאזור הגלילה
+            כדי שהתפריט הנפתח שלו לא ייחתך על ידי overflow-auto. */}
+        <div className="flex w-52 flex-none flex-col border-l border-slate-800 bg-slate-900/50">
+          <div className="flex flex-1 flex-col gap-2 overflow-auto p-3">
+            {slides.map((s, i) => {
+              const isDragging = dragIndex === i;
+              const isDropTarget = dragOverIndex === i && dragIndex >= 0 && dragIndex !== i;
+              return (
+                <button
+                  key={s.id}
+                  ref={s.id === selected.id ? selectedThumbRef : null}
+                  onClick={() => setSelectedId(s.id)}
+                  draggable
+                  title="גרור לשינוי סדר"
+                  onDragStart={(e) => {
+                    setDragIndex(i);
+                    if (e.dataTransfer) {
+                      e.dataTransfer.effectAllowed = 'move';
+                      try { e.dataTransfer.setData('text/plain', String(i)); } catch { /* דפדפנים ישנים */ }
+                    }
+                  }}
+                  onDragEnd={() => { setDragIndex(-1); setDragOverIndex(-1); }}
+                  onDragOver={(e) => {
+                    if (dragIndex < 0) return;
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                    if (dragOverIndex !== i) setDragOverIndex(i);
+                  }}
+                  onDragLeave={() => { if (dragOverIndex === i) setDragOverIndex(-1); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const raw = Number(e.dataTransfer?.getData('text/plain'));
+                    const from = dragIndex >= 0 ? dragIndex : (Number.isFinite(raw) ? raw : -1);
+                    setDragIndex(-1);
+                    setDragOverIndex(-1);
+                    handleReorderSlides(from, i);
+                  }}
+                  className={`relative cursor-grab rounded-lg border-2 text-right transition active:cursor-grabbing ${s.id === selected.id ? 'border-cyan-400' : 'border-transparent hover:border-slate-700'} ${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-cyan-400 ring-offset-2 ring-offset-slate-900' : ''}`}
+                >
+                  <span className="absolute right-1 top-1 z-10 rounded bg-slate-950/70 px-1.5 text-[10px] text-slate-300">{i + 1}</span>
+                  <SlideFrame slide={s} themeId={deck.themeId} customTheme={deck.customTheme} index={i} shadow={false} deckTitle={deck.title} deckId={deck.id} />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* הוספת שקופית לפי פריסה (אותה תבנית dropdown של תפריט הייצוא) */}
+          <div className="relative border-t border-slate-800 p-2">
+            <button
+              type="button"
+              onClick={() => setAddMenuOpen((v) => !v)}
+              className="w-full rounded-lg border border-dashed border-slate-700 py-2.5 text-xs text-slate-400 hover:border-cyan-400 hover:text-cyan-300"
+            >+ שקופית ▾</button>
+            {addMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setAddMenuOpen(false)} />
+                <div className="absolute bottom-full right-2 z-50 mb-1 w-56 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl">
+                  {ADD_SLIDE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.layout}
+                      type="button"
+                      onClick={() => { setAddMenuOpen(false); handleAddSlideOfLayout(opt.layout); }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                    ><span>{opt.icon}</span><span>{opt.label}</span></button>
+                  ))}
+                  <div className="my-1 h-px bg-slate-800" />
+                  <button
+                    type="button"
+                    onClick={() => { setAddMenuOpen(false); handleDuplicateSlide(); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs font-semibold text-cyan-300 hover:bg-slate-800"
+                  ><span>⧉</span><span>שכפול השקף הנוכחי</span><span className="mr-auto text-[10px] font-normal text-slate-500">Ctrl+D</span></button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* תצוגה מרכזית */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto bg-slate-950 p-6">
-          <div className="w-full max-w-3xl">
+          {/* לחיצה כפולה = קפיצה לעריכת הכותרת בפאנל התכונות (עריכה במקום על
+              הבמה המוקטנת נדחתה — ר' הערה בראש focusInspectorField). */}
+          <div className="w-full max-w-3xl" onDoubleClick={focusInspectorField} title="לחיצה כפולה — עריכת הכותרת בפאנל התכונות">
             {selected && <SlideFrame slide={selected} themeId={deck.themeId} customTheme={deck.customTheme} index={selectedIndex} deckTitle={deck.title} deckId={deck.id} />}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
-            <button onClick={() => handleMove('down')} disabled={selectedIndex >= slides.length - 1} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">אחר →</button>
-            <button onClick={handleRemove} disabled={slides.length <= 1} className="rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs text-rose-400 disabled:opacity-30">מחק שקופית</button>
+            <button onClick={() => handleMove('up')} disabled={selectedIndex <= 0} title="הקדם (Alt+↑)" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">← הקדם</button>
+            <button onClick={() => handleMove('down')} disabled={selectedIndex >= slides.length - 1} title="אחר (Alt+↓)" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-30">אחר →</button>
+            <button onClick={handleDuplicateSlide} title="שכפל שקופית (Ctrl+D)" className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-cyan-400 hover:text-cyan-300">⧉ שכפל</button>
+            <button onClick={handleRemove} disabled={slides.length <= 1} title="מחק שקופית (Delete)" className="rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs text-rose-400 disabled:opacity-30">מחק שקופית</button>
           </div>
 
           {/* ── שורת פעולות מדיה ב-AI לשקופית הנבחרת ── */}
@@ -1497,8 +1702,16 @@ export default function PresentationStudio({
         </div>
 
         {/* inspector */}
-        <div className="w-72 overflow-auto border-r border-slate-800 bg-slate-900/50">
-          {selected && <Inspector slide={selected} themeId={deck.themeId} onChange={patchSlide} onOpenImagePicker={() => setPickerOpen(true)} />}
+        <div className={`w-72 flex-none overflow-auto border-r bg-slate-900/50 transition-colors ${inspectorFlash ? 'border-cyan-400 ring-2 ring-inset ring-cyan-400/60' : 'border-slate-800'}`}>
+          {selected && (
+            <Inspector
+              slide={selected}
+              themeId={deck.themeId}
+              onChange={patchSlide}
+              onOpenImagePicker={() => setPickerOpen(true)}
+              focusFieldRef={inspectorFieldRef}
+            />
+          )}
         </div>
 
         {/* עוזר AI — עמודה אחרונה (RTL ⇒ הקצה השמאלי), כמו באפליקציה הראשית */}
