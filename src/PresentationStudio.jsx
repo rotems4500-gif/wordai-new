@@ -6,6 +6,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import AiSidebar from './AiSidebar';
 import { SlideFrame } from './presentation/SlideRenderer';
 import PresentMode from './presentation/PresentMode';
 import { DECK_THEMES, getThemeById, THEME_ACCENTS } from './presentation/deckThemes';
@@ -22,14 +23,23 @@ import {
   generateSlideImage, generateSlideInfographic, generateSlideBackground, restructureSlideAsInfographic,
   generateMissingDeckImages, generateDeckTheme,
 } from './services/deckMediaService';
+import {
+  buildDeckDocumentSnapshot, buildDeckEditTargetState, createDeckEditBridge, parseSlideContent,
+} from './presentation/deckEditBridge';
 import { buildPptxBase64 } from './services/pptxExport';
-import { getProviderConfig, saveProviderConfig, getPresentationPreferences, savePresentationPreferences } from './services/aiService';
+import {
+  getProviderConfig, saveProviderConfig, getPresentationPreferences, savePresentationPreferences,
+  getWordPreferences, getAssistantBehavior,
+} from './services/aiService';
 
 const DENSITY = [
   { id: 'lean', label: 'רזה' },
   { id: 'balanced', label: 'מאוזן' },
   { id: 'rich', label: 'עשיר' },
 ];
+
+// AiSidebar משדר התקדמות ל"מסמך חי" — במצגת אין יעד סטרימינג, ולכן noop.
+const noopStream = () => {};
 
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -792,6 +802,16 @@ export default function PresentationStudio({
   const [exportOpen, setExportOpen] = useState(false);
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const themePanelRef = useRef(null);
+  // חלונית העוזר (AiSidebar) בתוך העורך — ר' "גשר עריכה לעוזר" בהמשך.
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  // ⚠️ ב-AiSidebar החלת עריכה (onApplyEdit) רצה רק במצב מחבר 'edit'; ב-'chat'
+  // התשובה נשארת בצ'אט. פתיחה מהסטודיו נכנסת ישר למצב עריכה דרך launchPreset,
+  // אחרת "ערוך לי את השקופית" היה נראה כאילו לא קרה כלום.
+  const [assistantPreset, setAssistantPreset] = useState({ nonce: 0, classicAgentId: '', composerMode: '', prompt: '' });
+  const toggleAssistant = () => setAssistantOpen((open) => {
+    if (!open) setAssistantPreset({ nonce: Date.now(), classicAgentId: '', composerMode: 'edit', prompt: '' });
+    return !open;
+  });
 
   // ── היסטוריית ביטול/ביצוע-שוב ברמת ה-deck (Ctrl+Z / Ctrl+Shift+Z) ──
   const historyRef = useRef({ past: [], future: [] });
@@ -830,6 +850,10 @@ export default function PresentationStudio({
   const selectedIndex = useMemo(() => slides.findIndex((s) => s.id === selectedId), [slides, selectedId]);
   const selected = selectedIndex >= 0 ? slides[selectedIndex] : slides[0];
   const selectedThumbRef = useRef(null);
+  // ה-id של השקופית שבאמת נבחרה (selectedId עשוי להצביע על שקופית שנמחקה,
+  // ואז selected נופל ל-slides[0]). העוזר קורא מכאן ולא מה-state.
+  const selectedIdRef = useRef('');
+  selectedIdRef.current = selected?.id || '';
 
   // הדק העדכני ביותר דרך ref — פעולה אסינכרונית ארוכה (מדיה) סוגרת על ה-prop
   // שהיה בתחילתה, וקומיט מתוכה היה מוחק עריכות שנעשו בינתיים.
@@ -872,6 +896,23 @@ export default function PresentationStudio({
   };
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
+
+  // ── גשר עריכה לעוזר ה-AI ─────────────────────────────────────────
+  // הגשר נבנה פעם אחת (זהות יציבה, כי הוא נשלח כ-prop ל-AiSidebar) וקורא את
+  // הדק/הקומיט/הטוסט דרך refs — תשובה שמגיעה אחרי אסינכרון ארוך חייבת להיפגש
+  // עם המצב העדכני ולא עם זה שנתפס בזמן הרינדור שבו נוצר הגשר.
+  const commitDeckRef = useRef(null);
+  const showToastRef = useRef(showToast);
+  commitDeckRef.current = commitDeck;
+  showToastRef.current = showToast;
+  const deckBridge = useMemo(() => createDeckEditBridge({
+    getDeck: () => deckRef.current,
+    commitDeck: (next) => commitDeckRef.current?.(next),
+    showToast: (...args) => showToastRef.current?.(...args),
+  }), []);
+  // הפניות/הגדרות העוזר נקראות פעם אחת לכניסה לעורך (זהה ל-AddinApp).
+  const assistantWordPreferences = useMemo(() => getWordPreferences(), []);
+  const assistantBehavior = useMemo(() => getAssistantBehavior(), []);
 
   // דגלי המדיה נוסעים ב-payload עצמו ומטופלים בשלב היצירה (main.jsx).
   const handleCreateSubmit = (payload) => onGenerate(payload);
@@ -1074,6 +1115,9 @@ export default function PresentationStudio({
 
   const patchSlide = (patch) => commitDeck(updateSlide(deck, selected.id, patch));
 
+  // יעד העריכה שהעוזר רואה — השקופית הנבחרת במלואה. מחושב פעם אחת לרנדר.
+  const assistantTargetState = assistantOpen ? buildDeckEditTargetState(deck, selected?.id) : null;
+
   // ── פעולות מדיה ב-AI ─────────────────────────────────────────────
   const pendingImageCount = slides.filter((s) => s?.image?.pending && (s.image.query || s.image.alt)).length;
 
@@ -1171,6 +1215,33 @@ export default function PresentationStudio({
     const newIdx = next.slides.findIndex((s) => s.id === selected.id) + 1;
     setSelectedId(next.slides[newIdx]?.id || selectedId);
   };
+  // "הוסף למסמך" מהעוזר = שקופית חדשה אחרי הנבחרת. שורה ראשונה כותרת, השאר
+  // נקודות. stats/steps שהמודל ניסח בתווית מקופלים לטקסט נקודה כדי שלא ייעלמו.
+  const handleAssistantInsert = (text) => {
+    const current = deckRef.current;
+    if (!current) return;
+    const parsed = parseSlideContent(text);
+    const bullets = [...parsed.bullets, ...parsed.plain];
+    parsed.stats.forEach((s) => bullets.push(`${s.value}${s.label ? ` — ${s.label}` : ''}`));
+    parsed.steps.forEach((s) => bullets.push(`${s.title}${s.body ? `: ${s.body}` : ''}`));
+    parsed.columns.forEach((c) => { if (c.heading) bullets.push(c.heading); bullets.push(...c.bullets); });
+    if (!parsed.title && !bullets.length) {
+      showToast?.('לא זוהה תוכן להוספה כשקופית', { tone: 'warning' });
+      return;
+    }
+    const newSlide = createSlide({
+      layout: 'title-bullets',
+      title: parsed.title || 'שקופית חדשה',
+      subtitle: parsed.subtitle || '',
+      kicker: parsed.kicker || '',
+      notes: parsed.notes || '',
+      bullets: bullets.filter(Boolean).slice(0, 8),
+    });
+    commitDeck(addSlideAfter(current, selectedIdRef.current, newSlide));
+    setSelectedId(newSlide.id);
+    showToast?.('נוספה שקופית חדשה מהעוזר ✓', { tone: 'success' });
+  };
+
   const handleRemove = () => {
     if (slides.length <= 1) return;
     const idx = selectedIndex;
@@ -1307,6 +1378,12 @@ export default function PresentationStudio({
           aria-label="בצע שוב"
           className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-30"
         >↷</button>
+        <button
+          type="button"
+          onClick={toggleAssistant}
+          title="עוזר AI — עריכת השקופית הנבחרת בשיחה"
+          className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${assistantOpen ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+        >🤖 עוזר AI</button>
         <button onClick={() => { onGenerate(null); setView('brief'); }} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">מצגת חדשה</button>
         <button onClick={() => setPresenting(true)} className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600">▶ הצג</button>
         <div className="relative">
@@ -1405,6 +1482,35 @@ export default function PresentationStudio({
         <div className="w-72 overflow-auto border-r border-slate-800 bg-slate-900/50">
           {selected && <Inspector slide={selected} themeId={deck.themeId} onChange={patchSlide} onOpenImagePicker={() => setPickerOpen(true)} />}
         </div>
+
+        {/* עוזר AI — עמודה אחרונה (RTL ⇒ הקצה השמאלי), כמו באפליקציה הראשית */}
+        {assistantOpen && (
+          <div className="flex w-[380px] min-w-[320px] max-w-[42vw] flex-none flex-col overflow-hidden border-r border-slate-800 bg-[#F8FAFC]">
+            <AiSidebar
+              mode="sidebar"
+              reason="presentation"
+              launchPreset={assistantPreset}
+              onClose={() => setAssistantOpen(false)}
+              currentFilePath={`deck:${deck.id}`}
+              documentContext={() => buildDeckDocumentSnapshot(deckRef.current)}
+              selectedText=""
+              currentBlockText={assistantTargetState?.block?.text || ''}
+              editTarget={assistantTargetState?.active || null}
+              getCurrentEditTarget={() => buildDeckEditTargetState(deckRef.current, selectedIdRef.current)}
+              resolveEditTargetFromPrompt={() => null}
+              resolveEditTargetsFromPrompt={null}
+              onInsert={handleAssistantInsert}
+              onApplyEdit={deckBridge.applyEdit}
+              onApplyEditBatch={deckBridge.applyEditBatch}
+              onStreamStart={noopStream}
+              onStreamChunk={noopStream}
+              onStreamEnd={noopStream}
+              wordPreferences={assistantWordPreferences}
+              assistantBehavior={assistantBehavior}
+              onOpenHelp={onOpenHelp}
+            />
+          </div>
+        )}
       </div>
 
       {pickerOpen && selected && (
